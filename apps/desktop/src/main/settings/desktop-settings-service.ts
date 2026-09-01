@@ -96,6 +96,14 @@ import {
   userHomeWorktreesRoot,
   type DesktopSettingsConfig,
 } from "./desktop-config";
+import type {
+  ConfigUpdateResult,
+  DesktopConfigStore,
+} from "./config-store/desktop-config-store";
+import {
+  CONFIG_DOMAIN_KEYS,
+  type ConfigDomainMap,
+} from "./config-store/config-domains";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
@@ -247,6 +255,7 @@ type DesktopSettingsServiceOptions = {
     "discover" | "invalidate" | "resolve"
   >;
   configPath?: string;
+  configStore?: DesktopConfigStore;
   defaultDeveloperMode?: boolean;
   defaultManagedGrokBuilds?: boolean;
   ensureManagedCodexRuntime?: (options: {
@@ -1593,6 +1602,13 @@ export class DesktopSettingsService {
   async writeConfigPatch(
     patch: DesktopSettingsConfigPatch,
   ): Promise<DesktopSettingsSnapshot> {
+    await this.writeConfigPatchTargeted(patch);
+    return this.readSettings();
+  }
+
+  async writeConfigPatchTargeted(
+    patch: DesktopSettingsConfigPatch,
+  ): Promise<ConfigUpdateResult<keyof ConfigDomainMap>> {
     const current = this.readConfig();
     if (current.error) {
       throw new Error(
@@ -1620,7 +1636,9 @@ export class DesktopSettingsService {
     if (disablingTokenMiser) {
       this.abortManagedCodexUpdate();
     }
-    applyDesktopSettingsPatch(this.configPath, patch);
+    const update = this.options.configStore
+      ? await this.options.configStore.write(patch, CONFIG_DOMAIN_KEYS)
+      : await this.writeConfigPatchWithoutStore(patch);
     if (
       patch.models?.codex?.path !== undefined
       || patch.experimental?.tokenMiserEnabled !== undefined
@@ -1641,7 +1659,7 @@ export class DesktopSettingsService {
         || appearancePatch.sidebarTextSize !== undefined
         || appearancePatch.transcriptTextSize !== undefined)
     ) {
-      const next = this.readConfig().config.general?.appearance;
+      const next = update.values.general?.appearance;
       this.options.onAppearanceChange?.({
         theme: next?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
         density: next?.density ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
@@ -1664,7 +1682,40 @@ export class DesktopSettingsService {
     if (patch.experimental?.tokenMiserEnabled !== undefined) {
       await this.managedCodexRuntimeSwitchAttempt;
     }
-    return this.readSettings();
+    return update;
+  }
+
+  private async writeConfigPatchWithoutStore(
+    patch: DesktopSettingsConfigPatch,
+  ): Promise<ConfigUpdateResult<keyof ConfigDomainMap>> {
+    applyDesktopSettingsPatch(this.configPath, patch);
+    const config = this.readConfig().config;
+    return {
+      version: 0,
+      configRevision: "legacy",
+      changedDomains: Object.keys(patch) as Array<keyof ConfigDomainMap>,
+      normalizedPatch: patch,
+      values: {
+        general: {
+          appearance: {
+            theme:
+              config.general?.appearance?.theme
+              ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+            density:
+              config.general?.appearance?.density
+              ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+            sidebarTextSize:
+              config.general?.appearance?.sidebarTextSize
+              ?? DESKTOP_TEXT_SIZE_DEFAULT,
+            transcriptTextSize:
+              config.general?.appearance?.transcriptTextSize
+              ?? DESKTOP_TEXT_SIZE_DEFAULT,
+          },
+          settings: config.general ?? {},
+        },
+      } as ConfigDomainMap,
+      scheduledProviderRefreshes: [],
+    };
   }
 
   /**

@@ -93,6 +93,23 @@ export type ConfigDomainMap = Readonly<{
   imageUploads: ConfigSection<"imageUploads">;
 }>;
 
+export const CONFIG_DOMAIN_KEYS = [
+  "general",
+  "onboarding",
+  "experimental",
+  "messaging",
+  "federation",
+  "models",
+  "providers",
+  "applications",
+  "git",
+  "updates",
+  "worktrees",
+  "ui",
+  "integratedTerminal",
+  "imageUploads",
+] as const satisfies readonly (keyof ConfigDomainMap)[];
+
 export type ConfigFileStatus =
   | Readonly<{ kind: "valid"; contentHash: string; observedAt: number }>
   | Readonly<{ kind: "missing"; observedAt: number }>

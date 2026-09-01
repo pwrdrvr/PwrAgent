@@ -45,6 +45,7 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       : new DbBackedSafeStorageSecretStore(safeStorage, getAppStateDb());
     desktopSettingsService = new DesktopSettingsService({
       defaultDeveloperMode: app.isPackaged === true ? false : true,
+      configStore,
       // Dev follows the newest downstream build automatically. Packaged apps
       // keep managed downloads opt-in until the downstream signing lane is
       // configured and publishing signed Apple/Windows assets.
@@ -74,9 +75,6 @@ export function getDesktopSettingsService(): DesktopSettingsService {
           webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
         }
       },
-    });
-    desktopSettingsService.onConfigWritten(() => {
-      configStore.reloadFromDisk("self-write");
     });
   }
   return desktopSettingsService;

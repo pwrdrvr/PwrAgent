@@ -513,7 +513,7 @@ export function resolveAcpAgentEnabled(registryId: string): boolean {
 export function applyDesktopSettingsPatch(
   configPath: string,
   patch: DesktopSettingsConfigPatch,
-): void {
+): DesktopSettingsPatchWriteResult {
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const source = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf8")
@@ -523,16 +523,22 @@ export function applyDesktopSettingsPatch(
     parseTomlTables(source, configPath),
   );
   if (edits.length === 0) {
-    return;
+    return { changed: false, text: source };
   }
   const next = applyTomlEdits(source, edits);
   if (next === source) {
-    return;
+    return { changed: false, text: source };
   }
   const temporaryPath = `${configPath}.${process.pid}.tmp`;
   fs.writeFileSync(temporaryPath, next, "utf8");
   fs.renameSync(temporaryPath, configPath);
+  return { changed: true, text: next };
 }
+
+export type DesktopSettingsPatchWriteResult = Readonly<{
+  changed: boolean;
+  text: string;
+}>;
 
 export function desktopSettingsPatchToEdits(
   patch: DesktopSettingsConfigPatch,

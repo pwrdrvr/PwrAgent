@@ -43,6 +43,14 @@ export function readRawConfigFile(
     };
   }
 
+  return parseRawConfigText(text, configPath, observedAt);
+}
+
+export function parseRawConfigText(
+  text: string,
+  configPath: string,
+  observedAt = Date.now(),
+): RawConfigFileObservation {
   const contentHash = hashConfigText(text);
   try {
     return {

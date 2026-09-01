@@ -1,4 +1,7 @@
-import type { DesktopSettingsSecretName } from "@pwragent/shared";
+import type {
+  DesktopSettingsConfigPatch,
+  DesktopSettingsSecretName,
+} from "@pwragent/shared";
 import type { StateDb } from "../../state/state-db";
 import {
   watchConfigFile,
@@ -24,7 +27,14 @@ import {
   type ProviderDiscoverer,
   type ProviderRefreshReason,
 } from "./provider-refresh";
-import { readRawConfigFile } from "./raw-config-file";
+import {
+  applyDesktopSettingsPatch,
+  type DesktopSettingsConfig,
+} from "../desktop-config";
+import {
+  parseRawConfigText,
+  readRawConfigFile,
+} from "./raw-config-file";
 
 export type ConfigDomainChange<K extends keyof ConfigDomainMap> = Readonly<{
   version: number;
@@ -47,6 +57,15 @@ export type ConfigStoreDiagnosticEvent = Readonly<{
 export type ConfigStoreDiagnosticsSnapshot = Readonly<{
   events: number;
   byOperation: Readonly<Record<ConfigStoreDiagnosticEvent["operation"], number>>;
+}>;
+
+export type ConfigUpdateResult<K extends keyof ConfigDomainMap> = Readonly<{
+  version: number;
+  configRevision: string;
+  changedDomains: readonly (keyof ConfigDomainMap)[];
+  normalizedPatch: DesktopSettingsConfigPatch;
+  values: Readonly<Pick<ConfigDomainMap, K>>;
+  scheduledProviderRefreshes: readonly ProviderId[];
 }>;
 
 type Subscription = Readonly<{
@@ -182,6 +201,83 @@ export class DesktopConfigStore {
     return () => {
       this.subscriptions.delete(subscription);
     };
+  }
+
+  async write<K extends keyof ConfigDomainMap>(
+    patch: DesktopSettingsConfigPatch,
+    returnDomains: readonly K[],
+  ): Promise<ConfigUpdateResult<K>> {
+    const previous = this.snapshot;
+    const written = applyDesktopSettingsPatch(this.options.configPath, patch);
+    const observation = parseRawConfigText(
+      written.text,
+      this.options.configPath,
+      this.now(),
+    );
+    if (observation.kind !== "valid") {
+      throw new Error(
+        observation.kind === "invalid"
+          ? observation.error
+          : `Settings config is missing: ${this.options.configPath}`,
+      );
+    }
+    const domains = normalizeConfigDomains({
+      config: observation.config,
+      previousProviders: previous.domains.providers,
+    });
+    const next =
+      previous.configFile.kind === "valid"
+      && previous.configFile.contentHash === observation.contentHash
+        ? previous
+        : this.publish({
+            configFile: {
+              kind: "valid",
+              contentHash: observation.contentHash,
+              observedAt: observation.observedAt,
+            },
+            configRevision: observation.contentHash,
+            domains,
+          });
+    if (next.configRevision !== this.durableConfigRevision) {
+      const durableStartedAt = this.now();
+      this.durable.writeConfig({
+        configRevision: next.configRevision,
+        contentHash: observation.contentHash,
+        domains: next.domains,
+        schemaVersion: CONFIG_STORE_DURABLE_SCHEMA_VERSION,
+        updatedAt: observation.observedAt,
+      });
+      this.durableConfigRevision = next.configRevision;
+      this.recordDiagnostic({
+        operation: "durable-write",
+        durationMs: this.now() - durableStartedAt,
+        outcome: "success",
+        detail: { kind: "config" },
+      });
+    }
+    const changedDomains = changedConfigDomains(
+      previous.domains,
+      next.domains,
+    );
+    const scheduledProviderRefreshes = PROVIDER_IDS.filter((provider) =>
+      next.domains.providers[provider].configured.enabled
+      && next.domains.providers[provider].dependencyFingerprint
+        !== previous.domains.providers[provider].dependencyFingerprint,
+    );
+    for (const provider of scheduledProviderRefreshes) {
+      void this.refreshProvider(provider, "config-change");
+    }
+    const values = Object.fromEntries(
+      returnDomains.map((domain) => [domain, next.domains[domain]]),
+    ) as Pick<ConfigDomainMap, K>;
+    return deepFreeze({
+      version: next.version,
+      configRevision: next.configRevision,
+      changedDomains,
+      normalizedPatch: normalizedConfigPatch(observation.config, patch),
+      values,
+      scheduledProviderRefreshes,
+    });
   }
 
   reloadFromDisk(reason: "startup" | "self-write" | "watch"): void {
@@ -479,6 +575,32 @@ function providerDurableIdentity(projection: ProviderProjection): string {
     dependencyFingerprint: projection.dependencyFingerprint,
     discovery,
   });
+}
+
+function normalizedConfigPatch(
+  config: DesktopSettingsConfig,
+  patch: DesktopSettingsConfigPatch,
+): DesktopSettingsConfigPatch {
+  return selectPatchedValues(config, patch) as DesktopSettingsConfigPatch;
+}
+
+function selectPatchedValues(config: unknown, patch: unknown): unknown {
+  if (
+    patch === null
+    || typeof patch !== "object"
+    || Array.isArray(patch)
+  ) {
+    return config === undefined ? patch : structuredClone(config);
+  }
+  const configRecord = config && typeof config === "object"
+    ? config as Record<string, unknown>
+    : {};
+  return Object.fromEntries(
+    Object.entries(patch as Record<string, unknown>).map(([key, value]) => [
+      key,
+      selectPatchedValues(configRecord[key], value),
+    ]),
+  );
 }
 
 function changedConfigDomains(

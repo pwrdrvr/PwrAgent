@@ -14,6 +14,7 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 const cleanups: Array<() => void> = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   while (cleanups.length > 0) {
     cleanups.pop()?.();
   }
@@ -259,6 +260,86 @@ cli_path = "/opt/qwen-one"
     expect(readSecretPresence).not.toHaveBeenCalled();
   });
 
+  it("writes and publishes an ordinary setting without broad enrichment", async () => {
+    const fixture = createFixture(`
+[general.appearance]
+theme = "system"
+
+[messaging]
+enabled = false
+`);
+    const discoverProvider = vi.fn(async () => ({ candidates: [] }));
+    const readSecretPresence = vi.fn(() => ({
+      discordBotToken: {
+        configured: true,
+        source: "keychain" as const,
+        writable: true,
+      },
+    }));
+    const store = fixture.createStore({
+      discoverProvider,
+      readSecretPresence,
+    });
+    const messagingListener = vi.fn();
+    store.subscribe(["messaging"], messagingListener);
+    readSecretPresence.mockClear();
+    const readFile = vi.spyOn(fs, "readFileSync");
+
+    const result = await store.write(
+      { messaging: { enabled: true } },
+      ["messaging"],
+    );
+
+    expect(result).toMatchObject({
+      changedDomains: ["messaging"],
+      normalizedPatch: { messaging: { enabled: true } },
+      values: { messaging: { enabled: true } },
+      scheduledProviderRefreshes: [],
+    });
+    expect(store.read("messaging").enabled).toBe(true);
+    expect(messagingListener).toHaveBeenCalledOnce();
+    expect(discoverProvider).not.toHaveBeenCalled();
+    expect(readSecretPresence).not.toHaveBeenCalled();
+    const configReads = readFile.mock.calls.filter(
+      ([target]) => target === fixture.configPath,
+    );
+    readFile.mockRestore();
+    expect(configReads).toHaveLength(1);
+  });
+
+  it("schedules discovery only for the provider changed by a store write", async () => {
+    const fixture = createFixture(`
+[acp_agents.qwen]
+cli_path = "/opt/qwen-one"
+`);
+    const discoverProvider = vi.fn(async ({ projection }) => ({
+      candidates: [],
+      selectedCommand: projection.configured.commandOverride,
+      selectedVersion: "1.0.0",
+    }));
+    const store = fixture.createStore({ discoverProvider });
+
+    const result = await store.write(
+      { acpAgents: { qwen: { cliPath: "/opt/qwen-two" } } },
+      ["providers"],
+    );
+
+    expect(result.changedDomains).toEqual(["providers"]);
+    expect(result.normalizedPatch).toEqual({
+      acpAgents: { qwen: { cliPath: "/opt/qwen-two" } },
+    });
+    expect(result.scheduledProviderRefreshes).toEqual(["qwen"]);
+    await vi.waitFor(() => {
+      expect(discoverProvider).toHaveBeenCalledOnce();
+    });
+    expect(discoverProvider.mock.calls[0]?.[0].provider).toBe("qwen");
+    await vi.waitFor(() => {
+      expect(store.read("providers").qwen.lastKnownGood?.selectedCommand).toBe(
+        "/opt/qwen-two",
+      );
+    });
+  });
+
   it("repairs an invalid external edit without discarding the last good state", () => {
     const fixture = createFixture("[general.appearance]\ntheme = \"dark\"\n");
     const store = fixture.createStore();
@@ -365,10 +446,9 @@ describe("DesktopConfigStore write cost", () => {
     const db = StateDb.open(path.join(root, "state.db"));
     const store = new DesktopConfigStore({ configPath, stateDb: db });
     try {
-      fs.writeFileSync(configPath, "[messaging]\nenabled = true\n", "utf8");
       resetSqliteWriteMetrics();
       const { writes } = await measureSqliteWrites(async () => {
-        store.reloadFromDisk("self-write");
+        await store.write({ messaging: { enabled: true } }, ["messaging"]);
       });
       expectSqliteWriteBudget({
         note:
