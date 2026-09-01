@@ -381,7 +381,10 @@ An ordinary reply to an existing binding does not build a navigation snapshot.
 
 - the bound thread's durable overlay (execution mode, model, reasoning,
   service tier, fast mode, Agent/handoff origin);
-- its already-observed thread-list summary, when one is cached;
+- its last-observed thread-list summary — from the thread-list cache while that
+  is warm, and otherwise from the thread information store, which every turn,
+  status, and permission-mode notification would otherwise have emptied out
+  from under a status card;
 - the registry's per-thread active turn, queued permission mode, and queued
   turn projections; and
 - the equivalent targeted owner read for a federated binding.
