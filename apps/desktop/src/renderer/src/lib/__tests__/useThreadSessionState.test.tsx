@@ -2881,6 +2881,20 @@ describe("useThreadSessionState", () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            turn: {
+              id: "turn-2",
+              status: "in_progress",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
           method: "item/started",
           params: {
             threadId: "thread-1",
@@ -2908,6 +2922,17 @@ describe("useThreadSessionState", () => {
           },
         },
       });
+    });
+
+    act(() => {
+      result.current.addOptimisticUserMessage(
+        "Run the corrected command.",
+        [],
+        "turn-2",
+      );
+    });
+
+    act(() => {
       agentEventHandler?.({
         backend: "codex",
         notification: {

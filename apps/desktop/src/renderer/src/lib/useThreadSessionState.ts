@@ -3348,6 +3348,27 @@ function removePromotedOptimisticUserMessage(
   };
 }
 
+function findAuthoritativeUserMessageForOptimisticEntry(params: {
+  entry: AppServerThreadMessageEntry;
+  response: AppServerReadThreadResponse | undefined;
+  turnId: string | undefined;
+}): AppServerThreadMessageEntry | undefined {
+  if (!params.turnId) {
+    return undefined;
+  }
+
+  return params.response?.replay.entries.find(
+    (entry): entry is AppServerThreadMessageEntry =>
+      entry.type === "message"
+      && entry.role === "user"
+      && !entry.id.startsWith("optimistic-")
+      && entry.turn?.id === params.turnId
+      && messageMatchesOptimisticEntry(entry, params.entry, {
+        allowImageUrlMismatch: true,
+      })
+  );
+}
+
 function appendMessageEntries(
   response: AppServerReadThreadResponse | undefined,
   params: {
@@ -4134,7 +4155,8 @@ export function useThreadSessionState(params: {
   activeTurnStartedAt?: number;
   addOptimisticUserMessage: (
     text: string,
-    imageParts?: AppServerThreadImagePart[]
+    imageParts?: AppServerThreadImagePart[],
+    turnId?: string,
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
@@ -6367,33 +6389,63 @@ export function useThreadSessionState(params: {
   ]);
 
   const addOptimisticUserMessage = useCallback(
-    (text: string, imageParts: AppServerThreadImagePart[] = []): string => {
+    (
+      text: string,
+      imageParts: AppServerThreadImagePart[] = [],
+      turnId?: string,
+    ): string => {
       if (!thread || !threadKey) {
         return `optimistic-${Date.now()}`;
       }
 
       const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const createdAt = Date.now();
       const parts: AppServerThreadMessageEntry["parts"] = [
         ...(text ? [{ type: "text" as const, text }] : []),
         ...imageParts,
       ];
-      updateSession(threadKey, (current) => ({
-        ...current,
-        expectOwnUpdate: true,
-        interacted: true,
-        lastTouchedAt: Date.now(),
-        optimisticEntries: [
-          ...current.optimisticEntries,
-          {
-            type: "message",
-            id,
-            role: "user",
-            text,
-            parts,
-            createdAt: Date.now(),
-          },
-        ],
-      }));
+      const optimisticEntry: AppServerThreadMessageEntry = {
+        type: "message",
+        id,
+        role: "user",
+        text,
+        parts,
+        createdAt,
+      };
+      updateSession(threadKey, (current) => {
+        const authoritativeEntry =
+          findAuthoritativeUserMessageForOptimisticEntry({
+            entry: optimisticEntry,
+            response: current.response,
+            turnId: turnId ?? current.activeTurnId,
+          });
+        const nextResponse = authoritativeEntry
+          ? appendMessageEntries(
+              current.response,
+              {
+                backend: thread.source,
+                threadId: thread.id,
+              },
+              [
+                mergeCompletedUserMessageWithOptimisticEntry(
+                  authoritativeEntry,
+                  [optimisticEntry],
+                ),
+              ],
+            )
+          : current.response;
+
+        return {
+          ...current,
+          expectOwnUpdate: true,
+          interacted: true,
+          lastTouchedAt: Date.now(),
+          optimisticEntries: authoritativeEntry
+            ? current.optimisticEntries
+            : [...current.optimisticEntries, optimisticEntry],
+          response: nextResponse,
+        };
+      });
       return id;
     },
     [thread, threadKey, updateSession]

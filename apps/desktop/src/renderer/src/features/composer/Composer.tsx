@@ -216,7 +216,8 @@ type ComposerProps = {
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
     text: string,
-    imageParts?: AppServerThreadImagePart[]
+    imageParts?: AppServerThreadImagePart[],
+    turnId?: string,
   ) => string;
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
@@ -6281,6 +6282,7 @@ export function Composer(props: ComposerProps) {
             optimisticMessageId = props.addOptimisticUserMessage?.(
               payload.displayText,
               payload.imageParts,
+              response.turnId,
             );
             setActiveOptimisticMessageId(optimisticMessageId);
           }
