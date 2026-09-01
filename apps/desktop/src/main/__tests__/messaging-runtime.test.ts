@@ -35,7 +35,6 @@ import type {
   MessagingAutomationInboundHandler,
   MessagingAutomationInboundMatcher,
 } from "../messaging/messaging-runtime";
-import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 
 const messagingLog = {
   debug: vi.fn(),
