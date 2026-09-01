@@ -424,6 +424,45 @@ function usageActivity(params: {
   };
 }
 
+const sampleGitWorkingState = {
+  dirtyFiles: 0,
+  dirtyAdditions: 0,
+  dirtyDeletions: 0,
+  untrackedFiles: 0,
+  unpushedCommits: 0,
+  baseBranch: "main",
+  baseAheadCommitCount: 16,
+};
+
+// Only a multi-project thread is probe-eligible: a single-directory thread's
+// review target needs no working state to disambiguate it.
+function multiProjectThread(params: {
+  worktreePath: string;
+}): AppServerThreadSummary {
+  return {
+    id: `thread-${params.worktreePath}`,
+    title: "PwrAgent federation dogfood",
+    titleSource: "explicit",
+    source: "codex",
+    projectKey: params.worktreePath,
+    linkedDirectories: [
+      {
+        id: "pwragent",
+        kind: "worktree",
+        label: "PwrAgnt",
+        path: "/repos/PwrAgnt",
+        worktreePath: params.worktreePath,
+      },
+      {
+        id: "pwrsnap",
+        kind: "local",
+        label: "PwrSnap",
+        path: "/repos/PwrSnap",
+      },
+    ],
+  };
+}
+
 function createOverlayStoreMock(params?: {
   executionMode?: "default" | "full-access";
   launchpadDefaults?: NavigationLaunchpadDefaults;
@@ -3330,6 +3369,162 @@ describe("DesktopBackendRegistry", () => {
         },
       );
     } finally {
+      await registry.close();
+    }
+  });
+
+  it("schedules a stale working-state probe without awaiting the Git fleet", async () => {
+    // A navigation serving path must answer from cache. Holding the snapshot
+    // until the fleet returns is what put a Git probe on every messaging
+    // command and on every remote viewer's snapshot.
+    const worktreePath = "/worktrees/PwrAgnt";
+    let releaseProbe: (() => void) | undefined;
+    const probeReleased = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const readWorkingStateEntries = vi.fn(() =>
+      (async function* () {
+        await probeReleased;
+        yield { worktreePath, gitWorkingState: sampleGitWorkingState };
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates([
+          multiProjectThread({ worktreePath }),
+        ]),
+      ).resolves.toEqual({ scheduledCount: 1 });
+      expect(overlayStore.writeThreadGitWorkingStateCacheEntry)
+        .not.toHaveBeenCalled();
+
+      releaseProbe?.();
+      await expectEventually(
+        async () =>
+          overlayStore.writeThreadGitWorkingStateCacheEntry.mock.calls.length,
+        1,
+      );
+    } finally {
+      releaseProbe?.();
+      await registry.close();
+    }
+  });
+
+  it("caps a background working-state round and rotates the oldest probe forward", async () => {
+    // Navigation hands over a stable thread order. Without rotation the same
+    // prefix would win every round and the tail would never converge.
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const worktreePaths = Array.from(
+      { length: 9 },
+      (_unused, index) => `/worktrees/repo-${index}`,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () =>
+        Object.fromEntries(worktreePaths.map((worktreePath, index) => [
+          worktreePath,
+          {
+            worktreePath,
+            gitWorkingState: sampleGitWorkingState,
+            // All stale; the highest index was probed most recently.
+            fetchedAt: 1_000 + index,
+          },
+        ])),
+      ),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates(
+          // Reversed, so a naive prefix would take the freshest eight and
+          // only rotation can produce the ascending expectation below.
+          worktreePaths
+            .map((worktreePath) => multiProjectThread({ worktreePath }))
+            .reverse(),
+        ),
+      ).resolves.toEqual({ scheduledCount: 8 });
+      expect(readWorkingStateEntries).toHaveBeenCalledWith(
+        worktreePaths.slice(0, 8),
+        expect.anything(),
+      );
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("coalesces a background working-state probe already in flight", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    let releaseProbe: (() => void) | undefined;
+    const probeReleased = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        await probeReleased;
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const threads = [
+      multiProjectThread({ worktreePath }),
+      multiProjectThread({ worktreePath: `${worktreePath}-2` }),
+    ];
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
+      ).resolves.toEqual({ scheduledCount: 1 });
+      // The first worktree is in flight, so a capped round has to reach past
+      // it rather than re-selecting it and scheduling nothing.
+      await expect(
+        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
+      ).resolves.toEqual({ scheduledCount: 1 });
+      await expect(
+        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
+      ).resolves.toEqual({ scheduledCount: 0 });
+      expect(readWorkingStateEntries.mock.calls.map(([paths]) => paths))
+        .toEqual([[worktreePath], [`${worktreePath}-2`]]);
+    } finally {
+      releaseProbe?.();
       await registry.close();
     }
   });

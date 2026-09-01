@@ -303,10 +303,19 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       await this.registry.canonicalizeNavigationThreadPullRequests(
         snapshot.threads,
       );
+    // Working state is renderer-facing chip data — no main-process messaging
+    // or federation code reads it. Serve the durable cache the way the
+    // renderer's own navigation path does (ipc/app-server.ts) and let a
+    // bounded background probe converge the rest, instead of holding every
+    // messaging command and every remote viewer's snapshot behind a Git fleet.
     const threads = await this.registry.hydrateThreadGitWorkingStates(
       canonicalThreads,
-      { probeMissing: true },
     );
+    if (typeof this.registry.refreshThreadGitWorkingStates === "function") {
+      void this.registry.refreshThreadGitWorkingStates(threads).catch(() => {
+        // Background convergence: the next snapshot reads whatever landed.
+      });
+    }
     const hydratedSnapshot = {
       ...snapshot,
       threads,

@@ -314,7 +314,7 @@ describe("DesktopMessagingBackendBridge", () => {
     finishRefresh?.();
   });
 
-  it("hydrates review working state before the messenger chooses a project", async () => {
+  it("serves cached review working state and probes in the background", async () => {
     const pwrAgentWorktree = "/worktrees/PwrAgnt";
     const listedThread: AppServerThreadSummary = {
       id: "thread-1",
@@ -379,6 +379,8 @@ describe("DesktopMessagingBackendBridge", () => {
       ),
       listThreads: vi.fn(async () => [listedThread]),
       readDirectoryStatuses: vi.fn(async () => ({})),
+      // A Git fleet that never settles: the snapshot must not wait on it.
+      refreshThreadGitWorkingStates: vi.fn(() => new Promise(() => {})),
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);
@@ -387,7 +389,9 @@ describe("DesktopMessagingBackendBridge", () => {
 
     expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
       [reconciledThread],
-      { probeMissing: true },
+    );
+    expect(registry.refreshThreadGitWorkingStates).toHaveBeenCalledExactlyOnceWith(
+      [{ ...reconciledThread, gitWorkingState }],
     );
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,

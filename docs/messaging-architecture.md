@@ -422,6 +422,26 @@ This policy is interaction-driven. It adds no polling timer and no timer-driven
 SQLite writes; persistence changes only when a scheduled targeted or bounded
 background probe completes.
 
+#### Thread working-state refresh policy
+
+Per-worktree working state (dirty files, unpushed commits, base-branch drift)
+follows the same shape. It is renderer-facing chip data: no main-process
+messaging or federation code reads it. A broad snapshot serves the durable
+per-worktree cache and treats an entry as fresh for 30 seconds — shorter than
+the directory TTL, because working state has to catch out-of-band terminal and
+IDE edits.
+
+Only a multi-project thread is probe-eligible; a single-directory thread's
+review target needs no working state to disambiguate it. A snapshot schedules
+at most eight stale worktrees at once and never awaits that batch. Never-probed
+worktrees are selected first, then the oldest probe rotates forward, so a fleet
+larger than one round still converges. Registry scheduling coalesces each
+worktree while its probe is pending, and in-flight worktrees are excluded
+before the batch cap so a saturated round still reaches the paths behind it.
+
+A caller that cannot tolerate a stale answer awaits the fleet through
+`hydrateThreadGitWorkingStates(..., { probeMissing: true })` instead.
+
 ### Single platform-agnostic detach pipeline
 
 The detach flow — retire the channel's status surface, revoke the binding in the store, deliver a "Thread detached" confirmation — has exactly one implementation: `MessagingController.runDetachPipeline`. Every detach origin (Discord `/detach`, Telegram `/detach`, the desktop right-click "Unbind" chip, future archive-on-delete flows, future "Unbind all") routes through it.
