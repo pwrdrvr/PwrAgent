@@ -71,6 +71,12 @@ describe("Directories lens thread list ARIA", () => {
       within(threads).getAllByRole("listitem").length,
     ).toBeGreaterThan(0);
     expect(threads).toHaveAttribute("aria-label", "Threads in Project 1");
+
+    // The pinned lane, by the same selector `a11y.spec.ts` uses as its
+    // precondition there. Validated here so a rename of the attribute fails
+    // in a second rather than on a VM lab.
+    expect(threads.querySelectorAll('[data-thread-pin-state="pinned"]'))
+      .toHaveLength(2);
   });
 
   it("wraps every non-row child so the list owns only listitems", () => {

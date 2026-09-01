@@ -543,6 +543,13 @@ for (const theme of AUDIT_THEMES) {
     // neither, so borrowing that fixture would scan an empty lens and stay
     // green over the bug this block exists to catch.
     test("directories lens has no violations", async () => {
+      // Three unscoped scans plus a launch in one budget, against a window
+      // rendering 15 sidebar rows. The neighbouring blocks do two, or scan
+      // the much smaller map window. A slow guest otherwise reports "Test
+      // timeout of 30000ms exceeded" from inside whichever step was running,
+      // which costs exactly the attributability the per-step split buys.
+      test.setTimeout(60_000);
+
       const app = await launchAuditApp({
         fixturePath: DIRECTORIES_FIXTURE,
         theme,
@@ -602,12 +609,30 @@ for (const theme of AUDIT_THEMES) {
           .filter({ has: directory })
           .getByRole("list", { name: /^Threads in PwrAgent/ });
 
+        // Every scan below must measure the at-rest state, and a Playwright
+        // click leaves the pointer where it landed.
+        // `.directory-row__header:hover` lifts `.directory-row__launchpad-cluster`
+        // from `opacity: 0` to `1`, and axe treats zero opacity as hidden — so
+        // without this the collapsed scan would audit a hovered row while the
+        // two before it audited an unhovered one, and the three would not be
+        // comparable. It also keeps a latent failure from surfacing as a
+        // mystery: the cluster's split-button chevron is 16x24, under the
+        // `target-size` floor, and is absent here only because an isolated
+        // E2E profile has no federation peers to offer.
+        const settle = async () => {
+          await app.window.mouse.move(0, 0);
+        };
+
         await test.step("expanded directory thread list", async () => {
-          // The launch selection lands on `thread-directories-01`, and a
-          // directory holding the selected thread renders expanded — so this
-          // row arrives open rather than being clicked open. Asserted, not
-          // assumed: the list under audit only exists in this state, and a
-          // collapsed row would leave the scan with nothing to look at.
+          // This row arrives open rather than being clicked open: the launch
+          // selection falls back to `response.threads[0]`
+          // (`getFallbackSelectionKey`) — NOT to the fixture's
+          // `metadata.threadId`, which no selection path reads — and a
+          // directory holding the selected thread renders expanded. So the
+          // precondition is coupled to `thread-directories-01` carrying the
+          // fixture's newest `updatedAt`; reorder that array and the
+          // expansion moves to the PwrSnap row. Asserted, not assumed: the
+          // list under audit only exists in this state.
           await expect(directory).toHaveAttribute("aria-expanded", "true");
 
           // Precondition assertions, not decoration. An expanded row that
@@ -615,6 +640,14 @@ for (const theme of AUDIT_THEMES) {
           // nothing, and each control named here is one the fix had to keep
           // valid inside the list.
           await expect(threads).toBeVisible();
+          // The seeded pins, asserted where they are used. With none, the
+          // divider's `directoryPinnedThreads.length > 0` guard drops it and
+          // the lane silently becomes 14 unpinned rows — the first failure
+          // would be a 5s timeout on the control below, pointing nowhere near
+          // the seeder.
+          await expect(
+            threads.locator('[data-thread-pin-state="pinned"]'),
+          ).toHaveCount(2);
           await expect(
             threads.getByRole("button", {
               name: "Hide directory threads for PwrAgent",
@@ -630,6 +663,7 @@ for (const theme of AUDIT_THEMES) {
           // count a sub-thread list's own rows and read as fixture drift.
           await expect(listItems(threads)).toHaveCount(14);
 
+          await settle();
           await runAxe(app.window, "directories lens, expanded directory");
         });
 
@@ -641,6 +675,7 @@ for (const theme of AUDIT_THEMES) {
             .getByRole("button", { name: "Show 2 more", exact: true })
             .click();
           await expect(listItems(threads)).toHaveCount(16);
+          await settle();
           await runAxe(app.window, "directories lens, unpinned overflow");
         });
 
@@ -648,9 +683,18 @@ for (const theme of AUDIT_THEMES) {
           // Collapsing unmounts the list, so this scan covers the directory
           // rows on their own — the state the lens opens in for every
           // directory that does not hold the selected thread.
+          //
+          // This holds only because selecting a directory does not touch
+          // `selectedItemKey`: the force-expand effect in DirectoriesList
+          // re-opens the row holding the selection whenever that key CHANGES,
+          // and its explicit-collapse guard is what lets a click win. If
+          // directory selection ever also selected the directory's launchpad,
+          // the click would collapse and the effect would immediately
+          // re-expand, and this assertion would never pass again.
           await directory.click();
           await expect(directory).toHaveAttribute("aria-expanded", "false");
           await expect(threads).toHaveCount(0);
+          await settle();
           await runAxe(app.window, "directories lens, collapsed");
         });
       } finally {
