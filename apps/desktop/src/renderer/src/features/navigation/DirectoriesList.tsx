@@ -1166,10 +1166,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
         && Boolean(props.onUpdateSubthreadOrder);
       return (
         <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
-          {children.map((child) => {
+          {/* The parent's own workers lead its tray. Trailing them after every
+              child read as the last child's workers and buried them under a
+              long child list. */}
+          {nativeSubAgentCount > 0 ? (
+            <NativeSubAgentsDisclosure compact thread={parent} />
+          ) : null}
+          {children.flatMap((child) => {
             const childKey = threadSummaryIdentityKey(child);
             const rowDropKey = `subthread:${parentKey}:${childKey}`;
-            return (
+            // A row plus its own worker group, as siblings of this list. A
+            // wrapping element would break the tray's flat list semantics.
+            return [
             <ThreadRow
               key={`${directory.key}:${childKey}`}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -1270,12 +1278,22 @@ export function DirectoriesList(props: DirectoriesListProps) {
               onSetReaction={props.onSetReaction}
               onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-            />
-            );
+            />,
+            // A child's workers belong to the child, so they render under its
+            // own row. They follow it out of this tray when it is unlinked,
+            // because the child summary is what carries them.
+            ...(child.codexNativeSubAgents?.length
+              ? [
+                  <NativeSubAgentsDisclosure
+                    key={`${directory.key}:${childKey}:subagents`}
+                    compact
+                    nested
+                    thread={child}
+                  />,
+                ]
+              : []),
+            ];
           })}
-          {nativeSubAgentCount > 0 ? (
-            <NativeSubAgentsDisclosure compact thread={parent} />
-          ) : null}
         </div>
       );
     };

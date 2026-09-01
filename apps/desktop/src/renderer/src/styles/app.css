@@ -4024,6 +4024,15 @@ textarea,
   padding-bottom: 3px;
 }
 
+/* A child thread's own workers. The guide and indent follow `.subthread-list`
+   so the group reads as hanging off the child row above it, not as another
+   entry in the parent's tray. */
+.native-subagents--nested {
+  margin: 1px 0 2px 14px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-subtle);
+}
+
 .thread-row-shell--nested .thread-row {
   padding-left: 12px;
 }
