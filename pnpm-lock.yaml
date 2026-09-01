@@ -212,7 +212,7 @@ importers:
         version: 4.12.1(playwright-core@1.62.1)
       '@electron/asar':
         specifier: ^4.2.0
-        version: 4.2.1
+        version: 4.3.0
       '@playwright/test':
         specifier: ^1.55.0
         version: 1.62.1
@@ -242,7 +242,7 @@ importers:
         version: 4.13.0
       electron:
         specifier: ^41.10.3
-        version: 41.10.5
+        version: 41.10.6
       electron-builder:
         specifier: 26.15.7
         version: 26.15.7(electron-builder-squirrel-windows@26.15.7)
@@ -550,8 +550,8 @@ packages:
     engines: {node: '>=10.12.0'}
     hasBin: true
 
-  '@electron/asar@4.2.1':
-    resolution: {integrity: sha512-rGyEe7iy52zxiWuihV/h/AqQrFkx7YnUUJKW1bdufVDHCzIMP/XDrDI/NOzv/LLtzt3NduAzNa475WRmRnmswQ==}
+  '@electron/asar@4.3.0':
+    resolution: {integrity: sha512-k/FFC/NQoTykGBi/Ga4L4KorsAKDdkK0LfNVG90eUG6vPVpJaL3iR9V1ZLbzBAF3QpojK5DcaGOdQOheKZv4JQ==}
     engines: {node: '>=22.12.0'}
     hasBin: true
 
@@ -2351,8 +2351,8 @@ packages:
     resolution: {integrity: sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==}
     engines: {node: '>=8.0.0'}
 
-  electron@41.10.5:
-    resolution: {integrity: sha512-grSJOhLddanWX1UfE8B4xA2kOOduUCfpYoOQ2D4zEYte8lSQtrd1HYbV4xErsZmm+V+1Q3yzCQLBsCxEIiw/QQ==}
+  electron@41.10.6:
+    resolution: {integrity: sha512-NEB7QnVpT2p8S9U5jOCPAtCyhl1WjRT/ODvJP6ec1/dZRUmf/EjYVOBb/dthCmJh4bISqpAroGJ/xRRxX7VwJw==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -3367,10 +3367,6 @@ packages:
   min-indent@1.0.1:
     resolution: {integrity: sha512-I9jwMn07Sy/IwOj3zVkVik2JTvgpaykDZEigL6Rx6N9LbMywwUSMtxET+7lVoDLLd3O3IXwJwvuuns8UB/HeAg==}
     engines: {node: '>=4'}
-
-  minimatch@10.2.5:
-    resolution: {integrity: sha512-MULkVLfKGYDFYejP07QOurDLLQpcjk7Fw+7jXS2R2czRQzR56yHRveU5NDJEOviH+hETZKSkIk5c+T23GjFUMg==}
-    engines: {node: 18 || 20 || >=22}
 
   minimatch@10.2.6:
     resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
@@ -4832,10 +4828,10 @@ snapshots:
       glob: 7.2.3
       minimatch: 3.1.5
 
-  '@electron/asar@4.2.1':
+  '@electron/asar@4.3.0':
     dependencies:
       glob: 13.0.6
-      minimatch: 10.2.5
+      minimatch: 10.2.6
 
   '@electron/fuses@1.8.0':
     dependencies:
@@ -6728,7 +6724,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@41.10.5:
+  electron@41.10.6:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0
@@ -8051,10 +8047,6 @@ snapshots:
   mimic-response@3.1.0: {}
 
   min-indent@1.0.1: {}
-
-  minimatch@10.2.5:
-    dependencies:
-      brace-expansion: 5.0.9
 
   minimatch@10.2.6:
     dependencies:

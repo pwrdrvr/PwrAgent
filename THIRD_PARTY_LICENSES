@@ -214,7 +214,7 @@ MIT
 - devlop@1.1.0 | wooorm/devlop
 - dunder-proto@1.0.1 | https://github.com/es-shims/dunder-proto
 - ee-first@1.1.1 | jonathanong/ee-first
-- electron@41.10.5 | https://github.com/electron/electron
+- electron@41.10.6 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
 - electron-updater@6.8.9 | https://github.com/electron-userland/electron-builder
 - encodeurl@2.0.0 | pillarjs/encodeurl
@@ -3169,13 +3169,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-electron@41.10.5 (MIT)
+electron@41.10.6 (MIT)
 ----------------------
 
 Applies to:
-- electron@41.10.5 (MIT)
+- electron@41.10.6 (MIT)
 
-Representative file: electron@41.10.5/LICENSE
+Representative file: electron@41.10.6/LICENSE
 
 Copyright (c) Electron contributors
 Copyright (c) 2013-2020 GitHub Inc.
