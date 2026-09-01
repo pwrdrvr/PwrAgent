@@ -24036,8 +24036,6 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.35;
 }
 
-/* Token Miser folded under its turn: one summary line that keeps moving as
-   replays are counted, a chevron, and cards only for gates worth a card. */
 /* The bill split by the model that spent it. These rows live inside the
    pricing summary card, so they carry no border box of their own — the
    hairline between them is the whole frame, and the card supplies the rest. */
@@ -24117,9 +24115,13 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .pricing-spend-row__label {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .pricing-spend-row__meta {
@@ -24161,6 +24163,8 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 11px;
 }
 
+/* Token Miser folded under its turn: one summary line that keeps moving as
+   replays are counted, a chevron, and cards only for gates worth a card. */
 .pricing-token-miser {
   margin: 6px 0 0;
   border: 1px solid var(--border-subtle);

@@ -110,7 +110,13 @@ function spendRow(model: string): HTMLElement {
 
 function expandSpendRow(model: string): HTMLElement {
   const row = spendRow(model);
-  fireEvent.click(within(row).getByRole("button"));
+  const toggle = within(row).getByRole("button");
+  // A lone-model thread renders its row open, so clicking unconditionally
+  // would close the body these callers are about to read — and a negative
+  // assertion against a closed body passes for the wrong reason.
+  if (toggle.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(toggle);
+  }
   return row;
 }
 
@@ -1165,7 +1171,7 @@ describe("ThreadContextPanel", () => {
       inputTokens: 2_000,
       model: "gpt-5.6-luna",
       outputTokens: 20,
-      sourceItemId: "thread-naming-1",
+      sourceItemId: "system:title-helper:codex:thread-1",
       totalCostMicros: 1_000,
       totalTokens: 2_020,
       uncachedInputTokens: 2_000,
@@ -1204,11 +1210,113 @@ describe("ThreadContextPanel", () => {
     expect(parent).toHaveTextContent("Reasoning250");
 
     const helper = expandSpendRow("gpt-5.6-luna");
-    expect(within(helper).getByText("2 rows")).toBeInTheDocument();
-    expect(helper).toHaveTextContent("2 sub-agents");
+    // One provider, so no group heading restates the headline and the rows
+    // name the provider themselves.
+    expect(within(helper).getByText("OpenAI · 2 rows")).toBeInTheDocument();
+    // A Token Miser gate and the thread namer are PwrAgent's own helpers, not
+    // reviewers the operator dispatched, so they are counted apart.
+    expect(helper).toHaveTextContent("2 system helpers");
     expect(helper).toHaveTextContent("Uncached input7k");
     expect(helper).toHaveTextContent("Output420");
     expect(helper).not.toHaveTextContent("90k");
+  });
+
+  it("holds the lone row open when a second model starts billing", () => {
+    /* The default was derived from the live bucket count, so the row an
+       operator was reading closed itself the moment a reviewer — or the thread
+       namer — billed a second model. It is decided once and then held. */
+    const turnLine = buildMonitorLine({
+      model: "gpt-5.6-sol",
+      scope: "turn",
+      source: "live",
+      sourceItemId: "item-1",
+      uncachedInputTokens: 10_000,
+      usageLineId: "turn-line-1",
+    });
+    const reviewerLine = buildMonitorLine({
+      model: "gpt-5.6-luna",
+      parentThreadId: "thread-1",
+      sourceItemId: "review:luna",
+      uncachedInputTokens: 7_000,
+      usageLineId: "review-line-1",
+    });
+    const panelProps = (lines: ThreadUsageLineRecord[]) => (
+      <ThreadContextPanel
+        activeTab="pricing"
+        backends={[baseBackend]}
+        pinned
+        thread={baseThread}
+        onActiveTabChange={vi.fn()}
+        pricing={{ lines, summaries: [] }}
+        threadPricingSummaryEnabled
+      />
+    );
+    const { rerender } = render(panelProps([turnLine]));
+    expect(spendRow("gpt-5.6-sol")).toHaveTextContent("Uncached input10k");
+
+    rerender(panelProps([turnLine, reviewerLine]));
+
+    expect(spendRow("gpt-5.6-sol")).toHaveTextContent("Uncached input10k");
+    expect(spendRow("gpt-5.6-luna")).not.toHaveTextContent("Uncached input");
+  });
+
+  it("says a model is unpriced instead of pricing it at zero", () => {
+    /* An all-unpriced bucket rendered "$0.000", which is what a model that
+       genuinely cost nothing renders. The turn cards below already make the
+       distinction. */
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          buildMonitorLine({
+            model: "gpt-6-preview",
+            priceStatus: "unpriced",
+            priceUnavailableReason: "missing-rate",
+            scope: "turn",
+            source: "live",
+            totalCostMicros: 0,
+            uncachedInputTokens: 4_000_000,
+            usageLineId: "unpriced-line",
+          }),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const row = spendRow("gpt-6-preview");
+    expect(within(row).getByText("Unpriced")).toBeInTheDocument();
+    expect(row).not.toHaveTextContent("$0.000");
+  });
+
+  it("prints no dollars in the spend split when USD is turned off", () => {
+    /* The headline honors the display options; the rows used to print dollars
+       through them, so one card said "No estimate units selected" and
+       contradicted itself two lines below. */
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          buildMonitorLine({
+            model: "gpt-5.6-sol",
+            scope: "turn",
+            source: "live",
+            totalCostMicros: 800_000,
+            usageLineId: "turn-line-1",
+          }),
+        ],
+        summaries: [],
+      },
+      pricingDisplayOptions: { codexCredits: false, usd: false },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("No estimate units selected")).toBeInTheDocument();
+    expect(document.querySelector(".pricing-spend-list")).not.toHaveTextContent(
+      "$0.80",
+    );
   });
 
   it("summarizes Token Miser above the turn rows on the Pricing tab", () => {
@@ -4623,6 +4731,7 @@ describe("ThreadContextPanel", () => {
           buildMonitorLine({
             backend: "acp:grok",
             createdAt: createdAt - 1,
+            model: "grok-4.5",
             parentThreadId: "thread-1",
             provider: "xai",
             sourceItemId: "turn-grok-1",
@@ -4646,8 +4755,8 @@ describe("ThreadContextPanel", () => {
        from the sub-agent, the same chain the usage card below walks. */
     const rows = summaryCard?.querySelectorAll(".pricing-spend-row") ?? [];
     expect(rows).toHaveLength(2);
-    expect(within(spendRow("gpt-5.5")).getByText("xAI · 1 row")).toBeInTheDocument();
-    expect(within(spendRow("gpt-5.5")).getByText("$2.00")).toBeInTheDocument();
+    expect(within(spendRow("grok-4.5")).getByText("xAI · 1 row")).toBeInTheDocument();
+    expect(within(spendRow("grok-4.5")).getByText("$2.00")).toBeInTheDocument();
     expect(
       within(spendRow("gpt-5.6-sol")).getByText("OpenAI · 1 row"),
     ).toBeInTheDocument();

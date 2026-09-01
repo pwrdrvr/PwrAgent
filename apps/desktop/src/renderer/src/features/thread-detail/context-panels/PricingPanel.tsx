@@ -44,6 +44,7 @@ import {
   buildPricingSpendByModel,
   emptyPricingSummary,
   type PricingModelSpend,
+  prunePricingSpendOverrides,
 } from "../pricing-spend-by-model";
 import { buildTokenMiserSavingsSummary } from "../token-miser-savings-summary";
 
@@ -114,15 +115,6 @@ export function PricingPanel(props: PricingPanelProps) {
     usagePage.key === pricingHistoryKey
       ? usagePage.count
       : PRICING_USAGE_PAGE_SIZE;
-  // Which spend rows the operator has opened, and which they have closed. A
-  // lone row starts open — there is nothing for it to hide, and closing it
-  // would take away the token volume this section replaced.
-  const [spendExpansion, setSpendExpansion] = useState<{
-    key: string;
-    overrides: Readonly<Record<string, boolean>>;
-  }>({ key: pricingHistoryKey, overrides: {} });
-  const spendOverrides =
-    spendExpansion.key === pricingHistoryKey ? spendExpansion.overrides : {};
   const visibleDisplayLines = displayLines.slice(0, visibleUsageRowCount);
   const hiddenUsageRowCount = displayLines.length - visibleDisplayLines.length;
   const estimatedLines = allDisplayLines.filter(isEstimatedUsageGap);
@@ -147,23 +139,49 @@ export function PricingPanel(props: PricingPanelProps) {
     (total, group) => total + group.models.length,
     0,
   );
-  // A thread with one model has nothing to hide behind a click, and hiding it
-  // would take away the token volume this section replaced.
-  const spendRowStartsExpanded = spendModelCount === 1;
-  const isSpendRowExpanded = (key: string): boolean =>
-    spendOverrides[key] ?? spendRowStartsExpanded;
-  const toggleSpendRow = (key: string): void => {
-    setSpendExpansion((current) => {
-      const overrides =
-        current.key === pricingHistoryKey ? current.overrides : {};
-      return {
-        key: pricingHistoryKey,
-        overrides: {
-          ...overrides,
-          [key]: !(overrides[key] ?? spendRowStartsExpanded),
-        },
-      };
+  // Which spend rows the operator has opened, and which they have closed.
+  //
+  // A thread whose spend is one model has nothing to hide behind a click, so
+  // that row starts open on the token volume this section replaced. `openKey`
+  // names it, and is settled once — on the first render with any spend — then
+  // held. Re-deriving the default from the live bucket count closed the row an
+  // operator was reading the moment a reviewer, or even the thread namer,
+  // billed a second model; latching a bare flag instead would have opened
+  // every later row too.
+  const soleSpendKey =
+    spendModelCount === 1 ? spendByModel[0]?.models[0]?.key : undefined;
+  const [spendExpansion, setSpendExpansion] = useState<{
+    key: string;
+    openKey?: string;
+    overrides: Readonly<Record<string, boolean>>;
+    settled: boolean;
+  }>({ key: pricingHistoryKey, overrides: {}, settled: false });
+  const spendKeyMatches = spendExpansion.key === pricingHistoryKey;
+  // A bucket's key carries its model, so a helper whose model arrives late is
+  // re-keyed and leaves its override behind. Reading through the live buckets
+  // keeps a dead override from opening some later unrelated row.
+  const spendOverrides = spendKeyMatches
+    ? prunePricingSpendOverrides(spendExpansion.overrides, spendByModel)
+    : {};
+  if (!spendKeyMatches || (!spendExpansion.settled && spendModelCount > 0)) {
+    setSpendExpansion({
+      key: pricingHistoryKey,
+      ...(soleSpendKey === undefined ? {} : { openKey: soleSpendKey }),
+      overrides: spendKeyMatches ? spendOverrides : {},
+      settled: spendModelCount > 0,
     });
+  }
+  const isSpendRowExpanded = (key: string): boolean =>
+    spendOverrides[key] ?? key === spendExpansion.openKey;
+  const toggleSpendRow = (key: string): void => {
+    setSpendExpansion((current) => ({
+      ...current,
+      key: pricingHistoryKey,
+      overrides: {
+        ...spendOverrides,
+        [key]: !isSpendRowExpanded(key),
+      },
+    }));
   };
   // Thread-level gate result, from every gate this thread spawned. The
   // per-turn folds below price one turn each; this is the same arithmetic run
@@ -429,18 +447,28 @@ export function PricingPanel(props: PricingPanelProps) {
                   Spend by model
                 </span>
                 <div className="pricing-spend-list">
-                  {spendByModel.map((group) => (
+                  {spendByModel.map((group) => {
+                    // A provider earns a subtotal only when it holds more than
+                    // one model AND it is not the whole bill — a lone provider's
+                    // subtotal is the headline three lines above, which is the
+                    // duplication this section was built to remove. Wherever no
+                    // heading names the provider, the rows carry it instead, so
+                    // it is never dropped entirely.
+                    const showGroupHead =
+                      group.models.length > 1 && spendByModel.length > 1;
+                    return (
                     <div className="pricing-spend-group" key={group.key}>
-                      {/* A provider gets a heading only where it contributed
-                          more than one model, because that is the one case
-                          where its subtotal is not already a row. */}
-                      {group.models.length > 1 ? (
+                      {showGroupHead ? (
                         <div className="pricing-spend-group__head">
                           <span>
                             {formatPricingProviderLabel(group.provider)}
                           </span>
                           <span className="pricing-spend-group__total">
-                            {formatMoney(group.totalCostMicros, group.currency)}
+                            {formatSpendMoney({
+                              currency: group.currency,
+                              displayOptions,
+                              totalCostMicros: group.totalCostMicros,
+                            })}
                             {" · "}
                             {formatUsageRowCount(group.usageLineCount)}
                           </span>
@@ -448,15 +476,17 @@ export function PricingPanel(props: PricingPanelProps) {
                       ) : null}
                       {group.models.map((modelSpend) => (
                         <PricingModelSpendRow
+                          displayOptions={displayOptions}
                           expanded={isSpendRowExpanded(modelSpend.key)}
                           key={modelSpend.key}
                           onToggle={() => toggleSpendRow(modelSpend.key)}
-                          showProvider={group.models.length === 1}
+                          showProvider={!showGroupHead}
                           spend={modelSpend}
                         />
                       ))}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
@@ -472,7 +502,7 @@ export function PricingPanel(props: PricingPanelProps) {
         <p className="context-empty">No usage pricing recorded yet.</p>
       ) : null}
 
-      {/* Under the provider summary, above the turn rows: the gate's result is
+      {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}
       {tokenMiserSummary ? (
         <TokenMiserSummaryCard
@@ -530,6 +560,7 @@ export function PricingPanel(props: PricingPanelProps) {
  * replaced the provider split carries both.
  */
 function PricingModelSpendRow(props: {
+  displayOptions: PricingDisplayOptions;
   expanded: boolean;
   onToggle: () => void;
   /** True when no provider heading sits above this row to name it. */
@@ -537,15 +568,39 @@ function PricingModelSpendRow(props: {
   spend: PricingModelSpend;
 }) {
   const summary = props.spend.summary;
+  // A bucket that is entirely unpriced is not a bucket that cost nothing, and
+  // "$0.000" is what it would otherwise read as. The per-turn cards below make
+  // the same distinction; this row was the one place that dropped it.
+  const whollyUnpriced =
+    summary.pricedUsageLineCount === 0 && summary.unpricedUsageLineCount > 0;
   const meta = [
     props.showProvider
       ? formatPricingProviderLabel(props.spend.provider)
       : undefined,
     formatUsageRowCount(summary.usageLineCount),
+    !whollyUnpriced && summary.unpricedUsageLineCount > 0
+      ? `${summary.unpricedUsageLineCount.toLocaleString()} unpriced`
+      : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(" · ");
+  const cost = whollyUnpriced
+    ? "Unpriced"
+    : formatSpendMoney({
+        currency: summary.currency,
+        displayOptions: props.displayOptions,
+        hasEstimates: props.spend.hasEstimatedRows,
+        totalCostMicros: summary.totalCostMicros,
+      });
   const origin = formatModelSpendOrigin(props.spend);
+  // When helpers share this model, the token volume the operator wants is the
+  // thread's own — that is the figure the turn card and Codex's context meter
+  // agree with. The helpers' share is accounted for on its own line rather
+  // than folded in silently.
+  const volume = props.spend.threadSummary ?? summary;
+  const helperTokens = props.spend.threadSummary
+    ? summary.totalTokens - props.spend.threadSummary.totalTokens
+    : 0;
 
   return (
     <div
@@ -563,29 +618,35 @@ function PricingModelSpendRow(props: {
           {props.spend.model ?? "Unknown model"}
         </span>
         <span className="pricing-spend-row__meta">{meta}</span>
-        <span className="pricing-spend-row__cost">
-          {formatMoney(summary.totalCostMicros, summary.currency)}
-        </span>
+        {cost ? (
+          <span className="pricing-spend-row__cost">{cost}</span>
+        ) : null}
       </button>
       {props.expanded ? (
         <div className="pricing-spend-row__body">
           {origin ? <p className="pricing-spend-row__origin">{origin}</p> : null}
           <RailSummaryRow
             label="Uncached input"
-            value={formatCompactCount(summary.uncachedInputTokens)}
+            value={formatCompactCount(volume.uncachedInputTokens)}
           />
           <RailSummaryRow
             label="Cached input"
-            value={formatCompactCount(summary.cachedInputTokens)}
+            value={formatCompactCount(volume.cachedInputTokens)}
           />
           <RailSummaryRow
             label="Output"
-            value={formatCompactCount(summary.outputTokens)}
+            value={formatCompactCount(volume.outputTokens)}
           />
-          {summary.reasoningOutputTokens > 0 ? (
+          {volume.reasoningOutputTokens > 0 ? (
             <RailSummaryRow
               label="Reasoning"
-              value={formatCompactCount(summary.reasoningOutputTokens)}
+              value={formatCompactCount(volume.reasoningOutputTokens)}
+            />
+          ) : null}
+          {props.spend.threadSummary ? (
+            <RailSummaryRow
+              label="Helper tokens"
+              value={formatCompactCount(helperTokens)}
             />
           ) : null}
         </div>
@@ -595,23 +656,47 @@ function PricingModelSpendRow(props: {
 }
 
 /**
+ * A spend figure in the units the operator asked for. Nothing at all when they
+ * turned dollars off — the headline already says why, and a row that kept
+ * printing them would contradict it inside one card.
+ */
+function formatSpendMoney(params: {
+  currency: string;
+  displayOptions: PricingDisplayOptions;
+  hasEstimates?: boolean;
+  totalCostMicros: number;
+}): string | undefined {
+  if (!params.displayOptions.usd) {
+    return undefined;
+  }
+  const money = formatMoney(params.totalCostMicros, params.currency);
+  return params.hasEstimates ? `${money} estimated` : money;
+}
+
+/**
  * Says where a model's rows came from, when saying it adds something. A thread
  * whose own model is also a reviewer's reads "This thread's model · 2
  * sub-agents"; a bucket that is only turn rows says so once and stops.
+ *
+ * Token Miser gates and the thread namer are counted apart from sub-agents.
+ * They bill real money, but the operator dispatched none of them, and folding
+ * them into the sub-agent count reported reviewers that never ran.
  */
 function formatModelSpendOrigin(spend: PricingModelSpend): string | undefined {
-  const subAgents =
+  const parts = [
+    spend.threadUsageLineCount > 0 ? "This thread's model" : undefined,
     spend.subAgentCount > 0
       ? `${spend.subAgentCount.toLocaleString()} sub-agent${
           spend.subAgentCount === 1 ? "" : "s"
         }`
-      : undefined;
-  if (spend.threadUsageLineCount > 0) {
-    return subAgents
-      ? `This thread's model · ${subAgents}`
-      : "This thread's model";
-  }
-  return subAgents;
+      : undefined,
+    spend.systemHelperCount > 0
+      ? `${spend.systemHelperCount.toLocaleString()} system helper${
+          spend.systemHelperCount === 1 ? "" : "s"
+        }`
+      : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
 function formatUsageRowCount(count: number): string {

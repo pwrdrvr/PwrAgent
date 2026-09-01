@@ -74,6 +74,14 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
       "Unknown model",
       "grok-4.5",
     ]);
+    // A bucket nothing could price says so; "$0.000" is what a model that
+    // genuinely cost nothing would read as.
+    const unpricedSpendRow = contextRail.locator(".pricing-spend-row", {
+      hasText: "Unknown model",
+    });
+    await expect(
+      unpricedSpendRow.locator(".pricing-spend-row__cost"),
+    ).toHaveText("Unpriced");
 
     // Rows arrive collapsed whenever the thread spent on more than one model,
     // and expanding one shows that model's own token volume — the reviewer's
