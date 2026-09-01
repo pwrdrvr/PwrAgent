@@ -1728,7 +1728,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             {expanded ? (
               <div className="directory-row__details">
                 {visibleThreadCount > 0 ? (
-                  <div className="sidebar-list sidebar-list--compact directory-row__threads">
+                  <div className="sidebar-list sidebar-list--compact directory-row__threads" role="list" aria-label={`Threads in ${directory.label}`}>
                     {directoryPinnedThreads.map((thread) => {
 	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
@@ -1824,67 +1824,71 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
                     {directoryPinnedThreads.length > 0 &&
                     directoryUnpinnedThreadCount > 0 ? (
-                      <button
-                        type="button"
-                        className="recents-pinned-divider directory-row__thread-divider"
-                        aria-expanded={!directoryThreadsCollapsed}
-                        aria-label={`${
-                          directoryThreadsCollapsed ? "Show" : "Hide"
-                        } directory threads for ${directory.label}`}
-                        disabled={
-                          directoryUnconfigured
-                          || !props.onSetDirectoryThreadsCollapsed
-                        }
-                        onClick={() => {
-                          if (
+                      <div className="directory-row__threads-control" role="listitem">
+                        <button
+                          type="button"
+                          className="recents-pinned-divider directory-row__thread-divider"
+                          aria-expanded={!directoryThreadsCollapsed}
+                          aria-label={`${
+                            directoryThreadsCollapsed ? "Show" : "Hide"
+                          } directory threads for ${directory.label}`}
+                          disabled={
                             directoryUnconfigured
-                            || Date.now() - lastDirectoryThreadDropAtRef.current <
-                              POST_DRAG_CLICK_SUPPRESS_MS
-                          ) {
-                            return;
+                            || !props.onSetDirectoryThreadsCollapsed
                           }
-                          void props.onSetDirectoryThreadsCollapsed?.(
-                            directory,
-                            !directoryThreadsCollapsed,
-                          );
-                        }}
-                      >
-                        <span className="directory-row__thread-divider-label">
-                          <span
-                            aria-hidden="true"
-                            className={`directory-row__thread-divider-chevron${
-                              directoryThreadsCollapsed ? "" : " is-open"
-                            }`}
-                          />
-                          <span>Directory threads</span>
-                          {directoryThreadsCollapsed ? (
-                            <span className="directory-row__thread-divider-count">
-                              {directoryUnpinnedThreadCount}
-                            </span>
-                          ) : null}
-                        </span>
-                      </button>
+                          onClick={() => {
+                            if (
+                              directoryUnconfigured
+                              || Date.now() - lastDirectoryThreadDropAtRef.current <
+                                POST_DRAG_CLICK_SUPPRESS_MS
+                            ) {
+                              return;
+                            }
+                            void props.onSetDirectoryThreadsCollapsed?.(
+                              directory,
+                              !directoryThreadsCollapsed,
+                            );
+                          }}
+                        >
+                          <span className="directory-row__thread-divider-label">
+                            <span
+                              aria-hidden="true"
+                              className={`directory-row__thread-divider-chevron${
+                                directoryThreadsCollapsed ? "" : " is-open"
+                              }`}
+                            />
+                            <span>Directory threads</span>
+                            {directoryThreadsCollapsed ? (
+                              <span className="directory-row__thread-divider-count">
+                                {directoryUnpinnedThreadCount}
+                              </span>
+                            ) : null}
+                          </span>
+                        </button>
+                      </div>
                     ) : null}
 
                     {directoryThreadsCollapsed
                       ? null
                       : cappedUnpinnedThreads.map(renderUnpinnedRow)}
                     {!directoryThreadsCollapsed && hiddenUnpinnedCount > 0 ? (
-                      <button
-                        type="button"
-                        className="directory-row__show-more"
-                        aria-expanded={unpinnedExpanded}
-                        onClick={() =>
-                          setUnpinnedExpandedByKey((prev) => ({
-                            ...prev,
-                            [directory.key]: !unpinnedExpanded,
-                          }))
-                        }
-                      >
-                        {unpinnedExpanded
-                          ? "Show less"
-                          : `Show ${hiddenUnpinnedCount} more`}
-                      </button>
+                      <div className="directory-row__threads-control" role="listitem">
+                        <button
+                          type="button"
+                          className="directory-row__show-more"
+                          aria-expanded={unpinnedExpanded}
+                          onClick={() =>
+                            setUnpinnedExpandedByKey((prev) => ({
+                              ...prev,
+                              [directory.key]: !unpinnedExpanded,
+                            }))
+                          }
+                        >
+                          {unpinnedExpanded
+                            ? "Show less"
+                            : `Show ${hiddenUnpinnedCount} more`}
+                        </button>
+                      </div>
                     ) : null}
                     {!directoryThreadsCollapsed && unpinnedExpanded
                       ? overflowUnpinnedThreads.map(renderUnpinnedRow)

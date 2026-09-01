@@ -38,6 +38,10 @@ import {
   buildAuditSubAgents,
   seedThreadSubAgents,
 } from "./fixtures/sub-agent-state-seeding";
+import {
+  buildAuditDirectoryPins,
+  seedThreadPinnedRanks,
+} from "./fixtures/directory-pin-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -114,6 +118,14 @@ const COPY_CHIP_FIXTURE = path.resolve(
 const COMPOSER_AUTOCOMPLETE_FIXTURE = path.resolve(
   specDir,
   "fixtures/skill-autocomplete-interactions/replay.fixture.json",
+);
+
+// Fourteen threads on one directory and one on a second, so the audited row
+// has a pinned lane, an unpinned lane that overflows the ten-row cap, and a
+// collapsed sibling row. The pins themselves come from sqlite — see the block.
+const DIRECTORIES_FIXTURE = path.resolve(
+  specDir,
+  "fixtures/a11y-directories/replay.fixture.json",
 );
 
 const WCAG_AA_TAGS = [
@@ -487,6 +499,107 @@ for (const theme of AUDIT_THEMES) {
           ).toBeVisible();
           await expect(app.window.locator(".live-strip__item")).toHaveCount(4);
           await runAxe(app.window, "sub-agents strip expanded rows");
+        });
+      } finally {
+        await app.close();
+      }
+    });
+
+    // The Directories lens was never audited: every block above stays on the
+    // fixture's default lens, so `.directory-row__threads` — which renders
+    // `ThreadRow`'s `role="listitem"` children with no `role="list"` of its
+    // own, unlike the `.sidebar-list--dense` the other lenses use — failed
+    // `aria-required-parent` (critical) unnoticed. `KNOWN_VIOLATIONS` was
+    // empty the whole time; the surface was unwaived, just unlooked-at.
+    //
+    // Its own fixture, in the same class as `star-map/`: the lens only shows
+    // a directory row for a thread carrying `linkedDirectories`, and the list
+    // under audit only mounts once that row is expanded. The smoke thread has
+    // neither, so borrowing that fixture would scan an empty lens and stay
+    // green over the bug this block exists to catch.
+    test("directories lens has no violations", async () => {
+      const app = await launchAuditApp({
+        fixturePath: DIRECTORIES_FIXTURE,
+        theme,
+      });
+      try {
+        // Pins are desktop-local overlay state, not `thread/list` data, so no
+        // fixture can produce them and the only UI path is a native context
+        // menu. Without a pinned lane the directory renders undivided and the
+        // "Directory threads" disclosure never mounts.
+        seedThreadPinnedRanks({
+          pins: buildAuditDirectoryPins(),
+          stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
+        });
+        // The renderer does not re-poll on a direct sqlite mutation.
+        await app.window.reload();
+
+        await app.window.getByRole("tab", { name: "directories" }).click();
+
+        // Anchored, because Playwright matches an accessible name as a
+        // substring by default and "Open new thread launchpad for PwrAgent"
+        // is a sibling control on the same row. Anchored rather than `exact`
+        // because the header's label is built by joining the directory name
+        // with its state — ", not configured on this instance" and the
+        // active/review counts all append to it.
+        const directory = app.window.getByRole("button", {
+          name: /^PwrAgent\b/,
+        });
+        await expect(directory).toBeVisible();
+
+        await test.step("expanded directory thread list", async () => {
+          // The launch selection lands on `thread-directories-01`, and a
+          // directory holding the selected thread renders expanded — so this
+          // row arrives open rather than being clicked open. Asserted, not
+          // assumed: the list under audit only exists in this state, and a
+          // collapsed row would leave the scan with nothing to look at.
+          await expect(directory).toHaveAttribute("aria-expanded", "true");
+
+          // Precondition assertions, not decoration. An expanded row that
+          // rendered no threads would pass the axe scan below while auditing
+          // nothing, and each control named here is one the fix had to keep
+          // valid inside the list.
+          const threads = app.window.getByRole("list", {
+            name: "Threads in PwrAgent",
+          });
+          await expect(threads).toBeVisible();
+          await expect(
+            threads.getByRole("button", {
+              name: "Hide directory threads for PwrAgent",
+            }),
+          ).toBeVisible();
+          await expect(
+            threads.getByRole("button", { name: "Show 2 more" }),
+          ).toBeVisible();
+          // Two pinned rows + the ten-row unpinned cap + the two controls,
+          // each of which has to be a `listitem` for the list to be valid.
+          await expect(threads.getByRole("listitem")).toHaveCount(14);
+
+          await runAxe(app.window, "directories lens, expanded directory");
+        });
+
+        await test.step("expanded unpinned overflow", async () => {
+          // "Show more" reveals the rows past the cap. They mount as
+          // siblings of the control rather than inside a second list, so the
+          // scan is worth repeating with them present.
+          const threads = app.window.getByRole("list", {
+            name: "Threads in PwrAgent",
+          });
+          await threads.getByRole("button", { name: "Show 2 more" }).click();
+          await expect(threads.getByRole("listitem")).toHaveCount(16);
+          await runAxe(app.window, "directories lens, unpinned overflow");
+        });
+
+        await test.step("collapsed directory rows", async () => {
+          // Collapsing unmounts the list, so this scan covers the directory
+          // rows on their own — the state the lens opens in for every
+          // directory that does not hold the selected thread.
+          await directory.click();
+          await expect(directory).toHaveAttribute("aria-expanded", "false");
+          await expect(
+            app.window.getByRole("list", { name: "Threads in PwrAgent" }),
+          ).toHaveCount(0);
+          await runAxe(app.window, "directories lens, collapsed");
         });
       } finally {
         await app.close();

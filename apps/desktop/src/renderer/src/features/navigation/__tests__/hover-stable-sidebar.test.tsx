@@ -111,15 +111,26 @@ function renderSidebar(params: {
   );
 }
 
+// `listitem` is no longer a synonym for "thread row": the Directories lane's
+// "Directory threads" disclosure and "Show more" are wrapped in one each, so
+// they are valid children of the list its rows need as their parent. Filter to
+// the row shell, or every ordering assertion below picks up a control as an
+// untitled row.
+function threadRows(scope: HTMLElement): HTMLElement[] {
+  return within(scope)
+    .getAllByRole("listitem")
+    .filter((row) => row.classList.contains("thread-row-shell"));
+}
+
 function threadTitles(): string[] {
   const browser = screen.getByRole("region", { name: "Thread browser" });
-  return within(browser)
-    .getAllByRole("listitem")
-    .map((row) => row.querySelector(".thread-row__title")?.textContent ?? "");
+  return threadRows(browser).map(
+    (row) => row.querySelector(".thread-row__title")?.textContent ?? "",
+  );
 }
 
 function hoverFirstThread(): HTMLElement {
-  const firstRow = screen.getAllByRole("listitem")[0];
+  const firstRow = threadRows(document.body)[0];
   fireEvent.pointerOver(firstRow, { pointerType: "mouse" });
   return firstRow;
 }
