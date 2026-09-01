@@ -842,6 +842,90 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(readCount).toBe(2);
   });
 
+  it("moves an open window to the lens the request asks for", async () => {
+    /* The Pricing rail's "Token Miser Savings" action focuses whatever window
+       is already open. Without the lens in the request it stays on whichever
+       tab the operator left it on, which for this thread is Incidents. */
+    let refreshListener:
+      | ((request?: { backend: string; lens?: string; threadId: string; title: string }) => void)
+      | undefined;
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_700,
+      interceptions: [],
+    };
+    installApi({
+      onToolOutputIncidentExplorerRefresh: (
+        callback: (request?: unknown) => void,
+      ) => {
+        refreshListener = callback as typeof refreshListener;
+        return () => {
+          refreshListener = undefined;
+        };
+      },
+      readThread: async () => response,
+    });
+    window.location.hash =
+      "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByRole("tab", { name: /Savings/, selected: true });
+    fireEvent.click(screen.getByRole("tab", { name: /Incidents/ }));
+    expect(
+      screen.getByRole("tab", { name: /Incidents/, selected: true }),
+    ).toBeInTheDocument();
+
+    const request = {
+      backend: "codex",
+      projectLabel: "PwrAgent",
+      threadId: "thread-1",
+      title: "Noisy work",
+    };
+    await act(async () => refreshListener?.(request));
+    expect(
+      screen.getByRole("tab", { name: /Incidents/, selected: true }),
+    ).toBeInTheDocument();
+
+    await act(async () => refreshListener?.({ ...request, lens: "savings" }));
+    expect(
+      screen.getByRole("tab", { name: /Savings/, selected: true }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens on the lens its route names, not on the one accounting suggests", async () => {
+    /* The refresh event only reaches a window that already exists, so a
+       window this click creates has to read the lens off its own route. The
+       thread below gates, which is exactly the case the opening latch sends
+       to Savings — the route has to win, or a request naming a lens means
+       nothing until the second click. */
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_700,
+      interceptions: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash =
+      "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent/incidents";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(
+      await screen.findByRole("tab", { name: /Incidents/, selected: true }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("tab", { name: /Savings/, selected: false }),
+    ).toBeInTheDocument();
+  });
+
   it("updates Token Miser accounting from live tool-accounting events", async () => {
     let agentEventListener: ((event: never) => void) | undefined;
     const initial = buildResponse();
@@ -1291,7 +1375,7 @@ describe("ToolOutputIncidentExplorerWindow federation", () => {
     }));
     installApi({ analyzeThreadToolHistory, readThread });
     window.location.hash =
-      "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent/peer-instance";
+      "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent//peer-instance";
     render(<ToolOutputIncidentExplorerWindow />);
 
     await waitFor(() => expect(readThread).toHaveBeenCalledWith(

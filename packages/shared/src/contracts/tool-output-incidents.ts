@@ -170,10 +170,22 @@ export type OpenToolOutputIncidentExplorerWindowRequest = {
    * against the local registry, which does not have it.
    */
   federationTarget?: FederationTarget;
+  /**
+   * Which lens the operator asked for.
+   *
+   * A request that names one takes the window there either way: a new window
+   * opens on it, and an explorer already sitting on the other lens moves when
+   * the operator clicks "Token Miser Savings" on the Pricing rail. Omitted
+   * means "leave the lens alone" — a new window then picks its own from the
+   * thread's accounting, and an open one stays where the operator left it.
+   */
+  lens?: ToolOutputIncidentExplorerLens;
   projectLabel?: string;
   threadId: string;
   title: string;
 };
+
+export type ToolOutputIncidentExplorerLens = "incidents" | "savings";
 
 export type OpenToolOutputIncidentExplorerWindowResponse = {
   opened: true;

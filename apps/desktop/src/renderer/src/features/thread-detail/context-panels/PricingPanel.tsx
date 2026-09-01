@@ -32,13 +32,25 @@ import {
   RailSummaryRow,
 } from "./context-rail-shared";
 import { RailStatusChip } from "./RailStatusChip";
-import { subAgentPricingUsageTitle } from "./subagent-kind";
+import {
+  isTokenMiserSubAgent,
+  subAgentPricingUsageTitle,
+} from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
+import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
+import { buildTokenMiserSavingsSummary } from "../token-miser-savings-summary";
 
 type PricingPanelProps = {
   activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
+  /**
+   * Opens the Explorer on its savings lens. The Pricing rail is where an
+   * operator asks what a thread cost, so it is where the full savings
+   * breakdown has to be reachable — until now that window could only be
+   * opened from Tool calls, a tab the tool-accounting experiment gates off.
+   */
+  onOpenTokenMiserSavings?: () => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
     compactions?: ThreadCompactionRecord[];
@@ -109,6 +121,33 @@ export function PricingPanel(props: PricingPanelProps) {
   // the turn card and Codex's context-window meter.
   const parentModelSummary = aggregateUsageLines(
     allDisplayLines.filter(isMainThreadUsageLine),
+  );
+  // Thread-level gate result, from every gate this thread spawned. The
+  // per-turn folds below price one turn each; this is the same arithmetic run
+  // once across all of them, so the rail can answer "did the gate pay for
+  // itself" without expanding ninety folds.
+  //
+  // Enumerated from the sub-agents rather than from the gate usage rows: a
+  // decision that deterministic policy passed through never bills a helper
+  // turn, so it has accounting and a sub-agent and no usage line at all. Read
+  // from the rows, an all-policy thread looked like a thread with no gate.
+  const tokenMiserSummary = useMemo(
+    () => buildTokenMiserSavingsSummary({
+      ...(props.tokenMiserAccounting
+        ? { accounting: props.tokenMiserAccounting }
+        : {}),
+      gateAccountings: (props.subAgents ?? [])
+        .filter(isTokenMiserSubAgent)
+        .map((subAgent) => subAgent.tokenMiserAccounting),
+    }),
+    [props.subAgents, props.tokenMiserAccounting],
+  );
+  // The Explorer's own basis for "would have cost", so the two surfaces divide
+  // by the same denominator: the provider summaries as recorded, without the
+  // estimated-gap lines the rail folds into its headline total.
+  const observedCostMicros = summaries.reduce(
+    (total, provider) => total + provider.totalCostMicros,
+    0,
   );
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   // Totals run over every line, nested gates included: a gate's helper cost is
@@ -421,6 +460,18 @@ export function PricingPanel(props: PricingPanelProps) {
         </>
       ) : displayLines.length === 0 ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
+      ) : null}
+
+      {/* Under the provider summary, above the turn rows: the gate's result is
+          part of reading the bill, not a footnote to one turn of it. */}
+      {tokenMiserSummary ? (
+        <TokenMiserSummaryCard
+          {...(props.onOpenTokenMiserSavings
+            ? { onOpenSavings: props.onOpenTokenMiserSavings }
+            : {})}
+          {...(observedCostMicros > 0 ? { observedCostMicros } : {})}
+          summary={tokenMiserSummary}
+        />
       ) : null}
 
       {displayLines.length > 0 ? (

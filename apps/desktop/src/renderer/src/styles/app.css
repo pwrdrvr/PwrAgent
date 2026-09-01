@@ -24205,6 +24205,28 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
+/* Thread-level gate result, above the turn rows. It borrows the pricing
+   summary card wholesale — same shell, same eyebrow, same key/value rows, and
+   the section action the Tool calls tab already uses — so the two read as one
+   stack rather than as a summary and a widget. The figure keeps the card's own
+   text color; only an overhead is colored, and the accent stays a surface and
+   border signal. */
+.token-miser-summary-card__figure[data-negative="true"] {
+  color: var(--danger-text);
+}
+
+/* The rail's action is the section action, stretched: the card has a full
+   width to fill and a row of its own to sit in. Scoped to the card rather than
+   given its own class so it outranks the shared rule, which is defined further
+   down this file and would otherwise win on equal specificity. */
+.token-miser-summary-card .context-panel__section-action {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-height: 26px;
+  margin-top: 10px;
+}
+
 .rail-card__actions {
   width: 100%;
   margin-top: 2px;
@@ -24273,6 +24295,44 @@ button.pricing-token-miser__folded:focus-visible {
 
 .tool-calls-panel__heading h3 {
   margin: 0;
+}
+
+/* A rail heading's action, at rail scale. The shared `.button` is 34px at
+   13px, which outweighed the 14px heading it sat beside; these are the same
+   measurements as `.tool-call-row__details`, the other in-rail control. Both
+   entry points to the tool-output explorer wear this class, so the Pricing
+   card's action and the Tool calls heading's action are one control with two
+   destinations. */
+.context-panel__section-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.context-panel__section-action:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.context-panel__section-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.context-panel__section-action svg {
+  flex: 0 0 auto;
 }
 
 .tool-call-alert .rail-card__title {

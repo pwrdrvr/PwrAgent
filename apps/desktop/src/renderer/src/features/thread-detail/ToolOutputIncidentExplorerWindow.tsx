@@ -10,6 +10,7 @@ import type {
   ThreadCompactionRecord,
   ThreadTokenMiserSavings,
   ThreadToolInvocationRecord,
+  ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
 import {
   buildThreadToolIncidentPrompt,
@@ -22,6 +23,10 @@ import { useDesktopApi } from "../../lib/desktop-api";
 import { useDesktopSettings } from "../settings/useDesktopSettings";
 import { ThreadChip } from "./ThreadChip";
 import { detailMatchesInvocationItem } from "./tool-call-details";
+import {
+  describeSameTrajectoryCostChange,
+  TOKEN_MISER_PENDING_PRICING_CAPTION,
+} from "./token-miser-savings-summary";
 import type {
   CategoryShare,
   IncidentSortMode,
@@ -78,6 +83,12 @@ export function ToolOutputIncidentExplorerWindow() {
   const [statusTone, setStatusTone] = useState<"error" | "info">("info");
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
+  const [lensChoice, setLens] =
+    useState<ToolOutputIncidentExplorerLens>(route?.lens ?? "incidents");
+  /* Whether the opening lens has been chosen. Declared with the state it
+     guards rather than beside the latch below, because the refresh effect
+     sets it too. A route that named a lens has already chosen. */
+  const lensLatched = useRef(route?.lens !== undefined);
 
   /* Stable identity: `refresh` depends on it, and a refresh that changed every
      render would re-run the effect that calls it on every render. */
@@ -121,10 +132,24 @@ export function ToolOutputIncidentExplorerWindow() {
       if (request) {
         setRoute({
           backend: request.backend,
+          /* A viewer's explorer reads the peer's thread. Dropping the target
+             here would send the next refresh at the local registry, which
+             does not have this thread. */
+          ...(request.federationTarget
+            ? { federationTarget: request.federationTarget }
+            : {}),
           projectLabel: request.projectLabel,
           threadId: request.threadId,
           title: request.title,
         });
+        /* A window already open keeps the lens it is on, so an operator who
+           clicks "Token Miser Savings" on the Pricing rail and gets a focused
+           window still sitting on incidents got the wrong screen. Honor the
+           request, and stop the opening latch from overruling it. */
+        if (request.lens) {
+          lensLatched.current = true;
+          setLens(request.lens);
+        }
       }
       void refresh();
     });
@@ -225,7 +250,6 @@ export function ToolOutputIncidentExplorerWindow() {
   // feature off and nothing ever gated, this stays the single-lens screen it
   // was rather than growing a tab that can only say "nothing happened".
   const showSavingsLens = tokenMiserEnabled || Boolean(activeTokenMiser);
-  const [lensChoice, setLens] = useState<ExplorerLens>("incidents");
   // Latch the opening lens the first time accounting arrives, then leave it
   // alone. Re-deriving it from `activeTokenMiser` would yank the operator out
   // of the case they are reading the moment a gate lands mid-turn.
@@ -234,7 +258,6 @@ export function ToolOutputIncidentExplorerWindow() {
   // painted frame on the incidents lens before switching, so a thread that
   // gated would open on the wrong lens and visibly flip. React discards this
   // render and re-runs before painting.
-  const lensLatched = useRef(false);
   if (!lensLatched.current && accounting) {
     lensLatched.current = true;
     if (
@@ -244,7 +267,8 @@ export function ToolOutputIncidentExplorerWindow() {
       setLens("savings");
     }
   }
-  const lens: ExplorerLens = showSavingsLens ? lensChoice : "incidents";
+  const lens: ToolOutputIncidentExplorerLens =
+    showSavingsLens ? lensChoice : "incidents";
   const tokenMiserUsageLines = useMemo(
     () => (usageLines ?? []).filter((line) =>
       line.scope === "monitor"
@@ -1015,27 +1039,10 @@ function describeTokenMiserReach(params: {
     + `${params.toolCallCount === 1 ? "call" : "calls"} and ${kept}`;
 }
 
-type ExplorerLens = "incidents" | "savings";
-
 function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
   return estimatedTokensSaved >= 0
     ? `${formatCompactTokens(estimatedTokensSaved)} estimated parent-context footprint avoided`
     : `${formatCompactTokens(Math.abs(estimatedTokensSaved))} estimated net parent-context token overhead`;
-}
-
-function describeSameTrajectoryCostChange(
-  observedCostMicros: number,
-  savingsMicros: number,
-): string | undefined {
-  if (observedCostMicros <= 0) return undefined;
-  const unfilteredCostMicros = observedCostMicros + savingsMicros;
-  if (unfilteredCostMicros <= 0) return undefined;
-  const percent = Math.abs(savingsMicros) / unfilteredCostMicros * 100;
-  if (savingsMicros === 0) {
-    return `${percent.toFixed(1)}% change from estimated unfiltered cost`;
-  }
-  return `${percent.toFixed(1)}% ${savingsMicros > 0 ? "less" : "more"} `
-    + "than estimated unfiltered cost";
 }
 
 /**
@@ -1181,7 +1188,7 @@ function TokenMiserSavingsLens(props: {
                   )}
                 </strong>
                 {sameTrajectoryCostChange ? (
-                  <span>{sameTrajectoryCostChange}</span>
+                  <span>{sameTrajectoryCostChange.sentence}</span>
                 ) : null}
               </p>
               {props.threadCostMicros > 0 ? (
@@ -1215,7 +1222,7 @@ function TokenMiserSavingsLens(props: {
                 </span>
               </p>
               <p className="incident-explorer__savings-compare">
-                Dollar terms appear once the gate's usage line is priced.
+                {TOKEN_MISER_PENDING_PRICING_CAPTION}
               </p>
             </>
           )}
@@ -1984,14 +1991,16 @@ function countLaterTripsInTurn(
 function readIncidentRoute(): {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
+  lens?: ToolOutputIncidentExplorerLens;
   projectLabel?: string;
   threadId: string;
   title: string;
 } | undefined {
-  const [kind, backend, threadId, title, projectLabel, instanceId] =
+  const [kind, backend, threadId, title, projectLabel, lens, instanceId] =
     window.location.hash.replace(/^#/, "").split("/");
   if (kind !== "tool-output-incidents" || !backend || !threadId) return undefined;
   const owner = instanceId ? decodeURIComponent(instanceId) : "";
+  const requestedLens = lens ? decodeURIComponent(lens) : "";
   return {
     backend: decodeURIComponent(backend) as AppServerBackendKind,
     /* Present only for a peer's thread; a local thread carries no target and
@@ -2003,6 +2012,12 @@ function readIncidentRoute(): {
             instanceId: owner as FederationInstanceId,
           },
         }
+      : {}),
+    /* Present only when the click that opened this window named a lens. An
+       unrecognized value is treated as no preference rather than as a lens
+       nothing renders. */
+    ...(requestedLens === "incidents" || requestedLens === "savings"
+      ? { lens: requestedLens }
       : {}),
     ...(projectLabel
       ? { projectLabel: decodeURIComponent(projectLabel) }
