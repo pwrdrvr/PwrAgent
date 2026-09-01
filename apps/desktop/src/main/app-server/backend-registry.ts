@@ -3589,24 +3589,28 @@ export function readThreadCompactionBoundary(
         : {}),
     };
   }
+  // `item/started` and `item/completed` share one union member, so method
+  // narrowing does not expose `params.item`. Read it the same way the rest of
+  // this file does.
+  const itemType = readNotificationItemType(notification);
   if (
-    notification.method !== "item/started"
-    && notification.method !== "item/completed"
+    !itemType
+    || itemType.replace(/[-_\s]/g, "").toLowerCase() !== "contextcompaction"
   ) {
     return undefined;
   }
-  const itemType = notification.params.item.type;
-  if (
-    itemType.replace(/[-_\s]/g, "").toLowerCase() !== "contextcompaction"
-  ) {
+  const params = readRecord(notification.params);
+  const item = readRecord(params?.item);
+  const threadId = readNonEmptyString(params?.threadId);
+  const itemId = readNonEmptyString(item?.id);
+  if (!threadId || !itemId) {
     return undefined;
   }
+  const turnId = readNonEmptyString(params?.turnId);
   return {
-    itemId: notification.params.item.id,
-    threadId: notification.params.threadId,
-    ...(typeof notification.params.turnId === "string"
-      ? { turnId: notification.params.turnId }
-      : {}),
+    itemId,
+    threadId,
+    ...(turnId ? { turnId } : {}),
   };
 }
 
