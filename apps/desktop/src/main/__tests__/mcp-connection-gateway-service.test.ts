@@ -1,8 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   McpConnectionGatewayService,
 } from "../mcp-connections/mcp-connection-gateway-service";
+import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 
 function createSettings(initial?: string) {
   let credential = initial;
@@ -26,9 +30,21 @@ function createSettings(initial?: string) {
 }
 
 const services: McpConnectionGatewayService[] = [];
+const temporaryDirectories: string[] = [];
+
+function temporaryRegistry(): McpConnectionRegistry {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-mcp-gateway-"));
+  temporaryDirectories.push(directory);
+  return new McpConnectionRegistry({
+    configPath: path.join(directory, "config.toml"),
+  });
+}
 
 afterEach(async () => {
   await Promise.all(services.splice(0).map(async (service) => await service.close()));
+  for (const directory of temporaryDirectories.splice(0)) {
+    fs.rmSync(directory, { force: true, recursive: true });
+  }
 });
 
 describe("McpConnectionGatewayService", () => {
@@ -110,6 +126,39 @@ describe("McpConnectionGatewayService", () => {
     });
     expect(first.server.env.PWRAGENT_MCP_CONNECTION_TOKEN).toBeTruthy();
     expect(first.server.env.PWRAGENT_MCP_CONNECTION_SOCKET).toBeTruthy();
+  });
+
+  it("names the switch that is withholding a connection", async () => {
+    const registry = temporaryRegistry();
+    const connection = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    let gatewayEnabled = true;
+    const service = new McpConnectionGatewayService({
+      bridgeEntryPath: "/test/mcp-connection-bridge.js",
+      gatewayEnabled: () => gatewayEnabled,
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+
+    gatewayEnabled = false;
+    await expect(service.registerBridge(connection.id, "thread-1"))
+      .rejects.toThrow("MCP gateway is turned off");
+
+    gatewayEnabled = true;
+    registry.setEnabled(connection.id, false);
+    // A parked connection and a gateway that is off are different problems
+    // with different fixes, so they cannot share one message.
+    await expect(service.registerBridge(connection.id, "thread-1"))
+      .rejects.toThrow("Datadog is not available to threads");
+
+    // Existence is still answerable while a connection is withheld;
+    // otherwise the operator could never turn it back on.
+    await expect(service.setConnectionEnabled(connection.id, true))
+      .resolves.toMatchObject({ id: connection.id, enabled: true });
   });
 
   it("keeps blocking upstream tool calls alive beyond the SDK default", async () => {

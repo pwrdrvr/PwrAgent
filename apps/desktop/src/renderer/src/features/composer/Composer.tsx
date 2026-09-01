@@ -370,6 +370,7 @@ type ComposerProps = {
   >;
   onClearPickDirectoryError?: () => void;
   onShowMcpInventory?: (detail: CodexMcpInventoryDetail) => void;
+  onShowMcpAccess?: () => void;
   pickDirectoryError?: string;
   pickingDirectory?: boolean;
   setExecutionModeError?: string;
@@ -1572,6 +1573,7 @@ function ComposerThreadOptionsMenu(props: {
   existingCodexThread?: boolean;
   onAgentThreadChange?: (agentThread: boolean) => void;
   onShowMcpInventory?: () => void;
+  onShowMcpAccess?: () => void;
   /**
    * Effective Token Miser state for this thread. Undefined hides the item.
    */
@@ -1845,21 +1847,36 @@ function ComposerThreadOptionsMenu(props: {
               ) : null}
             </>
           ) : null}
+          {props.onShowMcpAccess || props.onShowMcpInventory ? (
+            <div className="composer-dropdown__separator" role="separator" />
+          ) : null}
+          {props.onShowMcpAccess ? (
+            <button
+              className="composer-dropdown__option composer-thread-options__option"
+              role="menuitem"
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                props.onShowMcpAccess?.();
+              }}
+            >
+              <span className="composer-thread-options__label">
+                MCP access&hellip;
+              </span>
+            </button>
+          ) : null}
           {props.onShowMcpInventory ? (
-            <>
-              <div className="composer-dropdown__separator" role="separator" />
-              <button
-                className="composer-dropdown__option composer-thread-options__option"
-                role="menuitem"
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  props.onShowMcpInventory?.();
-                }}
-              >
-                <span className="composer-thread-options__label">MCP tools</span>
-              </button>
-            </>
+            <button
+              className="composer-dropdown__option composer-thread-options__option"
+              role="menuitem"
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                props.onShowMcpInventory?.();
+              }}
+            >
+              <span className="composer-thread-options__label">MCP tools</span>
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -12181,6 +12198,7 @@ export function Composer(props: ComposerProps) {
                   },
                 }
               : {})}
+            onShowMcpAccess={props.onShowMcpAccess}
           />
         </div>
       ) : null}

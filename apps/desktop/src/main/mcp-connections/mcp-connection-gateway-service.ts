@@ -584,7 +584,11 @@ export class McpConnectionGatewayService {
         threadId,
       );
     }
-    const connection = this.requireConnection(connectionId);
+    // Availability is checked before credentials: a connection withheld by
+    // the gateway switch or by its own switch is not an authorization
+    // problem, and telling the operator to reauthorize would send them to
+    // the wrong control.
+    const connection = this.requireAvailableConnection(connectionId);
     if (!(await this.coordinatorFor(connection).configured())) {
       throw new Error(
         `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,

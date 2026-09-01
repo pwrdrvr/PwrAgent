@@ -12,6 +12,7 @@ import {
   type MutateMcpConnectionResponse,
   type RemoveMcpConnectionRequest,
   type SetMcpConnectionEnabledRequest,
+  type ReadThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
   type ConnectPwrSnapResponse,
@@ -37,6 +38,7 @@ import {
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
+  MCP_CONNECTION_READ_THREAD_CHANNEL,
 } from "../../shared/ipc";
 import {
   getMcpConnectionGatewayService,
@@ -147,6 +149,17 @@ export function registerMcpConnectionIpcHandlers(
       // machine cannot honor, so the guard matches the rest of this surface.
       requireLocalOwner(event);
       return await getDesktopBackendRegistry().setThreadMcpConnections(request);
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_READ_THREAD_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_READ_THREAD_CHANNEL,
+    async (
+      event,
+      request: ReadThreadMcpConnectionsRequest,
+    ): Promise<SetThreadMcpConnectionsResponse> => {
+      requireLocalOwner(event);
+      return await getDesktopBackendRegistry().readThreadMcpConnections(request);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
@@ -277,6 +290,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_REMOVE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_ENABLED_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_THREAD_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_READ_THREAD_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL);

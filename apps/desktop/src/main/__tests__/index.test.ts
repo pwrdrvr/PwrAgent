@@ -203,10 +203,12 @@ const isCodexBootstrapDeferredMock = vi.fn(() => false);
 const refreshStartupDiscoveryMock = vi.fn<() => Promise<void>>(
   async () => undefined,
 );
+const resolveMcpGatewayEnabledMock = vi.fn(() => true);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
   isCodexBootstrapDeferred: isCodexBootstrapDeferredMock,
   refreshStartupDiscovery: refreshStartupDiscoveryMock,
+  resolveMcpGatewayEnabled: resolveMcpGatewayEnabledMock,
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
 const resolveActiveProfileNameMock = vi.fn(() => "default");
