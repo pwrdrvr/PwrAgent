@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type { AgentEvent } from "@pwragent/shared";
 import {
   buildThreadCompactionIdentity,
   foldObservedContextReplay,
+  readThreadCompactionBoundary,
   type ObservedContextReplayCursor,
   type ObservedContextReplayTally,
 } from "../app-server/backend-registry";
@@ -31,6 +33,103 @@ describe("buildThreadCompactionIdentity", () => {
 
     expect(duplicate).toBe(first);
     expect(later).not.toBe(first);
+  });
+});
+
+describe("readThreadCompactionBoundary", () => {
+  it("reads automatic window compaction from a ContextCompaction item", () => {
+    expect(readThreadCompactionBoundary({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          item: {
+            id: "compact-item-1",
+            type: "ContextCompaction",
+          },
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+    })).toEqual({
+      itemId: "compact-item-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+  });
+
+  it("accepts camelCase contextCompaction on item/started", () => {
+    expect(readThreadCompactionBoundary({
+      backend: "codex",
+      notification: {
+        method: "item/started",
+        params: {
+          item: {
+            id: "compact-item-1",
+            type: "contextCompaction",
+          },
+          threadId: "thread-1",
+        },
+      },
+    })).toEqual({
+      itemId: "compact-item-1",
+      threadId: "thread-1",
+    });
+  });
+
+  it("ignores non-compaction items", () => {
+    expect(readThreadCompactionBoundary({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          item: {
+            id: "command-1",
+            type: "CommandExecution",
+          },
+          threadId: "thread-1",
+        },
+      },
+    })).toBeUndefined();
+  });
+
+  it("keys a ContextCompaction item with the same id as thread/compacted", () => {
+    const itemEvent = {
+      backend: "codex" as const,
+      notification: {
+        method: "item/completed" as const,
+        params: {
+          item: {
+            id: "compact-item-1",
+            type: "ContextCompaction",
+          },
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+    } satisfies AgentEvent;
+    const compactedEvent = {
+      backend: "codex" as const,
+      notification: {
+        method: "thread/compacted" as const,
+        params: {
+          itemId: "compact-item-1",
+          threadId: "thread-1",
+        },
+      },
+    } satisfies AgentEvent;
+    const itemBoundary = readThreadCompactionBoundary(itemEvent);
+    const compactedBoundary = readThreadCompactionBoundary(compactedEvent);
+
+    expect(itemBoundary).toBeDefined();
+    expect(compactedBoundary).toBeDefined();
+    expect(buildThreadCompactionIdentity({
+      backend: "codex",
+      ...itemBoundary!,
+    })).toBe(buildThreadCompactionIdentity({
+      backend: "codex",
+      ...compactedBoundary!,
+    }));
   });
 });
 

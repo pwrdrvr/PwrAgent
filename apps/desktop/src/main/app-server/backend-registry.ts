@@ -3560,6 +3560,56 @@ export function buildThreadCompactionIdentity(params: {
   ].join(":");
 }
 
+export type ThreadCompactionBoundary = {
+  itemId?: string;
+  threadId: string;
+  turnId?: string;
+};
+
+/**
+ * Compaction is the hard stop for Token Miser replay savings: once Codex
+ * replaces the prior window, a preserved payload is no longer in context and
+ * must not keep accruing cached-replay credit.
+ *
+ * Codex's automatic window compaction surfaces as a `ContextCompaction` item
+ * (`item/started` then `item/completed`). The dedicated `thread/compacted`
+ * notification is the same boundary when the app-server emits it, often with
+ * the same item id. Treat both as one event so a missing `thread/compacted`
+ * cannot leave the replay window open across later windows.
+ */
+export function readThreadCompactionBoundary(
+  event: AgentEvent,
+): ThreadCompactionBoundary | undefined {
+  const notification = event.notification;
+  if (notification.method === "thread/compacted") {
+    return {
+      threadId: notification.params.threadId,
+      ...(typeof notification.params.itemId === "string"
+        ? { itemId: notification.params.itemId }
+        : {}),
+    };
+  }
+  if (
+    notification.method !== "item/started"
+    && notification.method !== "item/completed"
+  ) {
+    return undefined;
+  }
+  const itemType = notification.params.item.type;
+  if (
+    itemType.replace(/[-_\s]/g, "").toLowerCase() !== "contextcompaction"
+  ) {
+    return undefined;
+  }
+  return {
+    itemId: notification.params.item.id,
+    threadId: notification.params.threadId,
+    ...(typeof notification.params.turnId === "string"
+      ? { turnId: notification.params.turnId }
+      : {}),
+  };
+}
+
 // Pure core of the context-replay accumulator: fold one token-usage update into
 // a running per-turn tally, given the per-thread cursor. A replay is counted
 // only when the cumulative input grows past the cursor, the growing request
@@ -27408,18 +27458,19 @@ export class DesktopBackendRegistry {
    * it used to be live-only: a compaction seen while the app was closed stopped
    * nothing, and historical accounting had no boundary at all. The marker is
    * keyed on the backend's own item id when it reports one, so a re-emitted
-   * notification does not become a second compaction.
+   * notification — or a `ContextCompaction` item plus `thread/compacted` for
+   * the same item — does not become a second compaction.
    */
   private async recordThreadCompaction(event: AgentEvent): Promise<boolean> {
-    if (event.notification.method !== "thread/compacted") {
+    const boundary = readThreadCompactionBoundary(event);
+    if (!boundary) {
       return false;
     }
-    const threadId = event.notification.params.threadId;
-    const itemId = typeof event.notification.params.itemId === "string"
-      ? event.notification.params.itemId
-      : undefined;
+    const threadId = boundary.threadId;
+    const itemId = boundary.itemId;
     const observedAt = Date.now();
-    const turnId = this.findActiveTurnIdForThread(event.backend, threadId);
+    const turnId = boundary.turnId
+      ?? this.findActiveTurnIdForThread(event.backend, threadId);
     const compactionId = buildThreadCompactionIdentity({
       backend: event.backend,
       cumulativeInputTokens: this.liveThreadReplayInputCursor.get(
@@ -27473,16 +27524,15 @@ export class DesktopBackendRegistry {
   private async stopTokenMiserReplayTrackingAtCompaction(
     event: AgentEvent,
   ): Promise<void> {
+    const boundary = readThreadCompactionBoundary(event);
     if (
       event.backend !== "codex"
-      || event.notification.method !== "thread/compacted"
+      || !boundary
       || !this.tokenMiserStore
     ) {
       return;
     }
-    const entries = this.activeTokenMiserReplayEntries.get(
-      event.notification.params.threadId,
-    );
+    const entries = this.activeTokenMiserReplayEntries.get(boundary.threadId);
     if (!entries || entries.size === 0) {
       return;
     }
@@ -27496,7 +27546,7 @@ export class DesktopBackendRegistry {
     }
     await this.emitThreadToolAccountingUpdated({
       backend: "codex",
-      threadId: event.notification.params.threadId,
+      threadId: boundary.threadId,
     });
   }
 
