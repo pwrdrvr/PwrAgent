@@ -14,7 +14,26 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = join(repoRoot, "THIRD_PARTY_LICENSES");
-const desktopFilter = "@pwragent/desktop";
+/**
+ * The pnpm selector naming every workspace project the desktop app ships.
+ *
+ * The trailing `...` is load-bearing. A bare `@pwragent/desktop` selects that
+ * one project, so `pnpm licenses list` reports only the dependencies declared
+ * in apps/desktop/package.json — and every dependency reached THROUGH a
+ * workspace package is invisible. That is not a corner: @pwragent/desktop
+ * depends on eight workspace packages, and the whole npm tree beneath the six
+ * messaging providers (discord.js, grammy, @slack/*, @line/bot-sdk,
+ * @mattermost/client, @larksuiteoapi/node-sdk and their transitive deps) ships
+ * in the packaged application. Before the `...`, 69 shipped packages were
+ * absent from this notice and, because check-third-party-license-allowlist.mjs
+ * reads the same selector, never gated either.
+ *
+ * `...` selects the project plus its dependency projects. Combined with
+ * `--prod` it yields the same set as pnpm's `--filter-prod`, because no
+ * workspace package is a devDependency of another; the two were compared when
+ * this was widened. Keep the suffix when editing this string.
+ */
+export const NOTICE_PNPM_FILTER = "@pwragent/desktop...";
 const PLATFORM_VARIANT_SUFFIX = /-(?:android|darwin|freebsd|linux|openbsd|sunos|win32)(?:-|$)/;
 
 /**
@@ -43,7 +62,7 @@ export const NOTICE_DEV_DEPENDENCIES = new Set(["electron"]);
 export function runPnpmLicenses(args) {
   const result = spawnSync(
     "pnpm",
-    ["licenses", "list", "--json", "--filter", desktopFilter, ...args],
+    ["licenses", "list", "--json", "--filter", NOTICE_PNPM_FILTER, ...args],
     {
       cwd: repoRoot,
       encoding: "utf8",
@@ -327,7 +346,7 @@ function main() {
   lines.push("-----");
   lines.push("");
   lines.push(
-    "This notice covers npm production dependencies for @pwragent/desktop plus the Electron runtime package.",
+    "This notice covers npm production dependencies for @pwragent/desktop and the workspace packages it ships, plus the Electron runtime package.",
   );
   lines.push(
     "Electron includes Chromium and Node.js runtime components. PwrAgent includes Electron's MIT runtime license here; Chromium's generated credits are maintained upstream by Chromium/Electron and are intentionally not appended to this text notice because Electron's generated LICENSES.chromium.html is about 18 MB for the pinned runtime.",

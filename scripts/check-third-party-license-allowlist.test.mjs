@@ -19,6 +19,7 @@ import {
 import {
   NOTICE_DEV_DEPENDENCIES,
   NOTICE_PNPM_ARGS,
+  NOTICE_PNPM_FILTER,
   expandOptionalPlatformVariants,
   flattenLicenseReport,
 } from "./generate-third-party-licenses.mjs";
@@ -301,6 +302,17 @@ describe("notice coverage", () => {
     // the notice never contained.
     expect(NOTICE_PNPM_ARGS.production).toEqual(["--prod"]);
     expect(NOTICE_PNPM_ARGS.all).toEqual([]);
+  });
+
+  it("selects the workspace packages the desktop app ships, not apps/desktop alone", () => {
+    // The `...` suffix is the difference between judging 472 shipped packages
+    // and judging 401. A bare `@pwragent/desktop` reports only the dependencies
+    // declared in apps/desktop/package.json, so everything reached through the
+    // eight workspace packages it depends on — the entire npm tree under the
+    // six messaging providers — goes both undisclosed and ungated. Dropping the
+    // suffix is a one-character edit that leaves every check passing, which is
+    // exactly why it is asserted here.
+    expect(NOTICE_PNPM_FILTER).toBe("@pwragent/desktop...");
   });
 
   it("allows every license the committed notice actually discloses", () => {
