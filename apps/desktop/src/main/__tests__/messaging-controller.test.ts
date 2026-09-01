@@ -101,6 +101,17 @@ async function createStore(): Promise<MessagingStore> {
   return new MessagingStore(path.join(tempDir, "messaging-state.json"));
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   await Promise.all(
@@ -206,6 +217,63 @@ describe("MessagingController", () => {
       + detail.originToPolicyMs
       + detail.policyToStartTurnIssueMs;
     expect(stageTotal).toBe(detail.pwragentReceivedToStartTurnIssueMs);
+  });
+
+  it("does not await optional inbound metadata before routing a reply", async () => {
+    const debug = vi.fn();
+    const harness = await createHarness({ logger: { debug } });
+    await bindThread(harness);
+    const findBinding = harness.store.findActiveBindingForChannel.bind(
+      harness.store,
+    );
+    const metadataRead = createDeferred<
+      Awaited<ReturnType<typeof findBinding>>
+    >();
+    const metadataStarted = createDeferred<void>();
+    const pendingSessionRead = vi.spyOn(
+      harness.store,
+      "findActiveBrowseSessionForChannel",
+    );
+    let bindingReadCount = 0;
+    vi.spyOn(harness.store, "findActiveBindingForChannel")
+      .mockImplementation(async (channel) => {
+        bindingReadCount += 1;
+        if (bindingReadCount === 1) {
+          metadataStarted.resolve();
+          return await metadataRead.promise;
+        }
+        return await findBinding(channel);
+      });
+
+    const handled = harness.controller.handleInboundEvent(
+      buildTextEvent("route before metadata"),
+    );
+    expect(pendingSessionRead).toHaveBeenCalledTimes(1);
+    await metadataStarted.promise;
+
+    metadataRead.resolve(
+      await findBinding(buildTextEvent("metadata").channel),
+    );
+    await handled;
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 10; index += 1) {
+      await Promise.resolve();
+    }
+    expect(debug).toHaveBeenCalledWith(
+      "messaging off-path inbound metadata timing",
+      expect.objectContaining({
+        eventId: "event-text",
+        platform: "telegram",
+      }),
+    );
+    expect(debug).toHaveBeenCalledWith(
+      "messaging admission append timing",
+      expect.objectContaining({
+        eventId: "event-text",
+        finalAdmissionAppendAwaitMs: expect.any(Number),
+        platform: "telegram",
+      }),
+    );
   });
 
   it("merges eventual provider channel metadata without replaying inbound", async () => {
@@ -2223,6 +2291,7 @@ describe("MessagingController", () => {
   });
 
   it("routes an accepted every-message topic to its default Agent without binding it", async () => {
+    const info = vi.fn();
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -2235,6 +2304,7 @@ describe("MessagingController", () => {
       },
     };
     const harness = await createHarness({
+      logger: { info },
       navigation,
       responseModeForConversation: () => "every_message",
     });
@@ -2274,6 +2344,26 @@ describe("MessagingController", () => {
     );
     expect(harness.delivered).not.toContainEqual(
       expect.objectContaining({ title: "PwrAgent commands" }),
+    );
+    expect(harness.listBackends).not.toHaveBeenCalled();
+    const startingTurn = info.mock.calls.find(
+      (call) => call[0] === "messaging starting turn",
+    );
+    expect(startingTurn?.[1]).toMatchObject({
+      handledBindingLookupMs: 0,
+      handledDefaultAgentAssignmentsMs: 0,
+      handledDefaultAgentRevocationsMs: 0,
+      handledDefaultAgentTargetValidationMs: 0,
+      handledPendingIntentReadMs: 0,
+      handledPendingNewThreadReadMs: 0,
+      handledPrivateContinuationExpirationMs: 0,
+      handledRequirePermissionMs: 0,
+      handledResponseModeMs: 0,
+      handledSharedMessagePolicyMs: 0,
+      handledTextParsingMs: 0,
+    });
+    expect(startingTurn?.[1]).not.toHaveProperty(
+      "handledDefaultAgentBackendValidationMs",
     );
   });
 

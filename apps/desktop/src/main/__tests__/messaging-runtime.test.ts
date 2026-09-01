@@ -30,6 +30,7 @@ import type {
   MessagingAutomationInboundHandler,
   MessagingAutomationInboundMatcher,
 } from "../messaging/messaging-runtime";
+import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 
 const messagingLog = {
   debug: vi.fn(),
@@ -869,6 +870,157 @@ describe("DesktopMessagingRuntime", () => {
         input: [{ type: "text", text: "continue without a mention" }],
       }),
     );
+  });
+
+  it("routes an accepted shared reply without reloading runtime settings", async () => {
+    await prepareRuntimeStore();
+    const adapter = createAdapter("telegram");
+    const bridge = createBackendBridge();
+    const config: DesktopMessagingConfig = {
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        responseMode: "mention_only",
+      },
+    };
+    const deferredReload = createDeferred<DesktopMessagingConfig>();
+    const loadConfig = vi.fn()
+      .mockResolvedValueOnce(config)
+      .mockImplementation(async () => await deferredReload.promise);
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      config: loadConfig,
+    }));
+    await runtime.start();
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:telegram:channel::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "channel",
+        },
+      },
+      createdAt: 1_000,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1_000,
+    });
+
+    const handled = adapter.listener?.({
+      ...buildTextEvent("continue in the channel"),
+      botMention: true,
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "channel",
+        },
+      },
+    });
+    await flushMicrotasks();
+
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+
+    deferredReload.resolve(config);
+    await handled;
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    expect(messagingLog.info).toHaveBeenCalledWith(
+      "messaging starting turn",
+      expect.objectContaining({
+        handledBindingLookupMs: expect.any(Number),
+        handledPendingIntentReadMs: expect.any(Number),
+        handledPendingNewThreadReadMs: expect.any(Number),
+        handledPrivateContinuationExpirationMs: expect.any(Number),
+        handledRemoteScopeMs: expect.any(Number),
+        handledRequirePermissionMs: expect.any(Number),
+        handledResponseModeMs: expect.any(Number),
+        handledSharedMessagePolicyMs: expect.any(Number),
+        handledTextParsingMs: expect.any(Number),
+        inboundEventId: "event-text",
+      }),
+    );
+  });
+
+  it("hot-replaces the response-mode snapshot without restarting the adapter", async () => {
+    await prepareRuntimeStore();
+    const updateAuthorization = vi.fn(async () => undefined);
+    const adapter = createAdapter("telegram", { updateAuthorization });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      config: {
+        inputDebounceMs: 0,
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+          responseMode: "every_message",
+        },
+      },
+    }));
+    await runtime.start();
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:telegram:channel::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "channel",
+        },
+      },
+      createdAt: 1_000,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1_000,
+    });
+
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        responseMode: "mention_only",
+      },
+    });
+    await adapter.listener?.({
+      ...buildTextEvent("ambient after hot apply"),
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "channel",
+        },
+      },
+    });
+
+    expect(updateAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ responseMode: "mention_only" }),
+    );
+    expect(adapter.start).toHaveBeenCalledTimes(1);
+    expect(adapter.stop).not.toHaveBeenCalled();
+    expect(bridge.startTurn).not.toHaveBeenCalled();
   });
 
   it("dispatches ambient replies in a native thread inside a 1:1 DM", async () => {
