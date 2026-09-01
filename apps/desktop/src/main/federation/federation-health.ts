@@ -1,23 +1,23 @@
 import type {
   DesktopFederationMode,
-  DesktopSettingsSnapshot,
   FederationHealthStatus,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
 } from "@pwragent/shared";
 import type { RuntimeFederationLeaseSnapshot } from "../runtime-federation-lease";
+import type { FederationRuntimeConfig } from "./federation-runtime-config";
 
 export function buildFederationHealthStatus(params: {
-  settings: DesktopSettingsSnapshot;
+  config: Pick<FederationRuntimeConfig, "mode" | "publicUrl">;
   peers: FederationPeerSummary[];
   instanceId?: FederationInstanceId;
   listenUrl?: string;
   unavailableReason?: string;
 }): FederationHealthStatus {
-  const mode = params.settings.federation.mode.value;
+  const mode = params.config.mode;
   const enabled = mode !== "disabled";
-  const publicUrl = params.settings.federation.publicUrl.value.trim();
+  const publicUrl = params.config.publicUrl;
 
   return {
     enabled,

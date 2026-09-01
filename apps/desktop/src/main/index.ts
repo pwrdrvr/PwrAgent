@@ -1299,9 +1299,6 @@ export function bootstrapApp(): void {
     registerQuitBlockerIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
-        if (patch.federation !== undefined) {
-          await getDesktopFederationRuntime().restart();
-        }
         if (
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||
@@ -1314,6 +1311,13 @@ export function bootstrapApp(): void {
           installApplicationMenu();
         }
       },
+    });
+    getDesktopConfigStore().subscribe(["federation"], () => {
+      void getDesktopFederationRuntime().restart().catch((error) => {
+        mainLog.error("federation runtime config refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     });
     registerWindowPointerIpcHandlers();
     if (isDevelopment) {

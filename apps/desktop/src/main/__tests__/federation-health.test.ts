@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type {
-  DesktopFederationMode,
-  DesktopSettingsSnapshot,
   FederationHealthStatus,
   FederationPeerSummary,
 } from "@pwragent/shared";
@@ -26,10 +24,10 @@ describe("federation health", () => {
     } as FederationPeerSummary & { pinnedPublicKeyPem: string };
 
     const health = buildFederationHealthStatus({
-      settings: settingsSnapshot({
+      config: {
         mode: "gateway",
         publicUrl: "wss://pwragent.example.com/federation",
-      }),
+      },
       peers: [peer],
       instanceId: "master_one",
       listenUrl: "ws://127.0.0.1:8765",
@@ -63,7 +61,7 @@ describe("federation health", () => {
 
   it("reports disabled mode without listener or public URL", () => {
     const health = buildFederationHealthStatus({
-      settings: settingsSnapshot({ mode: "disabled", publicUrl: "" }),
+      config: { mode: "disabled", publicUrl: "" },
       peers: [],
     });
 
@@ -75,7 +73,7 @@ describe("federation health", () => {
 
   it("reports a bind failure instead of claiming the configured listener", () => {
     const health = buildFederationHealthStatus({
-      settings: settingsSnapshot({ mode: "gateway", publicUrl: "" }),
+      config: { mode: "gateway", publicUrl: "" },
       peers: [],
       unavailableReason: "listen EADDRINUSE: address already in use 127.0.0.1:8765",
     });
@@ -191,17 +189,3 @@ describe("applyFederationLeaseSnapshot", () => {
     expect(health.unavailableReason).toBeUndefined();
   });
 });
-
-function settingsSnapshot(params: {
-  mode: DesktopFederationMode;
-  publicUrl: string;
-}): DesktopSettingsSnapshot {
-  return {
-    federation: {
-      mode: { value: params.mode, source: "config" },
-      listenHost: { value: "127.0.0.1", source: "config" },
-      listenPort: { value: 8765, source: "config" },
-      publicUrl: { value: params.publicUrl, source: "config" },
-    },
-  } as DesktopSettingsSnapshot;
-}

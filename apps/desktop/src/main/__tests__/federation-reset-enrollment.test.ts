@@ -53,10 +53,8 @@ vi.mock("../app-server/backend-registry", async (importOriginal) => ({
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
-    readSettings: async () => ({
-      federation: { mode: { value: federationMode.value } },
-    }),
-    writeConfigPatch: async (patch: DesktopSettingsConfigPatch) => {
+    readFederationConfig: () => ({ mode: federationMode.value }),
+    writeConfigPatchTargeted: async (patch: DesktopSettingsConfigPatch) => {
       configPatches.push(patch);
     },
     clearSecret: async (name: string) => {
