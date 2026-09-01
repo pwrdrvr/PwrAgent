@@ -222,3 +222,167 @@ describe("thread information is never lost", () => {
       .toBeUndefined();
   });
 });
+
+describe("thread read budgets across product flows", () => {
+  it("labels a burst of terminal notifications with one walk per unobserved thread", async () => {
+    // Turn completions arrive in bursts across concurrent threads. A thread
+    // this process never listed still deserves a label, but it must cost one
+    // reconciliation, not one per notification.
+    const { client, registry } = build([
+      codexThread({ id: "thread-alpha", title: "Alpha", titleSource: "derived" }),
+      codexThread({ id: "thread-beta", title: "Beta", titleSource: "derived" }),
+    ]);
+
+    await Promise.all(
+      ["thread-alpha", "thread-beta"].flatMap((threadId) =>
+        Array.from({ length: 4 }, (_unused, turn) =>
+          publishNotification(registry, {
+            method: "turn/completed",
+            params: {
+              threadId,
+              turnId: `turn-${turn}`,
+              turn: { id: `turn-${turn}`, status: "completed", output: [] },
+            },
+          }),
+        ),
+      ),
+    );
+
+    expectThreadReadBudget({
+      note: "eight terminal notifications across two threads neither of which was ever listed",
+      reads: client.counts,
+      scenario: "terminal-notification-burst",
+    });
+  });
+
+  it("reads the provider once for a window opening onto a warm profile", async () => {
+    // A second window mounting asks for the same navigation data the first
+    // window already fetched, then immediately reads labels for its rows.
+    const { client, registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    client.resetCounts();
+
+    await registry.listThreads(NAVIGATION_REFRESH);
+    for (const threadId of ["thread-alpha", "thread-beta"]) {
+      expect(registry.getThreadInfo({ backend: "codex", threadId })?.title)
+        .toBeDefined();
+    }
+
+    expectThreadReadBudget({
+      note: "a second window's navigation refresh and label reads against a warm list cache",
+      reads: client.counts,
+      scenario: "second-window-navigation",
+    });
+  });
+
+  it("keeps a turn's workspace lookups off the provider once the thread is known", async () => {
+    const { client, registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    client.resetCounts();
+
+    // Ten turns, each of which adopts a branch on start and reports a cwd.
+    for (let turn = 0; turn < 10; turn += 1) {
+      await publishNotification(registry, {
+        method: "turn/started",
+        params: { threadId: "thread-alpha", turnId: `turn-${turn}`, turn: { id: `turn-${turn}` } },
+      });
+      await publishNotification(registry, {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-alpha",
+          turnId: `turn-${turn}`,
+          turn: { id: `turn-${turn}`, status: "completed", output: [] },
+        },
+      });
+    }
+
+    expectThreadReadBudget({
+      note: "ten complete turns on a thread the navigation refresh already observed",
+      reads: client.counts,
+      scenario: "ten-turns-warm-thread",
+    });
+  });
+});
+
+describe("directory enrichment budget", () => {
+  // A worktree-shaped projectKey is what makes the registry reach for
+  // directory enrichment. Without one no scenario above can move the
+  // enrichment counter, and a budget that cannot move proves nothing.
+  const WORKTREE_THREAD = codexThread({
+    id: "thread-worktree",
+    projectKey: "/Users/example/.worktrees/feature-branch",
+    title: "Worktree thread",
+    titleSource: "explicit",
+  });
+
+  it("enriches a worktree thread's directories once per backfill-capable listing", async () => {
+    const { client, registry } = build([WORKTREE_THREAD]);
+    await registry.listThreads(NAVIGATION_REFRESH);
+
+    expect(client.directoryEnrichmentCallCount).toBeGreaterThan(0);
+    expectThreadReadBudget({
+      note: "one navigation refresh over a single worktree-backed thread",
+      reads: client.counts,
+      scenario: "worktree-navigation-refresh",
+    });
+  });
+
+  it("does not re-enrich a worktree thread for label reads across turns", async () => {
+    const { client, registry } = build([WORKTREE_THREAD]);
+    await registry.listThreads(NAVIGATION_REFRESH);
+    client.resetCounts();
+
+    for (let turn = 0; turn < 5; turn += 1) {
+      await publishNotification(registry, {
+        method: "turn/started",
+        params: { threadId: "thread-worktree", turnId: `turn-${turn}`, turn: { id: `turn-${turn}` } },
+      });
+      expect(registry.getThreadInfo({ backend: "codex", threadId: "thread-worktree" })?.title)
+        .toBe("Worktree thread");
+      await publishNotification(registry, {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-worktree",
+          turnId: `turn-${turn}`,
+          turn: { id: `turn-${turn}`, status: "completed", output: [] },
+        },
+      });
+    }
+
+    expectThreadReadBudget({
+      note: "five turns on an already-enriched worktree thread",
+      reads: client.counts,
+      scenario: "worktree-turns-after-enrichment",
+    });
+  });
+});
+
+describe("archival is an observation, not a cache eviction", () => {
+  it("records that a thread was archived without losing its title", async () => {
+    const { registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await publishNotification(registry, {
+      method: "thread/archived",
+      params: { threadId: "thread-alpha" },
+    });
+
+    expect(registry.getThreadInfo({ backend: "codex", threadId: "thread-alpha" }))
+      .toMatchObject({ archived: true, title: "Rework the quit dialog" });
+  });
+
+  it("records a restore over the archival", async () => {
+    const { registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await publishNotification(registry, {
+      method: "thread/archived",
+      params: { threadId: "thread-alpha" },
+    });
+    await publishNotification(registry, {
+      method: "thread/unarchived",
+      params: { threadId: "thread-alpha" },
+    });
+
+    expect(registry.getThreadInfo({ backend: "codex", threadId: "thread-alpha" })?.archived)
+      .toBe(false);
+  });
+});

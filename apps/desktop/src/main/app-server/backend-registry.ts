@@ -9650,6 +9650,7 @@ export class DesktopBackendRegistry {
         threads,
         displayMetadataObservationSequence,
         params.enrichDirectories,
+        params.archived === true,
       );
       return threads;
     }
@@ -9664,6 +9665,7 @@ export class DesktopBackendRegistry {
         threads,
         displayMetadataObservationSequence,
         params.enrichDirectories,
+        params.archived === true,
       );
       return threads;
     }
@@ -9689,6 +9691,7 @@ export class DesktopBackendRegistry {
       threads,
       displayMetadataObservationSequence,
       params.enrichDirectories,
+      params.archived === true,
     );
     return threads;
   }
@@ -34398,6 +34401,40 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * Teach the information store that a thread's archived state changed.
+   *
+   * Archival is a fact about the thread, so it is an observation like any
+   * other, and it is deliberately separate from `invalidateThreadListCache`.
+   * Invalidation says a query's result may have changed; it does not say a
+   * thread was archived, and conflating the two is what made the list cache the
+   * only record of archival — and therefore made forgetting it mandatory.
+   */
+  private recordThreadArchivalFromNotification(
+    backend: AppServerBackendKind,
+    notification: AgentEvent["notification"],
+  ): void {
+    const archived =
+      notification.method === "thread/archived"
+        ? true
+        : notification.method === "thread/unarchived"
+          ? false
+          : undefined;
+    if (archived === undefined) {
+      return;
+    }
+    const threadId = (notification.params as { threadId?: unknown })?.threadId;
+    if (typeof threadId !== "string") {
+      return;
+    }
+    this.threadInfoStore.observe({
+      archived,
+      identity: { backend, threadId },
+      observationSequence: this.reserveThreadInfoObservation(),
+      source: "lifecycle-notification",
+    });
+  }
+
+  /**
    * Take the sequence an observation will be recorded at. Asynchronous readers
    * MUST call this before they start: a listing that is overtaken by a rename
    * and then completes late carries the older sequence it reserved, so its
@@ -34409,6 +34446,7 @@ export class DesktopBackendRegistry {
 
   private rememberThreadTitleFromEvent(event: AgentEvent): void {
     const method = event.notification.method;
+    this.recordThreadArchivalFromNotification(event.backend, event.notification);
     if (method === "thread/name/updated") {
       const params = event.notification.params as {
         threadId?: unknown;
@@ -34531,6 +34569,7 @@ export class DesktopBackendRegistry {
     threads: readonly AppServerThreadSummary[],
     displayMetadataObservationSequence: number,
     enriched: boolean,
+    listedArchived: boolean,
   ): void {
     for (const thread of threads) {
       const identity = { backend: thread.source, threadId: thread.id };
@@ -34541,6 +34580,7 @@ export class DesktopBackendRegistry {
         identity,
         observationSequence: displayMetadataObservationSequence,
         source: "provider-list",
+        archived: listedArchived,
         title: thread.title,
         ...(thread.titleSource ? { titleSource: thread.titleSource } : {}),
         ...(projectLabel ? { projectLabel } : {}),
