@@ -15,6 +15,19 @@ on:
       - synchronize
       - reopened
 
+concurrency:
+  # PRs share one group per PR number, so a new push cancels the run it
+  # supersedes instead of leaving three obsolete builds holding runners.
+  #
+  # Pushes group on the commit SHA, so no two pushes ever share a group. That
+  # matters more than it looks: the default queue is `single`, which keeps at
+  # most one run pending per group and cancels the pending run a newer one
+  # replaces. A branch-name group with cancel-in-progress disabled would
+  # therefore drop the middle commit of any three merged in quick succession,
+  # which is exactly the history needed to tell which commit broke main.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   pull-requests: read
@@ -527,11 +540,18 @@ jobs:
       # Electron launches. The persistent 8 GB guest remains healthy under
       # measured memory pressure, but Virtualization.framework kernel clients
       # still accumulate across a long lane; the two-app federation lifecycle
-      # previously ran last after 105 launches. Keep only the two lab VMs busy
-      # concurrently, and do not cancel the other shards on failure: their
-      # artifacts distinguish a product failure from guest degradation.
+      # previously ran last after 105 launches.
+      #
+      # Lane concurrency is bounded by the number of runners in the
+      # pwrdrvr-macos group rather than by max-parallel: a lane with no free
+      # guest waits for one instead of oversubscribing a guest that is already
+      # running Electron. Raised from 2 while the lab returns to 3 builders.
+      # Lower it again only if a lane has to be pinned to a subset of guests.
+      #
+      # Do not cancel the other shards on failure: their artifacts distinguish
+      # a product failure from guest degradation.
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         lane: [1, 2, 3, 4]
     timeout-minutes: 30
