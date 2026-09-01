@@ -439,7 +439,7 @@ describe("RemoteThreadSummaryCache — remembered thread names", () => {
 
     cache.rememberThreadNames("peer-a", [
       stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
-    ]);
+    ], cache.reserveThreadNameObservation());
 
     expect(nameOf(cache, "t1")).toBe("Parent");
     expect(fetchSnapshot).not.toHaveBeenCalled();
@@ -458,7 +458,7 @@ describe("RemoteThreadSummaryCache — remembered thread names", () => {
     cache.rememberThreadNames("peer-a", [
       stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
       stampedThread({ instanceId: "peer-a", threadId: "t2", title: "Sibling" }),
-    ]);
+    ], cache.reserveThreadNameObservation());
     cache.rememberThreadNames("peer-a", [
       stampedThread({ instanceId: "peer-a", threadId: "t3", title: "Cousin" }),
       // A fallback title IS the thread id; recording it would overwrite a
@@ -467,7 +467,7 @@ describe("RemoteThreadSummaryCache — remembered thread names", () => {
         ...stampedThread({ instanceId: "peer-a", threadId: "t1", title: "t1" }),
         titleSource: "fallback",
       },
-    ]);
+    ], cache.reserveThreadNameObservation());
 
     expect(nameOf(cache, "t1")).toBe("Parent");
     expect(nameOf(cache, "t2")).toBe("Sibling");
@@ -543,10 +543,10 @@ describe("RemoteThreadSummaryCache — remembered thread names", () => {
 
     cache.rememberThreadNames("peer-a", [
       stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
-    ]);
+    ], cache.reserveThreadNameObservation());
     cache.rememberThreadNames("peer-a", [
       stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Renamed" }),
-    ]);
+    ], cache.reserveThreadNameObservation());
 
     expect(nameOf(cache, "t1")).toBe("Renamed");
   });
@@ -563,16 +563,41 @@ describe("RemoteThreadSummaryCache — remembered thread names", () => {
 
     cache.rememberThreadNames("peer-a", [
       stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Alpha" }),
-    ]);
+    ], cache.reserveThreadNameObservation());
     cache.rememberThreadNames("peer-b", [
       stampedThread({ instanceId: "peer-b", threadId: "t1", title: "Beta" }),
-    ]);
+    ], cache.reserveThreadNameObservation());
 
     expect(nameOnPeer(cache, "peer-a", "t1")).toBe("Alpha");
     expect(nameOnPeer(cache, "peer-b", "t1")).toBe("Beta");
 
     // And a peer that never saw the thread has no opinion about it.
     expect(nameOnPeer(cache, "peer-b", "t2")).toBeUndefined();
+  });
+
+  // titleSource is a compile-time contract over another instance's JSON. An
+  // older peer sends a real title without one, and a name still beats a uuid.
+  it("keeps a peer title that arrived without a titleSource", () => {
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    const row = stampedThread({
+      instanceId: "peer-a",
+      threadId: "t1",
+      title: "Design review",
+    });
+    delete (row as { titleSource?: unknown }).titleSource;
+    cache.rememberThreadNames(
+      "peer-a",
+      [row],
+      cache.reserveThreadNameObservation(),
+    );
+
+    expect(nameOf(cache, "t1")).toBe("Design review");
   });
 
   it("drops only the unmounted peer's names", () => {
@@ -585,10 +610,10 @@ describe("RemoteThreadSummaryCache — remembered thread names", () => {
 
     cache.rememberThreadNames("peer-a", [
       stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Alpha" }),
-    ]);
+    ], cache.reserveThreadNameObservation());
     cache.rememberThreadNames("peer-b", [
       stampedThread({ instanceId: "peer-b", threadId: "t1", title: "Beta" }),
-    ]);
+    ], cache.reserveThreadNameObservation());
 
     cache.forgetInstanceThreadNames("peer-a");
 

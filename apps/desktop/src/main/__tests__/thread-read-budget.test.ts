@@ -432,3 +432,132 @@ describe("messaging admission reads what this process already knows", () => {
     ).toBeUndefined();
   });
 });
+
+// Messaging admission and the quit dialog read this process's own knowledge
+// rather than the provider. That is only safe while what it knows is current.
+describe("what the store serves stays current", () => {
+  it("admits a reply under the renamed title, not the listed one", async () => {
+    const { registry } = build([NAMED_THREAD]);
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await publishNotification(registry, {
+      method: "thread/name/updated",
+      params: { threadId: "thread-alpha", threadName: "Renamed after listing" },
+    });
+
+    expect(
+      registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-alpha",
+      })?.title,
+    ).toBe("Renamed after listing");
+    await expect(
+      registry.resolveThread({ threadId: "thread-alpha" }),
+    ).resolves.toMatchObject({ title: "Renamed after listing" });
+  });
+
+  // resolveThread's provider fallback filters archived:false. Answering from
+  // the store has to honour the same thing, or a reply is admitted to a thread
+  // the operator archived.
+  it("stops resolving a thread once it is archived", async () => {
+    const { registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await registry.archiveThread({ backend: "codex", threadId: "thread-alpha" });
+    await publishNotification(registry, {
+      method: "thread/archived",
+      params: { threadId: "thread-alpha" },
+    });
+
+    expect(
+      registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-alpha",
+      }),
+    ).toBeUndefined();
+    await expect(
+      registry.resolveThread({ threadId: "thread-alpha" }),
+    ).resolves.toBeUndefined();
+    // The untouched thread is unaffected.
+    await expect(
+      registry.resolveThread({ threadId: "thread-beta" }),
+    ).resolves.toMatchObject({ id: "thread-beta" });
+  });
+
+  // thread/started replays the provider's own record, which on a resume is
+  // the pre-rename one. Sequence order alone would let it win.
+  it("keeps an unacknowledged rename over a resumed thread's own record", async () => {
+    const { registry } = build([NAMED_THREAD]);
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await publishNotification(registry, {
+      method: "thread/name/updated",
+      params: { threadId: "thread-alpha", threadName: "Renamed By Operator" },
+    });
+    await publishNotification(registry, {
+      method: "thread/started",
+      params: {
+        threadId: "thread-alpha",
+        thread: {
+          id: "thread-alpha",
+          title: "Rework the quit dialog",
+          titleSource: "explicit",
+        },
+      },
+    });
+
+    expect(
+      registry.getThreadInfo({ backend: "codex", threadId: "thread-alpha" })
+        ?.title,
+    ).toBe("Renamed By Operator");
+  });
+
+  // An unfiltered listing returns archived and active rows alike, so it proves
+  // nothing about either.
+  it("does not read archival into a listing that did not filter for it", async () => {
+    const { registry } = build();
+    await publishNotification(registry, {
+      method: "thread/archived",
+      params: { threadId: "thread-alpha" },
+    });
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+
+    expect(
+      registry.getThreadInfo({ backend: "codex", threadId: "thread-alpha" })
+        ?.archived,
+    ).toBe(true);
+  });
+
+  // A listing that failed is not an answer. Memoizing it would silence this
+  // thread's terminal notifications for the rest of the process.
+  it("retries a terminal-notification lookup that failed", async () => {
+    const { client, registry } = build();
+    client.failNextList = true;
+    await publishNotification(registry, {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-alpha",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+    const listsAfterFailure = client.listCalls.length;
+
+    await publishNotification(registry, {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-alpha",
+        turnId: "turn-2",
+        turn: { id: "turn-2", status: "completed", output: [] },
+      },
+    });
+
+    expect(client.listCalls.length).toBeGreaterThan(listsAfterFailure);
+    expect(
+      registry.getThreadInfo({ backend: "codex", threadId: "thread-alpha" })
+        ?.title,
+    ).toBe("Rework the quit dialog");
+  });
+});

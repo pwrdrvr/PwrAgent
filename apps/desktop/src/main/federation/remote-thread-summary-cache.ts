@@ -23,10 +23,16 @@ export type RemoteThreadSummaryPeer = {
   capabilities: FederationCapability[];
 };
 
-/** A peer's display name for one of its threads. */
+/**
+ * A peer's display name for one of its threads.
+ *
+ * `titleSource` is optional because it is a compile-time contract over another
+ * instance's JSON: an older peer sends a real title without one, and a name is
+ * still better than the raw thread id.
+ */
 export type RemoteThreadName = {
   title: string;
-  titleSource: NavigationThreadSummary["titleSource"];
+  titleSource?: NavigationThreadSummary["titleSource"];
 };
 
 export type ResolvedRemotePins = {
@@ -306,7 +312,7 @@ export class RemoteThreadSummaryCache {
   rememberThreadNames(
     instanceId: string,
     threads: readonly NavigationThreadSummary[],
-    observationSequence = this.reserveThreadNameObservation(),
+    observationSequence: number,
   ): void {
     for (const thread of threads) {
       this.threadNames.observe({
@@ -371,9 +377,14 @@ export class RemoteThreadSummaryCache {
       instanceId: params.target.instanceId,
       threadId: params.threadId,
     });
-    if (!info?.title || !info.titleSource) {
+    if (!info?.title) {
       return undefined;
     }
+    // titleSource is absent whenever the peer row omitted it — the field is a
+    // compile-time contract and the payload is another instance's JSON, so an
+    // older peer legitimately sends a real title without one. Requiring it
+    // here would answer `undefined` for a name this store holds, and the quit
+    // dialog would show the raw thread id instead.
     return { title: info.title, titleSource: info.titleSource };
   }
 

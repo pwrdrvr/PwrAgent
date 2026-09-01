@@ -490,7 +490,6 @@ import {
   ThreadInfoStore,
   type ThreadInfo,
   type ThreadInfoIdentity,
-  type ThreadInfoObservation,
 } from "./thread-info-store";
 import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
 import {
@@ -9660,7 +9659,7 @@ export class DesktopBackendRegistry {
         threads,
         displayMetadataObservationSequence,
         params.enrichDirectories,
-        params.archived === true,
+        params.archived,
       );
       return threads;
     }
@@ -9675,7 +9674,7 @@ export class DesktopBackendRegistry {
         threads,
         displayMetadataObservationSequence,
         params.enrichDirectories,
-        params.archived === true,
+        params.archived,
       );
       return threads;
     }
@@ -9701,7 +9700,7 @@ export class DesktopBackendRegistry {
       threads,
       displayMetadataObservationSequence,
       params.enrichDirectories,
-      params.archived === true,
+      params.archived,
     );
     return threads;
   }
@@ -34557,15 +34556,28 @@ export class DesktopBackendRegistry {
       || record.titleSource === "fallback"
         ? record.titleSource
         : undefined;
+    const projectLabel = readNotificationProjectLabel(record);
+    // A rename the provider has not acknowledged yet outranks the title in this
+    // payload. `thread/started` replays the provider's own record, which on a
+    // resume is the pre-rename one; without this the operator's rename loses on
+    // sequence alone and the quit dialog reverts to the old name. The provider
+    // acknowledging the rename clears the entry (see withObservedThreadName),
+    // after which its titles are believed normally.
+    const unacknowledgedRename = this.observedThreadNames.get(
+      buildThreadIdentityKey(backend, threadId),
+    );
+    const title = unacknowledgedRename ?? candidate;
     this.threadInfoStore.observe({
       identity: { backend, threadId },
       observationSequence: displayMetadataObservationSequence,
       source: "lifecycle-notification",
-      ...(candidate !== undefined ? { title: candidate } : {}),
-      ...(titleSource !== undefined ? { titleSource } : {}),
-      ...(readNotificationProjectLabel(record) !== undefined
-        ? { projectLabel: readNotificationProjectLabel(record) as string }
-        : {}),
+      ...(title !== undefined ? { title } : {}),
+      ...(unacknowledgedRename !== undefined
+        ? { titleSource: "explicit" as const }
+        : titleSource !== undefined
+          ? { titleSource }
+          : {}),
+      ...(projectLabel !== undefined ? { projectLabel } : {}),
     });
   }
 
@@ -34579,7 +34591,7 @@ export class DesktopBackendRegistry {
     threads: readonly AppServerThreadSummary[],
     displayMetadataObservationSequence: number,
     enriched: boolean,
-    listedArchived: boolean,
+    listedArchived: boolean | undefined,
   ): void {
     for (const thread of threads) {
       const identity = { backend: thread.source, threadId: thread.id };
@@ -34590,7 +34602,11 @@ export class DesktopBackendRegistry {
         identity,
         observationSequence: displayMetadataObservationSequence,
         source: "provider-list",
-        archived: listedArchived,
+        // Only a listing that actually filtered by archival proves anything
+        // about it. An unfiltered listing returns both kinds, so recording
+        // `false` for every row would overwrite an archival this store was
+        // just told about with a fact the listing never established.
+        ...(listedArchived === undefined ? {} : { archived: listedArchived }),
         title: thread.title,
         ...(thread.titleSource ? { titleSource: thread.titleSource } : {}),
         ...(projectLabel ? { projectLabel } : {}),
@@ -34655,6 +34671,16 @@ export class DesktopBackendRegistry {
             error: error instanceof Error ? error.message : String(error),
             threadId,
           });
+        })
+        .finally(() => {
+          // Dropped unless the walk actually taught us the label. Keeping a
+          // settled entry would memoize a FAILURE as though it were an answer:
+          // one listing that rejected while the provider was restarting would
+          // leave this thread's notifications unlabeled for the rest of the
+          // process, because every later attempt awaits the same dead promise.
+          if (!this.notificationThreadContextLabel(backend, threadId)) {
+            this.notificationContextReconciliations.delete(key);
+          }
         });
       this.notificationContextReconciliations.set(key, reconciliation);
     }

@@ -2129,9 +2129,14 @@ class DesktopAppServerService {
       // peer can be in flight together and can finish out of order; without
       // this, the older snapshot's rows land last and revert a rename the
       // operator has already seen.
-      const nameObservationSequence = getDesktopFederationRuntime()
-        .remoteThreadSummaries()
-        .reserveThreadNameObservation();
+      // The same cache instance must both reserve and spend the sequence. A
+      // federation restart between the two drops the cache, and the rebuilt
+      // one counts from zero — every later refresh would then lose to this
+      // one snapshot's high sequence and peer renames would stop appearing.
+      const remoteThreadSummaries = getDesktopFederationRuntime()
+        .remoteThreadSummaries();
+      const nameObservationSequence =
+        remoteThreadSummaries.reserveThreadNameObservation();
       try {
         const snapshot = await getDesktopFederationRuntime()
           .remoteNavigationSnapshot(
@@ -2152,13 +2157,11 @@ class DesktopAppServerService {
         // snapshot the operator actually asked for: the worst case of losing
         // it is a row that reads as a thread id somewhere else.
         try {
-          getDesktopFederationRuntime()
-            .remoteThreadSummaries()
-            .rememberThreadNames(
-              federationTarget.instanceId,
-              snapshot.threads,
-              nameObservationSequence,
-            );
+          remoteThreadSummaries.rememberThreadNames(
+            federationTarget.instanceId,
+            snapshot.threads,
+            nameObservationSequence,
+          );
         } catch (error) {
           logDebug("rememberRemoteThreadNames failed", {
             error: error instanceof Error ? error.message : String(error),

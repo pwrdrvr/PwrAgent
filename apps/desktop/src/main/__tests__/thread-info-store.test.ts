@@ -302,4 +302,175 @@ describe("ThreadInfoStore", () => {
       expect(new Set(sequences).size).toBe(sequences.length);
     });
   });
+  // The store keeps two lanes: notifications write fields, listings write the
+  // whole row. Handing the row back verbatim let this store answer with a
+  // title it already knew was stale.
+  describe("the row is reconciled with what the fields know", () => {
+    const rowFor = (
+      title: string,
+      titleSource: "explicit" | "derived" | "fallback" = "explicit",
+    ) =>
+      ({
+        id: "t1",
+        source: "codex" as const,
+        title,
+        titleSource,
+        linkedDirectories: [],
+      }) as unknown as Parameters<ThreadInfoStore["observeSummary"]>[0]["summary"];
+
+    function storeWithRow(title = "Old Name"): ThreadInfoStore {
+      const store = new ThreadInfoStore();
+      const seq = store.reserveObservationSequence();
+      store.observe({
+        identity: local("t1"),
+        observationSequence: seq,
+        source: "provider-list",
+        title,
+        titleSource: "explicit",
+      });
+      store.observeSummary({
+        enriched: false,
+        identity: local("t1"),
+        observationSequence: seq,
+        summary: rowFor(title),
+      });
+      return store;
+    }
+
+    it("serves a rename that arrived after the row", () => {
+      const store = storeWithRow();
+      store.observe({
+        identity: local("t1"),
+        observationSequence: store.reserveObservationSequence(),
+        source: "lifecycle-notification",
+        title: "New Name",
+        titleSource: "explicit",
+      });
+
+      expect(store.getTitle(local("t1"))).toBe("New Name");
+      expect(store.getSummary(local("t1"))?.title).toBe("New Name");
+      expect(store.findLocalSummary({ threadId: "t1" })?.title).toBe("New Name");
+    });
+
+    // A provider that lost its title index sends a newer row whose title IS
+    // the thread id. The field lane already rejects it; the row must not be a
+    // way around that.
+    it("does not let a newer fallback row overwrite a known name", () => {
+      const store = storeWithRow("Real Name");
+      const seq = store.reserveObservationSequence();
+      store.observe({
+        identity: local("t1"),
+        observationSequence: seq,
+        source: "provider-list",
+        title: "t1",
+        titleSource: "fallback",
+      });
+      store.observeSummary({
+        enriched: false,
+        identity: local("t1"),
+        observationSequence: seq,
+        summary: rowFor("t1", "fallback"),
+      });
+
+      expect(store.getTitle(local("t1"))).toBe("Real Name");
+      expect(store.getSummary(local("t1"))?.title).toBe("Real Name");
+    });
+
+    // Archival is membership, not a field. A caller asking for the row is
+    // asking about a thread the provider still serves.
+    it("stops serving a row once the thread is archived", () => {
+      const store = storeWithRow();
+      expect(store.getSummary(local("t1"))).toBeDefined();
+
+      store.observe({
+        identity: local("t1"),
+        observationSequence: store.reserveObservationSequence(),
+        source: "lifecycle-notification",
+        archived: true,
+      });
+
+      expect(store.getSummary(local("t1"))).toBeUndefined();
+      expect(store.findLocalSummary({ threadId: "t1" })).toBeUndefined();
+      // The name is still known — only the row is withheld.
+      expect(store.getTitle(local("t1"))).toBe("Old Name");
+    });
+
+    it("serves the row again once the thread is restored", () => {
+      const store = storeWithRow();
+      store.observe({
+        identity: local("t1"),
+        observationSequence: store.reserveObservationSequence(),
+        source: "lifecycle-notification",
+        archived: true,
+      });
+      store.observe({
+        identity: local("t1"),
+        observationSequence: store.reserveObservationSequence(),
+        source: "lifecycle-notification",
+        archived: false,
+      });
+
+      expect(store.getSummary(local("t1"))?.id).toBe("t1");
+    });
+
+    // Enrichment is a property of the listing, not of the thread, and the
+    // most frequent listing is unenriched.
+    it("keeps the enriched row when a newer unenriched one arrives", () => {
+      const store = new ThreadInfoStore();
+      store.observeSummary({
+        enriched: true,
+        identity: local("t1"),
+        observationSequence: store.reserveObservationSequence(),
+        summary: rowFor("Enriched"),
+      });
+      store.observeSummary({
+        enriched: false,
+        identity: local("t1"),
+        observationSequence: store.reserveObservationSequence(),
+        summary: rowFor("Unenriched"),
+      });
+
+      expect(store.getSummary(local("t1"), { requireEnriched: true })?.title)
+        .toBe("Enriched");
+      expect(store.getSummary(local("t1"))?.title).toBe("Unenriched");
+    });
+
+    // Thread ids are unique per backend, not across them, and an ACP adapter
+    // picks its own.
+    it("refuses an ambiguous backend-less lookup", () => {
+      const store = new ThreadInfoStore();
+      for (const backend of ["codex", "acp:claude-code"] as const) {
+        store.observeSummary({
+          enriched: false,
+          identity: { backend, threadId: "shared-id" },
+          observationSequence: store.reserveObservationSequence(),
+          summary: {
+            ...rowFor("Either one"),
+            id: "shared-id",
+          },
+        });
+      }
+
+      expect(store.findLocalSummary({ threadId: "shared-id" })).toBeUndefined();
+      expect(
+        store.findLocalSummary({ backend: "codex", threadId: "shared-id" })?.id,
+      ).toBe("shared-id");
+    });
+
+    it("forgets an entry whose id needed normalizing", () => {
+      const store = new ThreadInfoStore();
+      store.observe({
+        identity: local(" padded "),
+        observationSequence: store.reserveObservationSequence(),
+        source: "provider-list",
+        title: "Padded",
+        titleSource: "explicit",
+      });
+      expect(store.size).toBe(1);
+
+      store.forget(local(" padded "));
+
+      expect(store.size).toBe(0);
+    });
+  });
 });

@@ -74,6 +74,18 @@ type ThreadInfoEntry = {
   /** Highest sequence any accepted field on this entry carries. */
   lastObservedSequence: number;
   summary?: ThreadInfoSummaryEntry;
+  /**
+   * The latest row from a listing that ran directory enrichment, kept in its
+   * own slot.
+   *
+   * Enrichment is not a property of the thread, it is a property of the
+   * listing that produced the row — and the most frequent listing
+   * (`navigation-snapshot`) is unenriched. With one slot, that poll would
+   * overwrite the enriched row within seconds and every `requireEnriched`
+   * read would miss forever, sending the caller back to the provider it was
+   * meant to stop asking.
+   */
+  enrichedSummary?: ThreadInfoSummaryEntry;
 };
 
 /**
@@ -313,21 +325,26 @@ export class ThreadInfoStore {
       identity,
       lastObservedSequence: 0,
     };
-    const existing = entry.summary;
-    // An enriched row is not replaced by an unenriched one taken at the same
-    // moment: both are current, and only one can answer a directory question.
-    const supersedes =
-      !existing
-      || existing.observationSequence < params.observationSequence
-      || (existing.observationSequence === params.observationSequence
-        && params.enriched
-        && !existing.enriched);
-    if (supersedes) {
-      entry.summary = {
-        enriched: params.enriched,
-        observationSequence: params.observationSequence,
-        value: params.summary,
-      };
+    const observed: ThreadInfoSummaryEntry = {
+      enriched: params.enriched,
+      observationSequence: params.observationSequence,
+      value: params.summary,
+    };
+    if (
+      !entry.summary
+      || entry.summary.observationSequence <= params.observationSequence
+    ) {
+      entry.summary = observed;
+    }
+    // The enriched slot only ever hears from enriched listings, so an
+    // unenriched row cannot evict the one answer a directory question has.
+    if (
+      params.enriched
+      && (!entry.enrichedSummary
+        || entry.enrichedSummary.observationSequence
+          <= params.observationSequence)
+    ) {
+      entry.enrichedSummary = observed;
     }
     entry.lastObservedSequence = Math.max(
       entry.lastObservedSequence,
@@ -353,15 +370,66 @@ export class ThreadInfoStore {
     if (!threadId) {
       return undefined;
     }
-    const summary = this.entries.get(identityKey({ ...identity, threadId }))
-      ?.summary;
+    const entry = this.entries.get(identityKey({ ...identity, threadId }));
+    if (!entry) {
+      return undefined;
+    }
+    return this.projectSummary(entry, options?.requireEnriched === true);
+  }
+
+  /**
+   * The stored row, reconciled with everything the field lane has learned
+   * since it was taken.
+   *
+   * A listing row and a notification are two observations of one thread, and
+   * they arrive on different paths: only listings write the row, only
+   * notifications write a rename or an archival. Handing the row back verbatim
+   * lets this store answer with a title it already knows is stale — the exact
+   * failure it exists to prevent, reintroduced one layer down. So the field
+   * lane is projected over the row on the way out.
+   */
+  private projectSummary(
+    entry: ThreadInfoEntry,
+    requireEnriched: boolean,
+  ): AppServerThreadSummary | undefined {
+    const summary = requireEnriched ? entry.enrichedSummary : entry.summary;
     if (!summary) {
       return undefined;
     }
-    if (options?.requireEnriched && !summary.enriched) {
+    // Archival is membership, not a field: a caller asking for a thread's row
+    // is asking about a thread the provider still serves. Answering with the
+    // pre-archival row would let a reply be admitted to an archived thread.
+    const archived = entry.fields.archived;
+    if (
+      archived?.value === true
+      && archived.observationSequence >= summary.observationSequence
+    ) {
       return undefined;
     }
-    return summary.value;
+    const title = entry.fields.title;
+    if (!title) {
+      return summary.value;
+    }
+    // The row's own title wins only while it is both usable and no older than
+    // the field lane. A listing that regressed to a fallback title is newer
+    // and still must not overwrite a name this store already holds.
+    const rowTitleUsable = isUsableTitle(
+      summary.value.title,
+      summary.value.titleSource,
+    );
+    if (
+      rowTitleUsable
+      && title.observationSequence <= summary.observationSequence
+    ) {
+      return summary.value;
+    }
+    return {
+      ...summary.value,
+      title: title.value,
+      ...(entry.fields.titleSource
+        ? { titleSource: entry.fields.titleSource.value }
+        : {}),
+    };
   }
 
   /**
@@ -386,15 +454,25 @@ export class ThreadInfoStore {
     if (params.backend) {
       return this.getSummary({ backend: params.backend, threadId });
     }
+    // Thread ids are unique per backend, not across them, and an ACP adapter
+    // picks its own. Answering an ambiguous id with whichever backend this
+    // process happened to observe first would hand back another thread's
+    // directories; a caller that cannot name the backend gets nothing.
+    let match: AppServerThreadSummary | undefined;
     for (const entry of this.entries.values()) {
       if (entry.identity.instanceId || entry.identity.threadId !== threadId) {
         continue;
       }
-      if (entry.summary) {
-        return entry.summary.value;
+      const projected = this.projectSummary(entry, false);
+      if (!projected) {
+        continue;
       }
+      if (match) {
+        return undefined;
+      }
+      match = projected;
     }
-    return undefined;
+    return match;
   }
 
   /** The display title, or `undefined` when none has ever been observed. */
@@ -409,7 +487,11 @@ export class ThreadInfoStore {
    * says nothing about whether the thread still exists or what it is called.
    */
   forget(identity: ThreadInfoIdentity): void {
-    this.entries.delete(identityKey(identity));
+    const threadId = identity.threadId.trim();
+    if (!threadId) {
+      return;
+    }
+    this.entries.delete(identityKey({ ...identity, threadId }));
   }
 
   /** Drop every thread belonging to a peer that unmounted. */
