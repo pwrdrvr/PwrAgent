@@ -2415,6 +2415,27 @@ function createAcpSessionStoreMock(records: AcpSessionMetadata[]) {
   };
 }
 
+/**
+ * Empty the thread-list cache without touching any title state, so a
+ * `getCachedThreadSummary` read falls through to the information store. Every
+ * thread mutation does this in the running app, which is the whole reason the
+ * second tier exists — a test that reads while the cache is warm is measuring
+ * the provider row, not the store, and will agree with itself either way.
+ */
+async function coldenThreadListCache(
+  registry: DesktopBackendRegistry,
+  backend: AppServerBackendKind,
+  parentThreadId: string,
+): Promise<void> {
+  await registry.publishLocalEvent({
+    backend,
+    notification: {
+      method: "thread/subthreadsCollapsed/updated",
+      params: { parentThreadId, collapsed: true },
+    },
+  });
+}
+
 function createKimiAgentRecord(
   backendId: AcpBackendId = "acp:kimi" as AcpBackendId,
   runtimeCapabilities?: BackendAcpRuntimeCapabilities,
@@ -6806,45 +6827,29 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("keeps a generated ACP title marked derived for cached-summary readers", async () => {
-    const acpBackendId = "acp:gemini" as AcpBackendId;
-    const sessions: AcpSessionMetadata[] = [
-      {
-        backendId: acpBackendId,
-        sessionId: "session-1",
-        title: "ACP session",
-        titleSource: "fallback",
-        cwd: "/repo/project",
-        createdAt: 1000,
-        updatedAt: 1000,
-        executionMode: "default",
-        status: "idle",
-      },
-    ];
-    const sessionStore = createAcpSessionStoreMock(sessions);
-    const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
-      acpAgentStore: createAcpAgentStoreMock([
+  it("records a generated ACP title as derived once the cache goes cold", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions: [
         {
           backendId: acpBackendId,
-          registryId: "gemini",
-          name: "Gemini CLI",
-          distributionKind: "local",
-          distributionSource: "gemini --acp --skip-trust",
-          installStatus: "installed",
-          authStatus: "not-required",
-          verificationStatus: "not-applicable",
-          allowlistRuleId: "local-gemini-cli",
-          installedAt: 1000,
+          sessionId: "session-1",
+          title: "ACP session",
+          titleSource: "fallback",
+          cwd: "/repo/project",
+          createdAt: 1000,
           updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
         },
-      ]),
-      acpSessionStore: sessionStore,
+      ],
+    });
+    onTestFinished(async () => {
+      await registry.close();
     });
 
     await registry.listThreads({ backend: acpBackendId });
-
     await (registry as unknown as {
       applyGeneratedThreadTitle(params: {
         backend: AppServerBackendKind;
@@ -6856,13 +6861,13 @@ describe("DesktopBackendRegistry", () => {
       threadId: "session-1",
       title: "Investigate the flaky federation handshake test",
     });
+    await coldenThreadListCache(registry, acpBackendId, "session-1");
 
-    // The session store is PwrAgent's own durable record of the provenance,
-    // and it is what `listThreads` reports. A cached-summary reader must not
-    // contradict it and call a generated title an operator rename.
-    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
-      titleSource: "derived",
-    });
+    // The information-store tier — the one this read exists to serve, since a
+    // warm thread-list cache answers first and every mutation empties it.
+    // Nothing lists again after the rename on purpose: a later listing row
+    // outranks the notification's own record, so the assertion would hold
+    // whatever the notification carried.
     expect(
       registry.getCachedThreadSummary({
         backend: acpBackendId,
@@ -6872,52 +6877,35 @@ describe("DesktopBackendRegistry", () => {
       title: "Investigate the flaky federation handshake test",
       titleSource: "derived",
     });
-
-    await registry.close();
   });
 
-  it("records an ACP prompt-derived stopgap title without a fallback source", async () => {
-    const acpBackendId = "acp:gemini" as AcpBackendId;
-    const sessions: AcpSessionMetadata[] = [
-      {
-        backendId: acpBackendId,
-        sessionId: "session-1",
-        title: "ACP session",
-        titleSource: "fallback",
-        cwd: "/repo/project",
-        createdAt: 1000,
-        updatedAt: 1000,
-        executionMode: "default",
-        status: "idle",
-      },
-    ];
-    const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
-      acpAgentStore: createAcpAgentStoreMock([
+  it("keeps a fallback-sourced ACP rename's title on a cold-cache read", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions: [
         {
           backendId: acpBackendId,
-          registryId: "gemini",
-          name: "Gemini CLI",
-          distributionKind: "local",
-          distributionSource: "gemini --acp --skip-trust",
-          installStatus: "installed",
-          authStatus: "not-required",
-          verificationStatus: "not-applicable",
-          allowlistRuleId: "local-gemini-cli",
-          installedAt: 1000,
+          sessionId: "session-1",
+          title: "ACP session",
+          titleSource: "fallback",
+          cwd: "/repo/project",
+          createdAt: 1000,
           updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
         },
-      ]),
-      acpSessionStore: createAcpSessionStoreMock(sessions),
+      ],
+    });
+    onTestFinished(async () => {
+      await registry.close();
     });
 
     await registry.listThreads({ backend: acpBackendId });
-
-    // The stopgap the title helper applies when generation is unavailable. Its
-    // `fallback` source keeps the thread eligible for a real generated title,
-    // but the information store refuses a fallback-sourced title outright --
-    // so forwarding that source would strand the "ACP session" placeholder.
+    // The stopgap `applyPromptDerivedAcpThreadTitle` applies when no title
+    // generator is available: a real prompt-derived name carrying the
+    // "still replaceable" fallback marker. Forwarding that marker into the
+    // information store would make `isUsableTitle` refuse the name outright.
     await (registry as unknown as {
       renameAcpSession(
         backend: AcpBackendId,
@@ -6931,6 +6919,7 @@ describe("DesktopBackendRegistry", () => {
       "Investigate the flaky federation handshake test",
       { titleSource: "fallback" },
     );
+    await coldenThreadListCache(registry, acpBackendId, "session-1");
 
     expect(
       registry.getCachedThreadSummary({
@@ -6939,13 +6928,11 @@ describe("DesktopBackendRegistry", () => {
       }),
     ).toMatchObject({
       title: "Investigate the flaky federation handshake test",
-      titleSource: "derived",
+      titleSource: "explicit",
     });
-
-    await registry.close();
   });
 
-  it("leaves a generated Codex title explicit, matching what the provider reports", async () => {
+  it("treats a rename that states no source as an operator rename", async () => {
     const codexClient = new MockBackendClient({
       threads: [
         {
@@ -6961,36 +6948,34 @@ describe("DesktopBackendRegistry", () => {
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
-
-    await registry.listThreads({ backend: "codex" });
-    await (registry as unknown as {
-      applyGeneratedThreadTitle(params: {
-        backend: AppServerBackendKind;
-        threadId: string;
-        title: string;
-      }): Promise<void>;
-    }).applyGeneratedThreadTitle({
-      backend: "codex",
-      threadId: "thread-1",
-      title: "Investigate the flaky federation handshake test",
+    onTestFinished(async () => {
+      await registry.close();
     });
 
-    // Deliberate, not an oversight. Codex infers provenance from record shape
-    // rather than storing it, so a generated title -- which never matches the
-    // thread preview -- comes back `explicit` on the next listing, and the
-    // rename invalidates the list cache so that listing is the next one.
-    // Reporting `derived` here would be true for one listing and then flip.
+    await registry.listThreads({ backend: "codex" });
+    // A Codex rename and a federated one both arrive with no provenance, and
+    // the default has to stay what every consumer assumed before the field
+    // existed.
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Ship the release runbook",
+        },
+      },
+    });
+
     expect(
       registry.getCachedThreadSummary({
         backend: "codex",
         threadId: "thread-1",
       }),
     ).toMatchObject({
-      title: "Investigate the flaky federation handshake test",
+      title: "Ship the release runbook",
       titleSource: "explicit",
     });
-
-    await registry.close();
   });
 
   it("still reports an operator rename as an explicit title", async () => {
@@ -7009,6 +6994,9 @@ describe("DesktopBackendRegistry", () => {
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
+    onTestFinished(async () => {
+      await registry.close();
+    });
 
     await registry.listThreads({ backend: "codex" });
     await registry.renameThread({
@@ -7026,7 +7014,6 @@ describe("DesktopBackendRegistry", () => {
         titleSource: "explicit",
       }),
     ]);
-
     expect(
       registry.getCachedThreadSummary({
         backend: "codex",
@@ -7036,64 +7023,6 @@ describe("DesktopBackendRegistry", () => {
       title: "Ship the release runbook",
       titleSource: "explicit",
     });
-
-    await registry.close();
-  });
-
-  it("keeps an ACP operator rename explicit", async () => {
-    const acpBackendId = "acp:gemini" as AcpBackendId;
-    const sessions: AcpSessionMetadata[] = [
-      {
-        backendId: acpBackendId,
-        sessionId: "session-1",
-        title: "ACP session",
-        titleSource: "fallback",
-        cwd: "/repo/project",
-        createdAt: 1000,
-        updatedAt: 1000,
-        executionMode: "default",
-        status: "idle",
-      },
-    ];
-    const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
-      acpAgentStore: createAcpAgentStoreMock([
-        {
-          backendId: acpBackendId,
-          registryId: "gemini",
-          name: "Gemini CLI",
-          distributionKind: "local",
-          distributionSource: "gemini --acp --skip-trust",
-          installStatus: "installed",
-          authStatus: "not-required",
-          verificationStatus: "not-applicable",
-          allowlistRuleId: "local-gemini-cli",
-          installedAt: 1000,
-          updatedAt: 1000,
-        },
-      ]),
-      acpSessionStore: createAcpSessionStoreMock(sessions),
-    });
-
-    await registry.listThreads({ backend: acpBackendId });
-    await registry.renameThread({
-      backend: acpBackendId,
-      threadId: "session-1",
-      name: "Ship the release runbook",
-    });
-
-    expect(
-      registry.getCachedThreadSummary({
-        backend: acpBackendId,
-        threadId: "session-1",
-      }),
-    ).toMatchObject({
-      title: "Ship the release runbook",
-      titleSource: "explicit",
-    });
-
-    await registry.close();
   });
 
   it("exposes live Codex thread names while thread/list still returns the placeholder", async () => {

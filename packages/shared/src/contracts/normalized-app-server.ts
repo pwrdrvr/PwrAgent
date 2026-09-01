@@ -1732,6 +1732,15 @@ export type AppServerNotification =
       params: {
         threadId: string;
         threadName?: string;
+        /**
+         * Where the new name came from, when the emitter knows. A rename
+         * carries no provenance of its own, so a recorder that guesses calls
+         * every generated title an operator rename. Optional because a
+         * provider-forwarded or federated rename genuinely does not know;
+         * absent means "assume an operator", which is what every consumer
+         * assumed before this existed.
+         */
+        titleSource?: AppServerThreadTitleSource;
       };
     }
   | {

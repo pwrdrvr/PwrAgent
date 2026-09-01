@@ -5,6 +5,7 @@ import type {
   AppServerReviewTarget,
   AppServerThreadImagePart,
   AppServerThreadStatus,
+  AppServerThreadTitleSource,
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
   CodexThreadEnvironmentRuntime,
@@ -173,6 +174,7 @@ type FederationPeerStatusObservation = {
 
 type ThreadNameObservation = {
   threadName: string;
+  titleSource: AppServerThreadTitleSource;
 };
 
 type PrChipLocation = {
@@ -1108,7 +1110,7 @@ function applyObservedThreadNames(
     }
     if (
       thread.title === observation.threadName
-      && thread.titleSource === "explicit"
+      && thread.titleSource === observation.titleSource
     ) {
       observations.delete(threadKey);
       return thread;
@@ -1117,7 +1119,7 @@ function applyObservedThreadNames(
     return {
       ...thread,
       title: observation.threadName,
-      titleSource: "explicit" as const,
+      titleSource: observation.titleSource,
     };
   });
   return changed ? { ...snapshot, threads } : snapshot;
@@ -1942,12 +1944,14 @@ function applyThreadNameUpdate(
     federationTarget?: FederationTarget;
     threadId: string;
     threadName?: string;
+    titleSource?: AppServerThreadTitleSource;
   }
 ): NavigationSnapshot | undefined {
   const threadName = params.threadName?.trim();
   if (!snapshot || !threadName) {
     return snapshot;
   }
+  const titleSource = params.titleSource ?? "explicit";
 
   const threadKey = params.federationTarget
     ? federatedThreadIdentityKey({
@@ -1962,7 +1966,7 @@ function applyThreadNameUpdate(
       return thread;
     }
 
-    if (thread.title === threadName && thread.titleSource === "explicit") {
+    if (thread.title === threadName && thread.titleSource === titleSource) {
       return thread;
     }
 
@@ -1970,7 +1974,7 @@ function applyThreadNameUpdate(
     return {
       ...thread,
       title: threadName,
-      titleSource: "explicit" as const,
+      titleSource,
     };
   });
 
@@ -4321,17 +4325,25 @@ export function useThreadNavigation(
       }
 
       if (method === "thread/name/updated") {
-        const { threadId, threadName } = event.notification.params as {
+        const { threadId, threadName, titleSource } = event.notification
+          .params as {
           threadId: string;
           threadName?: string;
+          titleSource?: AppServerThreadTitleSource;
         };
         const nextThreadName = threadName?.trim();
         if (!nextThreadName) {
           return;
         }
+        // An emitter that knows the provenance says so; silence means an
+        // operator rename, which is what this assumed for every rename before
+        // the notification carried the field. Asserting `explicit` here is
+        // what made a generated title suppress the placeholder-title paths in
+        // `mergeHydratedThreadWithOptimisticTitle`.
+        const nextTitleSource = titleSource ?? "explicit";
         threadNameObservationsRef.current.set(
           agentEventThreadIdentityKey(event, threadId),
-          { threadName: nextThreadName },
+          { threadName: nextThreadName, titleSource: nextTitleSource },
         );
         setState((current) => ({
           ...current,
@@ -4340,6 +4352,7 @@ export function useThreadNavigation(
             federationTarget: event.federationTarget,
             threadId,
             threadName: nextThreadName,
+            titleSource: nextTitleSource,
           }),
         }));
         setOptimisticThread((current) => {
@@ -4350,7 +4363,7 @@ export function useThreadNavigation(
           return {
             ...current,
             title: nextThreadName,
-            titleSource: "explicit",
+            titleSource: nextTitleSource,
           };
         });
         return;
@@ -7031,7 +7044,7 @@ export function useThreadNavigation(
             }
           : undefined,
       });
-      const observedThreadName = threadNameObservationsRef.current.get(
+      const observedThreadNameEntry = threadNameObservationsRef.current.get(
         federationTarget
           ? federatedThreadIdentityKey({
               backend: response.backend,
@@ -7039,12 +7052,12 @@ export function useThreadNavigation(
               threadId: response.threadId,
             })
           : buildThreadIdentityKey(response.backend, response.threadId),
-      )?.threadName;
-      const namedOptimisticMaterializedThread = observedThreadName
+      );
+      const namedOptimisticMaterializedThread = observedThreadNameEntry
         ? {
             ...optimisticMaterializedThread,
-            title: observedThreadName,
-            titleSource: "explicit" as const,
+            title: observedThreadNameEntry.threadName,
+            titleSource: observedThreadNameEntry.titleSource,
           }
         : optimisticMaterializedThread;
       if (

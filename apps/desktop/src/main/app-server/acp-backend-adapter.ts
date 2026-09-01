@@ -2342,6 +2342,11 @@ export class AcpBackendAdapter {
               params: {
                 threadId: sessionId,
                 threadName: title,
+                // The agent named its own session. `title` is only non-empty
+                // when `updateSessionTitleFromAcpUpdate` accepted a topic
+                // update, and that writes `derived` unconditionally, so this
+                // is the source it just recorded rather than a guess.
+                titleSource: "derived",
               },
             },
           });

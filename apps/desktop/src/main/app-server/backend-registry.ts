@@ -6278,6 +6278,33 @@ function buildPromptHash(prompt: string): string {
   return prompt.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/**
+ * Where the name on a `thread/name/updated` came from.
+ *
+ * The notification did not always carry provenance, and this recorder assumed
+ * `explicit` for every rename — which called each generated title an operator
+ * rename. The emitters that know now say so, so this only has to decide what
+ * silence means.
+ *
+ * Silence means `explicit`, which is what every consumer assumed before the
+ * field existed. A Codex rename and a federated one both arrive without it and
+ * neither has anything better to offer: Codex stores no provenance, and
+ * `withObservedThreadName` force-stamps `explicit` on any Codex row it
+ * patches — so PwrAgent, not the provider, is what makes a generated Codex
+ * title read as an operator rename. Changing that needs durable
+ * PwrAgent-owned provenance for Codex, which is a design change and not this.
+ *
+ * `fallback` is deliberately not honored. It reaches here only from the ACP
+ * prompt-derived stopgap, whose title is a real name that the information
+ * store would refuse outright (`isUsableTitle`), stranding the placeholder it
+ * replaced. The stopgap's own label is the thing that is wrong; recording
+ * `explicit` keeps today's behavior instead of trading one wrong answer for a
+ * worse one.
+ */
+function renamedThreadTitleSource(value: unknown): AppServerThreadTitleSource {
+  return value === "derived" || value === "explicit" ? value : "explicit";
+}
+
 function isEligibleForGeneratedTitle(
   thread: AppServerThreadSummary | undefined,
   prompt: string,
@@ -11767,10 +11794,11 @@ export class DesktopBackendRegistry {
       throw new Error("Selected ACP thread was not found.");
     }
     const updatedAt = Date.now();
+    const titleSource = options?.titleSource ?? "explicit";
     this.acpBackend.upsertSession({
       ...session,
       title: nextName,
-      titleSource: options?.titleSource ?? "explicit",
+      titleSource,
       updatedAt: Math.max(session.updatedAt, updatedAt),
     });
     await this.emit({
@@ -11780,6 +11808,7 @@ export class DesktopBackendRegistry {
         params: {
           threadId,
           threadName: nextName,
+          titleSource,
         },
       },
     });
@@ -34783,6 +34812,7 @@ export class DesktopBackendRegistry {
       const params = event.notification.params as {
         threadId?: unknown;
         threadName?: unknown;
+        titleSource?: unknown;
       };
       const threadId = params.threadId;
       const threadName = params.threadName;
@@ -34790,16 +34820,12 @@ export class DesktopBackendRegistry {
         const trimmed = threadName.trim();
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
-          const titleSource = this.renamedThreadTitleSource(
-            event.backend,
-            threadId,
-          );
           this.threadInfoStore.observe({
             identity: { backend: event.backend, threadId },
             observationSequence: this.reserveThreadInfoObservation(),
             source: "lifecycle-notification",
             title: trimmed,
-            ...(titleSource ? { titleSource } : {}),
+            titleSource: renamedThreadTitleSource(params.titleSource),
           });
           this.observedThreadNames.set(key, trimmed);
         }
@@ -34822,49 +34848,6 @@ export class DesktopBackendRegistry {
         this.reserveThreadInfoObservation(),
       );
     }
-  }
-
-  /**
-   * Where the name on a `thread/name/updated` came from.
-   *
-   * The notification carries `{ threadId, threadName }` and no provenance, so
-   * this used to record every rename as `explicit`. Three of the four emitters
-   * are not operators: `applyGeneratedThreadTitle` renames with `derived`, its
-   * prompt-derived stopgap renames with `fallback`, and the ACP adapter
-   * forwards an agent's own session summary. For an ACP backend the session
-   * store is PwrAgent's own durable record of which one it was — it is
-   * written before the notification is emitted, and it is what `listThreads`
-   * reports — so read it instead of guessing, and the two readers agree by
-   * construction rather than until the next listing.
-   *
-   * Codex is deliberately left alone. Its provenance is not stored but
-   * inferred from record shape (`getThreadTitleInfo`): a title that differs
-   * from the thread preview reads as `explicit`, which a generated title
-   * always does. The provider therefore reports `explicit` on the very next
-   * listing, and the rename invalidates the list cache, so overriding it here
-   * would buy one listing of accuracy and then flip a status card from
-   * shortened back to full length. Making Codex honest needs durable
-   * PwrAgent-owned provenance that outranks the provider, which is a design
-   * change and not this.
-   *
-   * `fallback` is returned as `undefined` on purpose: the information store
-   * refuses a fallback-sourced title (`isUsableTitle`), so passing it through
-   * would drop a real prompt-derived name and strand the placeholder it
-   * replaced. Recording the title without a source lets the store apply its
-   * own rule and report the name as `derived`, which is what it is.
-   */
-  private renamedThreadTitleSource(
-    backend: AppServerBackendKind,
-    threadId: string,
-  ): AppServerThreadTitleSource | undefined {
-    if (!isAcpBackendId(backend)) {
-      return "explicit";
-    }
-    const titleSource = this.acpBackend.getSession(
-      backend,
-      threadId,
-    )?.titleSource;
-    return titleSource === "fallback" ? undefined : titleSource;
   }
 
   private withObservedThreadName(
