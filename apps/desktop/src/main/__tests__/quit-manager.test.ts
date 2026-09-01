@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const backendRegistryMock = vi.hoisted(() => ({
-  getCachedThreadDisplayMetadata: vi.fn(),
+  getThreadInfo: vi.fn(),
   getInProgressThreadSnapshotForQuit: vi.fn(() => ({
     count: 0,
     threadIds: [] as string[],
@@ -51,7 +51,7 @@ vi.mock("../log", () => ({
 }));
 
 beforeEach(() => {
-  backendRegistryMock.getCachedThreadDisplayMetadata.mockReset();
+  backendRegistryMock.getThreadInfo.mockReset();
   backendRegistryMock.getInProgressThreadSnapshotForQuit.mockReset();
   backendRegistryMock.getInProgressThreadSnapshotForQuit.mockReturnValue({
     count: 0,
@@ -921,7 +921,7 @@ describe("readQuitBlockerQueueSnapshot", () => {
       count: 1,
       threadIds: ["codex:thread-live"],
     });
-    backendRegistryMock.getCachedThreadDisplayMetadata.mockReturnValue({
+    backendRegistryMock.getThreadInfo.mockReturnValue({
       title: "Keep the quit queue stable",
       titleSource: "explicit",
     });
@@ -955,7 +955,7 @@ describe("readQuitBlockerQueueSnapshot", () => {
     // registry reads therefore enforces both steady-state budgets.
     expect(backendRegistryMock.listThreads).not.toHaveBeenCalled();
     expect(
-      backendRegistryMock.getCachedThreadDisplayMetadata,
+      backendRegistryMock.getThreadInfo,
     ).toHaveBeenCalledTimes(4);
   });
 
@@ -974,7 +974,7 @@ describe("readQuitBlockerQueueSnapshot", () => {
         count: 1,
         threadIds: ["codex:thread-first-snapshot"],
       });
-      backendRegistryMock.getCachedThreadDisplayMetadata.mockReturnValue({
+      backendRegistryMock.getThreadInfo.mockReturnValue({
         title: "First snapshot stays named",
         titleSource: "explicit",
       });

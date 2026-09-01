@@ -1,0 +1,22 @@
+{
+  "concurrent-identical-listings": {
+    "directoryEnrichments": 0,
+    "note": "six concurrent callers asking for the same unenriched Codex listing",
+    "providerListCalls": 1
+  },
+  "known-thread-label-lookups": {
+    "directoryEnrichments": 0,
+    "note": "50 synchronous label lookups for a thread already observed once",
+    "providerListCalls": 0
+  },
+  "quit-dialog-poll": {
+    "directoryEnrichments": 0,
+    "note": "20 quit-dialog polls against an in-progress turn, all served from observed metadata",
+    "providerListCalls": 0
+  },
+  "turn-lifecycle-label-reads": {
+    "directoryEnrichments": 0,
+    "note": "five complete turns with label reads between every lifecycle event",
+    "providerListCalls": 0
+  }
+}

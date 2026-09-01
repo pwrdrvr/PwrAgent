@@ -618,7 +618,7 @@ async function resolveCurrentQuitBlockerTitles(
 ): Promise<Map<string, string>> {
   return await resolveQuitBlockerThreadTitles(items, {
     cachedLocalThreadName: (params) =>
-      getDesktopBackendRegistry().getCachedThreadDisplayMetadata(params),
+      getDesktopBackendRegistry().getThreadInfo(params),
     cachedRemoteThreadName: (params) =>
       getDesktopFederationRuntime()
         .remoteThreadSummaries()
