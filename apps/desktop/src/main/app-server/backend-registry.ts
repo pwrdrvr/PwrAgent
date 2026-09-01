@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
@@ -7949,6 +7950,10 @@ export class DesktopBackendRegistry {
     BackendClient,
     Promise<CodexServerCapabilities | undefined>
   >();
+  private readonly tokenMiserServerCapabilitiesForTurn =
+    new AsyncLocalStorage<
+      WeakMap<BackendClient, Promise<CodexServerCapabilities | undefined>>
+    >();
   private tokenMiserReducerCapabilityState?: "supported" | "unsupported";
   private tokenMiserCodeModeGroupingVersion?: number;
   private tokenMiserPostToolUseExactOutputVersion?: number;
@@ -13966,6 +13971,12 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    if (!this.tokenMiserServerCapabilitiesForTurn.getStore()) {
+      return await this.tokenMiserServerCapabilitiesForTurn.run(
+        new WeakMap(),
+        async () => await this.startTurnNow(params),
+      );
+    }
     this.assertNotBootstrap("startTurn");
     if (this.closed) {
       throw new Error("Desktop backend registry is closed");
@@ -19983,11 +19994,18 @@ export class DesktopBackendRegistry {
   private async readTokenMiserServerCapabilities(
     client: BackendClient,
   ): Promise<CodexServerCapabilities | undefined> {
+    const turnCache = this.tokenMiserServerCapabilitiesForTurn.getStore();
+    const turnCached = turnCache?.get(client);
+    if (turnCached) {
+      return await turnCached;
+    }
     const cached = this.tokenMiserServerCapabilities.get(client);
     if (cached) {
+      turnCache?.set(client, cached);
       return await cached;
     }
 
+    let cacheResult = true;
     const probe = (async () => {
       if (!client.readServerCapabilities) {
         this.tokenMiserReducerCapabilityState = "unsupported";
@@ -20052,13 +20070,14 @@ export class DesktopBackendRegistry {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const normalized = message.toLowerCase();
-        if (
+        const permanentlyUnsupported =
           normalized.includes("method not found")
           || normalized.includes("unknown method")
           || normalized.includes(
             "unknown variant `server/capabilities/read`",
-          )
-        ) {
+          );
+        cacheResult = permanentlyUnsupported;
+        if (permanentlyUnsupported) {
           backendRegistryLog.debug(
             "Codex code-mode output reducer capability is unavailable",
             { reason: message },
@@ -20069,7 +20088,9 @@ export class DesktopBackendRegistry {
             { error: message },
           );
         }
-        this.tokenMiserReducerCapabilityState = "unsupported";
+        this.tokenMiserReducerCapabilityState = permanentlyUnsupported
+          ? "unsupported"
+          : undefined;
         this.tokenMiserCodeModeGroupingVersion = undefined;
         this.tokenMiserPostToolUseExactOutputVersion = undefined;
         await this.recordTokenMiserActivation({
@@ -20082,7 +20103,23 @@ export class DesktopBackendRegistry {
       }
     })();
     this.tokenMiserServerCapabilities.set(client, probe);
-    return await probe;
+    turnCache?.set(client, probe);
+    try {
+      return await probe;
+    } finally {
+      // Capability support is immutable for one live app-server, but a
+      // reconnect cancellation says nothing about the replacement process.
+      // Remove transient failures from the client-wide cache so the next
+      // turn retries. The turn-local cache retains this promise until the
+      // current start finishes, keeping its capability-dependent fields
+      // consistent and preventing repeated timeout-length probes.
+      if (
+        !cacheResult
+        && this.tokenMiserServerCapabilities.get(client) === probe
+      ) {
+        this.tokenMiserServerCapabilities.delete(client);
+      }
+    }
   }
 
   private async supportsTokenMiserCodeModeReducer(
