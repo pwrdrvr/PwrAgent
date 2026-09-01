@@ -59,6 +59,18 @@ function isRelocatableOverlayUsage(
   );
 }
 
+function transcriptAnchorTurnIds(
+  entries: readonly AppServerThreadEntry[],
+): Set<string> {
+  const turnIds = new Set<string>();
+  for (const entry of entries) {
+    if (!isRelocatableOverlayUsage(entry) && entry.turn?.id) {
+      turnIds.add(entry.turn.id);
+    }
+  }
+  return turnIds;
+}
+
 /**
  * Weave overlay usage into one already-ordered page. Matching turns are
  * inserted after the last same-turn entry in a single forward pass so a
@@ -116,14 +128,11 @@ function visibleTranscriptTailEntries(
   tailEntries: AppServerThreadEntry[],
   index: TranscriptHistoryIndex | undefined,
 ): AppServerThreadEntry[] {
-  const tailTurnIds = new Set<string>();
+  const tailTurnIds = transcriptAnchorTurnIds(tailEntries);
   let oldestTailAnchorCreatedAt: number | undefined;
   for (const entry of tailEntries) {
     if (isRelocatableOverlayUsage(entry)) {
       continue;
-    }
-    if (entry.turn?.id) {
-      tailTurnIds.add(entry.turn.id);
     }
     if (typeof entry.createdAt === "number") {
       oldestTailAnchorCreatedAt = Math.min(
@@ -144,8 +153,10 @@ function visibleTranscriptTailEntries(
     if (turnId && tailTurnIds.has(turnId)) {
       return true;
     }
+    // A later refresh can introduce usage for a turn already in immutable
+    // history. Keep that tail copy; hiding by turn id would drop it.
     if (turnId && index?.turnIds.has(turnId)) {
-      return false;
+      return true;
     }
     if (
       typeof entry.createdAt === "number"
@@ -190,7 +201,8 @@ function messagesForEntries(
  * Adds one server page without traversing or copying previously loaded pages.
  *
  * Overlay turn usage is hydrated on the latest page, so a newly loaded older
- * page merges matching usage from the tail once. Prior pages stay immutable.
+ * page merges matching usage from the tail once, and only when that turn no
+ * longer has non-usage entries in the tail. Prior pages stay immutable.
  *
  * The index is an append-only, non-rendered companion owned by one thread
  * session. Keeping it outside React state is deliberate: cloning a growing
@@ -216,6 +228,7 @@ export function prependTranscriptHistoryPage(params: {
       pageTurnIds.add(entry.turn.id);
     }
   }
+  const tailTurnIds = transcriptAnchorTurnIds(params.tailEntries);
   const relocatedUsage: AppServerThreadActivityEntry[] = [];
   if (pageTurnIds.size > 0) {
     for (const entry of params.tailEntries) {
@@ -223,6 +236,7 @@ export function prependTranscriptHistoryPage(params: {
         !isRelocatableOverlayUsage(entry)
         || !entry.turn?.id
         || !pageTurnIds.has(entry.turn.id)
+        || tailTurnIds.has(entry.turn.id)
         || params.index.entryIds.has(entry.id)
         || pageEntryIds.has(entry.id)
       ) {

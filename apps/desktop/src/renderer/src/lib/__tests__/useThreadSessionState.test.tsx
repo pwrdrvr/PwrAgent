@@ -588,6 +588,191 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("keeps overlay turn usage in the tail while that turn still straddles the page boundary", async () => {
+    const splitTurn = {
+      id: "split-turn",
+      status: "completed" as const,
+      startedAt: 100,
+      completedAt: 160,
+    };
+    const recentTurn = {
+      id: "recent-turn",
+      status: "completed" as const,
+      startedAt: 400,
+      completedAt: 480,
+    };
+    const splitUsage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-split-turn",
+      summary: "Turn usage: split",
+      status: "completed",
+      createdAt: 160,
+      details: [],
+      turn: splitTurn,
+    };
+    const initialTail = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "split-tail",
+            text: "Later split-turn work",
+            createdAt: 150,
+          }),
+          turn: splitTurn,
+        },
+        splitUsage,
+        {
+          ...messageEntry({
+            id: "recent-final",
+            text: "Recent answer",
+            createdAt: 480,
+          }),
+          phase: "final" as const,
+          turn: recentTurn,
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "older-page",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "split-older",
+            text: "Earlier split-turn work",
+            createdAt: 100,
+          }),
+          turn: splitTurn,
+        },
+      ],
+      hasPreviousPage: false,
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      }),
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "split-older",
+      "split-tail",
+      splitUsage.id,
+      "recent-final",
+    ]);
+  });
+
+  it("keeps overlay turn usage that arrives after its historical turn is already loaded", async () => {
+    const olderTurn = {
+      id: "older-turn",
+      status: "completed" as const,
+      startedAt: 100,
+      completedAt: 180,
+    };
+    const recentTurn = {
+      id: "recent-turn",
+      status: "completed" as const,
+      startedAt: 400,
+      completedAt: 480,
+    };
+    const lateUsage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-older-turn",
+      summary: "Turn usage: older",
+      status: "completed",
+      createdAt: 181,
+      details: [],
+      turn: olderTurn,
+    };
+    const recentFinal = {
+      ...messageEntry({
+        id: "recent-final",
+        text: "Recent answer",
+        createdAt: 480,
+      }),
+      phase: "final" as const,
+      turn: recentTurn,
+    };
+    const initialTail = readThreadResponse({
+      entries: [recentFinal],
+      hasPreviousPage: true,
+      previousCursor: "older-page",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "older-final",
+            text: "Older answer",
+            createdAt: 180,
+          }),
+          phase: "final" as const,
+          turn: olderTurn,
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "oldest-page",
+    });
+    const refreshedTail = readThreadResponse({
+      entries: [lateUsage, recentFinal],
+      hasPreviousPage: true,
+      previousCursor: "older-page-again",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockResolvedValueOnce(refreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "older-final",
+      "recent-final",
+    ]);
+
+    rerender({ updatedAt: 2_000 });
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "older-final",
+        lateUsage.id,
+        "recent-final",
+      ]);
+    });
+  });
+
   it("keeps completed remote turns ordered when a bounded refresh advances past them", async () => {
     const publishedTurn = {
       id: "published-turn",

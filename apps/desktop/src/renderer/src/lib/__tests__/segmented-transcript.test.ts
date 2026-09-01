@@ -433,6 +433,102 @@ describe("segmented transcript history", () => {
     ]);
   });
 
+  it("keeps overlay usage that arrives after its historical turn is already indexed", () => {
+    const olderTurn = {
+      id: "older-turn",
+      status: "completed" as const,
+    };
+    const recentTurn = {
+      id: "recent-turn",
+      status: "completed" as const,
+    };
+    const index = createTranscriptHistoryIndex();
+    const history = prependTranscriptHistoryPage({
+      history: undefined,
+      index,
+      page: response([
+        message("older-final", "Older answer", {
+          createdAt: 180,
+          turn: olderTurn,
+        }),
+      ]),
+      tailEntries: [
+        message("recent-final", "Recent answer", {
+          createdAt: 480,
+          turn: recentTurn,
+        }),
+      ],
+    });
+    const lateUsage = turnUsage({
+      createdAt: 181,
+      summary: "Turn usage: older",
+      turnId: olderTurn.id,
+    });
+    const tail = [
+      lateUsage,
+      message("recent-final", "Recent answer", {
+        createdAt: 480,
+        turn: recentTurn,
+      }),
+    ];
+
+    expect(
+      combineTranscriptEntries(history, index, tail).map((entry) => entry.id),
+    ).toEqual([
+      "older-final",
+      lateUsage.id,
+      "recent-final",
+    ]);
+  });
+
+  it("does not relocate overlay usage while the same turn still has tail entries", () => {
+    const splitTurn = {
+      id: "split-turn",
+      status: "completed" as const,
+    };
+    const recentTurn = {
+      id: "recent-turn",
+      status: "completed" as const,
+    };
+    const splitUsage = turnUsage({
+      createdAt: 160,
+      summary: "Turn usage: split",
+      turnId: splitTurn.id,
+    });
+    const tail = [
+      message("split-tail", "Later split-turn work", {
+        createdAt: 150,
+        turn: splitTurn,
+      }),
+      splitUsage,
+      message("recent-final", "Recent answer", {
+        createdAt: 480,
+        turn: recentTurn,
+      }),
+    ];
+    const index = createTranscriptHistoryIndex();
+    const history = prependTranscriptHistoryPage({
+      history: undefined,
+      index,
+      page: response([
+        message("split-older", "Earlier split-turn work", {
+          createdAt: 100,
+          turn: splitTurn,
+        }),
+      ]),
+      tailEntries: tail,
+    });
+
+    expect(
+      combineTranscriptEntries(history, index, tail).map((entry) => entry.id),
+    ).toEqual([
+      "split-older",
+      "split-tail",
+      splitUsage.id,
+      "recent-final",
+    ]);
+  });
+
   it("relocates overlay usage with one linear pass over the new page and tail", () => {
     const priorPageCount = 20;
     const entriesPerPage = 50;
