@@ -23,7 +23,10 @@ import type {
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import type { MessagingControllerDeliveryBudgetEvent } from "../messaging/core/messaging-controller";
-import type { DesktopMessagingConfig } from "../messaging/messaging-config";
+import type {
+  DesktopMessagingConfig,
+  DesktopMessagingFullAccessControls,
+} from "../messaging/messaging-config";
 import type {
   DesktopMessagingAdapter,
   DesktopMessagingAdapterFactory,
@@ -226,6 +229,50 @@ describe("DesktopMessagingRuntime", () => {
       kind: "error",
       title: "Full Access blocked",
     });
+  });
+
+  it("refreshes the cached contact after warning dismissal persists", async () => {
+    const persisted = createDeferred<void>();
+    const persistDismissal = vi.fn(async () => await persisted.promise);
+    const config = buildFullAccessRuntimeConfig(true);
+    config.fullAccessControls!.dismissWarning = persistDismissal;
+    config.fullAccessControls!.canDismissWarning = () => true;
+    const { runtime } = await createFullAccessRuntimeHarness(config);
+    await runtime.start();
+    const controller = (
+      runtime as unknown as {
+        controllers: Array<{
+          options: {
+            fullAccessControls: () =>
+              | DesktopMessagingFullAccessControls
+              | Promise<DesktopMessagingFullAccessControls>;
+          };
+        }>;
+      }
+    ).controllers[0]!;
+
+    const before = await controller.options.fullAccessControls();
+    expect(before.authorizedUsers.telegram?.[0]?.fullAccessWarningDismissed)
+      .not.toBe(true);
+    const dismissal = before.dismissWarning!({
+      actorId: "user-1",
+      channel: "telegram",
+    });
+    await flushMicrotasks();
+    const whilePersisting = await controller.options.fullAccessControls();
+    expect(
+      whilePersisting.authorizedUsers.telegram?.[0]?.fullAccessWarningDismissed,
+    ).not.toBe(true);
+    persisted.resolve();
+    await dismissal;
+    const after = await controller.options.fullAccessControls();
+
+    expect(persistDismissal).toHaveBeenCalledWith({
+      actorId: "user-1",
+      channel: "telegram",
+    });
+    expect(after.authorizedUsers.telegram?.[0]?.fullAccessWarningDismissed)
+      .toBe(true);
   });
 
   it("subscribes only to federated bindings on running adapters", async () => {

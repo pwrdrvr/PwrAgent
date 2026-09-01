@@ -96,7 +96,9 @@ export class RuntimeMessagingLeaseCoordinator {
       };
     }
 
-    const config = await loadConfig({ logStartupEligibility: true });
+    const config = await this.loadConfigFailClosed(runtime, loadConfig, {
+      logStartupEligibility: true,
+    });
     return this.applyResolvedConfig(runtime, config, { allowStart: true });
   }
 
@@ -105,13 +107,26 @@ export class RuntimeMessagingLeaseCoordinator {
     loadConfig: DesktopMessagingConfigLoader,
     options: DesktopMessagingConfigLoadOptions & { allowStart?: boolean } = {},
   ): Promise<RuntimeMessagingLeaseApplyResult> {
-    const config = await loadConfig({
+    const config = await this.loadConfigFailClosed(runtime, loadConfig, {
       logStartupEligibility: options.logStartupEligibility,
       messagingEnabledOverride: options.messagingEnabledOverride,
     });
     return this.applyResolvedConfig(runtime, config, {
       allowStart: options.allowStart ?? true,
     });
+  }
+
+  private async loadConfigFailClosed(
+    runtime: DesktopMessagingRuntime,
+    loadConfig: DesktopMessagingConfigLoader,
+    options: DesktopMessagingConfigLoadOptions,
+  ): Promise<DesktopMessagingConfig> {
+    try {
+      return await loadConfig(options);
+    } catch (error) {
+      runtime.failClosedFullAccessPolicy();
+      throw error;
+    }
   }
 
   async applyResolvedConfig(

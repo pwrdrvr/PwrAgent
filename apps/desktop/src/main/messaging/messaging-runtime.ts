@@ -796,6 +796,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     return this.started;
   }
 
+  failClosedFullAccessPolicy(): void {
+    this.invalidateFullAccessPolicySnapshot();
+  }
+
   /**
    * Subscribe to platform status transitions. Returns an unsubscribe.
    * Listeners receive every `health-changed` and `activity` event;
@@ -2957,9 +2961,51 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   private applyFullAccessPolicySnapshot(config: DesktopMessagingConfig): void {
+    const controls = snapshotFullAccessControls(config.fullAccessControls);
+    const persistDismissal = controls.dismissWarning;
+    if (persistDismissal) {
+      controls.dismissWarning = async (params) => {
+        await persistDismissal(params);
+        this.rememberFullAccessWarningDismissal(params);
+      };
+    }
     this.fullAccessPolicySnapshot = {
-      controls: snapshotFullAccessControls(config.fullAccessControls),
+      controls,
       revision: this.fullAccessPolicySnapshot.revision + 1,
+    };
+  }
+
+  private rememberFullAccessWarningDismissal(params: {
+    actorId: string;
+    channel: MessagingChannelKind;
+  }): void {
+    const current = this.fullAccessPolicySnapshot;
+    const contacts = current.controls.authorizedUsers[params.channel];
+    if (!contacts) return;
+    let changed = false;
+    const updatedContacts = contacts.map((contact) => {
+      if (
+        contact.id !== params.actorId
+        || contact.fullAccessWarningDismissed === true
+      ) {
+        return contact;
+      }
+      changed = true;
+      return {
+        ...contact,
+        fullAccessWarningDismissed: true,
+      };
+    });
+    if (!changed) return;
+    this.fullAccessPolicySnapshot = {
+      controls: {
+        ...current.controls,
+        authorizedUsers: {
+          ...current.controls.authorizedUsers,
+          [params.channel]: updatedContacts,
+        },
+      },
+      revision: current.revision + 1,
     };
   }
 
