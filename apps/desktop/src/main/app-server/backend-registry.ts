@@ -547,6 +547,11 @@ import {
   getDesktopConfigStore,
   getDesktopSettingsService,
 } from "../settings/desktop-settings-singleton";
+import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import {
+  resolveSpendAlertPolicy,
+  resolveToolOutputAlertPolicy,
+} from "../settings/config-store/config-domains";
 import {
   ONBOARDING_CODEX_GATE_ENABLED,
   type ManagedCodexSelectionChange,
@@ -8302,6 +8307,7 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolvePdfAnalysisEnabled?: () => boolean;
+    configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
     resolveManagedTokenMiserActivationRequired?: () => boolean;
@@ -8491,6 +8497,11 @@ export class DesktopBackendRegistry {
       options?.resolveToolOutputAlertPolicy ??
       (() => {
         try {
+          if (options?.configStore) {
+            return resolveToolOutputAlertPolicy(
+              options.configStore.read("general"),
+            );
+          }
           return (
             settingsService ?? getDesktopSettingsService()
           ).resolveToolOutputAlertPolicy();
@@ -8508,6 +8519,11 @@ export class DesktopBackendRegistry {
       options?.resolveSpendAlertPolicy ??
       (() => {
         try {
+          if (options?.configStore) {
+            return resolveSpendAlertPolicy(
+              options.configStore.read("general"),
+            );
+          }
           if (settingsService) {
             return typeof settingsService.resolveSpendAlertPolicy === "function"
               ? settingsService.resolveSpendAlertPolicy()
@@ -8526,7 +8542,14 @@ export class DesktopBackendRegistry {
       });
     this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
     this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
-    if (typeof settingsService?.onConfigWritten === "function") {
+    if (options?.configStore) {
+      this.unsubscribers.push(
+        options.configStore.subscribe(["general"], () => {
+          this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
+          this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
+        }),
+      );
+    } else if (typeof settingsService?.onConfigWritten === "function") {
       this.unsubscribers.push(
         settingsService.onConfigWritten(() => {
           this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
@@ -37487,7 +37510,10 @@ export function getDesktopBackendRegistry(): DesktopBackendRegistry {
     // `noLocalAcpAgentDiscovery` — keeping the config read, the GitHub release
     // fetch, the managed-Grok install, and the 5-16s binary probe out of the
     // suite even when a test forgets to inject its own discovery stub.
-    registry = new DesktopBackendRegistry({ useMachineAcpDiscovery: true });
+    registry = new DesktopBackendRegistry({
+      configStore: getDesktopConfigStore(),
+      useMachineAcpDiscovery: true,
+    });
   }
 
   return registry;

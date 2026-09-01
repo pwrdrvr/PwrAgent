@@ -3,13 +3,33 @@ import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   DesktopOnboardingCompletedSource,
+  DesktopSpendAlertPolicy,
   DesktopSettingsSecretName,
   DesktopTextSize,
+  DesktopToolOutputAlertPolicy,
+  PrAutoDispatchBudgetConfig,
 } from "@pwragent/shared";
 import {
+  DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
+  DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
+  MAX_REPEATED_LARGE_OUTPUT_CALLS,
+  MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+  MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  MAX_SPEND_ALERT_THRESHOLD_USD,
+  MIN_REPEATED_LARGE_OUTPUT_CALLS,
+  MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+  MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  MIN_SPEND_ALERT_THRESHOLD_USD,
 } from "@pwragent/shared";
 import type { DesktopSettingsConfig } from "../desktop-config";
 
@@ -234,6 +254,128 @@ export function providerDependencyFingerprint(params: {
       schemaVersion: CONFIG_STORE_DURABLE_SCHEMA_VERSION,
     }))
     .digest("hex");
+}
+
+export function resolveToolOutputAlertPolicy(
+  general: NormalizedGeneralConfig,
+): DesktopToolOutputAlertPolicy {
+  const config = general.settings.toolOutputAlerts;
+  return {
+    outputCapHitsEnabled:
+      config?.outputCapHitsEnabled
+      ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.outputCapHitsEnabled,
+    repeatedLargeOutputsEnabled:
+      config?.repeatedLargeOutputsEnabled
+      ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputsEnabled,
+    repeatedLargeOutputMinimumCalls: boundedInteger(
+      config?.repeatedLargeOutputMinimumCalls,
+      DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumCalls,
+      MIN_REPEATED_LARGE_OUTPUT_CALLS,
+      MAX_REPEATED_LARGE_OUTPUT_CALLS,
+    ),
+    repeatedLargeOutputMinimumPercent: boundedInteger(
+      config?.repeatedLargeOutputMinimumPercent,
+      DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumPercent,
+      MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+      MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+    ),
+    repeatedQueuedChecksEnabled:
+      config?.repeatedQueuedChecksEnabled
+      ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,
+  };
+}
+
+export function resolveSpendAlertPolicy(
+  general: NormalizedGeneralConfig,
+): DesktopSpendAlertPolicy {
+  const config = general.settings.spendAlerts;
+  return {
+    activeTurnSpendEnabled:
+      config?.activeTurnSpendEnabled
+      ?? DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendEnabled,
+    activeTurnSpendThresholdUsd: boundedAmount(
+      config?.activeTurnSpendThresholdUsd,
+      DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendThresholdUsd,
+    ),
+    threadSpendEnabled:
+      config?.threadSpendEnabled
+      ?? DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendEnabled,
+    threadSpendThresholdUsd: boundedAmount(
+      config?.threadSpendThresholdUsd,
+      DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendThresholdUsd,
+    ),
+  };
+}
+
+export type PrAutomationConfig = Readonly<{
+  backgroundPollingEnabled: boolean;
+  prAutoDispatchAllowed: boolean;
+  budget: PrAutoDispatchBudgetConfig;
+}>;
+
+export function resolvePrAutomationConfig(
+  git: ConfigDomainMap["git"],
+): PrAutomationConfig {
+  return {
+    backgroundPollingEnabled:
+      git.backgroundPrPolling ?? DEFAULT_BACKGROUND_PR_POLLING,
+    prAutoDispatchAllowed:
+      git.prAutoDispatchAllowed ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+    budget: {
+      capacity: boundedFloor(
+        git.prAutoDispatchBudgetCapacity,
+        DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+        MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+        MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+      ),
+      refillPerMinute: boundedFloor(
+        git.prAutoDispatchBudgetRefillPerMinute,
+        DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+        MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+        MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+      ),
+      pauseWhenEmpty:
+        git.pausePrAutoDispatchWhenBudgetEmpty
+        ?? DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+    },
+  };
+}
+
+function boundedInteger(
+  value: number | undefined,
+  defaultValue: number,
+  minimum: number,
+  maximum: number,
+): number {
+  return value !== undefined && Number.isFinite(value)
+    ? Math.min(maximum, Math.max(minimum, Math.round(value)))
+    : defaultValue;
+}
+
+function boundedAmount(
+  value: number | undefined,
+  defaultValue: number,
+): number {
+  return value !== undefined && Number.isFinite(value)
+    ? Math.min(
+        MAX_SPEND_ALERT_THRESHOLD_USD,
+        Math.max(
+          MIN_SPEND_ALERT_THRESHOLD_USD,
+          Math.round(value * 100) / 100,
+        ),
+      )
+    : defaultValue;
+}
+
+function boundedFloor(
+  value: number | undefined,
+  defaultValue: number,
+  minimum: number,
+  maximum: number,
+): number {
+  return value !== undefined && Number.isFinite(value)
+    ? Math.min(maximum, Math.max(minimum, Math.floor(value)))
+    : defaultValue;
 }
 
 export function deepFreeze<T>(value: T): Readonly<T> {

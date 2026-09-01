@@ -1476,6 +1476,10 @@ export class DesktopSettingsService {
   }
 
   resolveTokenMiserEnabled(): boolean {
+    if (this.options.configStore) {
+      return this.options.configStore.read("experimental").tokenMiserEnabled
+        ?? false;
+    }
     return this.resolveConfigBoolean(
       this.readConfig().config.experimental?.tokenMiserEnabled,
       false,
@@ -1483,6 +1487,10 @@ export class DesktopSettingsService {
   }
 
   resolveTokenMiserDefaultEnabled(): boolean {
+    if (this.options.configStore) {
+      return this.options.configStore.read("experimental")
+        .tokenMiserDefaultEnabled ?? true;
+    }
     return this.resolveConfigBoolean(
       this.readConfig().config.experimental?.tokenMiserDefaultEnabled,
       true,
@@ -2069,7 +2077,7 @@ export class DesktopSettingsService {
       void checkForUpdate();
       armTimer();
     }
-    const unsubscribe = this.onConfigWritten(() => {
+    const onExperimentalChanged = () => {
       const nextEnabled = this.resolveTokenMiserEnabled();
       if (nextEnabled === enabled) return;
       enabled = nextEnabled;
@@ -2094,7 +2102,13 @@ export class DesktopSettingsService {
           ? { runtime: this.managedCodexRuntime }
           : {}),
       });
-    });
+    };
+    const unsubscribe = this.options.configStore
+      ? this.options.configStore.subscribe(
+          ["experimental"],
+          onExperimentalChanged,
+        )
+      : this.onConfigWritten(onExperimentalChanged);
 
     return () => {
       stopped = true;

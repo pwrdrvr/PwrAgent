@@ -161,7 +161,7 @@ import {
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
 import { prewarmWindowsJobWrapper } from "./windows-job-wrapper";
-import { createMainWindow, syncHotCpuProfilersFromSettings } from "./window";
+import { createMainWindow } from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
@@ -939,7 +939,9 @@ function refreshProfileMenus(): void {
 }
 
 function installApplicationMenu(): void {
-  const developerMode = getDesktopSettingsService().resolveDeveloperMode();
+  const developerMode =
+    getDesktopConfigStore().read("general").settings.developerMode
+    ?? !app.isPackaged;
   const profiles = listDesktopPwrAgentProfiles().profiles;
   const windows = BrowserWindow.getAllWindows()
     .filter((window) => !window.isDestroyed())
@@ -1310,7 +1312,6 @@ export function bootstrapApp(): void {
           patch.general?.hotCpuProfilingHeapSnapshotLimit !== undefined
         ) {
           installApplicationMenu();
-          syncHotCpuProfilersFromSettings("settings-changed");
         }
       },
     });

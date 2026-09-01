@@ -335,7 +335,11 @@ import { selectDiscoveryDueThreadKeys } from "../pr-status/pr-discovery";
 
 /** Listener registered via `onPrStatusTransition`. */
 type PrStatusTransitionListener = (transition: PrStatusTransition) => void;
-import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import {
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "../settings/desktop-settings-singleton";
+import { resolvePrAutomationConfig } from "../settings/config-store/config-domains";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
@@ -5241,22 +5245,8 @@ class DesktopAppServerService {
     return this.prGraphqlClient;
   }
 
-  private getPrAutoDispatchBudgetConfigFromSettings(
-    settings: Pick<DesktopSettingsSnapshot, "git">,
-  ): PrAutoDispatchBudgetConfig {
-    return {
-      capacity: settings.git.prAutoDispatchBudgetCapacity.value,
-      refillPerMinute:
-        settings.git.prAutoDispatchBudgetRefillPerMinute.value,
-      pauseWhenEmpty:
-        settings.git.pausePrAutoDispatchWhenBudgetEmpty.value,
-    };
-  }
-
   private async readPrAutoDispatchBudgetConfig(): Promise<PrAutoDispatchBudgetConfig> {
-    return this.getPrAutoDispatchBudgetConfigFromSettings(
-      await getDesktopSettingsService().readSettings(),
-    );
+    return resolvePrAutomationConfig(getDesktopConfigStore().read("git")).budget;
   }
 
   /**
@@ -5276,13 +5266,13 @@ class DesktopAppServerService {
       };
       let budgetStatus: PrAutoDispatchBudgetStatus | undefined;
       try {
-        const settingsService = getDesktopSettingsService();
         // Subscribe lazily on the first sync (which the first navigation
         // snapshot triggers), so a later toggle re-syncs immediately without a
         // restart. Done here rather than at IPC-registration time so tests that
         // don't stub the settings singleton aren't forced to construct it.
         if (!this.prPollingSettingsUnsubscribe) {
-          this.prPollingSettingsUnsubscribe = settingsService.onConfigWritten(
+          this.prPollingSettingsUnsubscribe = getDesktopConfigStore().subscribe(
+            ["git"],
             () => {
               // Pause dispatch pessimistically while the new snapshot is read.
               // This closes settings-write races for both global kill switches.
@@ -5293,10 +5283,12 @@ class DesktopAppServerService {
             },
           );
         }
-        const settings = await settingsService.readSettings();
-        backgroundPollingEnabled = settings.git.backgroundPrPolling.value;
-        prAutoDispatchAllowed = settings.git.prAutoDispatchAllowed.value;
-        budgetConfig = this.getPrAutoDispatchBudgetConfigFromSettings(settings);
+        const config = resolvePrAutomationConfig(
+          getDesktopConfigStore().read("git"),
+        );
+        backgroundPollingEnabled = config.backgroundPollingEnabled;
+        prAutoDispatchAllowed = config.prAutoDispatchAllowed;
+        budgetConfig = config.budget;
         budgetStatus = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
           config: budgetConfig,
           now: Date.now(),

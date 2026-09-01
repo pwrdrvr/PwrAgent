@@ -505,9 +505,12 @@ vi.mock("../state/app-state", () => ({
 vi.mock("../settings/desktop-settings-singleton", () => ({
   disposeDesktopConfigStore: vi.fn(),
   getDesktopConfigStore: vi.fn(() => ({
-    read: vi.fn(() => ({
-      completed: !isCodexBootstrapDeferredMock(),
-    })),
+    read: vi.fn((domain: string) =>
+      domain === "onboarding"
+        ? { completed: !isCodexBootstrapDeferredMock() }
+        : { settings: { developerMode: resolveDeveloperModeMock() } },
+    ),
+    subscribe: vi.fn(() => () => undefined),
   })),
   getDesktopSettingsService: getDesktopSettingsServiceMock,
 }));

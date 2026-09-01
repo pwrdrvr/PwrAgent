@@ -64,10 +64,6 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       resolveAppVersion: () => app.getVersion(),
       secretStore,
       configPath,
-      // Production wiring: settings writes that touch `[general.appearance]`
-      // fan out to every open window via the broadcaster, which sends to
-      // every subscriber of APPEARANCE_CHANGED_EVENT_CHANNEL.
-      onAppearanceChange: broadcastAppearanceChange,
       onManagedCodexRuntimeSwitchComplete: () => {
         for (const webContents of subscribersForChannel(
           SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
@@ -75,6 +71,9 @@ export function getDesktopSettingsService(): DesktopSettingsService {
           webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
         }
       },
+    });
+    configStore.subscribe(["general"], ({ values }) => {
+      broadcastAppearanceChange(values.general.appearance);
     });
   }
   return desktopSettingsService;

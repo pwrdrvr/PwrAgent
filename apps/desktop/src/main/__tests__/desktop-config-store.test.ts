@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import {
+  resolvePrAutomationConfig,
+  resolveSpendAlertPolicy,
+  resolveToolOutputAlertPolicy,
+} from "../settings/config-store/config-domains";
 import { StateDb } from "../state/state-db";
 import {
   measureSqliteWrites,
@@ -50,6 +55,30 @@ density = "compact"
     expect(prepare).not.toHaveBeenCalled();
     expect(readFile).not.toHaveBeenCalled();
     expect(store.readDiagnostics()).toEqual(diagnostics);
+  });
+
+  it("normalizes hot policy consumers from narrow domains", () => {
+    const fixture = createFixture(`
+[general.tool_output_alerts]
+repeated_large_output_minimum_calls = 999
+
+[general.spend_alerts]
+active_turn_spend_threshold_usd = 1.234
+
+[git]
+background_pr_polling = false
+pr_auto_dispatch_budget_capacity = 0
+`);
+    const store = fixture.createStore();
+
+    expect(resolveToolOutputAlertPolicy(store.read("general")))
+      .toMatchObject({ repeatedLargeOutputMinimumCalls: 100 });
+    expect(resolveSpendAlertPolicy(store.read("general")))
+      .toMatchObject({ activeTurnSpendThresholdUsd: 1.23 });
+    expect(resolvePrAutomationConfig(store.read("git"))).toMatchObject({
+      backgroundPollingEnabled: false,
+      budget: { capacity: 1 },
+    });
   });
 
   it("retains the durable last-known-good snapshot after a malformed edit", () => {
