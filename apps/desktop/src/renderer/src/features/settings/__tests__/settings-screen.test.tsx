@@ -770,6 +770,40 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("keeps every section row inside the scrolling lane and the chrome outside it", () => {
+    // Regression guard for the clipped nav. `.settings-nav` is
+    // `overflow: hidden`, so a section row rendered as a direct child of
+    // the nav does not scroll — it is painted below the clip and no
+    // pointer can reach it. At the 640px MAIN_WINDOW_MIN_HEIGHT that was
+    // the whole tail of the list (Experimental, Troubleshooting, About).
+    //
+    // jsdom has no layout, so this cannot assert the geometry; what it
+    // can pin is the structural invariant the geometry rests on — every
+    // row inside the lane, and the masthead + Exit deliberately outside
+    // it so they stay put while the list scrolls under them.
+    const { container } = render(
+      <SettingsScreen settings={createSettingsState()} onClose={() => undefined} />,
+    );
+
+    const nav = container.querySelector(".settings-nav");
+    const lane = container.querySelector(".settings-nav__sections");
+    expect(nav).not.toBeNull();
+    expect(lane).not.toBeNull();
+
+    const rows = [...container.querySelectorAll(".settings-nav__row")];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(lane?.contains(row)).toBe(true);
+    }
+
+    // The pinned chrome is a sibling of the lane, not a passenger in it.
+    for (const selector of [".settings-nav__masthead", ".settings-nav__exit"]) {
+      const chrome = container.querySelector(selector);
+      expect(chrome).not.toBeNull();
+      expect(chrome?.parentElement).toBe(nav);
+    }
+  });
+
   it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
     const desktopApi = {

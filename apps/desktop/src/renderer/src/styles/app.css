@@ -8198,6 +8198,63 @@ textarea,
   text-transform: uppercase;
 }
 
+/* Section list — the ONLY part of the nav that scrolls. The masthead
+   owns the 80px stoplight gutter and the window drag region, and Exit
+   Settings is the escape hatch, so both stay pinned: scrolling them
+   away would slide the brand out from under the traffic lights and
+   put Exit out of reach on exactly the short windows that need it.
+   This is the main sidebar's split — fixed masthead above a scrolling
+   lane (`.sidebar__scroll-region` + `.sidebar-list--dense`).
+
+   Before this wrapper the rows were direct nav children, so the nav's
+   own `overflow: hidden` CLIPPED them: at the 640px
+   `MAIN_WINDOW_MIN_HEIGHT` (window.ts) the tail of the list —
+   Experimental, Troubleshooting, About — painted below the clip with
+   no scrollbar and no wheel scrolling, out of a pointer's reach. (A
+   clipped box still scrolls programmatically, so tabbing into one of
+   those rows dragged the whole nav up behind the stoplights with no
+   way to put it back. That was the only thing that moved the list.)
+
+   `flex: 1` + `min-height: 0` lets the lane shrink below its content
+   inside the nav's flex column; the `gap` re-establishes the 4px row
+   rhythm the rows used to inherit from the nav.
+
+   The bleed-then-re-inset is `.sidebar-list--dense`'s move, but it
+   re-insets to the nav's OWN 16px rail inset, not to the narrower
+   `--sidebar-lane-inset`: the sidebar's thread lanes may sit wider
+   than the chrome above them, these rows may not, because Exit and
+   the GENERAL label stay outside the scroller and the row pills have
+   to keep lining up with them. So the bleed buys exactly one thing —
+   the reserved gutter lands between the padding edge and the nav
+   wall, parking the thumb AT the wall instead of 16px inside it.
+   Under an overlay scrollbar (macOS default) that gutter is zero and
+   every row's box is unchanged from before this rule existed.
+
+   `scrollbar-gutter: stable` reserves the space permanently so no row
+   jumps sideways the moment the bar appears — which it does on
+   Windows and Linux, where classic scrollbars take layout width (and
+   on macOS under "Show scroll bars: Always"). The cost lands only
+   there, and lands as wrapping, not clipping: a ~11px thin classic
+   bar leaves the row box 120px instead of 131px, putting "Usage &
+   Pricing" and "Access Control" onto two lines next to "Thread
+   Management" and "Archived Threads", which already wrap here. Rows
+   that grow are fine now that the list scrolls.
+
+   Do NOT add a `::-webkit-scrollbar` block here — see
+   `.sidebar-list--dense` for why the universal `scrollbar-width: thin`
+   rule has to stay in charge. */
+.settings-nav__sections {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  margin-inline: -16px;
+  padding-inline: 16px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 /* Section row: caret gutter + label button. Every row reserves the
    24px gutter (caret button or spacer) so section labels align whether
    or not the section expands into a sublist. The gutter is 24px rather

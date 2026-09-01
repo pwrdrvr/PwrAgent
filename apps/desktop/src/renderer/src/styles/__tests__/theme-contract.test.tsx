@@ -1747,6 +1747,38 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("scrolls the Settings nav's section list without letting the reserved gutter move the rows", () => {
+    // Regression guard. `.settings-nav` clips (that is what keeps the
+    // bleed below from escaping the column), so the section list needs a
+    // scroll container of its own or its tail is simply unreachable at
+    // the 640px minimum window height. The nav must KEEP clipping — the
+    // fix is the inner lane, not `overflow: auto` on the nav, which would
+    // scroll the brand out from under the stoplights.
+    expect(extractRuleBody(css, ".settings-nav")).toContain("overflow: hidden;");
+
+    const lane = extractRuleBody(css, ".settings-nav__sections");
+    expect(lane).toContain("overflow-y: auto;");
+    expect(lane).toContain("min-height: 0;");
+
+    // Same bleed-then-re-inset move as `.sidebar-list--dense`, but back to
+    // the nav's OWN 16px rail inset rather than the narrower lane inset:
+    // Exit and the GENERAL label sit outside the scroller, and the row
+    // pills have to stay lined up with them. The bleed is purely so the
+    // reserved gutter lands against the nav wall.
+    expect(lane).toMatch(/margin-inline:\s*-16px;/);
+    expect(lane).toMatch(/padding-inline:\s*16px;/);
+
+    // Without a reserved gutter every row would jump sideways the moment a
+    // classic scrollbar appeared (Windows and Linux always; macOS under
+    // "Show scroll bars: Always"), because the bar takes layout width.
+    expect(lane).toContain("scrollbar-gutter: stable;");
+
+    // Defining a `::-webkit-scrollbar` block here would override the
+    // universal `scrollbar-width: thin` and reintroduce the classic-mode
+    // fat-bar flicker — the same trap the sidebar lanes are guarded from.
+    expect(css).not.toMatch(/\.settings-nav__sections::-webkit-scrollbar/);
+  });
+
   it("applies a thin, themed scrollbar to every scroller via the universal selector (scrollbar-width does not inherit)", () => {
     // `scrollbar-color` inherits but `scrollbar-width` does NOT, so a
     // `:root` rule alone leaves scrollers at the chunky default width in
