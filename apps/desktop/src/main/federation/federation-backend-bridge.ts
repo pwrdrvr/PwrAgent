@@ -157,10 +157,11 @@ import type { FederationRpcEndpoint } from "./federation-rpc";
 import {
   fitNormalizedReplayWithinByteBudget,
   pageNormalizedReplay,
+  threadReplayCursorIdSpace,
 } from "../app-server/thread-replay-pagination";
 import { FEDERATION_MAX_FRAME_BYTES } from "./federation-transport";
 
-const FEDERATION_RESPONSE_BYTE_BUDGET =
+export const FEDERATION_RESPONSE_BYTE_BUDGET =
   FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
 
 /**
@@ -875,10 +876,27 @@ export function registerFederationBackendHandlers(params: {
 
       // Bound non-paginating replays before they reach the federation
       // transport's per-frame receive ceiling.
-      const pagedReplay = response.replay.pagination.supportsPagination
+      //
+      // The trim rewrites the page, so it can also invalidate the page's
+      // cursor, and the id space that cursor lives in belongs to whoever paged
+      // the replay. Paging it here makes it ours, resolved by entry id against
+      // the merged replay on the way back in. Leaving an already-paged replay
+      // alone leaves the cursor with the backend, whose own cursor need not be
+      // a transcript entry id at all — Codex returns an opaque
+      // `thread/turns/list` cursor. Either way this replay has overlay-owned
+      // rows merged into it, and neither space can resolve one of those.
+      const alreadyPaged = response.replay.pagination.supportsPagination;
+      const pagedReplay = alreadyPaged
         ? response.replay
         : pageNormalizedReplay(response.replay, request);
       const replay = fitNormalizedReplayWithinByteBudget({
+        // `response.backend` rather than `request.backend`: the request field
+        // is optional and the remote forwarding path passes it through
+        // undefined, while the response always names the backend the owner
+        // actually read with.
+        cursorIdSpace: alreadyPaged
+          ? threadReplayCursorIdSpace(response.backend)
+          : "entry-id",
         replay: pagedReplay,
         maxBytes: FEDERATION_RESPONSE_BYTE_BUDGET,
         measureBytes: (candidate) =>
