@@ -77,11 +77,10 @@ import {
   getDesktopSettingsService,
 } from "../settings/desktop-settings-singleton";
 import {
-  acpAgentEnabledFor,
-  acpCliPathOverrideFor,
-  managedGrokBuildsEnabledForRuntime,
-  readDesktopSettingsConfigSafe,
-} from "../settings/desktop-config";
+  acpProviderCommandOverrideFromSnapshot,
+  acpProviderEnabledFromSnapshot,
+  managedGrokBuildsEnabledFromSnapshot,
+} from "../settings/config-store/provider-runtime-config";
 import {
   disposeDesktopBackendRegistry,
   getDesktopBackendRegistry,
@@ -317,6 +316,7 @@ async function listAcpAgentSettingsImpl(
   service?: DesktopSettingsService,
 ): Promise<ListAcpAgentSettingsResponse> {
   const store = new AcpAgentStore(getAppStateDb());
+  const settingsService = getService(service);
   const registryService = new AcpRegistryService();
   let snapshot: AcpRegistrySnapshot | undefined;
   let error: string | undefined;
@@ -338,7 +338,7 @@ async function listAcpAgentSettingsImpl(
       // directories to the app process PATH. Discover ACP CLIs from the same
       // hydrated login-shell environment used by the integrated terminal so
       // `qwen`, `kimi`, etc. resolve to the binaries the operator invokes.
-      discoveryEnv = await getService(service).resolveTerminalSpawnEnvAsync();
+      discoveryEnv = await settingsService.resolveTerminalSpawnEnvAsync();
     } catch (envError) {
       settingsIpcLog.debug("acp_discovery_shell_env_failed", {
         error: envError instanceof Error ? envError.message : String(envError),
@@ -346,6 +346,7 @@ async function listAcpAgentSettingsImpl(
     }
   }
   const installed = await listInstalledAndLocalAcpAgents(store, {
+    providers: settingsService.readProvidersConfig(),
     refreshLocal: request.refresh === true,
     ...(request.force === true ? { force: true } : {}),
     ...(request.probeCapabilities === false
@@ -465,6 +466,7 @@ function placeholderAcpAgentSettingsEntry(
 async function listInstalledAndLocalAcpAgents(
   store: AcpAgentStore,
   options?: {
+    providers?: ReturnType<DesktopSettingsService["readProvidersConfig"]>;
     refreshLocal?: boolean;
     force?: boolean;
     probeCapabilities?: boolean;
@@ -476,7 +478,8 @@ async function listInstalledAndLocalAcpAgents(
   let discovered: AcpInstalledAgentRecord[] = [];
   if (options?.refreshLocal) {
     try {
-      const config = readDesktopSettingsConfigSafe();
+      const providers = options.providers
+        ?? getDesktopSettingsService().readProvidersConfig();
       const preferences: Record<string, AcpAgentPreference> = {};
       const requestedRegistryIds = LOCAL_ACP_REGISTRY_IDS.filter(
         (registryId) =>
@@ -485,10 +488,13 @@ async function listInstalledAndLocalAcpAgents(
       const discoveryRegistryIds = options.probeCapabilities === false
         ? requestedRegistryIds
         : requestedRegistryIds.filter((registryId) =>
-            acpAgentEnabledFor(config, registryId),
+            acpProviderEnabledFromSnapshot(providers, registryId),
           );
       for (const registryId of discoveryRegistryIds) {
-        const override = acpCliPathOverrideFor(config, registryId);
+        const override = acpProviderCommandOverrideFromSnapshot(
+          providers,
+          registryId,
+        );
         if (override) {
           preferences[registryId] = { overridePath: override };
         }
@@ -497,13 +503,10 @@ async function listInstalledAndLocalAcpAgents(
         enabledRegistryIds: discoveryRegistryIds,
         managedGrok: {
           enabled:
-            acpAgentEnabledFor(config, "grok")
-            && managedGrokBuildsEnabledForRuntime(
-              config,
-              {
-                env: options?.env ?? process.env,
-                isPackaged: app?.isPackaged === true,
-              },
+            managedGrokBuildsEnabledFromSnapshot(
+              providers,
+              options?.env ?? process.env,
+              app?.isPackaged === true,
             ),
           checkMode: options.force
             ? "force"
@@ -551,7 +554,7 @@ async function listInstalledAndLocalAcpAgents(
         } satisfies AcpInstalledAgentRecord;
         if (
           options.probeCapabilities === false
-          || !acpAgentEnabledFor(config, record.registryId)
+          || !acpProviderEnabledFromSnapshot(providers, record.registryId)
         ) {
           store.upsertInstalledAgent(nextRecord);
           continue;

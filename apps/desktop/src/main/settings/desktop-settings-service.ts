@@ -102,6 +102,7 @@ import type {
 } from "./config-store/desktop-config-store";
 import {
   CONFIG_DOMAIN_KEYS,
+  normalizeConfigDomains,
   type ConfigDomainMap,
 } from "./config-store/config-domains";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
@@ -1392,6 +1393,14 @@ export class DesktopSettingsService {
     return this.options.configStore
       ? this.options.configStore.read("models")
       : this.readConfig().config.models ?? {};
+  }
+
+  readProvidersConfig(): ConfigDomainMap["providers"] {
+    return this.options.configStore
+      ? this.options.configStore.read("providers")
+      : normalizeConfigDomains({
+          config: this.readConfig().config,
+        }).providers;
   }
 
   readCodexProfiles(): DesktopCodexAuthProfileDiscoverySnapshot {

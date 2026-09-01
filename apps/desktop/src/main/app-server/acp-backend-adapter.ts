@@ -56,6 +56,12 @@ import {
   managedGrokBuildsEnabledForRuntime,
   readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
+import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import {
+  acpProviderCommandOverrideFromSnapshot,
+  acpProviderEnabledFromSnapshot,
+  managedGrokBuildsEnabledFromSnapshot,
+} from "../settings/config-store/provider-runtime-config";
 import {
   AcpLiveToolUpdateResolver,
   acpToolUpdateNotifications,
@@ -171,6 +177,7 @@ export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
  * and then spend 5-16s per lookup probing it. Tests inject their own.
  */
 export function createLocalAcpAgentDiscovery(params?: {
+  configStore?: Pick<DesktopConfigStore, "read">;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
 }): LocalAcpDiscovery {
   return async () => {
@@ -180,13 +187,18 @@ export function createLocalAcpAgentDiscovery(params?: {
     // cliPath override is honored — consistent with what Settings shows.
     // Read + parse the config once for all four agents (override + enabled),
     // not once per lookup.
-    const config = readDesktopSettingsConfigSafe();
+    const providers = params?.configStore?.read("providers");
+    const config = providers ? undefined : readDesktopSettingsConfigSafe();
     const preferences: Record<string, AcpAgentPreference> = {};
     const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
-      (registryId) => acpAgentEnabledFor(config, registryId),
+      (registryId) => providers
+        ? acpProviderEnabledFromSnapshot(providers, registryId)
+        : acpAgentEnabledFor(config ?? {}, registryId),
     );
     for (const registryId of enabledRegistryIds) {
-      const override = acpCliPathOverrideFor(config, registryId);
+      const override = providers
+        ? acpProviderCommandOverrideFromSnapshot(providers, registryId)
+        : acpCliPathOverrideFor(config ?? {}, registryId);
       if (override) {
         preferences[registryId] = { overridePath: override };
       }
@@ -196,14 +208,20 @@ export function createLocalAcpAgentDiscovery(params?: {
       enabledRegistryIds,
       managedGrok: {
         enabled:
-          acpAgentEnabledFor(config, "grok")
-          && managedGrokBuildsEnabledForRuntime(
-            config,
-            {
-              env: env ?? process.env,
-              isPackaged: app?.isPackaged === true,
-            },
-          ),
+          providers
+            ? managedGrokBuildsEnabledFromSnapshot(
+                providers,
+                env ?? process.env,
+                app?.isPackaged === true,
+              )
+            : acpAgentEnabledFor(config ?? {}, "grok")
+              && managedGrokBuildsEnabledForRuntime(
+                config ?? {},
+                {
+                  env: env ?? process.env,
+                  isPackaged: app?.isPackaged === true,
+                },
+              ),
         checkMode: app?.isPackaged === true ? "ttl" : "once-per-process",
         requirePlatformSignature: app?.isPackaged === true,
       },
@@ -1141,13 +1159,15 @@ export class AcpBackendAdapter {
   }
 
   async describeInstalledBackends(): Promise<BackendSummary[]> {
-    const config = readDesktopSettingsConfigSafe();
+    const config = this.isAcpAgentEnabled
+      ? undefined
+      : readDesktopSettingsConfigSafe();
     const installedAgents = await this.listAvailableAgents();
     const enabledAgents = installedAgents
       .filter((agent) =>
         this.isAcpAgentEnabled
           ? this.isAcpAgentEnabled(agent.registryId)
-          : acpAgentEnabledFor(config, agent.registryId),
+          : acpAgentEnabledFor(config ?? {}, agent.registryId),
       );
     return enabledAgents.map((agent) => {
       const summary = describeInstalledAcpBackend(agent);

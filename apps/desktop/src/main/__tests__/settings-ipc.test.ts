@@ -1400,7 +1400,7 @@ describe("settings ipc", () => {
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
-      configPath: path.join(tempRoot, "config.toml"),
+      configPath: profileConfigPath,
       env: {},
       secretStore: new MemoryDesktopSecretStore(),
       now: () => 20,

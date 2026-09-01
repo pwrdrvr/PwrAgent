@@ -552,6 +552,7 @@ import {
   resolveSpendAlertPolicy,
   resolveToolOutputAlertPolicy,
 } from "../settings/config-store/config-domains";
+import { acpProviderEnabledFromSnapshot } from "../settings/config-store/provider-runtime-config";
 import {
   ONBOARDING_CODEX_GATE_ENABLED,
   type ManagedCodexSelectionChange,
@@ -8843,15 +8844,29 @@ export class DesktopBackendRegistry {
         options?.discoverLocalAcpAgents
         ?? (options?.useMachineAcpDiscovery
           ? createLocalAcpAgentDiscovery(
-              settingsService
-                ? {
-                    resolveEnv: async () =>
-                      await settingsService.resolveTerminalSpawnEnvAsync(),
-                  }
-                : undefined,
+              {
+                ...(options?.configStore
+                  ? { configStore: options.configStore }
+                  : {}),
+                ...(settingsService
+                  ? {
+                      resolveEnv: async () =>
+                        await settingsService.resolveTerminalSpawnEnvAsync(),
+                    }
+                  : {}),
+              },
             )
           : noLocalAcpAgentDiscovery),
-      isAcpAgentEnabled: options?.isAcpAgentEnabled,
+      isAcpAgentEnabled:
+        options?.isAcpAgentEnabled
+        ?? (options?.configStore
+          ? (registryId) => {
+              const providers = options.configStore?.read("providers");
+              return providers
+                ? acpProviderEnabledFromSnapshot(providers, registryId)
+                : true;
+            }
+          : undefined),
       emit: async (event) => {
         this.rememberAcpAvailableCommands(event);
         await this.emit(event);

@@ -70,6 +70,7 @@ export type ProviderProjection = Readonly<{
   configured: Readonly<{
     enabled: boolean;
     commandOverride?: string;
+    managedBuilds?: boolean;
   }>;
   lastKnownGood?: Readonly<{
     selectedCommand?: string;
@@ -184,6 +185,10 @@ export function normalizeConfigDomains(params: {
         configured: {
           enabled,
           ...(commandOverride ? { commandOverride } : {}),
+          ...(provider === "grok"
+            && config.acpAgents?.grok?.managedBuilds !== undefined
+            ? { managedBuilds: config.acpAgents.grok.managedBuilds }
+            : {}),
         },
         ...(previous?.lastKnownGood
           ? { lastKnownGood: previous.lastKnownGood }
