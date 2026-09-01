@@ -66,6 +66,11 @@ type ThreadInfoEntry = {
   fields: {
     [Name in ThreadInfoFieldName]?: ThreadInfoFieldEntry<Name>;
   };
+  /**
+   * The identity this entry is keyed by, kept alongside the key so a lookup
+   * that does not know the backend can filter without parsing the key string.
+   */
+  identity: ThreadInfoIdentity;
   /** Highest sequence any accepted field on this entry carries. */
   lastObservedSequence: number;
   summary?: ThreadInfoSummaryEntry;
@@ -188,6 +193,7 @@ export class ThreadInfoStore {
     const key = identityKey(identity);
     const entry = this.entries.get(key) ?? {
       fields: {},
+      identity,
       lastObservedSequence: 0,
     };
 
@@ -294,9 +300,17 @@ export class ThreadInfoStore {
     if (!threadId) {
       return;
     }
-    const key = identityKey({ ...params.identity, threadId });
+    const identity: ThreadInfoIdentity = {
+      backend: params.identity.backend,
+      threadId,
+      ...(params.identity.instanceId
+        ? { instanceId: params.identity.instanceId }
+        : {}),
+    };
+    const key = identityKey(identity);
     const entry = this.entries.get(key) ?? {
       fields: {},
+      identity,
       lastObservedSequence: 0,
     };
     const existing = entry.summary;
@@ -348,6 +362,39 @@ export class ThreadInfoStore {
       return undefined;
     }
     return summary.value;
+  }
+
+  /**
+   * A locally-owned thread's summary when the caller may not know its backend.
+   *
+   * A named backend is a direct lookup. Without one this scans, the way the
+   * caller's previous thread-list walk did — but over one entry per thread
+   * rather than every row of every cached query, and it still answers after
+   * the query caches have been invalidated.
+   *
+   * Instance-qualified entries are skipped: those belong to peers, and a
+   * caller that did not name an instance is not asking about a peer's thread.
+   */
+  findLocalSummary(params: {
+    backend?: AppServerBackendKind;
+    threadId: string;
+  }): AppServerThreadSummary | undefined {
+    const threadId = params.threadId.trim();
+    if (!threadId) {
+      return undefined;
+    }
+    if (params.backend) {
+      return this.getSummary({ backend: params.backend, threadId });
+    }
+    for (const entry of this.entries.values()) {
+      if (entry.identity.instanceId || entry.identity.threadId !== threadId) {
+        continue;
+      }
+      if (entry.summary) {
+        return entry.summary.value;
+      }
+    }
+    return undefined;
   }
 
   /** The display title, or `undefined` when none has ever been observed. */

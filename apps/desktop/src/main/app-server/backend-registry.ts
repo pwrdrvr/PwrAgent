@@ -9561,6 +9561,13 @@ export class DesktopBackendRegistry {
    * thread-list walk. Hot-path consumers such as messaging admission combine
    * this volatile summary with the durable per-thread overlay instead of
    * asking navigation to rebuild every thread and directory.
+   *
+   * The thread-list cache is consulted first — when it is warm it holds the
+   * freshest listing — and the information store answers when it is not. The
+   * store matters because the cache is emptied by every mutation: without the
+   * second tier, admission for a thread this process listed minutes ago falls
+   * through to `resolveThread`'s forced full listing purely because something
+   * unrelated invalidated the cache in between.
    */
   getCachedThreadSummary(params: {
     backend?: AppServerBackendKind;
@@ -9580,7 +9587,10 @@ export class DesktopBackendRegistry {
         return cached;
       }
     }
-    return undefined;
+    return this.threadInfoStore.findLocalSummary({
+      ...(params.backend ? { backend: params.backend } : {}),
+      threadId,
+    });
   }
 
   /**

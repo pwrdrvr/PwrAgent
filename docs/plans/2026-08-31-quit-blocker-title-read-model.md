@@ -220,6 +220,7 @@ Current recorded budget:
 | Six concurrent callers asking for the same unenriched listing | 1 | 0 |
 | Eight terminal notifications across two never-listed threads | 1 | 0 |
 | One navigation refresh over a single worktree-backed thread | 1 | 1 |
+| Messaging admission after an unrelated mutation emptied the cache | 0 | 0 |
 
 The three nonzero rows are the shape the design intends: a thread nobody has
 ever listed costs exactly one listing however many callers ask at once, and
@@ -240,18 +241,45 @@ The budget is enforced with deterministic call-count assertions, not elapsed
 time. The enrichment counter is exercised with worktree-shaped fixtures so it
 provably can move — a budget that cannot move proves nothing.
 
-## Compatibility With PR #1896
+## Relationship To PR #1896
 
-PR #1896's `getCachedThreadSummary()` serves targeted messaging admission and
-is broader than a title read. Its current cache scan does not cover names
-observed from lifecycle/name notifications.
+PR #1896 merged first. It made the same class of fix for messaging admission:
+`resolveThread` used to call `listThreads({ callerReason: "thread-id-lookup",
+forceRefresh: true })` unconditionally, and #1896 put a cached read in front of
+it — `getCachedThreadSummary`, which scans the thread-list cache.
 
-This change does not cherry-pick or duplicate PR #1896's messaging work. On a
-later rebase, `getCachedThreadSummary()` can retain its admission contract and
-thread-list cache scan; where it needs a display title, it can read the store.
-Quit continues to call `getThreadInfo` and never treats title-only knowledge as
-a complete navigation/admission summary. Keeping the responsibilities separate makes the
-backend-registry overlap mechanical rather than architectural.
+That covers the warm case, and measurably so: ten admissions across ten turn
+boundaries cost zero provider listings, because `turn/started` does not empty
+the cache. The gap is the cold one. The thread-list cache *is* emptied by
+mutations, and after an unrelated `archiveThread` on a different thread:
+
+| Read | Result |
+|---|---|
+| `getCachedThreadSummary` (cache scan) | nothing |
+| `ThreadInfoStore.getSummary` | the summary, intact |
+| `resolveThread` | 1 forced full paged provider `thread/list` |
+
+So admission for a thread this window listed minutes ago paid a full listing
+because something unrelated invalidated the cache in between. This is the
+"later rebase" note the earlier draft left open, and it is now done:
+`getCachedThreadSummary` scans the cache first — warm, that is the freshest
+listing — and falls through to `ThreadInfoStore.findLocalSummary`.
+
+`findLocalSummary` exists because admission does not always know which backend
+owns the thread an inbound message names. With a backend it is a direct
+lookup; without one it scans, the way the previous thread-list walk did, but
+over one entry per thread rather than every row of every cached query.
+Instance-qualified entries are skipped: those belong to peers, and a caller
+that did not name an instance is not asking about a peer's thread.
+
+One case the store deliberately does **not** answer: a thread known only from a
+lifecycle notification, never from a listing, still costs one listing on
+admission. The store holds its title but not a summary, and a title is not a
+summary. Serving a synthesized row there would be guessing.
+
+The two contracts stay separate. `getCachedThreadSummary` keeps its admission
+contract; quit keeps calling `getThreadInfo` and never treats title-only
+knowledge as a complete navigation/admission summary.
 
 ## Test Matrix
 
@@ -275,6 +303,7 @@ backend-registry overlap mechanical rather than architectural.
 | Remote ordering | A peer snapshot that started earlier but finished later cannot revert a newer name; a rename recorded afterwards still wins. |
 | Remote isolation | Two peers reusing one thread id keep separate names, and unmounting one peer drops only that peer's names. |
 | Reservation ordering at the IPC seam | The navigation-snapshot handler reserves its observation sequence strictly before the peer round trip begins. |
+| Messaging admission after invalidation | An unrelated `archiveThread` empties the list cache; admission for an untouched thread costs zero provider listings, and a backend-less lookup still resolves. |
 
 Every test in the last four rows was falsified before being kept: the fix was
 reverted, the test was watched to fail, and the fix restored. A test that

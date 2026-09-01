@@ -386,3 +386,49 @@ describe("archival is an observation, not a cache eviction", () => {
       .toBe(false);
   });
 });
+
+describe("messaging admission reads what this process already knows", () => {
+  // resolveThread falls back to listThreads({ forceRefresh: true }) — a full
+  // paged provider walk — whenever the cached summary comes back empty. The
+  // thread-list cache is emptied by every mutation, so before the information
+  // store answered here, an inbound reply to a thread this window listed
+  // minutes ago paid that walk because something unrelated had invalidated the
+  // cache in between.
+  it("admits a reply after an invalidation without listing the provider", async () => {
+    const { client, registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    // An unrelated mutation on a different thread empties the whole cache.
+    await registry.archiveThread({ backend: "codex", threadId: "thread-beta" });
+    client.resetCounts();
+
+    const summary = registry.getCachedThreadSummary({
+      backend: "codex",
+      threadId: "thread-alpha",
+    });
+    expect(summary?.title).toBe("Rework the quit dialog");
+    await expect(
+      registry.resolveThread({ threadId: "thread-alpha" }),
+    ).resolves.toMatchObject({ id: "thread-alpha" });
+
+    expectThreadReadBudget({
+      note: "messaging admission for a listed thread whose list cache was invalidated",
+      reads: client.counts,
+      scenario: "messaging-admission-after-invalidation",
+    });
+  });
+
+  // The caller does not always know which backend owns the thread an inbound
+  // message names.
+  it("answers a backend-less lookup from the store", async () => {
+    const { registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await registry.archiveThread({ backend: "codex", threadId: "thread-alpha" });
+
+    expect(
+      registry.getCachedThreadSummary({ threadId: "thread-beta" })?.title,
+    ).toBe("Audit the messaging adapters");
+    expect(
+      registry.getCachedThreadSummary({ threadId: "no-such-thread" }),
+    ).toBeUndefined();
+  });
+});
