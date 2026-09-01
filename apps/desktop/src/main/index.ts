@@ -1299,6 +1299,13 @@ export function bootstrapApp(): void {
     registerQuitBlockerIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
+        if (patch.federation !== undefined) {
+          // Store subscriptions also cover external config-file edits. Keep
+          // direct settings writes awaiting the same single-flight restart so
+          // consecutive mode changes cannot collapse into the first restart
+          // and leave the runtime serving an obsolete mode.
+          await getDesktopFederationRuntime().restart();
+        }
         if (
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||

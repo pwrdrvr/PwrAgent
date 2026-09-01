@@ -149,6 +149,7 @@ type NavigationState = {
   refreshing: boolean;
   error?: string;
   response?: NavigationSnapshot;
+  startupSelectionSettled?: boolean;
 };
 
 type NavigationRefreshOptions = {
@@ -3608,6 +3609,9 @@ export function useThreadNavigation(
               loading: false,
               refreshing: false,
               error: undefined,
+              startupSelectionSettled:
+                current.startupSelectionSettled
+                || options?.refreshMode !== "active-recent",
             };
           }
 
@@ -3636,6 +3640,9 @@ export function useThreadNavigation(
             refreshing: false,
             error: undefined,
             response: nextResponse,
+            startupSelectionSettled:
+              current.startupSelectionSettled
+              || options?.refreshMode !== "active-recent",
           };
         });
 
@@ -5109,11 +5116,11 @@ export function useThreadNavigation(
     if (!initialFallbackSelectionKey) {
       if (
         state.response
-        && state.response.partial !== true
+        && state.startupSelectionSettled
         && state.response.providerRefresh?.state !== "checking"
       ) {
         // An empty settled full startup is still a completed selection
-        // decision. The progressive active-recent page is explicitly partial:
+        // decision. A progressive active-recent page is explicitly unsettled:
         // even if provider refresh has already reached "ready", its empty row
         // set cannot close the selection window before the queued full page.
         // Once the full page settles, do not let a later operator action that
@@ -5132,7 +5139,12 @@ export function useThreadNavigation(
     // launchpad) remains clear instead of being auto-selected again.
     initialSelectionEstablishedRef.current = true;
     setSelectedItemKey(initialFallbackSelectionKey);
-  }, [initialFallbackSelectionKey, selectedItemKey, state.response]);
+  }, [
+    initialFallbackSelectionKey,
+    selectedItemKey,
+    state.response,
+    state.startupSelectionSettled,
+  ]);
 
   const activeFederatedLaunchpad =
     federatedLaunchpad
