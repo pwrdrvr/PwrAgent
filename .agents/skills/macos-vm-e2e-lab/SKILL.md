@@ -1,203 +1,58 @@
 ---
 name: macos-vm-e2e-lab
 description: >-
-  Set up and operate PwrAgent's Tart-based macOS VM lab. It keeps headed
-  Playwright/Electron E2E runs off the host desktop and can provide a guarded,
-  network-isolated self-hosted GitHub Actions lane for macOS/ARM64 E2E and
-  visual-regression coverage. Use when a user mentions Tart, a local macOS VM,
-  self-hosted macOS runners, E2E windows stealing focus, or PwrAgent visual
-  goldens. Do not use for Windows VM probes or Windows E2E.
+  Route PwrAgent macOS Tart, self-hosted runner, headed E2E, and visual-golden
+  work to PwrSuiteLab when a checkout is available. Use when a user mentions
+  Tart, a local macOS VM, self-hosted macOS runners, E2E windows stealing
+  focus, or PwrAgent visual goldens. Do not use for Windows VM probes or
+  Windows E2E.
 ---
 
 # PwrAgent macOS VM E2E lab
 
-This skill is macOS-only. For Windows work, read
-`.agents/skills/use-windows-vm-lab/SKILL.md` in the operator-selected
-PwrSuiteLab checkout.
+PwrAgent does not own the Tart lab, runner VMs, or guest OS baseline.
+PwrSuiteLab does. Do not provision a product-local Tart lab from this
+repository. Do not clone a Cirrus image or register a GitHub Actions runner
+from these files.
 
-Use an Apple Silicon Mac host with Homebrew, Tart, and an authenticated `gh`
-CLI. Plan for approximately 80 GB of free disk. A human operator must configure
-the first softnet sudoers rule and the GitHub Actions external-contributor
-setting.
+## Prefer PwrSuiteLab
 
-## What this provides
+1. Resolve an existing PwrSuiteLab checkout from linked directories,
+   Federation, MCP, or an explicit operator pointer. Do not assume a
+   pathname. Do not clone, install, or provision PwrSuiteLab as part of a
+   product task.
+2. Use the attached primary checkout. Do not select a disposable worktree.
+3. Confirm the ignored config with an exact filesystem test. Headed E2E
+   uses `local-config/macos-tart.sh`. Runner work uses
+   `local-config/macos-runner.sh`. `rg --files`, `git ls-files`, and other
+   worktrees do not prove that a config is absent. Do not read, print, or
+   copy the config. If the exact default is absent, ask the operator for
+   an existing config path only.
+4. Read the matching skill in that checkout and follow it:
 
-The lab has two related roles:
+   | Work | Skill in the PwrSuiteLab checkout |
+   |---|---|
+   | Headed E2E and visual goldens | `macos-tart/README.md` and `macos-tart/run-e2e.sh` |
+   | Runner start, stop, pause, resume | `.agents/skills/operate-macos-gha-runner/SKILL.md` |
+   | Runner inspection | `.agents/skills/inspect-macos-gha-runner/SKILL.md` |
+   | Runner or E2E VM rebuild | `.agents/skills/rebuild-macos-lab-vm/SKILL.md` |
+   | VNC, SSH, registration, recovery | `.agents/skills/manage-macos-gha-runner/SKILL.md` |
+   | Windows probes or Windows E2E | `.agents/skills/use-windows-vm-lab/SKILL.md` |
 
-1. A trusted development VM runs headed Electron Playwright tests on the
-   guest display. The host desktop never flashes, loses focus, or receives test
-   windows.
-2. A shared PwrDrvr organization runner group serves PwrAgent and PwrSnap's
-   macOS E2E lanes. Its runner VMs boot with `softnet`, which permits Internet
-   access but blocks RFC1918/private host-network access.
+If no checkout is discoverable, ask the operator for the lab pointer and
+stop. Do not invent a fallback lab.
 
-Tart uses Apple Virtualization.framework, which is the supported route for
-macOS guests on Apple Silicon. Treat Tart and softnet as host tools, not
-runtime dependencies of PwrAgent.
+## PwrAgent product facts
 
-## One-time host setup
+These stay in this repository because they are product or CI contracts,
+not lab inventory:
 
-Copy the bundled scripts to their stable operating location. The scripts keep
-their SSH key, logs, and failed-test artifacts there.
-
-```bash
-lab_root="$HOME/pwragent-mac-vm"
-mkdir -p "$lab_root"
-cp -R .agents/skills/macos-vm-e2e-lab/scripts/. "$lab_root/"
-chmod +x "$lab_root"/*.sh "$lab_root"/runner/*.sh
-
-brew install cirruslabs/cli/tart cirruslabs/cli/softnet git-lfs
-tart clone ghcr.io/cirruslabs/macos-sequoia-base:latest pwragent-sequoia-base
-```
-
-The base-image pull is large and can take a while. Keep
-`pwragent-sequoia-base` pristine: never boot it. The lab clones it into its
-working VMs. Apple allows at most two macOS guests per host, so normally run a
-dev VM plus one runner VM, not a third guest.
-
-## Running E2E off the desktop
-
-```bash
-cd ~/pwragent-mac-vm
-./provision-dev.sh
-./run-e2e.sh main
-./run-e2e.sh my-branch --grep "approval"
-./run-e2e.sh --local /absolute/path/to/PwrAgent e2e/visual-regression.spec.ts
-```
-
-`--local` pushes the local repository's committed `HEAD` to the VM over SSH as
-the private `e2e-local` branch. Use it for unpushed work; do not push a WIP
-branch to a public remote only to run tests. Uncommitted changes do not travel,
-so commit a disposable WIP checkpoint first when necessary. The local transport
-also copies only the Git LFS objects referenced by `HEAD` into the guest repo;
-the guest SSH remote does not need to act as an LFS server.
-
-The test command runs inside tmux session `e2e` in the VM. Ctrl-C on the host
-log tail detaches from it without terminating the test. Failed-run artifacts
-are copied back to `~/pwragent-mac-vm/artifacts/`.
-
-Use `./vnc.sh [vm-name]` to inspect the guest display if needed. It opens macOS
-Screen Sharing against the guest itself; it does not open a window on the host
-until you explicitly ask to view the VM.
-
-## Visual-regression goldens
-
-PwrAgent's macOS golden images are lossless WebP files under
-`apps/desktop/e2e/*.spec.ts-snapshots/` and are intentionally tracked in Git
-LFS. Generate or update them only inside the authoritative PwrSuiteLab Tart VM,
-matching the macOS/ARM64 CI renderer.
-
-The bundled setup above does not install PwrSuiteLab. It is a separately
-managed checkout with its own access and provisioning policy. Use available
-workspace/directory tools, PwrAgent Federation tools, or MCP resources to find
-an existing local PwrSuiteLab checkout; do not assume a pathname or clone,
-install, or provision it as part of a baseline update. If no checkout is
-discoverable, ask the operator for the appropriate lab pointer.
-
-After resolving the checkout, test its ignored configuration directly:
-
-```bash
-test -f "$suite_lab_root/local-config/macos-tart.sh"
-```
-
-Do not infer its absence from `rg --files`, `git ls-files`, or another
-worktree. Do not read, print, or copy the config. If the exact default is
-absent, ask for an existing config path only and set `PWRLAB_MACOS_CONFIG_FILE`
-for that invocation.
-
-```bash
-suite_lab_root="<PwrSuiteLab checkout discovered with tools/MCP>"
-pwragent_root="$(git rev-parse --show-toplevel)"
-"$suite_lab_root/macos-tart/run-e2e.sh" --confirm-live-run \
-  --workload pwragent --local "$pwragent_root" \
-  e2e/visual-regression.spec.ts
-```
-
-The controller accepts only a clean worktree and transports committed `HEAD`.
-Use this checkpoint workflow:
-
-1. Commit the code-under-test checkpoint, confirm the worktree is clean, and
-   run the focused spec. A missing or changed baseline can fail while emitting
-   reviewable `*-actual.webp` artifacts.
-2. Review the retrieved artifacts and promote approved files to their
-   `*-darwin.webp` baseline names.
-3. Stage the promoted files explicitly and check `git lfs status`; every WebP
-   baseline must be an LFS object rather than an ordinary Git blob. Commit a
-   disposable checkpoint containing the promoted baselines and confirm the
-   worktree is clean again.
-4. Rerun the same focused spec so the VM verifies the exact committed
-   references. Amend or squash the disposable checkpoint only after that run
-   passes.
-
-Do not generate macOS goldens on a Linux host or an active developer desktop,
-and do not compare them against a different platform's output.
-
-## Self-hosted GitHub Actions runner
-
-The workflow job targets the shared organization runner label:
-
-```yaml
-runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
-```
-
-The `PwrDrvr macOS` runner group is selected-repository only: it grants
-access to exactly `pwrdrvr/PwrAgent` and `pwrdrvr/PwrSnap`, not the whole
-organization. Do not create a repository-scoped PwrAgent runner alongside it.
-
-One human action is required before any runner VM can use softnet (agents must
-not enter a sudo password or change this system policy themselves):
-
-```bash
-echo "$USER ALL=(ALL) NOPASSWD: $(brew --prefix)/bin/softnet" | \
-  sudo tee /etc/sudoers.d/softnet
-sudo -n "$(brew --prefix)/bin/softnet" --help
-```
-
-Then stage and install the always-on runner:
-
-```bash
-cd ~/pwragent-mac-vm
-./runner/provision-runner-base.sh
-./runner/configure-shared-runner-group.sh
-./runner/install-launch-agent.sh
-```
-
-The persistent runner is the normal mode: it occupies one VM slot, keeps its
-tool cache warm, and serves one job at a time. Re-baseline it with
-`tart stop pwragent-runner && tart delete pwragent-runner` before starting it
-again. `run-ephemeral-runner.sh` remains available when one-clean-VM-per-job
-is worth the setup cost. On this Mac, migrate the existing
-`~/pwrsnap-mac-vm` persistent runner into the shared group instead of starting
-another runner VM; the two guest slots are already valuable for development.
-
-For a foreground diagnostic session, run
-`./runner/run-persistent-runner.sh` instead of installing launchd; it owns the
-terminal until stopped. A first registration or re-baseline needs the
-organization-admin permission used by `configure-shared-runner-group.sh`.
-An already registered persistent runner restarts through launchd without that
-organization API call.
-
-## Runner security contract
-
-PwrAgent is public, so do not weaken any of these layers:
-
-1. The workflow excludes fork-head PRs from the self-hosted job.
-2. The organization runner group grants access only to PwrAgent and PwrSnap.
-3. The runner VM must boot with `--net-softnet`, and its script verifies that
-   private network space cannot be reached before registration.
-4. GitHub Actions must require approval for external contributors in the
-   repository settings.
-5. `git-lfs` must be installed and on the runner job PATH before checkout;
-   actions-runner snapshots the PATH during `config.sh`.
-
-Never register a runner when its private-network probe fails. Never use the
-trusted dev VM as the CI runner.
-
-## Operational gotchas
-
-Read [the troubleshooting reference](references/troubleshooting.md) before
-changing the scripts or diagnosing a stuck VM. In particular: headless guest
-display resolution needs an in-guest CoreGraphics fix, scripts sent over SSH
-must prevent stdin-hungry commands from consuming their heredoc, and the
-AppleParavirtGPU is disabled for VM E2E with
-`PWRAGENT_E2E_DISABLE_GPU=1`.
+- Generate macOS visual goldens only in the lab VM that matches the
+  macOS/ARM64 CI renderer. The workflow is in
+  [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+- The CI lane uses `runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]`.
+- The `PwrDrvr macOS` runner group is selected-repository only for
+  PwrAgent and PwrSnap. Do not add a repository-scoped runner. Do not
+  grant the rest of the organization access.
+- Fork-head pull requests must not run on those machines.
+- VM E2E sets `PWRAGENT_E2E_DISABLE_GPU=1`. Ordinary host E2E does not.

@@ -71,6 +71,9 @@
 - Both commands build `apps/desktop/out/` before Playwright starts.
 - Before headed desktop E2E, ask the operator whether an off-desktop lab is available.
 - If a lab is available, ask for its repository or skill.
+- For PwrSuiteLab macOS Tart, runner, or headed E2E work, follow
+  `.agents/skills/macos-vm-e2e-lab/SKILL.md`. It routes to PwrSuiteLab.
+  Do not provision a product-local Tart lab from this repository.
 - For PwrSuiteLab Windows probes or headed E2E, read
   `.agents/skills/use-windows-vm-lab/SKILL.md` in the attached lab checkout.
   Do not use the macOS VM skill for Windows work.

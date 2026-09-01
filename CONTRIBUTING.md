@@ -114,9 +114,11 @@ visual workflow uses a separately managed PwrSuiteLab Tart controller so the
 windows render on the guest display; it is not installed by this repository.
 Use available workspace/directory tools, PwrAgent Federation tools, or MCP
 resources to locate an existing local PwrSuiteLab checkout. If none is
-discoverable, ask the operator for the appropriate lab pointer. The security
-model and full workflow live in
-[`.agents/skills/macos-vm-e2e-lab/SKILL.md`](.agents/skills/macos-vm-e2e-lab/SKILL.md).
+discoverable, ask the operator for the appropriate lab pointer. Agents
+route that work through
+[`.agents/skills/macos-vm-e2e-lab/SKILL.md`](.agents/skills/macos-vm-e2e-lab/SKILL.md),
+which defers to PwrSuiteLab. Do not provision a product-local Tart lab from
+this repository.
 
 The small macOS/ARM64 visual-regression suite has lossless WebP baselines under
 `apps/desktop/e2e/*.spec.ts-snapshots/`. They are Git LFS objects, not ordinary
