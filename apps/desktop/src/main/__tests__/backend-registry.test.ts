@@ -18229,6 +18229,9 @@ command = "pnpm dev"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: ["codex:thread-reattached"],
+      threadTitles: {
+        "codex:thread-reattached": "Still working after HMR",
+      },
     });
     await expect(
       registry.startTurn({
@@ -18348,6 +18351,9 @@ command = "pnpm dev"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: ["codex:thread-stale-active"],
+      threadTitles: {
+        "codex:thread-stale-active": "Finished remotely",
+      },
     });
 
     await registry.close();
@@ -18631,6 +18637,334 @@ command = "pnpm dev"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 2,
       threadIds: ["acp:grok:acp-thread-1", "codex:thread-1"],
+    });
+
+    await registry.close();
+  });
+
+  it("names ordinary quit blockers from cached metadata without provider refreshes", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "thread-named-quit",
+          title: "Resolve quit titles from memory",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const enrichThreadDirectories = vi.fn(async (threads) => threads);
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+      enrichDirectories: false,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-named-quit",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const providerReadsBeforeQuit = codexClient.listThreadsCallCount;
+
+    for (let poll = 0; poll < 4; poll += 1) {
+      expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+        count: 1,
+        threadIds: ["codex:thread-named-quit"],
+        threadTitles: {
+          "codex:thread-named-quit": "Resolve quit titles from memory",
+        },
+      });
+    }
+
+    expect(codexClient.listThreadsCallCount).toBe(providerReadsBeforeQuit);
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-named-quit",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+
+    await registry.close();
+  });
+
+  it("keeps a newer quit title when an invalidated older list finishes late", async () => {
+    const listThreadsDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      listThreadsDelay: listThreadsDelay.promise,
+      threads: [
+        {
+          id: "thread-late-quit-title",
+          title: "Old provider title",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    const staleList = registry.listThreads({
+      backend: "codex",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    await waitForCondition(() => codexClient.listThreadsCallCount === 1);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-late-quit-title",
+          threadName: "New explicit rename",
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-late-quit-title",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-late-quit-title"],
+      threadTitles: {
+        "codex:thread-late-quit-title": "New explicit rename",
+      },
+    });
+
+    listThreadsDelay.resolve();
+    await staleList;
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-late-quit-title"],
+      threadTitles: {
+        "codex:thread-late-quit-title": "New explicit rename",
+      },
+    });
+    expect(codexClient.listThreadsCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("never downgrades a known quit title for fallback or missing list rows", async () => {
+    const threadId = "thread-monotonic-quit-title";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: threadId,
+          title: "Known display title",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.listThreads({ backend: "codex", enrichDirectories: false });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId,
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    codexClient.setThreads([
+      {
+        id: threadId,
+        title: threadId,
+        titleSource: "fallback",
+        linkedDirectories: [],
+        source: "codex",
+      },
+    ]);
+    await registry.listThreads({
+      backend: "codex",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    codexClient.setThreads([]);
+    await registry.listThreads({
+      backend: "codex",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`codex:${threadId}`],
+      threadTitles: {
+        [`codex:${threadId}`]: "Known display title",
+      },
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId,
+          threadName: "Newer renamed title",
+        },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`codex:${threadId}`],
+      threadTitles: {
+        [`codex:${threadId}`]: "Newer renamed title",
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("keeps a known quit title when a background provider list fails", async () => {
+    const threadId = "thread-failed-list-quit-title";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      listThreadsError: new Error("provider list unavailable"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId,
+          threadName: "Known before provider failure",
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId,
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        enrichDirectories: false,
+        forceRefresh: true,
+      }),
+    ).resolves.toEqual([]);
+    expect(codexClient.listThreadsCallCount).toBe(1);
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`codex:${threadId}`],
+      threadTitles: {
+        [`codex:${threadId}`]: "Known before provider failure",
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("keeps cached quit titles qualified when backends reuse a thread id", async () => {
+    const threadId = "shared-thread-id";
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    for (const [backend, threadName] of [
+      ["codex", "Local Codex work"],
+      ["acp:grok", "Local Grok work"],
+    ] as const) {
+      const turnId = backend === "codex" ? "turn-codex" : "turn-grok";
+      await registry.publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/name/updated",
+          params: { threadId, threadName },
+        },
+      });
+      await registry.publishLocalEvent({
+        backend,
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId,
+            turnId,
+            turn: { id: turnId },
+          },
+        },
+      });
+    }
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 2,
+      threadIds: ["acp:grok:shared-thread-id", "codex:shared-thread-id"],
+      threadTitles: {
+        "acp:grok:shared-thread-id": "Local Grok work",
+        "codex:shared-thread-id": "Local Codex work",
+      },
     });
 
     await registry.close();
@@ -29015,6 +29349,9 @@ script = "printf setup"
       expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
         count: 1,
         threadIds: ["codex:ordinary-thread"],
+        threadTitles: {
+          "codex:ordinary-thread": "Parent Thread",
+        },
       });
     });
 
@@ -29680,6 +30017,9 @@ script = "printf setup"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: [buildThreadIdentityKey("codex", "ordinary-thread")],
+      threadTitles: {
+        [buildThreadIdentityKey("codex", "ordinary-thread")]: "Parent Thread",
+      },
     });
 
     await registry.publishLocalEvent({
@@ -29843,6 +30183,9 @@ script = "printf setup"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: [buildThreadIdentityKey("codex", "ordinary-thread")],
+      threadTitles: {
+        [buildThreadIdentityKey("codex", "ordinary-thread")]: "Parent Thread",
+      },
     });
 
     await registry.publishLocalEvent({

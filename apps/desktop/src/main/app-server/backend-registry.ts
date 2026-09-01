@@ -5397,6 +5397,12 @@ type ThreadListCacheHit = {
   value: Promise<AppServerThreadSummary[]> | AppServerThreadSummary[];
 };
 
+type ThreadDisplayMetadata = {
+  observationSequence: number;
+  title: string;
+  titleSource?: AppServerThreadTitleSource;
+};
+
 type CreatedThreadDirectoryVisibility = Pick<
   NavigationDirectorySummary,
   "key" | "kind" | "path"
@@ -7755,14 +7761,16 @@ export class DesktopBackendRegistry {
    */
   private toolInvocationDeltaFlushChain: Promise<void> = Promise.resolve();
   /**
-   * Best-effort cache of thread labels keyed by `buildThreadIdentityKey`, used
-   * only to label native attention/terminal notifications so multiple
-   * background turns are distinguishable. Populated from `thread/started` and
-   * `thread/name/updated` notifications as they fan out through `emit()`.
-   * Falls back to a thread-list lookup, then a generic body when context still
-   * isn't available.
+   * Cache-only display metadata keyed by `buildThreadIdentityKey`. Provider
+   * lists reserve their observation sequence before awaiting so an older list
+   * cannot complete late and replace a newer lifecycle/name observation.
+   * Missing and fallback titles are not deletion events.
    */
-  private readonly notificationThreadTitles = new Map<string, string>();
+  private readonly threadDisplayMetadata = new Map<
+    string,
+    ThreadDisplayMetadata
+  >();
+  private threadDisplayMetadataObservationSequence = 0;
   private readonly notificationThreadProjectLabels = new Map<string, string>();
   /**
    * Live `thread/name/updated` observations are newer than the provider's
@@ -9460,7 +9468,12 @@ export class DesktopBackendRegistry {
     // An event can invalidate or replace this entry while the read awaits
     // enrichment. Only the promise that still owns the key may publish it.
     const pendingState: ThreadListCacheState = {};
-    const promise = this.readThreadList(normalizedParams)
+    const displayMetadataObservationSequence =
+      this.reserveThreadDisplayMetadataObservation();
+    const promise = this.readThreadList(
+      normalizedParams,
+      displayMetadataObservationSequence,
+    )
       .then((threads) => {
         if (this.threadListCache.get(cacheKey) === pendingState) {
           this.threadListCache.set(cacheKey, {
@@ -9562,6 +9575,32 @@ export class DesktopBackendRegistry {
     return undefined;
   }
 
+  /**
+   * Read display metadata this process has already observed. This method never
+   * starts or awaits provider listing, directory enrichment, or persistence.
+   */
+  getCachedThreadDisplayMetadata(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Pick<ThreadDisplayMetadata, "title" | "titleSource"> | undefined {
+    const threadId = params.threadId.trim();
+    if (!threadId) {
+      return undefined;
+    }
+    const metadata = this.threadDisplayMetadata.get(
+      buildThreadIdentityKey(params.backend, threadId),
+    );
+    if (!metadata) {
+      return undefined;
+    }
+    return {
+      title: metadata.title,
+      ...(metadata.titleSource
+        ? { titleSource: metadata.titleSource }
+        : {}),
+    };
+  }
+
   async getThreadAgentMetadata(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -9570,16 +9609,19 @@ export class DesktopBackendRegistry {
     return overlay?.agent;
   }
 
-  private async readThreadList(params: {
-    archived?: boolean;
-    backend?: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    enrichDirectories: boolean;
-    filter?: string;
-    limit?: number;
-    maxPages?: number;
-    skipArchivedMetadataRefresh?: boolean;
-  }): Promise<AppServerThreadSummary[]> {
+  private async readThreadList(
+    params: {
+      archived?: boolean;
+      backend?: AppServerBackendKind;
+      callerReason?: ThreadListCallerReason;
+      enrichDirectories: boolean;
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
+      skipArchivedMetadataRefresh?: boolean;
+    },
+    displayMetadataObservationSequence: number,
+  ): Promise<AppServerThreadSummary[]> {
     const diagnostics = {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
@@ -9607,7 +9649,10 @@ export class DesktopBackendRegistry {
           threads,
         });
       }
-      this.rememberThreadListContexts(threads);
+      this.rememberThreadListContexts(
+        threads,
+        displayMetadataObservationSequence,
+      );
       return threads;
     }
 
@@ -9617,7 +9662,10 @@ export class DesktopBackendRegistry {
         params.filter,
         params.archived,
       );
-      this.rememberThreadListContexts(threads);
+      this.rememberThreadListContexts(
+        threads,
+        displayMetadataObservationSequence,
+      );
       return threads;
     }
 
@@ -9638,7 +9686,10 @@ export class DesktopBackendRegistry {
     const threads = threadLists
       .flat()
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-    this.rememberThreadListContexts(threads);
+    this.rememberThreadListContexts(
+      threads,
+      displayMetadataObservationSequence,
+    );
     return threads;
   }
 
@@ -13705,10 +13756,10 @@ export class DesktopBackendRegistry {
         threadKeys.add(threadKey);
         if (owner.isSubAgent) {
           subAgentThreadKeys.add(threadKey);
-          const title = this.cachedQuitThreadTitle(owner.backend, owner.threadId);
-          if (title) {
-            threadTitles.set(threadKey, title);
-          }
+        }
+        const title = this.cachedQuitThreadTitle(owner.backend, owner.threadId);
+        if (title) {
+          threadTitles.set(threadKey, title);
         }
       }
     };
@@ -13845,25 +13896,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
   ): string | undefined {
-    const key = buildThreadIdentityKey(backend, threadId);
-    const remembered =
-      this.observedThreadNames.get(key) ?? this.notificationThreadTitles.get(key);
-    if (remembered?.trim()) {
-      return remembered.trim();
-    }
-    for (const state of this.threadListCache.values()) {
-      const thread = state.threads?.find(
-        (candidate) =>
-          candidate.source === backend
-          && candidate.id === threadId
-          && candidate.titleSource !== "fallback",
-      );
-      const title = thread?.title.trim();
-      if (title) {
-        return title;
-      }
-    }
-    return undefined;
+    return this.getCachedThreadDisplayMetadata({ backend, threadId })?.title;
   }
 
   async supportsMessagingPdfTools(params: {
@@ -34330,6 +34363,40 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private reserveThreadDisplayMetadataObservation(): number {
+    this.threadDisplayMetadataObservationSequence += 1;
+    return this.threadDisplayMetadataObservationSequence;
+  }
+
+  private rememberThreadDisplayMetadata(params: {
+    backend: AppServerBackendKind;
+    observationSequence: number;
+    threadId: string;
+    title?: string;
+    titleSource?: AppServerThreadTitleSource;
+  }): void {
+    if (params.titleSource === "fallback") {
+      return;
+    }
+    const title = params.title?.trim();
+    if (!title) {
+      return;
+    }
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const existing = this.threadDisplayMetadata.get(key);
+    if (
+      existing
+      && existing.observationSequence >= params.observationSequence
+    ) {
+      return;
+    }
+    this.threadDisplayMetadata.set(key, {
+      observationSequence: params.observationSequence,
+      title,
+      ...(params.titleSource ? { titleSource: params.titleSource } : {}),
+    });
+  }
+
   private rememberThreadTitleFromEvent(event: AgentEvent): void {
     const method = event.notification.method;
     if (method === "thread/name/updated") {
@@ -34343,7 +34410,14 @@ export class DesktopBackendRegistry {
         const trimmed = threadName.trim();
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
-          this.notificationThreadTitles.set(key, trimmed);
+          this.rememberThreadDisplayMetadata({
+            backend: event.backend,
+            observationSequence:
+              this.reserveThreadDisplayMetadataObservation(),
+            threadId,
+            title: trimmed,
+            titleSource: "explicit",
+          });
           this.observedThreadNames.set(key, trimmed);
         }
       }
@@ -34358,7 +34432,12 @@ export class DesktopBackendRegistry {
       if (typeof threadId !== "string") {
         return;
       }
-      this.rememberThreadNotificationContext(event.backend, threadId, params.thread);
+      this.rememberThreadNotificationContext(
+        event.backend,
+        threadId,
+        params.thread,
+        this.reserveThreadDisplayMetadataObservation(),
+      );
     }
   }
 
@@ -34406,6 +34485,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
     thread: unknown,
+    displayMetadataObservationSequence: number,
   ): void {
     if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
       return;
@@ -34414,11 +34494,20 @@ export class DesktopBackendRegistry {
     const candidate =
       (typeof record.title === "string" ? record.title : undefined) ??
       (typeof record.name === "string" ? record.name : undefined);
-    const trimmed = candidate?.trim();
+    const titleSource =
+      record.titleSource === "explicit"
+      || record.titleSource === "derived"
+      || record.titleSource === "fallback"
+        ? record.titleSource
+        : undefined;
+    this.rememberThreadDisplayMetadata({
+      backend,
+      observationSequence: displayMetadataObservationSequence,
+      threadId,
+      title: candidate,
+      titleSource,
+    });
     const key = buildThreadIdentityKey(backend, threadId);
-    if (trimmed) {
-      this.notificationThreadTitles.set(key, trimmed);
-    }
     const projectLabel = readNotificationProjectLabel(record);
     if (projectLabel) {
       this.notificationThreadProjectLabels.set(key, projectLabel);
@@ -34428,12 +34517,18 @@ export class DesktopBackendRegistry {
   /** Keep titles already shown in navigation available to time-bounded UI. */
   private rememberThreadListContexts(
     threads: readonly AppServerThreadSummary[],
+    displayMetadataObservationSequence: number,
   ): void {
     for (const thread of threads) {
       if (thread.titleSource === "fallback") {
         continue;
       }
-      this.rememberThreadNotificationContext(thread.source, thread.id, thread);
+      this.rememberThreadNotificationContext(
+        thread.source,
+        thread.id,
+        thread,
+        displayMetadataObservationSequence,
+      );
     }
   }
 
@@ -34443,7 +34538,7 @@ export class DesktopBackendRegistry {
   ): string | undefined {
     const key = buildThreadIdentityKey(backend, threadId);
     const projectLabel = this.notificationThreadProjectLabels.get(key);
-    const threadTitle = this.notificationThreadTitles.get(key);
+    const threadTitle = this.threadDisplayMetadata.get(key)?.title;
     if (projectLabel && threadTitle) {
       return `${projectLabel} > ${threadTitle}`;
     }
@@ -34466,7 +34561,6 @@ export class DesktopBackendRegistry {
       });
       const thread = threads.find((candidate) => candidate.id === threadId);
       if (thread) {
-        this.rememberThreadNotificationContext(backend, threadId, thread);
         return this.notificationThreadContextLabel(backend, threadId);
       }
     } catch (error) {
@@ -34494,9 +34588,9 @@ export class DesktopBackendRegistry {
     const title = isQuestion
       ? "PwrAgent input needed"
       : "PwrAgent approval needed";
-    const threadTitle = this.notificationThreadTitles.get(
+    const threadTitle = this.threadDisplayMetadata.get(
       buildThreadIdentityKey(event.backend, threadId),
-    );
+    )?.title;
     const approvalRequest = this.isApprovalAttentionNotification(event.notification)
       ? event.notification
       : undefined;
