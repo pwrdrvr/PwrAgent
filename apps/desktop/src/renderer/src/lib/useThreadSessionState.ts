@@ -3598,7 +3598,7 @@ function messageContentFromUserItem(item: Record<string, unknown>): {
   };
 }
 
-function userMessageEntryFromCompletedItem(params: {
+function userMessageEntryFromItem(params: {
   turnId?: string;
   item?: {
     id?: string;
@@ -5136,6 +5136,86 @@ export function useThreadSessionState(params: {
           };
         }
 
+        // Queue admission can publish the authoritative user item before the
+        // Composer's startTurn promise adds its optimistic row. Materialize
+        // the started item; a later completion reconciles by the same id.
+        if (
+          event.notification.method === "item/started"
+          || event.notification.method === "item/completed"
+        ) {
+          const userMessageEntry = userMessageEntryFromItem(
+            event.notification.params
+          );
+          if (userMessageEntry) {
+            const launchpadMessageCandidate =
+              launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
+                ? launchpadMessageCandidateRef.current.candidate
+                : undefined;
+            const unreconciledLaunchpadMessageCandidate =
+              reconciledLaunchpadMessageIdsRef.current[targetThreadKey]
+                === undefined
+                ? launchpadMessageCandidate
+                : undefined;
+            const reconcilesLaunchpadMessage = Boolean(
+              unreconciledLaunchpadMessageCandidate
+              && matchesAuthoritativeLaunchpadMessage(
+                userMessageEntry,
+                unreconciledLaunchpadMessageCandidate,
+              )
+            );
+            const authoritativeUserMessageEntry =
+              mergeCompletedUserMessageWithPromotedOptimisticEntry(
+                mergeCompletedUserMessageWithOptimisticEntry(
+                  userMessageEntry,
+                  reconcilesLaunchpadMessage
+                    && unreconciledLaunchpadMessageCandidate
+                    ? [unreconciledLaunchpadMessageCandidate.entry]
+                    : current.optimisticEntries
+                ),
+                current.response
+              );
+            if (reconcilesLaunchpadMessage) {
+              reconciledLaunchpadMessageIdsRef.current[targetThreadKey] =
+                authoritativeUserMessageEntry.id;
+            }
+            const nextResponse = appendMessageEntries(
+              removePromotedOptimisticUserMessage(
+                current.response,
+                authoritativeUserMessageEntry
+              ),
+              {
+                backend: event.backend,
+                threadId: notificationThreadId,
+              },
+              [authoritativeUserMessageEntry]
+            );
+
+            return {
+              ...current,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
+              optimisticEntries:
+                reconcilesLaunchpadMessage
+                  && unreconciledLaunchpadMessageCandidate
+                  ? current.optimisticEntries.filter(
+                      (entry) =>
+                        entry.id !== unreconciledLaunchpadMessageCandidate.entry.id
+                    )
+                  : current.optimisticEntries.filter(
+                      (entry) =>
+                        entry.id === unreconciledLaunchpadMessageCandidate?.entry.id
+                        || entry.type !== "message"
+                        || !messageTextMatchesOptimisticEntry(
+                          authoritativeUserMessageEntry,
+                          entry,
+                        )
+                    ),
+              response: nextResponse,
+            };
+          }
+        }
+
         if (event.notification.method === "item/started") {
           const item = getNotificationItem(event.notification.params);
           const details = item ? buildLiveToolDetails(item) : [];
@@ -5436,78 +5516,6 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/completed") {
-          const userMessageEntry = userMessageEntryFromCompletedItem(
-            event.notification.params
-          );
-          if (userMessageEntry) {
-            const launchpadMessageCandidate =
-              launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
-                ? launchpadMessageCandidateRef.current.candidate
-                : undefined;
-            const unreconciledLaunchpadMessageCandidate =
-              reconciledLaunchpadMessageIdsRef.current[targetThreadKey]
-                === undefined
-                ? launchpadMessageCandidate
-                : undefined;
-            const reconcilesLaunchpadMessage = Boolean(
-              unreconciledLaunchpadMessageCandidate
-              && matchesAuthoritativeLaunchpadMessage(
-                userMessageEntry,
-                unreconciledLaunchpadMessageCandidate,
-              )
-            );
-            const completedUserMessageEntry =
-              mergeCompletedUserMessageWithPromotedOptimisticEntry(
-                mergeCompletedUserMessageWithOptimisticEntry(
-                  userMessageEntry,
-                  reconcilesLaunchpadMessage
-                    && unreconciledLaunchpadMessageCandidate
-                    ? [unreconciledLaunchpadMessageCandidate.entry]
-                    : current.optimisticEntries
-                ),
-                current.response
-              );
-            if (reconcilesLaunchpadMessage) {
-              reconciledLaunchpadMessageIdsRef.current[targetThreadKey] =
-                completedUserMessageEntry.id;
-            }
-            const nextResponse = appendMessageEntries(
-              removePromotedOptimisticUserMessage(
-                current.response,
-                completedUserMessageEntry
-              ),
-              {
-                backend: event.backend,
-                threadId: notificationThreadId,
-              },
-              [completedUserMessageEntry]
-            );
-
-            return {
-              ...current,
-              expectOwnUpdate: true,
-              interacted: true,
-              lastTouchedAt: nextLastTouchedAt,
-              optimisticEntries:
-                reconcilesLaunchpadMessage
-                  && unreconciledLaunchpadMessageCandidate
-                  ? current.optimisticEntries.filter(
-                      (entry) =>
-                        entry.id !== unreconciledLaunchpadMessageCandidate.entry.id
-                    )
-                  : current.optimisticEntries.filter(
-                      (entry) =>
-                        entry.id === unreconciledLaunchpadMessageCandidate?.entry.id
-                        || entry.type !== "message"
-                        || !messageTextMatchesOptimisticEntry(
-                          completedUserMessageEntry,
-                          entry,
-                        )
-                    ),
-              response: nextResponse,
-            };
-          }
-
           const assistantTurn = buildTurnMetadata({
             fallbackId:
               typeof event.notification.params.turnId === "string"
