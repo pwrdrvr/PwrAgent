@@ -1,3 +1,4 @@
+import { rememberBoundedMap } from "../../bounded-map";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -87,6 +88,7 @@ import type {
   MessagingDefaultAgentScope,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
+  MessagingInboundChannelMetadataUpdate,
   MessagingInboundEvent,
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
@@ -300,6 +302,36 @@ const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 // visible message sends. Let them through a little sooner than noisy deltas.
 const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+// Upper bound on retained admission stage marks. A turn that is queued behind a
+// busy thread, or that fails before `startTurn`, never reaches the log that
+// consumes its marks, so the ceiling cannot depend on the happy path. Oldest
+// entry is evicted first; each holds at most eight numbers.
+const ADMISSION_STAGE_MARK_LIMIT = 256;
+
+/**
+ * Stage marks for one inbound message's trip from receipt to `startTurn`.
+ *
+ * `pwragentReceivedToStartTurnIssueMs` already measures that whole trip, which
+ * is enough to see that it is slow and not enough to see where. A slow trip is
+ * ambiguous between work this process chooses to do (resolving the route,
+ * preparing the input, reading admission state, enforcing policy) and a wait it
+ * merely schedules (the input debounce). These marks separate them, so one log
+ * line says which stage owns the latency instead of requiring a bisect.
+ *
+ * Marks are keyed by inbound event id, not by the event object: the command and
+ * media paths re-spread the event into a new object, so object identity does
+ * not survive the trip and a `WeakMap` would silently record nothing.
+ */
+type MessagingAdmissionStage =
+  | "handled"
+  | "routed"
+  | "bundleReady"
+  | "inputPrepared"
+  | "admissionStateResolved"
+  | "queued"
+  | "occupancyResolved"
+  | "originBuilt"
+  | "policyResolved";
 // Upper bound on retained automation start/final delivery-dedup keys. Each entry
 // embeds the full rendered message text and is only consulted while a run's
 // terminal events are in flight; oldest-first eviction reclaims keys for runs
@@ -924,6 +956,10 @@ export class MessagingController {
   private readonly deliveredAutomationStartKeys = new Set<string>();
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
+  private readonly admissionStageMarks = new Map<
+    string,
+    Partial<Record<MessagingAdmissionStage, number>>
+  >();
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
@@ -1113,6 +1149,11 @@ export class MessagingController {
       );
       return;
     }
+    // Marked past the authorization gate, not at the door. An unauthorized
+    // actor's traffic is not a turn anyone is timing, and marking it would let
+    // a burst of rejected events push the entries this map exists to hold out
+    // of it.
+    this.markAdmissionStage(event, "handled");
 
     // Self-heal: every inbound event carries the freshest ancestry data
     // the adapter knows (parentTitle = supergroup/server, ancestorTitle
@@ -1170,6 +1211,20 @@ export class MessagingController {
 
     if (event.kind === "text") {
       await this.handleText(event);
+    }
+  }
+
+  async handleInboundChannelMetadata(
+    update: MessagingInboundChannelMetadataUpdate,
+  ): Promise<void> {
+    try {
+      await this.refreshBindingChannelMetadata(update.channel, update.routingState);
+    } catch (error) {
+      this.logger.debug?.("messaging inbound metadata enrichment failed", {
+        eventId: update.eventId,
+        platform: update.channel.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -2162,17 +2217,24 @@ export class MessagingController {
   private async refreshBindingFromInbound(
     event: MessagingInboundEvent,
   ): Promise<void> {
+    await this.refreshBindingChannelMetadata(event.channel, event.routingState);
+  }
+
+  private async refreshBindingChannelMetadata(
+    channel: MessagingChannelRef,
+    routingStateUpdate?: MessagingAdapterState,
+  ): Promise<void> {
     const binding = await this.options.store.findActiveBindingForChannel(
-      event.channel,
+      channel,
     );
     if (!binding) return;
     const stored = binding.channel.conversation;
-    const incoming = event.channel.conversation;
+    const incoming = channel.conversation;
     // Incoming wins when present. Adapters fetch fresher metadata
     // than we stored at bind time:
-    //   - Discord resolves channel/parent/guild names via REST every
-    //     inbound (bounded LRU cache), so a server or channel rename
-    //     reaches us on the next message.
+    //   - Discord publishes channel/parent/guild names through the
+    //     post-dispatch metadata hook after bounded-LRU REST enrichment,
+    //     so a server or channel rename reaches us without delaying admission.
     //   - Telegram caches forum-topic names from `forum_topic_created`
     //     and `forum_topic_edited` service messages, so renames done
     //     in the Telegram client propagate to subsequent inbound
@@ -2190,7 +2252,7 @@ export class MessagingController {
     const managedTopic =
       incoming.kind === "topic" && incoming.parentId
         ? await this.options.store.findManagedTopicByConversation({
-            channel: event.channel.channel,
+            channel: channel.channel,
             supergroupId: incoming.parentId,
             topicId: incoming.id,
           })
@@ -2204,7 +2266,7 @@ export class MessagingController {
       ancestorTitle:
         incoming.ancestorTitle ?? stored.ancestorTitle ?? managedConversation?.ancestorTitle,
     };
-    const routingState = event.routingState ?? binding.routingState;
+    const routingState = routingStateUpdate ?? binding.routingState;
     const changed =
       merged.title !== stored.title
       || merged.parentTitle !== stored.parentTitle
@@ -2556,7 +2618,7 @@ export class MessagingController {
     const text = `/${[event.command.replace(/^\/+/, ""), ...event.args]
       .filter(Boolean)
       .join(" ")}`;
-    await this.turnAdmission.append({
+    await this.admitTurnInput({
       binding,
       event: {
         ...event,
@@ -2638,8 +2700,12 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
+    // findPreferredReviewWorkspaceCwd and buildReviewBranchOptions below read
+    // thread.gitWorkingState to choose a workspace and infer a base branch, so
+    // this picker cannot race the background refresh.
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: binding.backend,
+      probeWorkingStates: true,
     });
     const thread = findThreadForBinding(navigation, binding);
     const workspaces = (thread?.linkedDirectories ?? [])
@@ -3367,7 +3433,7 @@ export class MessagingController {
       return;
     }
 
-    await this.turnAdmission.append({ binding, event });
+    await this.admitTurnInput({ binding, event });
   }
 
   private async bootstrapDefaultAgentForAcceptedMessage(
@@ -3391,47 +3457,45 @@ export class MessagingController {
       return true;
     }
 
-    let navigation: NavigationSnapshot;
-    try {
-      navigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
-    } catch (error) {
-      await this.deliverDefaultAgentBootstrapError(
-        event,
-        "Default Agent unavailable",
-        error instanceof Error ? error.message : String(error),
-      );
-      return true;
-    }
-
     let selected:
       | {
           assignment: MessagingDefaultAgentAssignmentRecord;
-          thread: NavigationThreadSummary;
         }
       | undefined;
     const backendSummaries = await this.loadDefaultAgentBackendSummaries();
+    // Revocations are buffered, not applied as they are decided. Every
+    // iteration reads backend state that can fail, and a failure part-way
+    // through used to leave the channel half-revoked: the assignments already
+    // rejected were gone, the ones not yet examined survived, and the operator
+    // saw only "Default Agent unavailable". Deciding first and writing after
+    // makes the pass all-or-nothing.
+    const revocations: MessagingDefaultAgentAssignmentRecord[] = [];
     for (const assignment of assignments) {
-      const thread = navigation.threads.find(
-        (candidate) =>
-          candidate.source === assignment.target.backend
-          && candidate.id === assignment.target.threadId
-          && Boolean(candidate.agent),
-      );
+      let targetIsAgentThread: boolean;
+      try {
+        targetIsAgentThread =
+          await this.defaultAgentTargetIsAgentThread(assignment.target);
+      } catch (error) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent unavailable",
+          error instanceof Error ? error.message : String(error),
+        );
+        return true;
+      }
       const backendSupport = defaultAgentBackendSupport(
         assignment.target.backend,
         backendSummaries,
       );
       if (
         assignment.target.kind === "agent"
-        && thread
+        && targetIsAgentThread
         && backendSupport === "supported"
       ) {
-        selected = { assignment, thread };
+        selected = { assignment };
         break;
       }
-      if (thread && backendSupport === "unknown") {
+      if (targetIsAgentThread && backendSupport === "unknown") {
         await this.deliverDefaultAgentBootstrapError(
           event,
           "Default Agent unavailable",
@@ -3439,6 +3503,9 @@ export class MessagingController {
         );
         return true;
       }
+      revocations.push(assignment);
+    }
+    for (const assignment of revocations) {
       await this.options.store.revokeDefaultAgentAssignment({
         assignmentId: assignment.id,
         revokedAt: this.now(),
@@ -3454,11 +3521,57 @@ export class MessagingController {
       threadId: selected.assignment.target.threadId,
       toolUpdateMode: selected.assignment.toolUpdateMode,
     });
-    await this.turnAdmission.append({
+    await this.admitTurnInput({
       binding,
       event,
     });
     return true;
+  }
+
+  /**
+   * Does this assignment still point at an agent thread?
+   *
+   * Answered from what this process already knows about the one thread whose
+   * id the assignment carries. Deciding to start or queue a turn needs the
+   * target's identity, settings and occupancy; it does not need Git state,
+   * pull-request status, launchpads or the rest of the fleet.
+   *
+   * This used to call `getNavigationSnapshot({ backend: "all" })` on every
+   * accepted message, which enumerates every thread on every backend and then
+   * hydrates overlays, canonicalizes pull requests, probes Git working state,
+   * refreshes directory status and hydrates launchpads — all to answer one
+   * yes-or-no question about one thread. Opening the same thread in the app
+   * does none of that.
+   *
+   * ## What the listing proved, and what replaces it
+   *
+   * The listing proved two things at once: the thread still has an agent, and
+   * the provider still serves it. Only the first survives here, and the
+   * difference is deliberate rather than overlooked.
+   *
+   * `agent` is desktop-owned state that lives in the thread's overlay row, and
+   * a navigation row reads it from that same row — so the targeted answer and
+   * the listing's answer are the same answer.
+   *
+   * Existence is the one this cannot prove. `admission.thread` is built from
+   * the overlay when no listing row is remembered, and nothing deletes an
+   * overlay, so an agent thread deleted at the provider still presents a row
+   * here. Proving otherwise costs a provider round trip on every accepted
+   * message, and the two ways a target legitimately goes away are already
+   * covered more cheaply: archival revokes these assignments from the
+   * `thread/archived` handler, and a thread this machine has no record of at
+   * all fails the check below. What remains — an out-of-band deletion whose
+   * overlay outlives it — surfaces as a failed `startTurn` with a recoverable
+   * error rather than as a fleet walk charged to every message.
+   */
+  private async defaultAgentTargetIsAgentThread(
+    target: MessagingDefaultAgentAssignmentRecord["target"],
+  ): Promise<boolean> {
+    const admission = await this.options.backend.getThreadAdmissionState({
+      backend: target.backend,
+      threadId: target.threadId,
+    });
+    return Boolean(admission.thread?.agent);
   }
 
   private async deliverDefaultAgentBootstrapError(
@@ -3561,7 +3674,7 @@ export class MessagingController {
       return;
     }
 
-    await this.turnAdmission.append({ binding, event });
+    await this.admitTurnInput({ binding, event });
   }
 
   private async shouldHandleAmbientSharedMessage(
@@ -3592,9 +3705,143 @@ export class MessagingController {
     return await this.options.responseModeForConversation?.(channel) ?? "every_message";
   }
 
+  /**
+   * Retire a Default Agent assignment whose target could not start a turn.
+   *
+   * Scoped to bindings this controller routed through a Default Agent: an
+   * ordinary bound thread failing to start is a transient the operator can
+   * retry, not evidence that the binding is wrong. A revoked assignment leaves
+   * the channel unbound, so the next message falls through to normal handling
+   * and the operator is told the default was cleared.
+   */
+  private async revokeDefaultAgentRouteForFailedStart(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    if (!isDefaultAgentRouteBinding(binding)) {
+      return;
+    }
+    const revoked = await this.options.store
+      .revokeDefaultAgentAssignmentsForTarget({
+        backend: binding.backend,
+        threadId: binding.threadId,
+        revokedAt: this.now(),
+      })
+      .catch((error: unknown) => {
+        this.logger.debug?.("messaging default agent revoke after failed start failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+        return [];
+      });
+    // An empty array is still truthy, and a start can fail on a channel whose
+    // assignment was already retired -- announce a change only when one moved.
+    if (revoked.length > 0) {
+      this.notifyBindingChanged("default-agent-cleared");
+    }
+  }
+
+  /**
+   * The one door into the admission queue, so every route marks the same stage.
+   */
+  private async admitTurnInput(params: {
+    binding: MessagingBindingRecord;
+    event: MessagingTurnInputEvent;
+  }): Promise<void> {
+    this.markAdmissionStage(params.event, "routed");
+    await this.turnAdmission.append(params);
+  }
+
+  /**
+   * Record when this message reached {@link stage}, if it has not already.
+   *
+   * First mark wins: a stage reached twice (an admission state resolved once
+   * per bundle and again per queued release) keeps the earlier time, so a span
+   * never reads as negative.
+   */
+  private markAdmissionStage(
+    event: MessagingInboundEvent | undefined,
+    stage: MessagingAdmissionStage,
+  ): void {
+    if (!event) return;
+    let marks = this.admissionStageMarks.get(event.id);
+    if (!marks) {
+      marks = {};
+      rememberBoundedMap(
+        this.admissionStageMarks,
+        event.id,
+        marks,
+        ADMISSION_STAGE_MARK_LIMIT,
+      );
+    }
+    marks[stage] ??= this.now();
+  }
+
+  /**
+   * Consume this message's marks as span durations for the start-turn log.
+   *
+   * A span is emitted only when both of its ends were reached, so a path that
+   * skips a stage (a queued release, which never prepares input) reports the
+   * stages it did run instead of a misleading zero.
+   *
+   * `routedToBundleReadyMs` covers the input debounce, and for a coalesced
+   * burst it also covers the operator's own typing: the bundle carries its
+   * first event, but flushes {@link DEFAULT_INPUT_DEBOUNCE_MS} after the last.
+   * A large value there is the operator still typing, not PwrAgent stalling.
+   */
+  private takeAdmissionStageTiming(
+    event: MessagingInboundEvent | undefined,
+    startTurnIssuedAt: number,
+  ): Record<string, number> {
+    if (!event) return {};
+    const marks = this.admissionStageMarks.get(event.id);
+    if (!marks) return {};
+    this.admissionStageMarks.delete(event.id);
+    const spans: Array<[string, number | undefined, number | undefined]> = [
+      ["receivedToHandledMs", event.receivedAt, marks.handled],
+      ["handledToRoutedMs", marks.handled, marks.routed],
+      ["routedToBundleReadyMs", marks.routed, marks.bundleReady],
+      ["bundleReadyToInputPreparedMs", marks.bundleReady, marks.inputPrepared],
+      [
+        "inputPreparedToAdmissionStateMs",
+        marks.inputPrepared,
+        marks.admissionStateResolved,
+      ],
+      [
+        "admissionStateToOccupancyMs",
+        marks.admissionStateResolved,
+        marks.occupancyResolved,
+      ],
+      // A turn that waited behind a busy thread reports its wait here instead.
+      // Without these two the wait belonged to no span at all, so the stages
+      // stopped summing to the end-to-end number with nothing saying why -- the
+      // one reading that would send someone hunting for time that was never
+      // lost.
+      ["admissionStateToQueuedMs", marks.admissionStateResolved, marks.queued],
+      ["queuedToOriginMs", marks.queued, marks.originBuilt],
+      ["occupancyToOriginMs", marks.occupancyResolved, marks.originBuilt],
+      ["originToPolicyMs", marks.originBuilt, marks.policyResolved],
+      ["policyToStartTurnIssueMs", marks.policyResolved, startTurnIssuedAt],
+    ];
+    const timing: Record<string, number> = {};
+    for (const [name, from, to] of spans) {
+      if (from !== undefined && to !== undefined) {
+        timing[name] = to - from;
+      }
+    }
+    return timing;
+  }
+
   private async handleAdmittedTurnBundle(
     bundle: MessagingTurnAdmissionBundle,
   ): Promise<void> {
+    this.markAdmissionStage(bundle.events[0], "bundleReady");
+    // Only the first event of a bundle is carried forward to the start-turn
+    // log, so the others' marks can never be consumed. Dropping them here is
+    // what keeps the ceiling from evicting a turn that is still in flight --
+    // eviction is oldest-first, and the oldest entry is the one still waiting.
+    for (const event of bundle.events.slice(1)) {
+      this.admissionStageMarks.delete(event.id);
+    }
     const currentBinding = bundle.binding.pendingSkillSelection
       ? await this.options.store.getBinding(bundle.binding.id) ?? bundle.binding
       : bundle.binding;
@@ -3602,6 +3849,7 @@ export class MessagingController {
     if (!prepared) {
       return;
     }
+    this.markAdmissionStage(bundle.events[0], "inputPrepared");
     const preparedWithSkill = this.prependPendingSkillSelection(
       prepared,
       currentBinding,
@@ -3619,6 +3867,7 @@ export class MessagingController {
         federationTarget: federationTargetForBinding(consumedSkillBinding),
         threadId: consumedSkillBinding.threadId,
       });
+      this.markAdmissionStage(bundle.events[0], "admissionStateResolved");
     } catch (error) {
       await this.deliver(
         buildErrorIntent({
@@ -3642,6 +3891,7 @@ export class MessagingController {
         admissionState,
       )
     ) {
+      this.markAdmissionStage(bundle.events[0], "queued");
       await this.queuePreparedInput({
         binding: consumedSkillBinding,
         event: bundle.events[0],
@@ -3657,6 +3907,7 @@ export class MessagingController {
       return;
     }
 
+    this.markAdmissionStage(bundle.events[0], "occupancyResolved");
     const startResult = await this.startPreparedInput({
       binding: consumedSkillBinding,
       input: preparedWithSkill.input,
@@ -4057,6 +4308,7 @@ export class MessagingController {
           federationTarget: federationTargetForBinding(params.binding),
           threadId: params.binding.threadId,
         });
+      this.markAdmissionStage(params.event, "admissionStateResolved");
       const navigation = params.navigation
         ?? navigationSnapshotForAdmissionState(params.binding, admissionState);
       startingOrigin = await this.buildAgentMessagingOrigin({
@@ -4071,6 +4323,7 @@ export class MessagingController {
           startingOrigin,
         );
       }
+      this.markAdmissionStage(params.event, "originBuilt");
       const turnSettings = turnSettingsForBinding(params.binding, navigation);
       const executionResolution = resolveExecutionModeForBinding(
         params.binding,
@@ -4087,6 +4340,7 @@ export class MessagingController {
         );
         return "failed";
       }
+      this.markAdmissionStage(params.event, "policyResolved");
       // Diagnostic for #203-class regressions: a turn that the UI shows
       // as Default Access but routes to the Full Access codex client is
       // a silent security bug — the user thinks they're sandboxed but
@@ -4098,6 +4352,24 @@ export class MessagingController {
       // threadId to verify the routing matched intent. `executionModeSource` of
       // anything other than `thread` is suspicious for a thread the UI
       // claims has been explicitly toggled.
+      const startTurnIssuedAt = this.now();
+      const inboundTiming = params.event
+        ? {
+            inboundEventId: params.event.id,
+            providerSentAt: params.event.providerSentAt,
+            pwragentReceivedAt: params.event.receivedAt,
+            providerSentToPwragentReceivedMs:
+              params.event.providerSentAt === undefined
+                ? undefined
+                : params.event.receivedAt - params.event.providerSentAt,
+            pwragentReceivedToStartTurnIssueMs:
+              startTurnIssuedAt - params.event.receivedAt,
+          }
+        : {};
+      const stageTiming = this.takeAdmissionStageTiming(
+        params.event,
+        startTurnIssuedAt,
+      );
       this.logger.info?.("messaging starting turn", {
         backend: params.binding.backend,
         bindingId: params.binding.id,
@@ -4107,6 +4379,9 @@ export class MessagingController {
         executionModeSource: executionResolution.source,
         model: turnSettings.model,
         fastMode: turnSettings.fastMode,
+        startTurnIssuedAt,
+        ...inboundTiming,
+        ...stageTiming,
       });
       const started = await this.options.backend.startTurn({
         backend: params.binding.backend,
@@ -4116,6 +4391,18 @@ export class MessagingController {
         messageOrigin: messageOriginForInboundEvent(params.event),
         ...turnSettings,
       });
+      const startTurnAcceptedAt = this.now();
+      const acceptanceTiming = params.event
+        ? {
+            pwragentReceivedToStartTurnAcceptedMs:
+              startTurnAcceptedAt - params.event.receivedAt,
+            startTurnIssueToAcceptedMs: startTurnAcceptedAt - startTurnIssuedAt,
+            startTurnAcceptedAt,
+          }
+        : {
+            startTurnIssueToAcceptedMs: startTurnAcceptedAt - startTurnIssuedAt,
+            startTurnAcceptedAt,
+          };
       if (started.queueStatus === "queued") {
         this.rememberQueuedAgentMessagingOrigin({
           binding: params.binding,
@@ -4129,6 +4416,7 @@ export class MessagingController {
           threadId: params.binding.threadId,
           queueEntryId: started.queueEntryId ?? started.turnId,
           requestedExecutionMode: turnSettings.executionMode ?? "unset",
+          ...acceptanceTiming,
         });
         return "queued";
       }
@@ -4138,6 +4426,7 @@ export class MessagingController {
         threadId: params.binding.threadId,
         turnId: started.turnId,
         requestedExecutionMode: turnSettings.executionMode ?? "unset",
+        ...acceptanceTiming,
       });
       const activeTurn: MessagingActiveTurnSummary = {
         turnId: started.turnId,
@@ -4195,6 +4484,14 @@ export class MessagingController {
           return "queued";
         }
         return "failed";
+      }
+      // The durable overlay outlives its provider thread, so a targeted
+      // missing-thread response is the one reliable signal that a Default
+      // Agent assignment is dead. Other start failures are recoverable: a
+      // disconnect, rate limit, or invalid runtime option must not destroy the
+      // operator's persisted route.
+      if (isMissingTurnTargetStartError(error, params.binding)) {
+        await this.revokeDefaultAgentRouteForFailedStart(params.binding);
       }
       await this.deliver(
         buildErrorIntent({
@@ -5098,8 +5395,12 @@ export class MessagingController {
       return;
     }
 
+    // buildReviewBranchOptions below infers the base branch from
+    // thread.gitWorkingState, so this callback awaits working state for the
+    // same reason presentReviewPicker does.
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: binding.backend,
+      probeWorkingStates: true,
     });
     const targetSurface = pendingIntent.surface ?? (
       event.kind === "callback" ? event.interaction : undefined
@@ -6915,6 +7216,7 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
+    this.admissionStageMarks.clear();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
     }
@@ -20507,20 +20809,6 @@ function rememberBoundedKey(
   }
 }
 
-function rememberBoundedMap<Value>(
-  map: Map<string, Value>,
-  key: string,
-  value: Value,
-  maxSize = MAX_DELIVERED_AUTOMATION_KEYS,
-): void {
-  map.set(key, value);
-  while (map.size > maxSize) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) break;
-    map.delete(oldest);
-  }
-}
-
 function isSameActiveTurnState(
   previous: MessagingActiveTurnSummary | undefined,
   next: MessagingActiveTurnSummary | undefined,
@@ -21071,6 +21359,26 @@ function truncateText(text: string, limit: number): string {
 function isTurnInProgressStartError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /\b(active turn|turn already|already active|in progress)\b/i.test(message);
+}
+
+function isMissingTurnTargetStartError(
+  error: unknown,
+  binding: MessagingBindingRecord,
+): boolean {
+  const message = (error instanceof Error ? error.message : String(error))
+    .toLowerCase();
+  const threadId = binding.threadId.trim().toLowerCase();
+  if (!threadId || !message.includes(threadId)) {
+    return false;
+  }
+  return (
+    message.includes("thread not found")
+    || message.includes("thread does not exist")
+    || message.includes("thread was deleted")
+    || message.includes("thread has been deleted")
+    || message.includes("deleted thread")
+    || message.includes("unknown thread")
+  );
 }
 
 function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {

@@ -648,6 +648,7 @@ describe("LineAdapter", () => {
     await postLineWebhook(port, config.channelSecret, {
       events: [{
         type: "postback",
+        timestamp: 2_000,
         webhookEventId: "event-1",
         source: {
           type: "user",
@@ -662,6 +663,8 @@ describe("LineAdapter", () => {
     expect(events[0]).toMatchObject({
       kind: "callback",
       actionId: "confirm:yes",
+      providerSentAt: 2_000,
+      receivedAt: 2_234,
       value: "yes",
     });
   });

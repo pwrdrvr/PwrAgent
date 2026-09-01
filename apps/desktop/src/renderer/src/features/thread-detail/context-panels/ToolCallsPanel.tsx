@@ -6,6 +6,7 @@ import type {
   ThreadToolInvocationRecord,
   ThreadToolInvocationSummary,
 } from "@pwragent/shared";
+import { PopoutIcon } from "../../../icons";
 import type { ThreadLinkSource } from "../../../lib/thread-links";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
 import { detailMatchesInvocationItem } from "../tool-call-details";
@@ -54,12 +55,16 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
     <section className="context-panel__section tool-calls-panel">
       <div className="tool-calls-panel__heading">
         <h3>Tool calls</h3>
+        {/* Named for the window it opens rather than "Explore", and built at
+            rail scale: a 34px `.button` beside a 14px heading outweighed the
+            heading it sat next to. */}
         <button
-          className="button button--ghost"
+          className="context-panel__section-action"
           onClick={props.onOpenIncidentExplorer}
           type="button"
         >
-          Explore
+          <PopoutIcon size={11} aria-hidden="true" />
+          Tool Output Incidents
         </button>
       </div>
       {totals ? (

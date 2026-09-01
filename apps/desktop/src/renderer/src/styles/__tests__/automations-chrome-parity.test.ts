@@ -31,6 +31,14 @@ function padding(selector: string): string[] {
  * two are one chrome wearing two labels. Everywhere they diverge is an
  * accident — and one already shipped: the content inset drifted to 20px
  * against Settings' 24px and nothing failed, which is what these lock.
+ *
+ * One divergence is deliberate and NOT locked here: Settings wraps its
+ * section list in `.settings-nav__sections`, a scroll lane, because 16 rows
+ * plus expanded groups overflow the nav at the minimum window height.
+ * Automations renders one static row ("All Automations"), so it cannot
+ * overflow and a lane around a single button would be scaffolding. If that
+ * nav ever grows a real list — a row per schedule — it needs the same lane,
+ * or it clips the way Settings did.
  */
 describe("Automations chrome matches Settings", () => {
   it("insets content from the window edge identically", () => {

@@ -1340,6 +1340,14 @@ export type GetNavigationSnapshotRequest = {
   filter?: string;
   forceRefresh?: boolean;
   refreshMode?: "active-recent" | "full";
+  /**
+   * Await per-thread Git working state instead of serving the cache. Only a
+   * caller that reads `thread.gitWorkingState` to make a decision — the
+   * messenger's review picker, which compares dirt and base-branch drift
+   * across a multi-project thread's workspaces — should set this. Every other
+   * snapshot serves the durable cache and converges in the background.
+   */
+  probeWorkingStates?: boolean;
 };
 
 /**
@@ -1830,6 +1838,11 @@ export type RefreshThreadPullRequestsResponse = {
   lastStatusCheckAgeMs?: number;
   /** True when main accepted this request and started a provider refresh. */
   refreshStarted?: boolean;
+  /**
+   * Present when main intentionally skipped the refresh because the attached
+   * remote instance does not support this federation operation.
+   */
+  skippedReason?: "remote_refresh_unsupported";
   /** True when the host doesn't have `gh` installed; degrade silently. */
   ghAvailable: boolean;
   /**

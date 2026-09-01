@@ -49,6 +49,29 @@ turn admission policy that coalesces split input, prevents overlapping
 `turn/start` calls, queues follow-ups during active turns, and maps queued
 input to `turn/steer` or a later `turn/start`.
 
+Every inbound event carries two deliberately distinct time concepts:
+
+- `receivedAt` is required and means the PwrAgent wall-clock time captured at
+  the provider adapter's first handler boundary. Capture it before validation,
+  authorization, parsing that can throw, network enrichment, or any `await`.
+- `providerSentAt` is optional and preserves the original message time only
+  when the provider supplies one. Do not copy the provider time into
+  `receivedAt`, and do not invent `providerSentAt` for callbacks or transports
+  that omit it.
+
+Use `captureMessagingInboundReceipt(receivedAt, providerSentAt?)` from the
+interface package and spread the returned receipt into normalized events. The
+desktop runtime calls `assertMessagingInboundReceipt` before admission, so an
+adapter that omits or corrupts the first-boundary timestamp fails the contract
+at dispatch instead of producing misleading latency data.
+
+Inbound publication must precede optional network enrichment. If channel,
+workspace, guild, or parent-thread breadcrumbs require REST, dispatch the
+minimal authorized channel reference first. Providers may publish the eventual
+result through `onInboundChannelMetadata`; desktop orchestration merges it into
+an existing binding without replaying the inbound message or delaying turn
+admission.
+
 The `actor.platformUserId` must be the stable platform ID used for
 authorization. Mutable usernames and display names may be included for audit or
 operator visibility only.

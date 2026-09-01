@@ -47,6 +47,7 @@ import type {
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingInboundEvent,
+  MessagingInboundChannelMetadataListener,
   MessagingInboundRejectedListener,
   MessagingManagedConversationActionRequest,
   MessagingManagedConversationActionResult,
@@ -62,6 +63,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  assertMessagingInboundReceipt,
   extractMessagingPairingToken,
   isMessagingPairingCommand,
   MESSAGING_PAIRING_COMMAND,
@@ -143,6 +145,7 @@ export type DesktopMessagingAdapter = {
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
+  onInboundChannelMetadata?(listener: MessagingInboundChannelMetadataListener): () => void;
   onDiagnostic?(listener: (event: MessagingAdapterDiagnosticEvent) => void): () => void;
   updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
   updateRenderingPreferences?(
@@ -210,6 +213,7 @@ type RunningMessagingAdapter = {
   fingerprint: string;
   unsubscribeDiagnostic?: () => void;
   unsubscribeInboundRejected?: () => void;
+  unsubscribeInboundChannelMetadata?: () => void;
   unsubscribeRateLimit?: () => void;
   unsubscribeReconnect?: () => void;
   unsubscribeRuntimeError?: () => void;
@@ -1401,6 +1405,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     let unsubscribeDiagnostic: (() => void) | undefined;
     let unsubscribeInboundRejected: (() => void) | undefined;
+    let unsubscribeInboundChannelMetadata: (() => void) | undefined;
     try {
       unsubscribeDiagnostic = adapter.onDiagnostic?.((event) => {
         this.emitPlatformActivity(adapter.channel);
@@ -1428,8 +1433,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       unsubscribeInboundRejected = adapter.onInboundRejected?.(async (event) => {
         await this.handleRejectedInbound(adapter.channel, event, store);
       });
+      unsubscribeInboundChannelMetadata = adapter.onInboundChannelMetadata?.(async (update) => {
+        await controller.handleInboundChannelMetadata(update);
+      });
       this.setPlatformHealth(adapter.channel, "unknown");
       await this.startAdapterWithDeadline(adapter, async (event) => {
+        assertMessagingInboundReceipt(event);
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);
         if (await this.handlePairingInbound(adapter, event, store)) {
@@ -1527,6 +1536,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       } catch {
         // Best effort cleanup after startup failure.
       }
+      try {
+        unsubscribeInboundChannelMetadata?.();
+      } catch {
+        // Best effort cleanup after startup failure.
+      }
       controller.dispose();
       const cancelled = error instanceof AdapterStartCancelledError;
       if (cancelled) {
@@ -1584,6 +1598,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       fingerprint: messagingAdapterConfigFingerprint(config, adapter.channel),
       unsubscribeDiagnostic,
       unsubscribeInboundRejected,
+      unsubscribeInboundChannelMetadata,
       unsubscribeRateLimit,
       unsubscribeReconnect,
       unsubscribeRuntimeError,
@@ -1784,6 +1799,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       running.unsubscribeRuntimeError?.();
     } catch (error) {
       messagingLog.warn("messaging adapter runtime-error unsubscribe threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      running.unsubscribeInboundChannelMetadata?.();
+    } catch (error) {
+      messagingLog.warn("messaging adapter inbound-metadata unsubscribe threw", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -3001,7 +3023,10 @@ function pairingScopeFailure(
     return "token was generated for a user-in-group flow but was pasted in a DM";
   }
   if (entry.scope === "bucket" && isDm) {
-    return "token was generated for a group/guild bucket but was pasted in a DM";
+    // Platform-neutral on purpose: this reply reaches Telegram supergroups,
+    // Slack workspaces, Mattermost teams, Feishu tenants, and LINE groups as
+    // well as Discord servers, so it must not name any one platform's noun.
+    return "token was generated for a group/workspace bucket but was pasted in a DM";
   }
   return undefined;
 }

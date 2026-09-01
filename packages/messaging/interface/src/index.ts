@@ -1352,12 +1352,51 @@ export type MessagingConversationTitleUpdateResult = {
   updatedAt: number;
 };
 
-export type MessagingInboundBaseEvent = {
+export type MessagingInboundReceipt = {
+  /**
+   * Wall-clock time at the provider adapter's first inbound handler boundary.
+   * Capture this before validation, authorization, enrichment, or any await.
+   */
+  receivedAt: number;
+  /** Original sent time supplied by the provider, when available. */
+  providerSentAt?: number;
+};
+
+export function captureMessagingInboundReceipt(
+  receivedAt: number,
+  providerSentAt?: number,
+): MessagingInboundReceipt {
+  if (!Number.isFinite(receivedAt)) {
+    throw new Error("receivedAt must be a finite timestamp");
+  }
+  if (providerSentAt !== undefined && !Number.isFinite(providerSentAt)) {
+    throw new Error("providerSentAt must be a finite timestamp when supplied");
+  }
+  return {
+    receivedAt,
+    ...(providerSentAt !== undefined ? { providerSentAt } : {}),
+  };
+}
+
+export function assertMessagingInboundReceipt(
+  event: { providerSentAt?: unknown; receivedAt?: unknown },
+): asserts event is MessagingInboundReceipt {
+  if (typeof event.receivedAt !== "number" || !Number.isFinite(event.receivedAt)) {
+    throw new Error("Messaging provider omitted a finite first-boundary receivedAt timestamp.");
+  }
+  if (
+    event.providerSentAt !== undefined
+    && (typeof event.providerSentAt !== "number" || !Number.isFinite(event.providerSentAt))
+  ) {
+    throw new Error("Messaging provider supplied an invalid providerSentAt timestamp.");
+  }
+}
+
+export type MessagingInboundBaseEvent = MessagingInboundReceipt & {
   id: string;
   kind: MessagingInboundEventKind;
   actor: MessagingActorIdentity;
   channel: MessagingChannelRef;
-  receivedAt: number;
   /**
    * True when the adapter forwarded this event ONLY because its conversation
    * is being observed (an enabled inbound automation watches it), while the
@@ -1387,11 +1426,22 @@ export type MessagingInboundBaseEvent = {
   sourceSurface?: MessagingSurfaceRef;
 };
 
+export type MessagingInboundChannelMetadataUpdate = {
+  channel: MessagingChannelRef;
+  eventId: string;
+  observedAt: number;
+  routingState?: MessagingAdapterState;
+};
+
+export type MessagingInboundChannelMetadataListener = (
+  update: MessagingInboundChannelMetadataUpdate,
+) => Promise<void> | void;
+
 export type MessagingInboundRejectionReason =
   | "unauthorized-actor"
   | "unauthorized-conversation";
 
-export type MessagingRejectedInboundEvent = {
+export type MessagingRejectedInboundEvent = MessagingInboundReceipt & {
   id: string;
   kind: MessagingInboundEventKind;
   actor: MessagingActorIdentity;
@@ -1402,7 +1452,6 @@ export type MessagingRejectedInboundEvent = {
    */
   botMention?: boolean;
   channel: MessagingChannelRef;
-  receivedAt: number;
   reason: MessagingInboundRejectionReason;
   routingState?: MessagingAdapterState;
 };

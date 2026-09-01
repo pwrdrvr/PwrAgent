@@ -8206,6 +8206,53 @@ textarea,
   text-transform: uppercase;
 }
 
+/* Section list — the ONLY part of the nav that scrolls. The masthead
+   owns the stoplight gutter and the window drag region, and Exit
+   Settings is the escape hatch, so both stay pinned: scrolling them
+   away would slide the brand out from under the traffic lights and
+   put Exit out of reach on exactly the short windows that need it.
+   This is the main sidebar's split — fixed masthead above a scrolling
+   lane (`.sidebar__scroll-region` + `.sidebar-list--dense`).
+
+   Before this wrapper the rows were direct nav children, so the nav's
+   own `overflow: hidden` CLIPPED them instead of scrolling: at the
+   640px `MAIN_WINDOW_MIN_HEIGHT` (window.ts) the tail of an expanded
+   list — Experimental, Troubleshooting, About — painted below the clip
+   with no scrollbar and no wheel scrolling, out of a pointer's reach.
+   Collapsing every group fits, but with no margin to spare.
+
+   The bleed-then-re-inset is `.sidebar-list--dense`'s move, at the
+   same inset the nav already runs in (that inset is the point — it is
+   what makes this list read at the thread list's density). The bleed
+   buys exactly one thing: the reserved gutter lands between the
+   padding edge and the nav wall, so the thumb parks AT the wall
+   instead of inside it. Keep the two in lockstep — a bleed that stops
+   matching the nav's padding moves every row sideways.
+   `theme-contract.test.tsx` derives both from `.settings-nav` and
+   pins them, along with `flex`, `min-height` and `gap`.
+
+   `scrollbar-gutter: stable` reserves the space permanently so no row
+   jumps sideways the moment the bar appears — which it does on Windows
+   and Linux, where classic scrollbars take layout width (and on macOS
+   under "Show scroll bars: Always"). Under an overlay scrollbar the
+   gutter is zero and every row's box is unchanged from before this
+   rule existed.
+
+   Do NOT add a `::-webkit-scrollbar` block here — see
+   `.sidebar-list--dense` for why the universal `scrollbar-width: thin`
+   rule has to stay in charge. */
+.settings-nav__sections {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  margin-inline: -8px;
+  padding-inline: 8px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 /* Section row: caret gutter + label button. Every row reserves the
    24px gutter (caret button or spacer) so section labels align whether
    or not the section expands into a sublist. The gutter is 24px rather
@@ -9279,6 +9326,45 @@ textarea,
   gap: 7px;
 }
 
+/* The subhead's generic span rule would flatten the source chip into body
+   copy, so the chip restates its own presentation at matching specificity. */
+.messaging-routes__subhead .settings-source {
+  display: inline-flex;
+  margin-top: 6px;
+  font-size: 10px;
+}
+
+.messaging-routes__response-add {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px 14px;
+}
+
+.messaging-routes__response-add > label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.messaging-routes__response-add select {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.messaging-routes__response-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Composes .messaging-route-row__actions for layout and compact button
+   sizing; only the select needs a width of its own. */
+.messaging-routes__response-controls select {
+  width: auto;
+}
+
 .messaging-routes__error,
 .messaging-route-editor__error {
   margin: 0;
@@ -9525,6 +9611,12 @@ textarea,
 
 @media (max-width: 640px) {
   .messaging-routes__toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .messaging-routes__response-add,
+  .messaging-routes__response-controls {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -9805,12 +9897,16 @@ textarea,
 
 .settings-authorized-list__remove,
 .settings-authorized-list__lookup,
-.settings-authorized-list__add {
+.settings-authorized-list__add,
+.settings-authorized-list__refresh {
   width: max-content;
 }
 
-.settings-authorized-list__add {
+.settings-authorized-list__actions {
+  display: flex;
   align-self: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .settings-authorized-list__default-agent {
@@ -24036,6 +24132,133 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.35;
 }
 
+/* The bill split by the model that spent it. These rows live inside the
+   pricing summary card, so they carry no border box of their own — the
+   hairline between them is the whole frame, and the card supplies the rest. */
+.pricing-spend-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pricing-spend-group + .pricing-spend-group {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pricing-spend-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pricing-spend-group:first-child .pricing-spend-group__head {
+  padding-top: 2px;
+}
+
+.pricing-spend-group__total {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.pricing-spend-row + .pricing-spend-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pricing-spend-row__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The row runs edge to edge inside the card's padding, so a hovered
+   background would bleed into it. The label carries the hover instead. */
+.pricing-spend-row__summary:hover .pricing-spend-row__label {
+  color: var(--accent-bright);
+}
+
+.pricing-spend-row__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pricing-spend-row__chevron {
+  display: inline-block;
+  width: 8px;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.pricing-spend-row[data-expanded="true"] .pricing-spend-row__chevron {
+  transform: rotate(90deg);
+}
+
+.pricing-spend-row__label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pricing-spend-row__meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pricing-spend-row__cost {
+  margin-left: auto;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pricing-spend-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 8px 15px;
+  padding-left: 9px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.pricing-spend-row__body .rail-summary-card__row-label,
+.pricing-spend-row__body .rail-summary-card__row-value {
+  font-size: 11.5px;
+}
+
+.pricing-spend-row__origin {
+  margin: 0 0 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 /* Token Miser folded under its turn: one summary line that keeps moving as
    replays are counted, a chevron, and cards only for gates worth a card. */
 .pricing-token-miser {
@@ -24205,6 +24428,28 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
+/* Thread-level gate result, above the turn rows. It borrows the pricing
+   summary card wholesale — same shell, same eyebrow, same key/value rows, and
+   the section action the Tool calls tab already uses — so the two read as one
+   stack rather than as a summary and a widget. The figure keeps the card's own
+   text color; only an overhead is colored, and the accent stays a surface and
+   border signal. */
+.token-miser-summary-card__figure[data-negative="true"] {
+  color: var(--danger-text);
+}
+
+/* The rail's action is the section action, stretched: the card has a full
+   width to fill and a row of its own to sit in. Scoped to the card rather than
+   given its own class so it outranks the shared rule, which is defined further
+   down this file and would otherwise win on equal specificity. */
+.token-miser-summary-card .context-panel__section-action {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-height: 26px;
+  margin-top: 10px;
+}
+
 .rail-card__actions {
   width: 100%;
   margin-top: 2px;
@@ -24273,6 +24518,44 @@ button.pricing-token-miser__folded:focus-visible {
 
 .tool-calls-panel__heading h3 {
   margin: 0;
+}
+
+/* A rail heading's action, at rail scale. The shared `.button` is 34px at
+   13px, which outweighed the 14px heading it sat beside; these are the same
+   measurements as `.tool-call-row__details`, the other in-rail control. Both
+   entry points to the tool-output explorer wear this class, so the Pricing
+   card's action and the Tool calls heading's action are one control with two
+   destinations. */
+.context-panel__section-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.context-panel__section-action:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.context-panel__section-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.context-panel__section-action svg {
+  flex: 0 0 auto;
 }
 
 .tool-call-alert .rail-card__title {

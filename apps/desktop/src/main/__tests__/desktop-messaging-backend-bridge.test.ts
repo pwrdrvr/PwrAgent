@@ -181,7 +181,6 @@ describe("DesktopMessagingBackendBridge", () => {
     const registry = {
       getActiveTurnForThread: vi.fn(() => undefined),
       getCachedThreadSummary: vi.fn(() => undefined),
-      getCachedThreadTitle: vi.fn(() => undefined),
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
       isThreadTurnOccupied: vi.fn(() => false),
@@ -201,162 +200,6 @@ describe("DesktopMessagingBackendBridge", () => {
       },
       threadStatus: "idle",
     });
-  });
-
-  it("names a cold-cache thread from the registry's remembered title", async () => {
-    getThreadOverlayState.mockResolvedValueOnce({
-      backend: "codex",
-      threadId: "thread-cold",
-      executionMode: "full-access",
-      extraLinkedDirectories: [],
-    });
-    // A turn, status, or permission-mode notification drops the thread-list
-    // cache, so admission reads the summary cold while the overlay survives.
-    // Naming the thread after its own id would put a raw id on the status
-    // card where the operator has already seen a title.
-    const getCachedThreadTitle = vi.fn(() => ({
-      title: "Investigate the flaky login redirect",
-      titleSource: "derived" as const,
-    }));
-    const registry = {
-      getActiveTurnForThread: vi.fn(() => undefined),
-      getCachedThreadSummary: vi.fn(() => undefined),
-      getCachedThreadTitle,
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      getQueuedTurnsSnapshot: vi.fn(() => ({})),
-      isThreadTurnOccupied: vi.fn(() => false),
-    } as unknown as DesktopBackendRegistry;
-    const bridge = new DesktopMessagingBackendBridge(registry);
-
-    await expect(bridge.getThreadAdmissionState({
-      backend: "codex",
-      threadId: "thread-cold",
-    })).resolves.toMatchObject({
-      thread: {
-        executionMode: "full-access",
-        title: "Investigate the flaky login redirect",
-        titleSource: "derived",
-      },
-    });
-    expect(getCachedThreadTitle).toHaveBeenCalledExactlyOnceWith({
-      backend: "codex",
-      threadId: "thread-cold",
-    });
-  });
-
-  it("renders an unclassified remembered name as a derived title", async () => {
-    getThreadOverlayState.mockResolvedValueOnce({
-      backend: "codex",
-      threadId: "thread-renamed",
-      extraLinkedDirectories: [],
-    });
-    // A rename notification carries text and no source, so the registry
-    // reports the name without one. Claiming the operator chose it would skip
-    // the status card's derived-title shortening and length cap.
-    const registry = {
-      getActiveTurnForThread: vi.fn(() => undefined),
-      getCachedThreadSummary: vi.fn(() => undefined),
-      getCachedThreadTitle: vi.fn(() => ({ title: "Ship the release runbook" })),
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      getQueuedTurnsSnapshot: vi.fn(() => ({})),
-      isThreadTurnOccupied: vi.fn(() => false),
-    } as unknown as DesktopBackendRegistry;
-    const bridge = new DesktopMessagingBackendBridge(registry);
-
-    await expect(bridge.getThreadAdmissionState({
-      backend: "codex",
-      threadId: "thread-renamed",
-    })).resolves.toMatchObject({
-      thread: {
-        title: "Ship the release runbook",
-        titleSource: "derived",
-      },
-    });
-  });
-
-  it("falls back to the thread id when no title was ever observed", async () => {
-    getThreadOverlayState.mockResolvedValueOnce({
-      backend: "codex",
-      threadId: "thread-unnamed",
-      executionMode: "default",
-      extraLinkedDirectories: [],
-    });
-    const registry = {
-      getActiveTurnForThread: vi.fn(() => undefined),
-      getCachedThreadSummary: vi.fn(() => undefined),
-      getCachedThreadTitle: vi.fn(() => undefined),
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      getQueuedTurnsSnapshot: vi.fn(() => ({})),
-      isThreadTurnOccupied: vi.fn(() => false),
-    } as unknown as DesktopBackendRegistry;
-    const bridge = new DesktopMessagingBackendBridge(registry);
-
-    await expect(bridge.getThreadAdmissionState({
-      backend: "codex",
-      threadId: "thread-unnamed",
-    })).resolves.toMatchObject({
-      thread: {
-        title: "thread-unnamed",
-        titleSource: "fallback",
-      },
-    });
-  });
-
-  it("skips the remembered-title lookup with no cached summary and no overlay", async () => {
-    getThreadOverlayState.mockResolvedValueOnce(undefined);
-    const getCachedThreadTitle = vi.fn(() => ({ title: "Never rendered" }));
-    const registry = {
-      getActiveTurnForThread: vi.fn(() => undefined),
-      getCachedThreadSummary: vi.fn(() => undefined),
-      getCachedThreadTitle,
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      getQueuedTurnsSnapshot: vi.fn(() => ({})),
-      isThreadTurnOccupied: vi.fn(() => false),
-    } as unknown as DesktopBackendRegistry;
-    const bridge = new DesktopMessagingBackendBridge(registry);
-
-    const state = await bridge.getThreadAdmissionState({
-      backend: "codex",
-      threadId: "thread-unknown",
-    });
-
-    expect(state.thread).toBeUndefined();
-    expect(getCachedThreadTitle).not.toHaveBeenCalled();
-  });
-
-  it("keeps the cached summary title without a remembered-title lookup", async () => {
-    getThreadOverlayState.mockResolvedValueOnce({
-      backend: "codex",
-      threadId: "thread-warm",
-      extraLinkedDirectories: [],
-    });
-    const getCachedThreadTitle = vi.fn(() => ({
-      title: "Stale remembered name",
-      titleSource: "explicit" as const,
-    }));
-    const registry = {
-      getActiveTurnForThread: vi.fn(() => undefined),
-      getCachedThreadSummary: vi.fn(() => ({
-        id: "thread-warm",
-        title: "Current provider name",
-        titleSource: "explicit" as const,
-        source: "codex" as const,
-        linkedDirectories: [],
-      })),
-      getCachedThreadTitle,
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      getQueuedTurnsSnapshot: vi.fn(() => ({})),
-      isThreadTurnOccupied: vi.fn(() => false),
-    } as unknown as DesktopBackendRegistry;
-    const bridge = new DesktopMessagingBackendBridge(registry);
-
-    await expect(bridge.getThreadAdmissionState({
-      backend: "codex",
-      threadId: "thread-warm",
-    })).resolves.toMatchObject({
-      thread: { title: "Current provider name" },
-    });
-    expect(getCachedThreadTitle).not.toHaveBeenCalled();
   });
 
   it("serves cached directory status without awaiting a fleet refresh", async () => {
@@ -405,6 +248,7 @@ describe("DesktopMessagingBackendBridge", () => {
         async (threads: NavigationSnapshot["threads"]) => threads,
       ),
       listThreads: vi.fn(async () => []),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
       readDirectoryStatuses,
       refreshDirectoryGitStatuses,
       rememberCompleteNavigationSnapshot: vi.fn(),
@@ -456,6 +300,7 @@ describe("DesktopMessagingBackendBridge", () => {
         async (threads: NavigationSnapshot["threads"]) => threads,
       ),
       listThreads: vi.fn(async () => []),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
       refreshDirectoryGitStatuses,
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
@@ -471,7 +316,7 @@ describe("DesktopMessagingBackendBridge", () => {
     finishRefresh?.();
   });
 
-  it("hydrates review working state before the messenger chooses a project", async () => {
+  it("serves cached review working state and probes in the background", async () => {
     const pwrAgentWorktree = "/worktrees/PwrAgnt";
     const listedThread: AppServerThreadSummary = {
       id: "thread-1",
@@ -536,6 +381,8 @@ describe("DesktopMessagingBackendBridge", () => {
       ),
       listThreads: vi.fn(async () => [listedThread]),
       readDirectoryStatuses: vi.fn(async () => ({})),
+      // A Git fleet that never settles: the snapshot must not wait on it.
+      refreshThreadGitWorkingStates: vi.fn(() => new Promise(() => {})),
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);
@@ -544,8 +391,109 @@ describe("DesktopMessagingBackendBridge", () => {
 
     expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
       [reconciledThread],
+      { probeMissing: false },
+    );
+    // The canonical threads, not the hydrated ones: scheduling reads the
+    // cache to decide staleness, and passing threads that hydration just
+    // stamped from that same cache is how a probe stops converging.
+    expect(registry.refreshThreadGitWorkingStates).toHaveBeenCalledExactlyOnceWith(
+      [reconciledThread],
+    );
+    expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
+      pwrAgentWorktree,
+    );
+  });
+
+  it("awaits the working-state fleet when the caller opts in", async () => {
+    // The messenger's review picker resolves a multi-project thread's
+    // workspace from working state (findPreferredReviewWorkspaceCwd) and
+    // infers its base branch from it (buildReviewBranchOptions), so it cannot
+    // race a background probe: on a cold cache it would pick linkedDirectories[0].
+    const pwrAgentWorktree = "/worktrees/PwrAgnt";
+    const listedThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "PwrAgent federation dogfood PR #735",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: pwrAgentWorktree,
+      linkedDirectories: [
+        {
+          id: "pwrsnap",
+          kind: "local",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+        },
+        {
+          id: "pwragent",
+          kind: "worktree",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          worktreePath: pwrAgentWorktree,
+        },
+      ],
+    };
+    const reconciledThread: NavigationSnapshot["threads"][number] = {
+      ...listedThread,
+      inbox: { inInbox: false },
+    };
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "codex",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [reconciledThread],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+    const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      // Only the awaited probe answers here; a cached read returns the
+      // threads untouched, which is what a cold cache looks like.
+      hydrateThreadGitWorkingStates: vi.fn(async (
+        threads: NavigationSnapshot["threads"],
+        options?: { probeMissing?: boolean },
+      ) =>
+        options?.probeMissing
+          ? threads.map((thread) => ({
+            ...thread,
+            gitWorkingState: {
+              dirtyFiles: 2,
+              dirtyAdditions: 9,
+              dirtyDeletions: 1,
+              untrackedFiles: 0,
+              unpushedCommits: 0,
+              baseBranch: "main",
+              baseAheadCommitCount: 16,
+            },
+          }))
+          : threads
+      ),
+      listThreads: vi.fn(async () => [listedThread]),
+      readDirectoryStatuses: vi.fn(async () => ({})),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const snapshot = await bridge.getNavigationSnapshot({
+      backend: "codex",
+      probeWorkingStates: true,
+    });
+
+    expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
+      [reconciledThread],
       { probeMissing: true },
     );
+    // An opted-in caller already awaited the fleet; scheduling a second
+    // round behind it would re-probe the paths it just read.
+    expect(registry.refreshThreadGitWorkingStates).not.toHaveBeenCalled();
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,
     );
@@ -598,6 +546,7 @@ describe("DesktopMessagingBackendBridge", () => {
         async (threads: NavigationSnapshot["threads"]) => threads,
       ),
       listThreads: vi.fn(async () => []),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
       readDirectoryStatuses: vi.fn(async () => ({})),
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
@@ -686,6 +635,7 @@ describe("DesktopMessagingBackendBridge", () => {
       hydrateThreadGitWorkingStates,
       listThreads: vi.fn(async () => []),
       readDirectoryStatuses: vi.fn(async () => ({})),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);

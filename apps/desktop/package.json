@@ -26,6 +26,7 @@
     "derive:replay-fixture": "tsx ./scripts/derive-replay-fixture.ts",
     "export:session-capture": "tsx ./scripts/export-session-capture.ts",
     "generate:dmg-background": "swift ./scripts/generate-dmg-background.swift ./build/dmg-background.png",
+    "generate:macos-app-icon": "swift ./scripts/generate-macos-app-icon.swift",
     "verify:asar-contents": "node ./scripts/verify-asar-contents.mjs",
     "postinstall": "node scripts/ensure-electron-runtime.mjs && node scripts/rebuild-native-for-electron.mjs",
     "package:dryrun": "node ./scripts/release.mjs --dryrun",
@@ -54,7 +55,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@napi-rs/canvas": "1.0.6",
+    "@napi-rs/canvas": "1.0.8",
     "@octokit/graphql": "^9.0.3",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
@@ -116,8 +117,8 @@
     "vite": "^7.3.2"
   },
   "optionalDependencies": {
-    "@napi-rs/canvas-darwin-arm64": "1.0.6",
-    "@napi-rs/canvas-darwin-x64": "1.0.6",
-    "@napi-rs/canvas-win32-x64-msvc": "1.0.6"
+    "@napi-rs/canvas-darwin-arm64": "1.0.8",
+    "@napi-rs/canvas-darwin-x64": "1.0.8",
+    "@napi-rs/canvas-win32-x64-msvc": "1.0.8"
   }
 }

@@ -90,8 +90,9 @@ sequenceDiagram
 
     User->>Platform: types message / taps button
     Platform->>Adapter: webhook / gateway event
-    Note over Adapter: normalize to<br/>MessagingInboundEvent<br/>(text/command/callback/media/lifecycle)
+    Note over Adapter: capture PwrAgent receipt time,<br/>normalize and dispatch immediately<br/>(text/command/callback/media/lifecycle)
     Adapter->>Controller: handleInboundEvent(event)
+    Note over Adapter: optional REST breadcrumb<br/>enrichment runs off admission path
     Controller->>Automation: match inbound automation triggers
     Automation-->>Controller: matched or not matched
     Note over Controller: authorize actor,<br/>resolve binding,<br/>turn admission
@@ -380,11 +381,10 @@ An ordinary reply to an existing binding does not build a navigation snapshot.
 
 - the bound thread's durable overlay (execution mode, model, reasoning,
   service tier, fast mode, Agent/handoff origin);
-- its already-observed thread-list summary, when one is cached;
-- the registry's remembered thread name when that summary is not cached — the
-  thread list is dropped by every turn, status, and permission-mode
-  notification, and a status card must not fall back to naming a bound thread
-  after its own id;
+- its last-observed thread-list summary — from the thread-list cache while that
+  is warm, and otherwise from the thread information store, which every turn,
+  status, and permission-mode notification would otherwise have emptied out
+  from under a status card;
 - the registry's per-thread active turn, queued permission mode, and queued
   turn projections; and
 - the equivalent targeted owner read for a federated binding.
@@ -392,15 +392,7 @@ An ordinary reply to an existing binding does not build a navigation snapshot.
 That projection is sufficient for permission/full-access policy, message
 origin, occupancy, queue admission, and turn settings. It deliberately carries
 no PR lookup, Git working-state probe, launchpad hydration, directory-fleet
-walk, or connected-peer enumeration.
-
-Two fields are not yet recovered on a cold read, because only the provider's
-thread-list row carries them and no durable record does. A thread's provider
-directories are missing, so a cold status card reports its project, directory,
-and worktree as unavailable; and an ACP thread's `acpRuntime` is missing, so
-its permissions line falls back to the backend-global mode or loses its
-control. Both need a last-observed thread projection rather than a name
-lookup, so they are deliberately out of scope here rather than fixed halfway. The shared turn FIFO remains the final
+walk, or connected-peer enumeration. The shared turn FIFO remains the final
 race-safe admission authority if activity changes after the targeted read.
 
 Full navigation remains appropriate for explicit browse, monitor, picker,
@@ -432,6 +424,59 @@ and Git-mutating commands refresh the affected thread/worktree/PR projections.
 This policy is interaction-driven. It adds no polling timer and no timer-driven
 SQLite writes; persistence changes only when a scheduled targeted or bounded
 background probe completes.
+
+#### Thread working-state refresh policy
+
+Per-worktree working state (dirty files, unpushed commits, base-branch drift)
+follows the same shape. A broad snapshot serves the durable per-worktree cache
+and treats an entry as fresh for 30 seconds — shorter than the directory TTL,
+because working state has to catch out-of-band terminal and IDE edits.
+
+Each such snapshot schedules at most eight stale worktrees per round and never
+awaits them. Never-probed worktrees are selected first, then the oldest probe
+rotates forward, so a fleet larger than one round still converges. Registry
+scheduling coalesces each worktree while its probe is pending, and in-flight
+worktrees are excluded before the batch cap so a saturated round still reaches
+the paths behind it. The cap bounds one round, not the process: concurrent
+snapshots can each hold a round, and per-worktree coalescing is what keeps them
+from probing the same path twice. `close()` drains the live rounds.
+
+Two lanes drive this: the registry's background lane above, which serves
+messaging commands and federated viewers, and the renderer's navigation lane in
+`ipc/app-server.ts`, driven by the local window's snapshot polling and by
+turn/commit events. They are separate schedulers on purpose — different clocks,
+different triggers — but they are not allowed to disagree about what is stale,
+so they share two things:
+
+- **One policy.** `app-server/thread-working-state-refresh-policy.ts` owns the
+  TTL, the batch size, the freshness predicate, and the selection order. Each
+  lane keeps only what is genuinely its own: the registry resolves threads to
+  worktree paths and applies the review picker's multi-project narrowing; the
+  renderer decides whether a round is the capped automatic one or a focused
+  single-worktree one.
+- **One cache.** The registry owns the in-memory map, exposed read-only through
+  `getThreadGitWorkingStateCache()`, and
+  `rememberThreadGitWorkingStateCacheEntry` is the only writer. It stamps
+  `fetchedAt` strictly above the entry it replaces — two lanes can land in the
+  same millisecond, and the renderer ignores an update whose stamp does not
+  advance — writes the durable row, and publishes
+  `navigation/threadGitWorkingState/updated` so a probe from either lane
+  reaches already-open surfaces instead of waiting for the next full snapshot.
+
+The one seam left unshared is the in-flight set: each lane tracks its own
+pending worktrees, so the two can briefly probe the same path at once. Whichever
+lands first makes it fresh for the shared window, so the other lane's next round
+skips it.
+
+One caller does await the fleet, through
+`hydrateThreadGitWorkingStates(..., { probeMissing: true })`: the messenger's
+review picker. `findPreferredReviewWorkspaceCwd` and `buildReviewBranchOptions`
+read `thread.gitWorkingState` to choose a workspace and infer a base branch, so
+the picker cannot race the background refresh. Requests opt in with
+`GetNavigationSnapshotRequest.probeWorkingStates`, and only that path narrows to
+multi-project threads — a single-directory thread's review target needs no
+working state to disambiguate it. The background lane covers every thread,
+because it feeds the chips every thread shows.
 
 ### Single platform-agnostic detach pipeline
 

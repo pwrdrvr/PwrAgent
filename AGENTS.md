@@ -71,6 +71,9 @@
 - Both commands build `apps/desktop/out/` before Playwright starts.
 - Before headed desktop E2E, ask the operator whether an off-desktop lab is available.
 - If a lab is available, ask for its repository or skill.
+- For PwrSuiteLab macOS Tart, runner, or headed E2E work, follow
+  `.agents/skills/macos-vm-e2e-lab/SKILL.md`. It routes to PwrSuiteLab.
+  Do not provision a product-local Tart lab from this repository.
 - For PwrSuiteLab Windows probes or headed E2E, read
   `.agents/skills/use-windows-vm-lab/SKILL.md` in the attached lab checkout.
   Do not use the macOS VM skill for Windows work.
@@ -255,7 +258,17 @@
 #### Gate coverage
 
 - The gate covers the records the notice is built from.
-- It reads the npm production tree for `@pwragent/desktop`.
+- It reads the npm production tree for the `@pwragent/desktop...` pnpm selector.
+- The `...` suffix is load-bearing. Keep it.
+- A bare `@pwragent/desktop` selects that one project.
+- `pnpm licenses list` then reports only the dependencies that `apps/desktop/package.json` declares.
+- Every dependency reached through a workspace package is invisible to that selector.
+- `@pwragent/desktop` depends on eight workspace packages.
+- The whole npm tree under the six messaging providers ships in the packaged application.
+- Before the suffix, 69 shipped packages were absent from the notice and ungated.
+- `NOTICE_PNPM_FILTER` in [`generate-third-party-licenses.mjs`](scripts/generate-third-party-licenses.mjs) holds this selector.
+- The generator and the gate import that one constant, so the two cannot drift.
+- A test asserts the exact selector string, because dropping the suffix leaves every check passing.
 - It reads `NOTICE_DEV_DEPENDENCIES` from the `all` report.
 - That set holds Electron, a devDependency that ships and that `--prod` never reports.
 - The generator and the gate import that one set, so the two cannot drift.

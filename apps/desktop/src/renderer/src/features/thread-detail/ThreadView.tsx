@@ -47,6 +47,7 @@ import type {
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
+  ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
 import {
   buildPendingRequestResponse,
@@ -2541,22 +2542,26 @@ export function ThreadView(props: ThreadViewProps) {
       selectedThreadKey,
     ],
   );
-  const handleOpenToolOutputIncidentExplorer = useCallback(() => {
-    if (!selectedThread) return;
-    const projectLabel =
-      props.selectedDirectory?.label
-      ?? selectedThread.linkedDirectories[0]?.label;
-    void desktopApi?.openToolOutputIncidentExplorerWindow?.({
-      backend: selectedThread.source,
-      /* A peer's thread is analyzed and read on the instance that owns it. */
-      ...(selectedThread.federation?.ref.target
-        ? { federationTarget: selectedThread.federation.ref.target }
-        : {}),
-      ...(projectLabel ? { projectLabel } : {}),
-      threadId: selectedThread.id,
-      title: selectedThread.title,
-    });
-  }, [desktopApi, props.selectedDirectory?.label, selectedThread]);
+  const handleOpenToolOutputIncidentExplorer = useCallback(
+    (lens?: ToolOutputIncidentExplorerLens) => {
+      if (!selectedThread) return;
+      const projectLabel =
+        props.selectedDirectory?.label
+        ?? selectedThread.linkedDirectories[0]?.label;
+      void desktopApi?.openToolOutputIncidentExplorerWindow?.({
+        backend: selectedThread.source,
+        /* A peer's thread is analyzed and read on the instance that owns it. */
+        ...(selectedThread.federation?.ref.target
+          ? { federationTarget: selectedThread.federation.ref.target }
+          : {}),
+        ...(lens ? { lens } : {}),
+        ...(projectLabel ? { projectLabel } : {}),
+        threadId: selectedThread.id,
+        title: selectedThread.title,
+      });
+    },
+    [desktopApi, props.selectedDirectory?.label, selectedThread],
+  );
   const handleAnalyzeToolHistory = useCallback(() => {
     if (!selectedThread) return;
     void desktopApi?.analyzeThreadToolHistory?.({

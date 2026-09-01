@@ -109,10 +109,17 @@ export function showToolOutputIncidentExplorerWindow(
     encodeURIComponent(threadId),
     encodeURIComponent(title.slice(0, TITLE_MAX_LENGTH)),
     encodeURIComponent(request.projectLabel?.trim() ?? ""),
+    /* The lens the operator asked for, so a window created by this click opens
+       on it. The renderer otherwise picks the lens from the thread's own
+       accounting, and that accounting has a lookback window the durable gate
+       records outlive — an older gated thread would open on incidents with the
+       Savings tab sitting right there unselected. Always emitted, empty when
+       the request expresses no preference, so the segment below keeps a fixed
+       position. */
+    encodeURIComponent(request.lens ?? ""),
     /* The owning instance, appended only for a peer's thread: a viewer's
        explorer must read the peer's thread, not a local thread that happens
-       to share the id. Emitting an empty segment for local threads would add
-       a trailing slash to every ordinary route for nothing. */
+       to share the id. */
     ...(request.federationTarget?.scope === "remote"
       ? [encodeURIComponent(request.federationTarget.instanceId)]
       : []),

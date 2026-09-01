@@ -21,6 +21,7 @@ import type {
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
+  ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
@@ -119,7 +120,9 @@ type ThreadContextPanelProps = {
   loadingToolCallDetailItemId?: string;
   onRequestToolCallDetails?: (invocation: ThreadToolInvocationRecord) => void;
   onAnalyzeToolHistory?: () => void;
-  onOpenToolOutputIncidentExplorer?: () => void;
+  onOpenToolOutputIncidentExplorer?: (
+    lens?: ToolOutputIncidentExplorerLens,
+  ) => void;
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
@@ -696,6 +699,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
             displayOptions={props.pricingDisplayOptions}
+            onOpenTokenMiserSavings={
+              props.onOpenToolOutputIncidentExplorer
+                ? () => props.onOpenToolOutputIncidentExplorer?.("savings")
+                : undefined
+            }
             onScrollToTurn={props.onScrollToTurn}
             subAgents={props.thread.subAgents}
             tokenMiserAccounting={props.toolAccounting?.tokenMiser}
@@ -712,7 +720,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             entries={props.toolCallEntries}
             loadingDetailItemId={props.loadingToolCallDetailItemId}
             onAnalyzeHistory={props.onAnalyzeToolHistory}
-            onOpenIncidentExplorer={props.onOpenToolOutputIncidentExplorer}
+            /* No lens: this button opens the window by the window's own name,
+               so a thread that gated still gets the opening lens its
+               accounting chooses. Only the Pricing rail's button, which names
+               a lens inside the window, asks for one. */
+            onOpenIncidentExplorer={
+              props.onOpenToolOutputIncidentExplorer
+                ? () => props.onOpenToolOutputIncidentExplorer?.()
+                : undefined
+            }
             onRequestInvocationDetails={props.onRequestToolCallDetails}
             onScrollToTurn={props.onScrollToTurn}
             threadLinkSource={

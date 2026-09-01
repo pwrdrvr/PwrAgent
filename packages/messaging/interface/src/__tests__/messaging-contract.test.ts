@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertMessagingInboundReceipt,
+  captureMessagingInboundReceipt,
   MESSAGING_DELIVERY_OUTCOMES,
   MESSAGING_INBOUND_EVENT_KINDS,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
@@ -22,6 +24,23 @@ import {
 } from "../index";
 
 describe("messaging surface contract", () => {
+  it("distinguishes local receipt time from optional provider sent time", () => {
+    expect(captureMessagingInboundReceipt(2_000, 1_000)).toEqual({
+      providerSentAt: 1_000,
+      receivedAt: 2_000,
+    });
+    expect(captureMessagingInboundReceipt(2_000)).toEqual({
+      receivedAt: 2_000,
+    });
+    expect(() => captureMessagingInboundReceipt(Number.NaN)).toThrow(
+      "receivedAt must be a finite timestamp",
+    );
+    expect(() => assertMessagingInboundReceipt({})).toThrow(
+      "omitted a finite first-boundary receivedAt",
+    );
+    expect(() => assertMessagingInboundReceipt({ receivedAt: 2_000 })).not.toThrow();
+  });
+
   it("enumerates the first-release semantic intent and inbound event kinds", () => {
     expect(MESSAGING_SURFACE_INTENT_KINDS).toEqual([
       "activity",

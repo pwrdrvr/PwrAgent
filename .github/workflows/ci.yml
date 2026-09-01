@@ -495,22 +495,36 @@ jobs:
 
   macos-install-deps:
     name: Setup macOS Dependencies
-    # Keep the same fork guard as the macOS E2E consumer. A public fork must
-    # never execute arbitrary code on the self-hosted runner.
+    # GitHub-hosted Apple Silicon, matching the self-hosted Tart runners
+    # (macOS 26.6.1). Do not use macos-26-intel. configure-nodejs keys the
+    # store on runner.os + runner.arch (macOS/ARM64), not the macOS version,
+    # so this gate is shared with those E2E lanes and the macos-15
+    # signed-release prepare job. Keep the fork guard: a public fork still
+    # cannot run the self-hosted E2E consumer, so priming this cache there
+    # would only spend hosted macOS minutes.
     if: >-
       needs.changes.outputs.code_impacting == 'true' &&
       (github.event_name == 'push' ||
        (github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository))
-    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    runs-on: macos-26
     needs: changes
     timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
-        # Keep this checkout full: sparse state can persist on the self-hosted
-        # macOS runner and break a later job's checkout.
+        with:
+          sparse-checkout: |
+            **/package.json
+            .npmrc
+            .pnpmfile.cjs
+            patches/**
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            apps/desktop/scripts/ensure-electron-runtime.mjs
+            apps/desktop/scripts/rebuild-native-for-electron.mjs
+          sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1

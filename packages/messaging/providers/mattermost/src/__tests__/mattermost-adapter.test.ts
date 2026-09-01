@@ -482,6 +482,7 @@ describe("MattermostAdapter — capability profile", () => {
           channel_id: "channelabcdefghijklmn12345",
           user_id: "haroldabcdefghijklmnopqr12",
           message: "@pwragent new phone who dis?",
+          create_at: 1_699_999_999_500,
         }),
       },
     });
@@ -491,6 +492,8 @@ describe("MattermostAdapter — capability profile", () => {
       expect.objectContaining({
         botMention: true,
         kind: "text",
+        providerSentAt: 1_699_999_999_500,
+        receivedAt: 1_700_000_000_000,
         text: "new phone who dis?",
       }),
     ]);

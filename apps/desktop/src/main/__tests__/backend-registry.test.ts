@@ -34,6 +34,8 @@ import type {
   AppServerPendingRequestNotification,
   AppServerSkillSummary,
   AppServerThreadReplay,
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
   AppServerReviewTarget,
@@ -78,6 +80,10 @@ import {
   getCodexFastModeMismatchWarning,
   withTokenMiserBridgeDescriptorEnv,
 } from "../app-server/backend-registry";
+import {
+  BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+  WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS,
+} from "../app-server/thread-working-state-refresh-policy";
 import type {
   CodexPwrdrvrTokenMiserActivation,
   CodexServerCapabilities,
@@ -398,6 +404,65 @@ async function expectEventually<T>(
     throw lastError;
   }
   expect(lastValue).toBe(expected);
+}
+
+/**
+ * One finalized overlay turn-usage row. The overlay keeps these outside the
+ * provider rollout, so a read has to place them against the page it returns.
+ */
+function usageActivity(params: {
+  createdAt: number;
+  turnId?: string;
+  id?: string;
+}): AppServerThreadActivityEntry {
+  return {
+    type: "activity",
+    id: params.id ?? `live-turn-usage-${params.turnId}`,
+    summary: "Turn usage: 1,000 uncached in · 2,000 cached · 300 out",
+    status: "completed",
+    createdAt: params.createdAt,
+    ...(params.turnId
+      ? { turn: { id: params.turnId, status: "completed" as const } }
+      : {}),
+    details: [],
+  };
+}
+
+const sampleGitWorkingState = {
+  dirtyFiles: 0,
+  dirtyAdditions: 0,
+  dirtyDeletions: 0,
+  untrackedFiles: 0,
+  unpushedCommits: 0,
+  baseBranch: "main",
+  baseAheadCommitCount: 16,
+};
+
+function multiProjectThread(params: {
+  worktreePath: string;
+}): AppServerThreadSummary {
+  return {
+    id: `thread-${params.worktreePath}`,
+    title: "PwrAgent federation dogfood",
+    titleSource: "explicit",
+    source: "codex",
+    projectKey: params.worktreePath,
+    linkedDirectories: [
+      {
+        id: "pwragent",
+        kind: "worktree",
+        label: "PwrAgnt",
+        path: "/repos/PwrAgnt",
+        worktreePath: params.worktreePath,
+      },
+      {
+        id: "pwrsnap",
+        kind: "local",
+        label: "PwrSnap",
+        path: "/repos/PwrSnap",
+      },
+    ],
+  };
 }
 
 function createOverlayStoreMock(params?: {
@@ -2987,156 +3052,6 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("keeps a remembered thread title after a notification drops the thread list cache", async () => {
-    const codexClient = new MockBackendClient({
-      threads: [
-        {
-          id: "thread-1",
-          title: "Investigate the flaky login redirect",
-          titleSource: "derived",
-          source: "codex",
-          linkedDirectories: [],
-        },
-      ],
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock(),
-    });
-
-    try {
-      await registry.listThreads({ callerReason: "navigation-snapshot" });
-      expect(registry.getCachedThreadSummary({
-        backend: "codex",
-        threadId: "thread-1",
-      })).toMatchObject({ title: "Investigate the flaky login redirect" });
-
-      // `subscribeClient` invalidates the thread list before it emits, so any
-      // consumer reacting to this notification reads the summary cache cold.
-      await codexClient.emit({
-        method: "thread/executionMode/updated",
-        params: {
-          threadId: "thread-1",
-          executionMode: "full-access",
-        },
-      });
-
-      expect(registry.getCachedThreadSummary({
-        backend: "codex",
-        threadId: "thread-1",
-      })).toBeUndefined();
-      // The name the operator has already seen outlives the list. Messaging
-      // admission renders a bound thread from this instead of its raw id.
-      expect(registry.getCachedThreadTitle({
-        backend: "codex",
-        threadId: "thread-1",
-      })).toEqual({
-        title: "Investigate the flaky login redirect",
-        titleSource: "derived",
-      });
-    } finally {
-      await registry.close();
-    }
-  });
-
-  it("reports a renamed thread title before the next thread list read", async () => {
-    const codexClient = new MockBackendClient({
-      threads: [
-        {
-          id: "thread-1",
-          title: "Untitled thread",
-          titleSource: "fallback",
-          source: "codex",
-          linkedDirectories: [],
-        },
-      ],
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock(),
-    });
-
-    try {
-      await registry.listThreads({ callerReason: "navigation-snapshot" });
-      expect(registry.getCachedThreadTitle({
-        backend: "codex",
-        threadId: "thread-1",
-      })).toBeUndefined();
-
-      await codexClient.emit({
-        method: "thread/name/updated",
-        params: {
-          threadId: "thread-1",
-          threadName: "Ship the release runbook",
-        },
-      });
-
-      // The notification carries a name and nothing else — the registry emits
-      // the same method for an operator rename, a generated title, and an
-      // agent-chosen ACP session title — so it reports no source rather than
-      // guessing one.
-      expect(registry.getCachedThreadTitle({
-        backend: "codex",
-        threadId: "thread-1",
-      })).toEqual({ title: "Ship the release runbook" });
-    } finally {
-      await registry.close();
-    }
-  });
-
-  it("never names a thread after the placeholder written back to the provider", async () => {
-    const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock(),
-    });
-
-    try {
-      // `extractThreadNameRecordFromValue` writes the literal "Untitled
-      // thread" back to Codex for a thread with no name and no preview, so it
-      // returns as ordinary provider text on the next `thread/started`.
-      await codexClient.emit({
-        method: "thread/started",
-        params: {
-          threadId: "thread-1",
-          thread: { id: "thread-1", name: "Untitled thread" },
-        },
-      });
-
-      expect(registry.getCachedThreadTitle({
-        backend: "codex",
-        threadId: "thread-1",
-      })).toBeUndefined();
-    } finally {
-      await registry.close();
-    }
-  });
-
-  it("reports no source for a title the provider never classified", async () => {
-    const codexClient = new MockBackendClient({ threads: [] });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock(),
-    });
-
-    try {
-      await codexClient.emit({
-        method: "thread/started",
-        params: {
-          threadId: "thread-1",
-          thread: { id: "thread-1", name: "Investigate the flaky login redirect" },
-        },
-      });
-
-      expect(registry.getCachedThreadTitle({
-        backend: "codex",
-        threadId: "thread-1",
-      })).toEqual({ title: "Investigate the flaky login redirect" });
-    } finally {
-      await registry.close();
-    }
-  });
-
   it("hydrates review working state from the shared navigation cache", async () => {
     const worktreePath = "/worktrees/PwrAgnt";
     const gitWorkingState = {
@@ -3455,6 +3370,408 @@ describe("DesktopBackendRegistry", () => {
           },
         },
       );
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("schedules a stale working-state probe without awaiting the Git fleet", async () => {
+    // A navigation serving path must answer from cache. Holding the snapshot
+    // until the fleet returns is what put a Git probe on every messaging
+    // command and on every remote viewer's snapshot.
+    const worktreePath = "/worktrees/PwrAgnt";
+    let releaseProbe: (() => void) | undefined;
+    const probeReleased = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const readWorkingStateEntries = vi.fn(() =>
+      (async function* () {
+        await probeReleased;
+        yield { worktreePath, gitWorkingState: sampleGitWorkingState };
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates([
+          multiProjectThread({ worktreePath }),
+        ]),
+      ).resolves.toEqual({ scheduledCount: 1 });
+      expect(overlayStore.writeThreadGitWorkingStateCacheEntry)
+        .not.toHaveBeenCalled();
+
+      releaseProbe?.();
+      await expectEventually(
+        async () =>
+          overlayStore.writeThreadGitWorkingStateCacheEntry.mock.calls.length,
+        1,
+      );
+    } finally {
+      releaseProbe?.();
+      await registry.close();
+    }
+  });
+
+  it("caps a background working-state round and rotates the oldest probe forward", async () => {
+    // Navigation hands over a stable thread order. Without rotation the same
+    // prefix would win every round and the tail would never converge.
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const worktreePaths = Array.from(
+      { length: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE + 1 },
+      (_unused, index) => `/worktrees/repo-${index}`,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () =>
+        Object.fromEntries(worktreePaths.map((worktreePath, index) => [
+          worktreePath,
+          {
+            worktreePath,
+            gitWorkingState: sampleGitWorkingState,
+            // All stale; the highest index was probed most recently.
+            fetchedAt: 1_000 + index,
+          },
+        ])),
+      ),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates(
+          // Reversed, so a naive prefix would take the freshest eight and
+          // only rotation can produce the ascending expectation below.
+          worktreePaths
+            .map((worktreePath) => multiProjectThread({ worktreePath }))
+            .reverse(),
+        ),
+      ).resolves.toEqual({
+        scheduledCount: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+      });
+      // The round is scheduled, not awaited, so the fleet call lands some
+      // microtasks after the promise above settles.
+      await expectEventually(
+        async () => readWorkingStateEntries.mock.calls.length,
+        1,
+      );
+      expect(readWorkingStateEntries).toHaveBeenCalledWith(
+        worktreePaths.slice(0, BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE),
+        expect.anything(),
+      );
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("leaves a fresh worktree alone for the rest of its window", async () => {
+    // Freshness is the only gate on this lane. Without it every messaging
+    // command and every federated viewer's poll runs a Git fleet again —
+    // the exact cost the lane exists to remove.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({
+        [worktreePath]: {
+          worktreePath,
+          gitWorkingState: sampleGitWorkingState,
+          fetchedAt: Date.now(),
+        },
+      })),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates([
+          multiProjectThread({ worktreePath }),
+        ]),
+      ).resolves.toEqual({ scheduledCount: 0 });
+      expect(readWorkingStateEntries).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("coalesces a background working-state probe already in flight", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    let releaseProbe: (() => void) | undefined;
+    const probeReleased = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        await probeReleased;
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const threads = [
+      multiProjectThread({ worktreePath }),
+      multiProjectThread({ worktreePath: `${worktreePath}-2` }),
+    ];
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
+      ).resolves.toEqual({ scheduledCount: 1 });
+      // The first worktree is in flight, so a capped round has to reach past
+      // it rather than re-selecting it and scheduling nothing.
+      await expect(
+        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
+      ).resolves.toEqual({ scheduledCount: 1 });
+      await expect(
+        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
+      ).resolves.toEqual({ scheduledCount: 0 });
+      await expectEventually(
+        async () => readWorkingStateEntries.mock.calls.length,
+        2,
+      );
+      expect(readWorkingStateEntries.mock.calls.map(([paths]) => paths))
+        .toEqual([[worktreePath], [`${worktreePath}-2`]]);
+    } finally {
+      releaseProbe?.();
+      await registry.close();
+    }
+  });
+
+  it("re-probes a stale worktree that hydration already stamped", async () => {
+    // The serving path hydrates from the cache and then schedules, so every
+    // thread reaching the scheduler carries a `gitWorkingState`. Deciding
+    // staleness from that field instead of from the cache entry's age makes
+    // the probe inert the moment a worktree has any row: the operator commits
+    // from a terminal and the chips never move again.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({
+        [worktreePath]: {
+          worktreePath,
+          gitWorkingState: sampleGitWorkingState,
+          fetchedAt: Date.now() - WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS - 1,
+        },
+      })),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const hydrated = await registry.hydrateThreadGitWorkingStates([
+      multiProjectThread({ worktreePath }),
+    ]);
+
+    try {
+      expect(hydrated[0]?.gitWorkingState).toEqual(sampleGitWorkingState);
+      await expect(
+        registry.refreshThreadGitWorkingStates(hydrated),
+      ).resolves.toEqual({ scheduledCount: 1 });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("schedules a single-directory thread the chips also need", async () => {
+    // The multi-project narrowing belongs to the awaited review probe, which
+    // uses working state to disambiguate a review target. The background lane
+    // feeds the dirty/unpushed chips every thread shows, so inheriting that
+    // filter would leave a federated viewer's ordinary threads frozen.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const singleDirectoryThread = (path: string): AppServerThreadSummary => {
+      const thread = multiProjectThread({ worktreePath: path });
+      return {
+        ...thread,
+        linkedDirectories: thread.linkedDirectories.slice(0, 1),
+      };
+    };
+    const reviewWorktreePath = "/worktrees/PwrSnap";
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates([
+          singleDirectoryThread(worktreePath),
+        ]),
+      ).resolves.toEqual({ scheduledCount: 1 });
+
+      // The awaited review probe keeps the narrowing: one workspace needs no
+      // working state to disambiguate it.
+      await registry.hydrateThreadGitWorkingStates(
+        [singleDirectoryThread(reviewWorktreePath)],
+        { probeMissing: true },
+      );
+      expect(readWorkingStateEntries.mock.calls.flatMap(([paths]) => paths))
+        .not.toContain(reviewWorktreePath);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("publishes a background probe so already-open surfaces see it", async () => {
+    // The durable cache alone only reaches the next full navigation snapshot.
+    // Without this the lane's whole point — a federated viewer and a local
+    // window converging at the same rate — held only for the viewer.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const workingStateEvents: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      if (
+        event.notification.method === "navigation/threadGitWorkingState/updated"
+      ) {
+        workingStateEvents.push(event);
+      }
+    });
+
+    try {
+      await registry.refreshThreadGitWorkingStates([
+        multiProjectThread({ worktreePath }),
+      ]);
+      await expectEventually(async () => workingStateEvents.length, 1);
+      expect(workingStateEvents[0]?.notification.params).toEqual(
+        expect.objectContaining({
+          gitWorkingState: sampleGitWorkingState,
+          worktreePath,
+        }),
+      );
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
+  it("advances fetchedAt past the entry a probe replaces", async () => {
+    // Both lanes write through this seam, so two probes of one worktree can
+    // land in the same millisecond. The renderer ignores an update whose
+    // fetchedAt does not advance, which would drop the later result.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(
+        async (_entry: { fetchedAt: number }) => undefined,
+      ),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+
+    try {
+      await registry.rememberThreadGitWorkingStateCacheEntry({
+        fetchedAt: 5_000,
+        gitWorkingState: sampleGitWorkingState,
+        worktreePath,
+      });
+      await registry.rememberThreadGitWorkingStateCacheEntry({
+        fetchedAt: 5_000,
+        gitWorkingState: sampleGitWorkingState,
+        worktreePath,
+      });
+      expect(
+        overlayStore.writeThreadGitWorkingStateCacheEntry.mock.calls.map(
+          ([entry]) => entry.fetchedAt,
+        ),
+      ).toEqual([5_000, 5_001]);
+      expect(
+        registry.getThreadGitWorkingStateCache().get(worktreePath)?.fetchedAt,
+      ).toBe(5_001);
     } finally {
       await registry.close();
     }
@@ -13412,6 +13729,284 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("omits overlay turn usage whose turn is not on the page being read", async () => {
+    // The overlay retains up to MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES finalized
+    // rows spanning the whole thread. Merging all of them into the newest page
+    // stacked weeks-old usage under recent messages, and shipped rows the
+    // reader had no turn for. Placement is turn-anchored, so a page carries
+    // usage only for the turns it actually holds.
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-turn-9",
+            role: "assistant",
+            phase: "final",
+            text: "Recent answer.",
+            createdAt: 90_000,
+            turn: { id: "turn-9", status: "completed" },
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: true },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            immutableUsageActivities: [
+              usageActivity({ createdAt: 10_000, turnId: "turn-1" }),
+              usageActivity({ createdAt: 20_000, turnId: "turn-2" }),
+              usageActivity({ createdAt: 90_001, turnId: "turn-9" }),
+            ],
+          },
+        },
+      }),
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      "assistant-turn-9",
+      "live-turn-usage-turn-9",
+    ]);
+
+    await registry.close();
+  });
+
+  it("places overlay turn usage the page's turn ids cannot account for", async () => {
+    // Omitting a row is sound only where the page's own turn ids prove the row
+    // belongs to another page. A row with no turn id has no page that will
+    // ever claim it, and a page with no turn metadata — the shape
+    // findTurnPageStartIndex documents as still live — cannot claim anything.
+    // Dropping either hides the row on every page: the operator watches usage
+    // lines arrive during the turn and finds an empty transcript on restart.
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-early",
+            role: "assistant",
+            phase: "final",
+            text: "Earlier answer.",
+            createdAt: 10_000,
+          },
+          {
+            type: "message",
+            id: "assistant-late",
+            role: "assistant",
+            phase: "final",
+            text: "Later answer.",
+            createdAt: 90_000,
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            immutableUsageActivities: [
+              usageActivity({ createdAt: 90_001, turnId: "turn-9" }),
+              usageActivity({ createdAt: 50_000, turnId: "turn-5" }),
+              usageActivity({
+                createdAt: 20_000,
+                id: "live-turn-usage-thread-1",
+              }),
+            ],
+          },
+        },
+      }),
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    // createdAt order, exactly where insertTranscriptEntry put them: the
+    // 20_000 and 50_000 rows before the 90_000 message, the 90_001 row after.
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      "assistant-early",
+      "live-turn-usage-thread-1",
+      "live-turn-usage-turn-5",
+      "assistant-late",
+      "live-turn-usage-turn-9",
+    ]);
+
+    await registry.close();
+  });
+
+  it("anchors overlay turn usage inside an older pagination page", async () => {
+    // History pages used to receive no usage at all, which is why every row
+    // had to be merged into the newest page. A `before` read now carries the
+    // usage for its own turns, so scrolling back shows each row beside the
+    // turn it belongs to.
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-turn-1",
+            role: "assistant",
+            phase: "final",
+            text: "Older answer.",
+            createdAt: 10_000,
+            turn: { id: "turn-1", status: "completed" },
+          },
+          {
+            type: "activity",
+            id: "command-turn-1",
+            summary: "Ran shell command",
+            status: "completed",
+            createdAt: 10_001,
+            turn: { id: "turn-1", status: "completed" },
+            details: [],
+          },
+          {
+            type: "message",
+            id: "assistant-turn-2",
+            role: "assistant",
+            phase: "final",
+            text: "Next older answer.",
+            createdAt: 20_000,
+            turn: { id: "turn-2", status: "completed" },
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: true },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            immutableUsageActivities: [
+              usageActivity({ createdAt: 10_002, turnId: "turn-1" }),
+              usageActivity({ createdAt: 20_001, turnId: "turn-2" }),
+              usageActivity({ createdAt: 90_001, turnId: "turn-9" }),
+            ],
+          },
+        },
+      }),
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+      before: "assistant-turn-9",
+    });
+
+    // Each row sits after the last entry of its own turn, and turn-9 usage
+    // stays off a page that does not carry turn-9.
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      "assistant-turn-1",
+      "command-turn-1",
+      "live-turn-usage-turn-1",
+      "assistant-turn-2",
+      "live-turn-usage-turn-2",
+    ]);
+
+    await registry.close();
+  });
+
+  it("weaves overlay turn usage in one pass over the page", async () => {
+    // The previous merge filtered and re-inserted the whole entry array once
+    // per overlay row: 100 rows against a 500-entry page cost ~217,000 element
+    // visits where ~1,000 suffice. Instrumented ids count how many times the
+    // page is traversed, so a regression to per-row rebuilding fails here
+    // rather than showing up as a slow thread months later.
+    const pageEntryCount = 200;
+    const overlayUsageCount = 100;
+    let entryIdReads = 0;
+    const entries = Array.from(
+      { length: pageEntryCount },
+      (_value, index): AppServerThreadEntry => {
+        const id = `assistant-${index}`;
+        return {
+          type: "message",
+          get id() {
+            entryIdReads += 1;
+            return id;
+          },
+          role: "assistant",
+          phase: "final",
+          text: `Answer ${index}`,
+          createdAt: 10_000 + index,
+          turn: { id: `turn-${index}`, status: "completed" },
+        } as AppServerThreadEntry;
+      },
+    );
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries,
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: true },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            // Half anchor to this page, half belong to turns it does not hold.
+            immutableUsageActivities: Array.from(
+              { length: overlayUsageCount },
+              (_value, index) =>
+                usageActivity({
+                  createdAt: 10_000 + index,
+                  turnId: index % 2 === 0 ? `turn-${index}` : `absent-${index}`,
+                }),
+            ),
+          },
+        },
+      }),
+    });
+
+    entryIdReads = 0;
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    // A per-row rebuild reads every id once per overlay row. Allow generous
+    // headroom for unrelated id reads elsewhere in readThread while still
+    // failing an O(page x usage) regression by two orders of magnitude.
+    expect(entryIdReads).toBeLessThan(pageEntryCount * 10);
+    expect(response.replay.entries).toHaveLength(
+      pageEntryCount + overlayUsageCount / 2,
+    );
+
+    await registry.close();
+  });
+
   it("uses cheap thread summaries for selected-thread branch drift checks", async () => {
     const codexClient = new MockBackendClient({
       threads: [
@@ -18379,6 +18974,9 @@ command = "pnpm dev"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: ["codex:thread-reattached"],
+      threadTitles: {
+        "codex:thread-reattached": "Still working after HMR",
+      },
     });
     await expect(
       registry.startTurn({
@@ -18498,6 +19096,9 @@ command = "pnpm dev"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: ["codex:thread-stale-active"],
+      threadTitles: {
+        "codex:thread-stale-active": "Finished remotely",
+      },
     });
 
     await registry.close();
@@ -18781,6 +19382,334 @@ command = "pnpm dev"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 2,
       threadIds: ["acp:grok:acp-thread-1", "codex:thread-1"],
+    });
+
+    await registry.close();
+  });
+
+  it("names ordinary quit blockers from cached metadata without provider refreshes", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "thread-named-quit",
+          title: "Resolve quit titles from memory",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const enrichThreadDirectories = vi.fn(async (threads) => threads);
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+      enrichDirectories: false,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-named-quit",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const providerReadsBeforeQuit = codexClient.listThreadsCallCount;
+
+    for (let poll = 0; poll < 4; poll += 1) {
+      expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+        count: 1,
+        threadIds: ["codex:thread-named-quit"],
+        threadTitles: {
+          "codex:thread-named-quit": "Resolve quit titles from memory",
+        },
+      });
+    }
+
+    expect(codexClient.listThreadsCallCount).toBe(providerReadsBeforeQuit);
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-named-quit",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+
+    await registry.close();
+  });
+
+  it("keeps a newer quit title when an invalidated older list finishes late", async () => {
+    const listThreadsDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      listThreadsDelay: listThreadsDelay.promise,
+      threads: [
+        {
+          id: "thread-late-quit-title",
+          title: "Old provider title",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    const staleList = registry.listThreads({
+      backend: "codex",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    await waitForCondition(() => codexClient.listThreadsCallCount === 1);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-late-quit-title",
+          threadName: "New explicit rename",
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-late-quit-title",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-late-quit-title"],
+      threadTitles: {
+        "codex:thread-late-quit-title": "New explicit rename",
+      },
+    });
+
+    listThreadsDelay.resolve();
+    await staleList;
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-late-quit-title"],
+      threadTitles: {
+        "codex:thread-late-quit-title": "New explicit rename",
+      },
+    });
+    expect(codexClient.listThreadsCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("never downgrades a known quit title for fallback or missing list rows", async () => {
+    const threadId = "thread-monotonic-quit-title";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: threadId,
+          title: "Known display title",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.listThreads({ backend: "codex", enrichDirectories: false });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId,
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    codexClient.setThreads([
+      {
+        id: threadId,
+        title: threadId,
+        titleSource: "fallback",
+        linkedDirectories: [],
+        source: "codex",
+      },
+    ]);
+    await registry.listThreads({
+      backend: "codex",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    codexClient.setThreads([]);
+    await registry.listThreads({
+      backend: "codex",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`codex:${threadId}`],
+      threadTitles: {
+        [`codex:${threadId}`]: "Known display title",
+      },
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId,
+          threadName: "Newer renamed title",
+        },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`codex:${threadId}`],
+      threadTitles: {
+        [`codex:${threadId}`]: "Newer renamed title",
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("keeps a known quit title when a background provider list fails", async () => {
+    const threadId = "thread-failed-list-quit-title";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      listThreadsError: new Error("provider list unavailable"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId,
+          threadName: "Known before provider failure",
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId,
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        enrichDirectories: false,
+        forceRefresh: true,
+      }),
+    ).resolves.toEqual([]);
+    expect(codexClient.listThreadsCallCount).toBe(1);
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`codex:${threadId}`],
+      threadTitles: {
+        [`codex:${threadId}`]: "Known before provider failure",
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("keeps cached quit titles qualified when backends reuse a thread id", async () => {
+    const threadId = "shared-thread-id";
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    for (const [backend, threadName] of [
+      ["codex", "Local Codex work"],
+      ["acp:grok", "Local Grok work"],
+    ] as const) {
+      const turnId = backend === "codex" ? "turn-codex" : "turn-grok";
+      await registry.publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/name/updated",
+          params: { threadId, threadName },
+        },
+      });
+      await registry.publishLocalEvent({
+        backend,
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId,
+            turnId,
+            turn: { id: turnId },
+          },
+        },
+      });
+    }
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 2,
+      threadIds: ["acp:grok:shared-thread-id", "codex:shared-thread-id"],
+      threadTitles: {
+        "acp:grok:shared-thread-id": "Local Grok work",
+        "codex:shared-thread-id": "Local Codex work",
+      },
     });
 
     await registry.close();
@@ -29165,6 +30094,9 @@ script = "printf setup"
       expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
         count: 1,
         threadIds: ["codex:ordinary-thread"],
+        threadTitles: {
+          "codex:ordinary-thread": "Parent Thread",
+        },
       });
     });
 
@@ -29830,6 +30762,9 @@ script = "printf setup"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: [buildThreadIdentityKey("codex", "ordinary-thread")],
+      threadTitles: {
+        [buildThreadIdentityKey("codex", "ordinary-thread")]: "Parent Thread",
+      },
     });
 
     await registry.publishLocalEvent({
@@ -29993,6 +30928,9 @@ script = "printf setup"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: [buildThreadIdentityKey("codex", "ordinary-thread")],
+      threadTitles: {
+        [buildThreadIdentityKey("codex", "ordinary-thread")]: "Parent Thread",
+      },
     });
 
     await registry.publishLocalEvent({

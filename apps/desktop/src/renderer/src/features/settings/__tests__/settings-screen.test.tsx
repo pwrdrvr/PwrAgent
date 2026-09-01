@@ -770,6 +770,54 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("keeps every section row inside the scrolling lane and the chrome outside it", () => {
+    // Regression guard for the clipped nav. `.settings-nav` is
+    // `overflow: hidden`, so a section row rendered as a direct child of
+    // the nav does not scroll — it is painted below the clip and no
+    // pointer can reach it. At the 640px MAIN_WINDOW_MIN_HEIGHT that was
+    // the whole tail of the list (Experimental, Troubleshooting, About).
+    //
+    // jsdom has no layout, so this cannot assert the geometry; what it
+    // can pin is the structural invariant the geometry rests on — every
+    // row inside the lane, and the masthead + Exit deliberately outside
+    // it so they stay put while the list scrolls under them.
+    const { container } = render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = container.querySelector(".settings-nav");
+    const lane = container.querySelector(".settings-nav__sections");
+    expect(nav).not.toBeNull();
+    expect(lane).not.toBeNull();
+
+    // Every scrolling part, not just the rows: the collapsible sublists and
+    // the divider come out of the same map, and a refactor that hoisted the
+    // sublists out — to stop the scroller clipping them, say — would leave a
+    // rows-only assertion green while group children stopped scrolling with
+    // their parent row.
+    for (const selector of [
+      ".settings-nav__row",
+      ".settings-nav__sublist",
+      ".settings-nav__divider",
+    ]) {
+      const members = [...container.querySelectorAll(selector)];
+      expect(members.length).toBeGreaterThan(0);
+      for (const member of members) {
+        expect(lane?.contains(member)).toBe(true);
+      }
+    }
+
+    // The pinned chrome is a sibling of the lane, not a passenger in it.
+    for (const selector of [".settings-nav__masthead", ".settings-nav__exit"]) {
+      const chrome = container.querySelector(selector);
+      expect(chrome).not.toBeNull();
+      expect(chrome?.parentElement).toBe(nav);
+    }
+  });
+
   it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
     const desktopApi = {
@@ -4808,19 +4856,21 @@ describe("SettingsScreen", () => {
     expect(discordSection).not.toBeNull();
     const discordControls = within(discordSection as HTMLElement);
 
-    expect(discordControls.getByText("Discord response default")).toBeInTheDocument();
+    expect(discordControls.getByText("When PwrAgent responds")).toBeInTheDocument();
     expect(discordControls.getByText("automatic")).toBeInTheDocument();
     expect(
       discordControls.getByRole("textbox", {
         name: "Application ID Override (Advanced)",
       }),
     ).toHaveAttribute("placeholder", "Auto-discovered from bot token");
+    // Exact channel and native-thread behavior now lives beside Routes with a
+    // named surface picker, so the Discord screen offers no raw-ID editor.
     expect(
-      discordControls.getByText("Channel / Thread Response Overrides"),
-    ).toBeInTheDocument();
+      discordControls.queryByText("Channel / Thread Response Overrides"),
+    ).toBeNull();
     expect(
       discordControls.getByRole("combobox", {
-        name: "Authorized Guilds response mode 1",
+        name: "Authorized Servers responds to 1",
       }),
     ).toBeInTheDocument();
 
@@ -4836,6 +4886,153 @@ describe("SettingsScreen", () => {
         },
       });
     });
+  });
+
+  it("names Discord servers and scopes the response control to the server", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.botToken = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    };
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      { id: "1480556454498009353", displayName: "Test server" },
+    ];
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const discordHeader = screen.getByRole("button", { name: "Discord" });
+    if (discordHeader.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(discordHeader);
+    }
+    const discordControls = within(discordHeader.closest("section") as HTMLElement);
+
+    expect(discordControls.getByText("Authorized Servers")).toBeInTheDocument();
+    expect(discordControls.queryByText("Authorized Guilds")).toBeNull();
+    // Authorization is whole-server, and the copy has to say so rather than
+    // implying a row only covers the channel an operator happened to see.
+    expect(
+      discordControls.getByText(/covers every channel and native thread/i),
+    ).toBeInTheDocument();
+
+    // The tooltip is shared with Slack and Telegram rows, so it has to name
+    // the row's own scope instead of always claiming "this channel".
+    const responseControl = discordControls.getByRole("combobox", {
+      name: "Authorized Servers responds to 1",
+    });
+    expect(responseControl).toHaveAttribute(
+      "title",
+      expect.stringContaining("in this server"),
+    );
+    expect(responseControl.getAttribute("title")).not.toContain("this channel");
+    expect(responseControl).toHaveAttribute(
+      "title",
+      expect.stringContaining("does not choose an Agent or authorize access"),
+    );
+  });
+
+  it("refreshes server names without disturbing other row settings", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.botToken = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    };
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      {
+        id: "1480556454498009353",
+        displayName: "stale-name",
+        responseMode: "every_message",
+      },
+      { id: "1480556454498009354", displayName: "kept-name" },
+    ];
+    const settings = createSettingsState(snapshot);
+    const resolveMessagingContact = vi.fn(async (request: { id: string }) =>
+      request.id === "1480556454498009353"
+        ? {
+            status: "ok" as const,
+            id: request.id,
+            displayName: "resolved-name",
+          }
+        : { status: "not_found" as const, id: request.id });
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={{ resolveMessagingContact } as never}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const discordHeader = screen.getByRole("button", { name: "Discord" });
+    if (discordHeader.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(discordHeader);
+    }
+    const discordControls = within(discordHeader.closest("section") as HTMLElement);
+
+    fireEvent.click(
+      discordControls.getByRole("button", { name: "Refresh server names" }),
+    );
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalled();
+    });
+
+    // Only the resolved row is renamed. The failed lookup keeps its stored
+    // name, and every row keeps its ID, order, and response setting.
+    expect(settings.writeConfig).toHaveBeenCalledWith({
+      messaging: {
+        discord: {
+          authorizedGuilds: [
+            {
+              id: "1480556454498009353",
+              displayName: "resolved-name",
+              responseMode: "every_message",
+            },
+            { id: "1480556454498009354", displayName: "kept-name" },
+          ],
+        },
+      },
+    });
+    expect(resolveMessagingContact).toHaveBeenCalledTimes(2);
+    // One save for the whole pass, not one per resolved row.
+    expect(settings.writeConfig).toHaveBeenCalledTimes(1);
+    const summary =
+      "Checked 2 IDs. Updated 1 name. 1 lookup failed and was left unchanged."
+      + " No matching platform identity was found.";
+    expect(await discordControls.findByText(summary)).toBeInTheDocument();
+
+    // The real writeConfig resolves by replacing the snapshot, which hands the
+    // list a brand-new `value` array. The summary has to survive that: it
+    // reports the save that caused it, and it names the row that failed.
+    const saved = createSnapshot();
+    saved.messaging.discord.botToken = snapshot.messaging.discord.botToken;
+    saved.messaging.discord.authorizedGuilds.value = [
+      {
+        id: "1480556454498009353",
+        displayName: "resolved-name",
+        responseMode: "every_message",
+      },
+      { id: "1480556454498009354", displayName: "kept-name" },
+    ];
+    rerender(
+      <SettingsScreen
+        desktopApi={{ resolveMessagingContact } as never}
+        settings={{ ...settings, snapshot: saved }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(discordControls.getByText(summary)).toBeInTheDocument();
   });
 
   it("disables Discord mention modes until a bot identity can be resolved", () => {

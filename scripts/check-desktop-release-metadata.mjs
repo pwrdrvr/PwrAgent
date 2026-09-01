@@ -287,6 +287,12 @@ assertWorkflowJobRunner(
   "windows-package",
   "windows-2022",
 );
+assertWorkflowJobRunner(
+  ciWorkflow,
+  ".github/workflows/ci.yml",
+  "macos-install-deps",
+  "macos-26",
+);
 for (const unexpected of [
   "ci:windows-signing",
   "environment: windows-signing",

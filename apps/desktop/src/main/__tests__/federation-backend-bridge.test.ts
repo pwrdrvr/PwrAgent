@@ -13,6 +13,7 @@ import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FEDERATION_LOAD_STATUS_TIMEOUT_MS,
+  FEDERATION_RESPONSE_BYTE_BUDGET,
   FederationRemoteBackendClient,
   registerFederationBackendHandlers,
   type FederationBackendOperations,
@@ -20,6 +21,7 @@ import {
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
+import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
   it("prepares start, steer, handoff, and Star Map attachments before remote RPC", async () => {
@@ -1454,6 +1456,142 @@ describe("federation backend bridge", () => {
     });
     expect(backend.readThread).toHaveBeenCalledTimes(1);
     expect(replies).toHaveLength(1);
+  });
+
+  it("hands back a provider cursor when the trim leaves an overlay row leading", async () => {
+    // Two entries that together overflow the frame budget while the newer one
+    // fits inside it on its own, so the trim has to stop between them. A
+    // message's text is measured three times over — in `entries`, in
+    // `messages`, and again as `lastUserMessage` / `lastAssistantMessage`.
+    const olderLargeText = "o".repeat(
+      Math.floor(FEDERATION_RESPONSE_BYTE_BUDGET * 0.28),
+    );
+    const newestLargeText = "n".repeat(
+      Math.floor(FEDERATION_RESPONSE_BYTE_BUDGET * 0.25),
+    );
+    // What the ACP provider itself holds. `before` is resolved against this,
+    // so an id that is not in this list is an id no read can answer.
+    const providerEntries: AppServerReadThreadResponse["replay"]["entries"] = [
+      { type: "message", id: "entry-1", role: "user", text: "First" },
+      { type: "message", id: "entry-2", role: "assistant", text: "Second" },
+      { type: "message", id: "entry-3", role: "assistant", text: olderLargeText },
+      { type: "message", id: "entry-4", role: "user", text: newestLargeText },
+    ];
+    // The persisted turn total, spliced in after the provider entry that
+    // closes its turn — the same shape `mergeImmutableUsageActivities` builds.
+    const usageActivity: AppServerReadThreadResponse["replay"]["entries"][number] = {
+      type: "activity",
+      id: "live-turn-usage-turn-1",
+      summary: "Turn usage: 100 uncached in · 20 out",
+      status: "completed",
+      details: [],
+    };
+    const backend = {
+      readThread: vi.fn(async (request: AppServerReadThreadRequest) => {
+        // Mirrors readAcpThread: page the provider's own replay, then merge
+        // the overlay rows in — but only for a live read. readAcpThread gates
+        // that merge on `!request.before`, so an older page never carries them.
+        const page = pageNormalizedReplay(
+          {
+            entries: providerEntries,
+            messages: providerEntries.flatMap((entry) =>
+              entry.type === "message"
+                ? [{ id: entry.id, role: entry.role, text: entry.text }]
+                : [],
+            ),
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+          request,
+        );
+        const anchorIndex = request.before === undefined
+          ? page.entries.findIndex((entry) => entry.id === "entry-3")
+          : -1;
+        const entries = anchorIndex === -1
+          ? page.entries
+          : [
+              ...page.entries.slice(0, anchorIndex + 1),
+              usageActivity,
+              ...page.entries.slice(anchorIndex + 1),
+            ];
+        return {
+          backend: "acp:claude-code" as const,
+          fetchedAt: 1_000,
+          threadId: "thread-1",
+          replay: { ...page, entries },
+        };
+      }),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "latest-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readThread,
+        params: { backend: "acp:claude-code", threadId: "thread-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    const latestReplay = (replies[0] as { result: AppServerReadThreadResponse })
+      .result.replay;
+    // The trim stopped on the overlay row, which is exactly where naming the
+    // page's first entry would mint a cursor the provider has never seen.
+    expect(latestReplay.entries.map((entry) => entry.id)).toEqual([
+      "live-turn-usage-turn-1",
+      "entry-4",
+    ]);
+    expect(latestReplay.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "entry-4",
+    });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "older-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readThread,
+        params: {
+          backend: "acp:claude-code",
+          threadId: "thread-1",
+          before: latestReplay.pagination.previousCursor,
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_100,
+      },
+    });
+
+    const olderReplay = (replies[1] as { result: AppServerReadThreadResponse })
+      .result.replay;
+    // Older history, not the newest page handed back a second time. No overlay
+    // row here: readAcpThread merges those only into a live read.
+    expect(olderReplay.entries.map((entry) => entry.id)).toEqual([
+      "entry-1",
+      "entry-2",
+      "entry-3",
+    ]);
+    expect(olderReplay.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: false,
+    });
   });
 
   it("compacts an oversized retained entry below the frame ceiling", async () => {

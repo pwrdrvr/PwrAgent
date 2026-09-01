@@ -116,7 +116,7 @@ describe("tool-output incident explorer window", () => {
     expect(mocks.windows[0]?.loadFile).toHaveBeenCalledWith(
       "/renderer.html",
       {
-        hash: "tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent",
+        hash: "tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent/",
       },
     );
     expect(mocks.showAndFocusAuxiliaryWindow).toHaveBeenCalledOnce();
@@ -127,8 +127,8 @@ describe("tool-output incident explorer window", () => {
   });
 
   it("names the owning instance in the route only for a peer's thread", async () => {
-    /* A local thread's route must stay exactly as it was — an always-emitted
-       segment appended a trailing slash to every ordinary route. */
+    /* The lens segment sits between them and is always emitted, so the owner
+       keeps a fixed position whether or not a lens was asked for. */
     const { showToolOutputIncidentExplorerWindow } = await import(
       "../tool-output-incident-explorer-window"
     );
@@ -144,7 +144,32 @@ describe("tool-output incident explorer window", () => {
       "/renderer.html",
       {
         hash:
-          "tool-output-incidents/codex/thread-2/Peer%20work/PwrAgent/peer-instance",
+          "tool-output-incidents/codex/thread-2/Peer%20work/PwrAgent//peer-instance",
+      },
+    );
+  });
+
+  it("carries the requested lens into a window it has to create", async () => {
+    /* The refresh event only reaches a window that already exists. A first
+       click on "Token Miser Savings" creates the window, and the renderer's
+       own opening choice reads accounting that has a lookback the durable
+       gate records outlive. */
+    const { showToolOutputIncidentExplorerWindow } = await import(
+      "../tool-output-incident-explorer-window"
+    );
+    showToolOutputIncidentExplorerWindow({
+      backend: "codex" as const,
+      lens: "savings",
+      projectLabel: "PwrAgent",
+      threadId: "thread-3",
+      title: "Gated work",
+    });
+
+    expect(mocks.windows[0]?.loadFile).toHaveBeenCalledWith(
+      "/renderer.html",
+      {
+        hash:
+          "tool-output-incidents/codex/thread-3/Gated%20work/PwrAgent/savings",
       },
     );
   });

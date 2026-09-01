@@ -22,6 +22,55 @@ function snapshot(
 }
 
 describe("QuitBlockerQueueToast", () => {
+  it("keeps a known title when a refresh temporarily omits it", async () => {
+    vi.useFakeTimers();
+    let showQueue!: (snapshot: QuitBlockerQueueSnapshot) => void;
+    const titled = snapshot([
+      {
+        kind: "turn",
+        backend: "codex",
+        threadId: "01a05891-bfb8-7bc0-affd-97354d0080b1",
+        threadKey: "codex:01a05891-bfb8-7bc0-affd-97354d0080b1",
+        title: "Investigate compaction cost",
+      },
+    ]);
+    const unresolved = snapshot([
+      {
+        kind: "turn",
+        backend: "codex",
+        threadId: "01a05891-bfb8-7bc0-affd-97354d0080b1",
+        threadKey: "codex:01a05891-bfb8-7bc0-affd-97354d0080b1",
+      },
+    ]);
+    const readQuitBlockerQueue = vi.fn(async () => unresolved);
+
+    render(
+      <QuitBlockerQueueToast
+        desktopApi={{
+          onShowQuitBlockersRequested: (callback) => {
+            showQueue = callback;
+            return () => undefined;
+          },
+          readQuitBlockerQueue,
+          revealQuitBlocker: vi.fn(async () => ({ revealed: true })),
+        }}
+      />,
+    );
+
+    act(() => showQueue(titled));
+    expect(screen.getByText("Investigate compaction cost")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(readQuitBlockerQueue).toHaveBeenCalled();
+    expect(screen.getByText("Investigate compaction cost")).toBeInTheDocument();
+    expect(
+      screen.queryByText("01a05891-bfb8-7bc0-affd-97354d0080b1"),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps the live queue reachable while authoritative refreshes remove resolved work", async () => {
     vi.useFakeTimers();
     let showQueue!: (snapshot: QuitBlockerQueueSnapshot) => void;

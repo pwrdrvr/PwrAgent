@@ -32,13 +32,32 @@ import {
   RailSummaryRow,
 } from "./context-rail-shared";
 import { RailStatusChip } from "./RailStatusChip";
-import { subAgentPricingUsageTitle } from "./subagent-kind";
+import {
+  isTokenMiserSubAgent,
+  subAgentPricingUsageTitle,
+} from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
+import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
+import {
+  addUsageLineToSummary,
+  buildPricingSpendByModel,
+  emptyPricingSummary,
+  type PricingModelSpend,
+  prunePricingSpendOverrides,
+} from "../pricing-spend-by-model";
+import { buildTokenMiserSavingsSummary } from "../token-miser-savings-summary";
 
 type PricingPanelProps = {
   activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
+  /**
+   * Opens the Explorer on its savings lens. The Pricing rail is where an
+   * operator asks what a thread cost, so it is where the full savings
+   * breakdown has to be reachable — until now that window could only be
+   * opened from Tool calls, a tab the tool-accounting experiment gates off.
+   */
+  onOpenTokenMiserSavings?: () => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
     compactions?: ThreadCompactionRecord[];
@@ -103,12 +122,93 @@ export function PricingPanel(props: PricingPanelProps) {
   const summary =
     aggregateSummaries(displaySummaries) ?? aggregateUsageLines(allDisplayLines);
   // The headline is the all-in bill, including naming, reviews, monitors and
-  // Token Miser. Token volume is a context question, though: only the parent
-  // thread's turn rows enter its model context. Helper usage already has its
-  // own cards below, and mixing it here made the summary disagree with both
-  // the turn card and Codex's context-window meter.
-  const parentModelSummary = aggregateUsageLines(
-    allDisplayLines.filter(isMainThreadUsageLine),
+  // Token Miser. Underneath it, the same bill split by the model that spent
+  // it: a turn that sends four reviewers to four models bills three providers,
+  // and a per-provider split answers none of the questions that raises.
+  const spendByModel = buildPricingSpendByModel({
+    lines: allDisplayLines,
+    resolveModel: (line) =>
+      resolveUsageLineModel(
+        line,
+        line.scope === "monitor" && line.sourceItemId
+          ? subAgentsById.get(line.sourceItemId)
+          : undefined,
+      ),
+  });
+  const spendModelCount = spendByModel.reduce(
+    (total, group) => total + group.models.length,
+    0,
+  );
+  // Which spend rows the operator has opened, and which they have closed.
+  //
+  // A thread whose spend is one model has nothing to hide behind a click, so
+  // that row starts open on the token volume this section replaced. `openKey`
+  // names it, and is settled once — on the first render with any spend — then
+  // held. Re-deriving the default from the live bucket count closed the row an
+  // operator was reading the moment a reviewer, or even the thread namer,
+  // billed a second model; latching a bare flag instead would have opened
+  // every later row too.
+  const soleSpendKey =
+    spendModelCount === 1 ? spendByModel[0]?.models[0]?.key : undefined;
+  const [spendExpansion, setSpendExpansion] = useState<{
+    key: string;
+    openKey?: string;
+    overrides: Readonly<Record<string, boolean>>;
+    settled: boolean;
+  }>({ key: pricingHistoryKey, overrides: {}, settled: false });
+  const spendKeyMatches = spendExpansion.key === pricingHistoryKey;
+  // A bucket's key carries its model, so a helper whose model arrives late is
+  // re-keyed and leaves its override behind. Reading through the live buckets
+  // keeps a dead override from opening some later unrelated row.
+  const spendOverrides = spendKeyMatches
+    ? prunePricingSpendOverrides(spendExpansion.overrides, spendByModel)
+    : {};
+  if (!spendKeyMatches || (!spendExpansion.settled && spendModelCount > 0)) {
+    setSpendExpansion({
+      key: pricingHistoryKey,
+      ...(soleSpendKey === undefined ? {} : { openKey: soleSpendKey }),
+      overrides: spendKeyMatches ? spendOverrides : {},
+      settled: spendModelCount > 0,
+    });
+  }
+  const isSpendRowExpanded = (key: string): boolean =>
+    spendOverrides[key] ?? key === spendExpansion.openKey;
+  const toggleSpendRow = (key: string): void => {
+    setSpendExpansion((current) => ({
+      ...current,
+      key: pricingHistoryKey,
+      overrides: {
+        ...spendOverrides,
+        [key]: !isSpendRowExpanded(key),
+      },
+    }));
+  };
+  // Thread-level gate result, from every gate this thread spawned. The
+  // per-turn folds below price one turn each; this is the same arithmetic run
+  // once across all of them, so the rail can answer "did the gate pay for
+  // itself" without expanding ninety folds.
+  //
+  // Enumerated from the sub-agents rather than from the gate usage rows: a
+  // decision that deterministic policy passed through never bills a helper
+  // turn, so it has accounting and a sub-agent and no usage line at all. Read
+  // from the rows, an all-policy thread looked like a thread with no gate.
+  const tokenMiserSummary = useMemo(
+    () => buildTokenMiserSavingsSummary({
+      ...(props.tokenMiserAccounting
+        ? { accounting: props.tokenMiserAccounting }
+        : {}),
+      gateAccountings: (props.subAgents ?? [])
+        .filter(isTokenMiserSubAgent)
+        .map((subAgent) => subAgent.tokenMiserAccounting),
+    }),
+    [props.subAgents, props.tokenMiserAccounting],
+  );
+  // The Explorer's own basis for "would have cost", so the two surfaces divide
+  // by the same denominator: the provider summaries as recorded, without the
+  // estimated-gap lines the rail folds into its headline total.
+  const observedCostMicros = summaries.reduce(
+    (total, provider) => total + provider.totalCostMicros,
+    0,
   );
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   // Totals run over every line, nested gates included: a gate's helper cost is
@@ -205,11 +305,7 @@ export function PricingPanel(props: PricingPanelProps) {
         ? props.threadReasoningEffort
         : undefined);
     const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
-    const runtimeModel =
-      line.model
-      ?? subAgent?.preferredModel
-      ?? subAgent?.monitorUsage?.model
-      ?? subAgent?.monitorUsage?.cost?.model;
+    const runtimeModel = resolveUsageLineModel(line, subAgent);
 
     return (
       <li
@@ -345,48 +441,53 @@ export function PricingPanel(props: PricingPanelProps) {
               {summary.unpricedUsageLineCount.toLocaleString()} unpriced ·{" "}
               {formatTimestamp(summary.updatedAt)}
             </div>
-            {parentModelSummary ? (
+            {spendByModel.length > 0 ? (
               <div className="rail-summary-card__section">
                 <span className="rail-summary-card__section-title">
-                  Parent model token volume
+                  Spend by model
                 </span>
-                <RailSummaryRow
-                  label="Uncached input"
-                  value={formatCompactCount(parentModelSummary.uncachedInputTokens)}
-                />
-                <RailSummaryRow
-                  label="Cached input"
-                  value={formatCompactCount(parentModelSummary.cachedInputTokens)}
-                />
-                <RailSummaryRow
-                  label="Output"
-                  value={formatCompactCount(parentModelSummary.outputTokens)}
-                />
-                {parentModelSummary.reasoningOutputTokens > 0 ? (
-                  <RailSummaryRow
-                    label="Reasoning"
-                    value={formatCompactCount(
-                      parentModelSummary.reasoningOutputTokens,
-                    )}
-                  />
-                ) : null}
-              </div>
-            ) : null}
-            {displaySummaries.length > 1 ? (
-              <div className="rail-summary-card__section">
-                <span className="rail-summary-card__section-title">By provider</span>
-                {displaySummaries.map((providerSummary) => (
-                  <RailSummaryRow
-                    key={`${providerSummary.provider}:${providerSummary.currency}`}
-                    label={formatPricingProviderLabel(providerSummary.provider)}
-                    value={`${formatMoney(
-                      providerSummary.totalCostMicros,
-                      providerSummary.currency,
-                    )} · ${providerSummary.usageLineCount.toLocaleString()} row${
-                      providerSummary.usageLineCount === 1 ? "" : "s"
-                    }`}
-                  />
-                ))}
+                <div className="pricing-spend-list">
+                  {spendByModel.map((group) => {
+                    // A provider earns a subtotal only when it holds more than
+                    // one model AND it is not the whole bill — a lone provider's
+                    // subtotal is the headline three lines above, which is the
+                    // duplication this section was built to remove. Wherever no
+                    // heading names the provider, the rows carry it instead, so
+                    // it is never dropped entirely.
+                    const showGroupHead =
+                      group.models.length > 1 && spendByModel.length > 1;
+                    return (
+                    <div className="pricing-spend-group" key={group.key}>
+                      {showGroupHead ? (
+                        <div className="pricing-spend-group__head">
+                          <span>
+                            {formatPricingProviderLabel(group.provider)}
+                          </span>
+                          <span className="pricing-spend-group__total">
+                            {formatSpendMoney({
+                              currency: group.currency,
+                              displayOptions,
+                              totalCostMicros: group.totalCostMicros,
+                            })}
+                            {" · "}
+                            {formatUsageRowCount(group.usageLineCount)}
+                          </span>
+                        </div>
+                      ) : null}
+                      {group.models.map((modelSpend) => (
+                        <PricingModelSpendRow
+                          displayOptions={displayOptions}
+                          expanded={isSpendRowExpanded(modelSpend.key)}
+                          key={modelSpend.key}
+                          onToggle={() => toggleSpendRow(modelSpend.key)}
+                          showProvider={!showGroupHead}
+                          spend={modelSpend}
+                        />
+                      ))}
+                    </div>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
           </div>
@@ -396,31 +497,21 @@ export function PricingPanel(props: PricingPanelProps) {
               {summary.unpricedUsageLineCount === 1 ? "" : "s"} could not be priced.
             </p>
           ) : null}
-          {displaySummaries.length > 1 ? (
-            <ul className="context-list context-list--cards pricing-provider-list">
-              {displaySummaries.map((providerSummary) => (
-                <li
-                  key={`${providerSummary.provider}:${providerSummary.currency}`}
-                  className="rail-card pricing-provider-row"
-                >
-                  <p className="rail-card__title">
-                    {providerSummary.provider} · {providerSummary.currency}
-                  </p>
-                  <p className="rail-card__usage">
-                    {formatMoney(
-                      providerSummary.totalCostMicros,
-                      providerSummary.currency,
-                    )}{" "}
-                    list price · {providerSummary.usageLineCount.toLocaleString()} row
-                    {providerSummary.usageLineCount === 1 ? "" : "s"}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          ) : null}
         </>
       ) : displayLines.length === 0 ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
+      ) : null}
+
+      {/* Under the spend breakdown, above the turn rows: the gate's result is
+          part of reading the bill, not a footnote to one turn of it. */}
+      {tokenMiserSummary ? (
+        <TokenMiserSummaryCard
+          {...(props.onOpenTokenMiserSavings
+            ? { onOpenSavings: props.onOpenTokenMiserSavings }
+            : {})}
+          {...(observedCostMicros > 0 ? { observedCostMicros } : {})}
+          summary={tokenMiserSummary}
+        />
       ) : null}
 
       {displayLines.length > 0 ? (
@@ -457,6 +548,175 @@ export function PricingPanel(props: PricingPanelProps) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * One model's share of the bill, closed by default, opening onto the token
+ * volume behind it.
+ *
+ * Only the parent thread's volume was ever shown here, so a review that spent
+ * a dollar and 1.3M tokens appeared in the rail as a dollar. The row that
+ * replaced the provider split carries both.
+ */
+function PricingModelSpendRow(props: {
+  displayOptions: PricingDisplayOptions;
+  expanded: boolean;
+  onToggle: () => void;
+  /** True when no provider heading sits above this row to name it. */
+  showProvider: boolean;
+  spend: PricingModelSpend;
+}) {
+  const summary = props.spend.summary;
+  // A bucket that is entirely unpriced is not a bucket that cost nothing, and
+  // "$0.000" is what it would otherwise read as. The per-turn cards below make
+  // the same distinction; this row was the one place that dropped it.
+  const whollyUnpriced =
+    summary.pricedUsageLineCount === 0 && summary.unpricedUsageLineCount > 0;
+  const meta = [
+    props.showProvider
+      ? formatPricingProviderLabel(props.spend.provider)
+      : undefined,
+    formatUsageRowCount(summary.usageLineCount),
+    !whollyUnpriced && summary.unpricedUsageLineCount > 0
+      ? `${summary.unpricedUsageLineCount.toLocaleString()} unpriced`
+      : undefined,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" · ");
+  const cost = whollyUnpriced
+    ? "Unpriced"
+    : formatSpendMoney({
+        currency: summary.currency,
+        displayOptions: props.displayOptions,
+        hasEstimates: props.spend.hasEstimatedRows,
+        totalCostMicros: summary.totalCostMicros,
+      });
+  const origin = formatModelSpendOrigin(props.spend);
+  // When helpers share this model, the token volume the operator wants is the
+  // thread's own — that is the figure the turn card and Codex's context meter
+  // agree with. The helpers' share is accounted for on its own line rather
+  // than folded in silently.
+  const volume = props.spend.threadSummary ?? summary;
+  const helperTokens = props.spend.threadSummary
+    ? summary.totalTokens - props.spend.threadSummary.totalTokens
+    : 0;
+
+  return (
+    <div
+      className="pricing-spend-row"
+      data-expanded={props.expanded ? "true" : "false"}
+    >
+      <button
+        aria-expanded={props.expanded}
+        className="pricing-spend-row__summary"
+        onClick={props.onToggle}
+        type="button"
+      >
+        <span aria-hidden="true" className="pricing-spend-row__chevron">›</span>
+        <span className="pricing-spend-row__label">
+          {props.spend.model ?? "Unknown model"}
+        </span>
+        <span className="pricing-spend-row__meta">{meta}</span>
+        {cost ? (
+          <span className="pricing-spend-row__cost">{cost}</span>
+        ) : null}
+      </button>
+      {props.expanded ? (
+        <div className="pricing-spend-row__body">
+          {origin ? <p className="pricing-spend-row__origin">{origin}</p> : null}
+          <RailSummaryRow
+            label="Uncached input"
+            value={formatCompactCount(volume.uncachedInputTokens)}
+          />
+          <RailSummaryRow
+            label="Cached input"
+            value={formatCompactCount(volume.cachedInputTokens)}
+          />
+          <RailSummaryRow
+            label="Output"
+            value={formatCompactCount(volume.outputTokens)}
+          />
+          {volume.reasoningOutputTokens > 0 ? (
+            <RailSummaryRow
+              label="Reasoning"
+              value={formatCompactCount(volume.reasoningOutputTokens)}
+            />
+          ) : null}
+          {props.spend.threadSummary ? (
+            <RailSummaryRow
+              label="Helper tokens"
+              value={formatCompactCount(helperTokens)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A spend figure in the units the operator asked for. Nothing at all when they
+ * turned dollars off — the headline already says why, and a row that kept
+ * printing them would contradict it inside one card.
+ */
+function formatSpendMoney(params: {
+  currency: string;
+  displayOptions: PricingDisplayOptions;
+  hasEstimates?: boolean;
+  totalCostMicros: number;
+}): string | undefined {
+  if (!params.displayOptions.usd) {
+    return undefined;
+  }
+  const money = formatMoney(params.totalCostMicros, params.currency);
+  return params.hasEstimates ? `${money} estimated` : money;
+}
+
+/**
+ * Says where a model's rows came from, when saying it adds something. A thread
+ * whose own model is also a reviewer's reads "This thread's model · 2
+ * sub-agents"; a bucket that is only turn rows says so once and stops.
+ *
+ * Token Miser gates and the thread namer are counted apart from sub-agents.
+ * They bill real money, but the operator dispatched none of them, and folding
+ * them into the sub-agent count reported reviewers that never ran.
+ */
+function formatModelSpendOrigin(spend: PricingModelSpend): string | undefined {
+  const parts = [
+    spend.threadUsageLineCount > 0 ? "This thread's model" : undefined,
+    spend.subAgentCount > 0
+      ? `${spend.subAgentCount.toLocaleString()} sub-agent${
+          spend.subAgentCount === 1 ? "" : "s"
+        }`
+      : undefined,
+    spend.systemHelperCount > 0
+      ? `${spend.systemHelperCount.toLocaleString()} system helper${
+          spend.systemHelperCount === 1 ? "" : "s"
+        }`
+      : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+function formatUsageRowCount(count: number): string {
+  return `${count.toLocaleString()} row${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The model a usage row belongs to. A helper's row often carries none of its
+ * own and the sub-agent summary holds it, so the row card and the spend bucket
+ * walk the same chain rather than disagreeing about who spent the money.
+ */
+function resolveUsageLineModel(
+  line: ThreadUsageLineRecord,
+  subAgent?: ThreadSubAgentSummary,
+): string | undefined {
+  return (
+    line.model
+    ?? subAgent?.preferredModel
+    ?? subAgent?.monitorUsage?.model
+    ?? subAgent?.monitorUsage?.cost?.model
   );
 }
 
@@ -874,25 +1134,7 @@ function addEstimatedLinesToSummaries(
   }
   for (const line of estimatedLines) {
     const key = usageLineSummaryKey(line);
-    const existing =
-      byKey.get(key) ??
-      ({
-        backend: line.backend,
-        cachedInputTokens: 0,
-        currency: line.currency,
-        inputTokens: 0,
-        outputTokens: 0,
-        pricedUsageLineCount: 0,
-        provider: line.provider,
-        reasoningOutputTokens: 0,
-        threadId: line.parentThreadId ?? line.threadId,
-        totalCostMicros: 0,
-        totalTokens: 0,
-        uncachedInputTokens: 0,
-        unpricedUsageLineCount: 0,
-        updatedAt: 0,
-        usageLineCount: 0,
-      } satisfies ThreadPricingSummary);
+    const existing = byKey.get(key) ?? emptyPricingSummary(line);
     byKey.set(key, addUsageLineToSummary(existing, line));
   }
   return [...byKey.values()].sort((left, right) => {
@@ -907,53 +1149,10 @@ function aggregateUsageLines(lines: PricingUsageLine[]): ThreadPricingSummary | 
   if (lines.length === 0) {
     return undefined;
   }
-  const firstLine = lines[0];
   return lines.reduce<ThreadPricingSummary>(
     (summary, line) => addUsageLineToSummary(summary, line),
-    {
-      backend: firstLine.backend,
-      cachedInputTokens: 0,
-      currency: firstLine.currency,
-      inputTokens: 0,
-      outputTokens: 0,
-      pricedUsageLineCount: 0,
-      provider: firstLine.provider,
-      reasoningOutputTokens: 0,
-      threadId: firstLine.threadId,
-      totalCostMicros: 0,
-      totalTokens: 0,
-      uncachedInputTokens: 0,
-      unpricedUsageLineCount: 0,
-      updatedAt: 0,
-      usageLineCount: 0,
-    },
+    emptyPricingSummary(lines[0]),
   );
-}
-
-function addUsageLineToSummary(
-  summary: ThreadPricingSummary,
-  line: PricingUsageLine,
-): ThreadPricingSummary {
-  return {
-    backend: summary.backend,
-    cachedInputTokens: summary.cachedInputTokens + line.cachedInputTokens,
-    currency: summary.currency,
-    inputTokens: summary.inputTokens + line.inputTokens,
-    outputTokens: summary.outputTokens + line.outputTokens,
-    pricedUsageLineCount:
-      summary.pricedUsageLineCount + (line.priceStatus === "priced" ? 1 : 0),
-    provider: summary.provider,
-    reasoningOutputTokens:
-      summary.reasoningOutputTokens + line.reasoningOutputTokens,
-    threadId: summary.threadId,
-    totalCostMicros: summary.totalCostMicros + line.totalCostMicros,
-    totalTokens: summary.totalTokens + line.totalTokens,
-    uncachedInputTokens: summary.uncachedInputTokens + line.uncachedInputTokens,
-    unpricedUsageLineCount:
-      summary.unpricedUsageLineCount + (line.priceStatus === "priced" ? 0 : 1),
-    updatedAt: Math.max(summary.updatedAt, line.completedAt ?? line.createdAt),
-    usageLineCount: summary.usageLineCount + 1,
-  };
 }
 
 function summaryKey(summary: ThreadPricingSummary): string {
@@ -1000,10 +1199,6 @@ function compareUsageLinesDescending(
 
 function lineSortTimestamp(line: ThreadUsageLineRecord): number {
   return line.startedAt ?? line.createdAt;
-}
-
-function isMainThreadUsageLine(line: ThreadUsageLineRecord): boolean {
-  return line.scope !== "monitor";
 }
 
 function formatSummaryEstimates(params: {

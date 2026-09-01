@@ -930,7 +930,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(nativeImageCreateFromPathMock).toHaveBeenCalledWith(
-      "/test/app/build/icon.png",
+      "/test/app/build/icon-macos.png",
     );
     expect(dockSetIconMock).toHaveBeenCalledWith(nativeImageMock);
   });

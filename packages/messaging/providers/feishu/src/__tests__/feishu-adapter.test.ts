@@ -1283,6 +1283,7 @@ describe("FeishuAdapter", () => {
           chat_id: "oc_chat",
           chat_type: "p2p",
           content: JSON.stringify({ text: "pair 11111111111111111111111111111111" }),
+          create_time: "1699999999500",
           message_id: "om_message",
           message_type: "text",
         },
@@ -1296,6 +1297,8 @@ describe("FeishuAdapter", () => {
         kind: "command",
         command: "pair",
         args: ["11111111111111111111111111111111"],
+        providerSentAt: 1_699_999_999_500,
+        receivedAt: 1_700_000_000_000,
       }),
     ]);
   });
