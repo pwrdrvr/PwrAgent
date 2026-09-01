@@ -242,6 +242,41 @@ describe("settings field pending state", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("gives the switch its own accessible name when the row label needs context", () => {
+    render(
+      <ToggleField
+        checked={false}
+        label="Enabled"
+        switchLabel="Enable Grok"
+        source="config"
+        onChange={() => Promise.resolve()}
+      />,
+    );
+
+    // The row reads "Enabled" beside its card heading; the switch has to
+    // stand alone in a screen reader's control list.
+    expect(screen.getByRole("switch", { name: "Enable Grok" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Enabled" })).toBeNull();
+  });
+
+  it("keeps a toggle's actions out of the control row", () => {
+    render(
+      <ToggleField
+        actions={<button type="button">Apply to launchpads</button>}
+        checked={false}
+        label="Enable Auto-fix PR"
+        source="config"
+        onChange={() => Promise.resolve()}
+      />,
+    );
+
+    const row = document.querySelector(".settings-control-row");
+    expect(row?.querySelector("button[type='button']:not([role='switch'])")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Apply to launchpads" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders no pending affordance for a field that did not opt in", () => {
     render(
       <SettingsField

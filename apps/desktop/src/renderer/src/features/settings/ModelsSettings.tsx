@@ -17,8 +17,10 @@ import {
   SettingsField,
   SettingsIndexRow,
   SettingsPanelHead,
+  SettingsPendingIndicator,
   SettingsSection,
   SettingsSectionStack,
+  useSettingsFieldPending,
 } from "./SettingsLayout";
 import {
   SettingsPathRow,
@@ -939,14 +941,17 @@ function ProviderModelDefaultsSettings(props: {
                   pending: pendingFastAction,
                   onAllowChange: (allowed: boolean) => {
                     if (allowed) {
-                      void props.onSaveCodexFastAllowed(true).then((saved) => {
+                      return props.onSaveCodexFastAllowed(true).then((saved) => {
                         if (!saved) {
                           setStatus("Could not save the Codex Fast policy.");
                         }
                       });
-                    } else {
-                      void previewFastAction("disable");
                     }
+                    // Turning it off writes nothing: it counts the affected
+                    // threads and renders a confirmation, which is its own
+                    // feedback. A "Saving…" ring would name the wrong work.
+                    void previewFastAction("disable");
+                    return Promise.resolve();
                   },
                   onCancel: () => setPendingFastAction(undefined),
                   onConfirm: () => void applyFastAction(),
@@ -1268,7 +1273,7 @@ function ProviderModelDefaultField(props: {
       kind: "disable" | "turn-off";
       threadCount: number;
     };
-    onAllowChange: (allowed: boolean) => void;
+    onAllowChange: (allowed: boolean) => Promise<unknown>;
     onCancel: () => void;
     onConfirm: () => void;
     onTurnOffEverywhere: () => void;
@@ -1282,6 +1287,8 @@ function ProviderModelDefaultField(props: {
   onMigrate: (model: string, reasoningEffort?: string) => void;
   onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
 }) {
+  const { pending: fastAllowPending, track: trackFastAllow } =
+    useSettingsFieldPending();
   const models = props.backend.launchpadOptions?.models ?? [];
   const selectedModel = props.defaults?.model ?? "";
   const modelOption = models.find((model) => model.id === selectedModel);
@@ -1453,12 +1460,20 @@ function ProviderModelDefaultField(props: {
                 />
               ) : (
                 <div className="settings-inline-actions">
-                  <SettingsSwitch
-                    checked={props.fastMode.allowed}
-                    disabled={props.disabled}
-                    label="Allow Codex Fast mode"
-                    onChange={props.fastMode.onAllowChange}
-                  />
+                  <span className="settings-control-row">
+                    <SettingsSwitch
+                      checked={props.fastMode.allowed}
+                      disabled={props.disabled}
+                      label="Allow Codex Fast mode"
+                      pending={fastAllowPending}
+                      onChange={(allowed) =>
+                        trackFastAllow(
+                          props.fastMode?.onAllowChange(allowed)
+                            ?? Promise.resolve(),
+                        )}
+                    />
+                    <SettingsPendingIndicator pending={fastAllowPending} />
+                  </span>
                   <button
                     aria-label="Turn Fast off everywhere"
                     className="button button--secondary"

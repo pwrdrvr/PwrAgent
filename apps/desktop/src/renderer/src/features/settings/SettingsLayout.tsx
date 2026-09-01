@@ -710,9 +710,16 @@ export function ToggleField(props: {
   checked: boolean;
   disabled?: boolean;
   label: string;
+  /** Accessible name for the switch itself, when the row's label only reads
+   *  correctly beside it — an "Enabled" row inside a named agent's card needs
+   *  the switch to say which agent. Defaults to `label`. */
+  switchLabel?: string;
   sub?: ReactNode;
   help?: ReactNode;
-  source: string;
+  source?: ReactNode;
+  /** Follow-on controls for the row (a confirmation prompt, an apply button),
+   *  rendered under the switch rather than beside it. */
+  actions?: ReactNode;
   onChange: (value: boolean) => Promise<unknown>;
 }) {
   const { pending, track } = useSettingsFieldPending();
@@ -723,12 +730,13 @@ export function ToggleField(props: {
       sub={props.sub}
       help={props.help}
       source={props.source}
+      actions={props.actions}
       pending={pending}
       control={
         <SettingsSwitch
           checked={props.checked}
           disabled={props.disabled}
-          label={props.label}
+          label={props.switchLabel ?? props.label}
           pending={pending}
           onChange={(value) => track(props.onChange(value))}
         />

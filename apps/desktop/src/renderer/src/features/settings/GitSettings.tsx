@@ -23,12 +23,12 @@ import {
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
+  ToggleField,
 } from "./SettingsLayout";
 import {
   SettingsPathRow,
   type SettingsPathRowChip,
 } from "./SettingsPathRow";
-import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 import {
   commandDiscoveryFailureDetail as sharedCommandDiscoveryFailureDetail,
@@ -254,20 +254,15 @@ export function GitSettings(props: {
         chipKind={backgroundPrPolling.value ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={backgroundPrPolling.value}
+            disabled={props.saving}
             label="Enable background pull request status"
             sub="When on, the project you are viewing refreshes about every minute and other open projects refresh less often. Pull requests with no activity for a day stop being checked until you open their thread again. Requires the GitHub CLI to be signed in."
             source={sourceBadge(backgroundPrPolling)}
-            control={
-              <SettingsSwitch
-                checked={backgroundPrPolling.value}
-                disabled={props.saving}
-                label="Enable background pull request status"
-                onChange={(enabled) => {
-                  void props.onBackgroundPrPollingChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onBackgroundPrPollingChange(enabled);
+            }}
           />
         </div>
       </SettingsSection>
@@ -279,7 +274,9 @@ export function GitSettings(props: {
         chipKind={prAutoDispatchAllowed.value ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={prAutoDispatchAllowed.value}
+            disabled={props.saving || !backgroundPrPolling.value}
             label="Allow Auto-fix PR"
             sub={
               backgroundPrPolling.value
@@ -287,18 +284,13 @@ export function GitSettings(props: {
                 : "Turn on background pull request status above before allowing automatic PR repairs."
             }
             source={sourceBadge(prAutoDispatchAllowed)}
-            control={
-              <SettingsSwitch
-                checked={prAutoDispatchAllowed.value}
-                disabled={props.saving || !backgroundPrPolling.value}
-                label="Allow Auto-fix PR"
-                onChange={(enabled) => {
-                  void props.onPrAutoDispatchAllowedChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onPrAutoDispatchAllowedChange(enabled);
+            }}
           />
-          <SettingsField
+          <ToggleField
+            checked={defaultPrAutoDispatchEnabled.value}
+            disabled={actionsDisabled || checkingThreadEnable || hasPendingBulkAction}
             label="Enable Auto-fix PR for new threads and launchpads"
             sub={
               backgroundPrPolling.value && prAutoDispatchAllowed.value
@@ -306,46 +298,39 @@ export function GitSettings(props: {
                 : "This default is available when background pull request status and Auto-fix PR are allowed."
             }
             source={sourceBadge(defaultPrAutoDispatchEnabled)}
-            control={
-              <>
-                <SettingsSwitch
-                  checked={defaultPrAutoDispatchEnabled.value}
-                  disabled={actionsDisabled || checkingThreadEnable || hasPendingBulkAction}
-                  label="Enable Auto-fix PR for new threads and launchpads"
-                  onChange={(enabled) => {
-                    void props.onDefaultPrAutoDispatchEnabledChange(enabled);
-                  }}
+            actions={
+              pendingLaunchpadApply ? (
+                <GitActionConfirmation
+                  applying={applying}
+                  confirmLabel="Apply"
+                  label={`Apply to ${pendingLaunchpadApply.directoryKeys.length} launchpad${
+                    pendingLaunchpadApply.directoryKeys.length === 1 ? "" : "s"
+                  }?`}
+                  sub="This saves the selected Auto-fix PR choice for each launchpad. Existing threads stay unchanged."
+                  onCancel={() => setPendingLaunchpadApply(undefined)}
+                  onConfirm={() => void applyToLaunchpads()}
                 />
-                {pendingLaunchpadApply ? (
-                  <GitActionConfirmation
-                    applying={applying}
-                    confirmLabel="Apply"
-                    label={`Apply to ${pendingLaunchpadApply.directoryKeys.length} launchpad${
-                      pendingLaunchpadApply.directoryKeys.length === 1 ? "" : "s"
-                    }?`}
-                    sub="This saves the selected Auto-fix PR choice for each launchpad. Existing threads stay unchanged."
-                    onCancel={() => setPendingLaunchpadApply(undefined)}
-                    onConfirm={() => void applyToLaunchpads()}
-                  />
-                ) : (
-                  <div className="settings-inline-actions">
-                    <button
-                      className="button button--secondary"
-                      disabled={
-                        actionsDisabled
-                        || hasPendingBulkAction
-                        || !props.desktopApi?.getNavigationSnapshot
-                        || !props.desktopApi?.updateDirectoryLaunchpad
-                      }
-                      type="button"
-                      onClick={() => void previewLaunchpadApply()}
-                    >
-                      Apply to launchpads
-                    </button>
-                  </div>
-                )}
-              </>
+              ) : (
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      actionsDisabled
+                      || hasPendingBulkAction
+                      || !props.desktopApi?.getNavigationSnapshot
+                      || !props.desktopApi?.updateDirectoryLaunchpad
+                    }
+                    type="button"
+                    onClick={() => void previewLaunchpadApply()}
+                  >
+                    Apply to launchpads
+                  </button>
+                </div>
+              )
             }
+            onChange={(enabled) => {
+              return props.onDefaultPrAutoDispatchEnabledChange(enabled);
+            }}
           />
           <SettingsField
             label="Enable Auto-fix PR for existing threads"
@@ -424,20 +409,15 @@ export function GitSettings(props: {
               );
             }}
           />
-          <SettingsField
+          <ToggleField
+            checked={pausePrAutoDispatchWhenBudgetEmpty.value}
+            disabled={props.saving}
             label="Pause Auto-fix PR when the budget is empty"
             sub="Pause automatic PR repairs until you acknowledge the safety stop. Thread-level Auto-fix PR choices are left unchanged."
             source={sourceBadge(pausePrAutoDispatchWhenBudgetEmpty)}
-            control={
-              <SettingsSwitch
-                checked={pausePrAutoDispatchWhenBudgetEmpty.value}
-                disabled={props.saving}
-                label="Pause Auto-fix PR when the budget is empty"
-                onChange={(enabled) => {
-                  void props.onPausePrAutoDispatchWhenBudgetEmptyChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onPausePrAutoDispatchWhenBudgetEmptyChange(enabled);
+            }}
           />
         </div>
       </SettingsSection>

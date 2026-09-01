@@ -22,9 +22,9 @@ import {
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
+  ToggleField,
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
-import { SettingsSwitch } from "./SettingsSwitch";
 
 const THEME_OPTIONS: Array<{
   label: string;
@@ -429,20 +429,15 @@ export function GeneralSettings(props: {
         chip={sourceBadge(attentionPromoteOnTurnEnd)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={attentionPromoteOnTurnEnd.value}
+            disabled={props.saving}
             label="Move a thread to the top when its turn finishes"
             sub="Attention ranks threads by when their current turn started, so streaming output, sub-agents, and tool results never re-sort the queue mid-turn. Turn this off to keep a thread parked where its turn started until the next one begins."
             source={sourceBadge(attentionPromoteOnTurnEnd)}
-            control={
-              <SettingsSwitch
-                checked={attentionPromoteOnTurnEnd.value}
-                disabled={props.saving}
-                label="Move a thread to the top when its turn finishes"
-                onChange={(next) => {
-                  void props.onAttentionPromoteOnTurnEndChange(next);
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onAttentionPromoteOnTurnEndChange(next);
+            }}
           />
         </div>
       </SettingsSection>
@@ -453,20 +448,15 @@ export function GeneralSettings(props: {
         chip={sourceBadge(confirmQuitWithInProgressThreads)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={confirmQuitWithInProgressThreads.value}
+            disabled={props.saving}
             label="Confirm quit when threads or terminals are active"
             sub="Warn before quitting while agent turns, integrated terminal commands, or environment actions are running. On macOS and Linux, idle terminal prompts do not block quit. The prompt auto-quits after a short countdown so shutdown can continue."
             source={sourceBadge(confirmQuitWithInProgressThreads)}
-            control={
-              <SettingsSwitch
-                checked={confirmQuitWithInProgressThreads.value}
-                disabled={props.saving}
-                label="Confirm quit when threads or terminals are active"
-                onChange={(next) => {
-                  void props.onConfirmQuitWithInProgressThreadsChange(next);
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onConfirmQuitWithInProgressThreadsChange(next);
+            }}
           />
         </div>
       </SettingsSection>
@@ -477,21 +467,16 @@ export function GeneralSettings(props: {
         chip={sourceBadge(notificationsEnabled)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={notificationsEnabled.value}
+            disabled={props.saving}
             label="Desktop notifications"
             sub="Native alerts for approval/questions and turn completion while PwrAgent is unfocused or minimized."
-            source={sourceBadge(notificationsEnabled)}
             help="If you don't see notifications, allow them for PwrAgent in your OS notification settings."
-            control={
-              <SettingsSwitch
-                checked={notificationsEnabled.value}
-                disabled={props.saving}
-                label="Desktop notifications"
-                onChange={(next) => {
-                  void props.onNotificationsEnabledChange(next);
-                }}
-              />
-            }
+            source={sourceBadge(notificationsEnabled)}
+            onChange={(next) => {
+              return props.onNotificationsEnabledChange(next);
+            }}
           />
         </div>
       </SettingsSection>
@@ -705,21 +690,16 @@ export function GeneralSettings(props: {
         chip={sourceBadge(pdfAnalysisEnabled)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={pdfAnalysisEnabled.value}
+            disabled={props.saving}
             label="Use PwrAgent PDF analysis"
             sub="Use local PDF tools to select pages on supported Codex threads, or render a bounded page set when a backend requires image input. This preserves visual layout while avoiding raw PDF input overhead."
             help="Turn this off to leave PDFs as normal local-file references for model-directed code or manual inspection."
             source={sourceBadge(pdfAnalysisEnabled)}
-            control={
-              <SettingsSwitch
-                checked={pdfAnalysisEnabled.value}
-                disabled={props.saving}
-                label="Use PwrAgent PDF analysis"
-                onChange={(value) => {
-                  void props.onPdfAnalysisEnabledChange(value);
-                }}
-              />
-            }
+            onChange={(value) => {
+              return props.onPdfAnalysisEnabledChange(value);
+            }}
           />
         </div>
       </SettingsSection>

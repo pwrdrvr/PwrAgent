@@ -21,10 +21,10 @@ import {
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
+  ToggleField,
 } from "./SettingsLayout";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { formatProcessIds, sourceBadge } from "./settings-fields";
-import { SettingsSwitch } from "./SettingsSwitch";
 
 const HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS: Array<{
   label: string;
@@ -344,20 +344,15 @@ export function TroubleshootingSettings(props: {
         chip={sourceBadge(developerMode)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={developerMode.value}
+            disabled={props.saving}
             label="Developer Mode"
             sub="Expose Reload, Force Reload, and Developer Tools menu shortcuts."
             source={sourceBadge(developerMode)}
-            control={
-              <SettingsSwitch
-                checked={developerMode.value}
-                disabled={props.saving}
-                label="Developer Mode"
-                onChange={(next) => {
-                  void props.onDeveloperModeChange(next);
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onDeveloperModeChange(next);
+            }}
           />
           <SettingsField
             label="Process IDs"
@@ -587,21 +582,16 @@ export function TroubleshootingSettings(props: {
               </div>
             }
           />
-          <SettingsField
+          <ToggleField
+            checked={hotCpuProfilingCaptureHeapSnapshot.value}
+            disabled={props.saving}
             label="Smart heap snapshots"
             sub="Capture bounded heap snapshots around the next hot CPU trigger, then turn this option back off."
             help="Arms heap snapshots for the next explicit CPU capture start."
             source={sourceBadge(hotCpuProfilingCaptureHeapSnapshot)}
-            control={
-              <SettingsSwitch
-                checked={hotCpuProfilingCaptureHeapSnapshot.value}
-                disabled={props.saving}
-                label="Smart heap snapshots"
-                onChange={(next) => {
-                  void props.onHotCpuProfilingCaptureHeapSnapshotChange(next);
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onHotCpuProfilingCaptureHeapSnapshotChange(next);
+            }}
           />
           <SettingsField
             label="Heap snapshot limit"

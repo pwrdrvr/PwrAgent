@@ -17,8 +17,8 @@ import {
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
+  ToggleField,
 } from "./SettingsLayout";
-import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 
 const DEFAULT_THREAD_PRICING_SUMMARY = {
@@ -86,21 +86,16 @@ export function PricingSettings(props: {
         chipKind={threadPricingSummary.value ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={threadPricingSummary.value}
+            disabled={props.saving}
             label="Show thread pricing"
             sub="Show the Pricing tab in the thread context rail."
             help="Pricing is estimated from published provider rates and may differ from billed usage."
             source={sourceBadge(threadPricingSummary)}
-            control={
-              <SettingsSwitch
-                checked={threadPricingSummary.value}
-                disabled={props.saving}
-                label="Show thread pricing"
-                onChange={(enabled) => {
-                  void props.onThreadPricingSummaryChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onThreadPricingSummaryChange(enabled);
+            }}
           />
           <SettingsField
             label="Price displays"
@@ -156,22 +151,17 @@ export function PricingSettings(props: {
         chipKind={alertsEnabled ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={spendAlerts.activeTurnSpendEnabled.value}
+            disabled={props.saving}
             label="Active turn spend"
             sub={`Alert when one active turn reaches $${spendAlerts.activeTurnSpendThresholdUsd.value.toFixed(2)} in estimated list-price spend.`}
             source={sourceBadge(spendAlerts.activeTurnSpendEnabled)}
-            control={
-              <SettingsSwitch
-                checked={spendAlerts.activeTurnSpendEnabled.value}
-                disabled={props.saving}
-                label="Active turn spend"
-                onChange={(next) => {
-                  void props.onSpendAlertsChange({
-                    activeTurnSpendEnabled: next,
-                  });
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onSpendAlertsChange({
+                activeTurnSpendEnabled: next,
+              });
+            }}
           />
           <AlertNumberField
             decimals={2}
@@ -192,22 +182,17 @@ export function PricingSettings(props: {
               });
             }}
           />
-          <SettingsField
+          <ToggleField
+            checked={spendAlerts.threadSpendEnabled.value}
+            disabled={props.saving}
             label="Total thread spend"
             sub={`Alert when a thread reaches $${spendAlerts.threadSpendThresholdUsd.value.toFixed(2)} in estimated list-price spend.`}
             source={sourceBadge(spendAlerts.threadSpendEnabled)}
-            control={
-              <SettingsSwitch
-                checked={spendAlerts.threadSpendEnabled.value}
-                disabled={props.saving}
-                label="Total thread spend"
-                onChange={(next) => {
-                  void props.onSpendAlertsChange({
-                    threadSpendEnabled: next,
-                  });
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onSpendAlertsChange({
+                threadSpendEnabled: next,
+              });
+            }}
           />
           <AlertNumberField
             decimals={2}
@@ -226,39 +211,29 @@ export function PricingSettings(props: {
               });
             }}
           />
-          <SettingsField
+          <ToggleField
+            checked={toolOutputAlerts.outputCapHitsEnabled.value}
+            disabled={props.saving}
             label="Tool output reaches the cap"
             sub="Alert immediately when one tool call reaches the model-visible output cap and is truncated. This trigger does not use the calls-per-turn setting."
             source={sourceBadge(toolOutputAlerts.outputCapHitsEnabled)}
-            control={
-              <SettingsSwitch
-                checked={toolOutputAlerts.outputCapHitsEnabled.value}
-                disabled={props.saving}
-                label="Tool output reaches the cap"
-                onChange={(next) => {
-                  void props.onToolOutputAlertsChange({
-                    outputCapHitsEnabled: next,
-                  });
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onToolOutputAlertsChange({
+                outputCapHitsEnabled: next,
+              });
+            }}
           />
-          <SettingsField
+          <ToggleField
+            checked={toolOutputAlerts.repeatedLargeOutputsEnabled.value}
+            disabled={props.saving}
             label="Repeated large tool outputs"
             sub={repeatedLargeOutputDescription}
             source={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
-            control={
-              <SettingsSwitch
-                checked={toolOutputAlerts.repeatedLargeOutputsEnabled.value}
-                disabled={props.saving}
-                label="Repeated large tool outputs"
-                onChange={(next) => {
-                  void props.onToolOutputAlertsChange({
-                    repeatedLargeOutputsEnabled: next,
-                  });
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onToolOutputAlertsChange({
+                repeatedLargeOutputsEnabled: next,
+              });
+            }}
           />
           <AlertNumberField
             disabled={
@@ -300,22 +275,17 @@ export function PricingSettings(props: {
               });
             }}
           />
-          <SettingsField
+          <ToggleField
+            checked={toolOutputAlerts.repeatedQueuedChecksEnabled.value}
+            disabled={props.saving}
             label="Repeated queued checks"
             sub="Alert when repeated wait or polling calls keep waking the model and replaying the turn context."
             source={sourceBadge(toolOutputAlerts.repeatedQueuedChecksEnabled)}
-            control={
-              <SettingsSwitch
-                checked={toolOutputAlerts.repeatedQueuedChecksEnabled.value}
-                disabled={props.saving}
-                label="Repeated queued checks"
-                onChange={(next) => {
-                  void props.onToolOutputAlertsChange({
-                    repeatedQueuedChecksEnabled: next,
-                  });
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onToolOutputAlertsChange({
+                repeatedQueuedChecksEnabled: next,
+              });
+            }}
           />
         </div>
       </SettingsSection>

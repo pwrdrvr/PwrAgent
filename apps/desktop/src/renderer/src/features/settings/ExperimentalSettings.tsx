@@ -6,8 +6,8 @@ import {
   SettingsSection,
   SettingsSectionGroup,
   SettingsSectionStack,
+  ToggleField,
 } from "./SettingsLayout";
-import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 
 const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
@@ -153,42 +153,33 @@ export function ExperimentalSettings(props: {
         }
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={tokenMiserWriteTarget ?? tokenMiserEnabled.value}
+            disabled={
+              props.saving || tokenMiserWriteTarget !== undefined
+            }
             label="Make Token Miser available"
             sub="Download and activate PwrAgent's verified Codex build, then expose per-thread controls."
             help="Off by default. PwrAgent downloads, verifies, and durably selects its Token Miser-compatible Codex build; no path selection or hook approval is required. Update checks run only while this switch is on, and a new build takes over after active Codex turns finish. If activation or summarization is unavailable, the original result passes through unchanged."
             source={sourceBadge(tokenMiserEnabled)}
-            control={
-              <SettingsSwitch
-                checked={tokenMiserWriteTarget ?? tokenMiserEnabled.value}
-                disabled={
-                  props.saving || tokenMiserWriteTarget !== undefined
-                }
-                label="Make Token Miser available"
-                onChange={(enabled) => {
-                  setTokenMiserWriteTarget(enabled);
-                  void props.onTokenMiserEnabledChange(enabled).finally(() => {
-                    setTokenMiserWriteTarget(undefined);
-                  });
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              setTokenMiserWriteTarget(enabled);
+              return props.onTokenMiserEnabledChange(enabled).finally(() => {
+                setTokenMiserWriteTarget(undefined);
+              });
+            }}
           />
-          <SettingsField
+          <ToggleField
+            checked={tokenMiserDefaultEnabled.value}
+            disabled={props.saving || !tokenMiserEnabled.value}
             label="Enable on threads by default"
+            switchLabel="Enable Token Miser on threads by default"
             sub="Threads without an explicit override inherit this setting. Individual threads can still turn Token Miser on or off from the composer menu."
             help="On preserves the original Token Miser behavior: every Codex thread uses it unless opted out. Off makes Token Miser available as a per-thread opt-in."
             source={sourceBadge(tokenMiserDefaultEnabled)}
-            control={
-              <SettingsSwitch
-                checked={tokenMiserDefaultEnabled.value}
-                disabled={props.saving || !tokenMiserEnabled.value}
-                label="Enable Token Miser on threads by default"
-                onChange={(enabled) => {
-                  void props.onTokenMiserDefaultEnabledChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onTokenMiserDefaultEnabledChange(enabled);
+            }}
           />
           {tokenMiserInert ? (
             <SettingsField
@@ -230,21 +221,16 @@ export function ExperimentalSettings(props: {
         chipKind={threadToolAccounting.value ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={threadToolAccounting.value}
+            disabled={props.saving}
             label="Display tool call tracking"
             sub="Show the experimental Tool calls tab in the thread context rail."
             help="Collection stays on either way; this only controls the operator-facing tab."
             source={sourceBadge(threadToolAccounting)}
-            control={
-              <SettingsSwitch
-                checked={threadToolAccounting.value}
-                disabled={props.saving}
-                label="Display tool call tracking"
-                onChange={(enabled) => {
-                  void props.onThreadToolAccountingChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onThreadToolAccountingChange(enabled);
+            }}
           />
         </div>
       </SettingsSection>
@@ -257,21 +243,16 @@ export function ExperimentalSettings(props: {
         chipKind={markdownMathRendering.value ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={markdownMathRendering.value}
+            disabled={props.saving}
             label="Enable Markdown math rendering"
             sub="Render \\(…\\) and \\[…\\] expressions as typeset math."
             help="The KaTeX runtime is loaded on demand after this setting is enabled. Turning it off restores literal Markdown rendering."
             source={sourceBadge(markdownMathRendering)}
-            control={
-              <SettingsSwitch
-                checked={markdownMathRendering.value}
-                disabled={props.saving}
-                label="Enable Markdown math rendering"
-                onChange={(enabled) => {
-                  void props.onMarkdownMathRenderingChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onMarkdownMathRenderingChange(enabled);
+            }}
           />
         </div>
       </SettingsSection>
@@ -284,20 +265,15 @@ export function ExperimentalSettings(props: {
         chipKind={lightweightNavigationRefresh.value ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={lightweightNavigationRefresh.value}
+            disabled={props.saving}
             label="Enable lightweight navigation refresh"
             sub="When on, foreground background polling reads only the most recently active page and focus refreshes are throttled."
             source={sourceBadge(lightweightNavigationRefresh)}
-            control={
-              <SettingsSwitch
-                checked={lightweightNavigationRefresh.value}
-                disabled={props.saving}
-                label="Enable lightweight navigation refresh"
-                onChange={(enabled) => {
-                  void props.onLightweightNavigationRefreshChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onLightweightNavigationRefreshChange(enabled);
+            }}
           />
         </div>
       </SettingsSection>
@@ -310,21 +286,16 @@ export function ExperimentalSettings(props: {
         chipKind={managedReview.value ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={managedReview.value}
+            disabled={props.saving}
             label="Enable managed code review"
             sub="Route desktop and messaging /review requests through a managed child turn."
             help="Existing threads are not migrated; turning this off restores native Codex review/start for the next review."
             source={sourceBadge(managedReview)}
-            control={
-              <SettingsSwitch
-                checked={managedReview.value}
-                disabled={props.saving}
-                label="Enable managed code review"
-                onChange={(enabled) => {
-                  void props.onManagedReviewChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onManagedReviewChange(enabled);
+            }}
           />
         </div>
       </SettingsSection>
@@ -337,21 +308,16 @@ export function ExperimentalSettings(props: {
         chipKind={codexDefaultModeRequestUserInput.value ? "ok" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={codexDefaultModeRequestUserInput.value}
+            disabled={props.saving}
             label="Enable Codex skill questions"
             sub="Let Codex skills pause turns to ask questions."
             help="Enables Codex's default-mode request_user_input feature for Codex threads."
             source={sourceBadge(codexDefaultModeRequestUserInput)}
-            control={
-              <SettingsSwitch
-                checked={codexDefaultModeRequestUserInput.value}
-                disabled={props.saving}
-                label="Enable Codex skill questions"
-                onChange={(enabled) => {
-                  void props.onCodexDefaultModeRequestUserInputChange(enabled);
-                }}
-              />
-            }
+            onChange={(enabled) => {
+              return props.onCodexDefaultModeRequestUserInputChange(enabled);
+            }}
           />
         </div>
       </SettingsSection>
@@ -374,21 +340,16 @@ export function ExperimentalSettings(props: {
           chipKind={condensation.enabled.value ? "ok" : "default"}
         >
           <div className="settings-fields">
-            <SettingsField
+            <ToggleField
+              checked={condensation.enabled.value}
+              disabled={props.saving}
               label="Enable diff condensation"
               sub="Use Codex GPT-5.6 Luna to hide low-signal diff hunks."
               help="Each focused-diff request is sent to Codex, regardless of the launchpad default. If Codex is unavailable, the full diff remains visible."
               source={sourceBadge(condensation.enabled)}
-              control={
-                <SettingsSwitch
-                  checked={condensation.enabled.value}
-                  disabled={props.saving}
-                  label="Enable diff condensation"
-                  onChange={(enabled) => {
-                    void props.onDiffCondensationEnabledChange(enabled);
-                  }}
-                />
-              }
+              onChange={(enabled) => {
+                return props.onDiffCondensationEnabledChange(enabled);
+              }}
             />
 
           </div>
@@ -402,21 +363,16 @@ export function ExperimentalSettings(props: {
           chipKind={liveTranscriptEventFiltering.value ? "ok" : "default"}
         >
           <div className="settings-fields">
-            <SettingsField
+            <ToggleField
+              checked={liveTranscriptEventFiltering.value}
+              disabled={props.saving}
               label="Enable live transcript event filtering"
               sub="Ignore unrelated live transcript events."
               help="Live transcript notifications for other threads no longer update the focused thread view."
               source={sourceBadge(liveTranscriptEventFiltering)}
-              control={
-                <SettingsSwitch
-                  checked={liveTranscriptEventFiltering.value}
-                  disabled={props.saving}
-                  label="Enable live transcript event filtering"
-                  onChange={(enabled) => {
-                    void props.onLiveTranscriptEventFilteringChange(enabled);
-                  }}
-                />
-              }
+              onChange={(enabled) => {
+                return props.onLiveTranscriptEventFilteringChange(enabled);
+              }}
             />
           </div>
         </SettingsSection>
