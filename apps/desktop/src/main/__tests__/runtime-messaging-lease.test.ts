@@ -15,12 +15,16 @@ import { StateDb } from "../state/state-db";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type { DesktopMessagingRuntime } from "../messaging/messaging-runtime";
 
+type RuntimeStub = DesktopMessagingRuntime & {
+  failClosedFullAccessPolicy: ReturnType<typeof vi.fn>;
+};
+
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
 let tempDir: string;
 let liveProcessIds: Set<number>;
 
-function createRuntime(options: { failApply?: boolean } = {}): DesktopMessagingRuntime {
+function createRuntime(options: { failApply?: boolean } = {}): RuntimeStub {
   let enabled = false;
   return {
     applyConfig: vi.fn(async () => {
@@ -28,10 +32,11 @@ function createRuntime(options: { failApply?: boolean } = {}): DesktopMessagingR
       enabled = true;
     }),
     isEnabled: vi.fn(() => enabled),
+    failClosedFullAccessPolicy: vi.fn(),
     stop: vi.fn(async () => {
       enabled = false;
     }),
-  } as unknown as DesktopMessagingRuntime;
+  } as unknown as RuntimeStub;
 }
 
 function createCoordinator(
@@ -101,6 +106,28 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
       disabledReason: "explicit_override",
     });
     expect(store.getMessagingLease()).toBeUndefined();
+  });
+
+  it("fails Full Access policy closed when the latest config read fails", async () => {
+    const runtime = createRuntime();
+    const coordinator = createCoordinator({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt",
+      now: () => 1_000,
+      store,
+    });
+    const loadConfig = vi.fn(async (): Promise<DesktopMessagingConfig> => {
+      throw new Error("settings unavailable");
+    });
+
+    await expect(
+      coordinator.applyLatestConfig(runtime, loadConfig),
+    ).rejects.toThrow("settings unavailable");
+
+    expect(runtime.failClosedFullAccessPolicy).toHaveBeenCalledTimes(1);
+    expect(runtime.applyConfig).not.toHaveBeenCalled();
   });
 
   it("uses the launch root env var for lease owner identity", async () => {

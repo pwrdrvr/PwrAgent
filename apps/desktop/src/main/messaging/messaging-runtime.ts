@@ -78,6 +78,7 @@ import {
   type DesktopMessagingConfig,
   type DesktopMessagingConfigChannel,
   type DesktopMessagingChannelConfigUpdate,
+  type DesktopMessagingFullAccessControls,
 } from "./messaging-config";
 import {
   createMessagingResponseModeSnapshot,
@@ -227,6 +228,44 @@ type RunningMessagingAuthorization = {
   actorIds: string[];
   actorIdSet: Set<string>;
 };
+
+type FullAccessPolicySnapshot = {
+  controls: DesktopMessagingFullAccessControls;
+  revision: number;
+};
+
+function snapshotFullAccessControls(
+  controls: DesktopMessagingFullAccessControls | undefined,
+): DesktopMessagingFullAccessControls {
+  if (!controls) {
+    return {
+      allowEscalation: false,
+      allowThreadResume: false,
+      warningPolicy: "always",
+      authorizedUsers: {},
+    };
+  }
+  const authorizedUsers: DesktopMessagingFullAccessControls["authorizedUsers"] = {};
+  for (const [channel, contacts] of Object.entries(controls.authorizedUsers ?? {})) {
+    authorizedUsers[channel as MessagingChannelKind] = contacts?.map(
+      (contact) => ({ ...contact }),
+    );
+  }
+  const warningPolicy =
+    controls.warningPolicy === "always"
+    || controls.warningPolicy === "dismissable"
+    || controls.warningPolicy === "never"
+      ? controls.warningPolicy
+      : "always";
+  return {
+    allowEscalation: controls.allowEscalation === true,
+    allowThreadResume: controls.allowThreadResume === true,
+    warningPolicy,
+    authorizedUsers,
+    dismissWarning: controls.dismissWarning,
+    canDismissWarning: controls.canDismissWarning,
+  };
+}
 
 type RejectedInboundRoute = {
   backend: MessagingBindingRecord["backend"];
@@ -408,6 +447,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   >();
   private pendingAdapterStopReason?: string;
   private lifecycleQueue: Promise<void> = Promise.resolve();
+  // Replaced as one object on the serialized config lifecycle. Controllers
+  // only read this owned copy; a missing or failed lifecycle read installs the
+  // deny/deny snapshot instead of preserving a previously allowed policy.
+  private fullAccessPolicySnapshot: FullAccessPolicySnapshot = {
+    controls: snapshotFullAccessControls(undefined),
+    revision: 0,
+  };
   /**
    * Listeners notified whenever any controller mutates a binding
    * (create / refresh metadata / sync title / detach / revoke). The
@@ -439,7 +485,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     this.pendingAdapterStopReason = undefined;
     this.pendingAdapterStartCancellationReasons.clear();
     await this.enqueueLifecycle(async () => {
-      const config = await this.loadConfig({ logStartupEligibility: true });
+      const config = await this.loadConfigForLifecycle({
+        logStartupEligibility: true,
+      });
       await this.applyConfigWithFailureStatus(config);
     });
   }
@@ -555,6 +603,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     config: DesktopMessagingConfig,
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
+    this.applyFullAccessPolicySnapshot(config);
     try {
       await this.applyConfigNow(config, options);
       this.clearStartupFailuresForDisabledPlatforms(config);
@@ -736,12 +785,19 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
     await this.enqueueLifecycle(async () => {
-      await this.applyConfigWithFailureStatus(await this.loadConfig(), options);
+      await this.applyConfigWithFailureStatus(
+        await this.loadConfigForLifecycle(),
+        options,
+      );
     });
   }
 
   isEnabled(): boolean {
     return this.started;
+  }
+
+  failClosedFullAccessPolicy(): void {
+    this.invalidateFullAccessPolicySnapshot();
   }
 
   /**
@@ -1385,8 +1441,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           ? config.managerToolUpdateDefaultMode ?? "show_none"
           : config.toolUpdateDefaultMode ?? "show_some";
       },
-      fullAccessControls: async () =>
-        (await this.loadConfig()).fullAccessControls,
+      fullAccessControls: () => this.fullAccessPolicySnapshot.controls,
+      fullAccessControlsSource: "runtime-snapshot",
+      fullAccessPolicyRevision: () => this.fullAccessPolicySnapshot.revision,
       onBindingChanged: () => this.broadcastBindingsChanged(),
       onDeliveryBudgetEvent: (event) => {
         void this.handleDeliveryBudgetEvent(event);
@@ -2890,6 +2947,73 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     return typeof this.options.config === "function"
       ? await this.options.config(options)
       : this.options.config;
+  }
+
+  private async loadConfigForLifecycle(
+    options?: DesktopMessagingConfigLoadOptions,
+  ): Promise<DesktopMessagingConfig> {
+    try {
+      return await this.loadConfig(options);
+    } catch (error) {
+      this.invalidateFullAccessPolicySnapshot();
+      throw error;
+    }
+  }
+
+  private applyFullAccessPolicySnapshot(config: DesktopMessagingConfig): void {
+    const controls = snapshotFullAccessControls(config.fullAccessControls);
+    const persistDismissal = controls.dismissWarning;
+    if (persistDismissal) {
+      controls.dismissWarning = async (params) => {
+        await persistDismissal(params);
+        this.rememberFullAccessWarningDismissal(params);
+      };
+    }
+    this.fullAccessPolicySnapshot = {
+      controls,
+      revision: this.fullAccessPolicySnapshot.revision + 1,
+    };
+  }
+
+  private rememberFullAccessWarningDismissal(params: {
+    actorId: string;
+    channel: MessagingChannelKind;
+  }): void {
+    const current = this.fullAccessPolicySnapshot;
+    const contacts = current.controls.authorizedUsers[params.channel];
+    if (!contacts) return;
+    let changed = false;
+    const updatedContacts = contacts.map((contact) => {
+      if (
+        contact.id !== params.actorId
+        || contact.fullAccessWarningDismissed === true
+      ) {
+        return contact;
+      }
+      changed = true;
+      return {
+        ...contact,
+        fullAccessWarningDismissed: true,
+      };
+    });
+    if (!changed) return;
+    this.fullAccessPolicySnapshot = {
+      controls: {
+        ...current.controls,
+        authorizedUsers: {
+          ...current.controls.authorizedUsers,
+          [params.channel]: updatedContacts,
+        },
+      },
+      revision: current.revision + 1,
+    };
+  }
+
+  private invalidateFullAccessPolicySnapshot(): void {
+    this.fullAccessPolicySnapshot = {
+      controls: snapshotFullAccessControls(undefined),
+      revision: this.fullAccessPolicySnapshot.revision + 1,
+    };
   }
 }
 

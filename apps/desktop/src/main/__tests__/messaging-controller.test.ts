@@ -397,6 +397,64 @@ describe("MessagingController", () => {
     });
   });
 
+  it("attributes Full Access policy latency to bounded policy subspans", async () => {
+    let clock = 1_000;
+    const info = vi.fn();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads = [{
+      ...navigation.threads[0]!,
+      executionMode: "full-access",
+    }];
+    const harness = await createHarness({
+      navigation,
+      logger: { info },
+      now: () => clock,
+      fullAccessControls: async () => {
+        clock += 1_937;
+        return {
+          allowEscalation: true,
+          allowThreadResume: true,
+          warningPolicy: "dismissable",
+        };
+      },
+    });
+    await bindThread(harness);
+    info.mockClear();
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("measure Full Access policy"),
+      receivedAt: clock,
+    });
+
+    const policy = info.mock.calls.find(
+      (call) => call[0] === "messaging Full Access resume policy evaluated",
+    );
+    expect(policy?.[1]).toMatchObject({
+      inboundEventId: "event-text",
+      allowed: true,
+      controlsSource: "dynamic",
+      targetThreadLookupMs: 0,
+      executionModeResolutionMs: 0,
+      turnSettingsResolutionMs: 0,
+      fullAccessControlsLoadMs: 1_937,
+      fullAccessControlsLoadAwaitCount: 1,
+      settingsConfigReadMs: 1_937,
+      settingsConfigReadAwaitCount: 1,
+      authorizedUserPolicyCheckMs: 0,
+      authorizedUserPolicyCheckAwaitCount: 0,
+      allowedPathAuditPersistenceMs: 0,
+      allowedPathAuditPersistenceAwaitCount: 0,
+      fullAccessPolicyTotalMs: 1_937,
+    });
+    const startingTurn = info.mock.calls.find(
+      (call) => call[0] === "messaging starting turn",
+    );
+    expect(startingTurn?.[1]).toMatchObject({
+      inboundEventId: "event-text",
+      originToPolicyMs: 1_937,
+    });
+  });
+
   it("merges eventual provider channel metadata without replaying inbound", async () => {
     const harness = await createHarness();
     await bindThread(harness);
