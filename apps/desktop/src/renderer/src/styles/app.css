@@ -17837,6 +17837,129 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* Savings-lens verification chart. The axis comes from parent pricing turns,
+   not tool calls, so a no-tool compaction still owns a column. Peak context is
+   the quiet backdrop, final context is the solid signal, and compaction stays
+   a discrete event mark rather than becoming a third volume series. */
+.incident-explorer__context-turns {
+  flex: none;
+  padding: 9px 0 10px;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__context-turns-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.incident-explorer__context-turns-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.incident-explorer__context-turns-legend span {
+  display: inline-block;
+  width: 10px;
+  height: 5px;
+  margin-left: 5px;
+}
+
+.incident-explorer__context-turns-legend span:first-child {
+  margin-left: 0;
+}
+
+.incident-explorer__context-turns-legend span[data-kind="final"] {
+  background: var(--accent);
+}
+
+.incident-explorer__context-turns-legend span[data-kind="peak"] {
+  background: color-mix(in srgb, var(--text-secondary) 28%, transparent);
+}
+
+.incident-explorer__context-turns-legend span[data-kind="compaction"] {
+  width: 5px;
+  height: 5px;
+  background: var(--status-warning);
+  transform: rotate(45deg);
+}
+
+.incident-explorer__context-turns-chart {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  height: 72px;
+  margin-bottom: 7px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__context-turn {
+  position: relative;
+  flex: 1 1 0;
+  max-width: 24px;
+  min-width: 2px;
+  height: 100%;
+}
+
+.incident-explorer__context-turn-track {
+  position: absolute;
+  inset: 0;
+}
+
+.incident-explorer__context-turn-track i,
+.incident-explorer__context-turn-track b {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  min-height: 1px;
+}
+
+.incident-explorer__context-turn-track i {
+  background: color-mix(in srgb, var(--text-secondary) 28%, transparent);
+}
+
+.incident-explorer__context-turn-track b {
+  background: var(--accent);
+}
+
+.incident-explorer__context-turn[data-compaction="true"]::before {
+  position: absolute;
+  z-index: 2;
+  top: 3px;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--status-warning) 0 2px,
+    transparent 2px 4px
+  );
+  content: "";
+}
+
+.incident-explorer__context-turn[data-compaction="true"]::after {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: calc(50% - 2px);
+  width: 5px;
+  height: 5px;
+  background: var(--status-warning);
+  content: "";
+  transform: rotate(45deg);
+}
+
 .incident-explorer__gates {
   display: flex;
   flex: 1;
@@ -18236,6 +18359,30 @@ a.transcript-message__messaging-origin:focus-visible {
   margin-top: 10px;
 }
 
+.incident-explorer__timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.incident-explorer__timeline-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.incident-explorer__timeline-legend span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  background: var(--status-warning);
+  transform: rotate(45deg);
+}
+
 .incident-explorer__timeline {
   display: flex;
   align-items: stretch;
@@ -18247,6 +18394,7 @@ a.transcript-message__messaging-origin:focus-visible {
    a 300-turn thread in a narrow window must compress to 1px columns instead
    of overflowing, and gaps do not shrink. */
 .incident-explorer .incident-explorer__timeline-turn {
+  position: relative;
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
@@ -18257,6 +18405,38 @@ a.transcript-message__messaging-origin:focus-visible {
   border-radius: 0;
   background: transparent;
   cursor: pointer;
+}
+
+/* Compaction is an event, not another volume series. A dashed boundary and
+   diamond cap cross both halves of the bar, while the button's accessible name
+   carries the count for operators who do not see the mark. */
+.incident-explorer__timeline-turn[data-compaction="true"]::before {
+  position: absolute;
+  z-index: 2;
+  top: 2px;
+  bottom: 1px;
+  left: 50%;
+  width: 1px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--status-warning) 0 2px,
+    transparent 2px 4px
+  );
+  content: "";
+  pointer-events: none;
+}
+
+.incident-explorer__timeline-turn[data-compaction="true"]::after {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: calc(50% - 2px);
+  width: 5px;
+  height: 5px;
+  background: var(--status-warning);
+  content: "";
+  pointer-events: none;
+  transform: rotate(45deg);
 }
 
 .incident-explorer .incident-explorer__timeline-turn:last-child {
@@ -18436,6 +18616,10 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .incident-explorer__turn-label span {
   color: var(--text-muted);
+}
+
+.incident-explorer__turn-label .incident-explorer__turn-compaction {
+  color: var(--status-warning);
 }
 
 .incident-explorer__turn-bar,

@@ -419,7 +419,8 @@ CREATE INDEX IF NOT EXISTS idx_acp_available_commands_observed
   ON acp_available_commands(observed_at DESC);
 `;
 
-// One row per observed `thread/compacted`. Compaction is the only event that
+// One row per observed compaction (`thread/compacted` or a ContextCompaction
+// item). Compaction is the only event that
 // bounds how long a preserved tool payload can still be replayed, and it was
 // previously live-only: a compaction seen while the app was closed stopped
 // nothing, and historical accounting had no boundary at all. Persisting it

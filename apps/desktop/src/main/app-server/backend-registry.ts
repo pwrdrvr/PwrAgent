@@ -3547,6 +3547,10 @@ type LiveThreadContextWindowObservation = {
 const MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS = 32_000;
 // A replay counts as "hot" when at least this fraction of its input was cached.
 const OBSERVED_HOT_CACHE_FRACTION = 0.9;
+// The item lifecycle event and deprecated thread notification are emitted next
+// to each other. Keep their semantic boundary briefly so the notification can
+// omit its optional item id without creating a second durable marker.
+const COMPACTION_NOTIFICATION_DEDUP_WINDOW_MS = 30_000;
 
 // Per-thread replay-observation cursor.
 export type ObservedContextReplayCursor = {
@@ -3580,6 +3584,127 @@ export function buildThreadCompactionIdentity(params: {
     params.turnId ?? "unknown",
     `request-${params.cumulativeInputTokens ?? "unobserved"}`,
   ].join(":");
+}
+
+export type ThreadCompactionBoundary = {
+  itemId?: string;
+  threadId: string;
+  turnId?: string;
+};
+
+/**
+ * Compaction is the hard stop for Token Miser replay savings: once Codex
+ * replaces the prior window, a preserved payload is no longer in context and
+ * must not keep accruing cached-replay credit.
+ *
+ * Codex's automatic window compaction surfaces as a `ContextCompaction` item
+ * (`item/started` then `item/completed`). The dedicated `thread/compacted`
+ * notification is the same boundary when the app-server emits it, often with
+ * the same item id. Treat both as one event so a missing `thread/compacted`
+ * cannot leave the replay window open across later windows.
+ */
+export function readThreadCompactionBoundary(
+  event: AgentEvent,
+): ThreadCompactionBoundary | undefined {
+  const notification = event.notification;
+  if (notification.method === "thread/compacted") {
+    return {
+      threadId: notification.params.threadId,
+      ...(typeof notification.params.itemId === "string"
+        ? { itemId: notification.params.itemId }
+        : {}),
+    };
+  }
+  // `item/started` and `item/completed` share one union member, so method
+  // narrowing does not expose `params.item`. Read it the same way the rest of
+  // this file does.
+  const itemType = readNotificationItemType(notification);
+  if (
+    !itemType
+    || itemType.replace(/[-_\s]/g, "").toLowerCase() !== "contextcompaction"
+  ) {
+    return undefined;
+  }
+  const params = readRecord(notification.params);
+  const item = readRecord(params?.item);
+  const threadId = readNonEmptyString(params?.threadId);
+  const itemId = readNonEmptyString(item?.id);
+  if (!threadId || !itemId) {
+    return undefined;
+  }
+  const turnId = readNonEmptyString(params?.turnId);
+  return {
+    itemId,
+    threadId,
+    ...(turnId ? { turnId } : {}),
+  };
+}
+
+export type ObservedContextWindowDrop = {
+  cumulativeInputTokens: number;
+  currentContextTokens: number;
+  previousCumulativeInputTokens: number;
+  previousContextTokens: number;
+};
+
+type ReportedCompactionRequestBoundary = {
+  cumulativeInputTokens?: number;
+  itemId?: string;
+  observedAt: number;
+  turnId?: string;
+};
+
+/**
+ * Detect the safety-net compaction signal: a genuinely new cold model request
+ * whose working context is smaller than the preceding request's context.
+ *
+ * The cumulative input high-water mark rejects duplicate and stale usage
+ * emissions. A smaller hot request is an ordinary replay whose fresh tail got
+ * shorter, so it is not enough to infer compaction. Requiring the smaller
+ * request to miss the cache gives the fallback independent evidence that the
+ * prior replay window was replaced.
+ */
+export function detectObservedContextWindowDrop(params: {
+  cursor: ObservedContextReplayCursor | undefined;
+  tokenUsage: unknown;
+}): ObservedContextWindowDrop | undefined {
+  const cursor = params.cursor;
+  const previousContextTokens = cursor?.lastContextTokens;
+  if (
+    !cursor
+    || typeof previousContextTokens !== "number"
+    || previousContextTokens <= 0
+  ) {
+    return undefined;
+  }
+  const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
+  const cumulativeInputTokens = records?.totalUsage?.inputTokens;
+  const latest = records?.latestUsage;
+  const latestInputTokens = latest?.inputTokens;
+  const cachedInputTokens = latest?.cachedInputTokens;
+  const currentContextTokens = latest?.totalTokens
+    ?? (typeof latestInputTokens === "number"
+      ? latestInputTokens + (latest?.outputTokens ?? 0)
+      : undefined);
+  if (
+    typeof cumulativeInputTokens !== "number"
+    || cumulativeInputTokens <= cursor.cumulativeInputTokens
+    || typeof latestInputTokens !== "number"
+    || latestInputTokens <= 0
+    || typeof cachedInputTokens !== "number"
+    || cachedInputTokens >= OBSERVED_HOT_CACHE_FRACTION * latestInputTokens
+    || typeof currentContextTokens !== "number"
+    || currentContextTokens < 0
+    || currentContextTokens >= previousContextTokens
+  ) {
+    return undefined;
+  }
+  return {
+    cumulativeInputTokens,
+    currentContextTokens,
+    previousCumulativeInputTokens: cursor.cumulativeInputTokens,
+    previousContextTokens,
+  };
 }
 
 // Pure core of the context-replay accumulator: fold one token-usage update into
@@ -7722,6 +7847,17 @@ export class DesktopBackendRegistry {
   private readonly liveThreadReplayInputCursor = new Map<
     string,
     ObservedContextReplayCursor
+  >();
+  // Semantic boundary at the latest successfully persisted reported
+  // compaction. The cursor lets usage-only inference match the exact boundary;
+  // the remaining fields reconcile the item lifecycle event with an adjacent
+  // item-less `thread/compacted` notification.
+  // A later context drop suppresses inference only when its immediately prior
+  // request has this exact cursor; an older unattributed database row is not
+  // evidence that the new drop was already marked.
+  private readonly reportedCompactionRequestBoundaries = new Map<
+    string,
+    ReportedCompactionRequestBoundary
   >();
   /**
    * Cumulative live usage waiting for one bulk sqlite transaction. The
@@ -23725,6 +23861,7 @@ export class DesktopBackendRegistry {
     }
     await work.precedingDerivation;
     let derivedUsage: DerivedLiveThreadTokenUsage | undefined;
+    let contextDrop: ObservedContextWindowDrop | undefined;
     let observedReplays: ObservedContextReplayTally | undefined;
     let contextWindow: LiveThreadContextWindowObservation | undefined;
     try {
@@ -23767,6 +23904,12 @@ export class DesktopBackendRegistry {
         tokenUsage,
         turnId: notification.params.turnId ?? undefined,
       });
+      contextDrop = detectObservedContextWindowDrop({
+        cursor: this.liveThreadReplayInputCursor.get(
+          [event.backend, threadId].join(":"),
+        ),
+        tokenUsage,
+      });
       observedReplays = this.observeLiveThreadContextReplay({
         backend: event.backend,
         threadId,
@@ -23786,6 +23929,14 @@ export class DesktopBackendRegistry {
     }
     if (!derivedUsage) {
       return;
+    }
+    if (contextDrop) {
+      await this.handleInferredThreadCompaction({
+        backend: event.backend,
+        contextDrop,
+        threadId,
+        turnId: notification.params.turnId ?? undefined,
+      });
     }
 
     const overlay = await this.overlayStore.getThreadOverlayState({
@@ -27916,29 +28067,63 @@ export class DesktopBackendRegistry {
    * it used to be live-only: a compaction seen while the app was closed stopped
    * nothing, and historical accounting had no boundary at all. The marker is
    * keyed on the backend's own item id when it reports one, so a re-emitted
-   * notification does not become a second compaction.
+   * notification — or a `ContextCompaction` item plus `thread/compacted` for
+   * the same item — does not become a second compaction.
    */
   private async recordThreadCompaction(event: AgentEvent): Promise<boolean> {
-    if (event.notification.method !== "thread/compacted") {
+    const boundary = readThreadCompactionBoundary(event);
+    if (!boundary) {
       return false;
     }
-    const threadId = event.notification.params.threadId;
-    const itemId = typeof event.notification.params.itemId === "string"
-      ? event.notification.params.itemId
-      : undefined;
+    const threadId = boundary.threadId;
+    const itemId = boundary.itemId;
     const observedAt = Date.now();
-    const turnId = this.findActiveTurnIdForThread(event.backend, threadId);
+    const turnId = boundary.turnId
+      ?? this.findActiveTurnIdForThread(event.backend, threadId);
+    const threadKey = [event.backend, threadId].join(":");
+    const cumulativeInputTokens = this.liveThreadReplayInputCursor.get(
+      threadKey,
+    )?.cumulativeInputTokens;
+    const reportedBoundary = this.reportedCompactionRequestBoundaries.get(
+      threadKey,
+    );
+    const isRecentBoundary =
+      reportedBoundary !== undefined
+      && observedAt - reportedBoundary.observedAt
+        <= COMPACTION_NOTIFICATION_DEDUP_WINDOW_MS
+      && reportedBoundary.cumulativeInputTokens === cumulativeInputTokens
+      && (
+        reportedBoundary.turnId === undefined
+        || turnId === undefined
+        || reportedBoundary.turnId === turnId
+      );
+    const isSameItem =
+      itemId !== undefined
+      && itemId === reportedBoundary?.itemId;
+    const isDuplicateReportedBoundary =
+      isRecentBoundary
+      && (
+        isSameItem
+        || (reportedBoundary.itemId === undefined) !== (itemId === undefined)
+      );
+    if (isDuplicateReportedBoundary) {
+      this.reportedCompactionRequestBoundaries.set(threadKey, {
+        cumulativeInputTokens,
+        itemId: reportedBoundary.itemId ?? itemId,
+        observedAt,
+        turnId: reportedBoundary.turnId ?? turnId,
+      });
+      return false;
+    }
     const compactionId = buildThreadCompactionIdentity({
       backend: event.backend,
-      cumulativeInputTokens: this.liveThreadReplayInputCursor.get(
-        [event.backend, threadId].join(":"),
-      )?.cumulativeInputTokens,
+      cumulativeInputTokens,
       itemId,
       threadId,
       turnId,
     });
     try {
-      return await this.overlayStore.recordThreadCompaction?.({
+      const recorded = await this.overlayStore.recordThreadCompaction?.({
         compaction: {
           backend: event.backend,
           compactionId,
@@ -27949,6 +28134,15 @@ export class DesktopBackendRegistry {
           ...(turnId ? { turnId } : {}),
         },
       }) ?? true;
+      if (recorded) {
+        this.reportedCompactionRequestBoundaries.set(threadKey, {
+          cumulativeInputTokens,
+          itemId,
+          observedAt,
+          turnId,
+        });
+      }
+      return recorded;
     } catch (error) {
       backendRegistryLog.warn("compaction marker write failed", {
         backend: event.backend,
@@ -27958,6 +28152,85 @@ export class DesktopBackendRegistry {
       // The notification is still authoritative even when durable accounting
       // is unavailable. Stop the pre-compaction replay window conservatively.
       return true;
+    }
+  }
+
+  /**
+   * Persist the usage-only safety boundary unless a reported compaction is
+   * already waiting for this same post-boundary request.
+   *
+   * Match the reported marker's in-memory request cursor, not the database's
+   * attribution state. An old marker can remain unattributed when its next
+   * request was small or cache-served; treating every such row as current made
+   * it suppress a later genuinely unreported compaction.
+   */
+  private async handleInferredThreadCompaction(params: {
+    backend: AppServerBackendKind;
+    contextDrop: ObservedContextWindowDrop;
+    threadId: string;
+    turnId?: string;
+  }): Promise<void> {
+    const threadKey = [params.backend, params.threadId].join(":");
+    const reportedBoundary = this.reportedCompactionRequestBoundaries.get(
+      threadKey,
+    );
+    if (
+      reportedBoundary?.cumulativeInputTokens
+      === params.contextDrop.previousCumulativeInputTokens
+    ) {
+      this.reportedCompactionRequestBoundaries.delete(threadKey);
+      return;
+    }
+    if (
+      reportedBoundary?.cumulativeInputTokens !== undefined
+      && reportedBoundary.cumulativeInputTokens
+        < params.contextDrop.previousCumulativeInputTokens
+    ) {
+      this.reportedCompactionRequestBoundaries.delete(threadKey);
+    }
+    try {
+      const observedAt = Date.now();
+      const recorded = await this.overlayStore.recordThreadCompaction?.({
+        compaction: {
+          backend: params.backend,
+          compactionId: buildThreadCompactionIdentity({
+            backend: params.backend,
+            cumulativeInputTokens: params.contextDrop.cumulativeInputTokens,
+            threadId: params.threadId,
+            turnId: params.turnId,
+          }),
+          observedAt,
+          threadId: params.threadId,
+          updatedAt: observedAt,
+          ...(params.turnId ? { turnId: params.turnId } : {}),
+        },
+      }) ?? true;
+      if (!recorded) {
+        return;
+      }
+      backendRegistryLog.warn("compaction inferred from context-window drop", {
+        backend: params.backend,
+        currentContextTokens: params.contextDrop.currentContextTokens,
+        previousContextTokens: params.contextDrop.previousContextTokens,
+        threadId: params.threadId,
+        turnId: params.turnId,
+      });
+      await this.stopTokenMiserReplayTrackingAtBoundary({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("inferred compaction marker write failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      // The observed context drop is still authoritative enough to end replay
+      // accounting even when durable marker storage is unavailable.
+      await this.stopTokenMiserReplayTrackingAtBoundary({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
     }
   }
 
@@ -27981,16 +28254,24 @@ export class DesktopBackendRegistry {
   private async stopTokenMiserReplayTrackingAtCompaction(
     event: AgentEvent,
   ): Promise<void> {
-    if (
-      event.backend !== "codex"
-      || event.notification.method !== "thread/compacted"
-      || !this.tokenMiserStore
-    ) {
+    const boundary = readThreadCompactionBoundary(event);
+    if (!boundary) {
       return;
     }
-    const entries = this.activeTokenMiserReplayEntries.get(
-      event.notification.params.threadId,
-    );
+    await this.stopTokenMiserReplayTrackingAtBoundary({
+      backend: event.backend,
+      threadId: boundary.threadId,
+    });
+  }
+
+  private async stopTokenMiserReplayTrackingAtBoundary(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    if (params.backend !== "codex" || !this.tokenMiserStore) {
+      return;
+    }
+    const entries = this.activeTokenMiserReplayEntries.get(params.threadId);
     if (!entries || entries.size === 0) {
       return;
     }
@@ -28004,7 +28285,7 @@ export class DesktopBackendRegistry {
     }
     await this.emitThreadToolAccountingUpdated({
       backend: "codex",
-      threadId: event.notification.params.threadId,
+      threadId: params.threadId,
     });
   }
 

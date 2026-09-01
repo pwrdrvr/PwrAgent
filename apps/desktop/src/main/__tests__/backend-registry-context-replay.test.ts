@@ -1,12 +1,77 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type { AgentEvent } from "@pwragent/shared";
 import {
   buildThreadCompactionIdentity,
+  detectObservedContextWindowDrop,
   foldObservedContextReplay,
+  readThreadCompactionBoundary,
   type ObservedContextReplayCursor,
   type ObservedContextReplayTally,
 } from "../app-server/backend-registry";
+
+describe("detectObservedContextWindowDrop", () => {
+  const cursor: ObservedContextReplayCursor = {
+    cumulativeInputTokens: 400_000,
+    lastContextTokens: 240_000,
+  };
+
+  it("detects a smaller context at a new request boundary", () => {
+    expect(detectObservedContextWindowDrop({
+      cursor,
+      tokenUsage: {
+        last: {
+          cachedInputTokens: 0,
+          inputTokens: 21_000,
+          outputTokens: 500,
+          totalTokens: 21_500,
+        },
+        total: { inputTokens: 421_000 },
+      },
+    })).toEqual({
+      cumulativeInputTokens: 421_000,
+      currentContextTokens: 21_500,
+      previousCumulativeInputTokens: 400_000,
+      previousContextTokens: 240_000,
+    });
+  });
+
+  it("ignores duplicate usage and a growing context", () => {
+    expect(detectObservedContextWindowDrop({
+      cursor,
+      tokenUsage: {
+        last: { inputTokens: 21_000, totalTokens: 21_000 },
+        total: { inputTokens: 400_000 },
+      },
+    })).toBeUndefined();
+    expect(detectObservedContextWindowDrop({
+      cursor,
+      tokenUsage: {
+        last: { inputTokens: 241_000, totalTokens: 241_000 },
+        total: { inputTokens: 641_000 },
+      },
+    })).toBeUndefined();
+  });
+
+  it("does not classify the real-shape smaller hot replay as compaction", () => {
+    expect(detectObservedContextWindowDrop({
+      cursor: {
+        cumulativeInputTokens: 2_024_300,
+        lastContextTokens: 182_485,
+      },
+      tokenUsage: {
+        last: {
+          cachedInputTokens: 159_104,
+          inputTokens: 159_821,
+          outputTokens: 6,
+          totalTokens: 159_827,
+        },
+        total: { inputTokens: 2_184_121 },
+      },
+    })).toBeUndefined();
+  });
+});
 
 describe("buildThreadCompactionIdentity", () => {
   it("deduplicates an item-less notification at one request boundary", () => {
@@ -31,6 +96,103 @@ describe("buildThreadCompactionIdentity", () => {
 
     expect(duplicate).toBe(first);
     expect(later).not.toBe(first);
+  });
+});
+
+describe("readThreadCompactionBoundary", () => {
+  it("reads automatic window compaction from a ContextCompaction item", () => {
+    expect(readThreadCompactionBoundary({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          item: {
+            id: "compact-item-1",
+            type: "ContextCompaction",
+          },
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+    })).toEqual({
+      itemId: "compact-item-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+  });
+
+  it("accepts camelCase contextCompaction on item/started", () => {
+    expect(readThreadCompactionBoundary({
+      backend: "codex",
+      notification: {
+        method: "item/started",
+        params: {
+          item: {
+            id: "compact-item-1",
+            type: "contextCompaction",
+          },
+          threadId: "thread-1",
+        },
+      },
+    })).toEqual({
+      itemId: "compact-item-1",
+      threadId: "thread-1",
+    });
+  });
+
+  it("ignores non-compaction items", () => {
+    expect(readThreadCompactionBoundary({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          item: {
+            id: "command-1",
+            type: "CommandExecution",
+          },
+          threadId: "thread-1",
+        },
+      },
+    })).toBeUndefined();
+  });
+
+  it("keys a ContextCompaction item with the same id as thread/compacted", () => {
+    const itemEvent = {
+      backend: "codex" as const,
+      notification: {
+        method: "item/completed" as const,
+        params: {
+          item: {
+            id: "compact-item-1",
+            type: "ContextCompaction",
+          },
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+    } satisfies AgentEvent;
+    const compactedEvent = {
+      backend: "codex" as const,
+      notification: {
+        method: "thread/compacted" as const,
+        params: {
+          itemId: "compact-item-1",
+          threadId: "thread-1",
+        },
+      },
+    } satisfies AgentEvent;
+    const itemBoundary = readThreadCompactionBoundary(itemEvent);
+    const compactedBoundary = readThreadCompactionBoundary(compactedEvent);
+
+    expect(itemBoundary).toBeDefined();
+    expect(compactedBoundary).toBeDefined();
+    expect(buildThreadCompactionIdentity({
+      backend: "codex",
+      ...itemBoundary!,
+    })).toBe(buildThreadCompactionIdentity({
+      backend: "codex",
+      ...compactedBoundary!,
+    }));
   });
 });
 
