@@ -11,8 +11,19 @@ import {
 import { ensureManagedCodexRuntime } from "../codex-managed-runtime";
 import { SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
 import { subscribersForChannel } from "../window-channels";
+import {
+  disposeDesktopConfigStore,
+  getDesktopConfigStore,
+} from "./config-store/desktop-config-store-singleton";
+import { resolveDesktopConfigPath } from "./desktop-config";
 
 let desktopSettingsService: DesktopSettingsService | undefined;
+
+export {
+  disposeDesktopConfigStore,
+  getDesktopConfigStore,
+  getExistingDesktopConfigStore,
+} from "./config-store/desktop-config-store-singleton";
 
 export function getDesktopSettingsService(): DesktopSettingsService {
   if (!desktopSettingsService) {
@@ -22,6 +33,10 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     // them to the operator's chosen real profile before tearing the
     // bootstrap state down.
     const bootstrap = getAppStateMode() === "bootstrap";
+    const configPath = bootstrap
+      ? resolveBootstrapProfilePath("config.toml")
+      : resolveDesktopConfigPath();
+    const configStore = getDesktopConfigStore();
     const secretStore = isE2eMemorySecretStorageEnabled(
       process.env,
       app.isPackaged,
@@ -47,9 +62,7 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         }),
       resolveAppVersion: () => app.getVersion(),
       secretStore,
-      ...(bootstrap
-        ? { configPath: resolveBootstrapProfilePath("config.toml") }
-        : {}),
+      configPath,
       // Production wiring: settings writes that touch `[general.appearance]`
       // fan out to every open window via the broadcaster, which sends to
       // every subscriber of APPEARANCE_CHANGED_EVENT_CHANNEL.
@@ -62,10 +75,14 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         }
       },
     });
+    desktopSettingsService.onConfigWritten(() => {
+      configStore.reloadFromDisk("self-write");
+    });
   }
   return desktopSettingsService;
 }
 
 export function resetDesktopSettingsServiceForTests(): void {
   desktopSettingsService = undefined;
+  disposeDesktopConfigStore();
 }

@@ -69,7 +69,10 @@ import {
   SETTINGS_WRITE_CONFIG_CHANNEL,
 } from "../../shared/ipc";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
-import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import {
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "../settings/desktop-settings-singleton";
 import {
   acpAgentEnabledFor,
   acpCliPathOverrideFor,
@@ -1188,11 +1191,35 @@ export function registerSettingsIpcHandlers(
     ): Promise<ReadDesktopSettingsResponse> =>
       await timeStartupProfileOperation({
         type: "ipc-main:readSettings",
-        operation: async () => ({
-          snapshot: applyRuntimeMessagingSnapshot(
+        operation: async () => {
+          const snapshot = applyRuntimeMessagingSnapshot(
             await getService(service).readSettings(),
-          ),
-        }),
+          );
+          const discovery = snapshot.models.codex.discovery;
+          const selected = discovery.candidates.find((candidate) =>
+            candidate.selected,
+          );
+          getDesktopConfigStore().recordProviderDiscovery("codex", {
+            candidates: discovery.candidates.map((candidate) => ({
+              command: candidate.command,
+              source: candidate.source,
+              ...(candidate.version ? { version: candidate.version } : {}),
+              ...(candidate.failureReason || candidate.versionFailureReason
+                ? {
+                    failureReason:
+                      candidate.failureReason
+                      ?? candidate.versionFailureReason,
+                  }
+                : {}),
+            })),
+            ...(discovery.error ? { error: discovery.error } : {}),
+            ...(discovery.selectedCommand
+              ? { selectedCommand: discovery.selectedCommand }
+              : {}),
+            ...(selected?.version ? { selectedVersion: selected.version } : {}),
+          });
+          return { snapshot };
+        },
       }),
   );
 

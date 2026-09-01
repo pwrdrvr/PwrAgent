@@ -1,0 +1,231 @@
+import { createHash } from "node:crypto";
+import type {
+  DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
+  DesktopOnboardingCompletedSource,
+  DesktopSettingsSecretName,
+  DesktopTextSize,
+} from "@pwragent/shared";
+import {
+  DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_THEME_DEFAULT,
+  DESKTOP_TEXT_SIZE_DEFAULT,
+} from "@pwragent/shared";
+import type { DesktopSettingsConfig } from "../desktop-config";
+
+export const CONFIG_STORE_DURABLE_SCHEMA_VERSION = 1;
+export const PROVIDER_IDS = ["codex", "gemini", "grok", "kimi", "qwen"] as const;
+
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+
+type ConfigSection<K extends keyof DesktopSettingsConfig> = Readonly<
+  NonNullable<DesktopSettingsConfig[K]>
+>;
+
+export type NormalizedGeneralConfig = Readonly<{
+  appearance: Readonly<{
+    theme: DesktopAppearanceTheme;
+    density: DesktopAppearanceDensity;
+    sidebarTextSize: DesktopTextSize;
+    transcriptTextSize: DesktopTextSize;
+  }>;
+  settings: ConfigSection<"general">;
+}>;
+
+export type NormalizedOnboardingConfig = Readonly<{
+  completed: boolean;
+  completedSource: DesktopOnboardingCompletedSource | "";
+}>;
+
+export type ProviderCandidateSummary = Readonly<{
+  command: string;
+  version?: string;
+  source: string;
+  failureReason?: string;
+}>;
+
+export type ProviderProjection = Readonly<{
+  provider: ProviderId;
+  dependencyFingerprint: string;
+  configured: Readonly<{
+    enabled: boolean;
+    commandOverride?: string;
+  }>;
+  lastKnownGood?: Readonly<{
+    selectedCommand?: string;
+    selectedVersion?: string;
+    candidates: readonly ProviderCandidateSummary[];
+    executableIdentity?: Readonly<{
+      realpath: string;
+      size: number;
+      mtimeMs: number;
+    }>;
+    validatedAt: number;
+  }>;
+  validation: Readonly<{
+    state: "unknown" | "checking" | "valid" | "failed" | "stale";
+    lastAttemptAt?: number;
+    error?: string;
+  }>;
+}>;
+
+export type SecretPresence = Readonly<{
+  configured: boolean;
+  source: "env" | "keychain" | "unset";
+  writable: boolean;
+  unavailableReason?: string;
+}>;
+
+export type ConfigDomainMap = Readonly<{
+  general: NormalizedGeneralConfig;
+  onboarding: NormalizedOnboardingConfig;
+  experimental: ConfigSection<"experimental">;
+  messaging: ConfigSection<"messaging">;
+  federation: ConfigSection<"federation">;
+  models: ConfigSection<"models">;
+  providers: Readonly<Record<ProviderId, ProviderProjection>>;
+  applications: ConfigSection<"applications">;
+  git: ConfigSection<"git">;
+  updates: ConfigSection<"updates">;
+  worktrees: ConfigSection<"worktrees">;
+  ui: ConfigSection<"ui">;
+  integratedTerminal: ConfigSection<"integratedTerminal">;
+  imageUploads: ConfigSection<"imageUploads">;
+}>;
+
+export type ConfigFileStatus =
+  | Readonly<{ kind: "valid"; contentHash: string; observedAt: number }>
+  | Readonly<{ kind: "missing"; observedAt: number }>
+  | Readonly<{
+      kind: "invalid";
+      contentHash: string;
+      error: string;
+      observedAt: number;
+      serving: "last-known-good" | "defaults";
+    }>;
+
+export type ConfigStoreSnapshot = Readonly<{
+  version: number;
+  durableSchemaVersion: number;
+  configFile: ConfigFileStatus;
+  configRevision: string;
+  domains: ConfigDomainMap;
+  secretPresence: Readonly<
+    Partial<Record<DesktopSettingsSecretName, SecretPresence>>
+  >;
+}>;
+
+export function normalizeConfigDomains(params: {
+  config: DesktopSettingsConfig;
+  previousProviders?: Readonly<Record<ProviderId, ProviderProjection>>;
+}): ConfigDomainMap {
+  const config = structuredClone(params.config);
+  const completed = config.onboarding?.completed;
+  const completedSource = config.onboarding?.completedSource;
+  const inferredMigrated = completed === undefined && completedSource === undefined;
+  const providers = Object.fromEntries(
+    PROVIDER_IDS.map((provider) => {
+      const commandOverride = provider === "codex"
+        ? config.models?.codex?.path?.trim() || undefined
+        : config.acpAgents?.[provider]?.cliPath?.trim() || undefined;
+      const enabled = provider === "codex"
+        ? true
+        : config.acpAgents?.[provider]?.enabled !== false;
+      const dependencyFingerprint = providerDependencyFingerprint({
+        commandOverride,
+        enabled,
+        managedBuilds:
+          provider === "grok"
+            ? config.acpAgents?.grok?.managedBuilds
+            : undefined,
+        provider,
+      });
+      const previous = params.previousProviders?.[provider];
+      const projection: ProviderProjection = {
+        provider,
+        dependencyFingerprint,
+        configured: {
+          enabled,
+          ...(commandOverride ? { commandOverride } : {}),
+        },
+        ...(previous?.lastKnownGood
+          ? { lastKnownGood: previous.lastKnownGood }
+          : {}),
+        validation:
+          previous?.dependencyFingerprint === dependencyFingerprint
+            ? previous.validation
+            : {
+                state: previous?.lastKnownGood ? "stale" : "unknown",
+              },
+      };
+      return [provider, projection];
+    }),
+  ) as Record<ProviderId, ProviderProjection>;
+
+  return deepFreeze({
+    general: {
+      appearance: {
+        theme:
+          config.general?.appearance?.theme
+          ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+        density:
+          config.general?.appearance?.density
+          ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+        sidebarTextSize:
+          config.general?.appearance?.sidebarTextSize
+          ?? DESKTOP_TEXT_SIZE_DEFAULT,
+        transcriptTextSize:
+          config.general?.appearance?.transcriptTextSize
+          ?? DESKTOP_TEXT_SIZE_DEFAULT,
+      },
+      settings: config.general ?? {},
+    },
+    onboarding: {
+      completed: completed ?? inferredMigrated,
+      completedSource:
+        completedSource ?? (inferredMigrated ? "migrated" : ""),
+    },
+    experimental: config.experimental ?? {},
+    messaging: config.messaging ?? {},
+    federation: config.federation ?? {},
+    models: config.models ?? {},
+    providers,
+    applications: config.applications ?? {},
+    git: config.git ?? {},
+    updates: config.updates ?? {},
+    worktrees: config.worktrees ?? {},
+    ui: config.ui ?? {},
+    integratedTerminal: config.integratedTerminal ?? {},
+    imageUploads: config.imageUploads ?? {},
+  });
+}
+
+export function providerDependencyFingerprint(params: {
+  commandOverride?: string;
+  enabled: boolean;
+  managedBuilds?: boolean;
+  provider: ProviderId;
+}): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      arch: process.arch,
+      commandOverride: params.commandOverride ?? "",
+      enabled: params.enabled,
+      managedBuilds: params.managedBuilds ?? null,
+      platform: process.platform,
+      provider: params.provider,
+      schemaVersion: CONFIG_STORE_DURABLE_SCHEMA_VERSION,
+    }))
+    .digest("hex");
+}
+
+export function deepFreeze<T>(value: T): Readonly<T> {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+  Object.freeze(value);
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    deepFreeze(child);
+  }
+  return value;
+}

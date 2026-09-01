@@ -15,6 +15,9 @@ const getDesktopBackendRegistryMock = vi.fn(() => ({
   invalidateAcpBackendDiscovery: invalidateAcpBackendDiscoveryMock,
   listThreads: listThreadsMock,
 }));
+const desktopConfigStoreMock = vi.hoisted(() => ({
+  recordProviderDiscovery: vi.fn(),
+}));
 const childProcessMocks = vi.hoisted(() => ({
   execFile: vi.fn(),
   spawn: vi.fn(),
@@ -146,6 +149,11 @@ vi.mock("../acp/acp-runtime-discovery", () => acpRuntimeDiscoveryMock);
 vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: disposeDesktopBackendRegistryMock,
   getDesktopBackendRegistry: getDesktopBackendRegistryMock,
+}));
+
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopConfigStore: vi.fn(() => desktopConfigStoreMock),
+  getDesktopSettingsService: vi.fn(),
 }));
 
 vi.mock("../messaging/messaging-runtime", () => ({
@@ -294,6 +302,10 @@ describe("settings ipc", () => {
         },
       },
     });
+    expect(desktopConfigStoreMock.recordProviderDiscovery).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({ candidates: expect.any(Array) }),
+    );
     await handlers.get(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL)?.({}, {});
     expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
 

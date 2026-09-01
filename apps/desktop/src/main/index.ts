@@ -148,7 +148,11 @@ import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
 } from "./runtime-federation-lease";
-import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
+import {
+  disposeDesktopConfigStore,
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "./settings/desktop-settings-singleton";
 import {
   disposeAppState,
   initializeAppState,
@@ -510,6 +514,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeQuitBlockerIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
+  disposeDesktopConfigStore();
   disposeWindowPointerIpcHandlers();
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
@@ -1189,6 +1194,7 @@ export function bootstrapApp(): void {
       },
     });
     reportAutoVacuumConversion(initializeAppState(bootMode).autoVacuum);
+    getDesktopConfigStore();
     // Skip the focus-request watcher in bootstrap mode. The watcher
     // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
     // catch "focus existing window" requests from sibling PwrAgent
