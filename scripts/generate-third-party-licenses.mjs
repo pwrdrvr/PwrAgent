@@ -287,6 +287,58 @@ export function enrichRecord(record) {
   };
 }
 
+/**
+ * A bounded description of how the committed notice differs from a fresh one.
+ *
+ * Reports package-level changes rather than a line diff, because the notice
+ * repeats each package in a summary list and again in a license section, so a
+ * raw diff of a single added package runs to dozens of lines. Capped so a large
+ * drift cannot flood a CI log.
+ */
+export function describeNoticeDrift(current, generated) {
+  const CAP = 20;
+  const packageKeys = (text) =>
+    new Set(
+      text
+        .split("\n")
+        .map((line) => /^- (\S+@\S+) \| /.exec(line)?.[1])
+        .filter((key) => key !== undefined),
+    );
+
+  const before = packageKeys(current);
+  const after = packageKeys(generated);
+  const added = [...after].filter((key) => !before.has(key)).sort();
+  const removed = [...before].filter((key) => !after.has(key)).sort();
+
+  const lines = [];
+  const report = (label, keys) => {
+    if (keys.length === 0) return;
+    lines.push(`${label} (${keys.length}): ${keys.slice(0, CAP).join(", ")}`);
+    if (keys.length > CAP) {
+      lines.push(`  ...and ${keys.length - CAP} more`);
+    }
+  };
+  report("only in the freshly generated notice", added);
+  report("only in the committed notice", removed);
+
+  if (lines.length === 0) {
+    // Same package set, so the difference is in the license text, the source
+    // URL, or the ordering of a section — nothing the package-level view shows.
+    const currentLines = current.split("\n");
+    const generatedLines = generated.split("\n");
+    const index = currentLines.findIndex((line, i) => line !== generatedLines[i]);
+    lines.push(
+      "the package set is identical; the text differs"
+        + (index === -1
+          ? " only in length"
+          : ` from line ${index + 1}: committed ${JSON.stringify(currentLines[index] ?? "")}`
+            + `, generated ${JSON.stringify(generatedLines[index] ?? "")}`),
+    );
+  }
+
+  return lines;
+}
+
 function compareRecords(a, b) {
   return (
     a.name.localeCompare(b.name) ||
@@ -408,6 +460,14 @@ function main() {
       console.error(
         "THIRD_PARTY_LICENSES is out of date. Run `pnpm licenses:generate` and commit the result.",
       );
+      // Say what moved. "Out of date" alone sends the reader to regenerate
+      // locally and diff by hand, which does not work when the committed file
+      // was generated on a different platform than the one running the check:
+      // the two installs disagree about which optional packages exist, and the
+      // only way to see that from CI is for CI to name them.
+      for (const line of describeNoticeDrift(current, output)) {
+        console.error(`  ${line}`);
+      }
       process.exit(1);
     }
     console.log("third-party license notice check passed");
