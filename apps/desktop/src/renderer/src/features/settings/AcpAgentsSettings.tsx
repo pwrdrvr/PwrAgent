@@ -6,10 +6,9 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
-import { SettingsField, SettingsSection } from "./SettingsLayout";
+import { SettingsField, SettingsSection, ToggleField } from "./SettingsLayout";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
-import { SettingsSwitch } from "./SettingsSwitch";
 import { acpStatusLabel } from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
@@ -388,40 +387,41 @@ function AcpAgentSection(props: {
     >
       <div className="settings-fields">
         {props.onEnabledChange ? (
-          <SettingsField
+          <ToggleField
+            checked={enabled}
+            disabled={props.saving || pathUpdating || props.refreshing}
             label="Enabled"
+            switchQualifier={entry.name}
             sub="Show this agent in the model picker and launch threads with it."
-            control={
-              <SettingsSwitch
-                checked={enabled}
-                disabled={props.saving || pathUpdating || props.refreshing}
-                label={`Enable ${entry.name}`}
-                onChange={(next) => {
-                  void props.onEnabledChange?.(entry.registryId, next);
-                }}
-              />
-            }
+            onChange={(next) => {
+              // Guarded above, but the optional call still types as possibly
+              // undefined and the row needs a promise to hold pending on.
+              return props.onEnabledChange?.(entry.registryId, next)
+                ?? Promise.resolve();
+            }}
           />
         ) : null}
 
         {entry.registryId === "grok" && props.onManagedGrokBuildsChange ? (
-          <SettingsField
+          <ToggleField
+            checked={props.managedGrokBuilds}
+            disabled={props.saving || pathUpdating || props.refreshing || !enabled}
             label="PwrAgent build"
+            switchQualifier="Grok"
+            // The row holds pending across the config write AND the agent
+            // rescan chained below, so "Saving…" would name only the first
+            // and shortest part of the wait.
+            pendingLabel="Saving and rescanning…"
             sub="Download verified releases from pwrdrvr/grok-build and prefer the newest one for new threads. Packaged macOS and Windows apps require platform signing; manual paths still win."
-            control={
-              <SettingsSwitch
-                checked={props.managedGrokBuilds}
-                disabled={props.saving || pathUpdating || props.refreshing || !enabled}
-                label="Use managed PwrAgent Grok builds"
-                onChange={(next) => {
-                  void props.onManagedGrokBuildsChange?.(next).then((saved) => {
-                    if (saved) {
-                      void props.onRefresh();
-                    }
-                  });
-                }}
-              />
-            }
+            onChange={(next) => {
+              // The refresh is awaited rather than floated, so the row stays
+              // pending until the agent list actually reflects the change.
+              return props.onManagedGrokBuildsChange?.(next).then((saved) => {
+                if (saved) {
+                  return props.onRefresh();
+                }
+              }) ?? Promise.resolve();
+            }}
           />
         ) : null}
 

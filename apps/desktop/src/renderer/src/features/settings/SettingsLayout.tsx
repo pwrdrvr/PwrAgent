@@ -11,6 +11,11 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import {
+  createRendererErrorReport,
+  reportRendererError,
+} from "../../lib/renderer-error-reporting";
+import { SettingsSwitch } from "./SettingsSwitch";
 
 /**
  * Layout primitives for settings screens. Compose `SettingsPanelHead`,
@@ -579,7 +584,36 @@ export function SettingsField(props: {
   control: ReactNode;
   /** Optional inline error message rendered under the control. */
   error?: ReactNode;
+  /** Follow-on controls for the field (a reset button row), rendered under
+   *  the control rather than beside it. */
+  actions?: ReactNode;
+  /** Opt into the shared pending affordance: pass a boolean (not
+   *  `undefined`) and the control is laid out on a row with a spinner and
+   *  "Saving…" to its right, driven by `useSettingsFieldPending`.
+   *
+   *  Only opt in when the control is narrow enough to leave room — a switch
+   *  or a segmented group. A full-width input has none, and the indicator
+   *  would wrap under it. */
+  pending?: boolean;
+  /** Overrides the indicator's "Saving…" wording, for a wait that is not a
+   *  config write — a probe or a count the row is holding open. */
+  pendingLabel?: string;
 }) {
+  const control = props.pending === undefined ? (
+    props.control
+  ) : (
+    // A div, not a span: `SegmentedField`'s control is a `role="radiogroup"`
+    // div, and flow content inside phrasing content is invalid markup that an
+    // HTML parser reparents out of the flex row.
+    <div className="settings-control-row">
+      {props.control}
+      <SettingsPendingIndicator
+        label={props.pendingLabel}
+        pending={props.pending}
+      />
+    </div>
+  );
+
   return (
     <div className="settings-field">
       <div className="settings-field__label">
@@ -592,7 +626,8 @@ export function SettingsField(props: {
         ) : null}
       </div>
       <div className="settings-field__control">
-        {props.control}
+        {control}
+        {props.actions}
         {props.help ? (
           <span className="settings-field__help">{props.help}</span>
         ) : null}
@@ -603,6 +638,289 @@ export function SettingsField(props: {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * Per-control pending latch for a settings write.
+ *
+ * `useDesktopSettings` exposes a single `saving` boolean for the whole pane,
+ * so a control cannot learn from it whether *it* was the one the operator
+ * actuated — reading it directly would light up every control on the panel
+ * at once. Each control instead awaits the promise its own handler returns,
+ * which scopes the affordance to the actuated control and clears it on
+ * failure as well as success.
+ *
+ * Field handlers are typed to return a promise for exactly this reason: a
+ * fire-and-forget `void save(...)` body is a type error here instead of a
+ * control that silently never shows pending.
+ */
+export type SettingsFieldPending = {
+  pending: boolean;
+  /** Hold the pending state until `result` settles. Overlapping writes are
+   *  counted, so an early one returning does not clear a later one. */
+  track: (result: Promise<unknown>) => void;
+};
+
+export function useSettingsFieldPending(): SettingsFieldPending {
+  const [inFlight, setInFlight] = useState(0);
+
+  const track = useCallback((result: Promise<unknown>): void => {
+    setInFlight((current) => current + 1);
+    const settle = () => {
+      setInFlight((current) => Math.max(0, current - 1));
+    };
+    // `Promise.resolve` rather than `result.then`: `track` is exported, and a
+    // caller handing it a non-thenable would otherwise throw out of the click
+    // handler with `inFlight` already incremented — a row stuck at "Saving…"
+    // with no write outstanding.
+    //
+    // Settling on rejection is what clears the row, but the handler must not
+    // be where the error stops. `void save(...)` used to let a rejection reach
+    // the `unhandledrejection` reporter in lib/renderer-error-reporting.ts;
+    // most writes go through `writeConfig`, which catches and owns the error
+    // copy, but not all of them do (`onMessagingEnabledChange` calls
+    // `setMessagingEnabled` directly), so re-report rather than swallow.
+    Promise.resolve(result).then(settle, (error: unknown) => {
+      settle();
+      // "unhandled-rejection" is the honest source: this is the report the
+      // global handler would have filed before `track` attached a handler.
+      reportRendererError(
+        createRendererErrorReport("unhandled-rejection", error),
+      );
+    });
+  }, []);
+
+  return { pending: inFlight > 0, track };
+}
+
+/**
+ * The shared "write in flight" affordance: the renderer's one spinner plus
+ * the word, announced through a `role="status"` region.
+ *
+ * The region mounts only while the write is in flight, matching how the rest
+ * of the settings panes announce transient state. Keeping an empty region
+ * mounted per field would read marginally better to a screen reader — a live
+ * region present before its text lands — but a pane carries dozens of these
+ * fields, and dozens of standing announcer regions is the worse trade. Saves
+ * here run for seconds, so the region is present long enough to be picked up.
+ */
+export function SettingsPendingIndicator(props: {
+  pending: boolean;
+  /** Overrides the default "Saving…" wording. */
+  label?: string;
+}) {
+  if (!props.pending) {
+    return null;
+  }
+
+  return (
+    <span className="settings-pending" role="status">
+      <span aria-hidden="true" className="pending-spinner pending-spinner--sm" />
+      {props.label ?? "Saving…"}
+    </span>
+  );
+}
+
+/**
+ * Switch row. `onChange` returns the write's promise so the row can show
+ * pending for its own save only — see `useSettingsFieldPending`.
+ */
+export function ToggleField(props: {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  /** Disambiguates the switch when the row's label only reads correctly in
+   *  place — an "Enabled" row inside a named agent's card needs the switch to
+   *  say which agent. Appended to `label` rather than replacing it: WCAG 2.5.3
+   *  Label in Name requires the visible text to appear in the accessible name,
+   *  or a Voice Control user saying "click Enabled" matches nothing. */
+  switchQualifier?: string;
+  sub?: ReactNode;
+  help?: ReactNode;
+  source?: ReactNode;
+  /** Follow-on controls for the row (a confirmation prompt, an apply button),
+   *  rendered under the switch rather than beside it. */
+  actions?: ReactNode;
+  /** Overrides the pending indicator's "Saving…" wording. */
+  pendingLabel?: string;
+  onChange: (value: boolean) => Promise<unknown>;
+}) {
+  const { pending, track } = useSettingsFieldPending();
+
+  return (
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      help={props.help}
+      source={props.source}
+      actions={props.actions}
+      pending={pending}
+      pendingLabel={props.pendingLabel}
+      control={
+        <SettingsSwitch
+          checked={props.checked}
+          disabled={props.disabled}
+          label={
+            props.switchQualifier
+              ? `${props.label} — ${props.switchQualifier}`
+              : props.label
+          }
+          pending={pending}
+          onChange={(value) => track(props.onChange(value))}
+        />
+      }
+    />
+  );
+}
+
+/**
+ * The segmented radio group itself, without a field row around it.
+ *
+ * Split out of `SegmentedField` because the group also appears inside
+ * composite controls that supply their own surrounding layout (the update
+ * channel's row of buttons and version text). Those sites used to hand-roll
+ * the markup, which is how they drifted: same class names, but no same-value
+ * guard and no busy state. The caller owns the pending tracker so it can place
+ * the indicator to suit its layout; this component owns which segment is busy.
+ */
+export type SegmentedControlProps<TValue extends string | number> = {
+  disabled?: boolean;
+  /** Names the group for assistive tech. */
+  label: string;
+  /** An option carrying `meta` renders stacked, with the secondary line under
+   *  its label — release versions, delays, thresholds. The two always went
+   *  together in the hand-rolled groups this replaced, so presence of `meta`
+   *  is what selects the variant rather than a separate flag to keep in sync. */
+  options: Array<{ label: string; meta?: ReactNode; value: TValue }>;
+  value: TValue;
+} & (
+  | {
+      /** A tracker from `useSettingsFieldPending`. Supplying one obliges
+       *  `onChange` to return the write's promise, so a fire-and-forget
+       *  handler is a type error rather than a control that never shows
+       *  pending. */
+      pending: SettingsFieldPending;
+      onChange: (value: TValue) => Promise<unknown>;
+    }
+  | {
+      /** No tracker: the change lands immediately and needs no affordance.
+       *  Appearance axes apply optimistically — the window re-themes or
+       *  re-sizes on the click — and some groups only move local state. Say
+       *  so explicitly rather than passing a tracker nothing would drive. */
+      pending?: undefined;
+      onChange: (value: TValue) => void;
+    }
+);
+
+export function SegmentedControl<TValue extends string | number>(
+  props: SegmentedControlProps<TValue>,
+) {
+  // Which segments have a write outstanding, counted per value. A single
+  // "last picked" would mark the wrong segment busy as soon as two writes
+  // overlap: pick A, pick B before A returns, B settles first, and the ring
+  // sits on B while A is still going.
+  const [busyValues, setBusyValues] = useState<ReadonlyArray<TValue>>([]);
+
+  return (
+    <div className="settings-segmented" role="radiogroup" aria-label={props.label}>
+      {props.options.map((option) => (
+        <button
+          key={option.value}
+          aria-busy={busyValues.includes(option.value) ? true : undefined}
+          aria-checked={props.value === option.value}
+          className={`settings-segmented__button${
+            option.meta === undefined
+              ? ""
+              : " settings-segmented__button--stacked"
+          }${props.value === option.value ? " is-active" : ""}`}
+          disabled={props.disabled}
+          role="radio"
+          type="button"
+          onClick={() => {
+            // Re-clicking the selected segment is not a change. Several panes
+            // route through a delta builder that bails when nothing moved, so
+            // tracking it would announce "Saving…" for a write that never
+            // happens.
+            if (option.value === props.value) {
+              return;
+            }
+            if (props.pending === undefined) {
+              props.onChange(option.value);
+              return;
+            }
+            setBusyValues((current) => [...current, option.value]);
+            const clear = () => {
+              setBusyValues((current) => {
+                const at = current.indexOf(option.value);
+                if (at < 0) {
+                  return current;
+                }
+                return [...current.slice(0, at), ...current.slice(at + 1)];
+              });
+            };
+            const result = Promise.resolve(props.onChange(option.value));
+            result.then(clear, clear);
+            props.pending.track(result);
+          }}
+        >
+          {option.meta === undefined ? (
+            option.label
+          ) : (
+            <>
+              <span>{option.label}</span>
+              <span className="settings-segmented__meta">{option.meta}</span>
+            </>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Segmented (radio group) row. Like `ToggleField`, pending is scoped to this
+ * field's own write; the option the operator picked also carries `aria-busy`
+ * so the busy state is attached to the chosen segment, not the whole group.
+ */
+export function SegmentedField<TValue extends string | number>(props: {
+  actions?: ReactNode;
+  disabled?: boolean;
+  label: string;
+  sub?: ReactNode;
+  help?: ReactNode;
+  /** Inline error rendered under the group. */
+  error?: ReactNode;
+  options: Array<{ label: string; meta?: ReactNode; value: TValue }>;
+  source?: ReactNode;
+  value: TValue;
+  /** Overrides the pending indicator's "Saving…" wording. */
+  pendingLabel?: string;
+  onChange: (value: TValue) => Promise<unknown>;
+}) {
+  const fieldPending = useSettingsFieldPending();
+
+  return (
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      help={props.help}
+      error={props.error}
+      source={props.source}
+      actions={props.actions}
+      pending={fieldPending.pending}
+      pendingLabel={props.pendingLabel}
+      control={
+        <SegmentedControl
+          disabled={props.disabled}
+          label={props.label}
+          options={props.options}
+          pending={fieldPending}
+          value={props.value}
+          onChange={props.onChange}
+        />
+      }
+    />
   );
 }
 

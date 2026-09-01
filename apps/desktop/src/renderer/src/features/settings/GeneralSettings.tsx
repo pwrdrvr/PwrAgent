@@ -18,13 +18,17 @@ import type {
   ThemePreference,
 } from "../../lib/useAppearance";
 import {
+  SegmentedControl,
+  SegmentedField,
   SettingsField,
   SettingsPanelHead,
+  SettingsPendingIndicator,
   SettingsSection,
   SettingsSectionStack,
+  ToggleField,
+  useSettingsFieldPending,
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
-import { SettingsSwitch } from "./SettingsSwitch";
 
 const THEME_OPTIONS: Array<{
   label: string;
@@ -75,28 +79,15 @@ function TextSizeField(props: {
       label={props.label}
       sub={props.sub}
       control={
-        <div
-          className="settings-segmented"
-          role="radiogroup"
-          aria-label={props.label}
-        >
-          {TEXT_SIZE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              aria-checked={props.value === option.value}
-              className={`settings-segmented__button${
-                props.value === option.value ? " is-active" : ""
-              }`}
-              role="radio"
-              type="button"
-              onClick={() => {
-                props.onChange(option.value);
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+        // No pending tracker: the appearance controller applies the axis
+        // optimistically, so the sidebar or transcript resizes on the click
+        // and the persist is fire-and-forget behind it.
+        <SegmentedControl
+          label={props.label}
+          options={TEXT_SIZE_OPTIONS}
+          value={props.value}
+          onChange={props.onChange}
+        />
       }
     />
   );
@@ -207,6 +198,10 @@ export function GeneralSettings(props: {
     AppUpdateReleaseVersions | undefined
   >();
   const [updateChecking, setUpdateChecking] = useState(false);
+  // The track group sits inside a composite control with its own buttons, so
+  // the field cannot own the tracker — the indicator goes last in the button
+  // row, where arriving mid-save displaces nothing.
+  const updateChannelPending = useSettingsFieldPending();
   const [updateResult, setUpdateResult] = useState<
     AppUpdateCheckResult | undefined
   >();
@@ -345,62 +340,31 @@ export function GeneralSettings(props: {
                   : `Locked to ${appearance.theme}.`
               }
               control={
-                <div
-                  className="settings-segmented"
-                  role="radiogroup"
-                  aria-label="Theme"
-                >
-                  {THEME_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      aria-checked={appearance.theme === option.value}
-                      className={`settings-segmented__button settings-segmented__button--stacked${
-                        appearance.theme === option.value ? " is-active" : ""
-                      }`}
-                      role="radio"
-                      type="button"
-                      onClick={() => {
-                        props.appearanceController?.setTheme(option.value);
-                      }}
-                    >
-                      <span>{option.label}</span>
-                      <span className="settings-segmented__meta">
-                        {option.meta}
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                // No pending tracker: the whole window re-themes on the click,
+                // which is louder feedback than a spinner could be.
+                <SegmentedControl
+                  label="Theme"
+                  options={THEME_OPTIONS}
+                  value={appearance.theme}
+                  onChange={(value) => {
+                    props.appearanceController?.setTheme(value);
+                  }}
+                />
               }
             />
             <SettingsField
               label="Info density"
               sub="Compact hides the provider, directory, and branch chips in thread rows so more threads fit on screen. PR chips, reactions, and pin markers stay visible."
               control={
-                <div
-                  className="settings-segmented"
-                  role="radiogroup"
-                  aria-label="Info density"
-                >
-                  {DENSITY_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      aria-checked={appearance.density === option.value}
-                      className={`settings-segmented__button settings-segmented__button--stacked${
-                        appearance.density === option.value ? " is-active" : ""
-                      }`}
-                      role="radio"
-                      type="button"
-                      onClick={() => {
-                        props.appearanceController?.setDensity(option.value);
-                      }}
-                    >
-                      <span>{option.label}</span>
-                      <span className="settings-segmented__meta">
-                        {option.meta}
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                // No pending tracker: the thread rows recompose on the click.
+                <SegmentedControl
+                  label="Info density"
+                  options={DENSITY_OPTIONS}
+                  value={appearance.density}
+                  onChange={(value) => {
+                    props.appearanceController?.setDensity(value);
+                  }}
+                />
               }
             />
             <TextSizeField
@@ -429,20 +393,15 @@ export function GeneralSettings(props: {
         chip={sourceBadge(attentionPromoteOnTurnEnd)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={attentionPromoteOnTurnEnd.value}
+            disabled={props.saving}
             label="Move a thread to the top when its turn finishes"
             sub="Attention ranks threads by when their current turn started, so streaming output, sub-agents, and tool results never re-sort the queue mid-turn. Turn this off to keep a thread parked where its turn started until the next one begins."
             source={sourceBadge(attentionPromoteOnTurnEnd)}
-            control={
-              <SettingsSwitch
-                checked={attentionPromoteOnTurnEnd.value}
-                disabled={props.saving}
-                label="Move a thread to the top when its turn finishes"
-                onChange={(next) => {
-                  void props.onAttentionPromoteOnTurnEndChange(next);
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onAttentionPromoteOnTurnEndChange(next);
+            }}
           />
         </div>
       </SettingsSection>
@@ -453,20 +412,15 @@ export function GeneralSettings(props: {
         chip={sourceBadge(confirmQuitWithInProgressThreads)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={confirmQuitWithInProgressThreads.value}
+            disabled={props.saving}
             label="Confirm quit when threads or terminals are active"
             sub="Warn before quitting while agent turns, integrated terminal commands, or environment actions are running. On macOS and Linux, idle terminal prompts do not block quit. The prompt auto-quits after a short countdown so shutdown can continue."
             source={sourceBadge(confirmQuitWithInProgressThreads)}
-            control={
-              <SettingsSwitch
-                checked={confirmQuitWithInProgressThreads.value}
-                disabled={props.saving}
-                label="Confirm quit when threads or terminals are active"
-                onChange={(next) => {
-                  void props.onConfirmQuitWithInProgressThreadsChange(next);
-                }}
-              />
-            }
+            onChange={(next) => {
+              return props.onConfirmQuitWithInProgressThreadsChange(next);
+            }}
           />
         </div>
       </SettingsSection>
@@ -477,21 +431,16 @@ export function GeneralSettings(props: {
         chip={sourceBadge(notificationsEnabled)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={notificationsEnabled.value}
+            disabled={props.saving}
             label="Desktop notifications"
             sub="Native alerts for approval/questions and turn completion while PwrAgent is unfocused or minimized."
-            source={sourceBadge(notificationsEnabled)}
             help="If you don't see notifications, allow them for PwrAgent in your OS notification settings."
-            control={
-              <SettingsSwitch
-                checked={notificationsEnabled.value}
-                disabled={props.saving}
-                label="Desktop notifications"
-                onChange={(next) => {
-                  void props.onNotificationsEnabledChange(next);
-                }}
-              />
-            }
+            source={sourceBadge(notificationsEnabled)}
+            onChange={(next) => {
+              return props.onNotificationsEnabledChange(next);
+            }}
           />
         </div>
       </SettingsSection>
@@ -506,42 +455,21 @@ export function GeneralSettings(props: {
         }
       >
         <div className="settings-fields">
-          <SettingsField
+          <SegmentedField
             label="Release channel"
             sub="Stable is the smoke-checked train. Beta follows main and stays selectable even when its versions are still Unavailable."
             help={releaseHelpText(releaseVersions)}
             error={updateTrain.error}
             source={sourceBadge(updateTrain)}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Release channel"
-              >
-                {UPDATE_TRAIN_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={updateTrain.value === option.value}
-                    className={`settings-segmented__button settings-segmented__button--stacked${
-                      updateTrain.value === option.value ? " is-active" : ""
-                    }`}
-                    disabled={props.saving}
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onUpdateTrainChange(option.value);
-                    }}
-                  >
-                    <span>{option.label}</span>
-                    <span className="settings-segmented__meta">
-                      {releaseVersionText(
-                        releaseVersions?.[option.value]?.latest,
-                      )}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            }
+            disabled={props.saving}
+            options={UPDATE_TRAIN_OPTIONS.map((option) => ({
+              ...option,
+              meta: releaseVersionText(releaseVersions?.[option.value]?.latest),
+            }))}
+            value={updateTrain.value}
+            onChange={(value) => {
+              return props.onUpdateTrainChange(value);
+            }}
           />
           <SettingsField
             label="Update track"
@@ -567,36 +495,21 @@ export function GeneralSettings(props: {
             control={
               <div className="settings-update-channel">
                 <div className="settings-update-channel__controls">
-                  <div
-                    className="settings-segmented"
-                    role="radiogroup"
-                    aria-label="Update track"
-                  >
-                    {UPDATE_CHANNEL_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        aria-checked={updateChannel.value === option.value}
-                        className={`settings-segmented__button settings-segmented__button--stacked${
-                          updateChannel.value === option.value
-                            ? " is-active"
-                            : ""
-                        }`}
-                        disabled={props.saving}
-                        role="radio"
-                        type="button"
-                        onClick={() => {
-                          void props.onUpdateChannelChange(option.value);
-                        }}
-                      >
-                        <span>{option.label}</span>
-                        <span className="settings-segmented__meta">
-                          {releaseVersionText(
-                            releaseVersions?.[updateTrain.value]?.[option.value],
-                          )}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                  <SegmentedControl
+                    disabled={props.saving}
+                    label="Update track"
+                    options={UPDATE_CHANNEL_OPTIONS.map((option) => ({
+                      ...option,
+                      meta: releaseVersionText(
+                        releaseVersions?.[updateTrain.value]?.[option.value],
+                      ),
+                    }))}
+                    pending={updateChannelPending}
+                    value={updateChannel.value}
+                    onChange={(value) => {
+                      return props.onUpdateChannelChange(value);
+                    }}
+                  />
                   {downloadedVersion ? (
                     <button
                       aria-label={`${restartActionLabel} (${downloadedVersion})`}
@@ -625,6 +538,9 @@ export function GeneralSettings(props: {
                   >
                     {updateChecking ? "Checking..." : "Check for Update"}
                   </button>
+                  <SettingsPendingIndicator
+                    pending={updateChannelPending.pending}
+                  />
                 </div>
                 {downloadedVersion ? (
                   <>
@@ -653,7 +569,7 @@ export function GeneralSettings(props: {
         chip={sourceBadge(pastedImageMaxPatches)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <SegmentedField
             label="Image patch budget"
             sub="Resize pasted desktop images before upload to control image-token usage."
             help={
@@ -668,33 +584,12 @@ export function GeneralSettings(props: {
             }
             error={pastedImageMaxPatches.error}
             source={sourceBadge(pastedImageMaxPatches)}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Pasted image patch budget"
-              >
-                {PASTED_IMAGE_PATCH_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={pastedImageMaxPatches.value === option.value}
-                    className={`settings-segmented__button${
-                      pastedImageMaxPatches.value === option.value
-                        ? " is-active"
-                        : ""
-                    }`}
-                    disabled={props.saving}
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onPastedImageMaxPatchesChange(option.value);
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            }
+            disabled={props.saving}
+            options={PASTED_IMAGE_PATCH_OPTIONS}
+            value={pastedImageMaxPatches.value}
+            onChange={(value) => {
+              return props.onPastedImageMaxPatchesChange(value);
+            }}
           />
         </div>
       </SettingsSection>
@@ -705,21 +600,16 @@ export function GeneralSettings(props: {
         chip={sourceBadge(pdfAnalysisEnabled)}
       >
         <div className="settings-fields">
-          <SettingsField
+          <ToggleField
+            checked={pdfAnalysisEnabled.value}
+            disabled={props.saving}
             label="Use PwrAgent PDF analysis"
             sub="Use local PDF tools to select pages on supported Codex threads, or render a bounded page set when a backend requires image input. This preserves visual layout while avoiding raw PDF input overhead."
             help="Turn this off to leave PDFs as normal local-file references for model-directed code or manual inspection."
             source={sourceBadge(pdfAnalysisEnabled)}
-            control={
-              <SettingsSwitch
-                checked={pdfAnalysisEnabled.value}
-                disabled={props.saving}
-                label="Use PwrAgent PDF analysis"
-                onChange={(value) => {
-                  void props.onPdfAnalysisEnabledChange(value);
-                }}
-              />
-            }
+            onChange={(value) => {
+              return props.onPdfAnalysisEnabledChange(value);
+            }}
           />
         </div>
       </SettingsSection>
