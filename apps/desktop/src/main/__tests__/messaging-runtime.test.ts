@@ -134,11 +134,7 @@ describe("DesktopMessagingRuntime", () => {
   it("does not reload config to authorize an allowed Full Access bound reply", async () => {
     const config = buildFullAccessRuntimeConfig(true);
     let configLoadsAtStartTurn = -1;
-    const loadConfig = vi.fn()
-      .mockResolvedValueOnce(config)
-      // PDF policy remains outside this span and still resolves dynamically.
-      .mockResolvedValueOnce(config)
-      .mockResolvedValue(config);
+    const loadConfig = vi.fn().mockResolvedValue(config);
     const { runtime, adapter, bridge } = await createFullAccessRuntimeHarness(
       loadConfig,
     );
@@ -155,7 +151,11 @@ describe("DesktopMessagingRuntime", () => {
     await adapter.listener!(buildTextEvent("continue"));
 
     expect(bridge.startTurn).toHaveBeenCalledTimes(1);
-    expect(configLoadsAtStartTurn).toBe(2);
+    // Only the lifecycle read. This was 2 when the test was written, because
+    // the PDF policy resolved on every inbound message; #1920 made that read
+    // conditional on the event actually carrying an attachment, and this one
+    // is plain text.
+    expect(configLoadsAtStartTurn).toBe(1);
     const policy = messagingLog.info.mock.calls.find(
       (call) => call[0] === "messaging Full Access resume policy evaluated",
     );
