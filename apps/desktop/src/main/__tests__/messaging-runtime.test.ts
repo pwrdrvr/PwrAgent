@@ -52,6 +52,7 @@ function trackRuntime(runtime: DesktopMessagingRuntime): DesktopMessagingRuntime
 }
 
 beforeEach(() => {
+  messagingLog.debug.mockReset();
   messagingLog.error.mockReset();
   messagingLog.info.mockReset();
   messagingLog.warn.mockReset();
@@ -877,7 +878,7 @@ describe("DesktopMessagingRuntime", () => {
     const adapter = createAdapter("telegram");
     const bridge = createBackendBridge();
     const config: DesktopMessagingConfig = {
-      inputDebounceMs: 0,
+      inputDebounceMs: 60_000,
       telegram: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -886,9 +887,13 @@ describe("DesktopMessagingRuntime", () => {
       },
     };
     const deferredReload = createDeferred<DesktopMessagingConfig>();
+    const reloadStarted = createDeferred<void>();
     const loadConfig = vi.fn()
       .mockResolvedValueOnce(config)
-      .mockImplementation(async () => await deferredReload.promise);
+      .mockImplementation(async () => {
+        reloadStarted.resolve();
+        return await deferredReload.promise;
+      });
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
     );
@@ -929,26 +934,22 @@ describe("DesktopMessagingRuntime", () => {
         },
       },
     });
-    await flushMicrotasks();
-
-    expect(loadConfig).toHaveBeenCalledTimes(1);
-
+    const outcome = await Promise.race([
+      handled?.then(() => "handled" as const),
+      reloadStarted.promise.then(() => "config-reload" as const),
+    ]);
     deferredReload.resolve(config);
     await handled;
-    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
-    expect(messagingLog.info).toHaveBeenCalledWith(
-      "messaging starting turn",
+
+    expect(outcome).toBe("handled");
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+    expect(messagingLog.debug).toHaveBeenCalledWith(
+      "messaging admission append timing",
       expect.objectContaining({
-        handledBindingLookupMs: expect.any(Number),
-        handledPendingIntentReadMs: expect.any(Number),
-        handledPendingNewThreadReadMs: expect.any(Number),
-        handledPrivateContinuationExpirationMs: expect.any(Number),
-        handledRemoteScopeMs: expect.any(Number),
-        handledRequirePermissionMs: expect.any(Number),
-        handledResponseModeMs: expect.any(Number),
-        handledSharedMessagePolicyMs: expect.any(Number),
-        handledTextParsingMs: expect.any(Number),
-        inboundEventId: "event-text",
+        eventId: "event-text",
+        finalAdmissionAppendAwaitMs: expect.any(Number),
+        platform: "telegram",
       }),
     );
   });
