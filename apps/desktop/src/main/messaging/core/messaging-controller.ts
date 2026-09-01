@@ -4071,14 +4071,13 @@ export class MessagingController {
       ["originToPolicyMs", marks.originBuilt, marks.policyResolved],
       ["policyToStartTurnIssueMs", marks.policyResolved, startTurnIssuedAt],
     ];
-    const timing: Record<string, number> = {
-      ...admissionTiming.subspans,
-    };
+    const timing: Record<string, number> = {};
     for (const [name, from, to] of spans) {
       if (from !== undefined && to !== undefined) {
         timing[name] = to - from;
       }
     }
+    Object.assign(timing, admissionTiming.subspans);
     return timing;
   }
 

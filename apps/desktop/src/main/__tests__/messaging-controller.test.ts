@@ -206,6 +206,9 @@ describe("MessagingController", () => {
     // Everything the admission read did not spend is attributed elsewhere, so
     // the stages sum to the end-to-end number rather than overlapping it.
     const detail = startingTurn?.[1] as Record<string, number>;
+    expect(Object.keys(detail).indexOf("handledToRoutedMs")).toBeLessThan(
+      Object.keys(detail).indexOf("handledTextParsingMs"),
+    );
     const stageTotal =
       detail.receivedToHandledMs
       + detail.handledToRoutedMs
