@@ -22,6 +22,7 @@ import {
   type OpenPwrSnapResponse,
   type PwrSnapConnectionStatus,
 } from "@pwragent/shared";
+import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
 import {
   getRuntimeLeaseManager,
@@ -327,6 +328,16 @@ export class McpConnectionGatewayService {
   >();
   private readonly coordinators = new Map<string, McpOAuthSessionCoordinator>();
   private readonly upstreamSessions = new Map<string, UpstreamSession>();
+  /**
+   * In-flight session opens, keyed by bridge token.
+   *
+   * The bridge child opens a socket per RPC and every one of them carries the
+   * same token, so concurrent calls arrive before the first session exists.
+   * Without this, each would build its own client and the last write would
+   * orphan the others — every teardown path looks a session up by token, so
+   * an orphan can never be closed.
+   */
+  private readonly upstreamStarts = new Map<string, Promise<Client>>();
   private connectPromise?: Promise<ConnectPwrSnapResponse>;
   private leaseHeld = false;
   private brokerToken?: string;
@@ -484,7 +495,7 @@ export class McpConnectionGatewayService {
       await this.coordinatorFor(connection).authorize({
         redirectUrl: callback.url,
         state: authorizationState,
-        onRedirect: async (url) => await this.openExternal(url.href),
+        onRedirect: async (url) => await this.openAuthorizationUrl(url),
         waitForCode: callback.waitForCode,
       });
       if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
@@ -955,18 +966,10 @@ export class McpConnectionGatewayService {
         response.writeHead(404).end();
         return;
       }
-      const error = requestUrl.searchParams.get("error");
-      if (error) {
-        const detail =
-          requestUrl.searchParams.get("error_description") ?? error;
-        callbackState = { state: "failed", detail };
-        response.writeHead(400, callbackHtmlHeaders());
-        response.end(htmlResponse(`${displayName} connection declined`, detail, {
-          displayName,
-        }));
-        rejectRequest?.(new Error(detail));
-        return;
-      }
+      // The state check gates both outcomes, not only success. This server
+      // listens on a loopback port any local process can find, and an
+      // unchecked `?error=` would let one abort a pending authorization
+      // while the operator is still completing consent in the browser.
       if (requestUrl.searchParams.get("state") !== expectedState) {
         callbackState = {
           state: "failed",
@@ -981,6 +984,18 @@ export class McpConnectionGatewayService {
           ),
         );
         rejectRequest?.(new Error(`${displayName} authorization state did not match.`));
+        return;
+      }
+      const error = requestUrl.searchParams.get("error");
+      if (error) {
+        const detail =
+          requestUrl.searchParams.get("error_description") ?? error;
+        callbackState = { state: "failed", detail };
+        response.writeHead(400, callbackHtmlHeaders());
+        response.end(htmlResponse(`${displayName} connection declined`, detail, {
+          displayName,
+        }));
+        rejectRequest?.(new Error(detail));
         return;
       }
       response.writeHead(200, callbackHtmlHeaders());
@@ -1087,6 +1102,26 @@ export class McpConnectionGatewayService {
     return connection;
   }
 
+  /**
+   * Hand an OAuth authorization URL to the OS.
+   *
+   * The URL comes from the remote server's `authorization_endpoint`, and the
+   * SDK only screens it against a three-scheme denylist — `ms-msdt:`, `smb:`,
+   * and `file:` all survive that. `shell.openExternal` would launch the local
+   * handler for any of them, so the URL has to clear the same gate every
+   * other external open in the app clears, narrowed to the two schemes an
+   * authorization endpoint can legitimately use.
+   */
+  private async openAuthorizationUrl(url: URL): Promise<void> {
+    const allowedScheme = url.protocol === "https:" || url.protocol === "http:";
+    if (!allowedScheme || !isSafeExternalOpenUrl(url.href)) {
+      throw new Error(
+        "The MCP server asked PwrAgent to open an unsupported authorization URL.",
+      );
+    }
+    await this.openExternal(url.href);
+  }
+
   private coordinatorFor(
     connection: McpConnectionRecord,
   ): McpOAuthSessionCoordinator {
@@ -1135,9 +1170,27 @@ export class McpConnectionGatewayService {
     token: string,
     grant: BridgeGrant,
   ): Promise<Client> {
+    // Availability is checked before the cache, not after. A session opened
+    // while the gateway was on would otherwise keep serving every later call
+    // on this token: Codex re-registers each turn and would be refused, but
+    // an ACP agent resolves its servers only at session create or load, so
+    // nothing would ever notice the switch.
+    const connection = this.requireAvailableConnection(grant.connectionId);
     const existing = this.upstreamSessions.get(token);
     if (existing) return existing.client;
-    const connection = this.requireAvailableConnection(grant.connectionId);
+    const pending = this.upstreamStarts.get(token);
+    if (pending) return await pending;
+    const start = this.openUpstreamSession(token, connection).finally(() => {
+      this.upstreamStarts.delete(token);
+    });
+    this.upstreamStarts.set(token, start);
+    return await start;
+  }
+
+  private async openUpstreamSession(
+    token: string,
+    connection: McpConnectionRecord,
+  ): Promise<Client> {
     const coordinator = this.coordinatorFor(connection);
     if (!(await coordinator.configured())) {
       throw new Error(
@@ -1155,6 +1208,15 @@ export class McpConnectionGatewayService {
       },
       { capabilities: {} },
     );
+    // A session evicts itself when it actually dies. Leaving that to the
+    // per-request error path would close a healthy session shared by every
+    // in-flight request on this token the first time one of them was
+    // cancelled or answered with an ordinary JSON-RPC error.
+    client.onclose = () => {
+      if (this.upstreamSessions.get(token)?.client === client) {
+        this.upstreamSessions.delete(token);
+      }
+    };
     try {
       await client.connect(transport);
       if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
@@ -1175,6 +1237,23 @@ export class McpConnectionGatewayService {
     await session.client.close().catch(async () => {
       await session.transport.close().catch(() => undefined);
     });
+  }
+
+  /**
+   * Drop every live upstream session.
+   *
+   * Called when the profile-wide gateway switch goes off. `registerBridge`
+   * and `ensureUpstreamClient` already refuse new work, but a session that
+   * was opened while the switch was on holds an authorized transport and a
+   * remote session id, and no reconnection is needed to keep using them.
+   * Turning the gateway off has to end those too, not only forbid new ones.
+   */
+  async closeAllUpstreamSessions(): Promise<void> {
+    await Promise.all(
+      [...this.upstreamSessions.keys()].map(
+        async (token) => await this.closeUpstreamSession(token),
+      ),
+    );
   }
 
   private async closeConnectionSessions(connectionId: string): Promise<void> {
@@ -1310,7 +1389,11 @@ export class McpConnectionGatewayService {
       );
       this.respond(socket, { ok: true, result });
     } catch (error) {
-      await this.closeUpstreamSession(request.token);
+      // Deliberately no session teardown here. One token is shared by every
+      // in-flight request from the bridge child, so closing on any failure
+      // would take a cancelled call, a 429, or a `-32602` and turn it into
+      // `Connection closed` for each of its siblings. A session that really
+      // is gone removes itself through `client.onclose`.
       const message = error instanceof Error ? error.message : String(error);
       connectionLog.warn("proxied MCP operation failed", {
         connectionId: grant.connectionId,

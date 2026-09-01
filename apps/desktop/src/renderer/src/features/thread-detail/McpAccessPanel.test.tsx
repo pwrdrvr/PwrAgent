@@ -225,4 +225,125 @@ describe("ThreadMcpAccessPanel", () => {
       await screen.findByText("That thread is no longer available."),
     ).toBeTruthy();
   });
+
+  it("lets a parked connection be dropped from the thread", async () => {
+    const onSelectionChange = vi.fn(async () => undefined);
+    render(
+      <McpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({
+            connections: [
+              connection({
+                id: "acme",
+                displayName: "Acme",
+                enabled: false,
+              }),
+            ],
+          }),
+        }}
+        selection={{ connectionIds: ["acme"], providerServersEnabled: true }}
+        onDismiss={vi.fn()}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("switch", { name: "Use Acme in this thread" }),
+    );
+    await waitFor(() => {
+      expect(onSelectionChange).toHaveBeenCalledWith({
+        connectionIds: [],
+        providerServersEnabled: true,
+      });
+    });
+  });
+
+  it("lets a removed connection be dropped from the thread", async () => {
+    const onSelectionChange = vi.fn(async () => undefined);
+    render(
+      <McpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({ connections: [] }),
+        }}
+        selection={{ connectionIds: ["gone"], providerServersEnabled: true }}
+        onDismiss={vi.fn()}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("switch", { name: "Use gone in this thread" }),
+    );
+    await waitFor(() => {
+      expect(onSelectionChange).toHaveBeenCalledWith({
+        connectionIds: [],
+        providerServersEnabled: true,
+      });
+    });
+  });
+
+  it("does not drop a pending change when a second control is used", async () => {
+    let release: (() => void) | undefined;
+    const onSelectionChange = vi.fn(
+      async () =>
+        await new Promise<undefined>((resolve) => {
+          release = () => resolve(undefined);
+        }),
+    );
+    render(
+      <McpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({
+            connections: [
+              READY,
+              connection({ id: "sentry", displayName: "Sentry" }),
+            ],
+          }),
+        }}
+        selection={{ connectionIds: [], providerServersEnabled: true }}
+        onDismiss={vi.fn()}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("switch", { name: "Use Datadog in this thread" }),
+    );
+    await waitFor(() => expect(onSelectionChange).toHaveBeenCalledTimes(1));
+    // The first write has not resolved, so the caller's selection is still
+    // empty. A second toggle now would compose against it and revert Datadog.
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Use Sentry in this thread" }),
+    );
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Use the agent's own MCP servers in this thread",
+      }),
+    );
+    expect(onSelectionChange).toHaveBeenCalledTimes(1);
+    release?.();
+  });
+
+  it("offers the isolation control even with no managed connections", async () => {
+    render(
+      <McpAccessPanel
+        backend="codex"
+        desktopApi={{
+          listMcpConnections: async () => ({ connections: [] }),
+        }}
+        selection={{ connectionIds: [], providerServersEnabled: false }}
+        onDismiss={vi.fn()}
+        onSelectionChange={vi.fn(async () => undefined)}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("switch", {
+        name: "Use the agent's own MCP servers in this thread",
+      }),
+    ).toBeTruthy();
+  });
 });

@@ -138,17 +138,22 @@ export class McpConnectionRegistry {
     return true;
   }
 
-  private readStoredConnections(): McpConnectionRecord[] {
+  private readStoredRows(): StoredConnectionRow[] {
     if (!fs.existsSync(this.configPath)) return [];
     const source = fs.readFileSync(this.configPath, "utf8");
     const rows = parseTomlTables(source, this.configPath).mcp_connections
       ?.connections;
     if (!Array.isArray(rows)) return [];
+    return rows.filter(
+      (raw): raw is StoredConnectionRow =>
+        Boolean(raw) && !Array.isArray(raw) && typeof raw === "object",
+    );
+  }
+
+  private readStoredConnections(): McpConnectionRecord[] {
     const connections: McpConnectionRecord[] = [];
     const ids = new Set<string>([PWRSNAP_MCP_CONNECTION_ID]);
-    for (const raw of rows) {
-      if (!raw || Array.isArray(raw) || typeof raw !== "object") continue;
-      const row = raw as StoredConnectionRow;
+    for (const row of this.readStoredRows()) {
       const connection = connectionFromRow(row);
       if (!connection || ids.has(connection.id)) continue;
       ids.add(connection.id);
@@ -157,12 +162,48 @@ export class McpConnectionRegistry {
     return connections;
   }
 
+  /**
+   * Rewrite the stored rows from the rows already on disk.
+   *
+   * `setTableArray` replaces the whole block, so serializing only the rows
+   * this build accepted would delete every other one during an unrelated
+   * write — a hand-authored entry with a typo, a row a newer build wrote, an
+   * `id = "pwrsnap"` override. Those belong to the operator, and a toggle of
+   * a different connection is no place to discard them. Rewriting a known
+   * row also merges rather than replaces, so fields this build does not
+   * understand survive. Comments *inside* the block are still lost; the TOML
+   * editor rewrites the block as a unit.
+   */
   private writeStoredConnections(connections: McpConnectionRecord[]): void {
+    const byId = new Map(
+      connections.map((connection) => [connection.id, connection]),
+    );
+    const emitted = new Set<string>();
+    const rows: StoredConnectionRow[] = [];
+    for (const row of this.readStoredRows()) {
+      const parsed = connectionFromRow(row);
+      if (!parsed) {
+        rows.push(row);
+        continue;
+      }
+      const next = byId.get(parsed.id);
+      // A row whose id is gone from the new set was removed. A later row
+      // repeating an id already written is a duplicate the read path was
+      // ignoring anyway, and keeping it would resurrect a removed
+      // connection on the next read.
+      if (!next || emitted.has(parsed.id)) continue;
+      emitted.add(parsed.id);
+      rows.push({ ...row, ...connectionToRow(next) });
+    }
+    for (const connection of connections) {
+      if (emitted.has(connection.id)) continue;
+      rows.push(connectionToRow(connection));
+    }
     this.writeConfig((source) =>
       applyTomlEdits(source, [{
         op: "setTableArray",
         path: CONNECTIONS_TABLE,
-        value: connections.map(connectionToRow),
+        value: rows,
       }]),
     );
   }

@@ -105,29 +105,112 @@ async function validateOutboundUrl(
 
 function classifyAddress(address: string): "public" | "loopback" | "private" {
   const normalized = normalizeHostname(address).toLowerCase();
-  if (normalized === "::1") return "loopback";
-  if (normalized === "::") return "private";
-  const mappedIpv4 = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
-  if (mappedIpv4) return classifyIpv4(mappedIpv4);
-  if (normalized.includes(":")) {
-    const first = Number.parseInt(normalized.split(":", 1)[0] || "0", 16);
-    if ((first & 0xfe00) === 0xfc00) return "private";
-    if ((first & 0xffc0) === 0xfe80) return "private";
-    if ((first & 0xff00) === 0xff00) return "private";
-    if (normalized.startsWith("2001:db8:")) return "private";
-    return "public";
-  }
-  return classifyIpv4(normalized);
+  const family = isIP(normalized);
+  if (family === 6) return classifyIpv6(normalized);
+  if (family === 4) return classifyIpv4(normalized);
+  // Not an address we can reason about. Fail closed.
+  return "private";
 }
 
-function classifyIpv4(address: string): "public" | "loopback" | "private" {
+/**
+ * Classify an IPv6 literal by expanding it to its eight groups first.
+ *
+ * Matching on the textual form is not safe here: `new URL()` re-serializes a
+ * literal through the WHATWG host serializer, so `[::ffff:169.254.169.254]`
+ * arrives as `[::ffff:a9fe:a9fe]` and a dotted-quad pattern never sees it.
+ * Several prefixes also carry an IPv4 destination in their low bits, and each
+ * of those has to be classified as the IPv4 address it actually reaches.
+ */
+function classifyIpv6(address: string): "public" | "loopback" | "private" {
+  const groups = expandIpv6(address);
+  if (!groups) return "private";
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const embeddedIpv4 = formatIpv4(g6, g7);
+  const highZero = g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0;
+  // ::ffff:0:0/96 (IPv4-mapped) and ::/96 (IPv4-compatible).
+  if (highZero && (g5 === 0xffff || g5 === 0)) {
+    if (g5 === 0 && g6 === 0) {
+      if (g7 === 0) return "private";
+      if (g7 === 1) return "loopback";
+    }
+    return classifyIpv4(embeddedIpv4);
+  }
+  // 64:ff9b::/96 and 64:ff9b:1::/48 (NAT64).
+  if (g0 === 0x64 && g1 === 0xff9b) return classifyIpv4(embeddedIpv4);
+  // 2002::/16 (6to4) carries its IPv4 relay in the next 32 bits.
+  if (g0 === 0x2002) return classifyIpv4(formatIpv4(g1, g2));
+  if ((g0 & 0xfe00) === 0xfc00) return "private";
+  if ((g0 & 0xffc0) === 0xfe80) return "private";
+  if ((g0 & 0xff00) === 0xff00) return "private";
+  if (g0 === 0x2001 && g1 === 0x0db8) return "private";
+  if (g0 === 0x2001 && g1 === 0x0000) return "private";
+  if (g0 === 0x0100 && g1 === 0 && g2 === 0 && g3 === 0) return "private";
+  return "public";
+}
+
+function expandIpv6(address: string): number[] | undefined {
+  let text = address;
+  const embedded = text.match(/:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  if (embedded) {
+    const octets = parseIpv4Octets(embedded);
+    if (!octets) return undefined;
+    const [a, b, c, d] = octets;
+    const head = ((a << 8) | b).toString(16);
+    const tail = ((c << 8) | d).toString(16);
+    text = `${text.slice(0, text.length - embedded.length)}${head}:${tail}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return undefined;
+  const leading = halves[0] ? halves[0].split(":") : [];
+  const trailing = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const elided = halves.length === 2
+    ? 8 - leading.length - trailing.length
+    : 0;
+  if (halves.length === 2 && elided < 1) return undefined;
+  const groups = [
+    ...leading,
+    ...Array.from({ length: elided }, () => "0"),
+    ...trailing,
+  ];
+  if (groups.length !== 8) return undefined;
+  const parsed = groups.map((group) => Number.parseInt(group, 16));
+  if (
+    parsed.some(
+      (group) => !Number.isInteger(group) || group < 0 || group > 0xffff,
+    )
+  ) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function formatIpv4(high: number, low: number): string {
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
+function parseIpv4Octets(address: string): number[] | undefined {
   const octets = address.split(".").map(Number);
   if (
     octets.length !== 4
     || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
   ) {
-    return "private";
+    return undefined;
   }
+  return octets;
+}
+
+function classifyIpv4(address: string): "public" | "loopback" | "private" {
+  const octets = parseIpv4Octets(address);
+  if (!octets) return "private";
   const [a, b, c] = octets as [number, number, number, number];
   if (a === 127) return "loopback";
   if (

@@ -285,4 +285,56 @@ describe("McpOAuthSessionCoordinator", () => {
     ).rejects.toThrow("keychain unavailable");
     expect(coordinator.state).toBe("temporarily_unavailable");
   });
+
+  it("does not resurrect a credential revoked during a refresh", async () => {
+    const { vault, writes } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      redirectUrl: "http://127.0.0.1:4040/oauth/callback",
+      clientInformation: { client_id: "pwragent-client" },
+      tokens: {
+        access_token: "old-access",
+        refresh_token: "old-refresh",
+        token_type: "bearer",
+      },
+    });
+    let started: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    const refreshStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const authFn = refreshAuth(async (provider) => {
+      started?.();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await provider.saveTokens?.({
+        access_token: "new-access",
+        refresh_token: "new-refresh",
+        token_type: "bearer",
+      });
+      return "AUTHORIZED";
+    });
+    const coordinator = new McpOAuthSessionCoordinator({
+      authFn,
+      connectionId: "example",
+      fetchFn: vi.fn(async () => new Response("expired", { status: 401 })),
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    const pending = coordinator
+      .authorizedFetch()("https://mcp.example.com/mcp")
+      .catch(() => undefined);
+    await refreshStarted;
+    // The operator disconnects while the token POST is still in flight.
+    await coordinator.disconnect();
+    release?.();
+    await pending;
+
+    // The token response landed after the revocation and must not be stored.
+    expect(writes).toHaveLength(0);
+    expect(await coordinator.configured()).toBe(false);
+    expect(coordinator.state).not.toBe("ready");
+    expect(vault.delete).toHaveBeenCalled();
+  });
 });
