@@ -53,15 +53,24 @@ export type RetinaPlacement =
  */
 export async function moveWindowToRetinaDisplay(
   electronApp: ElectronApplication,
+  titleSubstring?: string,
 ): Promise<RetinaPlacement> {
   return await electronApp.evaluate(
-    ({ BrowserWindow, screen }, minimumScaleFactor): RetinaPlacement => {
-      const win = BrowserWindow.getAllWindows()[0];
+    ({ BrowserWindow, screen }, options): RetinaPlacement => {
+      const windows = BrowserWindow.getAllWindows();
+      // Match `capture-window.swift --title=`: an auxiliary window such as
+      // Messaging Activity is not windows[0], and placing the main window
+      // does nothing for a capture aimed at a different one.
+      const win = options.titleSubstring === undefined
+        ? windows[0]
+        : windows.find((candidate) =>
+          candidate.getTitle().includes(options.titleSubstring as string),
+        );
       if (!win) return { moved: false, reason: "no-window", available: [] };
 
       const displays = screen.getAllDisplays();
       const retina = displays.filter(
-        (display) => display.scaleFactor >= minimumScaleFactor,
+        (display) => display.scaleFactor >= options.minimumScaleFactor,
       );
       if (retina.length === 0) {
         return {
@@ -102,7 +111,7 @@ export async function moveWindowToRetinaDisplay(
         overflows,
       };
     },
-    MINIMUM_RETINA_SCALE_FACTOR,
+    { minimumScaleFactor: MINIMUM_RETINA_SCALE_FACTOR, titleSubstring },
   );
 }
 
@@ -120,11 +129,16 @@ let placementReported = false;
  * Both steps run before every capture, not just at launch: a display can
  * be connected or disconnected mid-run, and the operation is cheap and
  * idempotent.
+ *
+ * Pass `titleSubstring` when the capture targets an auxiliary window —
+ * it must match what goes to `capture-window.swift --title=`, or the
+ * main window gets placed while a different one is photographed.
  */
 export async function bringToFront(
   electronApp: ElectronApplication,
+  titleSubstring?: string,
 ): Promise<void> {
-  const placement = await moveWindowToRetinaDisplay(electronApp);
+  const placement = await moveWindowToRetinaDisplay(electronApp, titleSubstring);
 
   if (!placementReported) {
     placementReported = true;
@@ -152,13 +166,16 @@ export async function bringToFront(
     }
   }
 
-  await electronApp.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0];
+  await electronApp.evaluate(({ BrowserWindow }, needle) => {
+    const windows = BrowserWindow.getAllWindows();
+    const win = needle === undefined
+      ? windows[0]
+      : windows.find((candidate) => candidate.getTitle().includes(needle));
     if (!win) return;
     win.show();
     win.focus();
     win.moveTop();
-  });
+  }, titleSubstring);
   // Give the compositor a tick to actually raise the window (and settle
   // the move) before screencapture inspects the on-screen window list.
   await new Promise((resolve) => setTimeout(resolve, 500));

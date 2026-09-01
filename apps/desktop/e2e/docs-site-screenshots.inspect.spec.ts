@@ -695,16 +695,9 @@ test("messaging-activity-blocked — Messaging Activity showing rejected inbound
     }
     await activityWindow.waitForLoadState("load");
 
-    await app.electronApp.evaluate(({ BrowserWindow }, titleSubstring) => {
-      const win = BrowserWindow.getAllWindows().find((w) =>
-        w.getTitle().includes(titleSubstring),
-      );
-      if (!win) return;
-      win.show();
-      win.focus();
-      win.moveTop();
-    }, "Messaging Activity");
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Same title the capture below passes as `--title=`, so placement and
+    // raise both act on the window that actually gets photographed.
+    await bringToFront(app.electronApp, "Messaging Activity");
 
     // Two nested regions share `aria-label="Messaging activity"`
     // (the outer window shell and the inner screen); .first() pins
