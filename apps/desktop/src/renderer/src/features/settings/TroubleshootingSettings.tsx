@@ -17,6 +17,8 @@ import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  SegmentedControl,
+  SegmentedField,
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
@@ -503,84 +505,28 @@ export function TroubleshootingSettings(props: {
               </div>
             }
           />
-          <SettingsField
+          <SegmentedField
             label="Profiling start delay"
             sub="Wait before the monitor starts sampling so you can trigger the scenario."
             source={sourceBadge(hotCpuProfilingStartDelayMs)}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Profiling start delay"
-              >
-                {HOT_CPU_START_DELAY_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={
-                      hotCpuProfilingStartDelayMs.value === option.value
-                    }
-                    className={`settings-segmented__button settings-segmented__button--stacked${
-                      hotCpuProfilingStartDelayMs.value === option.value
-                        ? " is-active"
-                        : ""
-                    }`}
-                    disabled={props.saving}
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onHotCpuProfilingStartDelayMsChange(
-                        option.value,
-                      );
-                    }}
-                  >
-                    <span>{option.label}</span>
-                    <span className="settings-segmented__meta">
-                      {option.meta}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            }
+            disabled={props.saving}
+            options={HOT_CPU_START_DELAY_OPTIONS}
+            value={hotCpuProfilingStartDelayMs.value}
+            onChange={(value) => {
+              return props.onHotCpuProfilingStartDelayMsChange(value);
+            }}
           />
-          <SettingsField
+          <SegmentedField
             label="CPU profile trigger"
             sub="Choose whether one spike, two hot samples, or a lower slowburn starts the capture."
             help={`Slowburn currently uses ${hotCpuProfilingSlowburnThresholdPercent.value}% across the same consecutive-sample window.`}
             source={sourceBadge(hotCpuProfilingTriggerMode)}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="CPU profile trigger"
-              >
-                {HOT_CPU_TRIGGER_MODE_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={
-                      hotCpuProfilingTriggerMode.value === option.value
-                    }
-                    className={`settings-segmented__button settings-segmented__button--stacked${
-                      hotCpuProfilingTriggerMode.value === option.value
-                        ? " is-active"
-                        : ""
-                    }`}
-                    disabled={props.saving}
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onHotCpuProfilingTriggerModeChange(
-                        option.value,
-                      );
-                    }}
-                  >
-                    <span>{option.label}</span>
-                    <span className="settings-segmented__meta">
-                      {option.meta}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            }
+            disabled={props.saving}
+            options={HOT_CPU_TRIGGER_MODE_OPTIONS}
+            value={hotCpuProfilingTriggerMode.value}
+            onChange={(value) => {
+              return props.onHotCpuProfilingTriggerModeChange(value);
+            }}
           />
           <ToggleField
             checked={hotCpuProfilingCaptureHeapSnapshot.value}
@@ -593,46 +539,18 @@ export function TroubleshootingSettings(props: {
               return props.onHotCpuProfilingCaptureHeapSnapshotChange(next);
             }}
           />
-          <SettingsField
+          <SegmentedField
             label="Heap snapshot limit"
             sub="Keep emergency heap capture small enough to avoid filling disk or stalling the app repeatedly."
             source={sourceBadge(hotCpuProfilingHeapSnapshotLimit)}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Heap snapshot limit"
-              >
-                {HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={
-                      hotCpuProfilingHeapSnapshotLimit.value === option.value
-                    }
-                    className={`settings-segmented__button settings-segmented__button--stacked${
-                      hotCpuProfilingHeapSnapshotLimit.value === option.value
-                        ? " is-active"
-                        : ""
-                    }`}
-                    disabled={
-                      props.saving || !hotCpuProfilingCaptureHeapSnapshot.value
-                    }
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onHotCpuProfilingHeapSnapshotLimitChange(
-                        option.value,
-                      );
-                    }}
-                  >
-                    <span>{option.label}</span>
-                    <span className="settings-segmented__meta">
-                      {option.meta}
-                    </span>
-                  </button>
-                ))}
-              </div>
+            disabled={
+              props.saving || !hotCpuProfilingCaptureHeapSnapshot.value
             }
+            options={HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS}
+            value={hotCpuProfilingHeapSnapshotLimit.value}
+            onChange={(value) => {
+              return props.onHotCpuProfilingHeapSnapshotLimitChange(value);
+            }}
           />
           <SettingsField
             label="Capture heap snapshot"
@@ -667,34 +585,16 @@ export function TroubleshootingSettings(props: {
             label="Heap snapshot delay"
             sub="Wait before capturing so you can reproduce the state you want to inspect."
             control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Heap snapshot delay"
-              >
-                {HEAP_SNAPSHOT_DELAY_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={heapSnapshotDelayMs === option.value}
-                    className={`settings-segmented__button settings-segmented__button--stacked${
-                      heapSnapshotDelayMs === option.value ? " is-active" : ""
-                    }`}
-                    disabled={
-                      !developerMode.value || heapSnapshotCountdownActive
-                    }
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      setHeapSnapshotDelayMs(option.value);
-                    }}
-                  >
-                    <span>{option.label}</span>
-                    <span className="settings-segmented__meta">
-                      {option.meta}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              // No pending tracker: this only moves local state for the next
+              // capture. Nothing is written to config, so there is no save to
+              // report.
+              <SegmentedControl
+                disabled={!developerMode.value || heapSnapshotCountdownActive}
+                label="Heap snapshot delay"
+                options={HEAP_SNAPSHOT_DELAY_OPTIONS}
+                value={heapSnapshotDelayMs}
+                onChange={setHeapSnapshotDelayMs}
+              />
             }
           />
         </div>

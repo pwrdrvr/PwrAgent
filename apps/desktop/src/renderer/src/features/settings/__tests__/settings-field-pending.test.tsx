@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SegmentedField, SettingsField, ToggleField } from "../SettingsLayout";
+import {
+  SegmentedControl,
+  SegmentedField,
+  SettingsField,
+  ToggleField,
+} from "../SettingsLayout";
 
 afterEach(() => {
   cleanup();
@@ -198,6 +203,65 @@ describe("settings field pending state", () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(spinner()).toBeNull();
     expect(document.querySelector(".settings-pending")).toBeNull();
+  });
+
+  it("renders an option's meta as a stacked segment", () => {
+    render(
+      <SegmentedField
+        label="Release channel"
+        options={[
+          { label: "Stable", meta: "1.2.0", value: "stable" },
+          { label: "Beta", meta: "1.3.0-beta.1", value: "beta" },
+        ]}
+        source="config"
+        value="stable"
+        onChange={() => Promise.resolve()}
+      />,
+    );
+
+    const stable = screen.getByRole("radio", { name: /Stable/ });
+    expect(stable.className).toContain("settings-segmented__button--stacked");
+    expect(stable).toHaveTextContent("1.2.0");
+
+    // An option with no meta stays on the plain variant, so the two shapes
+    // cannot drift apart behind a separate flag.
+    cleanup();
+    render(
+      <SegmentedField
+        label="Release channel"
+        options={[{ label: "Stable", value: "stable" }]}
+        source="config"
+        value="stable"
+        onChange={() => Promise.resolve()}
+      />,
+    );
+    expect(
+      screen.getByRole("radio", { name: "Stable" }).className,
+    ).not.toContain("--stacked");
+  });
+
+  it("shows no affordance for a control that opted out of tracking", () => {
+    const onChange = vi.fn();
+    render(
+      <SegmentedControl
+        label="Theme"
+        options={[
+          { label: "System", value: "system" },
+          { label: "Dark", value: "dark" },
+        ]}
+        value="system"
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
+
+    // Appearance axes apply optimistically, so there is no wait to report.
+    expect(onChange).toHaveBeenCalledWith("dark");
+    expect(document.querySelector(".settings-pending")).toBeNull();
+    expect(
+      screen.getByRole("radio", { name: "Dark" }),
+    ).not.toHaveAttribute("aria-busy");
   });
 
   it("leaves a sibling field untouched while one field saves", async () => {

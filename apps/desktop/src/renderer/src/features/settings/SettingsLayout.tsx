@@ -655,12 +655,14 @@ export function SettingsField(props: {
  * fire-and-forget `void save(...)` body is a type error here instead of a
  * control that silently never shows pending.
  */
-export function useSettingsFieldPending(): {
+export type SettingsFieldPending = {
   pending: boolean;
   /** Hold the pending state until `result` settles. Overlapping writes are
    *  counted, so an early one returning does not clear a later one. */
   track: (result: Promise<unknown>) => void;
-} {
+};
+
+export function useSettingsFieldPending(): SettingsFieldPending {
   const [inFlight, setInFlight] = useState(0);
 
   const track = useCallback((result: Promise<unknown>): void => {
@@ -773,21 +775,47 @@ export function ToggleField(props: {
 }
 
 /**
- * Segmented (radio group) row. Like `ToggleField`, pending is scoped to this
- * field's own write; the option the operator picked also carries `aria-busy`
- * so the busy state is attached to the chosen segment, not the whole group.
+ * The segmented radio group itself, without a field row around it.
+ *
+ * Split out of `SegmentedField` because the group also appears inside
+ * composite controls that supply their own surrounding layout (the update
+ * channel's row of buttons and version text). Those sites used to hand-roll
+ * the markup, which is how they drifted: same class names, but no same-value
+ * guard and no busy state. The caller owns the pending tracker so it can place
+ * the indicator to suit its layout; this component owns which segment is busy.
  */
-export function SegmentedField<TValue extends string>(props: {
-  actions?: ReactNode;
+export type SegmentedControlProps<TValue extends string | number> = {
   disabled?: boolean;
+  /** Names the group for assistive tech. */
   label: string;
-  sub?: ReactNode;
-  options: Array<{ label: string; value: TValue }>;
-  source: string;
+  /** An option carrying `meta` renders stacked, with the secondary line under
+   *  its label — release versions, delays, thresholds. The two always went
+   *  together in the hand-rolled groups this replaced, so presence of `meta`
+   *  is what selects the variant rather than a separate flag to keep in sync. */
+  options: Array<{ label: string; meta?: ReactNode; value: TValue }>;
   value: TValue;
-  onChange: (value: TValue) => Promise<unknown>;
-}) {
-  const { pending, track } = useSettingsFieldPending();
+} & (
+  | {
+      /** A tracker from `useSettingsFieldPending`. Supplying one obliges
+       *  `onChange` to return the write's promise, so a fire-and-forget
+       *  handler is a type error rather than a control that never shows
+       *  pending. */
+      pending: SettingsFieldPending;
+      onChange: (value: TValue) => Promise<unknown>;
+    }
+  | {
+      /** No tracker: the change lands immediately and needs no affordance.
+       *  Appearance axes apply optimistically — the window re-themes or
+       *  re-sizes on the click — and some groups only move local state. Say
+       *  so explicitly rather than passing a tracker nothing would drive. */
+      pending?: undefined;
+      onChange: (value: TValue) => void;
+    }
+);
+
+export function SegmentedControl<TValue extends string | number>(
+  props: SegmentedControlProps<TValue>,
+) {
   // Which segments have a write outstanding, counted per value. A single
   // "last picked" would mark the wrong segment busy as soon as two writes
   // overlap: pick A, pick B before A returns, B settles first, and the ring
@@ -795,59 +823,102 @@ export function SegmentedField<TValue extends string>(props: {
   const [busyValues, setBusyValues] = useState<ReadonlyArray<TValue>>([]);
 
   return (
+    <div className="settings-segmented" role="radiogroup" aria-label={props.label}>
+      {props.options.map((option) => (
+        <button
+          key={option.value}
+          aria-busy={busyValues.includes(option.value) ? true : undefined}
+          aria-checked={props.value === option.value}
+          className={`settings-segmented__button${
+            option.meta === undefined
+              ? ""
+              : " settings-segmented__button--stacked"
+          }${props.value === option.value ? " is-active" : ""}`}
+          disabled={props.disabled}
+          role="radio"
+          type="button"
+          onClick={() => {
+            // Re-clicking the selected segment is not a change. Several panes
+            // route through a delta builder that bails when nothing moved, so
+            // tracking it would announce "Saving…" for a write that never
+            // happens.
+            if (option.value === props.value) {
+              return;
+            }
+            if (props.pending === undefined) {
+              props.onChange(option.value);
+              return;
+            }
+            setBusyValues((current) => [...current, option.value]);
+            const clear = () => {
+              setBusyValues((current) => {
+                const at = current.indexOf(option.value);
+                if (at < 0) {
+                  return current;
+                }
+                return [...current.slice(0, at), ...current.slice(at + 1)];
+              });
+            };
+            const result = Promise.resolve(props.onChange(option.value));
+            result.then(clear, clear);
+            props.pending.track(result);
+          }}
+        >
+          {option.meta === undefined ? (
+            option.label
+          ) : (
+            <>
+              <span>{option.label}</span>
+              <span className="settings-segmented__meta">{option.meta}</span>
+            </>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Segmented (radio group) row. Like `ToggleField`, pending is scoped to this
+ * field's own write; the option the operator picked also carries `aria-busy`
+ * so the busy state is attached to the chosen segment, not the whole group.
+ */
+export function SegmentedField<TValue extends string | number>(props: {
+  actions?: ReactNode;
+  disabled?: boolean;
+  label: string;
+  sub?: ReactNode;
+  help?: ReactNode;
+  /** Inline error rendered under the group. */
+  error?: ReactNode;
+  options: Array<{ label: string; meta?: ReactNode; value: TValue }>;
+  source?: ReactNode;
+  value: TValue;
+  /** Overrides the pending indicator's "Saving…" wording. */
+  pendingLabel?: string;
+  onChange: (value: TValue) => Promise<unknown>;
+}) {
+  const fieldPending = useSettingsFieldPending();
+
+  return (
     <SettingsField
       label={props.label}
       sub={props.sub}
+      help={props.help}
+      error={props.error}
       source={props.source}
       actions={props.actions}
-      pending={pending}
+      pending={fieldPending.pending}
+      pendingLabel={props.pendingLabel}
       control={
-        <div
-          className="settings-segmented"
-          role="radiogroup"
-          aria-label={props.label}
-        >
-          {props.options.map((option) => (
-            <button
-              key={option.value}
-              aria-busy={busyValues.includes(option.value) ? true : undefined}
-              aria-checked={props.value === option.value}
-              className={`settings-segmented__button${
-                props.value === option.value ? " is-active" : ""
-              }`}
-              disabled={props.disabled}
-              role="radio"
-              type="button"
-              onClick={() => {
-                // Re-clicking the selected segment is not a change. Several
-                // panes route through a delta builder that bails when nothing
-                // moved, so tracking it would announce "Saving…" for a write
-                // that never happens.
-                if (option.value === props.value) {
-                  return;
-                }
-                setBusyValues((current) => [...current, option.value]);
-                const clear = () => {
-                  setBusyValues((current) => {
-                    const at = current.indexOf(option.value);
-                    if (at < 0) {
-                      return current;
-                    }
-                    return [
-                      ...current.slice(0, at),
-                      ...current.slice(at + 1),
-                    ];
-                  });
-                };
-                const result = Promise.resolve(props.onChange(option.value));
-                result.then(clear, clear);
-                track(result);
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          disabled={props.disabled}
+          label={props.label}
+          options={props.options}
+          pending={fieldPending}
+          value={props.value}
+          onChange={props.onChange}
+        />
       }
     />
   );
