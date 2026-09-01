@@ -301,6 +301,35 @@ const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 // visible message sends. Let them through a little sooner than noisy deltas.
 const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+// Upper bound on retained admission stage marks. A turn that is queued behind a
+// busy thread, or that fails before `startTurn`, never reaches the log that
+// consumes its marks, so the ceiling cannot depend on the happy path. Oldest
+// entry is evicted first; each holds at most eight numbers.
+const ADMISSION_STAGE_MARK_LIMIT = 256;
+
+/**
+ * Stage marks for one inbound message's trip from receipt to `startTurn`.
+ *
+ * `pwragentReceivedToStartTurnIssueMs` already measures that whole trip, which
+ * is enough to see that it is slow and not enough to see where. A slow trip is
+ * ambiguous between work this process chooses to do (resolving the route,
+ * preparing the input, reading admission state, enforcing policy) and a wait it
+ * merely schedules (the input debounce). These marks separate them, so one log
+ * line says which stage owns the latency instead of requiring a bisect.
+ *
+ * Marks are keyed by inbound event id, not by the event object: the command and
+ * media paths re-spread the event into a new object, so object identity does
+ * not survive the trip and a `WeakMap` would silently record nothing.
+ */
+type MessagingAdmissionStage =
+  | "handled"
+  | "routed"
+  | "bundleReady"
+  | "inputPrepared"
+  | "admissionStateResolved"
+  | "occupancyResolved"
+  | "originBuilt"
+  | "policyResolved";
 // Upper bound on retained automation start/final delivery-dedup keys. Each entry
 // embeds the full rendered message text and is only consulted while a run's
 // terminal events are in flight; oldest-first eviction reclaims keys for runs
@@ -925,6 +954,10 @@ export class MessagingController {
   private readonly deliveredAutomationStartKeys = new Set<string>();
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
+  private readonly admissionStageMarks = new Map<
+    string,
+    Partial<Record<MessagingAdmissionStage, number>>
+  >();
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
@@ -1095,6 +1128,7 @@ export class MessagingController {
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
+    this.markAdmissionStage(event, "handled");
     if (!this.authorizeInboundAdmission(event)) {
       // In enforcing mode this fires for actors with no permission-granting
       // role (default-deny); record it so operators can see who was inert.
@@ -2578,7 +2612,7 @@ export class MessagingController {
     const text = `/${[event.command.replace(/^\/+/, ""), ...event.args]
       .filter(Boolean)
       .join(" ")}`;
-    await this.turnAdmission.append({
+    await this.admitTurnInput({
       binding,
       event: {
         ...event,
@@ -3389,7 +3423,7 @@ export class MessagingController {
       return;
     }
 
-    await this.turnAdmission.append({ binding, event });
+    await this.admitTurnInput({ binding, event });
   }
 
   private async bootstrapDefaultAgentForAcceptedMessage(
@@ -3479,7 +3513,7 @@ export class MessagingController {
       threadId: selected.assignment.target.threadId,
       toolUpdateMode: selected.assignment.toolUpdateMode,
     });
-    await this.turnAdmission.append({
+    await this.admitTurnInput({
       binding,
       event,
     });
@@ -3628,7 +3662,7 @@ export class MessagingController {
       return;
     }
 
-    await this.turnAdmission.append({ binding, event });
+    await this.admitTurnInput({ binding, event });
   }
 
   private async shouldHandleAmbientSharedMessage(
@@ -3659,9 +3693,96 @@ export class MessagingController {
     return await this.options.responseModeForConversation?.(channel) ?? "every_message";
   }
 
+  /**
+   * The one door into the admission queue, so every route marks the same stage.
+   */
+  private async admitTurnInput(params: {
+    binding: MessagingBindingRecord;
+    event: MessagingTurnInputEvent;
+  }): Promise<void> {
+    this.markAdmissionStage(params.event, "routed");
+    await this.turnAdmission.append(params);
+  }
+
+  /**
+   * Record when this message reached {@link stage}, if it has not already.
+   *
+   * First mark wins: a stage reached twice (an admission state resolved once
+   * per bundle and again per queued release) keeps the earlier time, so a span
+   * never reads as negative.
+   */
+  private markAdmissionStage(
+    event: MessagingInboundEvent | undefined,
+    stage: MessagingAdmissionStage,
+  ): void {
+    if (!event) return;
+    let marks = this.admissionStageMarks.get(event.id);
+    if (!marks) {
+      if (this.admissionStageMarks.size >= ADMISSION_STAGE_MARK_LIMIT) {
+        // Insertion-ordered, so the first key is the oldest.
+        const oldest = this.admissionStageMarks.keys().next();
+        if (!oldest.done) {
+          this.admissionStageMarks.delete(oldest.value);
+        }
+      }
+      marks = {};
+      this.admissionStageMarks.set(event.id, marks);
+    }
+    marks[stage] ??= this.now();
+  }
+
+  /**
+   * Consume this message's marks as span durations for the start-turn log.
+   *
+   * A span is emitted only when both of its ends were reached, so a path that
+   * skips a stage (a queued release, which never prepares input) reports the
+   * stages it did run instead of a misleading zero.
+   *
+   * `routedToBundleReadyMs` covers the input debounce, and for a coalesced
+   * burst it also covers the operator's own typing: the bundle carries its
+   * first event, but flushes {@link DEFAULT_INPUT_DEBOUNCE_MS} after the last.
+   * A large value there is the operator still typing, not PwrAgent stalling.
+   */
+  private takeAdmissionStageTiming(
+    event: MessagingInboundEvent | undefined,
+    startTurnIssuedAt: number,
+  ): Record<string, number> {
+    if (!event) return {};
+    const marks = this.admissionStageMarks.get(event.id);
+    if (!marks) return {};
+    this.admissionStageMarks.delete(event.id);
+    const spans: Array<[string, number | undefined, number | undefined]> = [
+      ["receivedToHandledMs", event.receivedAt, marks.handled],
+      ["handledToRoutedMs", marks.handled, marks.routed],
+      ["routedToBundleReadyMs", marks.routed, marks.bundleReady],
+      ["bundleReadyToInputPreparedMs", marks.bundleReady, marks.inputPrepared],
+      [
+        "inputPreparedToAdmissionStateMs",
+        marks.inputPrepared,
+        marks.admissionStateResolved,
+      ],
+      [
+        "admissionStateToOccupancyMs",
+        marks.admissionStateResolved,
+        marks.occupancyResolved,
+      ],
+      ["occupancyToOriginMs", marks.occupancyResolved, marks.originBuilt],
+      ["originToPolicyMs", marks.originBuilt, marks.policyResolved],
+      ["policyToStartTurnIssueMs", marks.policyResolved, startTurnIssuedAt],
+    ];
+    const timing: Record<string, number> = {};
+    for (const [name, from, to] of spans) {
+      if (from !== undefined && to !== undefined) {
+        timing[name] = to - from;
+      }
+    }
+    return timing;
+  }
+
   private async handleAdmittedTurnBundle(
     bundle: MessagingTurnAdmissionBundle,
   ): Promise<void> {
+    this.markAdmissionStage(bundle.events[0], "bundleReady");
     const currentBinding = bundle.binding.pendingSkillSelection
       ? await this.options.store.getBinding(bundle.binding.id) ?? bundle.binding
       : bundle.binding;
@@ -3669,6 +3790,7 @@ export class MessagingController {
     if (!prepared) {
       return;
     }
+    this.markAdmissionStage(bundle.events[0], "inputPrepared");
     const preparedWithSkill = this.prependPendingSkillSelection(
       prepared,
       currentBinding,
@@ -3686,6 +3808,7 @@ export class MessagingController {
         federationTarget: federationTargetForBinding(consumedSkillBinding),
         threadId: consumedSkillBinding.threadId,
       });
+      this.markAdmissionStage(bundle.events[0], "admissionStateResolved");
     } catch (error) {
       await this.deliver(
         buildErrorIntent({
@@ -3724,6 +3847,7 @@ export class MessagingController {
       return;
     }
 
+    this.markAdmissionStage(bundle.events[0], "occupancyResolved");
     const startResult = await this.startPreparedInput({
       binding: consumedSkillBinding,
       input: preparedWithSkill.input,
@@ -4124,6 +4248,7 @@ export class MessagingController {
           federationTarget: federationTargetForBinding(params.binding),
           threadId: params.binding.threadId,
         });
+      this.markAdmissionStage(params.event, "admissionStateResolved");
       const navigation = params.navigation
         ?? navigationSnapshotForAdmissionState(params.binding, admissionState);
       startingOrigin = await this.buildAgentMessagingOrigin({
@@ -4138,6 +4263,7 @@ export class MessagingController {
           startingOrigin,
         );
       }
+      this.markAdmissionStage(params.event, "originBuilt");
       const turnSettings = turnSettingsForBinding(params.binding, navigation);
       const executionResolution = resolveExecutionModeForBinding(
         params.binding,
@@ -4154,6 +4280,7 @@ export class MessagingController {
         );
         return "failed";
       }
+      this.markAdmissionStage(params.event, "policyResolved");
       // Diagnostic for #203-class regressions: a turn that the UI shows
       // as Default Access but routes to the Full Access codex client is
       // a silent security bug — the user thinks they're sandboxed but
@@ -4179,6 +4306,10 @@ export class MessagingController {
               startTurnIssuedAt - params.event.receivedAt,
           }
         : {};
+      const stageTiming = this.takeAdmissionStageTiming(
+        params.event,
+        startTurnIssuedAt,
+      );
       this.logger.info?.("messaging starting turn", {
         backend: params.binding.backend,
         bindingId: params.binding.id,
@@ -4190,6 +4321,7 @@ export class MessagingController {
         fastMode: turnSettings.fastMode,
         startTurnIssuedAt,
         ...inboundTiming,
+        ...stageTiming,
       });
       const started = await this.options.backend.startTurn({
         backend: params.binding.backend,
@@ -7012,6 +7144,7 @@ export class MessagingController {
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
+    this.admissionStageMarks.clear();
     for (const timer of this.monitorTimersByBindingId.values()) {
       clearTimeout(timer);
     }

@@ -161,6 +161,53 @@ describe("MessagingController", () => {
     );
   });
 
+  it("attributes start-turn latency to the stage that spent it", async () => {
+    // The end-to-end span above says a turn was slow; these say which stage was.
+    let clock = 1_000;
+    const info = vi.fn();
+    const harness = await createHarness({
+      logger: { info },
+      now: () => clock,
+      getThreadAdmissionState: async (request) => {
+        clock += 700;
+        const thread = buildNavigationSnapshot().threads.find(
+          (candidate) =>
+            candidate.source === request.backend
+            && candidate.id === request.threadId,
+        );
+        return thread ? { thread } : {};
+      },
+    });
+    await bindThread(harness);
+    info.mockClear();
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("measure stages"),
+      receivedAt: clock,
+    });
+
+    const startingTurn = info.mock.calls.find(
+      (call) => call[0] === "messaging starting turn",
+    );
+    expect(startingTurn?.[1]).toMatchObject({
+      inputPreparedToAdmissionStateMs: 700,
+    });
+    // Everything the admission read did not spend is attributed elsewhere, so
+    // the stages sum to the end-to-end number rather than overlapping it.
+    const detail = startingTurn?.[1] as Record<string, number>;
+    const stageTotal =
+      detail.receivedToHandledMs
+      + detail.handledToRoutedMs
+      + detail.routedToBundleReadyMs
+      + detail.bundleReadyToInputPreparedMs
+      + detail.inputPreparedToAdmissionStateMs
+      + detail.admissionStateToOccupancyMs
+      + detail.occupancyToOriginMs
+      + detail.originToPolicyMs
+      + detail.policyToStartTurnIssueMs;
+    expect(stageTotal).toBe(detail.pwragentReceivedToStartTurnIssueMs);
+  });
+
   it("merges eventual provider channel metadata without replaying inbound", async () => {
     const harness = await createHarness();
     await bindThread(harness);
