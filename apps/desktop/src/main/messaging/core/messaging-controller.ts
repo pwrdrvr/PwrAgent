@@ -2382,7 +2382,10 @@ export class MessagingController {
     const merged = await this.options.store.mergeBindingChannelMetadata({
       ancestorTitle: incoming.ancestorTitle ?? managedConversation?.ancestorTitle,
       bindingId: binding.id,
-      channel,
+      // Root-conversation fallback lookup can resolve a DM/channel binding
+      // from a thread-shaped Agent Session event. Preserve the binding's
+      // identity key while applying the fresher metadata from that event.
+      channel: binding.channel,
       observedAt,
       parentTitle: incoming.parentTitle ?? managedConversation?.parentTitle,
       routingState: routingStateUpdate,
