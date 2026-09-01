@@ -3413,34 +3413,37 @@ export class MessagingController {
       return true;
     }
 
-    let navigation: NavigationSnapshot;
-    try {
-      navigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
-    } catch (error) {
-      await this.deliverDefaultAgentBootstrapError(
-        event,
-        "Default Agent unavailable",
-        error instanceof Error ? error.message : String(error),
-      );
-      return true;
-    }
-
     let selected:
       | {
           assignment: MessagingDefaultAgentAssignmentRecord;
-          thread: NavigationThreadSummary;
         }
       | undefined;
     const backendSummaries = await this.loadDefaultAgentBackendSummaries();
+    // One listing at most, and only if a target turns out to be unknown to
+    // this process. Shared across assignments so a channel with several does
+    // not pay for it more than once.
+    let navigationForColdTargets: Promise<NavigationSnapshot> | undefined;
+    const listThreadsOnce = () => {
+      navigationForColdTargets ??= this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
+      return navigationForColdTargets;
+    };
     for (const assignment of assignments) {
-      const thread = navigation.threads.find(
-        (candidate) =>
-          candidate.source === assignment.target.backend
-          && candidate.id === assignment.target.threadId
-          && Boolean(candidate.agent),
-      );
+      let thread: boolean;
+      try {
+        thread = await this.defaultAgentTargetIsAgentThread(
+          assignment.target,
+          listThreadsOnce,
+        );
+      } catch (error) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent unavailable",
+          error instanceof Error ? error.message : String(error),
+        );
+        return true;
+      }
       const backendSupport = defaultAgentBackendSupport(
         assignment.target.backend,
         backendSummaries,
@@ -3450,7 +3453,7 @@ export class MessagingController {
         && thread
         && backendSupport === "supported"
       ) {
-        selected = { assignment, thread };
+        selected = { assignment };
         break;
       }
       if (thread && backendSupport === "unknown") {
@@ -3481,6 +3484,48 @@ export class MessagingController {
       event,
     });
     return true;
+  }
+
+  /**
+   * Does this assignment still point at an agent thread?
+   *
+   * Answered from what this process already knows — the thread's overlay row
+   * and its remembered summary — because that is the whole question. Deciding
+   * to start or queue a turn needs the target's identity, existence, settings
+   * and occupancy; it does not need Git state, pull-request status, launchpads
+   * or the rest of the fleet.
+   *
+   * This used to call `getNavigationSnapshot({ backend: "all" })` on every
+   * accepted message, which enumerates every thread on every backend and then
+   * hydrates overlays, canonicalizes pull requests, probes Git working state,
+   * refreshes directory status and hydrates launchpads — all to look up one
+   * thread whose id the assignment already carries. Opening the same thread in
+   * the app does none of that.
+   *
+   * The listing survives as a cold-path fallback only. An assignment is
+   * revoked when its target is gone, and a process that has simply never seen
+   * the thread must not be mistaken for one whose thread was deleted.
+   */
+  private async defaultAgentTargetIsAgentThread(
+    target: MessagingDefaultAgentAssignmentRecord["target"],
+    listThreadsOnce: () => Promise<NavigationSnapshot>,
+  ): Promise<boolean> {
+    const admission = await this.options.backend.getThreadAdmissionState({
+      backend: target.backend,
+      threadId: target.threadId,
+    });
+    if (admission.thread) {
+      // Both this row and a navigation row read `agent` from the same overlay
+      // record, so the targeted answer is the answer the listing would give.
+      return Boolean(admission.thread.agent);
+    }
+    const navigation = await listThreadsOnce();
+    return navigation.threads.some(
+      (candidate) =>
+        candidate.source === target.backend
+        && candidate.id === target.threadId
+        && Boolean(candidate.agent),
+    );
   }
 
   private async deliverDefaultAgentBootstrapError(

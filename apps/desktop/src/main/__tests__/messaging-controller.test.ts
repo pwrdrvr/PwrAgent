@@ -4466,6 +4466,97 @@ describe("MessagingController", () => {
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
+  // The reply hot path used to answer "does this assignment still point at an
+  // agent thread?" with a snapshot of every thread on every backend, then
+  // hydrate overlays, pull requests, Git working state, directory status and
+  // launchpads before it could start the turn. Opening the same thread in the
+  // app does none of that.
+  it("starts a default-agent reply without requesting a navigation snapshot", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Provider Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const channel = buildTopicChannel("13120");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:targeted-conversation",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    harness.getNavigationSnapshot.mockClear();
+    harness.getThreadAdmissionState.mockClear();
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "codex", threadId: "thread-1" }),
+    );
+    expect(harness.getThreadAdmissionState).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "codex", threadId: "thread-1" }),
+    );
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  // Revocation is destructive, so a target this process has simply never
+  // observed must not be mistaken for one whose thread was deleted.
+  it("lists once before revoking a target it has never observed", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Provider Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      // Nothing is cached: every target is cold.
+      getThreadAdmissionState: async () => ({}),
+    });
+    const channel = buildTopicChannel("13121");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:cold-stale",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "never-existed" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:cold-valid",
+      scope: { kind: "provider", channel: "telegram" },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    harness.getNavigationSnapshot.mockClear();
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    // The absent target is revoked, the live one still starts, and the two
+    // cold lookups share a single listing rather than taking one each.
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:cold-stale"),
+    ).resolves.toMatchObject({ revokedAt: 1000 });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "codex", threadId: "thread-1" }),
+    );
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves the messaging location for queued Agent-thread turns", async () => {
     const harness = await createHarness();
     harness.startTurn.mockImplementation(async (request: StartTurnRequest) => {
