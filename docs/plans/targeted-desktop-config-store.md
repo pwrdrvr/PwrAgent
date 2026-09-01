@@ -1,11 +1,37 @@
 # Targeted Desktop Configuration Store
 
-Status: Proposed design and migration plan
+Status: Implemented through Phase 5; Phase 6 compatibility removal pending
 
 Date: 2026-09-01
 
 Audit base: `d001f84999f7dc20108a84c82eb3e6096c233b20` from
 `origin/fix/desktop-thread-info-store`
+
+Implementation base: `e46890070621` from `origin/main`, including squash
+merges #1920, #1921, #1922, and the follow-up test correction #1924.
+
+## Implementation checkpoint
+
+The incremental implementation now covers Phases 0–5 on
+`docs/targeted-config-store-design`:
+
+| Phase | State | Implemented result |
+|---|---|---|
+| 0 | Complete | Audit/design record, startup timing contracts, and the broad-load callsite catalog. |
+| 1 | Complete | Immutable versioned domains, durable secret-free last-known-good config/provider projections, file watching, targeted provider refresh, diagnostics, and store publication. |
+| 2 | Complete | Thread navigation and durable provider/thread summaries no longer wait for Settings enrichment or live provider discovery; startup refresh is background work. |
+| 3 | Complete | Targeted config/secret IPC results, keyed subscriptions, normalized local renderer updates, and provider-scoped mutation invalidation. |
+| 4 | Complete | Messaging, pairing/RBAC, federation, ACP listing, focused diff, thread migration, terminal, Git/PR, quit, worktree, notification, and related runtime reads use narrow store domains. |
+| 5 | Complete | Response mode, PDF, streaming visibility, tool-update defaults, and Full Access admission use synchronous runtime policy snapshots fed by keyed store publication. No admission path awaits a config refresh. |
+| 6 | Pending | Remove the Settings-screen compatibility projection and legacy injected-test fallbacks, enforce the raw-config import boundary, and delete obsolete public raw resolvers. |
+
+The remaining production `readSettings()` references are the Settings-screen
+projection, explicit Codex rediscovery/profile workflow, and compatibility
+fallbacks for injected legacy test sources. Raw active-profile reads remain
+only behind compatibility fallbacks; explicit-path appearance and multi-profile
+bootstrap/profile-registry reads remain separate because they do not address
+the active profile store. Phase 6 should remove or formally isolate those
+escape hatches after this behavior change is reviewed independently.
 
 ## Decision summary
 
