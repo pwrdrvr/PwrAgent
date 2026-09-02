@@ -1478,6 +1478,7 @@ export type DesktopSettingsConfigUpdate = {
 
 export type DesktopSettingsWriteResponse = {
   update: DesktopSettingsConfigUpdate;
+  snapshot: DesktopSettingsSnapshot;
 };
 
 export type DesktopSettingsSecretWriteResponse = {

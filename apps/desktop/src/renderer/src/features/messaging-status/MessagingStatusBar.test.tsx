@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopMessagingSettingsProjection,
+  DesktopSettingsSnapshot,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
 } from "@pwragent/shared";
@@ -360,6 +361,7 @@ describe("MessagingStatusBar", () => {
         normalizedPatch: { messaging: { telegram: { enabled: false } } },
         scheduledProviderRefreshes: [],
       },
+      snapshot: {} as DesktopSettingsSnapshot,
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => statuses),
@@ -405,6 +407,7 @@ describe("MessagingStatusBar", () => {
         normalizedPatch: { messaging: { telegram: { enabled: false } } },
         scheduledProviderRefreshes: [],
       },
+      snapshot: {} as DesktopSettingsSnapshot,
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => statuses),
@@ -443,6 +446,7 @@ describe("MessagingStatusBar", () => {
         normalizedPatch: { messaging: { line: { enabled: true } } },
         scheduledProviderRefreshes: [],
       },
+      snapshot: {} as DesktopSettingsSnapshot,
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => []),

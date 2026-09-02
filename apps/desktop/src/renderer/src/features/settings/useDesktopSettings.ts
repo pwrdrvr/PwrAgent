@@ -11,7 +11,6 @@ import type {
 import { DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
-  applyConfigUpdateToSettingsSnapshot,
   applySecretUpdateToSettingsSnapshot,
 } from "../../lib/settings-snapshot-updates";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
@@ -83,13 +82,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       try {
         const request: WriteDesktopSettingsConfigRequest = { patch };
         const response = await desktopApi.writeSettingsConfig(request);
-        setSnapshot((current) => {
-          if (!current) return current;
-          return applyConfigUpdateToSettingsSnapshot(
-            current,
-            response.update.normalizedPatch,
-          );
-        });
+        setSnapshot(response.snapshot);
         if (
           patch.models?.codex?.path !== undefined
           || patch.acpAgents !== undefined

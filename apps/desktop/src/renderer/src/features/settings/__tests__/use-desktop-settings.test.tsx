@@ -30,6 +30,12 @@ describe("useDesktopSettings", () => {
 
   it("refreshes backend summaries after ACP provider settings change", async () => {
     const onRefresh = vi.fn();
+    const normalizedSnapshot = {
+      worktrees: {
+        storage: { value: "custom" },
+        effectivePath: "/normalized/worktrees",
+      },
+    } as unknown as DesktopSettingsSnapshot;
     const writeSettingsConfig = vi
       .fn<NonNullable<DesktopApi["writeSettingsConfig"]>>()
       .mockResolvedValue({
@@ -42,6 +48,7 @@ describe("useDesktopSettings", () => {
           },
           scheduledProviderRefreshes: ["gemini"],
         },
+        snapshot: normalizedSnapshot,
       });
     const desktopApi: DesktopApi = {
       writeSettingsConfig,
@@ -64,6 +71,7 @@ describe("useDesktopSettings", () => {
       });
 
       expect(onRefresh).toHaveBeenCalledTimes(1);
+      expect(result.current.snapshot).toBe(normalizedSnapshot);
     } finally {
       window.removeEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, onRefresh);
     }

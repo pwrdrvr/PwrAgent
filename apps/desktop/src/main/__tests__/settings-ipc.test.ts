@@ -100,6 +100,9 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
     instanceId: "test-instance",
     effectiveMessagingEnabled: false,
     leaseHeld: false,
+    disabledReason: undefined as string | undefined,
+    disabledReasonKind: undefined as "lease_held" | undefined,
+    leaseHolder: undefined as { instanceId: string } | undefined,
   })),
 }));
 
@@ -365,9 +368,14 @@ describe("settings ipc", () => {
         },
         scheduledProviderRefreshes: [],
       },
+      snapshot: {
+        experimental: {
+          diffCondensation: { enabled: { value: true } },
+        },
+      },
     });
     expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
-    expect(readSettings).not.toHaveBeenCalled();
+    expect(readSettings).toHaveBeenCalledOnce();
     const secretResponse = await handlers.get(SETTINGS_REPLACE_SECRET_CHANNEL)?.(
       {},
       {
@@ -383,17 +391,61 @@ describe("settings ipc", () => {
         writable: true,
       },
     });
-    expect(readSettings).not.toHaveBeenCalled();
+    expect(readSettings).toHaveBeenCalledOnce();
 
     const readResponse = await handlers.get(SETTINGS_READ_CHANNEL)?.({});
     const encoded = JSON.stringify(readResponse);
     expect(encoded).toContain("diffCondensation");
     expect(encoded).not.toContain("123456789:secret-token");
     expect(encoded).not.toContain("discord-secret");
+    expect(readSettings).toHaveBeenCalledTimes(2);
 
     disposeSettingsIpcHandlers();
     expect(handlers.has(SETTINGS_READ_CHANNEL)).toBe(false);
     expect(handlers.has(SETTINGS_READ_BOOTSTRAP_CHANNEL)).toBe(false);
+  });
+
+  it("includes live lease state in the targeted messaging projection", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+    await service.writeConfigPatchTargeted({
+      messaging: { enabled: true },
+    });
+    runtimeMock.isEnabled.mockReturnValue(false);
+    leaseCoordinatorMock.snapshot.mockReturnValueOnce({
+      instanceId: "test-instance",
+      effectiveMessagingEnabled: false,
+      leaseHeld: true,
+      disabledReason: "Messaging is active in another PwrAgent instance.",
+      disabledReasonKind: "lease_held",
+      leaseHolder: { instanceId: "other-instance" },
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_READ_MESSAGING_CHANNEL } = await import("../../shared/ipc");
+
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_READ_MESSAGING_CHANNEL)?.({}),
+    ).resolves.toMatchObject({
+      snapshot: {
+        messaging: {
+          enabled: { value: true },
+        },
+        runtime: {
+          disabled: true,
+          overrideActive: true,
+          disabledReasonKind: "lease_held",
+          leaseHolder: { instanceId: "other-instance" },
+        },
+      },
+    });
   });
 
   it("uses startup messaging identity as the last credential result when no manual test ran", async () => {

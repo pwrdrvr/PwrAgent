@@ -15,6 +15,7 @@ import type {
   CreateDesktopCodexAuthProfileResponse,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
+  DesktopMessagingSettingsProjection,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
   DesktopSettingsSecretWriteResponse,
@@ -901,38 +902,60 @@ async function applyLatestMessagingRuntimeConfig(
   );
 }
 
-function applyRuntimeMessagingSnapshot(
-  snapshot: DesktopSettingsSnapshot,
-): DesktopSettingsSnapshot {
+function resolveRuntimeMessagingState(
+  messaging: DesktopSettingsSnapshot["messaging"],
+  runtime: DesktopSettingsSnapshot["runtime"]["messaging"],
+): DesktopSettingsSnapshot["runtime"]["messaging"] {
   const leaseSnapshot = getRuntimeMessagingLeaseCoordinator().snapshot();
   const leaseOverrideActive = leaseSnapshot.disabledReasonKind === "lease_held";
   const overrideActive =
-    snapshot.runtime.messaging.overrideActive === true || leaseOverrideActive;
+    runtime.overrideActive === true || leaseOverrideActive;
   const runtimeEnabled = overrideActive
     ? getDesktopMessagingRuntime().isEnabled()
-    : snapshot.messaging.enabled.value;
+    : messaging.enabled.value;
   const disabledReason =
-    leaseSnapshot.disabledReason ?? snapshot.runtime.messaging.disabledReason;
+    leaseSnapshot.disabledReason ?? runtime.disabledReason;
   const disabledReasonKind =
     leaseSnapshot.disabledReasonKind
-    ?? snapshot.runtime.messaging.disabledReasonKind;
+    ?? runtime.disabledReasonKind;
+  return {
+    ...runtime,
+    disabled: overrideActive
+      ? !runtimeEnabled
+      : messaging.enabled.value === false,
+    overrideActive,
+    ...(disabledReason ? { disabledReason } : {}),
+    ...(disabledReasonKind ? { disabledReasonKind } : {}),
+    ...(leaseSnapshot.leaseHolder
+      ? { leaseHolder: leaseSnapshot.leaseHolder }
+      : {}),
+  };
+}
+
+function applyRuntimeMessagingSnapshot(
+  snapshot: DesktopSettingsSnapshot,
+): DesktopSettingsSnapshot {
   return {
     ...snapshot,
     runtime: {
       ...snapshot.runtime,
-      messaging: {
-        ...snapshot.runtime.messaging,
-        disabled: overrideActive
-          ? !runtimeEnabled
-          : snapshot.messaging.enabled.value === false,
-        overrideActive,
-        ...(disabledReason ? { disabledReason } : {}),
-        ...(disabledReasonKind ? { disabledReasonKind } : {}),
-        ...(leaseSnapshot.leaseHolder
-          ? { leaseHolder: leaseSnapshot.leaseHolder }
-          : {}),
-      },
+      messaging: resolveRuntimeMessagingState(
+        snapshot.messaging,
+        snapshot.runtime.messaging,
+      ),
     },
+  };
+}
+
+function applyRuntimeMessagingProjection(
+  projection: DesktopMessagingSettingsProjection,
+): DesktopMessagingSettingsProjection {
+  return {
+    ...projection,
+    runtime: resolveRuntimeMessagingState(
+      projection.messaging,
+      projection.runtime,
+    ),
   };
 }
 
@@ -1243,7 +1266,9 @@ export function registerSettingsIpcHandlers(
   ipcMain.handle(
     SETTINGS_READ_MESSAGING_CHANNEL,
     async (): Promise<ReadDesktopMessagingSettingsResponse> => ({
-      snapshot: await getService(service).readMessagingProjection(),
+      snapshot: applyRuntimeMessagingProjection(
+        await getService(service).readMessagingProjection(),
+      ),
     }),
   );
 
@@ -1277,7 +1302,12 @@ export function registerSettingsIpcHandlers(
       if (service && messagingPatchTouchesRuntime(request.patch)) {
         await applyLatestMessagingRuntimeConfig(activeService);
       }
-      return { update };
+      return {
+        update,
+        snapshot: applyRuntimeMessagingSnapshot(
+          await activeService.readSettingsProjection(),
+        ),
+      };
     },
   );
 

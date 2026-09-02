@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   BackendCapabilities,
   CelestialIconId,
+  DesktopSettingsSnapshot,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -2503,6 +2504,7 @@ describe("StarMapChatCard settings menu", () => {
         },
         scheduledProviderRefreshes: [],
       },
+      snapshot: {} as DesktopSettingsSnapshot,
     }));
     const desktopApi = settingsSnapshotApi(false, {
       writeSettingsConfig,
