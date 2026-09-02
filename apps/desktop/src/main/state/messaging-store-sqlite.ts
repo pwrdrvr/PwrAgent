@@ -1294,23 +1294,34 @@ function buildMessagingConversationLookupKeys(
         kind: "channel",
       },
     }));
-    const rootKind = channel.conversation.isDirectMessage ? "dm" : "channel";
-    keys.add(buildMessagingConversationKey({
-      channel: channel.channel,
-      conversation: {
-        id: channel.conversation.id,
-        kind: rootKind,
-      },
-    }));
+    // DM-only. Slack thread refs carry `id = channelId`, so a parentId-less
+    // `channel` root key would equal the parent channel's own binding key
+    // and every side thread in a bound channel would resolve to it — which
+    // makes `/bind` inside such a thread revoke the channel's binding.
+    if (channel.conversation.isDirectMessage) {
+      keys.add(buildMessagingConversationKey({
+        channel: channel.channel,
+        conversation: {
+          id: channel.conversation.id,
+          kind: "dm",
+        },
+      }));
+    }
     if (
       channel.conversation.parentConversationId
       && channel.conversation.parentConversationId !== channel.conversation.id
     ) {
+      // Reconstruct the parent's own key the way `messaging-default-agent`
+      // does: providers such as Discord store the parent channel under its
+      // guild `parentId`, so dropping it never matches.
       keys.add(buildMessagingConversationKey({
         channel: channel.channel,
         conversation: {
           id: channel.conversation.parentConversationId,
-          kind: "channel",
+          kind: channel.conversation.isDirectMessage ? "dm" : "channel",
+          ...(channel.conversation.parentConversationParentId
+            ? { parentId: channel.conversation.parentConversationParentId }
+            : {}),
         },
       }));
     }

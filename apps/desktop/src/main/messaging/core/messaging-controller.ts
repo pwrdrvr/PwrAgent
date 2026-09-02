@@ -2384,16 +2384,24 @@ export class MessagingController {
           })
         : undefined;
     const managedConversation = managedTopic?.conversation;
+    // Root-conversation fallback lookup can resolve a DM binding from a
+    // thread-shaped Agent Session event. Passing `binding.channel` keeps the
+    // merge's identity guard satisfied so those fresher titles land — but it
+    // also makes that guard a self-comparison, so the caller has to decide
+    // for itself whether this event describes the binding's own
+    // conversation. Routing state is the part that must not cross over:
+    // adopting a thread's `threadTs` here would silently re-anchor every
+    // later status card, reply, and working card into that thread.
+    const describesSameConversation =
+      buildMessagingConversationKey(binding.channel)
+      === buildMessagingConversationKey(channel);
     const merged = await this.options.store.mergeBindingChannelMetadata({
       ancestorTitle: incoming.ancestorTitle ?? managedConversation?.ancestorTitle,
       bindingId: binding.id,
-      // Root-conversation fallback lookup can resolve a DM/channel binding
-      // from a thread-shaped Agent Session event. Preserve the binding's
-      // identity key while applying the fresher metadata from that event.
       channel: binding.channel,
       observedAt,
       parentTitle: incoming.parentTitle ?? managedConversation?.parentTitle,
-      routingState: routingStateUpdate,
+      routingState: describesSameConversation ? routingStateUpdate : undefined,
       title: incoming.title ?? managedConversation?.title,
     });
     if (!merged?.changed) return;
@@ -17467,6 +17475,12 @@ export class MessagingController {
         origin.origin.deliveryBinding = updatedBinding;
       }
       this.notifyBindingChanged("agent-rename-conversation");
+      // Binding-local mutation with no registry event behind it, so the
+      // status card needs the inline render too — the bus never fires for
+      // this, and the provider's own rename echo (Slack's
+      // `agent_session_title_changed`) only fires for a participant's
+      // rename, never for ours.
+      await this.renderBindingStatus(updatedBinding, origin.origin.event);
     }
 
     return {

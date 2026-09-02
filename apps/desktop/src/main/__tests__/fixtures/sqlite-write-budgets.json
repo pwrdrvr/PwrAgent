@@ -98,11 +98,11 @@
     "statements": 30
   },
   "messaging-agent-conversation-rename": {
-    "commits": 2,
-    "note": "one agent-driven conversation rename persists the binding title",
-    "observedWalBytes": 32960,
-    "rowsChanged": 2,
-    "statements": 2
+    "commits": 5,
+    "note": "one agent-driven conversation rename persists the binding title and re-renders the status card inline (no bus event exists for binding-local mutations); bounded by explicit tool calls, not per turn or per item",
+    "observedWalBytes": 78280,
+    "rowsChanged": 5,
+    "statements": 5
   },
   "messaging-binding-revoke": {
     "commits": 11,

@@ -1049,7 +1049,11 @@ export class SlackAdapter implements SlackProviderAdapter {
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult> {
     const target = slackAgentSessionTarget(request.channel, request.routingState);
-    if (!target) {
+    // Slack caps an Agent Session title at 200 characters and rejects the
+    // whole call above it, so clamp on the way out the way the Discord and
+    // Telegram adapters do. Callers upstream only collapse whitespace.
+    const requestedTitle = normalizeSlackAgentSessionTitle(request.title);
+    if (!target || !requestedTitle) {
       return {
         channel: this.channel,
         conversation: request.channel.conversation,
@@ -1065,17 +1069,17 @@ export class SlackAdapter implements SlackProviderAdapter {
           const session = await this.api.renameAgentSession({
             channelId: target.channelId,
             threadTs: target.threadTs,
-            title: request.title,
+            title: requestedTitle,
           });
           const title = normalizeSlackAgentSessionTitle(session.title)
-            ?? request.title;
+            ?? requestedTitle;
           this.threadTitleCache.set(
             slackAgentSessionKey(target.channelId, target.threadTs),
             title,
           );
           return {
             channel: this.channel,
-            conversation: request.channel.conversation,
+            conversation: { ...request.channel.conversation, title },
             outcome: "updated",
             title,
             updatedAt: this.now(),
@@ -1084,7 +1088,9 @@ export class SlackAdapter implements SlackProviderAdapter {
           if (!isSlackAgentSessionsUnsupportedError(error)) {
             throw error;
           }
-          this.agentSessionRenameDisabled = true;
+          if (isSlackAgentSessionsCapabilityMissing(error)) {
+            this.agentSessionRenameDisabled = true;
+          }
           this.logger.warn?.("slack agent session rename unavailable; using compatibility bridge", {
             reason: slackErrorReason(error),
           });
@@ -1104,7 +1110,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         await this.api.setAssistantThreadTitle({
           channelId: target.channelId,
           threadTs: target.threadTs,
-          title: request.title,
+          title: requestedTitle,
         });
       } catch (error) {
         if (!isSlackAssistantThreadUnsupportedError(error)) {
@@ -1121,13 +1127,16 @@ export class SlackAdapter implements SlackProviderAdapter {
       }
       this.threadTitleCache.set(
         slackAgentSessionKey(target.channelId, target.threadTs),
-        request.title,
+        requestedTitle,
       );
       return {
         channel: this.channel,
-        conversation: request.channel.conversation,
+        conversation: {
+          ...request.channel.conversation,
+          title: requestedTitle,
+        },
         outcome: "updated",
-        title: request.title,
+        title: requestedTitle,
         updatedAt: this.now(),
       };
     } catch (error) {
@@ -1351,18 +1360,26 @@ export class SlackAdapter implements SlackProviderAdapter {
       userId: event.user,
     });
     if (!ids) return;
+    // Diagnostic correlation data, never the authority for which turn to
+    // stop. Malformed or oversized values are dropped individually; they
+    // must never discard the operator's Stop press.
     const streamingMessageTimestamps =
-      this.validateAgentSessionStreamingMessageTimestamps(
+      this.readAgentSessionStreamingMessageTimestamps(
         event.streaming_message_ts,
       );
-    if (!streamingMessageTimestamps) return;
+    // Slack has already moved the session out of its previous state, so the
+    // local mirror is stale by definition. Drop it, or the controller's
+    // stop-denied / stop-failed repair signal dedupes away against it.
+    this.agentSessionStatuses.delete(
+      slackAgentSessionKey(ids.channelId, ids.threadTs),
+    );
 
     const { actor, channel, routingState } = this.minimalAgentSessionContext(ids);
     const authorization = this.authorizeInbound({
       actor,
       channel,
       kind: "callback",
-      isGroupDm: false,
+      isGroupDm: await this.resolveIsGroupDm({ channelId: ids.channelId }),
       reportRejection: true,
       routingState,
       teamId: ids.teamId,
@@ -1407,10 +1424,6 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (!ids) return;
     const title = normalizeSlackAgentSessionTitle(event.title);
     if (!title) return;
-    this.threadTitleCache.set(
-      slackAgentSessionKey(ids.channelId, ids.threadTs),
-      title,
-    );
     if (!this.listener) return;
 
     const { actor, channel, routingState } = this.minimalAgentSessionContext(ids);
@@ -1418,12 +1431,18 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind: "lifecycle",
-      isGroupDm: false,
+      isGroupDm: await this.resolveIsGroupDm({ channelId: ids.channelId }),
       reportRejection: false,
       routingState,
       teamId: ids.teamId,
     });
     if (authorization !== true) return;
+    // Cached only after authorization: a rejected event must not leave a
+    // title behind for `lookupSlackThreadTitle` to hand to every later read.
+    this.threadTitleCache.set(
+      slackAgentSessionKey(ids.channelId, ids.threadTs),
+      title,
+    );
     await this.listener({
       id: this.newEventId("slack-agent-session-title-changed"),
       kind: "lifecycle",
@@ -2375,16 +2394,22 @@ export class SlackAdapter implements SlackProviderAdapter {
             sessionStatus: intent.card.phase === "waiting" ? "suspended" : "active",
             ts: state.ts!,
           });
-          this.agentSessionStatuses.set(
-            slackAgentSessionKey(
-              state.target.channelId,
-              state.target.threadTs,
-            ),
-            {
-              signaledAt: this.now(),
-              status: intent.card.phase === "waiting" ? "suspended" : "active",
-            },
-          );
+          // Only record the mirror when `session_status` could actually have
+          // been applied. On the Assistant-thread compatibility bridge the
+          // field is inert, and recording it here would dedupe away the
+          // turn-end signal that clears "is working on your request...".
+          if (this.api.setAgentSessionStatus && !this.agentSessionStatusDisabled) {
+            this.agentSessionStatuses.set(
+              slackAgentSessionKey(
+                state.target.channelId,
+                state.target.threadTs,
+              ),
+              {
+                signaledAt: this.now(),
+                status: intent.card.phase === "waiting" ? "suspended" : "active",
+              },
+            );
+          }
           this.workingCardStreams.delete(key);
           this.recordWorkingCardTombstone(key, intent.card.sequence);
           return;
@@ -3109,17 +3134,26 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  private validateAgentSessionStreamingMessageTimestamps(
+  /**
+   * `streaming_message_ts` is correlation data, not the authority for which
+   * turn to stop, so this never fails the event: a bad shape, an oversized
+   * array, or one malformed element drops that data and keeps the Stop.
+   * Failing closed here would silently discard a user's Stop press — for a
+   * long-lived thread past the element cap, permanently.
+   */
+  private readAgentSessionStreamingMessageTimestamps(
     value: unknown,
-  ): string[] | undefined {
+  ): string[] {
     if (!Array.isArray(value)) {
-      logSlackInvalidIdentifier({
-        field: "streaming_message_ts",
-        logger: this.logger,
-        reason: "type",
-        value,
-      });
-      return undefined;
+      if (value !== undefined) {
+        logSlackInvalidIdentifier({
+          field: "streaming_message_ts",
+          logger: this.logger,
+          reason: "type",
+          value,
+        });
+      }
+      return [];
     }
     if (value.length > SLACK_AGENT_SESSION_STREAMING_MESSAGES_MAX) {
       logSlackInvalidIdentifier({
@@ -3128,10 +3162,12 @@ export class SlackAdapter implements SlackProviderAdapter {
         reason: "length",
         value,
       });
-      return undefined;
     }
     const timestamps: string[] = [];
-    for (const timestamp of value) {
+    for (const timestamp of value.slice(
+      0,
+      SLACK_AGENT_SESSION_STREAMING_MESSAGES_MAX,
+    )) {
       const validation = validateSlackMessageTs(timestamp);
       if (!validation.ok) {
         logSlackInvalidIdentifier({
@@ -3140,7 +3176,7 @@ export class SlackAdapter implements SlackProviderAdapter {
           reason: validation.reason,
           value: timestamp,
         });
-        return undefined;
+        continue;
       }
       timestamps.push(timestamp as string);
     }
@@ -3931,9 +3967,13 @@ export class SlackAdapter implements SlackProviderAdapter {
             threadTs,
             session,
           );
+          // The mirror must hold what Slack has, not what we asked for.
+          // `rememberAgentSession` already recorded a status Slack echoed
+          // back; only fill in the requested one when it echoed none.
           this.agentSessionStatuses.set(sessionKey, {
             signaledAt: this.now(),
-            status: sessionStatus,
+            status: normalizeSlackAgentSessionStatus(session.status)
+              ?? sessionStatus,
           });
           return {
             channel: this.channel,
@@ -3944,7 +3984,9 @@ export class SlackAdapter implements SlackProviderAdapter {
           if (!isSlackAgentSessionsUnsupportedError(error)) {
             throw error;
           }
-          this.agentSessionStatusDisabled = true;
+          if (isSlackAgentSessionsCapabilityMissing(error)) {
+            this.agentSessionStatusDisabled = true;
+          }
           this.logger.warn?.("slack agent session status unavailable; using compatibility bridge", {
             reason: slackErrorReason(error),
             requiredScope: "chat:write",
@@ -4536,10 +4578,13 @@ function slackAgentSessionTarget(
     state?.channelId
     ?? channel.conversation.parentConversationId
     ?? channel.conversation.id;
+  // No `state.ts` fallback: that is the inbound message (or our own status
+  // card) and is not an Agent Session root. Renaming a pseudo-thread built
+  // from it targets the wrong conversation, so a non-thread surface stays
+  // `unsupported`, matching `slackManagedThreadTarget`.
   const threadTs =
     state?.threadTs
-    ?? channel.conversation.parentId
-    ?? state?.ts;
+    ?? channel.conversation.parentId;
   if (
     !validateSlackChannelId(channelId).ok
     || !validateSlackMessageTs(threadTs).ok
@@ -4896,16 +4941,33 @@ function retryAfterMsFromError(error: unknown): number | undefined {
   return status === 429 ? 1_000 : undefined;
 }
 
+/**
+ * Fall back to the Assistant-thread bridge for *this* call. Covers both
+ * workspace-wide capability gaps and per-conversation refusals such as
+ * `not_an_agent_session`.
+ */
 function isSlackAgentSessionsUnsupportedError(error: unknown): boolean {
   const reason = slackErrorReason(error).toLowerCase();
-  return reason.includes("missing_scope")
+  return isSlackAgentSessionsCapabilityMissing(error)
     || reason.includes("not_an_agent")
     || reason.includes("not an agent")
     || reason.includes("agent_not")
+    || reason.includes("unsupported");
+}
+
+/**
+ * Latch the capability off for the whole adapter. Only reasons that hold
+ * for every conversation belong here: a per-conversation refusal such as
+ * `not_an_agent_session` (an ordinary channel thread) or a per-call
+ * `unsupported_arguments` must not disable Agent Sessions in the DMs where
+ * the API works, because nothing ever clears these flags.
+ */
+function isSlackAgentSessionsCapabilityMissing(error: unknown): boolean {
+  const reason = slackErrorReason(error).toLowerCase();
+  return reason.includes("missing_scope")
     || reason.includes("feature_not_enabled")
     || reason.includes("method_not_supported")
-    || reason.includes("unknown_method")
-    || reason.includes("unsupported");
+    || reason.includes("unknown_method");
 }
 
 function isSlackAssistantThreadUnsupportedError(error: unknown): boolean {

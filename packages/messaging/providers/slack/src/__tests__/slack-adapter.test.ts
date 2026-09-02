@@ -583,13 +583,21 @@ describe("SlackAdapter", () => {
     releaseUserLookup?.();
   });
 
+  /**
+   * `streaming_message_ts` is correlation data, not the authority for which
+   * turn to stop, so a bad shape must cost only that data. Dropping the
+   * event would silently discard the operator's Stop press — and past the
+   * element cap it would do so for the rest of the thread's life.
+   */
   it.each([
     {
+      expected: [],
       label: "a non-array value",
       reason: "type",
       streamingMessageTimestamps: "1782234987.693923",
     },
     {
+      expected: Array.from({ length: 100 }, () => "1782234987.693923"),
       label: "too many timestamps",
       reason: "length",
       streamingMessageTimestamps: Array.from(
@@ -598,11 +606,13 @@ describe("SlackAdapter", () => {
       ),
     },
     {
+      expected: [],
       label: "an invalid timestamp",
       reason: "format",
       streamingMessageTimestamps: ["not-a-timestamp"],
     },
-  ])("rejects Agent Session stop events with $label", async ({
+  ])("keeps the Agent Session stop but drops $label", async ({
+    expected,
     reason,
     streamingMessageTimestamps,
   }) => {
@@ -633,7 +643,15 @@ describe("SlackAdapter", () => {
       },
     })).resolves.toBeUndefined();
 
-    expect(events).toEqual([]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "callback",
+      actionId: "status:stop",
+      value: {
+        source: "agent_session_stopped",
+        streamingMessageTimestamps: expected,
+      },
+    });
     expect(warnings).toContainEqual({
       message: "messaging inbound identifier rejected",
       data: expect.objectContaining({
@@ -1392,9 +1410,15 @@ describe("SlackAdapter", () => {
     }]);
   });
 
-  it("uses the Assistant title bridge only after Agent Session rename is unavailable", async () => {
-    const unsupported = Object.assign(new Error("not_an_agent"), {
-      data: { error: "not_an_agent" },
+  /**
+   * `not_an_agent_session` describes one thread, not the workspace, so the
+   * bridge covers that call and the next conversation still gets a real
+   * attempt. Latching on it would disable Agent Sessions everywhere for the
+   * life of the adapter, since nothing ever clears the flag.
+   */
+  it("retries Agent Session rename after a per-conversation refusal", async () => {
+    const unsupported = Object.assign(new Error("not_an_agent_session"), {
+      data: { error: "not_an_agent_session" },
     });
     const assistantTitles: Array<{
       channelId: string;
@@ -1434,7 +1458,7 @@ describe("SlackAdapter", () => {
       title: "Compatibility bridge 2",
     })).resolves.toMatchObject({ outcome: "updated" });
 
-    expect(agentAttempts).toBe(1);
+    expect(agentAttempts).toBe(2);
     expect(assistantTitles).toEqual([
       {
         channelId: "C012ABCDEF0",
@@ -1449,9 +1473,14 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  /**
+   * App-level reasons only. A conversation-scoped refusal such as
+   * `not_an_agent_session` must not withdraw the capability workspace-wide —
+   * see the retry test above.
+   */
   it("withdraws title support after both Slack rename APIs reject the app", async () => {
-    const agentUnsupported = Object.assign(new Error("not_an_agent"), {
-      data: { error: "not_an_agent" },
+    const agentUnsupported = Object.assign(new Error("missing_scope"), {
+      data: { error: "missing_scope" },
     });
     const assistantUnsupported = Object.assign(new Error("not_assistant"), {
       data: { error: "not_assistant" },
@@ -1487,6 +1516,84 @@ describe("SlackAdapter", () => {
       outcome: "unsupported",
     });
     expect(adapter.supportsConversationTitle(request)).toBe(false);
+  });
+
+  it("latches the Assistant title bridge when the workspace lacks the scope", async () => {
+    const missingScope = Object.assign(new Error("missing_scope"), {
+      data: { error: "missing_scope" },
+    });
+    let agentAttempts = 0;
+    const api = fakeApi({ assistantTitles: [] });
+    api.renameAgentSession = async () => {
+      agentAttempts += 1;
+      throw missingScope;
+    };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+    });
+    const request = {
+      channel: {
+        channel: "slack" as const,
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread" as const,
+          parentId: "1712023030.000000",
+          parentConversationId: "C012ABCDEF0",
+        },
+      },
+      title: "Scope gap",
+    };
+
+    await adapter.setConversationTitle(request);
+    await adapter.setConversationTitle({ ...request, title: "Scope gap 2" });
+
+    expect(agentAttempts).toBe(1);
+  });
+
+  /**
+   * Slack rejects an Agent Session title over 200 characters outright, so a
+   * long backend-derived title has to be clamped rather than turned into a
+   * "Name sync unavailable" error.
+   */
+  it("clamps an over-long title to Slack's limit and echoes what it set", async () => {
+    const renames: Array<{ title: string }> = [];
+    const api = fakeApi({});
+    api.renameAgentSession = async (params) => {
+      renames.push({ title: params.title });
+      return {};
+    };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+    });
+
+    const result = await adapter.setConversationTitle({
+      channel: {
+        channel: "slack" as const,
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread" as const,
+          parentId: "1712023030.000000",
+          parentConversationId: "C012ABCDEF0",
+          title: "Old title",
+        },
+      },
+      title: "x".repeat(240),
+    });
+
+    expect(renames).toEqual([{ title: "x".repeat(200) }]);
+    expect(result).toMatchObject({
+      outcome: "updated",
+      title: "x".repeat(200),
+      // The result carries the conversation as it now reads, the way the
+      // Discord and Telegram adapters do — the rename tool reports this.
+      conversation: expect.objectContaining({ title: "x".repeat(200) }),
+    });
   });
 
   it("returns structured rate-limit feedback when Slack rejects a send", async () => {

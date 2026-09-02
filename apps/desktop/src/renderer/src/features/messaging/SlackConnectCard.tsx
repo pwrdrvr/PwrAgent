@@ -159,8 +159,16 @@ export function SlackConnectCard(props: {
 
   const openSlackApps = async (): Promise<void> => {
     await start("openApps", async (openSlackCreateApp) => {
-      const result = await openSlackCreateApp({ mode: "update", open: true });
-      setManifestSize(formatManifestSize(result.manifestJson));
+      await openSlackCreateApp({ mode: "update", open: true });
+      // Deliberately does not touch the size label: that label says what is
+      // on the clipboard, and this action copies nothing. `start` cleared
+      // the manifest acknowledgement, so say what happened instead of
+      // leaving the row blank.
+      setFeedback({
+        action: "openApps",
+        kind: "status",
+        message: "Opened Slack Apps in your browser. Paste the manifest there.",
+      });
     });
   };
 
