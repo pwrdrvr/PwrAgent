@@ -1353,9 +1353,13 @@ describe("settings ipc", () => {
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     // The pin has to be a real configured override, because that is the cause
     // `pinnedBehind` reports. A bare tag mismatch is not enough.
+    // The path has to be escaped, not interpolated raw. A Windows path is
+    // `C:\Users\...`, and the config parser rejects `\U` as an unknown escape,
+    // drops the key, and leaves the override unset. The parser reads basic
+    // strings only, so a literal string is not an option here.
     fs.writeFileSync(
       path.join(tempRoot, "config.toml"),
-      `[acp_agents.grok]\ncli_path = "${pinnedCommand}"\n`,
+      `[acp_agents.grok]\ncli_path = ${JSON.stringify(pinnedCommand)}\n`,
     );
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
