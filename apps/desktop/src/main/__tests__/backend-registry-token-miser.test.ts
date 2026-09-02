@@ -609,7 +609,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       .toBeGreaterThan(initialAccounting?.savingsMicros ?? 0);
   });
 
-  it("stops cached replay counting at a ContextCompaction item boundary", async () => {
+  it("stops baseline and revealed replay accounting at ContextCompaction", async () => {
     const { objectId, tokenMiserStore } = await startLiveReplayGate();
 
     await registry.publishLocalEvent(parentUsageEvent(2_000));
@@ -617,6 +617,8 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await registry.publishLocalEvent(parentUsageEvent(4_000));
     expect(await tokenMiserStore.readMetadata(objectId)).toMatchObject({
       cachedReplayCount: 1,
+      cachedBaselineTokens: 6_000,
+      cachedRevealedTokens: 225,
       parentRequestsObservedAfterGate: 3,
     });
 
@@ -640,6 +642,8 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
 
     expect(await tokenMiserStore.readMetadata(objectId)).toMatchObject({
       cachedReplayCount: 1,
+      cachedBaselineTokens: 6_000,
+      cachedRevealedTokens: 225,
       parentRequestsObservedAfterGate: 3,
     });
     expect(
