@@ -5263,6 +5263,173 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not double-report a default-agent start failure emitted by the backend", async () => {
+    const navigation = buildNavigationSnapshot();
+    const rawFailure = JSON.stringify({
+      type: "error",
+      error: {
+        message: "thread not found: thread-1",
+      },
+      status: 400,
+    });
+    const harness = await createHarness({
+      navigation,
+      getThreadAdmissionState: async (request) => ({
+        thread: {
+          ...navigation.threads[0]!,
+          id: request.threadId,
+          source: request.backend,
+          agent: {
+            name: "Provider Agent",
+            instructionLineCount: 1,
+            instructionsTooLong: false,
+            updatedAt: 1500,
+          },
+        },
+      }),
+    });
+    harness.startTurn.mockImplementationOnce(async (request) => {
+      await harness.controller.handleBackendEvent({
+        backend: request.backend,
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: request.threadId,
+            turnId: `pending:${request.threadId}`,
+            turn: {
+              id: `pending:${request.threadId}`,
+              status: "in_progress",
+            },
+          },
+        },
+      });
+      await harness.controller.handleBackendEvent({
+        backend: request.backend,
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: request.threadId,
+            turnId: `pending:${request.threadId}`,
+            turn: {
+              id: `pending:${request.threadId}`,
+              status: "failed",
+              error: { message: rawFailure },
+            },
+          },
+        },
+      });
+      throw new Error(rawFailure);
+    });
+    const channel = buildTopicChannel("13125");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:reported-start-failure",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:reported-start-failure"),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Number) });
+    const failureNotices = harness.delivered.filter(
+      (intent) =>
+        intent.kind === "error"
+        && (
+          intent.title === "Turn failed"
+          || intent.title === "Turn could not start"
+        ),
+    );
+    expect(failureNotices).toHaveLength(1);
+    expect(failureNotices[0]).toMatchObject({
+      title: "Turn failed",
+      body: "thread not found: thread-1",
+    });
+  });
+
+  it("waits for an asynchronously forwarded remote start failure before reporting it", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.federation = {
+      ref: buildFederatedThreadRef({
+        backend: "codex",
+        instanceId: "client_one",
+        threadId: "thread-1",
+      }),
+      instanceLabel: "Studio Mac",
+      peerStatus: "connected",
+    };
+    const harness = await createHarness({ navigation });
+    const event = buildTextEvent("remote request");
+    await harness.store.upsertBinding({
+      id: "binding:remote-start-failure",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      federatedThread: navigation.threads[0]!.federation.ref,
+      routingState: event.routingState,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    const failureLookupStarted = createDeferred<void>();
+    const releaseFailureLookup = createDeferred<void>();
+    const findActiveBindingsForThread =
+      harness.store.findActiveBindingsForThread.bind(harness.store);
+    vi.spyOn(harness.store, "findActiveBindingsForThread")
+      .mockImplementationOnce(async (request) => {
+        failureLookupStarted.resolve();
+        await releaseFailureLookup.promise;
+        return await findActiveBindingsForThread(request);
+      });
+    let failureHandling: Promise<void> | undefined;
+    harness.startTurn.mockImplementationOnce(async (request) => {
+      failureHandling = harness.controller.handleBackendEvent({
+        backend: request.backend,
+        federationTarget: request.federationTarget,
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: request.threadId,
+            turnId: `pending:${request.threadId}`,
+            turn: {
+              id: `pending:${request.threadId}`,
+              status: "failed",
+              error: { message: "remote start failed" },
+            },
+          },
+        },
+      });
+      await failureLookupStarted.promise;
+      throw new Error("remote start failed");
+    });
+
+    const inboundHandling = harness.controller.handleInboundEvent(event);
+    await failureLookupStarted.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseFailureLookup.resolve();
+    await inboundHandling;
+    await failureHandling;
+
+    const failureNotices = harness.delivered.filter(
+      (intent) =>
+        intent.kind === "error"
+        && (
+          intent.title === "Turn failed"
+          || intent.title === "Turn could not start"
+        ),
+    );
+    expect(failureNotices).toHaveLength(1);
+    expect(failureNotices[0]).toMatchObject({
+      title: "Turn failed",
+      body: "remote start failed",
+    });
+  });
+
   it("preserves the messaging location for queued Agent-thread turns", async () => {
     const harness = await createHarness();
     harness.startTurn.mockImplementation(async (request: StartTurnRequest) => {
