@@ -6842,6 +6842,10 @@ export function useThreadSessionState(params: {
 
   const selectedRetainedLiveEntryVersion =
     selectedSession?.retainedLiveEntryVersion;
+  const selectedLaunchpadMessageCandidate =
+    threadKey && launchpadMessageCandidateRef.current?.threadKey === threadKey
+      ? launchpadMessageCandidateRef.current.candidate
+      : undefined;
   const selectedRetainedLiveEntries = useMemo(() => {
     if (!threadKey || selectedRetainedLiveEntryVersion === undefined) {
       return [];
@@ -6855,12 +6859,12 @@ export function useThreadSessionState(params: {
       threadKey
         ? reconciledLaunchpadMessageIdsRef.current[threadKey]
         : undefined,
-      launchpadMessageCandidate,
+      selectedLaunchpadMessageCandidate,
     ),
     [
-      launchpadMessageCandidate,
       selectedSession?.optimisticEntries,
       selectedSession?.response,
+      selectedLaunchpadMessageCandidate,
       threadKey,
     ],
   );
@@ -6897,14 +6901,36 @@ export function useThreadSessionState(params: {
     ),
     [selectedSession?.response?.replay.entries, visibleOptimisticEntries],
   );
+  const visibleOptimisticMessageEntries = useMemo(() => {
+    const authoritativeLaunchpadMessageExists = Boolean(
+      selectedLaunchpadMessageCandidate
+      && selectedSession?.response?.replay.messages.some((message) =>
+        matchesAuthoritativeLaunchpadMessage(
+          { type: "message", ...message },
+          selectedLaunchpadMessageCandidate,
+        )
+      )
+    );
+
+    return visibleOptimisticEntries.filter(
+      (entry): entry is AppServerThreadMessageEntry =>
+        entry.type === "message"
+        && !(
+          authoritativeLaunchpadMessageExists
+          && entry.id === selectedLaunchpadMessageCandidate?.entry.id
+        )
+    );
+  }, [
+    selectedLaunchpadMessageCandidate,
+    selectedSession?.response?.replay.messages,
+    visibleOptimisticEntries,
+  ]);
   const mergedTailMessages = useMemo(
     () => mergeTranscriptMessages(
       selectedSession?.response?.replay.messages ?? [],
-      visibleOptimisticEntries
-        .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
-        .map(({ type: _type, ...message }) => message),
+      visibleOptimisticMessageEntries.map(({ type: _type, ...message }) => message),
     ),
-    [selectedSession?.response?.replay.messages, visibleOptimisticEntries],
+    [selectedSession?.response?.replay.messages, visibleOptimisticMessageEntries],
   );
   const reviewPresentation = useMemo(
     () => createTranscriptReviewPresentation({
