@@ -28,6 +28,7 @@ import {
   App,
   inferReplayCodexProfileModel,
   inferReplayCodexProfileSetup,
+  resolveNormalAppEnabled,
 } from "../App";
 
 beforeAll(() => {
@@ -100,6 +101,32 @@ function createDeferred<T>(): {
   });
   return { promise, resolve, reject };
 }
+
+describe("resolveNormalAppEnabled", () => {
+  it("lets a refreshed completed snapshot supersede stale bootstrap state", () => {
+    expect(resolveNormalAppEnabled({
+      bootstrapCompleted: false,
+      bootstrapFailed: false,
+      bootstrapLoaded: true,
+      hasBootstrapReader: true,
+      hasSettingsReader: true,
+      settingsCompleted: true,
+      settingsLoaded: true,
+    })).toBe(true);
+  });
+
+  it("uses bootstrap state only until the settings snapshot arrives", () => {
+    expect(resolveNormalAppEnabled({
+      bootstrapCompleted: true,
+      bootstrapFailed: false,
+      bootstrapLoaded: true,
+      hasBootstrapReader: true,
+      hasSettingsReader: true,
+      settingsCompleted: false,
+      settingsLoaded: true,
+    })).toBe(false);
+  });
+});
 
 function backendToastEvents(
   federationTarget?: AgentEvent["federationTarget"],

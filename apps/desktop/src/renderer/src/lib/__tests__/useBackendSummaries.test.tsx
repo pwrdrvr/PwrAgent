@@ -158,6 +158,67 @@ describe("useBackendSummaries", () => {
     });
   });
 
+  it("refreshes cached summaries when startup provider discovery completes", async () => {
+    let eventHandler: ((event: AgentEvent) => void) | undefined;
+    const listBackends = vi
+      .fn<NonNullable<DesktopApi["listBackends"]>>()
+      .mockResolvedValueOnce({
+        fetchedAt: 1,
+        backends: [],
+      })
+      .mockResolvedValueOnce({
+        fetchedAt: 2,
+        backends: [{
+          kind: "codex",
+          label: "Codex",
+          available: true,
+          methods: [],
+          capabilities: {
+            listThreads: true,
+            createThread: true,
+            resumeThread: true,
+            renameThread: true,
+            readThread: true,
+            startTurn: true,
+            interruptTurn: true,
+            steerTurn: false,
+            transcriptPagination: false,
+            toolUse: false,
+            approvalRequests: false,
+            multiDirectoryThreads: true,
+          },
+          executionModes: [],
+        }],
+      });
+    const desktopApi: DesktopApi = {
+      listBackends,
+      onAgentEvent: (callback) => {
+        eventHandler = callback;
+        return () => undefined;
+      },
+    };
+    const { result } = renderHook(() => useBackendSummaries(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.loaded).toBe(true);
+      expect(result.current.backends).toEqual([]);
+    });
+    eventHandler?.({
+      backend: "codex",
+      notification: {
+        method: "navigation/providerThreads/refreshed",
+        params: { failedProviders: 0 },
+      },
+    });
+
+    await waitFor(() => {
+      expect(result.current.backends).toEqual([
+        expect.objectContaining({ kind: "codex", available: true }),
+      ]);
+    });
+    expect(listBackends).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes backend details when Codex rate limits update", async () => {
     let eventHandler: ((event: AgentEvent) => void) | undefined;
     const listBackends = vi

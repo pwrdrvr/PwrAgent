@@ -186,6 +186,28 @@ const LazyOnboardingWizard = lazy(async () => ({
   default: (await import("./features/onboarding/OnboardingWizard")).OnboardingWizard,
 }));
 
+export function resolveNormalAppEnabled(params: {
+  bootstrapCompleted?: boolean;
+  bootstrapFailed: boolean;
+  bootstrapLoaded: boolean;
+  hasBootstrapReader: boolean;
+  hasSettingsReader: boolean;
+  settingsCompleted?: boolean;
+  settingsLoaded: boolean;
+}): boolean {
+  if (!params.hasSettingsReader) return true;
+  // The bootstrap projection only accelerates first paint. Once the live
+  // settings snapshot arrives, it is authoritative for wizard completion and
+  // must be able to release (or restore) the navigation gate in this process.
+  if (params.settingsLoaded) {
+    return params.settingsCompleted !== false;
+  }
+  if (params.hasBootstrapReader && !params.bootstrapFailed) {
+    return params.bootstrapLoaded && params.bootstrapCompleted !== false;
+  }
+  return false;
+}
+
 export function App() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
@@ -1241,13 +1263,16 @@ function DesktopAppShell(props: {
     }
   }, [uiPrefs]);
 
-  const normalAppEnabled =
-    !desktopApi?.readSettings
-    || (desktopApi.readConfigBootstrap && !props.bootstrapConfig.error
-      ? props.bootstrapConfig.snapshot?.onboarding.completed !== false
-        && Boolean(props.bootstrapConfig.snapshot)
-      : Boolean(settings.snapshot)
-        && settings.snapshot?.onboarding?.completed.value !== false);
+  const normalAppEnabled = resolveNormalAppEnabled({
+    bootstrapCompleted:
+      props.bootstrapConfig.snapshot?.onboarding.completed,
+    bootstrapFailed: Boolean(props.bootstrapConfig.error),
+    bootstrapLoaded: Boolean(props.bootstrapConfig.snapshot),
+    hasBootstrapReader: Boolean(desktopApi?.readConfigBootstrap),
+    hasSettingsReader: Boolean(desktopApi?.readSettings),
+    settingsCompleted: settings.snapshot?.onboarding?.completed.value,
+    settingsLoaded: Boolean(settings.snapshot),
+  });
   const profiles = usePwrAgentProfiles(desktopApi);
   const refreshProfiles = profiles.refresh;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);

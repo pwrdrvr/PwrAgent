@@ -146,7 +146,8 @@ export function useBackendSummaries(
           (event.notification.method === "account/rateLimits/updated" ||
             event.notification.method === "account/updated")) ||
         event.notification.method === "backend/acpRuntimeCapabilities/updated" ||
-        event.notification.method === "backend/providerStatus/updated"
+        event.notification.method === "backend/providerStatus/updated" ||
+        event.notification.method === "navigation/providerThreads/refreshed"
       ) {
         void refresh();
       }
