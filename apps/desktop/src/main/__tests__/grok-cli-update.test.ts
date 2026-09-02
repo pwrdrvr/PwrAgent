@@ -1,11 +1,14 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   checkGrokCliUpdate,
   GROK_UPDATE_FAILURE_TTL_MS,
   GROK_UPDATE_SUCCESS_TTL_MS,
   grokUpdateChecksDisabled,
+  isPwrAgentOwnedGrokRuntime,
   shouldCheckGrokCliUpdate,
 } from "../acp/grok-cli-update";
+import { resolvePwragentRoot } from "../profile";
 
 describe("checkGrokCliUpdate", () => {
   it("normalizes the official JSON status and preserves same-version acknowledgement", async () => {
@@ -200,5 +203,54 @@ describe("grokUpdateChecksDisabled", () => {
     expect(grokUpdateChecksDisabled({ isPackaged: false })).toBe(false);
 
     vi.unstubAllEnvs();
+  });
+});
+
+describe("isPwrAgentOwnedGrokRuntime", () => {
+  const managedCommand = (tag: string) => path.join(
+    resolvePwragentRoot(),
+    "agents",
+    "grok",
+    "versions",
+    tag,
+    "grok",
+  );
+
+  it("trusts the discovery stamp", () => {
+    expect(isPwrAgentOwnedGrokRuntime({
+      launchDescriptor: {
+        command: "/Users/me/.grok/bin/grok",
+        args: [],
+        env: { GROK_INSTALLER: "pwragent" },
+      },
+    } as never)).toBe(true);
+  });
+
+  it("claims a managed build the stamp missed", () => {
+    // Discovery stamps by comparing against the command this run's release
+    // check resolved, so a pinned older version, or any version present while
+    // a check failed, arrives unstamped. It is still ours, and running the
+    // vendor updater against it is what produced an xAI version number next to
+    // a `-pwragent` build in the update toast.
+    expect(isPwrAgentOwnedGrokRuntime({
+      activeCommand: managedCommand("pwragent-v1.0.0-pwragent.1"),
+      launchDescriptor: {
+        command: managedCommand("pwragent-v1.0.0-pwragent.1"),
+        args: [],
+        env: {},
+      },
+    } as never)).toBe(true);
+  });
+
+  it("leaves an unstamped vendor install on the vendor channel", () => {
+    expect(isPwrAgentOwnedGrokRuntime({
+      activeCommand: "/Users/me/.grok/bin/grok",
+      launchDescriptor: {
+        command: "/Users/me/.grok/bin/grok",
+        args: [],
+        env: {},
+      },
+    } as never)).toBe(false);
+    expect(isPwrAgentOwnedGrokRuntime({} as never)).toBe(false);
   });
 });

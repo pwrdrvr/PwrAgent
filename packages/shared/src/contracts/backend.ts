@@ -295,8 +295,38 @@ export type AcpAgentSettingsEntry = {
    *  bundle) rather than a vendor install. Those runtimes follow the verified
    *  PwrAgent release feed, so vendor update notices never apply to them. */
   pwrAgentManagedRuntime?: boolean;
+  /** State of the PwrAgent-managed build channel for this agent (Grok only
+   *  today). Present whenever the channel is enabled, whether or not the
+   *  active runtime happens to be one of its builds. */
+  managedBuild?: AcpManagedBuildStatus;
   enabled?: boolean;
   preference?: AcpAgentPreference;
+};
+
+/**
+ * The PwrAgent-managed build channel, as the settings pane needs to describe
+ * it. Distinct from `AcpAgentUpdateStatus`, which reports the *vendor*
+ * updater's answer about a vendor install: the two channels publish different
+ * artifacts under different version strings, and a surface must never describe
+ * one in the other's terms.
+ */
+export type AcpManagedBuildStatus = {
+  /** GitHub repository the channel publishes from, e.g. `pwrdrvr/grok-build`. */
+  repository: string;
+  /** Newest verified build installed on this machine by the last check. */
+  installedTag?: string;
+  /** Release tag of the active runtime, when that runtime is a managed build.
+   *  Absent when a vendor install or the app-bundled copy is active. */
+  activeTag?: string;
+  /** When the last release check ran. */
+  checkedAt?: number;
+  /** When `installedTag` was installed. */
+  installedAt?: number;
+  /** `installedTag` is installed and ready but something is holding an older
+   *  managed build in place for new threads — in practice a manual path
+   *  override pinning one version directory. The one managed-channel state
+   *  that never resolves on its own. */
+  pinnedBehind?: boolean;
 };
 
 export type AcpAgentUpdateStatus = {
@@ -326,6 +356,13 @@ export type AcpAgentInstance = {
   version?: string;
   /** How the path was found: user override, a `PATH` match, or a fallback path. */
   source: AcpAgentInstanceSource;
+  /** PwrAgent supplied this executable — a managed download or the copy inside
+   *  the app bundle. A vendor install leaves it unset. Independent of whether
+   *  this is the *newest* build: provenance does not change when the channel
+   *  publishes a newer tag. */
+  pwrAgentBuild?: boolean;
+  /** Release tag of a managed download, when the executable is one. */
+  pwrAgentBuildTag?: string;
 };
 
 /** An executable that was found but did not pass ACP discovery. A timed-out

@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   AcpAgentPreference,
   AcpAgentSettingsEntry,
+  AcpManagedBuildStatus,
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   CheckDesktopCodexAuthProfileStatusRequest,
@@ -87,6 +88,7 @@ import {
   managedGrokBuildsEnabledFromSnapshot,
   providerProjectionForRegistryId,
 } from "../settings/config-store/provider-runtime-config";
+import type { ConfigDomainMap } from "../settings/config-store/config-domains";
 import {
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
@@ -120,6 +122,14 @@ import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
 import { shouldReprobeAcpCapabilities } from "../acp/acp-capability-freshness";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
 import { isPwrAgentOwnedGrokRuntime } from "../acp/grok-cli-update";
+import {
+  MANAGED_GROK_REPOSITORY,
+  readManagedGrokInstallSummary,
+} from "../acp/grok-managed-runtime";
+import {
+  isPwrAgentSuppliedGrokCommand,
+  managedGrokTagForCommand,
+} from "../acp/grok-build-channel";
 import { selectAcpDistributionForCurrentPlatform } from "../acp/acp-platform-distribution";
 import { AcpRegistryService } from "../acp/acp-registry-service";
 import type {
@@ -442,10 +452,92 @@ async function listAcpAgentSettingsImpl(
     })
     .map(({ entry }) => entry);
 
+  await decorateManagedGrokBuild(
+    orderedEntries,
+    settingsService.readProvidersConfig(),
+  );
+
   return {
     fetchedAt: snapshot?.fetchedAt ?? Date.now(),
     entries: orderedEntries,
     ...(error ? { error } : {}),
+  };
+}
+
+/**
+ * Label each Grok executable with the channel that publishes it, and attach
+ * the managed channel's own state.
+ *
+ * Two products answer to the word "Grok" on this pane: xAI's CLI, which the
+ * operator updates from x.ai/build, and the `-pwragent` builds PwrAgent
+ * downloads, verifies and installs itself. They carry different version
+ * strings and different release pages, so a surface that cannot tell them
+ * apart ends up describing one in the other's terms.
+ *
+ * Everything reported here was already written to disk by the last release
+ * check, so this adds no network call and starts no download — the pane can
+ * name the installed tag and say when it was checked without one.
+ */
+async function decorateManagedGrokBuild(
+  entries: AcpAgentSettingsEntry[],
+  providers: ConfigDomainMap["providers"],
+): Promise<void> {
+  const index = entries.findIndex((entry) => entry.registryId === "grok");
+  if (index === -1) {
+    return;
+  }
+  const entry = entries[index];
+  // Provenance is labeled whether or not the channel is enabled: the copy
+  // inside the app bundle is a PwrAgent build even with managed downloads off,
+  // and so is a managed version an operator pinned before turning them off.
+  const instances = entry.instances?.map((instance) => {
+    const tag = managedGrokTagForCommand(instance.command);
+    if (tag === undefined && !isPwrAgentSuppliedGrokCommand(instance.command)) {
+      return instance;
+    }
+    return {
+      ...instance,
+      pwrAgentBuild: true,
+      ...(tag !== undefined ? { pwrAgentBuildTag: tag } : {}),
+    };
+  });
+
+  if (
+    !managedGrokBuildsEnabledFromSnapshot(
+      providers,
+      process.env,
+      app?.isPackaged === true,
+    )
+  ) {
+    if (instances) {
+      entries[index] = { ...entry, instances };
+    }
+    return;
+  }
+
+  const summary = await readManagedGrokInstallSummary();
+  const activeTag = managedGrokTagForCommand(entry.activeCommand);
+  const managedBuild: AcpManagedBuildStatus = {
+    repository: MANAGED_GROK_REPOSITORY,
+    ...(summary
+      ? {
+          installedTag: summary.tag,
+          checkedAt: summary.checkedAt,
+          installedAt: summary.installedAt,
+        }
+      : {}),
+    ...(activeTag !== undefined ? { activeTag } : {}),
+    // Only a managed build can be *behind* this channel. A vendor install is
+    // on a different channel entirely, and calling it "behind" a `-pwragent`
+    // tag is exactly the cross-channel comparison this work exists to remove.
+    ...(summary && activeTag !== undefined && activeTag !== summary.tag
+      ? { pinnedBehind: true }
+      : {}),
+  };
+  entries[index] = {
+    ...entry,
+    ...(instances ? { instances } : {}),
+    managedBuild,
   };
 }
 

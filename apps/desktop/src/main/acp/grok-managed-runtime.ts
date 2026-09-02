@@ -198,6 +198,55 @@ const processChecks = new Set<string>();
 const activeChecks = new Map<string, Promise<ManagedGrokRuntime | undefined>>();
 const markedRuntimeCommands = new Map<string, string>();
 
+/** What the last managed release check decided, as recorded on disk. */
+export type ManagedGrokInstallSummary = {
+  tag: string;
+  checkedAt: number;
+  installedAt: number;
+};
+
+/**
+ * Read `managed-release.json` and nothing else.
+ *
+ * Deliberately weaker than `readCachedRuntime`: it does not validate the
+ * bundle, probe a version, or verify a signature, so it must never be used to
+ * choose a runtime. It answers one reporting question — which tag the last
+ * check installed, and when — for a settings pane that would otherwise have to
+ * start a download to say anything at all.
+ */
+export async function readManagedGrokInstallSummary(options?: {
+  rootDir?: string;
+}): Promise<ManagedGrokInstallSummary | undefined> {
+  const rootDir = options?.rootDir ?? path.join(
+    resolvePwragentRoot(),
+    "agents",
+    "grok",
+  );
+  try {
+    const metadata = JSON.parse(
+      await readFile(path.join(rootDir, "managed-release.json"), "utf8"),
+    ) as Partial<ManagedGrokMetadata>;
+    if (
+      metadata.schemaVersion !== MANAGED_GROK_METADATA_VERSION
+      || metadata.repository !== MANAGED_GROK_REPOSITORY
+      || typeof metadata.tag !== "string"
+      || !isManagedGrokTagEligible(metadata.tag)
+      || typeof metadata.checkedAt !== "number"
+      || typeof metadata.installedAt !== "number"
+    ) {
+      return undefined;
+    }
+    return {
+      tag: metadata.tag,
+      checkedAt: metadata.checkedAt,
+      installedAt: metadata.installedAt,
+    };
+  } catch {
+    // No install yet, or unreadable metadata. Both mean "nothing to report".
+    return undefined;
+  }
+}
+
 export async function ensureManagedGrokRuntime(
   options: ManagedGrokRuntimeOptions = {},
 ): Promise<ManagedGrokRuntime | undefined> {

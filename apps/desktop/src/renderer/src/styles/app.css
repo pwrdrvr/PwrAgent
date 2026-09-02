@@ -3763,6 +3763,17 @@ textarea,
   padding: 0 12px;
 }
 
+/* An `<a class="button">` — an external link that reads as an action, e.g. a
+   release-notes or install-guide link. A native <button> centers its content
+   and carries no underline for free; an inline anchor does neither, so it
+   renders as underlined text in a box the min-height never reaches. */
+a.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .button:focus,
 .thread-row:focus,
 .transcript-activity__toggle:focus,
@@ -10396,6 +10407,51 @@ textarea,
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
+}
+
+/* ------------------------------------------------------------------
+   ACP MANAGED BUILD STATUS (Settings -> AI Providers -> Grok)
+
+   The PwrAgent-build row reports a release channel, not a boolean:
+   which tag is installed, whether it is the one running, and when
+   PwrAgent last checked. One status line above the row's action
+   buttons, both inside the field's `actions` slot.
+   ------------------------------------------------------------------ */
+
+.acp-build {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.acp-build__line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+  min-width: 0;
+}
+
+/* The dot is a baseline-aligned marker in a text line, not a flex row
+   item of its own — nudge it onto the text's optical center. */
+.acp-build__line .status-dot {
+  align-self: center;
+}
+
+.acp-build__tag {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.acp-build__state {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .settings-provider-defaults__fast {

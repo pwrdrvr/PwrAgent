@@ -34,6 +34,7 @@ import {
   ensureManagedGrokRuntime,
   type ManagedGrokCheckMode,
 } from "./grok-managed-runtime.js";
+import { isPwrAgentSuppliedGrokCommand } from "./grok-build-channel.js";
 import { normalizeAcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import type {
@@ -275,10 +276,16 @@ export async function discoverLocalAcpAgentRecords(
       args: group.args,
       env: {
         ...group.env,
+        // Equality covers the command this run's check just resolved (and the
+        // injected commands discovery tests supply); the path check covers
+        // every other PwrAgent build the machine holds — an older managed
+        // version an operator pinned, or one left active while a release check
+        // failed. Both are ours, so neither may reach the vendor updater.
         ...(group.strategyId === "grok"
           && (
             active.command === managedGrokCommand
             || active.command === bundledGrokCommand
+            || isPwrAgentSuppliedGrokCommand(active.command)
           )
           ? { GROK_INSTALLER: "pwragent" }
           : {}),

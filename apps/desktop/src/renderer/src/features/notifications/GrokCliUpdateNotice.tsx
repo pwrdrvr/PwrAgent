@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  managedGrokReleaseUrl,
+  XAI_GROK_UPDATE_URL,
+} from "../../lib/grok-build-channel";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
-
-export const GROK_BUILD_UPDATE_URL = "https://x.ai/build";
 
 export function GrokCliUpdateNotice(props: {
   desktopApi?: DesktopApi;
@@ -64,19 +66,31 @@ export function GrokCliUpdateNotice(props: {
     [desktopApi, entry?.update?.latestVersion, now],
   );
 
-  const notice = useMemo(() => buildGrokCliUpdateNotice({
-    entry,
-    now: clock,
-    onOpenUpdatePage: (url) => {
-      window.open(url, "_blank", "noopener,noreferrer");
-    },
-    onDismiss: () => {
-      void acknowledge("dismiss");
-    },
-    onSnooze: () => {
-      void acknowledge("snooze");
-    },
-  }), [acknowledge, clock, entry]);
+  const openUpdatePage = useCallback((url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, []);
+
+  // The two channels are mutually exclusive by construction: the managed
+  // notice needs a PwrAgent build to be active, and the vendor notice refuses
+  // to render for one. Ordering here only decides which wins if that ever
+  // stops being true, and the channel PwrAgent owns should win.
+  const notice = useMemo(() => (
+    buildManagedGrokBuildNotice({
+      entry,
+      onOpenReleasePage: openUpdatePage,
+    })
+    ?? buildXaiGrokCliUpdateNotice({
+      entry,
+      now: clock,
+      onOpenUpdatePage: openUpdatePage,
+      onDismiss: () => {
+        void acknowledge("dismiss");
+      },
+      onSnooze: () => {
+        void acknowledge("snooze");
+      },
+    })
+  ), [acknowledge, clock, entry, openUpdatePage]);
 
   useEffect(() => {
     onNoticeChanged(notice);
@@ -85,7 +99,59 @@ export function GrokCliUpdateNotice(props: {
   return null;
 }
 
-export function buildGrokCliUpdateNotice(params: {
+/**
+ * The PwrAgent-built Grok channel has exactly one state worth interrupting
+ * for: a newer verified build is installed and something is holding an older
+ * one in place for new threads. Every other state resolves itself — PwrAgent
+ * downloads and installs the newest build on its own — so a "an update is
+ * available" prompt on this channel would ask the operator to do work PwrAgent
+ * has already done.
+ */
+export function buildManagedGrokBuildNotice(params: {
+  entry?: AcpAgentSettingsEntry;
+  onOpenReleasePage: (url: string) => void;
+}): AppNoticeToastNotice | undefined {
+  const managed = params.entry?.managedBuild;
+  if (
+    params.entry?.registryId !== "grok"
+    || params.entry.pwrAgentManagedRuntime !== true
+    || managed?.pinnedBehind !== true
+    || !managed.installedTag
+    || !managed.activeTag
+  ) {
+    return undefined;
+  }
+  return {
+    id: `managed-grok-build:${managed.installedTag}`,
+    autoDismiss: false,
+    title: "PwrAgent Grok build update not in use",
+    message:
+      `${managed.installedTag} is verified and installed, but a manual path`
+      + ` pins ${managed.activeTag}, so new threads keep using the older build.`,
+    detail:
+      "Clear the manual path in Settings → AI Providers → Grok to follow the"
+      + " newest build. Running threads keep the build they started on.",
+    tone: "warning",
+    actions: [
+      {
+        label: "Release notes",
+        onClick: () => params.onOpenReleasePage(
+          managedGrokReleaseUrl(managed.repository, managed.installedTag ?? ""),
+        ),
+        tone: "primary",
+      },
+    ],
+  };
+}
+
+/**
+ * The vendor channel: an xAI install the operator updates themselves from
+ * x.ai/build. It must never render against a PwrAgent build — those carry
+ * `-pwragent` versions from a different publisher, and pairing one with an xAI
+ * version number in the same sentence is the confusion this split exists to
+ * end.
+ */
+export function buildXaiGrokCliUpdateNotice(params: {
   entry?: AcpAgentSettingsEntry;
   now: number;
   onOpenUpdatePage: (url: string) => void;
@@ -112,15 +178,19 @@ export function buildGrokCliUpdateNotice(params: {
   return {
     id: `acp-update:acp:grok:${update.latestVersion}`,
     autoDismiss: false,
-    title: "Grok update available",
-    message: `Grok ${update.latestVersion} is available; ${update.currentVersion} is installed.`,
-    detail: "Update Grok from x.ai/build, then restart active Grok sessions.",
+    title: "xAI Grok CLI update available",
+    message:
+      `xAI Grok ${update.latestVersion} is available;`
+      + ` your xAI install is ${update.currentVersion}.`,
+    detail:
+      "PwrAgent does not update this build. Update it from x.ai/build, then"
+      + " restart active Grok sessions.",
     onDismiss: params.onDismiss,
     tone: "warning",
     actions: [
       {
-        label: "Open update page",
-        onClick: () => params.onOpenUpdatePage(GROK_BUILD_UPDATE_URL),
+        label: "Open x.ai/build",
+        onClick: () => params.onOpenUpdatePage(XAI_GROK_UPDATE_URL),
         tone: "primary",
       },
       { label: "Tomorrow", onClick: params.onSnooze },

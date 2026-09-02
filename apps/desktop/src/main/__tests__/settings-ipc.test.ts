@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AcpAgentSettingsEntry } from "@pwragent/shared";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 
@@ -1310,6 +1311,108 @@ describe("settings ipc", () => {
       );
       expect(grok).toMatchObject({ pwrAgentManagedRuntime: true });
       expect(grok?.update).toBeUndefined();
+    } finally {
+      disposeAppState();
+    }
+  });
+
+  it("reports the managed Grok channel and the pin holding it back", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const managedRoot = path.join(tempRoot, "agents", "grok");
+    fs.mkdirSync(managedRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(managedRoot, "managed-release.json"),
+      JSON.stringify({
+        asset: "pwragent-grok-1.0.5-pwragent.1-macos-universal.tar.gz",
+        checkedAt: 5_000,
+        installedAt: 4_000,
+        repository: "pwrdrvr/grok-build",
+        schemaVersion: 1,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v1.0.5-pwragent.1",
+      }),
+    );
+    // The operator pinned an older managed version with a manual path, so the
+    // newest verified build is installed and never runs.
+    const pinnedCommand = path.join(
+      managedRoot,
+      "versions",
+      "pwragent-v1.0.4-pwragent.2",
+      "grok",
+    );
+
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState("bootstrap");
+    try {
+      new AcpAgentStore(getAppStateDb()).upsertInstalledAgent({
+        backendId: "acp:grok",
+        registryId: "grok",
+        name: "Grok",
+        version: "1.0.4-pwragent.2",
+        distributionKind: "local",
+        distributionSource: "grok agent stdio",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-grok-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        activeCommand: pinnedCommand,
+        instances: [
+          { command: pinnedCommand, version: "1.0.4-pwragent.2", source: "override" },
+          { command: "/Users/me/.grok/bin/grok", version: "1.0.5", source: "path" },
+        ],
+        launchDescriptor: {
+          backendId: "acp:grok",
+          registryId: "grok",
+          distributionKind: "local",
+          command: pinnedCommand,
+          args: ["agent", "stdio"],
+          // Deliberately unstamped: discovery only stamps the command the
+          // current release check resolved, which a pinned older version is
+          // not. Provenance still has to come out right.
+          env: { NO_COLOR: "1" },
+        },
+      });
+      registerSettingsIpcHandlers(service);
+
+      const response = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: false },
+      )) as { entries?: AcpAgentSettingsEntry[] } | undefined;
+      const grok = response?.entries?.find(
+        (entry) => entry.registryId === "grok",
+      );
+
+      expect(grok).toMatchObject({ pwrAgentManagedRuntime: true });
+      expect(grok?.managedBuild).toMatchObject({
+        repository: "pwrdrvr/grok-build",
+        installedTag: "pwragent-v1.0.5-pwragent.1",
+        activeTag: "pwragent-v1.0.4-pwragent.2",
+        checkedAt: 5_000,
+        pinnedBehind: true,
+      });
+      expect(grok?.instances).toMatchObject([
+        { pwrAgentBuild: true, pwrAgentBuildTag: "pwragent-v1.0.4-pwragent.2" },
+        { command: "/Users/me/.grok/bin/grok" },
+      ]);
+      expect(grok?.instances?.[1]?.pwrAgentBuild).toBeUndefined();
     } finally {
       disposeAppState();
     }
