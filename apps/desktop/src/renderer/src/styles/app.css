@@ -8,6 +8,24 @@
      buttons sit on the same line. Only consumed under [data-platform="win32"];
      zero contribution elsewhere. */
   --win-titlebar-h: 40px;
+  /* Height of every top-of-window chrome band: the sidebar masthead, the
+     thread header, the Activity/Settings title bars, and the Settings nav
+     masthead. All of them center their content in this box, so one
+     centerline (y=20) runs across the whole top of the app — and the macOS
+     stoplights land on it too (`MACOS_TRAFFIC_LIGHT_POSITION`).
+
+     Derived, not chosen: `.sidebar__icon-button` is 28px around a 16px
+     icon, i.e. a 6px ring. The band gives the button row the same 6px
+     ring, so 28 + 6 + 6 = 40 and the row nests concentrically.
+
+     These bands used to declare `min-height: 44px` with `padding-top:
+     10px` and no bottom padding — "10px + the 34px icon button". The
+     button was tightened to 28px and the bands were never re-derived, so
+     every one of them put all its slack above the content and drifted
+     below its own center, by different amounts (24 / 24 / 26.5 / 27
+     against `.settings-titlebar`'s balanced 19.5). Center content in this
+     band; never re-introduce one-sided padding to position it. */
+  --chrome-band-h: 40px;
   /* Width reserved at the strip's right edge for the OS caption buttons
      (min/max/close) so title-bar content never sits under them. */
   --win-caption-w: 140px;
@@ -678,7 +696,7 @@ textarea,
 }
 
 .app-shell[data-sidebar-hidden="true"] .thread-header__top {
-  min-height: 44px;
+  min-height: var(--chrome-band-h);
 }
 
 .app-shell[data-sidebar-hidden="true"] .thread-header__main {
@@ -1460,7 +1478,8 @@ textarea,
 
 .sidebar__masthead {
   align-items: center;
-  padding: 10px 0 0 80px;
+  min-height: var(--chrome-band-h);
+  padding: 0 0 0 80px;
   border-bottom: none;
   /* Tighter than the shared 16px so the brand sits closer to its actions. */
   gap: 8px;
@@ -1524,14 +1543,13 @@ textarea,
 }
 
 .thread-header {
-  /* Vertically center the title row + chips + MessagingStatusBar in
-     a 44px box that matches the sidebar masthead's effective height
-     (10px top padding + 34px set by `.sidebar__icon-button`). With
-     `box-sizing: border-box`, `min-height: 44px` + `padding-top: 10px`
-     gives a 34px content area; `align-items: center` puts the
-     compact title's top at y=18.5 — exactly where the brand sits in
-     the sidebar masthead. Result: title, brand, and messaging pills
-     all share the same vertical centerline.
+  /* Vertically center the title row + chips + MessagingStatusBar in the
+     shared `--chrome-band-h` box, the same band the sidebar masthead
+     uses. `justify-content: center` on this column is what does the
+     centering — do NOT go back to `flex-start` plus a top padding, which
+     is how this row drifted below the brand it is supposed to line up
+     with. Result: title, brand, and messaging pills all share the same
+     vertical centerline as the stoplights.
      The header is a column holding exactly ONE row (breadcrumb + chips on
      the left, layout toggles + MessagingStatusBar on the right). Keeping MSG
      in that row — instead of vertically centered against a `__main` that
@@ -1542,10 +1560,10 @@ textarea,
      constant. Do not add a second row here. */
   flex-direction: column;
   align-items: stretch;
-  justify-content: flex-start;
+  justify-content: center;
   gap: 6px;
-  min-height: 44px;
-  padding-top: 10px;
+  min-height: var(--chrome-band-h);
+  padding-top: 0;
   /* Issue #240 follow-up: the thread header carries its OWN left
      inset, decoupled from the transcript / composer below it. The
      previous 28px sidebar gutter on `.app-main` provided this for
@@ -2200,8 +2218,8 @@ textarea,
   align-items: center;
   gap: 16px;
   flex: 0 0 auto;
-  min-height: 44px;
-  padding: 10px 14px 0 96px;
+  min-height: var(--chrome-band-h);
+  padding: 0 14px 0 96px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
   -webkit-app-region: drag;
@@ -2217,7 +2235,7 @@ textarea,
    .activity-titlebar header IS the title strip: drop the macOS stoplight
    reservation on the left, reserve the caption-button width on the right, and
    match the WCO overlay color (--bg-sidebar) so the buttons blend in. It's
-   already draggable + min-height 44px from the base rule. */
+   already draggable + on `--chrome-band-h` from the base rule. */
 :root[data-platform="win32"] .activity-titlebar {
   padding-left: 14px;
   padding-right: var(--win-caption-w, 140px);
@@ -7994,9 +8012,11 @@ textarea,
   gap: 12px;
   /* No 80px stoplight gutter here — the nav masthead on the left
      handles that. The right pane's title bar starts at x=188 (past
-     the stoplight area) so it doesn't need any clearance. Match
-     `.thread-header`'s 10px top padding for visual rhythm. */
-  padding: 10px 14px;
+     the stoplight area) so it doesn't need any clearance. Shares the
+     app-wide chrome band so its breadcrumb sits on the same centerline
+     as the nav brand beside it. */
+  min-height: var(--chrome-band-h);
+  padding: 0 14px;
   border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: drag;
 }
@@ -8119,19 +8139,17 @@ textarea,
      The nav runs its rows in a tighter lane, so the masthead carries
      the difference: every platform branch below re-inserts 8px too,
      which is why the brand lands identically on both screens.
-   - `min-height: 44px` gives the masthead the same effective
-     height that `.sidebar__masthead` has on the main screen
-     (10px top padding + 34px from the icon buttons it contains).
-     Without this, the masthead would collapse to brand-height +
-     padding, putting the brand ~8.5px higher than main's brand.
-     With it, the brand vertically centers in the same 34px content
-     area that main uses, so the two screens read identically. */
+   - `min-height: var(--chrome-band-h)` gives the masthead the same
+     band `.sidebar__masthead` has on the main screen. Without it the
+     masthead would collapse to brand height, floating the brand above
+     main's. With it, the brand centers in the same band main uses, so
+     the two screens read identically. */
 .settings-nav__masthead {
   display: flex;
   align-items: center;
   gap: 16px;
-  min-height: 44px;
-  padding: 10px 0 0 88px;
+  min-height: var(--chrome-band-h);
+  padding: 0 0 0 88px;
   -webkit-app-region: drag;
 }
 

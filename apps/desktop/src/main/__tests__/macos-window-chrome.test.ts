@@ -14,6 +14,34 @@ const css = readFileSync(
 );
 const windowSource = readFileSync(path.resolve(testDir, "../window.ts"), "utf8");
 
+/**
+ * Every top-level declaration block for a selector, concatenated. Several of
+ * these bars are declared twice (once grouped for the drag region, once for
+ * layout), so a single-block lookup would read the wrong half.
+ */
+function ruleFor(selector: string): string {
+  const blocks: string[] = [];
+  const needle = `\n${selector} {`;
+  for (let i = css.indexOf(needle); i !== -1; i = css.indexOf(needle, i + 1)) {
+    blocks.push(css.slice(i, css.indexOf("\n}", i)));
+  }
+  if (blocks.length === 0) throw new Error(`app.css has no ${selector} rule`);
+  return blocks.join("\n");
+}
+
+/**
+ * The top padding a rule sets, via either the longhand or the shorthand's
+ * first value. One-sided top padding is what pushed these bars below their
+ * own centre, so the band test asserts every one of them leaves it at 0.
+ */
+function topPaddingOf(rule: string): string {
+  const longhand = /padding-top:\s*([^;]+);/.exec(rule);
+  if (longhand) return longhand[1].trim();
+  const shorthand = /\n\s*padding:\s*([^;]+);/.exec(rule);
+  if (shorthand) return shorthand[1].trim().split(/\s+/)[0];
+  return "0";
+}
+
 const originalPlatform = process.platform;
 
 /**
@@ -24,6 +52,9 @@ const originalPlatform = process.platform;
  */
 const BUTTON_SIZE = 14;
 const BUTTON_PITCH = 23;
+
+/** `--chrome-band-h` in app.css — the band every top-of-window bar centres in. */
+const CHROME_BAND = 40;
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", {
@@ -51,13 +82,35 @@ describe("macOS window chrome", () => {
     expect(MACOS_TRAFFIC_LIGHT_POSITION.x).toBe(16);
   });
 
-  it("centres the stoplights on the wordmark's cap height", () => {
-    // The masthead is 10px of top padding above a 34px icon-button row, so
-    // the 17px/700 wordmark's cap centre lands at y=23. A 14px button at
-    // y=16 centres at 23 too.
-    expect(css).toContain("padding: 10px 0 0 80px;");
+  it("centres the stoplights in the shared chrome band", () => {
+    // Every top-of-window bar centres its content in `--chrome-band-h`, so
+    // the stoplights centre in it too and land on the same y=20 centreline
+    // as the wordmark, the thread title, and the breadcrumbs.
+    expect(css).toContain("--chrome-band-h: 40px;");
+    const bandCentre = CHROME_BAND / 2;
     const buttonCentre = MACOS_TRAFFIC_LIGHT_POSITION.y + BUTTON_SIZE / 2;
-    expect(buttonCentre).toBe(23);
+    expect(buttonCentre).toBe(bandCentre);
+    expect(buttonCentre).toBe(20);
+  });
+
+  it("keeps every chrome bar on that one band", () => {
+    // A bar that opts out of the band, or re-introduces one-sided padding
+    // to position its content, silently drops off the shared centreline —
+    // which is exactly how these four drifted to 24 / 24 / 26.5 / 27.
+    for (const bar of [
+      ".sidebar__masthead",
+      ".thread-header",
+      ".activity-titlebar",
+      ".settings-nav__masthead",
+      ".settings-titlebar",
+    ]) {
+      const rule = ruleFor(bar);
+      expect(rule, `${bar} should declare the shared band`).toContain(
+        "min-height: var(--chrome-band-h);",
+      );
+      expect(topPaddingOf(rule), `${bar} should not pad its content off centre`)
+        .toBe("0");
+    }
   });
 
   it("keeps the 80px masthead reservation clear of the button group", () => {
