@@ -1314,6 +1314,129 @@ describe("useThreadSessionState", () => {
     expect(liveEntryIdReads).toBeLessThanOrEqual(liveEntryCount * 12);
   });
 
+  it("does not rescan split-hydrated launch messages for every live update", async () => {
+    const historyMessageCount = 48;
+    const liveUpdateCount = 12;
+    const launchpadText = "Keep this prompt visible while the turn starts.";
+
+    async function measureMessageTextReads(
+      includeLaunchpadState: boolean,
+    ): Promise<number> {
+      let messageTextReads = 0;
+      const messageEntries: AppServerThreadMessageEntry[] = Array.from(
+        { length: historyMessageCount },
+        (_value, index) => ({
+          ...messageEntry({
+            id: `history-${index}`,
+            role: "user",
+            text: `Historical prompt ${index}`,
+            createdAt: index,
+          }),
+          turn: {
+            id: `history-turn-${index}`,
+            status: "completed" as const,
+          },
+        }),
+      );
+      const entries: AppServerThreadEntry[] = messageEntries;
+      const hydratedLaunchMessage: AppServerThreadMessage = {
+        id: "hydrated-launch",
+        role: "user",
+        text: launchpadText,
+        createdAt: 1_000,
+      };
+      const messages: AppServerThreadMessage[] = [
+        ...messageEntries.map(
+          ({ type: _type, turn: _turn, ...message }) => message,
+        ),
+        hydratedLaunchMessage,
+      ].map((message) => new Proxy(message, {
+        get(target, property, receiver) {
+          if (property === "text") {
+            messageTextReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }));
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread: async ({ backend, threadId }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries,
+            messages,
+            pagination: {
+              supportsPagination: true,
+              hasPreviousPage: false,
+            },
+          },
+        }),
+      };
+      const { result, rerender, unmount } = renderHook(
+        ({ showLaunchpadState }) =>
+          useThreadSessionState({
+            desktopApi,
+            thread: {
+              ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+              ...(showLaunchpadState
+                ? {
+                    optimisticUserMessage: {
+                      text: launchpadText,
+                      createdAt: 1_000,
+                    },
+                    optimisticActiveTurn: {
+                      id: "turn-1",
+                      statusText: "Thinking",
+                      startedAt: 1_000,
+                    },
+                  }
+                : {}),
+            },
+          }),
+        { initialProps: { showLaunchpadState: includeLaunchpadState } },
+      );
+
+      await waitForThreadHydration(result);
+      rerender({ showLaunchpadState: false });
+      await waitFor(() => {
+        expect(result.current.messages.at(-1)?.id).toBe("hydrated-launch");
+      });
+      messageTextReads = 0;
+
+      for (let index = 0; index < liveUpdateCount; index += 1) {
+        act(() => {
+          result.current.upsertLiveTranscriptEntry({
+            type: "activity",
+            id: `live-activity-${index}`,
+            summary: `Live activity ${index}`,
+            createdAt: 2_000 + index,
+            details: [],
+            turn: {
+              id: "turn-1",
+              status: "in_progress",
+              startedAt: 1_000,
+            },
+          });
+        });
+      }
+
+      const measuredReads = messageTextReads;
+      unmount();
+      return measuredReads;
+    }
+
+    const baselineReads = await measureMessageTextReads(false);
+    const launchpadReads = await measureMessageTextReads(true);
+
+    // Launch-message correlation may inspect the hydrated projection once,
+    // but live tail updates must not multiply that full-transcript scan.
+    expect(launchpadReads - baselineReads).toBeLessThanOrEqual(
+      (historyMessageCount + 1) * 2,
+    );
+  });
+
   it("coalesces reviews and suppresses duplicates across page-tail boundaries", async () => {
     const fullReview = [
       "Full review comments:",
@@ -3630,6 +3753,189 @@ describe("useThreadSessionState", () => {
         text: launchpadText,
         turn: expect.objectContaining({ id: "turn-1" }),
       }),
+    ]);
+  });
+
+  it("keeps the launchpad prompt visible while messages hydrate ahead of entries", async () => {
+    const launchpadText = "Keep this prompt visible while the turn starts.";
+    const desktopApi: DesktopApi = {
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I am starting the investigation.",
+              createdAt: 2_000,
+            },
+          ],
+          messages: [
+            {
+              id: "hydrated-user",
+              role: "user" as const,
+              text: launchpadText,
+              createdAt: 1_000,
+            },
+            {
+              id: "assistant-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I am starting the investigation.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: true,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const { result, rerender } = renderHook(
+      ({ includeLaunchpadState }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+            ...(includeLaunchpadState
+              ? {
+                  optimisticUserMessage: {
+                    text: launchpadText,
+                    createdAt: 1_000,
+                  },
+                  optimisticActiveTurn: {
+                    id: "turn-1",
+                    statusText: "Thinking",
+                    startedAt: 1_000,
+                  },
+                }
+              : {}),
+          },
+        }),
+      { initialProps: { includeLaunchpadState: true } },
+    );
+
+    await waitForThreadHydration(result);
+    rerender({ includeLaunchpadState: false });
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        `user:${launchpadText}`,
+        "assistant:I am starting the investigation.",
+      ]);
+    });
+    expect(
+      result.current.messages.filter((message) => message.role === "user")
+    ).toHaveLength(1);
+  });
+
+  it("keeps identical user messages from different turns in the message projection", async () => {
+    const launchpadText = "Run the same verification again.";
+    const desktopApi: DesktopApi = {
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "previous-user",
+              role: "user" as const,
+              text: launchpadText,
+              createdAt: 500,
+              turn: {
+                id: "turn-previous",
+                status: "completed" as const,
+              },
+            },
+            {
+              type: "message" as const,
+              id: "assistant-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I am starting the new verification.",
+              createdAt: 2_000,
+              turn: {
+                id: "turn-1",
+                status: "in_progress" as const,
+                startedAt: 1_000,
+              },
+            },
+          ],
+          messages: [
+            {
+              id: "previous-user",
+              role: "user" as const,
+              text: launchpadText,
+              createdAt: 500,
+            },
+            {
+              id: "assistant-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I am starting the new verification.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: true,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const { result, rerender } = renderHook(
+      ({ includeLaunchpadState }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+            ...(includeLaunchpadState
+              ? {
+                  optimisticUserMessage: {
+                    text: launchpadText,
+                    createdAt: 1_000,
+                  },
+                  optimisticActiveTurn: {
+                    id: "turn-1",
+                    statusText: "Thinking",
+                    startedAt: 1_000,
+                  },
+                }
+              : {}),
+          },
+        }),
+      { initialProps: { includeLaunchpadState: true } },
+    );
+
+    await waitForThreadHydration(result);
+    rerender({ includeLaunchpadState: false });
+    await waitFor(() => {
+      expect(
+        result.current.entries
+          .filter((entry) => entry.type === "message" && entry.role === "user")
+          .map((entry) => entry.id)
+      ).toEqual([
+        "previous-user",
+        "optimistic-launchpad-codex:thread-1",
+      ]);
+    });
+    expect(
+      result.current.messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.id)
+    ).toEqual([
+      "previous-user",
+      "optimistic-launchpad-codex:thread-1",
     ]);
   });
 
