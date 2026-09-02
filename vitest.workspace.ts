@@ -8,6 +8,12 @@ import { defineConfig } from "vitest/config";
 const TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
 const HOOK_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 10_000;
 
+// A Windows worker thread's process.env is case-sensitive, unlike the real
+// Electron main process and a forked Node process on Windows. Keep desktop-main
+// on forks there so PATH/Path behavior remains production-equivalent. POSIX
+// uses threads to avoid one OS process exec per test file.
+const DESKTOP_MAIN_POOL = process.platform === "win32" ? "forks" : "threads";
+
 // Where the desktop suites resolve the PwrAgent root to. `resolvePwragentRoot`
 // falls back to `~/.pwragent` — the operator's live application state — and
 // only about a dozen main tests override it themselves, so every other test
@@ -35,6 +41,12 @@ export default defineConfig({
       {
         test: {
           name: "messaging",
+          // Vitest 4 defaults to forks, which execs a fresh Node process for
+          // every test file. With hundreds of files and many concurrent
+          // worktrees, that executable churn overwhelms macOS provenance
+          // checks. Threads retain Vitest's default per-file isolation without
+          // creating an OS process per file.
+          pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "node",
@@ -44,6 +56,7 @@ export default defineConfig({
       {
         test: {
           name: "shared",
+          pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "node",
@@ -53,6 +66,7 @@ export default defineConfig({
       {
         test: {
           name: "desktop-main",
+          pool: DESKTOP_MAIN_POOL,
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           hookTimeout: HOOK_TIMEOUT_MS,
@@ -93,6 +107,7 @@ export default defineConfig({
       {
         test: {
           name: "desktop-renderer",
+          pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "jsdom",
