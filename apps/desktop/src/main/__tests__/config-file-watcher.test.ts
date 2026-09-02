@@ -39,14 +39,18 @@ describe("watchConfigFile", () => {
       { interval: 250, persistent: false },
       expect.any(Function),
     );
-    listener?.({} as Stats, {} as Stats);
+    expect(onChange).not.toHaveBeenCalled();
     vi.advanceTimersByTime(50);
     expect(onChange).toHaveBeenCalledOnce();
+
+    listener?.({} as Stats, {} as Stats);
+    vi.advanceTimersByTime(50);
+    expect(onChange).toHaveBeenCalledTimes(2);
 
     watcher.close();
     expect(unwatchFile).toHaveBeenCalledWith(configPath, listener);
     listener?.({} as Stats, {} as Stats);
     vi.advanceTimersByTime(50);
-    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 });
