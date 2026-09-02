@@ -12,12 +12,31 @@ import type {
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  readStoredSavingsLayout,
+  SAVINGS_DETAILS_MIN_HEIGHT,
+} from "../token-miser-savings-layout";
 import { ToolOutputIncidentExplorerWindow } from "../ToolOutputIncidentExplorerWindow";
 
 afterEach(() => {
   Reflect.deleteProperty(window, "pwragent");
+  window.localStorage.clear();
   window.location.hash = "";
 });
+
+/**
+ * The Savings lens folds its reference sections by default, so a test that
+ * asserts on one has to open it first. Each section is a named region, which
+ * keeps these lookups off the results list below — its rows are buttons whose
+ * text also begins "Code Mode".
+ */
+function savingsSection(label: string) {
+  return within(screen.getByRole("region", { name: label }));
+}
+
+function openSavingsSection(label: string) {
+  fireEvent.click(savingsSection(label).getByRole("button"));
+}
 
 describe("ToolOutputIncidentExplorerWindow", () => {
   it("uses standard thread identity chrome without exposing the raw thread id", async () => {
@@ -189,8 +208,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
     render(<ToolOutputIncidentExplorerWindow />);
 
-    expect(await screen.findByText(/2 Code Mode calls/)).toBeInTheDocument();
-    expect(screen.getByText(/2 direct command cells · 0 reducer decisions/))
+    await screen.findByRole("region", { name: "Code Mode" });
+    expect(savingsSection("Code Mode").getByRole("button"))
+      .toHaveTextContent(/2 calls.*2 direct/);
+    openSavingsSection("Code Mode");
+    expect(savingsSection("Code Mode").getByText("Direct command cells"))
       .toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^All\s*2$/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Direct\s*2$/ })).toBeInTheDocument();
@@ -257,22 +279,37 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
     render(<ToolOutputIncidentExplorerWindow />);
 
-    expect(await screen.findByText(
-      /143 Code Mode calls · 121 command-bearing cells · 122 nested command invocations · 1\.01 per command cell/,
-    )).toBeInTheDocument();
-    expect(screen.getByText(
-      /90 direct command cells · 31 reducer decisions/,
-    )).toBeInTheDocument();
-    expect(screen.getByText(
-      /31 decisions · 26 Luna evaluations · 5 policy pass-throughs · 2 helper pass-throughs/,
-    )).toBeInTheDocument();
+    // Folded, each section leads with its own headline counts. Code Mode
+    // calls, command cells and reducer decisions are three different numbers
+    // and must never be collapsed into one.
+    await screen.findByRole("region", { name: "Code Mode" });
+    expect(savingsSection("Code Mode").getByRole("button")).toHaveTextContent(
+      /143 calls.*121 command cells.*121 dispatch clusters/,
+    );
+    expect(savingsSection("Decisions").getByRole("button"))
+      .toHaveTextContent(/31 decisions/);
+
+    openSavingsSection("Code Mode");
+    const codeMode = savingsSection("Code Mode");
+    expect(codeMode.getByText(/122 nested · 1\.01 per cell/)).toBeInTheDocument();
+    expect(codeMode.getByText(/1 multi-invocation · largest 2/)).toBeInTheDocument();
+    expect(codeMode.getByText("Direct command cells").nextSibling)
+      .toHaveTextContent("90");
+    // Nested invocations divided by decisions rather than by command cells.
     expect(screen.queryByText(/3\.94 per/)).not.toBeInTheDocument();
-    expect(screen.getByText(
-      /1 parent compactions · 50k compaction-attributed cold replay tokens · \$0\.25/,
-    )).toBeInTheDocument();
-    expect(screen.getByText(
-      /Peak context 244k \/ 258k \(94\.4%\) · final context 131k \/ 258k \(50\.9%\)/,
-    )).toBeInTheDocument();
+
+    openSavingsSection("Decisions");
+    const decisions = savingsSection("Decisions");
+    expect(decisions.getByText("Luna evaluations").nextSibling)
+      .toHaveTextContent("26");
+    expect(decisions.getByText(/5 policy · 2 helper/)).toBeInTheDocument();
+
+    openSavingsSection("Context boundaries");
+    const boundaries = savingsSection("Context boundaries");
+    expect(boundaries.getByText("Cold replay tokens").nextSibling)
+      .toHaveTextContent(/50k\$0\.25/);
+    expect(boundaries.getByText(/244k \/ 258k \(94\.4%\)/)).toBeInTheDocument();
+    expect(boundaries.getByText(/131k \/ 258k \(50\.9%\)/)).toBeInTheDocument();
   });
 
   it("warns on a near-limit thread even when no compaction occurred", async () => {
@@ -299,11 +336,15 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     window.location.hash = "#tool-output-incidents/codex/thread-1/Near%20limit";
     render(<ToolOutputIncidentExplorerWindow />);
 
-    expect(await screen.findByText(
-      /0 parent compactions · 0 compaction-attributed cold replay tokens/,
-    )).toBeInTheDocument();
-    expect(screen.getByText(
-      /Peak context 240k \/ 258k \(92\.9%\) · final context 239k \/ 258k \(92\.5%\) · warning: this thread approached the context limit/,
+    await screen.findByRole("region", { name: "Context boundaries" });
+    openSavingsSection("Context boundaries");
+    const boundaries = savingsSection("Context boundaries");
+    expect(boundaries.getByText("Parent compactions").nextSibling)
+      .toHaveTextContent("0");
+    expect(boundaries.getByText(/240k \/ 258k \(92\.9%\)/)).toBeInTheDocument();
+    expect(boundaries.getByText(/239k \/ 258k \(92\.5%\)/)).toBeInTheDocument();
+    expect(boundaries.getByText(
+      /Warning: this thread approached the context limit/,
     )).toBeInTheDocument();
   });
 
@@ -437,7 +478,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByRole("button", { name: /win-1/ })).not.toBeInTheDocument();
   });
 
-  it("separates summary and pass-through tokens in the savings caption", async () => {
+  it("separates summary and pass-through tokens on the decisions row", async () => {
     const response = buildResponse();
     response.toolAccounting!.tokenMiser = {
       interceptionCount: 2,
@@ -480,9 +521,178 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     window.location.hash = "#tool-output-incidents/codex/thread-1/Adaptive%20proof";
     render(<ToolOutputIncidentExplorerWindow />);
 
-    expect(await screen.findByText(
-      /1 summarized · 1 passed through · 392 summary tokens · 2.7k pass-through tokens · nothing read back later/,
-    )).toBeInTheDocument();
+    await screen.findByRole("region", { name: "Decisions" });
+    expect(savingsSection("Decisions").getByRole("button")).toHaveTextContent(
+      /1 summarized.*1 passed through/,
+    );
+    openSavingsSection("Decisions");
+    const decisions = savingsSection("Decisions");
+    expect(decisions.getByText("392 of summaries")).toBeInTheDocument();
+    expect(decisions.getByText("2.7k tokens")).toBeInTheDocument();
+    expect(decisions.getByText("nothing read back later")).toBeInTheDocument();
+  });
+
+  /* The lens shipped with every band above the results list fixed-height and
+     fully expanded. At the 1000x700 window it runs in, they needed more than
+     the window, and the list — the only part an operator can explore — was
+     left rendering a single row. These three cover the fix: the reference
+     rows cost nothing until asked for, the operator's choice survives, and
+     the grip can never hand the list less than its floor. */
+  function buildSavingsResponse() {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 23,
+      passThroughCount: 5,
+      policyPassThroughCount: 0,
+      helperPassThroughCount: 5,
+      helperDecisionCount: 23,
+      originalCharacters: 100_000,
+      baselineParentTokens: 25_000,
+      replacementTokens: 3_000,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 22_000,
+      interceptions: [],
+      codeMode: {
+        callCount: 37,
+        commandCellCount: 0,
+        directCommandCellCount: 0,
+        dispatchClusterCount: 0,
+        multiInvocationClusterCount: 0,
+        largestDispatchCluster: 0,
+        nestedCommandInvocationCount: 0,
+        patchCellCount: 0,
+        otherCellCount: 37,
+        pollingCellCount: 0,
+        directCount: 14,
+        summarizedCount: 18,
+        passThroughCount: 5,
+        retrievalCount: 0,
+        capturedNestedInvocationCount: 0,
+        observations: [],
+      },
+    };
+    return response;
+  }
+
+  it("folds every reference section so the results list is not squeezed", async () => {
+    installApi({ readThread: async () => buildSavingsResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByRole("region", { name: "Decisions" });
+    for (const label of ["Decisions", "Context boundaries", "Code Mode"]) {
+      expect(savingsSection(label).getByRole("button"))
+        .toHaveAttribute("aria-expanded", "false");
+    }
+    // Folded rows still carry their headline numbers, so nothing has to be
+    // opened to read the screen.
+    expect(savingsSection("Decisions").getByRole("button"))
+      .toHaveTextContent(/23 decisions.*18 summarized.*5 passed through/);
+    expect(savingsSection("Code Mode").getByRole("button"))
+      .toHaveTextContent(/37 calls.*23 gated.*14 direct/);
+    // No section body is mounted until one is asked for.
+    expect(screen.queryByText("Luna evaluations")).not.toBeInTheDocument();
+    expect(screen.queryByText("Retrieval cells")).not.toBeInTheDocument();
+  });
+
+  it("remembers which sections the operator unfolded", async () => {
+    installApi({ readThread: async () => buildSavingsResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    const first = render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByRole("region", { name: "Code Mode" });
+    openSavingsSection("Code Mode");
+    expect(savingsSection("Code Mode").getByText("Retrieval cells"))
+      .toBeInTheDocument();
+    first.unmount();
+
+    render(<ToolOutputIncidentExplorerWindow />);
+    await screen.findByRole("region", { name: "Code Mode" });
+    expect(savingsSection("Code Mode").getByRole("button"))
+      .toHaveAttribute("aria-expanded", "true");
+    expect(savingsSection("Decisions").getByRole("button"))
+      .toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("clamps the grip so the results list keeps its floor", async () => {
+    installApi({ readThread: async () => buildSavingsResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const grip = await screen.findByRole("separator", {
+      name: "Resize the Token Miser detail rows",
+    });
+    fireEvent.keyDown(grip, { key: "ArrowDown" });
+
+    /* jsdom lays nothing out, so every measured height is zero and the drag
+       asks for more than the window has. The stored value is the clamp's
+       floor rather than the requested one, which is the property that keeps
+       the list alive on a genuinely short window too. */
+    await waitFor(() => {
+      expect(readStoredSavingsLayout().detailsHeight)
+        .toBe(SAVINGS_DETAILS_MIN_HEIGHT);
+    });
+  });
+
+  /* jsdom implements no pointer capture at all, so the grip's own calls have
+     to be stubbed for a drag to reach the handlers. Everything the assertions
+     read — the captured start height, the delta, and when the drag ends — is
+     still the component's. */
+  function stubPointerCapture(node: HTMLElement): void {
+    let captured = false;
+    Object.assign(node, {
+      hasPointerCapture: () => captured,
+      releasePointerCapture: () => {
+        captured = false;
+      },
+      setPointerCapture: () => {
+        captured = true;
+      },
+    });
+  }
+
+  it("resizes the detail stack while the pointer is down", async () => {
+    installApi({ readThread: async () => buildSavingsResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const grip = await screen.findByRole("separator", {
+      name: "Resize the Token Miser detail rows",
+    });
+    stubPointerCapture(grip);
+    const stack = document.querySelector(".incident-explorer__savings-details");
+    expect(stack).not.toHaveAttribute("style");
+
+    fireEvent.pointerDown(grip, { button: 0, clientY: 400, pointerId: 1 });
+    fireEvent.pointerMove(grip, { clientY: 520, pointerId: 1 });
+
+    // jsdom reports no geometry, so the clamp hands back its floor whatever
+    // the drag asked for. What this pins is that the drag ran and committed a
+    // height, which is the half the keyboard test cannot reach.
+    await waitFor(() => {
+      expect(stack).toHaveStyle({ height: `${SAVINGS_DETAILS_MIN_HEIGHT}px` });
+    });
+  });
+
+  /* A gesture the OS takes over ends in lostpointercapture, never pointerup.
+     Clearing the drag only on pointerup left it armed, and every later hover
+     across the handle then resized the split with no button held. */
+  it("stops resizing when a drag is cancelled instead of released", async () => {
+    installApi({ readThread: async () => buildSavingsResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const grip = await screen.findByRole("separator", {
+      name: "Resize the Token Miser detail rows",
+    });
+    stubPointerCapture(grip);
+    fireEvent.pointerDown(grip, { button: 0, clientY: 400, pointerId: 1 });
+    fireEvent.lostPointerCapture(grip, { pointerId: 1 });
+    fireEvent.pointerMove(grip, { clientY: 900, pointerId: 1 });
+
+    const stack = document.querySelector(".incident-explorer__savings-details");
+    expect(stack).not.toHaveAttribute("style");
+    expect(readStoredSavingsLayout().detailsHeight).toBeUndefined();
   });
 
   it("shows the priced savings equation and how much of it was observed", async () => {
@@ -535,27 +745,52 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(screen.getByText("Estimated same-trajectory savings"))
       .toBeInTheDocument();
-    expect(screen.getByText("$0.35")).toBeInTheDocument();
     expect(screen.getByText("49.3% less than estimated unfiltered cost"))
       .toBeInTheDocument();
-    expect(screen.getByText(/Observed thread cost/)).toHaveTextContent(
-      "Observed thread cost $0.36 · estimated same-trajectory cost without filtering $0.71",
-    );
-    expect(screen.getByText("1 · Without the gate")).toBeInTheDocument();
+    // The terms are laid out as the subtraction they are, so the headline and
+    // the result of the equation are the same figure printed twice.
+    expect(screen.getAllByText("$0.35")).toHaveLength(2);
+    expect(screen.getByText("Without the gate")).toBeInTheDocument();
     expect(screen.getByText("$0.68")).toBeInTheDocument();
-    expect(
-      screen.getByText(/40k uncached \+ 1,850k cached · gated tool output/),
-    ).toBeInTheDocument();
-    expect(screen.getByText("2 · Gate compute")).toBeInTheDocument();
+    expect(screen.getByText("Gate compute")).toBeInTheDocument();
     expect(screen.getByText("$0.05")).toBeInTheDocument();
-    expect(screen.getByText("3 · Revealed to parent")).toBeInTheDocument();
+    expect(screen.getByText("Revealed to parent")).toBeInTheDocument();
     expect(screen.getByText("$0.28")).toBeInTheDocument();
-    expect(
-      screen.getByText(/1.4k uncached \+ 50k cached · summaries and retrievals/),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+    // 350k saved, 50k gate and 280k revealed out of the 680k unfiltered.
+    // The split caption is matched on its own text nodes, because every figure
+    // in it sits inside a <b> that getByText does not descend into.
+    const splitCaption = screen
+      .getByText("avoided · gate · revealed")
+      .closest("p");
+    // 51.5, 7.4 and 41.2 percent. The last term absorbs the rounding, so the
+    // three printed shares close on 100 instead of the 99 that rounding each
+    // of them on its own produces.
+    expect(splitCaption).toHaveTextContent("51% avoided · 7% gate · 42% revealed");
+    expect(splitCaption).toHaveTextContent("observed $0.36 · unfiltered $0.71");
     expect(
       screen.getByText(/Directly observed · 47 payload replays across 4 gates, each counted at a request boundary/),
     ).toBeInTheDocument();
+
+    // The basis stays readable to a screen reader even though the compact
+    // equation only paints it into a `title`. `toHaveTextContent` descends,
+    // which is the point: it sees what the accessibility tree sees.
+    expect(screen.getByText("Without the gate").closest("div"))
+      .toHaveTextContent("40k uncached + 1,850k cached at gpt-5.6-terra rates");
+    expect(screen.getByText("Gate compute").closest("div"))
+      .toHaveTextContent("0 charged by gpt-5.6-luna");
+
+    // The token basis of each term also lands on the decisions row rather than
+    // paying for two lines of visible sub-caption under every term.
+    openSavingsSection("Decisions");
+    const decisions = savingsSection("Decisions");
+    expect(decisions.getByText(/40k uncached · 1,850k cached/))
+      .toBeInTheDocument();
+    expect(decisions.getByText(/1.4k uncached · 50k cached/)).toBeInTheDocument();
+    expect(decisions.getByText("Parent rates").nextSibling)
+      .toHaveTextContent("gpt-5.6-terra");
+    expect(decisions.getByText("Gate model").nextSibling)
+      .toHaveTextContent("gpt-5.6-luna");
   });
 
   it("shows same-trajectory overhead as a percentage of unfiltered cost", async () => {
@@ -604,6 +839,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     await screen.findByText("Estimated same-trajectory overhead");
     expect(screen.getByText("33.3% more than estimated unfiltered cost"))
       .toBeInTheDocument();
+    /* With negative savings the parts sum past the whole, and a bar
+       overflowing its own track reads as a rendering fault. The overspend
+       states itself in words above instead. */
+    expect(screen.queryByText("avoided · gate · revealed")).not.toBeInTheDocument();
+    expect(document.querySelector(".incident-explorer__savings-split")).toBeNull();
   });
 
   // Reconstructed replays are inferred from later tool calls and cannot see
@@ -638,7 +878,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(
       screen.getByText(/Partly reconstructed · 5 of 8 payload replays inferred from later tool calls · 1 gate is not priced yet/),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/All gates ·/)).toHaveLength(2);
+    // Token counts cover every gate while the dollars cover only the priced
+    // ones, so the two token figures say so.
+    openSavingsSection("Decisions");
+    expect(savingsSection("Decisions").getAllByText(/All gates ·/))
+      .toHaveLength(2);
   });
 
   it("shows Token Miser savings beside gross tool-output exposure", async () => {
@@ -695,10 +939,13 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(
       screen.getByText(/34.6k more across 6 replays/),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/2 gated calls · 700 of summaries · 1.3k read back later/),
-    ).toBeInTheDocument();
     expect(screen.getByText("awaiting the pricing ledger")).toBeInTheDocument();
+    expect(savingsSection("Decisions").getByRole("button")).toHaveTextContent(
+      /2 decisions.*2 summarized.*1.3k read back/,
+    );
+    openSavingsSection("Decisions");
+    expect(savingsSection("Decisions").getByText("700 of summaries"))
+      .toBeInTheDocument();
 
     // The per-call gate box belongs to the incidents lens, beside the raw
     // output it replaced.

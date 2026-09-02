@@ -18017,19 +18017,34 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 13px;
 }
 
+/* Headline left, verification chart right — the same two-column split the
+   Incidents lens uses for its own summary. The chart used to be a full-width
+   band between the hero and the results, which cost 120px of a 700px window
+   to draw, most often, a single 24px bar. */
 .incident-explorer__savings-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px 28px;
+  align-items: start;
+}
+
+/* The chart renders nothing on a thread with no measured turns, and a reserved
+   300px of empty column is worse than the full-width headline it displaces. */
+.incident-explorer__savings-hero:has(.incident-explorer__context-turns) {
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+.incident-explorer__savings-headline {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px 32px;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .incident-explorer__savings-figure {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin: 6px 0 0;
+  gap: 10px;
+  margin: 4px 0 0;
 }
 
 .incident-explorer__savings-figure strong {
@@ -18039,6 +18054,7 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 600;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .incident-explorer__savings-figure span {
@@ -18046,42 +18062,150 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 12.5px;
 }
 
-.incident-explorer__savings-terms {
+/* Savings is term 1 minus terms 2 and 3, so the terms are laid out as that
+   subtraction and end in the headline figure. Three equal tiles with the total
+   sixty pixels above them made the reader do the arithmetic to believe it. */
+.incident-explorer__savings-equation {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  margin: 0;
-  min-width: min(560px, 62vw);
-  background: var(--border-subtle);
+  grid-template-columns: auto 14px auto 14px auto 18px auto;
+  align-items: end;
+  column-gap: 10px;
+  margin: 12px 0 0;
 }
 
-.incident-explorer__savings-terms div {
-  padding: 6px 10px;
-  background: var(--bg-panel);
+.incident-explorer__savings-operator {
+  padding-bottom: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  text-align: center;
 }
 
-.incident-explorer__savings-terms dt {
+.incident-explorer__savings-term {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.incident-explorer__savings-term dt {
   color: var(--text-muted);
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
-.incident-explorer__savings-terms dd {
-  display: flex;
-  flex-direction: column;
-  margin: 2px 0 0;
+.incident-explorer__savings-term dd {
+  margin: 0;
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.incident-explorer__savings-terms dd span {
+/* The term's token basis, named for a screen reader without painting it. The
+   compact equation moved that text into `title`, which is a pointer-only
+   affordance. Scoped to this lens for the same reason `.star-map-card__state`
+   is scoped to the map: a repo-wide visually-hidden primitive deserves its own
+   decision. */
+.incident-explorer__savings-basis {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.incident-explorer__savings-term[data-result="true"] dt,
+.incident-explorer__savings-term[data-result="true"] dd {
+  color: var(--accent);
+}
+
+/* Token terms for a thread whose gates are not priced yet. Deliberately not
+   the equation above: the dollar terms subtract, these three do not. */
+.incident-explorer__savings-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 28px;
+  margin: 12px 0 0;
+}
+
+.incident-explorer__savings-tokens div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.incident-explorer__savings-tokens dt {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__savings-tokens dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-tokens dd span {
+  display: block;
   color: var(--text-muted);
   font-size: 10.5px;
   font-weight: 400;
+}
+
+/* How much of the unfiltered cost went away, as one bar. */
+.incident-explorer__savings-split {
+  display: flex;
+  height: 8px;
+  margin: 10px 0 0;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--bg-panel-elevated);
+}
+
+.incident-explorer__savings-split i {
+  display: block;
+  height: 100%;
+}
+
+.incident-explorer__savings-split i[data-part="avoided"] {
+  background: var(--accent);
+}
+
+.incident-explorer__savings-split i[data-part="gate"] {
+  background: var(--status-warning);
+}
+
+.incident-explorer__savings-split i[data-part="revealed"] {
+  background: color-mix(in srgb, var(--text-secondary) 42%, transparent);
+}
+
+.incident-explorer__savings-split-caption {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-split-caption b {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .incident-explorer__savings-compare {
@@ -18098,36 +18222,29 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* Confidence marker. Semantic, not accent: this reports how much of the figure
-   was measured versus inferred, which is a different axis from emphasis. */
+   was measured versus inferred, which is a different axis from emphasis. It is
+   a line rather than a filled chip because it was the only bordered element in
+   a hero of unboxed figures, and it cost 38px to say one sentence. */
 .incident-explorer__confidence {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 7px;
-  margin: 10px 0 0;
-  padding: 5px 10px;
-  border: 1px solid var(--success-border);
-  border-radius: 4px;
-  background: var(--success-soft);
+  margin: 8px 0 0;
   color: var(--success-text);
   font-size: 11.5px;
 }
 
 .incident-explorer__confidence[data-kind="reconstructed"] {
-  border-color: color-mix(in srgb, var(--status-warning) 34%, transparent);
-  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
   color: var(--status-warning);
 }
 
 .incident-explorer__confidence span {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: currentColor;
   flex: none;
-}
-
-.incident-explorer__savings-terms[data-terms="3"] dd {
-  font-size: 17px;
+  transform: translateY(-1px);
 }
 
 .incident-explorer__savings-caption {
@@ -18141,12 +18258,17 @@ a.transcript-message__messaging-origin:focus-visible {
 /* Savings-lens verification chart. The axis comes from parent pricing turns,
    not tool calls, so a no-tool compaction still owns a column. Peak context is
    the quiet backdrop, final context is the solid signal, and compaction stays
-   a discrete event mark rather than becoming a third volume series. */
+   a discrete event mark rather than becoming a third volume series.
+
+   It sits in the hero's right column, so it carries a divider rather than the
+   full-width rules a standalone band needed. */
 .incident-explorer__context-turns {
-  flex: none;
-  padding: 9px 0 10px;
-  border-top: 1px solid var(--border-subtle);
-  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 100%;
+  padding-left: 20px;
+  border-left: 1px solid var(--border-subtle);
 }
 
 .incident-explorer__context-turns-head {
@@ -18155,7 +18277,6 @@ a.transcript-message__messaging-origin:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 6px;
 }
 
 .incident-explorer__context-turns-legend {
@@ -18197,8 +18318,7 @@ a.transcript-message__messaging-origin:focus-visible {
   display: flex;
   align-items: stretch;
   gap: 1px;
-  height: 72px;
-  margin-bottom: 7px;
+  height: 56px;
   overflow: hidden;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -18261,12 +18381,189 @@ a.transcript-message__messaging-origin:focus-visible {
   transform: rotate(45deg);
 }
 
+/* Reference rows, above the results list.
+
+   `flex-shrink` is the fix for what this lens shipped as: every band above the
+   list was `flex: none`, the list was the only thing that could yield, and it
+   yielded all of it — a header over one clipped row. The operator's dragged
+   height is a preference, not a floor, so this stack shrinks and scrolls
+   before the list gives up its three rows. */
+.incident-explorer__savings-details {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__savings-section {
+  flex: none;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__savings-section-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 150px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.incident-explorer__savings-section-row:hover {
+  background: var(--bg-panel-hover);
+}
+
+.incident-explorer__savings-chevron {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-muted);
+  transform: translateY(1px);
+  transition: transform 120ms ease;
+}
+
+.incident-explorer__savings-section[data-open="true"] .incident-explorer__savings-chevron {
+  transform: translate(1px, 2px) rotate(90deg);
+}
+
+.incident-explorer__savings-section-label {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* The numbers that used to be dot-joined runs of monospace at one weight.
+   Value bright, label muted, so a row has landmarks to land on. */
+.incident-explorer__savings-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-facts b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Dimmed, never hidden: a zero here is an answer, and a row that dropped it
+   would read as a measurement this version failed to take. */
+.incident-explorer__savings-facts span[data-zero="true"] b {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.incident-explorer__savings-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+  padding: 4px 4px 12px 30px;
+}
+
+.incident-explorer__savings-figures div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.incident-explorer__savings-figures dt {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__savings-figures dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-figures div[data-zero="true"] dd {
+  color: var(--text-muted);
+}
+
+.incident-explorer__savings-figures dd span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+.incident-explorer__savings-note {
+  margin: 0;
+  padding: 0 4px 12px 30px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* The grip. The lens shipped with a plain rule here, so an operator who wanted
+   more of the list had nothing to pull. */
+.incident-explorer__savings-grip {
+  position: relative;
+  flex: none;
+  height: 11px;
+  margin: -3px 0;
+  cursor: row-resize;
+  /* The drag owns the vertical axis. Without this a touch or precision-pointer
+     gesture scrolls instead, and the scroll cancels the pointer capture. */
+  touch-action: none;
+}
+
+.incident-explorer__savings-grip span {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  width: 36px;
+  height: 3px;
+  margin-left: -18px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.incident-explorer__savings-grip:hover span,
+.incident-explorer__savings-grip:focus-visible span {
+  background: var(--accent);
+}
+
+.incident-explorer__savings-grip:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .incident-explorer__savings-chevron {
+    transition: none;
+  }
+}
+
+/* The results list. `min-height` is its floor: the only explorable part of
+   this lens must never be squeezed below three rows by the reference bands
+   above it, however many of those the operator has unfolded. */
 .incident-explorer__gates {
   display: flex;
-  flex: 1;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 10px;
-  min-height: 0;
+  min-height: 160px;
+  padding-top: 4px;
 }
 
 .incident-explorer__gates-head {
