@@ -5542,6 +5542,11 @@ type ThreadListCallerReason =
   | "workspace-handoff"
   | (string & {});
 
+type StartupProviderThreadRefresh = Readonly<{
+  backends: readonly AppServerBackendKind[];
+  threads: readonly AppServerThreadSummary[];
+}>;
+
 type ThreadListCacheState = {
   expiresAt?: number;
   promise?: Promise<AppServerThreadSummary[]>;
@@ -10153,7 +10158,11 @@ export class DesktopBackendRegistry {
             failedProviders: failures.length,
           }
         : { state: "ready" };
-      this.publishRefreshedProviderThreadsToCache();
+      this.publishRefreshedProviderThreadsToCache(
+        results.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        ),
+      );
       await this.emit({
         backend: "codex",
         notification: {
@@ -10171,29 +10180,34 @@ export class DesktopBackendRegistry {
 
   private async refreshCodexProviderAtStartup(
     permit: ProviderDiscoveryPermit,
-  ): Promise<void> {
-    await this.listThreads({
+  ): Promise<StartupProviderThreadRefresh> {
+    const threads = await this.listThreads({
       backend: "codex",
       callerReason: "startup-provider-refresh",
       enrichDirectories: false,
       forceRefresh: true,
     });
     await this.discoverCodexBackend(permit);
+    return { backends: ["codex"], threads };
   }
 
   private async refreshAcpProviderThreadsAtStartup(
     permit: ProviderDiscoveryPermit,
-  ): Promise<void> {
+  ): Promise<StartupProviderThreadRefresh> {
     const agents = await this.acpBackend.discoverAvailableAgents(permit);
-    await Promise.all(
+    const threads = (await Promise.all(
       agents.map(async (agent) => {
-        await this.listThreads({
+        return await this.listThreads({
           backend: agent.backendId,
           callerReason: "startup-provider-refresh",
           forceRefresh: true,
         });
       }),
-    );
+    )).flat();
+    return {
+      backends: agents.map((agent) => agent.backendId),
+      threads,
+    };
   }
 
   getStartupProviderRefreshStatus(): Readonly<{
@@ -10203,12 +10217,21 @@ export class DesktopBackendRegistry {
     return this.startupProviderRefreshStatus;
   }
 
-  private publishRefreshedProviderThreadsToCache(): void {
+  private publishRefreshedProviderThreadsToCache(
+    refreshes: readonly StartupProviderThreadRefresh[],
+  ): void {
     if (!this.providerThreadSnapshotStore) {
       return;
     }
-    const threads = this.providerThreadSnapshotStore.list()
-      .flatMap((snapshot) => snapshot.threads)
+    const refreshedBackends = new Set(
+      refreshes.flatMap((refresh) => refresh.backends),
+    );
+    const threads = [
+      ...refreshes.flatMap((refresh) => refresh.threads),
+      ...this.providerThreadSnapshotStore.list()
+        .filter((snapshot) => !refreshedBackends.has(snapshot.backend))
+        .flatMap((snapshot) => snapshot.threads),
+    ]
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
     this.invalidateThreadListCache();
     this.rememberThreadListContexts(

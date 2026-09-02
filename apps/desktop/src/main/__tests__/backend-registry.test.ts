@@ -6737,6 +6737,7 @@ describe("DesktopBackendRegistry", () => {
           source: "codex",
           title: "Live provider thread",
           titleSource: "explicit",
+          summary: "Live prompt preview",
           linkedDirectories: [],
           updatedAt: 200,
         },
@@ -6759,7 +6760,13 @@ describe("DesktopBackendRegistry", () => {
       },
     ];
     const replace = vi.fn((snapshot: ProviderThreadSnapshot) => {
-      storedSnapshots = [snapshot];
+      storedSnapshots = [{
+        ...snapshot,
+        threads: snapshot.threads.map((thread) => ({
+          ...thread,
+          summary: undefined,
+        })),
+      }];
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -6799,7 +6806,10 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.listThreads({
       callerReason: "navigation-snapshot",
     })).resolves.toEqual([
-      expect.objectContaining({ id: "live-thread" }),
+      expect.objectContaining({
+        id: "live-thread",
+        summary: "Live prompt preview",
+      }),
     ]);
     expect(codexClient.listThreadsCallCount).toBe(1);
     await registry.close();
