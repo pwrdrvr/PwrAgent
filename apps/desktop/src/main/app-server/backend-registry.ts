@@ -74,6 +74,7 @@ import {
   buildThreadUrl,
   estimateTokenUsageCost,
   formatTokenUsageUsd,
+  isCodexNativeSubAgentVisibleInNavigation,
   isToolManagedWorktreePath,
   normalizeRenamedTitleSource,
   resolveOpenAiPricingServiceTier,
@@ -738,7 +739,6 @@ type BackendClient = {
     params?: {
       filter?: string;
       limit?: number;
-      maxPages?: number;
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
@@ -2905,6 +2905,7 @@ function codexNativeSubAgentId(threadId: string): string {
  */
 function groupCodexNativeSubAgents(params: {
   nativeThreads: AppServerThreadSummary[];
+  now: number;
   parentThreads: AppServerThreadSummary[];
 }): AppServerThreadSummary[] {
   const childrenByParentThreadId = new Map<string, AppServerThreadSummary[]>();
@@ -2946,7 +2947,7 @@ function groupCodexNativeSubAgents(params: {
         }
         emittedThreadIds.add(child.id);
         const provenance = child.codexNativeSubAgent;
-        nativeSubAgents.push({
+        const summary: CodexNativeSubAgentSummary = {
           threadId: child.id,
           title: child.title,
           createdAt: child.createdAt,
@@ -2955,7 +2956,10 @@ function groupCodexNativeSubAgents(params: {
           depth: provenance?.depth ?? inferredDepth,
           agentNickname: provenance?.agentNickname,
           agentRole: provenance?.agentRole,
-        });
+        };
+        if (isCodexNativeSubAgentVisibleInNavigation(summary, params.now)) {
+          nativeSubAgents.push(summary);
+        }
         appendChildren(child.id, inferredDepth + 1);
       }
     };
@@ -23128,7 +23132,6 @@ export class DesktopBackendRegistry {
       this.codexClient.listNativeSubAgentThreads
         ? await this.codexClient.listNativeSubAgentThreads({
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
-            ...(params.maxPages !== undefined ? { maxPages: params.maxPages } : {}),
           }, diagnostics).catch((error) => {
             backendRegistryLog.debug("native Codex sub-agent discovery failed", {
               error: error instanceof Error ? error.message : String(error),
@@ -23138,6 +23141,7 @@ export class DesktopBackendRegistry {
         : [];
     const groupedThreads = groupCodexNativeSubAgents({
       nativeThreads: nativeSubAgentThreads,
+      now: Date.now(),
       parentThreads: defaultThreads,
     });
     // The sidebar deliberately flattens nested native workers below their

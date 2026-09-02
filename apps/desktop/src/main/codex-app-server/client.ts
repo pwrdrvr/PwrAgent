@@ -6076,6 +6076,8 @@ function buildThreadDiscoveryPayloads(
   ];
 }
 
+const CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT = 100;
+
 function threadTitleSourcePriority(
   titleSource: AppServerThreadTitleSource
 ): number {
@@ -7994,11 +7996,14 @@ export class CodexAppServerClient {
   /**
    * Lists native Codex `spawn_agent` workers for parent-scoped disclosure.
    * Callers must not add these summaries to ordinary navigation.
+   *
+   * Discovery is deliberately one newest-first state-DB page. Its cost stays
+   * fixed as native worker history grows; the navigation projection applies
+   * the shorter display horizon after grouping nested workers.
    */
   async listNativeSubAgentThreads(params?: {
     filter?: string;
     limit?: number;
-    maxPages?: number;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
@@ -8007,8 +8012,14 @@ export class CodexAppServerClient {
       client: this.connection,
       diagnostics,
       filter: params?.filter,
-      limit: params?.limit,
-      maxPages: params?.maxPages,
+      limit: Math.max(
+        1,
+        Math.min(
+          Math.floor(params?.limit ?? CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT),
+          CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT,
+        ),
+      ),
+      maxPages: 1,
       requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       sourceKinds: ["subAgentThreadSpawn"],
     });

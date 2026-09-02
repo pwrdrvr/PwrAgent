@@ -43,6 +43,7 @@ export * from "./pending-request-response";
 export * from "./path-display";
 export * from "./renderer-payload-boundary";
 export * from "./review-branches";
+export * from "./subagent-visibility";
 export * from "./subthreads";
 export * from "./thread-jump-match";
 export * from "./thread-pins";

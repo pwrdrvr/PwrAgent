@@ -2,6 +2,7 @@ import type {
   NavigationThreadSummary,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
+import { isThreadSubAgentVisibleInPanel } from "@pwragent/shared";
 
 export type UseSubAgentsResult = {
   subAgents: ThreadSubAgentSummary[];
@@ -15,10 +16,11 @@ export type UseSubAgentsResult = {
  * the persisted thread overlay projected onto the navigation snapshot.
  */
 export function useSubAgents(thread: NavigationThreadSummary): UseSubAgentsResult {
+  const now = Date.now();
   return {
-    subAgents: [...(thread.subAgents ?? [])].sort(
-      (left, right) => right.createdAt - left.createdAt,
-    ),
+    subAgents: (thread.subAgents ?? [])
+      .filter((subAgent) => isThreadSubAgentVisibleInPanel(subAgent, now))
+      .sort((left, right) => right.createdAt - left.createdAt),
     loading: false,
     supported: true,
   };
