@@ -502,6 +502,10 @@ import {
   type ThreadInfo,
   type ThreadInfoIdentity,
 } from "./thread-info-store";
+import {
+  ProviderThreadSnapshotStore,
+  type ProviderThreadSnapshotStoreLike,
+} from "./provider-thread-snapshot-store";
 import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
@@ -539,8 +543,24 @@ import {
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { getMainLogger } from "../log";
-import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
+import {
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "../settings/desktop-settings-singleton";
+import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import {
+  assertProviderDiscoveryPermit,
+  type ProviderDiscoveryPermit,
+} from "../settings/provider-discovery-permit";
+import {
+  resolveSpendAlertPolicy,
+  resolveToolOutputAlertPolicy,
+} from "../settings/config-store/config-domains";
+import { acpProviderEnabledFromSnapshot } from "../settings/config-store/provider-runtime-config";
+import {
+  ONBOARDING_CODEX_GATE_ENABLED,
+  type ManagedCodexSelectionChange,
+} from "../settings/desktop-settings-service";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import {
@@ -5450,13 +5470,6 @@ function buildLaunchpadOptions(
   };
 }
 
-async function readClientModels(client: BackendClient): Promise<BackendModelOption[]> {
-  if (!client.listModels) {
-    return [];
-  }
-  return await client.listModels();
-}
-
 async function readClientAccount(
   client: BackendClient
 ): Promise<BackendAccountSummary | undefined> {
@@ -5528,6 +5541,11 @@ type ThreadListCallerReason =
   | "title-generation"
   | "workspace-handoff"
   | (string & {});
+
+type StartupProviderThreadRefresh = Readonly<{
+  backends: readonly AppServerBackendKind[];
+  threads: readonly AppServerThreadSummary[];
+}>;
 
 type ThreadListCacheState = {
   expiresAt?: number;
@@ -5633,6 +5651,7 @@ function shouldBackfillCodexDirectoryRelationships(
     case "navigation-snapshot":
     case "navigation-snapshot:active-recent":
     case "startup-prewarm":
+    case "startup-provider-refresh":
       return true;
     default:
       return false;
@@ -7605,6 +7624,11 @@ function buildCodexInvalidIdRecoveryCooldownMessage(
 
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
+  private readonly configStore?: Pick<
+    DesktopConfigStore,
+    "read" | "subscribe"
+  >;
+  private codexBackendSummary?: BackendSummary;
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkingStateService: GitWorkingStateService;
@@ -7987,6 +8011,14 @@ export class DesktopBackendRegistry {
    * synchronous and cannot start provider work, so a 500ms UI poll can use one.
    */
   private readonly threadInfoStore = new ThreadInfoStore();
+  private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike;
+  private durableStartupThreadHydrationAttempted = false;
+  private startupProviderRefreshAttempted = false;
+  private startupProviderRefreshPromise?: Promise<void>;
+  private startupProviderRefreshStatus?: Readonly<{
+    state: "checking" | "degraded" | "ready";
+    failedProviders?: number;
+  }>;
   /**
    * In-flight terminal-notification label reconciliations, keyed by thread. A
    * burst of turn completions on threads this process never observed must cost
@@ -8202,6 +8234,7 @@ export class DesktopBackendRegistry {
   private tokenMiserPostToolUseExactOutputVersion?: number;
   private tokenMiserRuntimePreparationFailure?: string;
   private codexRuntimeRestartPending = false;
+  private managedCodexRuntimeSwitchPending = false;
   private codexRuntimeRestartPromise?: Promise<boolean>;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
@@ -8236,6 +8269,7 @@ export class DesktopBackendRegistry {
     acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
     acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike | null;
+    providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike | null;
     acpAvailableCommandProbeBudgetMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     /**
@@ -8283,6 +8317,7 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolvePdfAnalysisEnabled?: () => boolean;
+    configStore?: Pick<DesktopConfigStore, "read" | "subscribe">;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
     resolveManagedTokenMiserActivationRequired?: () => boolean;
@@ -8300,6 +8335,7 @@ export class DesktopBackendRegistry {
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
     const processRuntimeIdentity = getProcessRuntimeIdentity();
+    this.configStore = options?.configStore;
     this.runtimeInstanceId =
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
@@ -8314,6 +8350,13 @@ export class DesktopBackendRegistry {
         ? undefined
         : options?.mcpConnectionService ??
           (isAppStateInitialized() ? getPwrSnapConnectionService() : undefined);
+    this.providerThreadSnapshotStore =
+      options?.providerThreadSnapshotStore === null
+        ? undefined
+        : options?.providerThreadSnapshotStore
+          ?? (isAppStateInitialized()
+            ? new ProviderThreadSnapshotStore(getAppStateDb())
+            : undefined);
     const replayClients = createReplayClientsFromEnv();
     const createsLiveCodexClient =
       !options?.codexClient && !replayClients?.codexClient;
@@ -8465,6 +8508,11 @@ export class DesktopBackendRegistry {
       options?.resolveToolOutputAlertPolicy ??
       (() => {
         try {
+          if (options?.configStore) {
+            return resolveToolOutputAlertPolicy(
+              options.configStore.read("general"),
+            );
+          }
           return (
             settingsService ?? getDesktopSettingsService()
           ).resolveToolOutputAlertPolicy();
@@ -8482,6 +8530,11 @@ export class DesktopBackendRegistry {
       options?.resolveSpendAlertPolicy ??
       (() => {
         try {
+          if (options?.configStore) {
+            return resolveSpendAlertPolicy(
+              options.configStore.read("general"),
+            );
+          }
           if (settingsService) {
             return typeof settingsService.resolveSpendAlertPolicy === "function"
               ? settingsService.resolveSpendAlertPolicy()
@@ -8500,7 +8553,14 @@ export class DesktopBackendRegistry {
       });
     this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
     this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
-    if (typeof settingsService?.onConfigWritten === "function") {
+    if (options?.configStore) {
+      this.unsubscribers.push(
+        options.configStore.subscribe(["general"], () => {
+          this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
+          this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
+        }),
+      );
+    } else if (typeof settingsService?.onConfigWritten === "function") {
       this.unsubscribers.push(
         settingsService.onConfigWritten(() => {
           this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
@@ -8566,15 +8626,9 @@ export class DesktopBackendRegistry {
           this.resolveTokenMiserEnabledFn()
             ? tokenMiserActivationNonce
             : undefined,
-        // Fire the gate at the client level too, not just the
-        // listThreads layer. Without this, `describeCodexBackend`
-        // (called by `listBackends` on app startup) would call
-        // `ensureInitialized` → spawn the Codex CLI subprocess —
-        // even on a fresh PwrAgent profile mid-wizard, and on
-        // machines where the operator doesn't have Codex installed
-        // yet. The client throws `CodexBootstrapDeferredError` which
-        // `describeCodexBackend` catches via `Promise.allSettled` and
-        // surfaces as `available: false` with a clean reason.
+        // Fire the bootstrap gate at the client level too, not just the
+        // listThreads layer. Startup and explicit Settings/setup discovery
+        // may initialize this client; ordinary backend summaries are passive.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
     const watchManagedCodexRuntime =
@@ -8591,6 +8645,7 @@ export class DesktopBackendRegistry {
             version: change.runtime?.metadata.version,
           });
           this.codexRuntimeRestartPending = true;
+          this.managedCodexRuntimeSwitchPending = true;
           return this.maybeRestartCodexForManagedRuntimeChange();
         }),
       );
@@ -8794,15 +8849,27 @@ export class DesktopBackendRegistry {
         options?.discoverLocalAcpAgents
         ?? (options?.useMachineAcpDiscovery
           ? createLocalAcpAgentDiscovery(
-              settingsService
-                ? {
-                    resolveEnv: async () =>
-                      await settingsService.resolveTerminalSpawnEnvAsync(),
-                  }
-                : undefined,
+              {
+                configStore: options?.configStore ?? getDesktopConfigStore(),
+                ...(settingsService
+                  ? {
+                      resolveEnv: async () =>
+                        await settingsService.resolveTerminalSpawnEnvAsync(),
+                    }
+                  : {}),
+              },
             )
           : noLocalAcpAgentDiscovery),
-      isAcpAgentEnabled: options?.isAcpAgentEnabled,
+      isAcpAgentEnabled:
+        options?.isAcpAgentEnabled
+        ?? (options?.configStore
+          ? (registryId) => {
+              const providers = options.configStore?.read("providers");
+              return providers
+                ? acpProviderEnabledFromSnapshot(providers, registryId)
+                : true;
+            }
+          : undefined),
       emit: async (event) => {
         this.rememberAcpAvailableCommands(event);
         await this.emit(event);
@@ -8917,7 +8984,8 @@ export class DesktopBackendRegistry {
       options?.isCodexBootstrapDeferred ??
       (() => {
         try {
-          return getDesktopSettingsService().isCodexBootstrapDeferred();
+          return ONBOARDING_CODEX_GATE_ENABLED
+            && !getDesktopConfigStore().read("onboarding").completed;
         } catch (error) {
           // The settings singleton can only throw if app-state init
           // never ran. That should not be reachable in production —
@@ -9576,17 +9644,25 @@ export class DesktopBackendRegistry {
   }
 
   async listBackends(
-    request: ListBackendsRequest = {}
+    request: ListBackendsRequest = {},
+    discoveryPermit?: ProviderDiscoveryPermit,
   ): Promise<ListBackendsResponse> {
+    if (request.refreshModels !== undefined) {
+      assertProviderDiscoveryPermit(discoveryPermit, [
+        "settings-user-action",
+        "setup-user-action",
+      ]);
+    }
     if (request.refreshModels === true) {
       this.modelCatalog.invalidate();
-      this.invalidateAcpBackendDiscovery();
     } else if (request.refreshModels === "codex") {
       this.modelCatalog.invalidate("codex");
-    } else if (request.refreshModels && isAcpBackendId(request.refreshModels)) {
-      this.invalidateAcpBackendDiscovery();
     }
-    const summaries = [await this.describeCodexBackend()];
+    const codexSummary =
+      request.refreshModels === true || request.refreshModels === "codex"
+        ? await this.discoverCodexBackend(discoveryPermit!)
+        : this.readCodexBackendSummary();
+    const summaries = [codexSummary];
     const acpSummaries = await this.acpBackend.describeInstalledBackends();
 
     return {
@@ -9597,8 +9673,22 @@ export class DesktopBackendRegistry {
     };
   }
 
-  invalidateAcpBackendDiscovery(): void {
-    this.acpBackend.invalidateLocalAgentDiscovery();
+  async invalidateProviderRuntimeSelections(params: {
+    acp: boolean;
+    codex: boolean;
+  }): Promise<void> {
+    if (params.acp) {
+      this.acpBackend.invalidateLocalAgentDiscovery();
+    }
+    if (!params.codex) return;
+    // A settings write is authority to stop using the obsolete executable,
+    // not to discover or launch its replacement. The reconnectable client
+    // resolves the new command only when the next permitted discovery or
+    // ordinary provider operation initializes it.
+    this.codexBackendSummary = undefined;
+    this.modelCatalog.invalidate("codex");
+    this.codexRuntimeRestartPending = true;
+    await this.maybeRestartCodexForManagedRuntimeChange();
   }
 
   /**
@@ -9877,12 +9967,20 @@ export class DesktopBackendRegistry {
       callerReason?: ThreadListCallerReason;
       enrichDirectories: boolean;
       filter?: string;
+      forceRefresh?: boolean;
       limit?: number;
       maxPages?: number;
       skipArchivedMetadataRefresh?: boolean;
     },
     displayMetadataObservationSequence: number,
   ): Promise<AppServerThreadSummary[]> {
+    const durableThreads = this.readDurableStartupThreads(
+      params,
+      displayMetadataObservationSequence,
+    );
+    if (durableThreads) {
+      return durableThreads;
+    }
     const diagnostics = {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
@@ -9916,6 +10014,7 @@ export class DesktopBackendRegistry {
         params.enrichDirectories,
         params.archived,
       );
+      this.persistProviderThreadSnapshot("codex", threads, params);
       return threads;
     }
 
@@ -9935,6 +10034,7 @@ export class DesktopBackendRegistry {
         ACP_LISTINGS_ARE_ENRICHED,
         params.archived,
       );
+      this.persistProviderThreadSnapshot(params.backend, threads, params);
       return threads;
     }
 
@@ -9967,6 +10067,216 @@ export class DesktopBackendRegistry {
     return [...codexThreads, ...acpThreads].sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
+  }
+
+  private readDurableStartupThreads(
+    params: {
+      archived?: boolean;
+      backend?: AppServerBackendKind;
+      callerReason?: ThreadListCallerReason;
+      enrichDirectories: boolean;
+      filter?: string;
+      forceRefresh?: boolean;
+      limit?: number;
+      maxPages?: number;
+    },
+    displayMetadataObservationSequence: number,
+  ): AppServerThreadSummary[] | undefined {
+    if (
+      this.durableStartupThreadHydrationAttempted
+      || !this.providerThreadSnapshotStore
+      || params.backend
+      || params.archived === true
+      || Boolean(params.filter?.trim())
+      || params.forceRefresh === true
+      || (params.callerReason !== "startup-prewarm"
+        && params.callerReason !== "navigation-snapshot"
+        && params.callerReason !== "navigation-snapshot:active-recent")
+    ) {
+      return undefined;
+    }
+
+    this.durableStartupThreadHydrationAttempted = true;
+    const snapshots = this.providerThreadSnapshotStore.list();
+    this.startupProviderRefreshStatus = { state: "checking" };
+    const threads = snapshots.flatMap((snapshot) =>
+      snapshot.backend === "codex" && params.limit !== undefined
+        ? snapshot.threads.slice(0, params.limit)
+        : snapshot.threads,
+    ).sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    this.rememberThreadListContexts(
+      threads,
+      displayMetadataObservationSequence,
+      params.enrichDirectories,
+      false,
+    );
+    backendRegistryLog.info("startup thread list hydrated from durable providers", {
+      providerCount: snapshots.length,
+      threadCount: threads.length,
+    });
+    return threads;
+  }
+
+  refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
+    assertProviderDiscoveryPermit(permit, ["startup"]);
+    if (this.startupProviderRefreshPromise) {
+      return this.startupProviderRefreshPromise;
+    }
+    if (this.startupProviderRefreshAttempted) {
+      return Promise.resolve();
+    }
+    this.startupProviderRefreshAttempted = true;
+    this.startupProviderRefreshPromise = Promise.resolve().then(async () => {
+      const startedAt = Date.now();
+      const results = await Promise.allSettled([
+        this.refreshCodexProviderAtStartup(permit),
+        this.refreshAcpProviderThreadsAtStartup(permit),
+      ]);
+      if (this.closed) {
+        return;
+      }
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length > 0) {
+        backendRegistryLog.warn("startup provider thread refresh degraded", {
+          failureCount: failures.length,
+          errors: failures.map((failure) =>
+            failure.status === "rejected"
+              ? failure.reason instanceof Error
+                ? failure.reason.message
+                : String(failure.reason)
+              : "",
+          ),
+        });
+      }
+      backendRegistryLog.info("startup provider thread refresh completed", {
+        durationMs: Date.now() - startedAt,
+        failureCount: failures.length,
+      });
+      this.startupProviderRefreshStatus = failures.length > 0
+        ? {
+            state: "degraded",
+            failedProviders: failures.length,
+          }
+        : { state: "ready" };
+      this.publishRefreshedProviderThreadsToCache(
+        results.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        ),
+      );
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "navigation/providerThreads/refreshed",
+          params: {
+            failedProviders: failures.length,
+          },
+        },
+      });
+    }).finally(() => {
+      this.startupProviderRefreshPromise = undefined;
+    });
+    return this.startupProviderRefreshPromise;
+  }
+
+  private async refreshCodexProviderAtStartup(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<StartupProviderThreadRefresh> {
+    const threads = await this.listThreads({
+      backend: "codex",
+      callerReason: "startup-provider-refresh",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    await this.discoverCodexBackend(permit);
+    return { backends: ["codex"], threads };
+  }
+
+  private async refreshAcpProviderThreadsAtStartup(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<StartupProviderThreadRefresh> {
+    const agents = await this.acpBackend.discoverAvailableAgents(permit);
+    const threads = (await Promise.all(
+      agents.map(async (agent) => {
+        return await this.listThreads({
+          backend: agent.backendId,
+          callerReason: "startup-provider-refresh",
+          forceRefresh: true,
+        });
+      }),
+    )).flat();
+    return {
+      backends: agents.map((agent) => agent.backendId),
+      threads,
+    };
+  }
+
+  getStartupProviderRefreshStatus(): Readonly<{
+    state: "checking" | "degraded" | "ready";
+    failedProviders?: number;
+  }> | undefined {
+    return this.startupProviderRefreshStatus;
+  }
+
+  private publishRefreshedProviderThreadsToCache(
+    refreshes: readonly StartupProviderThreadRefresh[],
+  ): void {
+    if (!this.providerThreadSnapshotStore) {
+      return;
+    }
+    const refreshedBackends = new Set(
+      refreshes.flatMap((refresh) => refresh.backends),
+    );
+    const threads = [
+      ...refreshes.flatMap((refresh) => refresh.threads),
+      ...this.providerThreadSnapshotStore.list()
+        .filter((snapshot) => !refreshedBackends.has(snapshot.backend))
+        .flatMap((snapshot) => snapshot.threads),
+    ]
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    this.invalidateThreadListCache();
+    this.rememberThreadListContexts(
+      threads,
+      this.reserveThreadInfoObservation(),
+      false,
+      false,
+    );
+    const cacheKey = this.buildThreadListCacheKey({
+      callerReason: "navigation-snapshot",
+      enrichDirectories: false,
+    });
+    this.threadListCache.set(cacheKey, {
+      expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
+      threads,
+    });
+  }
+
+  private persistProviderThreadSnapshot(
+    backend: AppServerBackendKind,
+    threads: readonly AppServerThreadSummary[],
+    params: {
+      archived?: boolean;
+      callerReason?: ThreadListCallerReason;
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
+    },
+  ): void {
+    if (
+      !this.providerThreadSnapshotStore
+      || this.closed
+      || params.callerReason !== "startup-provider-refresh"
+      || params.archived === true
+      || Boolean(params.filter?.trim())
+      || params.limit !== undefined
+      || params.maxPages !== undefined
+    ) {
+      return;
+    }
+    this.providerThreadSnapshotStore.replace({
+      backend,
+      observedAt: Date.now(),
+      threads,
+    });
   }
 
   private async filterArchivedThreadsPresentInActiveList(params: {
@@ -22547,7 +22857,10 @@ export class DesktopBackendRegistry {
         this.codexClient
           .listThreads(params, diagnostics)
           .catch((error) => {
-            if (diagnostics?.callerReason === "archive-cleanup") {
+            if (
+              diagnostics?.callerReason === "archive-cleanup"
+              || diagnostics?.callerReason === "startup-provider-refresh"
+            ) {
               throw error;
             }
 
@@ -23175,7 +23488,55 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async describeCodexBackend(): Promise<BackendSummary> {
+  private readCodexBackendSummary(): BackendSummary {
+    if (this.codexBackendSummary) {
+      return this.codexBackendSummary;
+    }
+    const provider = this.configStore?.read("providers").codex;
+    const lastKnownGood = provider?.lastKnownGood;
+    const available = Boolean(lastKnownGood?.selectedCommand);
+    const methods: string[] = [];
+    const capabilities = buildCapabilities(methods, "codex");
+    if (
+      this.resolveManagedReviewEnabledFn()
+      && capabilities.createThread
+      && capabilities.startTurn
+    ) {
+      capabilities.startReview = true;
+    }
+    const unavailableReason = provider?.validation.error
+      ?? "Codex discovery has not completed yet.";
+    return {
+      kind: "codex",
+      label: BACKEND_LABELS.codex,
+      available,
+      serverVersion: lastKnownGood?.selectedVersion,
+      methods,
+      capabilities,
+      launchpadOptions: buildLaunchpadOptions("codex", []),
+      executionModes: [
+        {
+          mode: "default",
+          label: EXECUTION_MODE_SUMMARIES.default.label,
+          available,
+          isDefault: true,
+          ...(available ? {} : { unavailableReason }),
+        },
+        {
+          mode: "full-access",
+          label: EXECUTION_MODE_SUMMARIES["full-access"].label,
+          available,
+          ...(available ? {} : { unavailableReason }),
+        },
+      ],
+      ...(available ? {} : { unavailableReason }),
+    };
+  }
+
+  private async discoverCodexBackend(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<BackendSummary> {
+    assertProviderDiscoveryPermit(permit);
     const [
       initializeResult,
       defaultModelsResult,
@@ -23209,7 +23570,7 @@ export class DesktopBackendRegistry {
       capabilities.startReview = true;
     }
 
-    return {
+    const summary: BackendSummary = {
       kind: "codex",
       label: BACKEND_LABELS.codex,
       available,
@@ -23254,6 +23615,8 @@ export class DesktopBackendRegistry {
       ],
       unavailableReason: available ? undefined : unavailableReason || "Codex unavailable",
     };
+    this.codexBackendSummary = summary;
+    return summary;
   }
 
   private async recordTaskMonitorUsage(event: AgentEvent): Promise<void> {
@@ -25991,56 +26354,6 @@ export class DesktopBackendRegistry {
     this.scheduleStreamedToolInvocationFlush();
   }
 
-  private async describeSingleBackend(
-    kind: AppServerBackendKind,
-    client: BackendClient
-  ): Promise<BackendSummary> {
-    try {
-      const initialize = await client.getInitializeResult();
-      const models = await readClientModels(client).catch(() => []);
-      const methods = Array.isArray(initialize.methods)
-        ? initialize.methods.filter((method): method is string => typeof method === "string")
-        : [];
-
-      return {
-        kind,
-        label: BACKEND_LABELS[kind],
-        available: true,
-        serverName: initialize.serverInfo?.name,
-        serverVersion: initialize.serverInfo?.version,
-        methods,
-        capabilities: buildCapabilities(methods, kind),
-        launchpadOptions: buildLaunchpadOptions(kind, models),
-        executionModes: [
-          {
-            mode: "default",
-            label: EXECUTION_MODE_SUMMARIES.default.label,
-            available: true,
-            isDefault: true,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        kind,
-        label: BACKEND_LABELS[kind],
-        available: false,
-        methods: [],
-        capabilities: buildCapabilities([], kind),
-        executionModes: [
-          {
-            mode: "default",
-            label: EXECUTION_MODE_SUMMARIES.default.label,
-            available: false,
-            isDefault: true,
-            unavailableReason: error instanceof Error ? error.message : String(error),
-          },
-        ],
-        unavailableReason: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
   private async withCodexThreadClient<T>(
     threadId: string,
     operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
@@ -26124,9 +26437,11 @@ export class DesktopBackendRegistry {
       return await this.codexRuntimeRestartPromise;
     }
 
+    const completesManagedSwitch = this.managedCodexRuntimeSwitchPending;
     const restart = (async () => {
       if (this.hasActiveCodexRuntimeWork()) return false;
       this.codexRuntimeRestartPending = false;
+      this.managedCodexRuntimeSwitchPending = false;
       await this.codexClient.close();
       this.tokenMiserServerCapabilities.delete(this.codexClient);
       this.tokenMiserReducerCapabilityState = undefined;
@@ -26136,7 +26451,9 @@ export class DesktopBackendRegistry {
       if (this.resolveTokenMiserEnabledFn()) {
         await this.prepareTokenMiserRuntime({ prune: true });
       }
-      this.markManagedCodexRuntimeSwitchCompleteFn();
+      if (completesManagedSwitch) {
+        this.markManagedCodexRuntimeSwitchCompleteFn();
+      }
       return true;
     })();
     this.codexRuntimeRestartPromise = restart;
@@ -26144,6 +26461,9 @@ export class DesktopBackendRegistry {
       return await restart;
     } catch (error) {
       this.codexRuntimeRestartPending = true;
+      if (completesManagedSwitch) {
+        this.managedCodexRuntimeSwitchPending = true;
+      }
       backendRegistryLog.warn("managed Codex restart failed", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -37269,7 +37589,10 @@ export function getDesktopBackendRegistry(): DesktopBackendRegistry {
     // `noLocalAcpAgentDiscovery` — keeping the config read, the GitHub release
     // fetch, the managed-Grok install, and the 5-16s binary probe out of the
     // suite even when a test forgets to inject its own discovery stub.
-    registry = new DesktopBackendRegistry({ useMachineAcpDiscovery: true });
+    registry = new DesktopBackendRegistry({
+      configStore: getDesktopConfigStore(),
+      useMachineAcpDiscovery: true,
+    });
   }
 
   return registry;

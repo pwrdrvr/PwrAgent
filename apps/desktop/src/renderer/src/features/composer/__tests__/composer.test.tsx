@@ -4637,10 +4637,9 @@ describe("Composer", () => {
       expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
     });
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+      expect(listAcpAgents).not.toHaveBeenCalled();
       expect(listBackends).toHaveBeenCalledWith({
         includeUnavailable: true,
-        refreshModels: "acp:grok",
       });
     });
     expect(providerPatches.at(-1)).toEqual({

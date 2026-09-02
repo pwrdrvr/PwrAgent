@@ -643,7 +643,7 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
-  it("requests messaging startup eligibility logging only for the startup config load", async () => {
+  it("does not reload config after the startup policy snapshot", async () => {
     await prepareRuntimeStore();
     const adapter = createAdapter("telegram");
     const configLoader = vi.fn(() => ({
@@ -691,7 +691,7 @@ describe("DesktopMessagingRuntime", () => {
     expect(configLoader).toHaveBeenNthCalledWith(1, {
       logStartupEligibility: true,
     });
-    expect(configLoader).toHaveBeenNthCalledWith(2, undefined);
+    expect(configLoader).toHaveBeenCalledTimes(1);
   });
 
   it("uses adapter-supplied authorization without provider-specific runtime config", async () => {
@@ -737,6 +737,7 @@ describe("DesktopMessagingRuntime", () => {
   }): Promise<{
     adapter: ReturnType<typeof createAdapter>;
     bridge: ReturnType<typeof createBackendBridge>;
+    configLoader: ReturnType<typeof vi.fn>;
   }> {
     await prepareRuntimeStore();
     const { resetInboundPreview } = await import(
@@ -760,25 +761,26 @@ describe("DesktopMessagingRuntime", () => {
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
     );
+    const configLoader = vi.fn(() => ({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram" as const,
+        botToken: "telegram-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        responseMode: "mention_only" as const,
+      },
+    }));
     const runtime = trackRuntime(
       new Runtime({
         adapterFactory: () => [adapter],
         backendBridge: bridge,
         automationInboundHandler: options.automationInboundHandler,
         automationInboundMatches: options.automationInboundMatches,
-        config: {
-          inputDebounceMs: 0,
-          telegram: {
-            channel: "telegram",
-            botToken: "telegram-token",
-            authorizedActorIds: [{ id: "user-1", displayName: "" }],
-            responseMode: "mention_only",
-          },
-        },
+        config: configLoader,
       }),
     );
     await runtime.start();
-    return { adapter, bridge };
+    return { adapter, bridge, configLoader };
   }
 
   const ambientEvent = {
@@ -938,7 +940,7 @@ describe("DesktopMessagingRuntime", () => {
   it("drops ambient @mention-only messages no automation filter matches", async () => {
     const automationInboundHandler = vi.fn(async () => false);
     const automationInboundMatches = vi.fn(() => false);
-    const { adapter } = await startMentionOnlyRuntime({
+    const { adapter, configLoader } = await startMentionOnlyRuntime({
       automationInboundHandler,
       automationInboundMatches,
     });
@@ -951,6 +953,7 @@ describe("DesktopMessagingRuntime", () => {
     expect(
       adapter.delivered.some((intent) => intent.kind === "message"),
     ).toBe(false);
+    expect(configLoader).toHaveBeenCalledTimes(1);
   });
 
   it("applies channel response mode to strict bindings unless the binding overrides it", async () => {

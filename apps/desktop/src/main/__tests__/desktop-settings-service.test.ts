@@ -9,6 +9,8 @@ import {
   type DesktopSecretStore,
 } from "../settings/desktop-secret-store";
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
+import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 
 // `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
 // test injects one, and the kit's probe runs `codex --version` against every
@@ -41,7 +43,72 @@ function existsOrEmpty(filePath: string): boolean {
 }
 
 describe("DesktopSettingsService", () => {
-  it("forces discovery refresh and invalidates command-setting writes", async () => {
+  it("resolves routine runtime settings from narrow store domains", () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "missing-config.toml");
+    const domains = {
+      applications: { gh: { path: "/store/bin/gh" } },
+      experimental: {
+        codexDefaultModeRequestUserInput: true,
+        managedReview: true,
+      },
+      general: {
+        appearance: {
+          theme: "system",
+          density: "mission-control",
+          sidebarTextSize: "md",
+          transcriptTextSize: "md",
+        },
+        settings: {
+          confirmQuitWithInProgressThreads: false,
+          developerMode: true,
+          notificationsEnabled: true,
+          pdfAnalysisEnabled: false,
+        },
+      },
+      git: { defaultPrAutoDispatchEnabled: false },
+      integratedTerminal: { windowsShell: "pwsh" },
+      messaging: {
+        feishu: { tenantRegion: "lark" },
+        mattermost: { serverUrl: "https://chat.example.com" },
+      },
+      models: {
+        codex: { allowFast: false, path: "/store/bin/codex" },
+        providerDefaults: { codex: { model: "gpt-test" } },
+        providerThreadMigrations: { codex: { fromModel: "old", toModel: "new" } },
+      },
+      onboarding: { completed: false, completedSource: "" },
+      updates: { channel: "prerelease", train: "beta" },
+      worktrees: { storage: "in-repo" },
+    };
+    const read = vi.fn((domain: keyof typeof domains) => domains[domain]);
+    const service = new DesktopSettingsService({
+      configPath,
+      configStore: { read } as never,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect(service.resolveCodexCommandPreference()).toBe("/store/bin/codex");
+    expect(service.resolveCodexFastAllowed()).toBe(false);
+    expect(service.resolveConfirmQuitWithInProgressThreads()).toBe(false);
+    expect(service.resolveDeveloperMode()).toBe(true);
+    expect(service.resolveGhCommandPreference()).toBe("/store/bin/gh");
+    expect(service.resolveIntegratedTerminalWindowsShell()).toBe("pwsh");
+    expect(service.resolveManagedReviewEnabled()).toBe(true);
+    expect(service.resolveMattermostServerUrlSync()).toBe(
+      "https://chat.example.com",
+    );
+    expect(service.resolveNotificationsEnabled()).toBe(true);
+    expect(service.resolveOnboardingCompleted()).toBe(false);
+    expect(service.resolvePdfAnalysisEnabled()).toBe(false);
+    expect(service.resolveUpdateChannel()).toBe("prerelease");
+    expect(service.resolveUpdateTrain()).toBe("beta");
+    expect(service.resolveWorktreeStorage()).toBe("in-repo");
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  it("runs discovery only for a permitted refresh", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const discover = vi.fn(async () => ({
@@ -73,21 +140,21 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.readSettings();
-    await service.refreshCodexDiscovery();
-    expect(discover).toHaveBeenNthCalledWith(2, undefined, {
-      allowStaleSuccess: true,
+    await service.readSettingsProjection();
+    expect(discover).not.toHaveBeenCalled();
+    await service.refreshCodexDiscovery(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    expect(discover).toHaveBeenCalledWith(undefined, {
+      allowStaleSuccess: false,
       force: true,
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       models: { codex: { path: "/opt/codex" } },
     });
     expect(invalidate).toHaveBeenCalledOnce();
-    expect(discover).toHaveBeenLastCalledWith("/opt/codex", {
-      allowStaleSuccess: true,
-      force: false,
-    });
+    expect(discover).toHaveBeenCalledOnce();
   });
 
   it("loads TOML values from the desktop config path", async () => {
@@ -164,7 +231,7 @@ describe("DesktopSettingsService", () => {
       now: () => 10,
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.fetchedAt).toBe(10);
     expect(snapshot.experimental.chatReplyComposer).toEqual({
@@ -332,7 +399,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.updates.channel).toEqual({
       value: "latest",
       source: "default",
@@ -344,7 +411,7 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveUpdateChannel()).toBe("latest");
     expect(service.resolveUpdateTrain()).toBe("stable");
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       updates: {
         channel: "prerelease",
         train: "beta",
@@ -355,18 +422,18 @@ describe("DesktopSettingsService", () => {
     expect(afterPrerelease).toContain("[updates]");
     expect(afterPrerelease).toContain('channel = "prerelease"');
     expect(afterPrerelease).toContain('train = "beta"');
-    expect((await service.readSettings()).updates.channel).toEqual({
+    expect((await service.readSettingsProjection()).updates.channel).toEqual({
       value: "prerelease",
       source: "config",
     });
-    expect((await service.readSettings()).updates.train).toEqual({
+    expect((await service.readSettingsProjection()).updates.train).toEqual({
       value: "beta",
       source: "config",
     });
     expect(service.resolveUpdateChannel()).toBe("prerelease");
     expect(service.resolveUpdateTrain()).toBe("beta");
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       updates: {
         channel: "latest",
         train: "stable",
@@ -376,11 +443,11 @@ describe("DesktopSettingsService", () => {
     const afterDefault = fs.readFileSync(configPath, "utf8");
     expect(afterDefault).toContain('channel = "latest"');
     expect(afterDefault).toContain('train = "stable"');
-    expect((await service.readSettings()).updates.channel).toEqual({
+    expect((await service.readSettingsProjection()).updates.channel).toEqual({
       value: "latest",
       source: "config",
     });
-    expect((await service.readSettings()).updates.train).toEqual({
+    expect((await service.readSettingsProjection()).updates.train).toEqual({
       value: "stable",
       source: "config",
     });
@@ -395,7 +462,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         discord: {
           responseMode: "mention_only",
@@ -417,7 +484,7 @@ describe("DesktopSettingsService", () => {
       },
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.messaging.discord.responseMode).toEqual({
       value: "mention_only",
       source: "config",
@@ -453,7 +520,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.updates.train).toEqual({
       value: "beta",
       source: "default",
@@ -480,7 +547,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.updates.channel).toEqual({
       value: "prerelease",
       source: "config",
@@ -504,7 +571,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(service.resolveUpdateTrain()).toBe("beta");
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       updates: {
         train: "stable",
         channel: "latest",
@@ -550,7 +617,7 @@ describe("DesktopSettingsService", () => {
       secretStore,
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.federation).toMatchObject({
       mode: { value: "disabled", source: "default" },
       listenHost: { value: "127.0.0.1", source: "default" },
@@ -570,7 +637,7 @@ describe("DesktopSettingsService", () => {
       },
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       federation: {
         mode: "client",
         gatewayUrl: "https://pwragent.example.com",
@@ -578,7 +645,7 @@ describe("DesktopSettingsService", () => {
     });
     await service.replaceSecret("federationInstancePrivateKey", "private-key");
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.federation).toMatchObject({
       mode: { value: "client", source: "config" },
       gatewayUrl: {
@@ -603,14 +670,14 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.general.developerMode).toEqual({
       value: false,
       source: "default",
     });
     expect(service.resolveDeveloperMode()).toBe(false);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         developerMode: true,
       },
@@ -619,7 +686,7 @@ describe("DesktopSettingsService", () => {
     const saved = fs.readFileSync(configPath, "utf8");
     expect(saved).toContain("[general]");
     expect(saved).toContain("developer_mode = true");
-    expect((await service.readSettings()).general.developerMode).toEqual({
+    expect((await service.readSettingsProjection()).general.developerMode).toEqual({
       value: true,
       source: "config",
     });
@@ -635,31 +702,31 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+    expect((await service.readSettingsProjection()).general.pdfAnalysisEnabled).toEqual({
       value: true,
       source: "default",
     });
     expect(service.resolvePdfAnalysisEnabled()).toBe(true);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: { pdfAnalysisEnabled: false },
     });
 
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "pdf_analysis_enabled = false",
     );
-    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+    expect((await service.readSettingsProjection()).general.pdfAnalysisEnabled).toEqual({
       value: false,
       source: "config",
     });
     expect(service.resolvePdfAnalysisEnabled()).toBe(false);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: { pdfAnalysisEnabled: true },
     });
 
     expect(fs.readFileSync(configPath, "utf8")).not.toContain("pdf_analysis_enabled");
-    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+    expect((await service.readSettingsProjection()).general.pdfAnalysisEnabled).toEqual({
       value: true,
       source: "default",
     });
@@ -674,7 +741,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.general.hotCpuProfilingEnabled).toEqual({
       value: false,
       source: "default",
@@ -706,7 +773,7 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveHotCpuProfilingCaptureHeapSnapshot()).toBe(false);
     expect(service.resolveHotCpuProfilingHeapSnapshotLimit()).toBe(2);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         hotCpuProfilingEnabled: true,
         hotCpuProfilingStartDelayMs: 5000,
@@ -725,36 +792,36 @@ describe("DesktopSettingsService", () => {
     expect(saved).toContain("hot_cpu_profiling_slowburn_threshold_percent = 20");
     expect(saved).toContain("hot_cpu_profiling_capture_heap_snapshot = true");
     expect(saved).toContain("hot_cpu_profiling_heap_snapshot_limit = 3");
-    expect((await service.readSettings()).general.hotCpuProfilingEnabled).toEqual({
+    expect((await service.readSettingsProjection()).general.hotCpuProfilingEnabled).toEqual({
       value: true,
       source: "config",
     });
     expect(
-      (await service.readSettings()).general.hotCpuProfilingStartDelayMs,
+      (await service.readSettingsProjection()).general.hotCpuProfilingStartDelayMs,
     ).toEqual({
       value: 5000,
       source: "config",
     });
     expect(
-      (await service.readSettings()).general.hotCpuProfilingTriggerMode,
+      (await service.readSettingsProjection()).general.hotCpuProfilingTriggerMode,
     ).toEqual({
       value: "slowburn",
       source: "config",
     });
     expect(
-      (await service.readSettings()).general.hotCpuProfilingSlowburnThresholdPercent,
+      (await service.readSettingsProjection()).general.hotCpuProfilingSlowburnThresholdPercent,
     ).toEqual({
       value: 20,
       source: "config",
     });
     expect(
-      (await service.readSettings()).general.hotCpuProfilingCaptureHeapSnapshot,
+      (await service.readSettingsProjection()).general.hotCpuProfilingCaptureHeapSnapshot,
     ).toEqual({
       value: true,
       source: "config",
     });
     expect(
-      (await service.readSettings()).general.hotCpuProfilingHeapSnapshotLimit,
+      (await service.readSettingsProjection()).general.hotCpuProfilingHeapSnapshotLimit,
     ).toEqual({
       value: 3,
       source: "config",
@@ -776,13 +843,13 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.general.notificationsEnabled).toEqual({
       value: false,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         notificationsEnabled: true,
       },
@@ -791,7 +858,7 @@ describe("DesktopSettingsService", () => {
     const saved = fs.readFileSync(configPath, "utf8");
     expect(saved).toContain("[general]");
     expect(saved).toContain("notifications_enabled = true");
-    expect((await service.readSettings()).general.notificationsEnabled).toEqual({
+    expect((await service.readSettingsProjection()).general.notificationsEnabled).toEqual({
       value: true,
       source: "config",
     });
@@ -806,7 +873,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).general.toolOutputAlerts).toEqual({
+    expect((await service.readSettingsProjection()).general.toolOutputAlerts).toEqual({
       outputCapHitsEnabled: { value: false, source: "default" },
       repeatedLargeOutputsEnabled: { value: false, source: "default" },
       repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
@@ -814,7 +881,7 @@ describe("DesktopSettingsService", () => {
       repeatedQueuedChecksEnabled: { value: false, source: "default" },
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         toolOutputAlerts: {
           repeatedLargeOutputsEnabled: true,
@@ -865,7 +932,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.runtime.tokenMiser?.activation).toMatchObject({
       state: "unavailable",
     });
@@ -881,7 +948,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).runtime.tokenMiser?.activation)
+    expect((await service.readSettingsProjection()).runtime.tokenMiser?.activation)
       .toBeUndefined();
   });
 
@@ -894,20 +961,20 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).experimental.tokenMiserEnabled).toEqual({
+    expect((await service.readSettingsProjection()).experimental.tokenMiserEnabled).toEqual({
       value: false,
       source: "default",
     });
     expect(service.resolveTokenMiserEnabled()).toBe(false);
     expect(
-      (await service.readSettings()).experimental.tokenMiserDefaultEnabled,
+      (await service.readSettingsProjection()).experimental.tokenMiserDefaultEnabled,
     ).toEqual({
       value: true,
       source: "default",
     });
     expect(service.resolveTokenMiserDefaultEnabled()).toBe(true);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         tokenMiserEnabled: true,
         tokenMiserDefaultEnabled: false,
@@ -972,23 +1039,17 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.readSettings();
+    await service.readSettingsProjection();
     expect(ensureManaged).not.toHaveBeenCalled();
 
-    await service.writeConfigPatch({
-      experimental: { tokenMiserEnabled: true },
-    });
+    await service.writeConfigPatchTargeted(
+      { experimental: { tokenMiserEnabled: true } },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
 
     expect(ensureManaged).toHaveBeenNthCalledWith(1, { checkMode: "force" });
-    expect(ensureManaged).toHaveBeenLastCalledWith(expect.objectContaining({
-      checkMode: "ttl",
-      signal: expect.any(AbortSignal),
-    }));
     expect(invalidate).toHaveBeenCalledOnce();
-    expect(discover).toHaveBeenLastCalledWith("/managed/codex", {
-      allowStaleSuccess: true,
-      force: false,
-    });
+    expect(discover).not.toHaveBeenCalled();
     await expect(service.resolveCodexCommand()).resolves.toEqual({
       command: "/managed/codex",
       source: "config",
@@ -1020,9 +1081,10 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await expect(service.writeConfigPatch({
-      experimental: { tokenMiserEnabled: true },
-    })).rejects.toThrow("No compatible signed Codex release");
+    await expect(service.writeConfigPatchTargeted(
+      { experimental: { tokenMiserEnabled: true } },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    )).rejects.toThrow("No compatible signed Codex release");
 
     expect(service.resolveTokenMiserEnabled()).toBe(false);
     expect(invalidate).not.toHaveBeenCalled();
@@ -1055,7 +1117,22 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await expect(service.readSettings()).resolves.toMatchObject({
+    await expect(service.readSettingsProjection()).resolves.not.toMatchObject({
+      runtime: {
+        tokenMiser: {
+          managedCodex: {
+            state: "unavailable",
+            reason: "Verified managed Codex is temporarily unavailable.",
+          },
+        },
+      },
+    });
+    expect(discover).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+    await service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    await expect(service.readSettingsProjection()).resolves.toMatchObject({
       runtime: {
         tokenMiser: {
           managedCodex: {
@@ -1066,7 +1143,7 @@ describe("DesktopSettingsService", () => {
       },
     });
     await expect(service.resolveCodexCommand()).rejects.toThrow(
-      "Verified managed Codex is temporarily unavailable",
+      "Refresh Codex in Settings",
     );
     expect(resolve).not.toHaveBeenCalled();
   });
@@ -1097,7 +1174,22 @@ describe("DesktopSettingsService", () => {
         version: "0.200.0-pwragent.1",
       },
     }));
-    const discover = vi.fn(async () => ({ candidates: [] }));
+    const discover = vi.fn(async (configuredCommand?: string) => ({
+      candidates: configuredCommand
+        ? [{
+            command: configuredCommand,
+            executable: true,
+            selected: true,
+            source: "config" as const,
+          }]
+        : [],
+      ...(configuredCommand
+        ? {
+            selectedCommand: configuredCommand,
+            selectedSource: "config" as const,
+          }
+        : {}),
+    }));
     const service = new DesktopSettingsService({
       codexDiscoveryCoordinator: {
         discover,
@@ -1114,25 +1206,31 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
+    await service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
     await expect(service.resolveCodexCommand()).resolves.toMatchObject({
       command: "/managed/codex",
     });
     ensureManaged.mockClear();
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: { tokenMiserEnabled: false },
     });
+    await service.refreshCodexDiscovery(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     await expect(service.resolveCodexCommand()).resolves.toMatchObject({
       command: "/operator/codex",
     });
     expect(ensureManaged).not.toHaveBeenCalled();
     expect(discover).toHaveBeenLastCalledWith("/operator/codex", {
-      allowStaleSuccess: true,
-      force: false,
+      allowStaleSuccess: false,
+      force: true,
     });
   });
 
-  it("polls managed Codex only while Token Miser availability is on", async () => {
+  it("never polls managed Codex from the passive runtime observer", async () => {
     vi.useFakeTimers();
     try {
       const configPath = path.join(createTempRoot(), "config.toml");
@@ -1173,9 +1271,10 @@ describe("DesktopSettingsService", () => {
       await vi.advanceTimersByTimeAsync(3_000);
       expect(ensureManaged).not.toHaveBeenCalled();
 
-      await service.writeConfigPatch({
-        experimental: { tokenMiserEnabled: true },
-      });
+      await service.writeConfigPatchTargeted(
+        { experimental: { tokenMiserEnabled: true } },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
       expect(changes).toHaveBeenCalledWith(expect.objectContaining({
         enabled: true,
         reason: "availability",
@@ -1183,13 +1282,9 @@ describe("DesktopSettingsService", () => {
       ensureManaged.mockClear();
 
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(ensureManaged).toHaveBeenCalledWith(expect.objectContaining({
-        checkMode: "ttl",
-        signal: expect.any(AbortSignal),
-        waitForUpdate: true,
-      }));
+      expect(ensureManaged).not.toHaveBeenCalled();
 
-      await service.writeConfigPatch({
+      await service.writeConfigPatchTargeted({
         experimental: { tokenMiserEnabled: false },
       });
       expect(changes).toHaveBeenCalledWith({
@@ -1206,83 +1301,31 @@ describe("DesktopSettingsService", () => {
     }
   });
 
-  it("announces recovery after the first successful managed Codex retry", async () => {
-    vi.useFakeTimers();
-    try {
-      const configPath = path.join(createTempRoot(), "config.toml");
-      fs.writeFileSync(configPath, [
-        "[experimental]",
-        "token_miser_enabled = true",
-        "",
-      ].join("\n"));
-      const runtime = {
-        appServerCommand: "/managed/codex-app-server",
-        codeModeHostCommand: "/managed/codex-code-mode-host",
-        command: "/managed/codex",
-        metadata: {
-          asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
-          checkedAt: 1,
-          installedAt: 1,
-          repository: "pwrdrvr/codex",
-          schemaVersion: 1 as const,
-          sha256: "a".repeat(64),
-          tag: "pwragent-v0.200.0-pwragent.1",
-          version: "0.200.0-pwragent.1",
-        },
-      };
-      const ensureManaged = vi.fn()
-        .mockRejectedValueOnce(new Error("offline"))
-        .mockResolvedValue(runtime);
-      const service = new DesktopSettingsService({
-        codexDiscoveryCoordinator: {
-          discover: vi.fn(async () => ({ candidates: [] })),
-          invalidate: vi.fn(),
-          resolve: vi.fn(async () => ({
-            command: "/path/codex",
-            source: "path" as const,
-          })),
-        },
-        configPath,
-        ensureManagedCodexRuntime: ensureManaged,
-        env: {},
-        secretStore: new MemoryDesktopSecretStore(),
-      });
-      const changes = vi.fn();
-      const stop = service.watchManagedCodexRuntime(changes, {
-        intervalMs: 1_000,
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(changes).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(changes).toHaveBeenCalledWith({
-        enabled: true,
-        reason: "update",
-        runtime,
-      });
-      stop();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("aborts an in-flight managed Codex update when availability turns off", async () => {
+  it("announces managed Codex recovery only after an admitted refresh", async () => {
     const configPath = path.join(createTempRoot(), "config.toml");
     fs.writeFileSync(configPath, [
       "[experimental]",
       "token_miser_enabled = true",
       "",
     ].join("\n"));
-    let updateSignal: AbortSignal | undefined;
-    const ensureManaged = vi.fn(async (options: { signal?: AbortSignal }) =>
-      await new Promise<never>((_resolve, reject) => {
-        updateSignal = options.signal;
-        options.signal?.addEventListener("abort", () => {
-          reject(options.signal?.reason);
-        }, { once: true });
-      }),
-    );
+    const runtime = {
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1 as const,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.200.0-pwragent.1",
+        version: "0.200.0-pwragent.1",
+      },
+    };
+    const ensureManaged = vi.fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(runtime);
     const service = new DesktopSettingsService({
       codexDiscoveryCoordinator: {
         discover: vi.fn(async () => ({ candidates: [] })),
@@ -1299,13 +1342,129 @@ describe("DesktopSettingsService", () => {
     });
     const changes = vi.fn();
     const stop = service.watchManagedCodexRuntime(changes);
-    await vi.waitFor(() => expect(updateSignal).toBeDefined());
 
-    await service.writeConfigPatch({
+    await service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    expect(changes).not.toHaveBeenCalled();
+    await service.refreshCodexDiscovery(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+
+    expect(changes).toHaveBeenCalledWith({
+      enabled: true,
+      reason: "update",
+      runtime,
+    });
+    stop();
+  });
+
+  it("does not announce an unchanged durable managed runtime at startup", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, [
+      "[experimental]",
+      "token_miser_enabled = true",
+      "",
+    ].join("\n"));
+    const runtime = {
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.200.0-pwragent.1-test.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1 as const,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.200.0-pwragent.1",
+        version: "0.200.0-pwragent.1",
+      },
+    };
+    const configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{
+        command: runtime.command,
+        source: "config",
+        version: runtime.metadata.version,
+      }],
+      selectedCommand: runtime.command,
+      selectedVersion: runtime.metadata.version,
+    });
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({
+          candidates: [{
+            command: runtime.command,
+            executable: true,
+            selected: true,
+            source: "config" as const,
+            version: runtime.metadata.version,
+          }],
+          selectedCommand: runtime.command,
+          selectedSource: "config" as const,
+        })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: runtime.command,
+          source: "config" as const,
+          version: runtime.metadata.version,
+        })),
+      },
+      configPath,
+      configStore,
+      ensureManagedCodexRuntime: vi.fn(async () => runtime),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const changes = vi.fn();
+    const stop = service.watchManagedCodexRuntime(changes);
+
+    await service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
+
+    expect(changes).not.toHaveBeenCalled();
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+      command: runtime.command,
+    });
+    stop();
+    configStore.dispose();
+  });
+
+  it("does not start a managed Codex update from a passive observer", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[experimental]",
+      "token_miser_enabled = true",
+      "",
+    ].join("\n"));
+    const ensureManaged = vi.fn();
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: "/path/codex",
+          source: "path" as const,
+        })),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const changes = vi.fn();
+    const stop = service.watchManagedCodexRuntime(changes);
+    await Promise.resolve();
+    expect(ensureManaged).not.toHaveBeenCalled();
+
+    await service.writeConfigPatchTargeted({
       experimental: { tokenMiserEnabled: false },
     });
 
-    expect(updateSignal?.aborted).toBe(true);
+    expect(ensureManaged).not.toHaveBeenCalled();
     expect(changes).toHaveBeenCalledWith({
       enabled: false,
       reason: "availability",
@@ -1356,11 +1515,12 @@ describe("DesktopSettingsService", () => {
     const stop = service.watchManagedCodexRuntime(selectionChanged);
 
     let writeSettled = false;
-    const write = service.writeConfigPatch({
-      experimental: { tokenMiserEnabled: true },
-    }).then((snapshot) => {
+    const write = service.writeConfigPatchTargeted(
+      { experimental: { tokenMiserEnabled: true } },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    ).then(async () => {
       writeSettled = true;
-      return snapshot;
+      return await service.readSettingsProjection();
     });
     await vi.waitFor(() => expect(selectionChanged).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: true, reason: "availability" }),
@@ -1383,7 +1543,7 @@ describe("DesktopSettingsService", () => {
     stop();
   });
 
-  it("announces an update installed by another settings read", async () => {
+  it("does not install or announce updates from an ordinary settings read", async () => {
     vi.useFakeTimers();
     try {
       const configPath = path.join(createTempRoot(), "config.toml");
@@ -1424,7 +1584,9 @@ describe("DesktopSettingsService", () => {
         secretStore: new MemoryDesktopSecretStore(),
       });
       const changes = vi.fn();
-      await service.readSettings();
+      await service.refreshStartupDiscovery(
+        issueProviderDiscoveryPermit("startup"),
+      );
       ensureManaged.mockClear();
       const stop = service.watchManagedCodexRuntime(changes, {
         intervalMs: 1_000,
@@ -1433,24 +1595,24 @@ describe("DesktopSettingsService", () => {
       expect(changes).not.toHaveBeenCalled();
 
       selectedRuntime = runtime("0.201.0-pwragent.1");
-      await service.readSettings();
+      await service.readSettingsProjection();
       changes.mockClear();
       await vi.advanceTimersByTimeAsync(1_000);
 
-      expect(changes).toHaveBeenCalledWith({
-        enabled: true,
-        reason: "update",
-        runtime: selectedRuntime,
-      });
-      await expect(service.readSettings()).resolves.toMatchObject({
+      expect(ensureManaged).not.toHaveBeenCalled();
+      expect(changes).not.toHaveBeenCalled();
+      await expect(service.readSettingsProjection()).resolves.toMatchObject({
         runtime: {
           tokenMiser: {
-            managedCodex: { state: "pending-switch" },
+            managedCodex: {
+              state: "pending-switch",
+              version: "0.200.0-pwragent.1",
+            },
           },
         },
       });
       service.markManagedCodexRuntimeSwitchComplete();
-      await expect(service.readSettings()).resolves.toMatchObject({
+      await expect(service.readSettingsProjection()).resolves.toMatchObject({
         runtime: {
           tokenMiser: {
             managedCodex: { state: "ready" },
@@ -1477,12 +1639,12 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).experimental.tokenMiserEnabled).toEqual({
+    expect((await service.readSettingsProjection()).experimental.tokenMiserEnabled).toEqual({
       value: true,
       source: "config",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: { tokenMiserEnabled: false },
     });
 
@@ -1503,14 +1665,14 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).general.spendAlerts).toEqual({
+    expect((await service.readSettingsProjection()).general.spendAlerts).toEqual({
       activeTurnSpendEnabled: { value: false, source: "default" },
       activeTurnSpendThresholdUsd: { value: 5, source: "default" },
       threadSpendEnabled: { value: true, source: "default" },
       threadSpendThresholdUsd: { value: 25, source: "default" },
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         spendAlerts: {
           activeTurnSpendEnabled: false,
@@ -1540,14 +1702,14 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.general.confirmQuitWithInProgressThreads).toEqual({
       value: true,
       source: "default",
     });
     expect(service.resolveConfirmQuitWithInProgressThreads()).toBe(true);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         confirmQuitWithInProgressThreads: false,
       },
@@ -1557,7 +1719,7 @@ describe("DesktopSettingsService", () => {
     expect(saved).toContain("[general]");
     expect(saved).toContain("confirm_quit_with_in_progress_threads = false");
     expect(
-      (await service.readSettings()).general.confirmQuitWithInProgressThreads,
+      (await service.readSettingsProjection()).general.confirmQuitWithInProgressThreads,
     ).toEqual({
       value: false,
       source: "config",
@@ -1574,13 +1736,13 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.general.attentionPromoteOnTurnEnd).toEqual({
       value: true,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         attentionPromoteOnTurnEnd: false,
       },
@@ -1590,7 +1752,7 @@ describe("DesktopSettingsService", () => {
     expect(saved).toContain("[general]");
     expect(saved).toContain("attention_promote_on_turn_end = false");
     expect(
-      (await service.readSettings()).general.attentionPromoteOnTurnEnd,
+      (await service.readSettingsProjection()).general.attentionPromoteOnTurnEnd,
     ).toEqual({
       value: false,
       source: "config",
@@ -1610,7 +1772,7 @@ describe("DesktopSettingsService", () => {
     // BrowserWindow uses pre-mount) must agree with the service path
     // (which the renderer reads later via IPC) — they read the same
     // TOML, so any divergence here is a contract bug.
-    const initialSettings = await service.readSettings();
+    const initialSettings = await service.readSettingsProjection();
     expect(initialSettings.general.appearance.theme).toEqual({
       value: "system",
       source: "default",
@@ -1628,7 +1790,7 @@ describe("DesktopSettingsService", () => {
 
     // Write non-default values. The byte-preserving patch path should
     // create `[general.appearance]` with all three keys.
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         appearance: {
           theme: "light",
@@ -1644,7 +1806,7 @@ describe("DesktopSettingsService", () => {
     expect(writtenFile).toContain('density = "compact"');
     expect(writtenFile).toContain('sidebar_text_size = "lg"');
 
-    const afterWrite = await service.readSettings();
+    const afterWrite = await service.readSettingsProjection();
     expect(afterWrite.general.appearance.theme).toEqual({
       value: "light",
       source: "config",
@@ -1666,7 +1828,7 @@ describe("DesktopSettingsService", () => {
 
     // Restore to defaults: the patch path should DELETE the keys
     // (defaults aren't written to disk) so the file stays minimal.
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         appearance: {
           theme: "system",
@@ -1681,7 +1843,7 @@ describe("DesktopSettingsService", () => {
     expect(restoredFile).not.toContain('density = "');
     expect(restoredFile).not.toContain('sidebar_text_size = "');
 
-    const afterRestore = await service.readSettings();
+    const afterRestore = await service.readSettingsProjection();
     expect(afterRestore.general.appearance.theme.source).toBe("default");
     expect(afterRestore.general.appearance.density.source).toBe("default");
     expect(afterRestore.general.appearance.sidebarTextSize.source).toBe(
@@ -1711,12 +1873,12 @@ describe("DesktopSettingsService", () => {
     // every unrelated settings save (update channel, image patches,
     // messaging) would needlessly churn every aux window if we fired
     // on every write.
-    await service.writeConfigPatch({ updates: { channel: "prerelease" } });
+    await service.writeConfigPatchTargeted({ updates: { channel: "prerelease" } });
     expect(onAppearanceChange).not.toHaveBeenCalled();
 
     // Patch that explicitly sets non-default appearance values fires
     // with the resolved post-write values.
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         appearance: {
           theme: "light",
@@ -1737,7 +1899,7 @@ describe("DesktopSettingsService", () => {
     // The byte-preserving patch path deletes the keys from disk; the
     // broadcast payload resolves through the same fallback the read
     // path uses, so subscribers see the defaults.
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         appearance: {
           theme: "system",
@@ -1756,7 +1918,7 @@ describe("DesktopSettingsService", () => {
     // Patch with `general` but only developerMode (not appearance) must
     // NOT fire — the guard is "did this patch touch the appearance
     // sub-block", not "did it touch the general block".
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: { developerMode: true },
     });
     expect(onAppearanceChange).toHaveBeenCalledTimes(2);
@@ -1764,7 +1926,7 @@ describe("DesktopSettingsService", () => {
     // Patch with `general.appearance` but only one field set still fires
     // — the broadcast carries the FULL resolved appearance so subscribers
     // get the complete post-write state.
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       general: {
         appearance: { theme: "dark" },
       },
@@ -1792,22 +1954,22 @@ describe("DesktopSettingsService", () => {
 
     // Fires for the Git setting the background poller cares about — this is
     // what makes the toggle take effect without a restart.
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       git: { backgroundPrPolling: true },
     });
     expect(listener).toHaveBeenCalledTimes(1);
     // The listener runs AFTER the write lands, so a re-read sees the new value.
     expect(
-      (await service.readSettings()).git.backgroundPrPolling.value,
+      (await service.readSettingsProjection()).git.backgroundPrPolling.value,
     ).toBe(true);
 
     // Generic: fires for unrelated writes too (cheap; the poller just re-reads).
-    await service.writeConfigPatch({ updates: { channel: "prerelease" } });
+    await service.writeConfigPatchTargeted({ updates: { channel: "prerelease" } });
     expect(listener).toHaveBeenCalledTimes(2);
 
     // Unsubscribe stops delivery.
     unsubscribe();
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       git: { backgroundPrPolling: false },
     });
     expect(listener).toHaveBeenCalledTimes(2);
@@ -1828,10 +1990,10 @@ describe("DesktopSettingsService", () => {
 
     // A throwing side-effect listener must not fail the settings write.
     await expect(
-      service.writeConfigPatch({ git: { backgroundPrPolling: true } }),
+      service.writeConfigPatchTargeted({ git: { backgroundPrPolling: true } }),
     ).resolves.toBeDefined();
     expect(
-      (await service.readSettings()).git.backgroundPrPolling.value,
+      (await service.readSettingsProjection()).git.backgroundPrPolling.value,
     ).toBe(true);
   });
 
@@ -1844,7 +2006,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.messaging.attachments.imageProfile).toEqual({
       value: "medium",
       source: "default",
@@ -1854,7 +2016,7 @@ describe("DesktopSettingsService", () => {
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         attachments: { imageProfile: "actual" },
       },
@@ -1863,12 +2025,12 @@ describe("DesktopSettingsService", () => {
     const afterActual = fs.readFileSync(configPath, "utf8");
     expect(afterActual).toContain("[messaging.attachments]");
     expect(afterActual).toContain('image_profile = "actual"');
-    expect((await service.readSettings()).messaging.attachments.imageProfile).toEqual({
+    expect((await service.readSettingsProjection()).messaging.attachments.imageProfile).toEqual({
       value: "actual",
       source: "config",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         attachments: { imageProfile: "medium" },
       },
@@ -1876,12 +2038,12 @@ describe("DesktopSettingsService", () => {
 
     const afterDefault = fs.readFileSync(configPath, "utf8");
     expect(afterDefault).not.toContain("image_profile");
-    expect((await service.readSettings()).messaging.attachments.imageProfile).toEqual({
+    expect((await service.readSettingsProjection()).messaging.attachments.imageProfile).toEqual({
       value: "medium",
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         attachments: { pdfProfile: "actual" },
       },
@@ -1889,12 +2051,12 @@ describe("DesktopSettingsService", () => {
 
     const afterPdfActual = fs.readFileSync(configPath, "utf8");
     expect(afterPdfActual).toContain('pdf_profile = "actual"');
-    expect((await service.readSettings()).messaging.attachments.pdfProfile).toEqual({
+    expect((await service.readSettingsProjection()).messaging.attachments.pdfProfile).toEqual({
       value: "actual",
       source: "config",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         attachments: { pdfProfile: "high" },
       },
@@ -1902,7 +2064,7 @@ describe("DesktopSettingsService", () => {
 
     const afterPdfDefault = fs.readFileSync(configPath, "utf8");
     expect(afterPdfDefault).not.toContain("pdf_profile");
-    expect((await service.readSettings()).messaging.attachments.pdfProfile).toEqual({
+    expect((await service.readSettingsProjection()).messaging.attachments.pdfProfile).toEqual({
       value: "high",
       source: "default",
     });
@@ -1917,13 +2079,13 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.imageUploads.pastedImageMaxPatches).toEqual({
       value: 1536,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       imageUploads: {
         pastedImageMaxPatches: 1024,
       },
@@ -1932,12 +2094,12 @@ describe("DesktopSettingsService", () => {
     const afterCompact = fs.readFileSync(configPath, "utf8");
     expect(afterCompact).toContain("[image_uploads]");
     expect(afterCompact).toContain("pasted_image_max_patches = 1024");
-    expect((await service.readSettings()).imageUploads.pastedImageMaxPatches).toEqual({
+    expect((await service.readSettingsProjection()).imageUploads.pastedImageMaxPatches).toEqual({
       value: 1024,
       source: "config",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       imageUploads: {
         pastedImageMaxPatches: 1536,
       },
@@ -1945,7 +2107,7 @@ describe("DesktopSettingsService", () => {
 
     const afterDefault = fs.readFileSync(configPath, "utf8");
     expect(afterDefault).not.toContain("pasted_image_max_patches");
-    expect((await service.readSettings()).imageUploads.pastedImageMaxPatches).toEqual({
+    expect((await service.readSettingsProjection()).imageUploads.pastedImageMaxPatches).toEqual({
       value: 1536,
       source: "default",
     });
@@ -1971,7 +2133,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         toolUpdateMode: "show_all",
         managerToolUpdateMode: "show_more",
@@ -2017,7 +2179,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
       {
@@ -2051,14 +2213,14 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const before = await service.readSettings();
+    const before = await service.readSettingsProjection();
     expect(before.messaging.slack.authorizedUserIds.value).toEqual([{
       id: "U079K80HTGS",
       displayName: "Harold Hunt",
       username: "hhunt",
     }]);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         slack: {
           authorizedUserIds: before.messaging.slack.authorizedUserIds.value,
@@ -2067,7 +2229,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(fs.readFileSync(configPath, "utf8")).toContain('username = "hhunt"');
-    const after = await service.readSettings();
+    const after = await service.readSettingsProjection();
     expect(after.messaging.slack.authorizedUserIds.value).toEqual([{
       id: "U079K80HTGS",
       displayName: "Harold Hunt",
@@ -2095,7 +2257,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
       { id: "111111111", displayName: "Harold" },
@@ -2111,20 +2273,20 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.messaging.slack.liveWorkingCards).toEqual({
       value: false,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: { slack: { workspaceUrl: "https://example.slack.com" } },
     });
     expect(fs.readFileSync(configPath, "utf8")).not.toContain(
       "live_working_cards",
     );
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: { slack: { liveWorkingCards: true } },
     });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
@@ -2150,7 +2312,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const before = await service.readSettings();
+    const before = await service.readSettingsProjection();
     expect(before.messaging.telegram.authorizedUserIds.value).toEqual([
       { id: "111111111", displayName: "" },
     ]);
@@ -2158,7 +2320,7 @@ describe("DesktopSettingsService", () => {
       'authorized_user_ids = ["111111111"]',
     );
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         telegram: {
           authorizedUserIds: [{ id: "111111111", displayName: "Harold" }],
@@ -2177,7 +2339,7 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain('display_name = "Harold"');
     expect(contents).toContain("streaming_responses = true");
 
-    const after = await service.readSettings();
+    const after = await service.readSettingsProjection();
     expect(after.messaging.telegram.authorizedUserIds.value).toEqual([
       { id: "111111111", displayName: "Harold" },
     ]);
@@ -2204,12 +2366,12 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const before = await service.readSettings();
+    const before = await service.readSettingsProjection();
     expect(before.messaging.telegram.authorizedUserIds.value).toEqual([
       { id: "111111111", displayName: "Harold" },
     ]);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         telegram: {
           authorizedUserIds: [{ id: "111111111", displayName: "Harold" }],
@@ -2241,7 +2403,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.worktrees.storage).toEqual({
       value: "in-repo",
@@ -2266,7 +2428,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.worktrees.storage).toMatchObject({
       value: "user-home",
@@ -2287,13 +2449,13 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.writeConfigPatch({ worktrees: { storage: "in-repo" } });
+    await service.writeConfigPatchTargeted({ worktrees: { storage: "in-repo" } });
 
     const tomlOnDisk = fs.readFileSync(configPath, "utf8");
     expect(tomlOnDisk).toContain("[worktrees]");
     expect(tomlOnDisk).toContain('storage = "in-repo"');
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.worktrees.storage.value).toBe("in-repo");
   });
 
@@ -2306,13 +2468,13 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.writeConfigPatch({ models: { codex: { profile: "work" } } });
+    await service.writeConfigPatchTargeted({ models: { codex: { profile: "work" } } });
 
     const tomlOnDisk = fs.readFileSync(configPath, "utf8");
     expect(tomlOnDisk).toContain("[models.codex]");
     expect(tomlOnDisk).toContain('profile = "work"');
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.models.codex.profile).toEqual({
       value: "work",
       source: "config",
@@ -2328,7 +2490,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       acpAgents: {
         grok: { cliPath: "/custom/grok" },
         qwen: { cliPath: "/custom/qwen" },
@@ -2341,7 +2503,7 @@ describe("DesktopSettingsService", () => {
     expect(tomlOnDisk).toContain("[acp_agents.qwen]");
     expect(tomlOnDisk).toContain('cli_path = "/custom/qwen"');
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.acpAgents.grok.cliPath).toEqual({
       value: "/custom/grok",
       source: "config",
@@ -2362,11 +2524,11 @@ describe("DesktopSettingsService", () => {
     });
 
     // Unset → enabled by default (on-by-default policy).
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.acpAgents.gemini.enabled).toBe(true);
     expect(initial.acpAgents.kimi.enabled).toBe(true);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       acpAgents: { kimi: { enabled: false } },
     });
 
@@ -2374,7 +2536,7 @@ describe("DesktopSettingsService", () => {
     expect(tomlOnDisk).toContain("[acp_agents.kimi]");
     expect(tomlOnDisk).toContain("enabled = false");
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.acpAgents.kimi.enabled).toBe(false);
     // Untouched agents stay enabled.
     expect(snapshot.acpAgents.gemini.enabled).toBe(true);
@@ -2389,7 +2551,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).acpAgents.grok.managedBuilds).toBe(true);
+    expect((await service.readSettingsProjection()).acpAgents.grok.managedBuilds).toBe(true);
 
     const packagedDefault = new DesktopSettingsService({
       configPath: path.join(root, "packaged-config.toml"),
@@ -2398,17 +2560,17 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
     expect(
-      (await packagedDefault.readSettings()).acpAgents.grok.managedBuilds,
+      (await packagedDefault.readSettingsProjection()).acpAgents.grok.managedBuilds,
     ).toBe(false);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       acpAgents: { grok: { managedBuilds: false } },
     });
 
     const tomlOnDisk = fs.readFileSync(configPath, "utf8");
     expect(tomlOnDisk).toContain("[acp_agents.grok]");
     expect(tomlOnDisk).toContain("managed_builds = false");
-    expect((await service.readSettings()).acpAgents.grok.managedBuilds).toBe(false);
+    expect((await service.readSettingsProjection()).acpAgents.grok.managedBuilds).toBe(false);
   });
 
   it("suppresses managed Grok builds only for unpackaged E2E runtimes", () => {
@@ -2491,11 +2653,11 @@ describe("DesktopSettingsService", () => {
       resolveCodexShellEnv: () => ({}),
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       models: { codex: { profile: "personal" } },
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.models.codex.profile.value).toBe("personal");
     expect(service.resolveStartupCodexHome()).toBe(
       path.join(root, "codex", "profiles", "work"),
@@ -2582,7 +2744,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.experimental.chatReplyComposer).toEqual({
       value: "tiptap-wysiwyg-markdown-chips",
@@ -2650,7 +2812,7 @@ describe("DesktopSettingsService", () => {
       secretStore,
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.messaging.telegram.botToken).toMatchObject({
       configured: true,
@@ -2687,7 +2849,7 @@ describe("DesktopSettingsService", () => {
       secretStore,
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.messaging.telegram.botToken).toMatchObject({
       configured: false,
@@ -2707,7 +2869,7 @@ describe("DesktopSettingsService", () => {
       secretStore,
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         inputDebounceMs: 1250,
         toolUpdateMode: "show_less",
@@ -2735,7 +2897,7 @@ describe("DesktopSettingsService", () => {
     await service.replaceSecret("telegramBotToken", "123456789:secret-token");
 
     const contents = fs.readFileSync(configPath, "utf8");
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(contents).toContain("[messaging.telegram]");
     expect(contents).toContain("[messaging]");
@@ -2768,7 +2930,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.messaging.discord.authorizedGuilds).toEqual({
       value: [],
@@ -2785,7 +2947,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.runtime.messaging).toEqual({
       disabled: true,
@@ -2805,7 +2967,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.configError).toContain("Invalid TOML line");
     expect(snapshot.experimental.chatReplyComposer).toEqual({
@@ -2829,7 +2991,7 @@ describe("DesktopSettingsService", () => {
     });
 
     await expect(
-      service.writeConfigPatch({
+      service.writeConfigPatchTargeted({
         experimental: {
           diffCondensation: {
             enabled: true,
@@ -2852,7 +3014,7 @@ describe("DesktopSettingsService", () => {
       now: () => 1,
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         mattermost: {
           enabled: true,
@@ -2896,7 +3058,7 @@ describe("DesktopSettingsService", () => {
     expect(contents).not.toContain("token-abc");
     expect(contents).not.toContain("hmac-secret");
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.messaging.mattermost.enabled).toMatchObject({
       value: true,
       source: "config",
@@ -2952,7 +3114,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.messaging.mattermost.enabled).toMatchObject({
       value: false,
       source: "default",
@@ -2980,7 +3142,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.messaging.mattermost.botToken).toMatchObject({
       configured: true,
       source: "env",
@@ -3020,7 +3182,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.messaging.feishu.tenantRegion).toEqual({
       value: "lark",
@@ -3053,7 +3215,7 @@ describe("DesktopSettingsService", () => {
       }),
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
 
     expect(snapshot.secretStorage.available).toBe(false);
     expect(snapshot.messaging.telegram.botToken).toMatchObject({
@@ -3076,29 +3238,29 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.experimental.diffCondensation).toEqual({
       enabled: { value: false, source: "default" },
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         diffCondensation: { enabled: true },
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.experimental.diffCondensation).toEqual({
       enabled: { value: true, source: "config" },
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         diffCondensation: { enabled: false },
       },
     });
 
-    const reverted = await service.readSettings();
+    const reverted = await service.readSettingsProjection();
     expect(reverted.experimental.diffCondensation.enabled.value).toBe(false);
   });
 
@@ -3111,19 +3273,19 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.experimental.fullAccessRiskWarningDismissed).toEqual({
       value: false,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         fullAccessRiskWarningDismissed: true,
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.experimental.fullAccessRiskWarningDismissed).toEqual({
       value: true,
       source: "config",
@@ -3142,19 +3304,19 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.experimental.liveTranscriptEventFiltering).toEqual({
       value: false,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         liveTranscriptEventFiltering: true,
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.experimental.liveTranscriptEventFiltering).toEqual({
       value: true,
       source: "config",
@@ -3173,19 +3335,19 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.experimental.lightweightNavigationRefresh).toEqual({
       value: false,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         lightweightNavigationRefresh: true,
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.experimental.lightweightNavigationRefresh).toEqual({
       value: true,
       source: "config",
@@ -3204,19 +3366,19 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.experimental.markdownMathRendering).toEqual({
       value: false,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         markdownMathRendering: true,
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.experimental.markdownMathRendering).toEqual({
       value: true,
       source: "config",
@@ -3236,19 +3398,19 @@ describe("DesktopSettingsService", () => {
     });
 
     // With the flag absent, background polling is enabled by default.
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.git.backgroundPrPolling).toEqual({
       value: true,
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       git: {
         backgroundPrPolling: false,
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.git.backgroundPrPolling).toEqual({
       value: false,
       source: "config",
@@ -3267,7 +3429,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.git.prAutoDispatchAllowed).toEqual({
       value: true,
       source: "default",
@@ -3290,7 +3452,7 @@ describe("DesktopSettingsService", () => {
     });
     expect(service.resolveDefaultPrAutoDispatchEnabled()).toBe(true);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       git: {
         prAutoDispatchAllowed: false,
         defaultPrAutoDispatchEnabled: false,
@@ -3300,7 +3462,7 @@ describe("DesktopSettingsService", () => {
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.git.prAutoDispatchAllowed).toEqual({
       value: false,
       source: "config",
@@ -3347,7 +3509,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).git.backgroundPrPolling).toEqual({
+    expect((await service.readSettingsProjection()).git.backgroundPrPolling).toEqual({
       value: false,
       source: "config",
     });
@@ -3370,7 +3532,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).git.backgroundPrPolling).toEqual({
+    expect((await service.readSettingsProjection()).git.backgroundPrPolling).toEqual({
       value: false,
       source: "config",
     });
@@ -3396,7 +3558,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).git.backgroundPrPolling).toEqual({
+    expect((await service.readSettingsProjection()).git.backgroundPrPolling).toEqual({
       value: false,
       source: "config",
     });
@@ -3424,7 +3586,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       git: { backgroundPrPolling: true },
     });
 
@@ -3443,7 +3605,7 @@ describe("DesktopSettingsService", () => {
       contents.match(/pwragent-legacy-settings key=background_pr_polling/g),
     ).toHaveLength(1);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       git: { backgroundPrPolling: false },
     });
 
@@ -3463,7 +3625,7 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.experimental.threadPricingSummary).toEqual({
       value: true,
       source: "default",
@@ -3481,7 +3643,7 @@ describe("DesktopSettingsService", () => {
       source: "default",
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         threadPricingSummary: false,
         threadPricingDisplayUsd: false,
@@ -3490,7 +3652,7 @@ describe("DesktopSettingsService", () => {
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.experimental.threadPricingSummary).toEqual({
       value: false,
       source: "config",
@@ -3530,20 +3692,20 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    const initial = await service.readSettings();
+    const initial = await service.readSettingsProjection();
     expect(initial.experimental.codexDefaultModeRequestUserInput).toEqual({
       value: false,
       source: "default",
     });
     expect(service.resolveCodexDefaultModeRequestUserInput()).toBe(false);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: {
         codexDefaultModeRequestUserInput: true,
       },
     });
 
-    const updated = await service.readSettings();
+    const updated = await service.readSettingsProjection();
     expect(updated.experimental.codexDefaultModeRequestUserInput).toEqual({
       value: true,
       source: "config",
@@ -3569,17 +3731,17 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).experimental.managedReview).toEqual({
+    expect((await service.readSettingsProjection()).experimental.managedReview).toEqual({
       value: false,
       source: "default",
     });
     expect(service.resolveManagedReviewEnabled()).toBe(false);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: { managedReview: true },
     });
 
-    expect((await service.readSettings()).experimental.managedReview).toEqual({
+    expect((await service.readSettingsProjection()).experimental.managedReview).toEqual({
       value: true,
       source: "config",
     });
@@ -3617,7 +3779,7 @@ describe("DesktopSettingsService", () => {
       now: () => 0,
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         telegram: { enabled: false },
       },
@@ -3662,7 +3824,7 @@ describe("DesktopSettingsService", () => {
       now: () => 0,
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.configError).toBeUndefined();
     expect(snapshot.messaging.telegram.enabled.value).toBe(true);
   });
@@ -3687,7 +3849,7 @@ describe("DesktopSettingsService", () => {
         secretStore: new MemoryDesktopSecretStore(),
       });
 
-      const snapshot = await service.readSettings();
+      const snapshot = await service.readSettingsProjection();
       expect(snapshot.onboarding.completed).toEqual({
         value: true,
         source: "default",
@@ -3713,7 +3875,7 @@ describe("DesktopSettingsService", () => {
         secretStore: new MemoryDesktopSecretStore(),
       });
 
-      const snapshot = await service.readSettings();
+      const snapshot = await service.readSettingsProjection();
       expect(snapshot.onboarding.completed.value).toBe(true);
       expect(snapshot.onboarding.completedSource.value).toBe("migrated");
     });
@@ -3733,7 +3895,7 @@ describe("DesktopSettingsService", () => {
         secretStore: new MemoryDesktopSecretStore(),
       });
 
-      const snapshot = await service.readSettings();
+      const snapshot = await service.readSettingsProjection();
       expect(snapshot.onboarding.completed).toEqual({
         value: false,
         source: "config",
@@ -3788,7 +3950,7 @@ describe("DesktopSettingsService", () => {
 
       expect(service.resolveOnboardingCompleted()).toBe(false);
 
-      await service.writeConfigPatch({
+      await service.writeConfigPatchTargeted({
         onboarding: { completed: true, completedSource: "wizard" },
       });
 
@@ -3797,7 +3959,7 @@ describe("DesktopSettingsService", () => {
       expect(onDisk).toContain("completed = true");
       expect(onDisk).toContain('completed_source = "wizard"');
 
-      const snapshot = await service.readSettings();
+      const snapshot = await service.readSettingsProjection();
       expect(snapshot.onboarding.completed).toEqual({
         value: true,
         source: "config",
@@ -3828,7 +3990,7 @@ describe("DesktopSettingsService", () => {
       now: () => 0,
     });
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       messaging: {
         telegram: {
           enabled: true,

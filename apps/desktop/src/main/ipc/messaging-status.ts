@@ -737,14 +737,16 @@ export function registerMessagingStatusIpcHandlers(): void {
         && pairing.observedChat?.bucketId
           ? await resolveSlackWorkspaceName(service, pairing.observedChat.bucketId)
           : undefined;
-      const snapshot = await service.readSettings();
+      const snapshot = {
+        messaging: service.readMessagingSettings(),
+      } as DesktopSettingsSnapshot;
       const approval = buildPairingApprovalPatch(
         pairing,
         snapshot,
         request.target,
         { teamName },
       );
-      const next = await service.writeConfigPatch(approval.patch);
+      const next = await service.writeConfigPatchTargeted(approval.patch);
       await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
         runtime,
         (options) => loadDesktopMessagingConfigFromSettings(service, process.env, options),
@@ -779,7 +781,9 @@ export function registerMessagingStatusIpcHandlers(): void {
           platform: pairing.platform,
           target: request.target,
           added: approval.added,
-          configPath: next.configPath,
+          ...(next && "configRevision" in next
+            ? { configRevision: next.configRevision }
+            : {}),
         });
         return { entry: updated, added: approval.added };
       }
@@ -791,7 +795,9 @@ export function registerMessagingStatusIpcHandlers(): void {
         pairingId: request.entryId,
         platform: pairing.platform,
         added: approval.added,
-        configPath: next.configPath,
+        ...(next && "configRevision" in next
+          ? { configRevision: next.configRevision }
+          : {}),
       });
       return { entry: consumed ?? pairing, added: approval.added };
     },

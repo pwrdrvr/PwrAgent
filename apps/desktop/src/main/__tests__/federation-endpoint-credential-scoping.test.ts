@@ -41,14 +41,10 @@ vi.mock("../settings/desktop-settings-singleton", () => {
   const noise = generateFederationNoiseStaticKeyPair();
   return {
     getDesktopSettingsService: () => ({
-      readSettings: async () => ({
-        federation: {
-          instanceLabel: { value: "" },
-          instanceNotes: { value: "" },
-          cloudflareEndpoint: { value: cloudflareEndpoint.value },
-          cloudflareMtlsEnabled: { value: true },
-          cloudflareAccessServiceAuthEnabled: { value: true },
-        },
+      readFederationConfig: () => ({
+        cloudflareEndpoint: cloudflareEndpoint.value,
+        cloudflareMtlsEnabled: true,
+        cloudflareAccessServiceAuthEnabled: true,
       }),
       resolveFederationCloudflareCredentials: async () => ({
         clientCertificate: "PEM-CERT",

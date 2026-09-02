@@ -101,14 +101,11 @@ export function useBackendSummaries(
 
     const refreshPromise = (async () => {
       try {
-        await desktopApi.listAcpAgents?.({
-          refresh: true,
-          force: true,
-        });
         return await refresh();
       } catch {
-        // ACP discovery is best-effort. Keep the cached backend summaries
-        // usable when one local CLI cannot be probed.
+        // Keep the cached backend summaries usable when the main-process
+        // projection is temporarily unavailable. Runtime surfaces never
+        // launch provider discovery; Settings/setup own explicit probes.
         return [];
       }
     })();
@@ -149,7 +146,8 @@ export function useBackendSummaries(
           (event.notification.method === "account/rateLimits/updated" ||
             event.notification.method === "account/updated")) ||
         event.notification.method === "backend/acpRuntimeCapabilities/updated" ||
-        event.notification.method === "backend/providerStatus/updated"
+        event.notification.method === "backend/providerStatus/updated" ||
+        event.notification.method === "navigation/providerThreads/refreshed"
       ) {
         void refresh();
       }

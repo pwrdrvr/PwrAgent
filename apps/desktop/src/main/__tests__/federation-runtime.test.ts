@@ -726,6 +726,13 @@ describe("DesktopFederationRuntime", () => {
           ? () => undefined
           : () => false,
     }) as never);
+    const configStore = vi.spyOn(
+      desktopSettingsSingleton,
+      "getDesktopConfigStore",
+    ).mockReturnValue({
+      read: () => ({ settings: {} }),
+      subscribe: () => () => undefined,
+    } as never);
     const registry = getDesktopBackendRegistry();
     const parentSummary = {
       source: "codex" as const,
@@ -908,6 +915,7 @@ describe("DesktopFederationRuntime", () => {
       publish.mockRestore();
       navigationSnapshot.mockRestore();
       settings.mockRestore();
+      configStore.mockRestore();
       resetDesktopOverlayStoreForTests();
       stateDb.close();
       rmSync(tempDir, { recursive: true, force: true });

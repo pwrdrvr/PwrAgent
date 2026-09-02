@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 55;
+export const CURRENT_STATE_DB_USER_VERSION = 56;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1085,6 +1085,37 @@ CREATE INDEX IF NOT EXISTS idx_federation_session_audit_session_created
 `;
 
 /**
+ * Secret-free durable projections used to keep startup independent from
+ * provider discovery. These rows are derived state: a newer build may ignore
+ * or replace an incompatible schema version without touching config.toml.
+ */
+const DESKTOP_CONFIG_STORE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS desktop_config_snapshots (
+  snapshot_key      TEXT PRIMARY KEY,
+  schema_version    INTEGER NOT NULL,
+  config_revision   TEXT NOT NULL,
+  content_hash      TEXT NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  payload           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_discovery_snapshots (
+  provider_id       TEXT PRIMARY KEY,
+  schema_version    INTEGER NOT NULL,
+  dependency_fingerprint TEXT NOT NULL,
+  validated_at      INTEGER NOT NULL,
+  payload           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS provider_thread_snapshots (
+  backend           TEXT PRIMARY KEY,
+  schema_version    INTEGER NOT NULL,
+  observed_at       INTEGER NOT NULL,
+  payload           TEXT NOT NULL
+);
+`;
+
+/**
  * Cached ACP slash commands are keyed by (agent, repository root), so a row
  * outlives the repo it describes — a deleted checkout, a worktree root that
  * moved, an agent the operator uninstalled. Nothing reads a row this old: a
@@ -1593,6 +1624,12 @@ export class StateDb {
       if ((db.pragma("user_version", { simple: true }) as number) < 55) {
         db.transaction(() => {
           ensureThreadUsageTurnContextColumns(db);
+          db.pragma("user_version = 55");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 56) {
+        db.transaction(() => {
+          db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
           db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
         })();
       }
@@ -2184,6 +2221,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(REMOTE_THREAD_TARGET_SCHEMA);
     db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     db.exec(STAR_MAP_WORKSPACE_SCHEMA);
+    db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

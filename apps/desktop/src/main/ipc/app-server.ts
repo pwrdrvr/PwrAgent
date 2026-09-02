@@ -74,7 +74,6 @@ import {
   type RecordRecentFileReferencesRequest,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
-  type DesktopSettingsSnapshot,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
   type RefreshThreadGitWorkingStateRequest,
@@ -335,7 +334,11 @@ import { selectDiscoveryDueThreadKeys } from "../pr-status/pr-discovery";
 
 /** Listener registered via `onPrStatusTransition`. */
 type PrStatusTransitionListener = (transition: PrStatusTransition) => void;
-import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import {
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "../settings/desktop-settings-singleton";
+import { resolvePrAutomationConfig } from "../settings/config-store/config-domains";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
@@ -2314,6 +2317,13 @@ class DesktopAppServerService {
 
     const remotePins = await this.mergePinnedRemoteThreads();
 
+    const registry = getDesktopBackendRegistry();
+    const providerRefresh =
+      backend === "all"
+      && !request.filter?.trim()
+      && typeof registry.getStartupProviderRefreshStatus === "function"
+        ? registry.getStartupProviderRefreshStatus()
+        : undefined;
     const responseWithoutLiveTokenMiser = {
       ...snapshot,
       threads: [...threadsWithWorkingState, ...remotePins.threads],
@@ -2339,8 +2349,8 @@ class DesktopAppServerService {
         && !canonicalSnapshot.changed
         && !primaryGitRepositoriesChanged
         && !remotePins.changed,
+      ...(providerRefresh ? { providerRefresh } : {}),
     };
-    const registry = getDesktopBackendRegistry();
     const response = typeof registry.withLiveTokenMiserNavigationSnapshot
       === "function"
       ? registry.withLiveTokenMiserNavigationSnapshot(
@@ -5233,22 +5243,8 @@ class DesktopAppServerService {
     return this.prGraphqlClient;
   }
 
-  private getPrAutoDispatchBudgetConfigFromSettings(
-    settings: Pick<DesktopSettingsSnapshot, "git">,
-  ): PrAutoDispatchBudgetConfig {
-    return {
-      capacity: settings.git.prAutoDispatchBudgetCapacity.value,
-      refillPerMinute:
-        settings.git.prAutoDispatchBudgetRefillPerMinute.value,
-      pauseWhenEmpty:
-        settings.git.pausePrAutoDispatchWhenBudgetEmpty.value,
-    };
-  }
-
   private async readPrAutoDispatchBudgetConfig(): Promise<PrAutoDispatchBudgetConfig> {
-    return this.getPrAutoDispatchBudgetConfigFromSettings(
-      await getDesktopSettingsService().readSettings(),
-    );
+    return resolvePrAutomationConfig(getDesktopConfigStore().read("git")).budget;
   }
 
   /**
@@ -5268,13 +5264,13 @@ class DesktopAppServerService {
       };
       let budgetStatus: PrAutoDispatchBudgetStatus | undefined;
       try {
-        const settingsService = getDesktopSettingsService();
         // Subscribe lazily on the first sync (which the first navigation
         // snapshot triggers), so a later toggle re-syncs immediately without a
         // restart. Done here rather than at IPC-registration time so tests that
         // don't stub the settings singleton aren't forced to construct it.
         if (!this.prPollingSettingsUnsubscribe) {
-          this.prPollingSettingsUnsubscribe = settingsService.onConfigWritten(
+          this.prPollingSettingsUnsubscribe = getDesktopConfigStore().subscribe(
+            ["git"],
             () => {
               // Pause dispatch pessimistically while the new snapshot is read.
               // This closes settings-write races for both global kill switches.
@@ -5285,10 +5281,12 @@ class DesktopAppServerService {
             },
           );
         }
-        const settings = await settingsService.readSettings();
-        backgroundPollingEnabled = settings.git.backgroundPrPolling.value;
-        prAutoDispatchAllowed = settings.git.prAutoDispatchAllowed.value;
-        budgetConfig = this.getPrAutoDispatchBudgetConfigFromSettings(settings);
+        const config = resolvePrAutomationConfig(
+          getDesktopConfigStore().read("git"),
+        );
+        backgroundPollingEnabled = config.backgroundPollingEnabled;
+        prAutoDispatchAllowed = config.prAutoDispatchAllowed;
+        budgetConfig = config.budget;
         budgetStatus = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
           config: budgetConfig,
           now: Date.now(),
@@ -7318,12 +7316,13 @@ class DesktopAppServerService {
     // exercise the focused-diff path keep working with the default-off
     // setting; without that bypass the override (consumed inside
     // FocusedDiffService.analyze) never gets a chance to run.
-    const settings = await getDesktopSettingsService().readSettings();
-    const condensation = settings.experimental.diffCondensation;
+    const condensation = getDesktopSettingsService()
+      .readExperimentalConfig()
+      .diffCondensation;
     const testOverridePresent = Boolean(
       process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE,
     );
-    if (!condensation.enabled.value && !testOverridePresent) {
+    if (condensation?.enabled !== true && !testOverridePresent) {
       logDebug("analyzeFocusedDiff", {
         filePath: request.filePath ?? null,
         hunkCount: request.hunks.length,

@@ -218,6 +218,10 @@ type SidebarProps = {
   /** A snapshot exists even if its latest refresh failed. */
   loaded?: boolean;
   loading: boolean;
+  providerRefresh?: {
+    state: "checking" | "degraded" | "ready";
+    failedProviders?: number;
+  };
   creatingThread?: {
     backend: AppServerBackendKind;
     executionMode: ThreadExecutionMode;
@@ -2092,6 +2096,9 @@ export function Sidebar(props: SidebarProps) {
         >
           {props.loading ? (
             <p className="sidebar-empty">Loading threads…</p>
+          ) : props.providerRefresh?.state === "checking"
+            && renderedThreads.length === 0 ? (
+            <p className="sidebar-empty">Checking providers…</p>
           ) : props.error && !props.loaded ? (
             <p className="sidebar-error">{props.error}</p>
           ) : props.browseMode === "directories" ? (

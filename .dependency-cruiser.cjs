@@ -108,6 +108,19 @@ module.exports = {
         path: "^(grammy|discord\\.js|telegraf)$",
       },
     },
+    {
+      name: "desktop-raw-config-is-store-private",
+      severity: "error",
+      comment:
+        "Only the desktop config-store implementation may import the raw config parser/writer.",
+      from: {
+        path: "^apps/desktop/src/main/",
+        pathNot: "^apps/desktop/src/main/settings/config-store/",
+      },
+      to: {
+        path: "^apps/desktop/src/main/settings/config-store/raw-config-file\\.ts$",
+      },
+    },
   ],
   options: {
     doNotFollow: {

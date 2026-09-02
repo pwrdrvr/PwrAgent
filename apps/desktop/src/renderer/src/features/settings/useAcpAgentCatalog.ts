@@ -76,7 +76,12 @@ export function useAcpAgentCatalog(
     let disposed = false;
     const read = async (refresh: boolean): Promise<void> => {
       try {
-        const response = await listAcpAgents({ refresh });
+        const response = await listAcpAgents({
+          refresh,
+          ...(refresh
+            ? { discoveryIntent: "settings-user-action" as const }
+            : {}),
+        });
         if (refresh) {
           // The main-process cache refreshed even if this consumer was
           // cleaned up mid-flight (hub→focused navigation), so always

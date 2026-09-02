@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopFederationMode,
-  DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import type { FederationRuntimeConfig } from "../federation/federation-runtime-config";
 
 // vi.hoisted so the mock factories (which run when the statically imported
 // federation-runtime module first resolves them) can reach these fns.
@@ -67,7 +67,7 @@ vi.mock("../federation/federation-transport", async (importOriginal) => {
 type StartupHarness = {
   startAfterLeaseAcquired(
     mode: DesktopFederationMode,
-    settings: DesktopSettingsSnapshot,
+    config: FederationRuntimeConfig,
   ): Promise<void>;
   stop(): Promise<void>;
   server?: unknown;
@@ -75,13 +75,18 @@ type StartupHarness = {
 };
 
 const fakeSettings = {
-  federation: {
-    mode: { value: "gateway", source: "config" },
-    listenHost: { value: "127.0.0.1", source: "config" },
-    listenPort: { value: 4321, source: "config" },
-    gatewayEndpoints: { value: [], source: "config" },
-  },
-} as unknown as DesktopSettingsSnapshot;
+  advertisedEndpoints: [],
+  cloudflareAccessServiceAuthEnabled: false,
+  cloudflareEndpoint: "",
+  cloudflareMtlsEnabled: false,
+  gatewayEndpoints: [],
+  instanceLabel: "",
+  instanceNotes: "",
+  listenHost: "127.0.0.1",
+  listenPort: 4321,
+  mode: "gateway",
+  publicUrl: "",
+} as const satisfies FederationRuntimeConfig;
 
 const NOISE_KEY = {
   privateKeyBase64: Buffer.alloc(32, 1).toString("base64"),

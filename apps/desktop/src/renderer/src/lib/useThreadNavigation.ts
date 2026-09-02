@@ -149,6 +149,7 @@ type NavigationState = {
   refreshing: boolean;
   error?: string;
   response?: NavigationSnapshot;
+  startupSelectionSettled?: boolean;
 };
 
 type NavigationRefreshOptions = {
@@ -2993,6 +2994,7 @@ export function useThreadNavigation(
   worktreeArchiveError?: string;
   loading: boolean;
   loaded: boolean;
+  providerRefresh?: NavigationSnapshot["providerRefresh"];
   refreshing: boolean;
   refresh: () => Promise<void>;
   materializeDirectoryLaunchpad: (
@@ -3216,6 +3218,7 @@ export function useThreadNavigation(
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
+  const initialSelectionEstablishedRef = useRef(false);
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
@@ -3312,6 +3315,7 @@ export function useThreadNavigation(
   const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
+  const startupAutomaticSelectionKeyRef = useRef<string | undefined>(undefined);
   const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const selectedItemKeyRef = useRef<string | undefined>(undefined);
   const manuallySelectedThreadKeysRef = useRef(new Set<string>());
@@ -3606,6 +3610,9 @@ export function useThreadNavigation(
               loading: false,
               refreshing: false,
               error: undefined,
+              startupSelectionSettled:
+                current.startupSelectionSettled
+                || options?.refreshMode !== "active-recent",
             };
           }
 
@@ -3634,6 +3641,9 @@ export function useThreadNavigation(
             refreshing: false,
             error: undefined,
             response: nextResponse,
+            startupSelectionSettled:
+              current.startupSelectionSettled
+              || options?.refreshMode !== "active-recent",
           };
         });
 
@@ -3665,13 +3675,29 @@ export function useThreadNavigation(
         }
 
         setSelectedItemKey((current) => {
-          return resolveRefreshSelectionKey(
+          const repairingAutomaticStartupSelection = Boolean(
+            options?.refreshMode === "full"
+            && current
+            && current === startupAutomaticSelectionKeyRef.current
+            && !hasSelectionKey(response, current, optimisticThreadKey)
+          );
+          const next = resolveRefreshSelectionKey(
             response,
-            current,
+            repairingAutomaticStartupSelection ? undefined : current,
             preferredSelectionKey,
             optimisticThreadKey,
             forcePreferredSelection
           );
+          if (
+            options?.refreshMode === "active-recent"
+            && !current
+            && !preferredSelectionKey
+          ) {
+            startupAutomaticSelectionKeyRef.current = next;
+          } else if (options?.refreshMode === "full") {
+            startupAutomaticSelectionKeyRef.current = undefined;
+          }
+          return next;
         });
       } catch (error) {
         desktopApi.recordStartupProfileEvent?.("navigation-refresh:error", {
@@ -4120,6 +4146,13 @@ export function useThreadNavigation(
       }
 
       markNavigationActivity({ refreshOnIdleResume: false });
+      if (method === "navigation/providerThreads/refreshed") {
+        // Startup served the durable provider snapshot first. The background
+        // revalidation has now populated the registry caches, so consume that
+        // publication without forcing a second provider walk.
+        scheduleRefresh();
+        return;
+      }
       if (method === "navigation/remoteThreadPins/changed") {
         // Viewer-side pin membership or rank changed (possibly in another
         // window) — the merged snapshot is the source of truth for the row
@@ -4973,6 +5006,9 @@ export function useThreadNavigation(
         threadSummaryIdentityKey(thread) === optimisticThreadKey
           ? {
               ...mergeHydratedThreadWithOptimisticTitle(thread, optimisticThread),
+              codexEnvironmentRuntime:
+                thread.codexEnvironmentRuntime
+                ?? optimisticThread.codexEnvironmentRuntime,
               optimisticActiveTurn:
                 thread.optimisticActiveTurn ?? optimisticThread.optimisticActiveTurn,
               optimisticUserMessage:
@@ -5068,9 +5104,68 @@ export function useThreadNavigation(
     [threads],
   );
 
+  const initialFallbackSelectionKey = useMemo(() => {
+    if (
+      selectedItemKey
+      || initialSelectionEstablishedRef.current
+      || !state.response
+    ) {
+      return undefined;
+    }
+
+    return getFallbackSelectionKey(
+      {
+        ...state.response,
+        directories,
+        threads,
+      },
+      optimisticThread
+        ? threadSummaryIdentityKey(optimisticThread)
+        : undefined,
+    );
+  }, [directories, optimisticThread, selectedItemKey, state.response, threads]);
+  const displaySelectionKey = selectedItemKey ?? initialFallbackSelectionKey;
+  useEffect(() => {
+    if (selectedItemKey) {
+      initialSelectionEstablishedRef.current = true;
+      return;
+    }
+    if (!initialFallbackSelectionKey) {
+      if (
+        state.response
+        && state.startupSelectionSettled
+        && state.response.providerRefresh?.state !== "checking"
+      ) {
+        // An empty settled full startup is still a completed selection
+        // decision. A progressive active-recent page is explicitly unsettled:
+        // even if provider refresh has already reached "ready", its empty row
+        // set cannot close the selection window before the queued full page.
+        // Once the full page settles, do not let a later operator action that
+        // adds a directory turn into implicit navigation to its launchpad.
+        initialSelectionEstablishedRef.current = true;
+      }
+      return;
+    }
+
+    // The startup snapshot and its selection are separate React state writes.
+    // Under a loaded renderer the selectable rows can commit first, leaving a
+    // visible but unselected thread or launchpad until the selection update is
+    // scheduled. Derive the first display selection from the published rows,
+    // then commit it for subsequent user-driven navigation. Once a real
+    // selection has existed, an intentional clear (for example Cancel on a
+    // launchpad) remains clear instead of being auto-selected again.
+    initialSelectionEstablishedRef.current = true;
+    setSelectedItemKey(initialFallbackSelectionKey);
+  }, [
+    initialFallbackSelectionKey,
+    selectedItemKey,
+    state.response,
+    state.startupSelectionSettled,
+  ]);
+
   const activeFederatedLaunchpad =
     federatedLaunchpad
-    && selectedItemKey === buildFederatedLaunchpadSelectionKey(
+    && displaySelectionKey === buildFederatedLaunchpadSelectionKey(
       federatedLaunchpad.target,
     )
       ? federatedLaunchpad
@@ -5079,15 +5174,15 @@ export function useThreadNavigation(
 
   const selectedThreadKey = useMemo(() => {
     if (
-      selectedItemKey
-      && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)
-      && !isFederatedLaunchpadSelectionKey(selectedItemKey)
+      displaySelectionKey
+      && !getDirectoryKeyFromLaunchpadSelection(displaySelectionKey)
+      && !isFederatedLaunchpadSelectionKey(displaySelectionKey)
     ) {
-      return selectedItemKey;
+      return displaySelectionKey;
     }
 
     return undefined;
-  }, [selectedItemKey]);
+  }, [displaySelectionKey]);
 
   const selectedThread = useMemo<NavigationThreadSummary | undefined>(
     () =>
@@ -5104,7 +5199,9 @@ export function useThreadNavigation(
       return activeFederatedLaunchpad.directory;
     }
 
-    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(
+      displaySelectionKey,
+    );
     if (launchpadDirectoryKey) {
       return directories.find((directory) => directory.key === launchpadDirectoryKey);
     }
@@ -5116,20 +5213,27 @@ export function useThreadNavigation(
     return directories.find((directory) =>
       directory.threadKeys.includes(selectedThreadKey)
     );
-  }, [activeFederatedLaunchpad, directories, selectedItemKey, selectedThreadKey]);
+  }, [
+    activeFederatedLaunchpad,
+    directories,
+    displaySelectionKey,
+    selectedThreadKey,
+  ]);
   const selectedLaunchpad = useMemo(() => {
     if (activeFederatedLaunchpad) {
       return activeFederatedLaunchpad.launchpad;
     }
 
-    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(
+      displaySelectionKey,
+    );
     if (!launchpadDirectoryKey) {
       return undefined;
     }
 
     return directories.find((directory) => directory.key === launchpadDirectoryKey)
       ?.launchpad;
-  }, [activeFederatedLaunchpad, directories, selectedItemKey]);
+  }, [activeFederatedLaunchpad, directories, displaySelectionKey]);
 
   // The directory label the New Thread button would resolve to with its
   // default (context-aware) behavior, or undefined when that resolves to the
@@ -8560,6 +8664,7 @@ export function useThreadNavigation(
     worktreeArchiveError,
     loading: state.loading,
     loaded: Boolean(state.response),
+    providerRefresh: state.response?.providerRefresh,
     refreshing: state.refreshing,
     refresh: refreshNavigation,
     materializeDirectoryLaunchpad,
@@ -8581,7 +8686,7 @@ export function useThreadNavigation(
     removeDirectory,
     selectDirectoryLaunchpad,
     selectedDirectory,
-    selectedItemKey,
+    selectedItemKey: displaySelectionKey,
     selectedLaunchpad,
     selectedThread,
     selectedThreadKey,

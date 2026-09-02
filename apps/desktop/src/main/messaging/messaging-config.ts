@@ -7,6 +7,7 @@ import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-teleg
 import type {
   DesktopAuthorizedContact,
   DesktopMessagingFullAccessWarningGlobalPolicy,
+  DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
   MessagingToolUpdateMode,
@@ -97,7 +98,6 @@ import {
   readEnvMessagingImageProfile,
   readEnvMessagingPdfProfile,
 } from "../settings/desktop-settings-env";
-
 export {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_GUILDS_ENV,
@@ -349,8 +349,9 @@ export type DesktopMessagingChannelConfigUpdate =
 
 export type DesktopMessagingSettingsSource = Pick<
   DesktopSettingsService,
-  | "readSettings"
-  | "writeConfigPatch"
+  | "readGeneralConfig"
+  | "readMessagingSettings"
+  | "writeConfigPatchTargeted"
   | "resolveDiscordBotTokenSync"
   | "resolveTelegramBotTokenSync"
   | "resolveMattermostBotTokenSync"
@@ -724,8 +725,16 @@ export async function loadDesktopMessagingConfigFromSettings(
   options: DesktopMessagingConfigLoadOptions = {},
 ): Promise<DesktopMessagingConfig> {
   const log = getMainLogger("pwragent:messaging");
-  const snapshot = await settings.readSettings();
   const envConfig = loadDesktopMessagingConfig(env);
+  const snapshot = {
+    general: {
+      pdfAnalysisEnabled: {
+        value: settings.readGeneralConfig().pdfAnalysisEnabled ?? true,
+        source: "config" as const,
+      },
+    },
+    messaging: settings.readMessagingSettings(),
+  };
   const telegramBotToken =
     envConfig.telegram?.botToken ?? settings.resolveTelegramBotTokenSync();
   const discordBotToken =
@@ -1145,10 +1154,18 @@ export async function loadDesktopMessagingConfigFromSettings(
         line: snapshot.messaging.line.authorizedUserIds.value,
       },
       dismissWarning: async ({ actorId, channel }) => {
-        await dismissMessagingFullAccessWarning(settings, channel, actorId);
+        await dismissMessagingFullAccessWarning(
+          settings,
+          channel,
+          actorId,
+        );
       },
       canDismissWarning: async ({ actorId, channel }) =>
-        await canPersistMessagingFullAccessWarningDismissal(settings, channel, actorId),
+        await canPersistMessagingFullAccessWarningDismissal(
+          settings,
+          channel,
+          actorId,
+        ),
     },
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     pdfAnalysisEnabled: snapshot.general.pdfAnalysisEnabled.value,
@@ -1344,8 +1361,8 @@ async function dismissMessagingFullAccessWarning(
   channel: MessagingChannelKind,
   actorId: string,
 ): Promise<void> {
-  const snapshot = await settings.readSettings();
-  const field = contactsForFullAccessWarningChannel(snapshot, channel);
+  const messaging = await readMessagingSettingsProjection(settings);
+  const field = contactsForFullAccessWarningChannel(messaging, channel);
   const contacts = field.value;
   const log = getMainLogger("pwragent:messaging");
   if (field.source !== "config") {
@@ -1372,32 +1389,32 @@ async function dismissMessagingFullAccessWarning(
 
   switch (channel) {
     case "telegram":
-      await settings.writeConfigPatch({
+      await writeMessagingConfigPatch(settings, {
         messaging: { telegram: { authorizedUserIds: nextContacts } },
       });
       return;
     case "discord":
-      await settings.writeConfigPatch({
+      await writeMessagingConfigPatch(settings, {
         messaging: { discord: { authorizedUserIds: nextContacts } },
       });
       return;
     case "mattermost":
-      await settings.writeConfigPatch({
+      await writeMessagingConfigPatch(settings, {
         messaging: { mattermost: { authorizedUserIds: nextContacts } },
       });
       return;
     case "slack":
-      await settings.writeConfigPatch({
+      await writeMessagingConfigPatch(settings, {
         messaging: { slack: { authorizedUserIds: nextContacts } },
       });
       return;
     case "feishu":
-      await settings.writeConfigPatch({
+      await writeMessagingConfigPatch(settings, {
         messaging: { feishu: { authorizedUserIds: nextContacts } },
       });
       return;
     case "line":
-      await settings.writeConfigPatch({
+      await writeMessagingConfigPatch(settings, {
         messaging: { line: { authorizedUserIds: nextContacts } },
       });
       return;
@@ -1411,32 +1428,45 @@ async function canPersistMessagingFullAccessWarningDismissal(
   channel: MessagingChannelKind,
   actorId: string,
 ): Promise<boolean> {
-  const snapshot = await settings.readSettings();
-  const field = contactsForFullAccessWarningChannel(snapshot, channel);
+  const messaging = await readMessagingSettingsProjection(settings);
+  const field = contactsForFullAccessWarningChannel(messaging, channel);
   return field.source === "config"
     && field.value.some((contact) => contact.id === actorId);
 }
 
 function contactsForFullAccessWarningChannel(
-  snapshot: DesktopSettingsSnapshot,
+  messaging: DesktopSettingsSnapshot["messaging"],
   channel: MessagingChannelKind,
 ): DesktopSettingsValue<DesktopAuthorizedContact[]> {
   switch (channel) {
     case "telegram":
-      return snapshot.messaging.telegram.authorizedUserIds;
+      return messaging.telegram.authorizedUserIds;
     case "discord":
-      return snapshot.messaging.discord.authorizedUserIds;
+      return messaging.discord.authorizedUserIds;
     case "mattermost":
-      return snapshot.messaging.mattermost.authorizedUserIds;
+      return messaging.mattermost.authorizedUserIds;
     case "slack":
-      return snapshot.messaging.slack.authorizedUserIds;
+      return messaging.slack.authorizedUserIds;
     case "feishu":
-      return snapshot.messaging.feishu.authorizedUserIds;
+      return messaging.feishu.authorizedUserIds;
     case "line":
-      return snapshot.messaging.line.authorizedUserIds;
+      return messaging.line.authorizedUserIds;
     default:
       return { value: [], source: "default" };
   }
+}
+
+async function readMessagingSettingsProjection(
+  settings: DesktopMessagingSettingsSource,
+): Promise<DesktopSettingsSnapshot["messaging"]> {
+  return settings.readMessagingSettings();
+}
+
+async function writeMessagingConfigPatch(
+  settings: DesktopMessagingSettingsSource,
+  patch: DesktopSettingsConfigPatch,
+): Promise<void> {
+  await settings.writeConfigPatchTargeted(patch);
 }
 
 function readInputDebounceMsFromEnv(env: NodeJS.ProcessEnv): number | undefined {

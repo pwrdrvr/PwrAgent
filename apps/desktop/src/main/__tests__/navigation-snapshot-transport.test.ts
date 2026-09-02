@@ -43,6 +43,36 @@ function buildSnapshot(
 }
 
 describe("NavigationSnapshotTransport", () => {
+  it("publishes provider-refresh state changes as a small delta", () => {
+    const transport = new NavigationSnapshotTransport();
+    const threads = [buildThread(1)];
+    const full = transport.encode({
+      request: {},
+      snapshot: {
+        ...buildSnapshot(threads),
+        providerRefresh: { state: "checking" },
+      },
+    });
+    if (full.kind !== "full") {
+      throw new Error("Expected initial full snapshot");
+    }
+
+    const updated = transport.encode({
+      baseRevision: full.revision,
+      request: {},
+      snapshot: {
+        ...buildSnapshot(threads, 2),
+        providerRefresh: { state: "ready" },
+      },
+    });
+
+    expect(updated).toMatchObject({
+      kind: "delta",
+      providerRefresh: { state: "ready" },
+      upsertedThreads: [],
+    });
+  });
+
   it("reduces an unchanged 1,200-thread refresh to a revision acknowledgement", () => {
     const transport = new NavigationSnapshotTransport();
     const threads = Array.from({ length: 1_200 }, (_, index) =>

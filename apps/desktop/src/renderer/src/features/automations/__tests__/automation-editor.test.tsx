@@ -15,7 +15,7 @@ import type {
   MessagingChannelKind,
   MessagingPairingEntry,
   NavigationThreadSummary,
-  ReadDesktopSettingsResponse,
+  ReadDesktopMessagingSettingsResponse,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { CODEX_AGENT_THREAD_CREATION_NOTE } from "../../../lib/agent-thread";
@@ -510,7 +510,7 @@ describe("AutomationEditor", () => {
       prompt: "Investigate the alert in the incoming message and summarize it.",
     }));
     const desktopApi = {
-      readSettings: async () => fakeSettings({ enabled: { telegram: true } }),
+      readMessagingSettings: async () => fakeSettings({ enabled: { telegram: true } }),
       draftAutomationPrompt,
     } as unknown as DesktopApi;
 
@@ -556,7 +556,7 @@ describe("AutomationEditor", () => {
       entry: { id: "pair-1" } as MessagingPairingEntry,
     }));
     const desktopApi = {
-      readSettings: async () => fakeSettings({ enabled: { telegram: true } }),
+      readMessagingSettings: async () => fakeSettings({ enabled: { telegram: true } }),
       generateMessagingPairingToken: async () => ({
         entry: { id: "pair-1" } as MessagingPairingEntry,
         expiresAt: 0,
@@ -628,7 +628,7 @@ describe("AutomationEditor", () => {
   it("previews live messages and highlights ones the filter matches", async () => {
     let previewListener: ((message: InboundPreviewMessage) => void) | undefined;
     const desktopApi = {
-      readSettings: async () => fakeSettings({ enabled: { telegram: true } }),
+      readMessagingSettings: async () => fakeSettings({ enabled: { telegram: true } }),
       startInboundPreview: vi.fn(async () => ({ ok: true })),
       stopInboundPreview: vi.fn(async () => undefined),
       onInboundPreviewMessage: (
@@ -748,7 +748,7 @@ describe("AutomationEditor", () => {
   it("offers a topic picker from known topics and submits its name", async () => {
     const onSubmit = vi.fn(async () => undefined);
     const desktopApi = {
-      readSettings: async () =>
+      readMessagingSettings: async () =>
         fakeSettings({
           enabled: { telegram: true },
           telegramGroups: [{ displayName: "Ops Room", id: "-100" }],
@@ -866,7 +866,7 @@ describe("AutomationEditor", () => {
   it("clears a stale topic when the group changes", async () => {
     const onSubmit = vi.fn(async () => undefined);
     const desktopApi = {
-      readSettings: async () =>
+      readMessagingSettings: async () =>
         fakeSettings({
           enabled: { telegram: true },
           telegramGroups: [{ displayName: "Ops Room", id: "-100" }],
@@ -1541,7 +1541,7 @@ function fakeSettings(params: {
   enabled: Partial<Record<MessagingChannelKind, boolean>>;
   telegramGroups?: Array<{ displayName: string; id: string }>;
   slackChannels?: Array<{ displayName: string; id: string }>;
-}): ReadDesktopSettingsResponse {
+}): ReadDesktopMessagingSettingsResponse {
   const provider = (kind: MessagingChannelKind) => ({
     enabled: { value: Boolean(params.enabled[kind]) },
   });
@@ -1562,12 +1562,12 @@ function fakeSettings(params: {
         line: provider("line"),
       },
     },
-  } as unknown as ReadDesktopSettingsResponse;
+  } as unknown as ReadDesktopMessagingSettingsResponse;
 }
 
-function fakeDesktopApi(settings: ReadDesktopSettingsResponse): DesktopApi {
+function fakeDesktopApi(settings: ReadDesktopMessagingSettingsResponse): DesktopApi {
   return {
-    readSettings: async () => settings,
+    readMessagingSettings: async () => settings,
     // The execution Model/Reasoning selects are populated from this catalog —
     // the same source the composer reads — so tests that pick a model exercise
     // the real wiring instead of a hardcoded list.

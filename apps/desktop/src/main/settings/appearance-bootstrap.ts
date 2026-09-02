@@ -24,10 +24,9 @@ import {
   DESKTOP_TEXT_SIZE_DEFAULT,
   isDesktopTextSize,
 } from "@pwragent/shared";
-import {
-  readDesktopSettingsConfig,
-  resolveDesktopConfigPath,
-} from "./desktop-config";
+import { resolveDesktopConfigPath } from "./desktop-config";
+import { readProfileConfigFile } from "./config-store/profile-config-file";
+import { getExistingDesktopConfigStore } from "./config-store/desktop-config-store-singleton";
 
 export type BootstrapAppearance = {
   theme: DesktopAppearanceTheme;
@@ -50,10 +49,18 @@ export function themedWindowAdditionalArguments(
 }
 
 export function readBootstrapAppearance(
-  configPath: string = resolveDesktopConfigPath(),
+  configPath?: string,
 ): BootstrapAppearance {
+  if (!configPath) {
+    const storeAppearance = getExistingDesktopConfigStore()?.read("general").appearance;
+    if (storeAppearance) {
+      return storeAppearance;
+    }
+  }
   try {
-    const config = readDesktopSettingsConfig(configPath);
+    const config = readProfileConfigFile(
+      configPath ?? resolveDesktopConfigPath(),
+    );
     return {
       theme: config.general?.appearance?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
       density:

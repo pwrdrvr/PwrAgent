@@ -308,6 +308,7 @@ import type {
   DeleteDesktopPwrAgentProfileResponse,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
+  DesktopSettingsSecretWriteResponse,
   DesktopSettingsWriteResponse,
   ConfigureFederationTailscaleRequest,
   ConfigureFederationTailscaleResponse,
@@ -360,6 +361,9 @@ import type {
   WriteStarMapWorkspaceRequest,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  ReadDesktopConfigBootstrapResponse,
+  ReadDesktopFullAccessPolicyResponse,
+  ReadDesktopMessagingSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
@@ -714,6 +718,9 @@ import {
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  SETTINGS_READ_BOOTSTRAP_CHANNEL,
+  SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL,
+  SETTINGS_READ_MESSAGING_CHANNEL,
   SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
@@ -1171,20 +1178,29 @@ const desktopApi = Object.freeze({
       SETTINGS_READ_CHANNEL,
       request,
     ),
+  readConfigBootstrap: async (): Promise<ReadDesktopConfigBootstrapResponse> =>
+    await invokeWithStartupProfileTiming(
+      "readConfigBootstrap",
+      SETTINGS_READ_BOOTSTRAP_CHANNEL,
+    ),
+  readMessagingSettings: async (): Promise<ReadDesktopMessagingSettingsResponse> =>
+    await ipcRenderer.invoke(SETTINGS_READ_MESSAGING_CHANNEL),
+  readFullAccessPolicy: async (): Promise<ReadDesktopFullAccessPolicyResponse> =>
+    await ipcRenderer.invoke(SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL),
   writeSettingsConfig: async (
     request: WriteDesktopSettingsConfigRequest,
   ): Promise<DesktopSettingsWriteResponse> =>
     await ipcRenderer.invoke(SETTINGS_WRITE_CONFIG_CHANNEL, request),
   replaceSettingsSecret: async (
     request: ReplaceDesktopSettingsSecretRequest,
-  ): Promise<DesktopSettingsWriteResponse> =>
+  ): Promise<DesktopSettingsSecretWriteResponse> =>
     await ipcRenderer.invoke(SETTINGS_REPLACE_SECRET_CHANNEL, request),
   clearSettingsSecret: async (
     request: ClearDesktopSettingsSecretRequest,
-  ): Promise<DesktopSettingsWriteResponse> =>
+  ): Promise<DesktopSettingsSecretWriteResponse> =>
     await ipcRenderer.invoke(SETTINGS_CLEAR_SECRET_CHANNEL, request),
   refreshCodexDiscovery: async (
-    request?: RefreshDesktopCodexDiscoveryRequest,
+    request: RefreshDesktopCodexDiscoveryRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL, request),
   createCodexAuthProfile: async (

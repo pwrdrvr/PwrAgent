@@ -21,6 +21,7 @@ import {
 } from "../app-server/acp-backend-adapter";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 
 const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -476,7 +477,7 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    const [available] = await adapter.listAvailableAgents();
+    const [available] = await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
     expect(available?.launchDescriptor?.command).toBe(
       "/tmp/pwragent-grok-arm64/grok",
     );
@@ -549,7 +550,7 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    const [available] = await adapter.listAvailableAgents();
+    const [available] = await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
     expect(available?.runtimeCapabilities).toEqual(runtimeCapabilities);
     expect(available?.lastDiscoveredAt).toBe(1000);
 
@@ -603,7 +604,7 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    const [available] = await adapter.listAvailableAgents();
+    const [available] = await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
     expect(available?.update).toEqual(update);
     expect(available?.updateCommand).toBe(
       "/app/resources/agents/grok/grok",
@@ -2455,12 +2456,15 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       checkGrokCliUpdate: updateCheck,
-      discoverLocalAcpAgents: async () => [],
+      discoverLocalAcpAgents: async () => [stored],
       emit,
       handleServerRequest: async () => ({ decision: "accept" }),
       isAcpAgentEnabled: () => true,
     });
 
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     const [summary] = await adapter.describeInstalledBackends();
     expect(summary?.kind).toBe(backendId);
     expect(updateCheck).toHaveBeenCalledOnce();
@@ -2480,7 +2484,9 @@ describe("AcpBackendAdapter", () => {
       }),
     );
 
-    await adapter.describeInstalledBackends();
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     expect(updateCheck).toHaveBeenCalledOnce();
     await adapter.close();
   });
@@ -2516,7 +2522,9 @@ describe("AcpBackendAdapter", () => {
       isAcpAgentEnabled: () => true,
     });
 
-    await adapter.describeInstalledBackends();
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
 
     expect(updateCheck).not.toHaveBeenCalled();
     await adapter.close();
@@ -2577,7 +2585,7 @@ describe("AcpBackendAdapter", () => {
       isAcpAgentEnabled: () => true,
     });
 
-    const [agent] = await adapter.listAvailableAgents();
+    const [agent] = await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
 
     expect(agent?.update).toBeUndefined();
     expect(agent?.updateCommand).toBeUndefined();
@@ -2651,7 +2659,9 @@ describe("AcpBackendAdapter", () => {
       isAcpAgentEnabled: () => true,
     });
 
-    await adapter.describeInstalledBackends();
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     await vi.waitFor(() => {
       expect(emit).toHaveBeenCalledOnce();
     });
@@ -2703,13 +2713,15 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       checkGrokCliUpdate: updateCheck,
-      discoverLocalAcpAgents: async () => [],
+      discoverLocalAcpAgents: async () => [stored],
       emit,
       handleServerRequest: async () => ({ decision: "accept" }),
       isAcpAgentEnabled: () => true,
     });
 
-    await adapter.describeInstalledBackends();
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     await vi.waitFor(() => {
       expect(updateCheck).toHaveBeenCalledOnce();
     });
@@ -3449,9 +3461,15 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
     await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
     discovered = overrideAgent;
     adapter.invalidateLocalAgentDiscovery();
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
 
     await expect(
       adapter.getClientForSession(backendId, "session-1"),
@@ -3469,6 +3487,82 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
     expect(firstDispose).toHaveBeenCalledOnce();
     expect(secondDispose).toHaveBeenCalledOnce();
+  });
+
+  it("adopts a newer durable launch identity over stale local discovery", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const firstAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      activeCommand: "/path/kimi",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "/path/kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const replacementAgent: AcpInstalledAgentRecord = {
+      ...firstAgent,
+      updatedAt: firstAgent.updatedAt + 1,
+      activeCommand: "/replacement/kimi",
+      launchDescriptor: {
+        ...firstAgent.launchDescriptor!,
+        command: "/replacement/kimi",
+      },
+    };
+    let durableAgent = firstAgent;
+    const firstClient = {
+      dispose: vi.fn(async () => undefined),
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      initialize: vi.fn(async () => undefined),
+    };
+    const secondClient = {
+      dispose: vi.fn(async () => undefined),
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      initialize: vi.fn(async () => undefined),
+    };
+    const createAcpClient = vi
+      .fn()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => durableAgent,
+        listInstalledAgents: () => [durableAgent],
+        upsertInstalledAgent: (agent) => {
+          durableAgent = agent;
+        },
+      },
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [firstAgent],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+
+    // Settings discovery owns its own explicit probe and writes the shared
+    // durable cache. The adapter's earlier local snapshot must not override it.
+    durableAgent = replacementAgent;
+    await expect(adapter.listAvailableAgents()).resolves.toEqual([
+      expect.objectContaining({ activeCommand: "/replacement/kimi" }),
+    ]);
+    await expect(adapter.getClient(backendId)).resolves.toBe(secondClient);
+    expect(createAcpClient).toHaveBeenNthCalledWith(2, replacementAgent);
+    expect(firstClient.dispose).toHaveBeenCalledOnce();
+
+    await adapter.close();
   });
 
   it("replaces the owner of a loadable session after launch identity changes", async () => {
@@ -3533,9 +3627,15 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
     await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
     discovered = overrideAgent;
     adapter.invalidateLocalAgentDiscovery();
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
 
     await expect(
       adapter.getClientForSession(backendId, "session-1"),
@@ -3600,9 +3700,15 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
     await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
     discovered = overrideAgent;
     adapter.invalidateLocalAgentDiscovery();
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
 
     await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
     expect(firstDispose).not.toHaveBeenCalled();
@@ -3685,11 +3791,17 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
     await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
     const session = firstClient.startSession();
     const runtimeOption = firstClient.setRuntimeOption();
     discovered = overrideAgent;
     adapter.invalidateLocalAgentDiscovery();
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
 
     await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
     expect(firstDispose).not.toHaveBeenCalled();
@@ -3753,10 +3865,10 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    const preInvalidationListing = adapter.listAvailableAgents();
+    const preInvalidationListing = adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
     await vi.waitFor(() => expect(discoveries).toHaveLength(1));
     adapter.invalidateLocalAgentDiscovery();
-    const postInvalidationListing = adapter.listAvailableAgents();
+    const postInvalidationListing = adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
     await vi.waitFor(() => expect(discoveries).toHaveLength(2));
 
     discoveries[0]!.resolve([staleAgent]);
@@ -3821,7 +3933,7 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    const listing = adapter.listAvailableAgents();
+    const listing = adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
     await vi.waitFor(() => expect(discoveries).toHaveLength(1));
     discoveries[0]!.resolve([staleAgent]);
     await Promise.resolve();
@@ -3880,7 +3992,7 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    const listing = adapter.listAvailableAgents();
+    const listing = adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
     await vi.waitFor(() => expect(finishDiscovery).toBeDefined());
     cached = {
       ...cached,
@@ -3986,6 +4098,9 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     await expect(adapter.describeInstalledBackends()).resolves.toEqual([
       expect.objectContaining({
         kind: backendId,
@@ -4027,7 +4142,9 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    const pendingClient = adapter.getClient(backendId);
+    const pendingClient = adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    ).then(async () => await adapter.getClient(backendId));
     await Promise.resolve();
     await adapter.close();
     finishDiscovery?.([agent]);
