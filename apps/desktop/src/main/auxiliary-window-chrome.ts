@@ -2,6 +2,7 @@ import type {
   BrowserWindow,
   BrowserWindowConstructorOptions,
 } from "electron";
+import { macosTitleBarChrome } from "./macos-window-chrome";
 import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
 import { themedTitleBarOverlay } from "./native-appearance";
 
@@ -40,8 +41,7 @@ export function auxiliaryWindowChromeOptions(): Pick<
     // without leaving the current Space. Keep `maximizable` true so that
     // button stays live (it'd grey out otherwise).
     return {
-      titleBarStyle: "hiddenInset",
-      trafficLightPosition: { x: 20, y: 18 },
+      ...macosTitleBarChrome(),
       fullscreenable: false,
       maximizable: true,
     };

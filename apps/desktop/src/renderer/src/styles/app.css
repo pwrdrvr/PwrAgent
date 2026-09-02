@@ -2192,7 +2192,7 @@ textarea,
    stoplight clearance on the left: the same x=96 the two nav mastheads
    reach (`.sidebar__masthead` pads 80px inside a 16px rail,
    `.settings-nav__masthead` 88px inside an 8px lane); stoplights end at
-   ~x=72, brand lands at x=96. Platforms without macOS/Windows chrome conventions override
+   x=76, brand lands at x=96. Platforms without macOS/Windows chrome conventions override
    the left padding below so auxiliary-window titles don't float
    awkwardly away from the window edge. */
 .activity-titlebar {
@@ -8113,8 +8113,8 @@ textarea,
    `.sidebar__masthead` pattern:
    - Lives inside the nav's own 8px horizontal padding, so
      `padding-left: 88px` puts the brand at x≈96 from the window
-     edge (stoplights end at ~x=72 with
-     `trafficLightPosition: { x: 20, y: 18 }` from window.ts).
+     edge (stoplights end at x=76 with
+     `MACOS_TRAFFIC_LIGHT_POSITION` = `{ x: 16, y: 16 }`).
    - Main's rail is 16px and its masthead pads 80px to the same x=96.
      The nav runs its rows in a tighter lane, so the masthead carries
      the difference: every platform branch below re-inserts 8px too,

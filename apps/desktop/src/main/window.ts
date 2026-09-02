@@ -28,6 +28,7 @@ import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { RendererHotCpuProfiler } from "./diagnostics/renderer-hot-cpu-profiler";
 import { isSafeExternalOpenUrl } from "./external-url-policy";
 import { getMainLogger } from "./log";
+import { macosTitleBarChrome } from "./macos-window-chrome";
 import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import { resolveActiveProfilePath } from "./profile";
@@ -357,10 +358,7 @@ export function createMainWindow(options?: {
     MAIN_WINDOW_HEIGHT,
   );
   const windowChrome = isMac
-    ? {
-        titleBarStyle: "hiddenInset" as const,
-        trafficLightPosition: { x: 20, y: 18 },
-      }
+    ? macosTitleBarChrome()
     : isWindows
       ? {
           // Frameless + Window Controls Overlay: the OS draws min/max/close in
