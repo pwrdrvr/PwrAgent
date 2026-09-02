@@ -1770,6 +1770,7 @@ describe("App", () => {
           discovery: { candidates: [] },
         },
         git: {
+          path: { value: "", source: "default" },
           discovery: { candidates: [] },
         },
       },

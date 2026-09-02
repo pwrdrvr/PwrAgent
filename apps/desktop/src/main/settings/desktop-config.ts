@@ -300,6 +300,9 @@ export type DesktopSettingsConfig = {
     gh?: {
       path?: string;
     };
+    git?: {
+      path?: string;
+    };
   };
   worktrees?: {
     storage?: DesktopWorktreeStorageLocation;
@@ -1592,6 +1595,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.applications?.gh?.path !== undefined) {
     set(["applications", "gh", "path"], patch.applications.gh.path);
   }
+  if (patch.applications?.git?.path !== undefined) {
+    set(["applications", "git", "path"], patch.applications.git.path);
+  }
 
   if (patch.worktrees?.storage !== undefined) {
     set(["worktrees", "storage"], patch.worktrees.storage);
@@ -1641,6 +1647,7 @@ function normalizeDesktopConfig(
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
   const gh = tables["applications.gh"];
+  const gitApplication = tables["applications.git"];
   const worktrees = tables["worktrees"];
 
   return pruneEmptyConfig({
@@ -2012,6 +2019,9 @@ function normalizeDesktopConfig(
       gh: {
         path: readString(gh?.path),
       },
+      git: {
+        path: readString(gitApplication?.path),
+      },
     },
     worktrees: {
       storage: readWorktreeStorage(worktrees?.storage),
@@ -2301,10 +2311,12 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const editor = config.applications?.editor;
   const terminal = config.applications?.terminal;
   const gh = config.applications?.gh;
+  const gitApplication = config.applications?.git;
   if (
     (editor && hasDefinedValue(editor))
     || (terminal && hasDefinedValue(terminal))
     || (gh && hasDefinedValue(gh))
+    || (gitApplication && hasDefinedValue(gitApplication))
   ) {
     pruned.applications = {};
     if (editor && hasDefinedValue(editor)) {
@@ -2315,6 +2327,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (gh && hasDefinedValue(gh)) {
       pruned.applications.gh = gh;
+    }
+    if (gitApplication && hasDefinedValue(gitApplication)) {
+      pruned.applications.git = gitApplication;
     }
   }
 

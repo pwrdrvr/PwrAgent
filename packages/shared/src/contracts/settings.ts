@@ -664,6 +664,7 @@ export type DesktopGhDiscoverySnapshot = {
 
 export type DesktopGitCandidateSource =
   | "env"
+  | "config"
   | "path"
   | "homebrew"
   | "xcode"
@@ -711,6 +712,7 @@ export type DesktopApplicationsSnapshot = {
     discovery: DesktopGhDiscoverySnapshot;
   };
   git: {
+    path: DesktopSettingsValue<string>;
     discovery: DesktopGitDiscoverySnapshot;
   };
 };
@@ -1309,6 +1311,9 @@ export type DesktopSettingsConfigPatch = {
     gh?: {
       path?: string;
     };
+    git?: {
+      path?: string;
+    };
   };
   worktrees?: {
     storage?: DesktopWorktreeStorageLocation;
@@ -1450,6 +1455,65 @@ export type PickGhCommandResponse = {
   path?: string;
   error?: string;
   candidate?: DesktopGhDiscoveryCandidate;
+};
+
+export type PickGitCommandResponse = {
+  canceled: boolean;
+  path?: string;
+  error?: string;
+  candidate?: DesktopGitDiscoveryCandidate;
+};
+
+/**
+ * How much a platform's code-signing system vouches for an executable,
+ * ordered strongest to weakest. Rendered as a chip beside every external
+ * program PwrAgent runs but does not ship.
+ *
+ * `adhoc` is deliberately not a warning: a Homebrew bottle is relinked at
+ * install, which invalidates any upstream signature, so ad-hoc is the
+ * overwhelmingly common state of a developer machine's `git`. A chip that
+ * cried wolf there would teach operators to ignore the chip.
+ */
+export type DesktopCodeSignatureTrust =
+  /** Signed by the platform vendor itself (macOS `Software Signing`). */
+  | "platform"
+  /** Developer ID signed and accepted by Apple's notary service. */
+  | "notarized"
+  /** A real publisher signature: Developer ID, or a valid Authenticode chain. */
+  | "publisher"
+  /** Signed with no identity — integrity only, no origin. */
+  | "adhoc"
+  /** No signature at all. */
+  | "unsigned"
+  /** A signature exists but does not verify. */
+  | "invalid"
+  /** The probe could not classify the file (spawn failed, timed out). */
+  | "unknown"
+  /** The platform has no code-signing system to report (Linux). */
+  | "unsupported";
+
+export type DesktopCodeSignature = {
+  /** Absolute path the signature was read from. */
+  path: string;
+  trust: DesktopCodeSignatureTrust;
+  /**
+   * Who signed it, when the platform names them — the macOS leaf authority
+   * ("Developer ID Application: Microsoft Corporation (UBF8T346G9)") or the
+   * Authenticode signer's common name. Shown on hover, never in the chip.
+   */
+  signer?: string;
+  /** macOS Team Identifier, when the signature carries one. */
+  teamId?: string;
+  /** Why the probe produced `unknown` or `invalid`, for the hover title. */
+  detail?: string;
+};
+
+export type InspectCodeSignaturesRequest = {
+  paths: string[];
+};
+
+export type InspectCodeSignaturesResponse = {
+  signatures: DesktopCodeSignature[];
 };
 
 export type DesktopConfigDomainKey =

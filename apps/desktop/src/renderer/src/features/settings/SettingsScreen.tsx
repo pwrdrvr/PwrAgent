@@ -1010,6 +1010,7 @@ function SettingsSectionBody(props: {
   if (props.section === "applications") {
     return (
       <ApplicationsSettings
+        desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onPreferredApplicationChange={async (kind, preferredId) => {
@@ -1018,6 +1019,21 @@ function SettingsSectionBody(props: {
               kind === "editor"
                 ? { editor: { preferredId } }
                 : { terminal: { preferredId } },
+          });
+        }}
+        onRefresh={props.settings.refresh}
+        onSaveGhPath={async (path) => {
+          await props.settings.writeConfig({
+            applications: {
+              gh: { path },
+            },
+          });
+        }}
+        onSaveGitPath={async (path) => {
+          await props.settings.writeConfig({
+            applications: {
+              git: { path },
+            },
           });
         }}
       />
@@ -1078,6 +1094,13 @@ function SettingsSectionBody(props: {
           await props.settings.writeConfig({
             applications: {
               gh: { path },
+            },
+          });
+        }}
+        onSaveGitPath={async (path) => {
+          await props.settings.writeConfig({
+            applications: {
+              git: { path },
             },
           });
         }}

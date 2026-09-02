@@ -423,6 +423,7 @@ describe("desktop settings contracts", () => {
           discovery: { candidates: [] },
         },
         git: {
+          path: { value: "", source: "default" },
           discovery: { candidates: [] },
         },
       },

@@ -483,6 +483,7 @@ function createSnapshot(
         discovery: { candidates: [] },
       },
       git: {
+        path: { value: "", source: "default" },
         discovery: {
           selectedCommand: "/opt/homebrew/bin/git",
           selectedSource: "homebrew",
@@ -1192,11 +1193,21 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("/System/Applications/Utilities/Terminal.app")).toBeInTheDocument();
     expect(screen.getByText("Ghostty")).toBeInTheDocument();
     expect(screen.getByText("/Applications/Ghostty.app")).toBeInTheDocument();
+    // Applications is the inventory of every external program PwrAgent
+    // runs, so the two command line tools render here as well as on Git —
+    // the same components over the same config keys, not a copy.
     expect(
-      screen.queryByRole("heading", { name: "GitHub CLI (gh)" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("heading", { name: "GitHub CLI (gh)" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Git" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Use" }));
+    // The whole row is the control, so its accessible name names the
+    // choice rather than repeating a bare "Use".
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Use Ghostty at /Applications/Ghostty.app",
+      }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         applications: {
@@ -3435,7 +3446,11 @@ describe("SettingsScreen", () => {
     expect(within(ghPanel).getAllByText("2.88.1").length).toBeGreaterThanOrEqual(1);
     expect(within(ghPanel).getByText("Signed in as")).toBeInTheDocument();
 
-    fireEvent.click(within(ghPanel).getByRole("button", { name: "Use" }));
+    fireEvent.click(
+      within(ghPanel).getByRole("button", {
+        name: "Use Homebrew gh at /usr/local/bin/gh",
+      }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         applications: {
@@ -3609,6 +3624,7 @@ describe("SettingsScreen", () => {
   it("shows Git discovery and Xcode license remediation", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.git = {
+      path: { value: "", source: "default" },
       discovery: {
         selectedCommand: "/opt/homebrew/bin/git",
         selectedSource: "homebrew",
@@ -3662,6 +3678,134 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(copyTextMock).toHaveBeenCalledWith("sudo xcodebuild -license");
     });
+  });
+
+  it("selects a git candidate and shows what signed each one", async () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.git = {
+      path: { value: "", source: "default" },
+      discovery: {
+        selectedCommand: "/opt/homebrew/bin/git",
+        selectedSource: "homebrew",
+        candidates: [
+          {
+            command: "/opt/homebrew/bin/git",
+            executable: true,
+            selected: true,
+            source: "homebrew",
+            version: "2.54.0",
+          },
+          {
+            command: "/usr/bin/git",
+            executable: true,
+            selected: false,
+            source: "xcode",
+            version: "2.50.1",
+          },
+        ],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const inspectCodeSignatures = vi.fn(async () => ({
+      signatures: [
+        { path: "/opt/homebrew/bin/git", trust: "adhoc" as const },
+        {
+          path: "/usr/bin/git",
+          trust: "platform" as const,
+          signer: "macOS Software Signing",
+        },
+      ],
+    }));
+    const refreshGitDiscovery = vi.fn(async () => ({ snapshot }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ inspectCodeSignatures, refreshGitDiscovery }}
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const gitPanel = screen
+      .getByRole("heading", { name: "Git" })
+      .closest("section")!;
+
+    // The provenance is the title, because every row here is `git` and the
+    // choice being made is Homebrew's or Apple's.
+    expect(within(gitPanel).getByText("Homebrew")).toBeInTheDocument();
+    expect(within(gitPanel).getByText("Apple")).toBeInTheDocument();
+    expect(within(gitPanel).getByText("2.50.1")).toBeInTheDocument();
+
+    // Signatures arrive after the rows paint.
+    expect(await within(gitPanel).findByText("Ad-hoc")).toBeInTheDocument();
+    expect(within(gitPanel).getByText("System")).toBeInTheDocument();
+
+    // The whole row is the control: before this, git rows had no action at
+    // all and clicking one did nothing.
+    fireEvent.click(
+      within(gitPanel).getByRole("button", {
+        name: "Use Apple git at /usr/bin/git",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        applications: {
+          git: {
+            path: "/usr/bin/git",
+          },
+        },
+      });
+    });
+    // Selecting has to re-probe: a plain projection re-read would serve the
+    // memoized startup snapshot back and the pane would look unchanged.
+    expect(refreshGitDiscovery).toHaveBeenCalled();
+  });
+
+  it("does not offer a git selection while PWRAGENT_GIT_PATH is set", () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.git = {
+      path: { value: "/opt/env/git", source: "env" },
+      discovery: {
+        selectedCommand: "/opt/env/git",
+        selectedSource: "env",
+        candidates: [
+          {
+            command: "/opt/env/git",
+            executable: true,
+            selected: true,
+            source: "env",
+            version: "2.54.0",
+          },
+          {
+            command: "/usr/bin/git",
+            executable: true,
+            selected: false,
+            source: "xcode",
+            version: "2.50.1",
+          },
+        ],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const gitPanel = screen
+      .getByRole("heading", { name: "Git" })
+      .closest("section")!;
+    expect(
+      within(gitPanel).getByRole("button", {
+        name: "Use Apple git at /usr/bin/git",
+      }),
+    ).toBeDisabled();
+    expect(within(gitPanel).getByText(/PWRAGENT_GIT_PATH is set/)).toBeInTheDocument();
   });
 
   it("renders the Mattermost section and saves edits via writeConfig", async () => {

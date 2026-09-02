@@ -1658,6 +1658,7 @@ Implementation notes remain in a readable bubble.`;
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}

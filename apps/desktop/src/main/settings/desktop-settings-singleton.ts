@@ -16,6 +16,7 @@ import {
   getDesktopConfigStore,
 } from "./config-store/desktop-config-store-singleton";
 import { resolveDesktopConfigPath } from "./desktop-config";
+import { setGitCommandResolver } from "../git-command";
 
 let desktopSettingsService: DesktopSettingsService | undefined;
 
@@ -72,6 +73,12 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         }
       },
     });
+    // Every main-process git spawn resolves through this. Installed here
+    // rather than in `index.ts` so the wiring cannot be missed by a code
+    // path that reaches settings without going through app startup — and
+    // so it is torn down with the service in tests.
+    const service = desktopSettingsService;
+    setGitCommandResolver(() => service.resolveGitCommandPreference());
     configStore.subscribe(["general"], ({ values }) => {
       broadcastAppearanceChange(values.general.appearance);
     });
@@ -95,5 +102,6 @@ export function getDesktopSettingsService(): DesktopSettingsService {
 
 export function resetDesktopSettingsServiceForTests(): void {
   desktopSettingsService = undefined;
+  setGitCommandResolver(undefined);
   disposeDesktopConfigStore();
 }

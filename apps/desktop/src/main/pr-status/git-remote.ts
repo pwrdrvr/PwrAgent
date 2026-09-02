@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { getGitCommand } from "../git-command";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
@@ -207,7 +208,7 @@ async function readParsedGitRemotes(
 
 async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
-  const { stdout } = await execFileAsync("git", ["remote"], {
+  const { stdout } = await execFileAsync(getGitCommand(), ["remote"], {
     cwd,
     env: childEnv,
     maxBuffer: 64 * 1024,
@@ -217,8 +218,7 @@ async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
-        const result = await execFileAsync(
-          "git",
+        const result = await execFileAsync(getGitCommand(),
           ["remote", "get-url", "--all", name],
           {
             cwd,

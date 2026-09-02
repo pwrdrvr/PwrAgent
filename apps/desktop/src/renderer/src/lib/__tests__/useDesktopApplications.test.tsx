@@ -36,7 +36,10 @@ function applications(params: {
       path: { value: "", source: "default" },
       discovery: { candidates: [] },
     },
-    git: { discovery: { candidates: [] } },
+    git: {
+      path: { value: "", source: "default" },
+      discovery: { candidates: [] },
+    },
   };
 }
 

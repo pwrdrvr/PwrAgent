@@ -6,6 +6,7 @@ import type { LinkedDirectorySummary } from "@pwragent/shared";
 import { isToolManagedWorktreePath } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
+import { getGitCommand } from "../git-command";
 
 const execFile = promisify(execFileCallback);
 const threadDirectoryLog = getMainLogger("pwragent:thread-directory-enricher");
@@ -44,7 +45,7 @@ type GitMetadataEvidence = {
 };
 
 async function runGit(projectKey: string, args: string[]): Promise<string> {
-  const result = await execFile("git", ["-C", projectKey, ...args], {
+  const result = await execFile(getGitCommand(), ["-C", projectKey, ...args], {
     env: buildPwrAgentChildProcessEnv(process.env),
     maxBuffer: GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES,
     timeout: GIT_DIRECTORY_PROBE_TIMEOUT_MS,

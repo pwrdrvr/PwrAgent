@@ -1631,6 +1631,7 @@ describe("Composer", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -1719,6 +1720,7 @@ describe("Composer", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -1816,6 +1818,7 @@ describe("Composer", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -13415,6 +13418,7 @@ describe("Composer", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -14535,6 +14539,7 @@ describe("Composer", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -14622,6 +14627,7 @@ describe("Composer", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}

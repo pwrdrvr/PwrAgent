@@ -22,7 +22,10 @@ const remoteApplications: DesktopApplicationsSnapshot = {
     path: { value: "", source: "default" },
     discovery: { candidates: [] },
   },
-  git: { discovery: { candidates: [] } },
+  git: {
+    path: { value: "", source: "default" },
+    discovery: { candidates: [] },
+  },
 };
 
 const mocks = vi.hoisted(() => {
