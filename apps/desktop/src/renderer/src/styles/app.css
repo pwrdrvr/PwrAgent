@@ -6205,6 +6205,26 @@ textarea,
   padding-right: 8px;
 }
 
+.directory-row__threads-slot {
+  /* `role="listitem"` box around the children of `.directory-row__threads`
+     that are not thread rows: the "Directory threads" disclosure, "Show
+     more", and a row's sub-thread list. That container is a `role="list"`
+     (its rows carry `role="listitem"` and need it), and a list owns only
+     listitem — so a bare <button> or a nested `role="list"` there fails
+     `aria-required-children`. Wrapping the sub-thread list gives the
+     `<li><ul>...</ul></li>` shape.
+
+     `display: contents` for the same reason `.transcript-list__item`
+     uses it (see TranscriptList.tsx): the wrapper generates no box, so
+     each control stays a direct flex child of `.directory-row__threads`
+     and its layout is unchanged by construction rather than by argument.
+     A wrapper that generated a box would re-parent a <button> into a
+     block container, where it sizes to fit-content whatever its own
+     `display` is — that alone cut the full-width divider band down to
+     its label. */
+  display: contents;
+}
+
 .directory-row__pin-drop-boundary {
   position: relative;
   z-index: 7;
@@ -6289,6 +6309,13 @@ textarea,
      is a section label, not a card. (The bottom stays at the base 2px:
      with the list gap it totals 4.) */
   margin-top: 4px;
+  /* WCAG 2.5.8: the band is a real button, and its 11px label alone made
+     it 13px tall — under the 24px minimum, with only 23px of safe
+     clickable space between the rows above and below it. `align-items:
+     center` (inherited from `.recents-pinned-divider`) keeps the label
+     optically where it was; the extra height is hit area, not padding
+     around a bigger label. Do not trade this back for density. */
+  min-height: 24px;
 }
 
 .directory-row__thread-divider:hover:not(:disabled) {
@@ -6357,6 +6384,12 @@ textarea,
 .directory-row__show-more {
   align-self: flex-start;
   margin-top: 2px;
+  /* WCAG 2.5.8, same as the divider above. Without it this lands at
+     ~24.4px — 8px padding + 2px border + a 12px font's `normal` line box —
+     so it clears the 24px floor on font metrics alone. Adding a
+     `line-height` anywhere upstream would drop it under with no other
+     visible cause. */
+  min-height: 24px;
   padding: 4px 10px;
   border: 1px solid transparent;
   border-radius: 6px;

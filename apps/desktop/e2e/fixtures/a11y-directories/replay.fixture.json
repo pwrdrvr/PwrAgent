@@ -1,0 +1,371 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "a11y-directories",
+    "threadId": "thread-directories-01"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-directories-01",
+          "title": "Directories lens thread 01",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999999000
+        },
+        {
+          "id": "thread-directories-02",
+          "title": "Directories lens thread 02",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999998000
+        },
+        {
+          "id": "thread-directories-03",
+          "title": "Directories lens thread 03",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999997000
+        },
+        {
+          "id": "thread-directories-04",
+          "title": "Directories lens thread 04",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999996000
+        },
+        {
+          "id": "thread-directories-05",
+          "title": "Directories lens thread 05",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999995000
+        },
+        {
+          "id": "thread-directories-06",
+          "title": "Directories lens thread 06",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999994000
+        },
+        {
+          "id": "thread-directories-07",
+          "title": "Directories lens thread 07",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999993000
+        },
+        {
+          "id": "thread-directories-08",
+          "title": "Directories lens thread 08",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999992000
+        },
+        {
+          "id": "thread-directories-09",
+          "title": "Directories lens thread 09",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999991000
+        },
+        {
+          "id": "thread-directories-10",
+          "title": "Directories lens thread 10",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999990000
+        },
+        {
+          "id": "thread-directories-11",
+          "title": "Directories lens thread 11",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999989000
+        },
+        {
+          "id": "thread-directories-12",
+          "title": "Directories lens thread 12",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999988000
+        },
+        {
+          "id": "thread-directories-13",
+          "title": "Directories lens thread 13",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999987000
+        },
+        {
+          "id": "thread-directories-14",
+          "title": "Directories lens thread 14",
+          "titleSource": "explicit",
+          "summary": "A directory-linked thread, so the expanded lane has rows to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-primary",
+              "kind": "local",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999986000
+        },
+        {
+          "id": "thread-directories-secondary",
+          "title": "Second directory thread",
+          "titleSource": "explicit",
+          "summary": "Keeps a collapsed directory row in the scan.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "a11y-directories-secondary",
+              "kind": "local",
+              "label": "PwrSnap",
+              "path": "/repo/PwrSnap"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759999980000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Open the directories lens."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The directories lens is live."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Open the directories lens."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The directories lens is live."
+          }
+        ],
+        "lastUserMessage": "Open the directories lens.",
+        "lastAssistantMessage": "The directories lens is live.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

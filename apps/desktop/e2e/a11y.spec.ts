@@ -30,7 +30,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import type { DesktopAppearanceTheme } from "@pwragent/shared";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { openStarMapWindow } from "./fixtures/star-map-window";
@@ -38,6 +38,8 @@ import {
   buildAuditSubAgents,
   seedThreadSubAgents,
 } from "./fixtures/sub-agent-state-seeding";
+import { StateDb } from "../src/main/state/state-db";
+import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,12 +63,23 @@ async function launchAuditApp(options?: {
   fixturePath?: string;
   /** Defaults to the harness default (dark). */
   theme?: DesktopAppearanceTheme;
+  /**
+   * Seed overlay state into the profile before boot. Prefer this to seeding
+   * after launch and reloading — the renderer does not re-poll on a direct
+   * sqlite mutation, so a post-launch seed costs a full renderer reload per
+   * theme. `StateDb.open` creates the profile directory, so the hook can run
+   * before anything else has.
+   */
+  preLaunchHook?: (homeRoot: string) => Promise<void>;
 }) {
   const app = await launchElectronApp({
     fixturePath:
       options?.fixturePath
       ?? path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     ...(options?.theme ? { appearance: { theme: options.theme } } : {}),
+    ...(options?.preLaunchHook
+      ? { preLaunchHook: options.preLaunchHook }
+      : {}),
   });
   await app.window.emulateMedia({ reducedMotion: "reduce" });
   return app;
@@ -116,6 +129,21 @@ const COMPOSER_AUTOCOMPLETE_FIXTURE = path.resolve(
   "fixtures/skill-autocomplete-interactions/replay.fixture.json",
 );
 
+// Fourteen threads on one directory and one on a second, so the audited row
+// has a pinned lane, an unpinned lane that overflows the ten-row cap, and a
+// collapsed sibling row. The pins themselves come from sqlite — see the block.
+const DIRECTORIES_FIXTURE = path.resolve(
+  specDir,
+  "fixtures/a11y-directories/replay.fixture.json",
+);
+
+// The two threads the block pins, both on the audited directory. They are the
+// fixture's first two, so the pinned lane keeps the order the file lists.
+const DIRECTORIES_PINNED_THREAD_IDS = [
+  "thread-directories-01",
+  "thread-directories-02",
+];
+
 const WCAG_AA_TAGS = [
   "wcag2a",
   "wcag2aa",
@@ -135,6 +163,15 @@ const KNOWN_VIOLATIONS: ReadonlyArray<{
   rule: string;
   reason: string;
 }> = [];
+
+/**
+ * Direct `listitem` children of a list. `Locator.getByRole` matches every
+ * descendant, so a nested list's rows would be counted as though they were the
+ * outer list's own.
+ */
+function listItems(list: Locator): Locator {
+  return list.locator("> [role=listitem]");
+}
 
 async function runAxe(
   window: Page,
@@ -487,6 +524,183 @@ for (const theme of AUDIT_THEMES) {
           ).toBeVisible();
           await expect(app.window.locator(".live-strip__item")).toHaveCount(4);
           await runAxe(app.window, "sub-agents strip expanded rows");
+        });
+      } finally {
+        await app.close();
+      }
+    });
+
+    // The Directories lens was never audited: every block above stays on the
+    // fixture's default lens, so `.directory-row__threads` — which renders
+    // `ThreadRow`'s `role="listitem"` children with no `role="list"` of its
+    // own, unlike the `.sidebar-list--dense` the other lenses use — failed
+    // `aria-required-parent` (critical) unnoticed. `KNOWN_VIOLATIONS` was
+    // empty the whole time; the surface was unwaived, just unlooked-at.
+    //
+    // Its own fixture, in the same class as `star-map/`: the lens only shows
+    // a directory row for a thread carrying `linkedDirectories`, and the list
+    // under audit only mounts once that row is expanded. The smoke thread has
+    // neither, so borrowing that fixture would scan an empty lens and stay
+    // green over the bug this block exists to catch.
+    test("directories lens has no violations", async () => {
+      // Three unscoped scans plus a launch in one budget, against a window
+      // rendering 15 sidebar rows. The neighbouring blocks do two, or scan
+      // the much smaller map window. A slow guest otherwise reports "Test
+      // timeout of 30000ms exceeded" from inside whichever step was running,
+      // which costs exactly the attributability the per-step split buys.
+      test.setTimeout(60_000);
+
+      const app = await launchAuditApp({
+        fixturePath: DIRECTORIES_FIXTURE,
+        theme,
+        // Pins are desktop-local overlay state, not `thread/list` data, so no
+        // fixture can produce them and the only UI path is a native context
+        // menu. Without a pinned lane the directory renders undivided and the
+        // "Directory threads" disclosure never mounts — the disclosure is what
+        // needs a pin, not the pin-drop boundary, which mounts off
+        // `onReorderThreadPins && directoryUnpinnedThreadCount > 0` and does
+        // not read the pinned count at all. Two rather than one so the lane
+        // has an order to get wrong.
+        //
+        // Through the app's own `setThreadPin` rather than a hand-written row:
+        // the storage key format and the overlay payload shape then have one
+        // owner instead of two that can drift apart silently.
+        preLaunchHook: async (homeRoot) => {
+          const stateDb = StateDb.open(stateDbPathForHomeRoot(homeRoot), {
+            profileName: "default",
+          });
+          try {
+            const overlay = new SqliteOverlayStore(stateDb);
+            for (const [index, threadId] of DIRECTORIES_PINNED_THREAD_IDS.entries()) {
+              await overlay.setThreadPin({
+                backend: "codex",
+                threadId,
+                pinnedRank: String((index + 1) * 1024),
+              });
+            }
+          } finally {
+            stateDb.close();
+          }
+        },
+      });
+      try {
+        await app.window.getByRole("tab", { name: "directories" }).click();
+
+        // Anchored, because Playwright matches an accessible name as a
+        // substring by default and "Open new thread launchpad for PwrAgent"
+        // is a sibling control on the same row. Anchored rather than `exact`
+        // because the header's label is built by joining the directory name
+        // with its state (`[label, "not configured on this instance",
+        // activeCount, reviewCount].filter(Boolean).join(", ")`). `(,|$)`
+        // rather than `\b`, which only stops a WORD character — `^PwrAgent\b`
+        // also matches a sibling checkout called "PwrAgent-docs".
+        const directory = app.window.getByRole("button", {
+          name: /^PwrAgent(,|$)/,
+        });
+        await expect(directory).toBeVisible();
+
+        // Scoped to this directory's row. `Threads in ${label}` is only as
+        // unique as the label, which is a path basename — two checkouts of the
+        // same repo give two lists the same name, and an unscoped locator then
+        // fails Playwright strict mode rather than reporting anything about
+        // accessibility.
+        const threads = app.window
+          .locator(".directory-row")
+          .filter({ has: directory })
+          .getByRole("list", { name: /^Threads in PwrAgent/ });
+
+        // Every scan below must measure the at-rest state, and a Playwright
+        // click leaves the pointer where it landed.
+        // `.directory-row__header:hover` lifts `.directory-row__launchpad-cluster`
+        // from `opacity: 0` to `1`, and axe treats zero opacity as hidden — so
+        // without this the collapsed scan would audit a hovered row while the
+        // two before it audited an unhovered one, and the three would not be
+        // comparable. It also keeps a latent failure from surfacing as a
+        // mystery: the cluster's split-button chevron is 16x24, under the
+        // `target-size` floor, and is absent here only because an isolated
+        // E2E profile has no federation peers to offer.
+        const settle = async () => {
+          await app.window.mouse.move(0, 0);
+        };
+
+        await test.step("expanded directory thread list", async () => {
+          // This row arrives open rather than being clicked open: the launch
+          // selection falls back to `response.threads[0]`
+          // (`getFallbackSelectionKey`) — NOT to the fixture's
+          // `metadata.threadId`, which no selection path reads — and a
+          // directory holding the selected thread renders expanded. So the
+          // precondition is coupled to `thread-directories-01` carrying the
+          // fixture's newest `updatedAt`; reorder that array and the
+          // expansion moves to the PwrSnap row. Asserted, not assumed: the
+          // list under audit only exists in this state.
+          await expect(directory).toHaveAttribute("aria-expanded", "true");
+
+          // Precondition assertions, not decoration. An expanded row that
+          // rendered no threads would pass the axe scan below while auditing
+          // nothing, and each control named here is one the fix had to keep
+          // valid inside the list.
+          await expect(threads).toBeVisible();
+          // The seeded pins, asserted where they are used. With none, the
+          // divider's `directoryPinnedThreads.length > 0` guard drops it and
+          // the lane silently becomes 14 unpinned rows — the first failure
+          // would be a 5s timeout on the control below, pointing nowhere near
+          // the seeder.
+          await expect(
+            threads.locator('[data-thread-pin-state="pinned"]'),
+          ).toHaveCount(2);
+          await expect(
+            threads.getByRole("button", {
+              name: "Hide directory threads for PwrAgent",
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expect(
+            threads.getByRole("button", { name: "Show 2 more", exact: true }),
+          ).toBeVisible();
+          // Two pinned rows + the pin-drop boundary + the "Directory threads"
+          // disclosure + the ten-row unpinned cap + "Show more". Everything
+          // that is not a row is a `listitem` too, because a list owns only
+          // listitem — including the boundary, whose separator child is
+          // exposed mid-drag.
+          //
+          // Direct children: `getByRole` matches DESCENDANTS, so it would also
+          // count a sub-thread list's own rows and read as fixture drift.
+          await expect(listItems(threads)).toHaveCount(15);
+
+          await settle();
+          await runAxe(app.window, "directories lens, expanded directory");
+        });
+
+        await test.step("expanded unpinned overflow", async () => {
+          // "Show more" reveals the rows past the cap. They mount as
+          // siblings of the control rather than inside a second list, so the
+          // scan is worth repeating with them present.
+          await threads
+            .getByRole("button", { name: "Show 2 more", exact: true })
+            .click();
+          // The two rows past the cap, on top of the 15 above.
+          await expect(listItems(threads)).toHaveCount(17);
+          await settle();
+          await runAxe(app.window, "directories lens, unpinned overflow");
+        });
+
+        await test.step("collapsed directory rows", async () => {
+          // Collapsing unmounts the list, so this scan covers the directory
+          // rows on their own — the state the lens opens in for every
+          // directory that does not hold the selected thread.
+          //
+          // This holds only because selecting a directory does not touch
+          // `selectedItemKey`: the force-expand effect in DirectoriesList
+          // re-opens the row holding the selection whenever that key CHANGES,
+          // and its explicit-collapse guard is what lets a click win. If
+          // directory selection ever also selected the directory's launchpad,
+          // the click would collapse and the effect would immediately
+          // re-expand, and this assertion would never pass again.
+          await directory.click();
+          await expect(directory).toHaveAttribute("aria-expanded", "false");
+          await expect(threads).toHaveCount(0);
+          await settle();
+          await runAxe(app.window, "directories lens, collapsed");
         });
       } finally {
         await app.close();

@@ -1165,133 +1165,141 @@ export function DirectoriesList(props: DirectoriesListProps) {
         && children.length > 1
         && Boolean(props.onUpdateSubthreadOrder);
       return (
-        <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
-          {/* The parent's own workers lead its tray. Trailing them after every
-              child read as the last child's workers and buried them under a
-              long child list. */}
-          {nativeSubAgentCount > 0 ? (
-            <NativeSubAgentsDisclosure compact thread={parent} />
-          ) : null}
-          {children.flatMap((child) => {
-            const childKey = threadSummaryIdentityKey(child);
-            const rowDropKey = `subthread:${parentKey}:${childKey}`;
-            // A row plus its own worker group, as siblings of this list. A
-            // wrapping element would break the tray's flat list semantics.
-            return [
-            <ThreadRow
-              key={`${directory.key}:${childKey}`}
-              approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-              terminalThreadKeys={props.terminalThreadKeys}
-              inputRequestThreadKeys={props.inputRequestThreadKeys}
-              queuedMessageThreadKeys={props.queuedMessageThreadKeys}
-              draftThreadKeys={props.draftThreadKeys}
-              composerSourceThreadKey={props.composerSourceThreadKey}
-              compact
-              draggable={reorderable}
-              includeLinkedDirectories
-              linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
-              nested
-              revealSelectedThreadRequest={props.revealSelectedThreadRequest}
-              selectedThreadKey={props.selectedItemKey}
-              selectedThreadKeys={props.selectedThreadKeys}
-              thinkingThreadKeys={props.thinkingThreadKeys}
-              thread={child}
-              onDragStartThread={(event) => {
-                setDraggedSubthreadKey(childKey);
-                event.dataTransfer.effectAllowed = "move";
-                // Subthread-only MIME — top-level drop handlers read
-                // `text/plain` and so ignore a child reorder drag.
-                event.dataTransfer.setData(
-                  "application/x-pwragent-subthread",
-                  childKey,
-                );
-              }}
-              onDragOverThread={(event) => {
-                event.preventDefault();
-                const draggedThread = draggedSubthreadKey
-                  ? threadsByKey.get(draggedSubthreadKey)
-                  : undefined;
-                if (
-                  !draggedThread
-                  || draggedSubthreadKey === childKey
-                  || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
-                ) {
-                  event.dataTransfer.dropEffect = "none";
-                  subthreadDropIndicator.clear();
-                  return;
-                }
-                event.dataTransfer.dropEffect = "move";
-                subthreadDropIndicator.show(event.currentTarget, {
-                  targetKey: rowDropKey,
-                  position: getDropIndicatorPosition(event),
-                });
-              }}
-              onDragLeaveThread={(event) => {
-                if (didDragLeaveCurrentTarget(event)) {
-                  subthreadDropIndicator.clear();
-                }
-              }}
-              onDragEndThread={() => {
-                setDraggedSubthreadKey(undefined);
-                subthreadDropIndicator.clear();
-              }}
-              onDropOnThread={(event) => {
-                event.preventDefault();
-                setDraggedSubthreadKey(undefined);
-                subthreadDropIndicator.clear();
-                const draggedKey = event.dataTransfer.getData(
-                  "application/x-pwragent-subthread",
-                );
-                const draggedThread = draggedKey
-                  ? threadsByKey.get(draggedKey)
-                  : undefined;
-                if (
-                  !draggedThread
-                  || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
-                ) {
-                  return;
-                }
-                const nextKeys = moveThreadKey(
-                  childOrderKeys,
-                  draggedKey,
-                  childKey,
-                  getDropIndicatorPosition(event),
-                );
-                void props.onUpdateSubthreadOrder?.(
-                  parent,
-                  nextKeys
-                    .map((key) => threadsByKey.get(key)?.id)
-                    .filter((threadId): threadId is string => Boolean(threadId)),
-                );
-              }}
-              onOpenContextMenu={props.onOpenThreadContextMenu}
-              onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-              onDetachPullRequest={props.onDetachPullRequest}
-              onPrefetchPullRequests={props.onPrefetchPullRequests}
-              onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
-              onRevealSelectedThreadComplete={
-                props.onRevealSelectedThreadComplete
-              }
-              onSelectThread={(thread, event) =>
-                props.onSelectThread(thread, event, selectionOrder)
-              }
-              onSetReaction={props.onSetReaction}
-              onSetThreadPin={props.onSetThreadPin}
-              onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-            />,
-            // A child's workers belong to the child, so they render under its
-            // own row. They follow it out of this tray when it is unlinked,
-            // because the child summary is what carries them.
-            child.codexNativeSubAgents?.length ? (
-              <NativeSubAgentsDisclosure
-                key={`${directory.key}:${childKey}:subagents`}
+        // `listitem` box because this list is a SIBLING of its parent row
+        // rather than a child of it: `renderStaticSubthreads` is called from a
+        // Fragment beside <ThreadRow/>, which renders no DOM node, so the
+        // sublist lands directly inside `.directory-row__threads`. A bare
+        // `role="list"` there fails `aria-required-children` — list owns only
+        // listitem. This is the `<li><ul>...</ul></li>` shape.
+        <div className="directory-row__threads-slot" role="listitem">
+          <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
+            {/* The parent's own workers lead its tray. Trailing them after every
+                child read as the last child's workers and buried them under a
+                long child list. */}
+            {nativeSubAgentCount > 0 ? (
+              <NativeSubAgentsDisclosure compact thread={parent} />
+            ) : null}
+            {children.flatMap((child) => {
+              const childKey = threadSummaryIdentityKey(child);
+              const rowDropKey = `subthread:${parentKey}:${childKey}`;
+              // A row plus its own worker group, as siblings of this list. A
+              // wrapping element would break the tray's flat list semantics.
+              return [
+              <ThreadRow
+                key={`${directory.key}:${childKey}`}
+                approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                terminalThreadKeys={props.terminalThreadKeys}
+                inputRequestThreadKeys={props.inputRequestThreadKeys}
+                queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+                draftThreadKeys={props.draftThreadKeys}
+                composerSourceThreadKey={props.composerSourceThreadKey}
                 compact
+                draggable={reorderable}
+                includeLinkedDirectories
+                linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
+                revealSelectedThreadRequest={props.revealSelectedThreadRequest}
+                selectedThreadKey={props.selectedItemKey}
+                selectedThreadKeys={props.selectedThreadKeys}
+                thinkingThreadKeys={props.thinkingThreadKeys}
                 thread={child}
-              />
-            ) : null,
-            ];
-          })}
+                onDragStartThread={(event) => {
+                  setDraggedSubthreadKey(childKey);
+                  event.dataTransfer.effectAllowed = "move";
+                  // Subthread-only MIME — top-level drop handlers read
+                  // `text/plain` and so ignore a child reorder drag.
+                  event.dataTransfer.setData(
+                    "application/x-pwragent-subthread",
+                    childKey,
+                  );
+                }}
+                onDragOverThread={(event) => {
+                  event.preventDefault();
+                  const draggedThread = draggedSubthreadKey
+                    ? threadsByKey.get(draggedSubthreadKey)
+                    : undefined;
+                  if (
+                    !draggedThread
+                    || draggedSubthreadKey === childKey
+                    || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
+                  ) {
+                    event.dataTransfer.dropEffect = "none";
+                    subthreadDropIndicator.clear();
+                    return;
+                  }
+                  event.dataTransfer.dropEffect = "move";
+                  subthreadDropIndicator.show(event.currentTarget, {
+                    targetKey: rowDropKey,
+                    position: getDropIndicatorPosition(event),
+                  });
+                }}
+                onDragLeaveThread={(event) => {
+                  if (didDragLeaveCurrentTarget(event)) {
+                    subthreadDropIndicator.clear();
+                  }
+                }}
+                onDragEndThread={() => {
+                  setDraggedSubthreadKey(undefined);
+                  subthreadDropIndicator.clear();
+                }}
+                onDropOnThread={(event) => {
+                  event.preventDefault();
+                  setDraggedSubthreadKey(undefined);
+                  subthreadDropIndicator.clear();
+                  const draggedKey = event.dataTransfer.getData(
+                    "application/x-pwragent-subthread",
+                  );
+                  const draggedThread = draggedKey
+                    ? threadsByKey.get(draggedKey)
+                    : undefined;
+                  if (
+                    !draggedThread
+                    || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
+                  ) {
+                    return;
+                  }
+                  const nextKeys = moveThreadKey(
+                    childOrderKeys,
+                    draggedKey,
+                    childKey,
+                    getDropIndicatorPosition(event),
+                  );
+                  void props.onUpdateSubthreadOrder?.(
+                    parent,
+                    nextKeys
+                      .map((key) => threadsByKey.get(key)?.id)
+                      .filter((threadId): threadId is string => Boolean(threadId)),
+                  );
+                }}
+                onOpenContextMenu={props.onOpenThreadContextMenu}
+                onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
+                onDetachPullRequest={props.onDetachPullRequest}
+                onPrefetchPullRequests={props.onPrefetchPullRequests}
+                onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
+                onRevealSelectedThreadComplete={
+                  props.onRevealSelectedThreadComplete
+                }
+                onSelectThread={(thread, event) =>
+                  props.onSelectThread(thread, event, selectionOrder)
+                }
+                onSetReaction={props.onSetReaction}
+                onSetThreadPin={props.onSetThreadPin}
+                onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+              />,
+              // A child's workers belong to the child, so they render under its
+              // own row. They follow it out of this tray when it is unlinked,
+              // because the child summary is what carries them.
+              child.codexNativeSubAgents?.length ? (
+                <NativeSubAgentsDisclosure
+                  key={`${directory.key}:${childKey}:subagents`}
+                  compact
+                  nested
+                  thread={child}
+                />
+              ) : null,
+              ];
+            })}
+          </div>
         </div>
       );
     };
@@ -1744,7 +1752,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             {expanded ? (
               <div className="directory-row__details">
                 {visibleThreadCount > 0 ? (
-                  <div className="sidebar-list sidebar-list--compact directory-row__threads">
+                  <div className="sidebar-list sidebar-list--compact directory-row__threads" role="list" aria-label={`Threads in ${directory.label}`}>
                     {directoryPinnedThreads.map((thread) => {
 	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
@@ -1828,7 +1836,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     })}
 
                     {renderPinnedAppendTarget ? (
-                      <div className="directory-row__pin-drop-boundary">
+                      <div
+                        className="directory-row__pin-drop-boundary"
+                        // The slot's `aria-hidden` is REMOVED for the duration
+                        // of a pin drag (`setThreadPinAppendTargetActive`), so
+                        // mid-drag this subtree exposes a `separator` to the
+                        // `role="list"` above. Role-less, the boundary would be
+                        // transparent and that separator would become an
+                        // unallowed owned child; as a `listitem` it is the
+                        // separator's parent and the list stays valid in both
+                        // states. No axe run catches this — the gate never
+                        // scans mid-drag.
+                        role="listitem"
+                      >
                         <div
                           aria-label={`Pin thread after pinned threads for ${directory.label}`}
                           aria-hidden="true"
@@ -1840,67 +1860,71 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
                     {directoryPinnedThreads.length > 0 &&
                     directoryUnpinnedThreadCount > 0 ? (
-                      <button
-                        type="button"
-                        className="recents-pinned-divider directory-row__thread-divider"
-                        aria-expanded={!directoryThreadsCollapsed}
-                        aria-label={`${
-                          directoryThreadsCollapsed ? "Show" : "Hide"
-                        } directory threads for ${directory.label}`}
-                        disabled={
-                          directoryUnconfigured
-                          || !props.onSetDirectoryThreadsCollapsed
-                        }
-                        onClick={() => {
-                          if (
+                      <div className="directory-row__threads-slot" role="listitem">
+                        <button
+                          type="button"
+                          className="recents-pinned-divider directory-row__thread-divider"
+                          aria-expanded={!directoryThreadsCollapsed}
+                          aria-label={`${
+                            directoryThreadsCollapsed ? "Show" : "Hide"
+                          } directory threads for ${directory.label}`}
+                          disabled={
                             directoryUnconfigured
-                            || Date.now() - lastDirectoryThreadDropAtRef.current <
-                              POST_DRAG_CLICK_SUPPRESS_MS
-                          ) {
-                            return;
+                            || !props.onSetDirectoryThreadsCollapsed
                           }
-                          void props.onSetDirectoryThreadsCollapsed?.(
-                            directory,
-                            !directoryThreadsCollapsed,
-                          );
-                        }}
-                      >
-                        <span className="directory-row__thread-divider-label">
-                          <span
-                            aria-hidden="true"
-                            className={`directory-row__thread-divider-chevron${
-                              directoryThreadsCollapsed ? "" : " is-open"
-                            }`}
-                          />
-                          <span>Directory threads</span>
-                          {directoryThreadsCollapsed ? (
-                            <span className="directory-row__thread-divider-count">
-                              {directoryUnpinnedThreadCount}
-                            </span>
-                          ) : null}
-                        </span>
-                      </button>
+                          onClick={() => {
+                            if (
+                              directoryUnconfigured
+                              || Date.now() - lastDirectoryThreadDropAtRef.current <
+                                POST_DRAG_CLICK_SUPPRESS_MS
+                            ) {
+                              return;
+                            }
+                            void props.onSetDirectoryThreadsCollapsed?.(
+                              directory,
+                              !directoryThreadsCollapsed,
+                            );
+                          }}
+                        >
+                          <span className="directory-row__thread-divider-label">
+                            <span
+                              aria-hidden="true"
+                              className={`directory-row__thread-divider-chevron${
+                                directoryThreadsCollapsed ? "" : " is-open"
+                              }`}
+                            />
+                            <span>Directory threads</span>
+                            {directoryThreadsCollapsed ? (
+                              <span className="directory-row__thread-divider-count">
+                                {directoryUnpinnedThreadCount}
+                              </span>
+                            ) : null}
+                          </span>
+                        </button>
+                      </div>
                     ) : null}
 
                     {directoryThreadsCollapsed
                       ? null
                       : cappedUnpinnedThreads.map(renderUnpinnedRow)}
                     {!directoryThreadsCollapsed && hiddenUnpinnedCount > 0 ? (
-                      <button
-                        type="button"
-                        className="directory-row__show-more"
-                        aria-expanded={unpinnedExpanded}
-                        onClick={() =>
-                          setUnpinnedExpandedByKey((prev) => ({
-                            ...prev,
-                            [directory.key]: !unpinnedExpanded,
-                          }))
-                        }
-                      >
-                        {unpinnedExpanded
-                          ? "Show less"
-                          : `Show ${hiddenUnpinnedCount} more`}
-                      </button>
+                      <div className="directory-row__threads-slot" role="listitem">
+                        <button
+                          type="button"
+                          className="directory-row__show-more"
+                          aria-expanded={unpinnedExpanded}
+                          onClick={() =>
+                            setUnpinnedExpandedByKey((prev) => ({
+                              ...prev,
+                              [directory.key]: !unpinnedExpanded,
+                            }))
+                          }
+                        >
+                          {unpinnedExpanded
+                            ? "Show less"
+                            : `Show ${hiddenUnpinnedCount} more`}
+                        </button>
+                      </div>
                     ) : null}
                     {!directoryThreadsCollapsed && unpinnedExpanded
                       ? overflowUnpinnedThreads.map(renderUnpinnedRow)
