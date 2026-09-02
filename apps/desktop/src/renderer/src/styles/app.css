@@ -688,10 +688,11 @@ textarea,
 
 /* With the sidebar gone, its wordmark + action buttons relocate into the
    thread header's left as a sidebar-colored cluster (see ThreadHeader).
-   Drop the header's own left/top padding so the cluster sits flush in the
-   top-left corner; the cluster reserves the macOS stoplight strip itself. */
+   Drop the header's own left padding so the cluster sits flush against the
+   window edge; the cluster reserves the macOS stoplight strip itself. The
+   header keeps `--chrome-band-h` and its centering from the base rule, so
+   the relocated wordmark lands on the same centerline as the stoplights. */
 .app-shell[data-sidebar-hidden="true"] .thread-header {
-  padding-top: 0;
   padding-left: 0;
 }
 
@@ -2235,7 +2236,14 @@ textarea,
    .activity-titlebar header IS the title strip: drop the macOS stoplight
    reservation on the left, reserve the caption-button width on the right, and
    match the WCO overlay color (--bg-sidebar) so the buttons blend in. It's
-   already draggable + on `--chrome-band-h` from the base rule. */
+   already draggable + on `--chrome-band-h` from the base rule.
+
+   That band is load bearing here in a way it is not on macOS: the OS draws
+   the caption buttons at `TITLE_BAR_OVERLAY_HEIGHT` (native-appearance.ts,
+   mirrored by `--win-titlebar-h`), so this strip cannot be shorter than
+   that or the buttons hang past its bottom border and out of the blend.
+   The two tokens are equal today; `macos-window-chrome.test.ts` holds the
+   floor so lowering the band fails there instead of on Windows. */
 :root[data-platform="win32"] .activity-titlebar {
   padding-left: 14px;
   padding-right: var(--win-caption-w, 140px);
@@ -8134,7 +8142,7 @@ textarea,
    - Lives inside the nav's own 8px horizontal padding, so
      `padding-left: 88px` puts the brand at x≈96 from the window
      edge (stoplights end at x=76 with
-     `MACOS_TRAFFIC_LIGHT_POSITION` = `{ x: 16, y: 16 }`).
+     `MACOS_TRAFFIC_LIGHT_POSITION` = `{ x: 16, y: 13 }`).
    - Main's rail is 16px and its masthead pads 80px to the same x=96.
      The nav runs its rows in a tighter lane, so the masthead carries
      the difference: every platform branch below re-inserts 8px too,
@@ -13793,7 +13801,18 @@ textarea,
    that strip is the only handle this window has (see the note there). So
    the band declares no `-webkit-app-region` at all and passes its pointer
    events through; each slot punches its own hole and takes its pointer
-   events back. The gaps between the slots stay draggable sky. */
+   events back. The gaps between the slots stay draggable sky.
+
+   The band is a chrome bar like any other, so it centers its row in
+   `--chrome-band-h` instead of padding it down from the top edge. This
+   window spreads `auxiliaryWindowChromeOptions()` like every other
+   secondary window, so macOS floats its stoplights over the sky at
+   `MACOS_TRAFFIC_LIGHT_POSITION` - a position derived from that same band.
+   Center here and the wordmark, Find, View, and the filter chips land on
+   the y=20 centerline the buttons sit on; pad from the top instead and
+   they drift below it, which is what the 14px top padding did. Pinning the
+   height to the token also means a chip that grows (the Attention chip's
+   stacked turn column) can no longer move the whole band. */
 .star-map__top-band {
   display: flex;
   position: absolute;
@@ -13801,9 +13820,10 @@ textarea,
   right: 0;
   left: 0;
   z-index: 4;
-  align-items: start;
+  align-items: center;
   gap: 12px;
-  padding: 14px 16px 0;
+  min-height: var(--chrome-band-h);
+  padding: 0 16px;
   pointer-events: none;
 }
 
