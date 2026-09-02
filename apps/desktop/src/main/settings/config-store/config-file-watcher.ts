@@ -1,5 +1,4 @@
-import fs, { type FSWatcher } from "node:fs";
-import path from "node:path";
+import fs, { type Stats } from "node:fs";
 
 export type ConfigFileWatcher = Readonly<{
   close(): void;
@@ -12,30 +11,31 @@ export type ConfigFileWatcherFactory = (params: {
 }) => ConfigFileWatcher;
 
 export const watchConfigFile: ConfigFileWatcherFactory = (params) => {
-  const directory = path.dirname(params.configPath);
-  const filename = path.basename(params.configPath);
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let watcher: FSWatcher | undefined;
+  let closed = false;
 
-  try {
-    watcher = fs.watch(directory, (_eventType, changedFilename) => {
-      if (changedFilename && changedFilename.toString() !== filename) {
-        return;
-      }
-      clearTimeout(timer);
-      timer = setTimeout(params.onChange, params.coalesceMs ?? 50);
-      timer.unref?.();
-    });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
+  // Watch the exact path through stat polling rather than attaching a libuv
+  // directory event watcher. Atomic config replacement changes the file behind
+  // this path, which watchFile continues to observe. On Windows, directory
+  // watchers can abort the entire Node worker in libuv when the watched
+  // temporary profile directory is replaced or removed.
+  const listener = (_current: Stats, _previous: Stats): void => {
+    if (closed) return;
+    clearTimeout(timer);
+    timer = setTimeout(params.onChange, params.coalesceMs ?? 50);
+    timer.unref?.();
+  };
+  fs.watchFile(
+    params.configPath,
+    { interval: 250, persistent: false },
+    listener,
+  );
 
   return {
     close(): void {
+      closed = true;
       clearTimeout(timer);
-      watcher?.close();
+      fs.unwatchFile(params.configPath, listener);
     },
   };
 };
