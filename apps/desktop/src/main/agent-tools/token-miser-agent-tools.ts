@@ -6,7 +6,11 @@ import {
 } from "./agent-tool-definition.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
 import type { TokenMiserGroupBatchOperation } from "../token-miser/token-miser-store.js";
-import { TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS } from "../token-miser/token-miser-types.js";
+import {
+  TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+  takeUtf8Prefix,
+  utf8ByteLength,
+} from "../token-miser/token-miser-types.js";
 
 export function buildTokenMiserToolDefinitions(
   store?: TokenMiserStore,
@@ -211,7 +215,7 @@ async function retrievalSuccess(params: {
   // enormous nested result; confirmation enforces the shared outer ceiling.
   const maxResponseCharacters =
     params.maxResponseCharacters
-    ?? TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS;
+    ?? Number.MAX_SAFE_INTEGER;
   while (true) {
     const delivery = await params.store.prepareRetrievalDelivery({
       objectId: params.objectId,
@@ -227,6 +231,7 @@ async function retrievalSuccess(params: {
     };
     if (
       delivery.text.length <= maxResponseCharacters
+      && utf8ByteLength(delivery.text) <= TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES
     ) {
       return agentToolSuccess(payload, {
         contentItems: [{ type: "inputText", text: delivery.text }],
@@ -234,10 +239,22 @@ async function retrievalSuccess(params: {
       });
     }
     params.store.abandonRetrievalDelivery(delivery.deliveryId);
+    const characterOverflow = Math.max(
+      0,
+      delivery.text.length - maxResponseCharacters,
+    );
+    const byteOverflowCharacters = Math.max(
+      0,
+      delivery.text.length
+      - takeUtf8Prefix(
+        delivery.text,
+        TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+      ).length,
+    );
     const nextLength = Math.max(
       0,
       visibleText.length
-      - (delivery.text.length - maxResponseCharacters)
+      - Math.max(characterOverflow, byteOverflowCharacters)
       - 64,
     );
     if (nextLength >= visibleText.length) {

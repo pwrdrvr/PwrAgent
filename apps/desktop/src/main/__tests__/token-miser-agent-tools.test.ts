@@ -6,7 +6,10 @@ import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
-import { TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS } from "../token-miser/token-miser-types";
+import {
+  TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+  utf8ByteLength,
+} from "../token-miser/token-miser-types";
 
 const temporaryDirectories: string[] = [];
 
@@ -26,7 +29,7 @@ describe("Token Miser agent tools", () => {
       turnId: "turn-1",
       toolUseId: "tool-1",
       toolName: "Code Mode",
-      output: `short line\nconst payload = "${"x".repeat(100_000)}";\nlast line`,
+      output: `short line\nconst payload = "${"中".repeat(30_000)}";\nlast line`,
       replacementCharacters: 100,
       summary: {
         summary: "A minified source line was preserved.",
@@ -56,8 +59,8 @@ describe("Token Miser agent tools", () => {
     if (content?.type !== "inputText") {
       throw new Error("Expected a text dynamic-tool response.");
     }
-    expect(content.text.length).toBeLessThanOrEqual(
-      TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
+    expect(utf8ByteLength(content.text)).toBeLessThanOrEqual(
+      TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
     );
     expect(content.text).toContain("retrieval truncated");
   });

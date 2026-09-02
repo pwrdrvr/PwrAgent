@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import {
   TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
   TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS,
-  TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-  TOKEN_MISER_HELPER_INPUT_CAP_CHARACTERS,
-  TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
+  TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+  TOKEN_MISER_HELPER_INPUT_CAP_BYTES,
+  TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   serializeToolResponse,
+  takeUtf8Prefix,
+  utf8ByteLength,
   type TokenMiserCodeModeOutputPayload,
   type TokenMiserCodeModeReductionOutput,
   type TokenMiserGroupMemberSummary,
@@ -260,7 +262,7 @@ export class TokenMiserService {
     }
     if (isDirectTokenMiserRetrievalInvocation(payload)) {
       await this.options.store.confirmModelVisibleRetrievals({
-        maxVisibleCharacters: TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
+        maxVisibleBytes: TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
         output: serializeToolResponse(
           payload.token_miser_exact_tool_response,
         ),
@@ -369,9 +371,9 @@ export class TokenMiserService {
       // model-visible ceiling. Confirm only the prefix eligible to cross that
       // boundary; otherwise one minified line can become an unbounded debit.
       await this.options.store.confirmModelVisibleRetrievals({
-        maxVisibleCharacters:
+        maxVisibleBytes:
           payload.max_output_tokens
-          * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+          * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
         output,
         threadId: payload.thread_id,
       });
@@ -451,11 +453,11 @@ export class TokenMiserService {
       prompt: buildCodeModeSummaryPrompt(payload, output),
       signal: options.signal,
       baselineParentTokenCap: payload.max_output_tokens,
-      maxReplacementCharacters:
+      maxReplacementBytes:
         payload.max_output_tokens
-        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+        * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
       replacementCharacters: (text) =>
-        text.length + payload.model_visible_overhead_characters
+        utf8ByteLength(text) + payload.model_visible_overhead_characters
         + this.codeModeActionableStateCharacters(payload),
     });
     if (!prepared) {
@@ -510,10 +512,10 @@ export class TokenMiserService {
     if (!payload.actionable_state) {
       return 0;
     }
-    return (
-      `<${CODE_MODE_ACTIONABLE_STATE_TAG}>`.length
-      + JSON.stringify(payload.actionable_state).length
-      + `</${CODE_MODE_ACTIONABLE_STATE_TAG}>`.length
+    return utf8ByteLength(
+      `<${CODE_MODE_ACTIONABLE_STATE_TAG}>`
+      + JSON.stringify(payload.actionable_state)
+      + `</${CODE_MODE_ACTIONABLE_STATE_TAG}>`,
     );
   }
 
@@ -594,10 +596,10 @@ export class TokenMiserService {
       toolUseId: payload.call_id,
       toolName: "Code Mode",
       output: JSON.stringify(storedOutput),
-      baselineCharacters: outerOutput.length,
+      baselineCharacters: utf8ByteLength(outerOutput),
       baselineParentTokenCap: payload.max_output_tokens,
       replacementCharacters:
-        replacement.length + payload.model_visible_overhead_characters
+        utf8ByteLength(replacement) + payload.model_visible_overhead_characters
         + this.codeModeActionableStateCharacters(payload),
       summary: parsed.summary,
       disposition: "summarized",
@@ -689,7 +691,7 @@ export class TokenMiserService {
     prompt: string;
     signal?: AbortSignal;
     baselineParentTokenCap?: number;
-    maxReplacementCharacters?: number;
+    maxReplacementBytes?: number;
     replacementCharacters?: (replacement: string) => number;
   }): Promise<{
     disposition: "summarized";
@@ -733,13 +735,13 @@ export class TokenMiserService {
     }
 
     const objectId = randomUUID();
-    const replacement = capTextToCharacters(
+    const replacement = capTextToUtf8Bytes(
       buildReplacement({
         objectId,
         summary: decision.summary,
       }),
-      params.maxReplacementCharacters
-      ?? TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
+      params.maxReplacementBytes
+      ?? TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
       "… summary truncated",
     );
     const parentModel = await this.options.resolveParentModel?.(
@@ -756,7 +758,7 @@ export class TokenMiserService {
       toolName: params.toolName,
       output: params.output,
       replacementCharacters:
-        params.replacementCharacters?.(replacement) ?? replacement.length,
+        params.replacementCharacters?.(replacement) ?? utf8ByteLength(replacement),
       summary: decision.summary,
       disposition: "summarized",
       helperUsage: {
@@ -800,9 +802,9 @@ export class TokenMiserService {
       params.threadId,
     ).catch(() => undefined);
     const visibleCharacters = Math.min(
-      params.output.length,
+      utf8ByteLength(params.output),
       (params.baselineParentTokenCap ?? 10_000)
-      * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+      * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
     );
     const staged = await this.options.store.stage({
       threadId: params.threadId,
@@ -813,7 +815,7 @@ export class TokenMiserService {
       // beside its accounting record so retrieval can never expose a second
       // copy of content the parent already received.
       output: "",
-      baselineCharacters: params.output.length,
+      baselineCharacters: utf8ByteLength(params.output),
       ...(params.baselineParentTokenCap !== undefined
         ? { baselineParentTokenCap: params.baselineParentTokenCap }
         : {}),
@@ -965,17 +967,17 @@ function buildGroupedCodeModeSummaryPrompt(
   const fixedPrompt = [header, ...memberHeaders].join("\n");
   const outputBudget = Math.max(
     0,
-    TOKEN_MISER_HELPER_INPUT_CAP_CHARACTERS
-    - TOKEN_MISER_SYSTEM_PROMPT.length
-    - fixedPrompt.length
+    TOKEN_MISER_HELPER_INPUT_CAP_BYTES
+    - utf8ByteLength(TOKEN_MISER_SYSTEM_PROMPT)
+    - utf8ByteLength(fixedPrompt)
     - members.length,
   );
-  const memberBudgets = distributeFairCharacterBudget(
-    members.map((member) => member.output.length),
+  const memberBudgets = distributeFairByteBudget(
+    members.map((member) => utf8ByteLength(member.output)),
     outputBudget,
   );
   const memberSections = memberHeaders.map(
-    (memberHeader, index) => `${memberHeader}\n${capTextToCharacters(
+    (memberHeader, index) => `${memberHeader}\n${capTextToUtf8Bytes(
       members[index]!.output,
       memberBudgets[index]!,
       "\n… member output truncated",
@@ -984,7 +986,7 @@ function buildGroupedCodeModeSummaryPrompt(
   return capHelperPrompt([header, ...memberSections].join("\n"));
 }
 
-function distributeFairCharacterBudget(
+function distributeFairByteBudget(
   lengths: readonly number[],
   totalBudget: number,
 ): number[] {
@@ -1023,10 +1025,10 @@ function capHelperPrompt(prompt: string): string {
   // Its reported usage remains authoritative for gate cost accounting.
   const promptBudget = Math.max(
     0,
-    TOKEN_MISER_HELPER_INPUT_CAP_CHARACTERS
-    - TOKEN_MISER_SYSTEM_PROMPT.length,
+    TOKEN_MISER_HELPER_INPUT_CAP_BYTES
+    - utf8ByteLength(TOKEN_MISER_SYSTEM_PROMPT),
   );
-  return capTextToCharacters(
+  return capTextToUtf8Bytes(
     prompt,
     promptBudget,
     "\n… source truncated at the projected 20k-token Luna input cap",
@@ -1034,25 +1036,26 @@ function capHelperPrompt(prompt: string): string {
 }
 
 function capModelVisibleText(text: string, maxOutputTokens: number): string {
-  return capTextToCharacters(
+  return capTextToUtf8Bytes(
     text,
-    maxOutputTokens * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    maxOutputTokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
     "\n… summary truncated",
   );
 }
 
-function capTextToCharacters(
+function capTextToUtf8Bytes(
   text: string,
-  maxCharacters: number,
+  maxBytes: number,
   marker: string,
 ): string {
-  if (text.length <= maxCharacters) {
+  if (utf8ByteLength(text) <= maxBytes) {
     return text;
   }
-  if (maxCharacters <= marker.length) {
-    return text.slice(0, maxCharacters);
+  const markerBytes = utf8ByteLength(marker);
+  if (maxBytes <= markerBytes) {
+    return takeUtf8Prefix(text, maxBytes);
   }
-  return `${text.slice(0, maxCharacters - marker.length)}${marker}`;
+  return `${takeUtf8Prefix(text, maxBytes - markerBytes)}${marker}`;
 }
 
 function buildReplacement(params: {

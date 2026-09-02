@@ -12,8 +12,9 @@ import type {
   TokenMiserPostToolUsePayload,
 } from "../token-miser/token-miser-types";
 import {
-  TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+  TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
   TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
+  utf8ByteLength,
 } from "../token-miser/token-miser-types";
 
 const temporaryDirectories: string[] = [];
@@ -31,7 +32,10 @@ afterEach(async () => {
 describe("TokenMiserService", () => {
   it("replaces large output with a summary and a retrievable object id", async () => {
     const store = await createStore();
-    const generateSummary = vi.fn(async () => ({
+    const generateSummary = vi.fn(async (_request: {
+      prompt: string;
+      system: string;
+    }) => ({
       status: "ok" as const,
       object: {
         disposition: "summarize",
@@ -260,7 +264,7 @@ describe("TokenMiserService", () => {
       turnId: "turn-1",
       toolUseId: "tool-source",
       toolName: "Code Mode",
-      output: "x".repeat(100_000),
+      output: "中".repeat(30_000),
       replacementCharacters: 100,
       summary: { summary: "Large source", usefulDetails: [] },
     });
@@ -292,11 +296,14 @@ describe("TokenMiserService", () => {
       },
     });
 
-    expect((await store.readMetadata(metadata.objectId))!.retrievedCharacters)
-      .toBeLessThanOrEqual(
-        TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
-        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-      );
+    const retrievedBytes = (await store.readMetadata(
+      metadata.objectId,
+    ))!.retrievedCharacters;
+    expect(retrievedBytes).toBeGreaterThan(39_000);
+    expect(retrievedBytes).toBeLessThanOrEqual(
+      TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
+      * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+    );
   });
 
   it("does not mistake a direct source search for Token Miser retrieval", async () => {
@@ -527,8 +534,51 @@ describe("TokenMiserService code-mode reduction", () => {
     const prompt = request.prompt;
     expect(prompt).toContain(secondWindowGold);
     expect(prompt).not.toContain(beyondHelperCap);
-    expect(prompt.length + request.system.length).toBeLessThanOrEqual(
-      20_000 * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    expect(utf8ByteLength(prompt) + utf8ByteLength(request.system)).toBeLessThanOrEqual(
+      20_000 * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+    );
+  });
+
+  it("applies Luna's projected input cap in UTF-8 bytes for CJK output", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async (_request: {
+      prompt: string;
+      system: string;
+    }) => ({
+      status: "ok" as const,
+      object: {
+        disposition: "summarize" as const,
+        summary: "The bounded source was inspected.",
+        usefulDetails: [],
+      },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+    const withinByteBudget = "CJK_WITHIN_BYTE_BUDGET";
+    const beyondByteBudget = "CJK_BEYOND_BYTE_BUDGET";
+    const output = [
+      "中".repeat(15_000),
+      withinByteBudget,
+      "文".repeat(13_000),
+      beyondByteBudget,
+    ].join("");
+
+    await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text",
+      text: output,
+    }]));
+
+    const request = generateSummary.mock.calls[0]![0];
+    expect(request.prompt).toContain(withinByteBudget);
+    expect(request.prompt).not.toContain(beyondByteBudget);
+    expect(
+      utf8ByteLength(request.prompt) + utf8ByteLength(request.system),
+    ).toBeLessThanOrEqual(
+      20_000 * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
     );
   });
 
@@ -657,7 +707,7 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(await service.prepareCodeModeOutput({
       ...codeModePayload([{
         type: "input_text",
-        text: "x".repeat(100_000),
+        text: "中".repeat(20_000),
       }]),
       script: "text(await tools.exec_command({ cmd: 'focused-query' }))",
     })).toBeUndefined();
@@ -668,7 +718,7 @@ describe("TokenMiserService code-mode reduction", () => {
       baselineParentTokens: TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
       replacementCharacters:
         TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
-        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+        * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
       helperUsage: {
         helperThreadId: "helper-pass-through",
         model: "gpt-5.6-luna",
@@ -878,8 +928,10 @@ describe("TokenMiserService code-mode reduction", () => {
     const request = generateSummary.mock.calls[0]![0];
     expect(request.prompt).toContain("FIRST_MEMBER_GOLD");
     expect(request.prompt).toContain("SECOND_MEMBER_GOLD");
-    expect(request.prompt.length + request.system.length).toBeLessThanOrEqual(
-      20_000 * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    expect(
+      utf8ByteLength(request.prompt) + utf8ByteLength(request.system),
+    ).toBeLessThanOrEqual(
+      20_000 * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
     );
   });
 
@@ -1174,12 +1226,14 @@ describe("TokenMiserService code-mode reduction", () => {
 
     const firstUpdated = await store.readMetadata(first.metadata.objectId);
     const secondUpdated = await store.readMetadata(second.metadata.objectId);
+    expect(firstUpdated!.retrievedCharacters).toBeGreaterThan(15_000);
+    expect(secondUpdated!.retrievedCharacters).toBeGreaterThan(15_000);
     const retrievedCharacters =
       firstUpdated!.retrievedCharacters + secondUpdated!.retrievedCharacters;
     expect(retrievedCharacters).toBeGreaterThan(30_000);
     expect(retrievedCharacters).toBeLessThanOrEqual(
       TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
-      * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+      * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
     );
 
     for (const cumulativeInputTokens of [1_000, 2_000, 3_000]) {
@@ -1311,7 +1365,7 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(await store.listMetadata()).toEqual([]);
   });
 
-  it("fails open before storage when a reducer response exceeds its byte cap", async () => {
+  it("caps a multibyte reducer response before the bridge byte cap", async () => {
     const store = await createStore();
     const service = new TokenMiserService({
       store,
@@ -1321,6 +1375,37 @@ describe("TokenMiserService code-mode reduction", () => {
         object: {
           disposition: "summarize",
           summary: "😀".repeat(20_000),
+          usefulDetails: [],
+          suggestedNextStep: "Read a narrow range if needed.",
+        },
+      }),
+      thresholdCharacters: 1,
+    });
+
+    const prepared = await service.prepareCodeModeOutput(
+      codeModePayload([{ type: "input_text", text: "large output" }]),
+    );
+    expect(prepared).toBeDefined();
+    const replacement = prepared!.response.replacement[0]!.text;
+    expect(utf8ByteLength(replacement)).toBeLessThanOrEqual(
+      TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
+      * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+    );
+    expect(Buffer.byteLength(`${JSON.stringify(prepared!.response)}\n`)).toBeLessThan(
+      64 * 1024,
+    );
+  });
+
+  it("fails open before storage when escaped response bytes exceed the bridge cap", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary: async () => ({
+        status: "ok",
+        object: {
+          disposition: "summarize",
+          summary: "\\".repeat(40_000),
           usefulDetails: [],
           suggestedNextStep: "Read a narrow range if needed.",
         },

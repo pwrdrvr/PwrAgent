@@ -2,8 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
-  TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
+  TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   estimateTokenCount,
+  utf8ByteLength,
   type TokenMiserHelperUsage,
   type TokenMiserCodeModeObservation,
   type TokenMiserGroupMemberSummary,
@@ -185,7 +186,7 @@ export type TokenMiserStoreParams = {
   toolUseId: string;
   toolName: string;
   output: string;
-  /** Characters that could have entered the parent before preservation encoding. */
+  /** UTF-8 bytes that could have entered the parent before preservation encoding. */
   baselineCharacters?: number;
   /**
    * Optional provider-enforced ceiling for the original model-visible result.
@@ -193,6 +194,7 @@ export type TokenMiserStoreParams = {
    * retain the historical 10k-token cap below.
    */
   baselineParentTokenCap?: number;
+  /** UTF-8 bytes; the legacy field name is retained in persisted metadata. */
   replacementCharacters: number;
   summary: TokenMiserSummary;
   disposition?: "summarized" | "passed_through";
@@ -236,7 +238,8 @@ export class TokenMiserStore {
     if (!isSafeObjectId(objectId)) {
       throw new Error("Invalid Token Miser object id.");
     }
-    const originalCharacters = params.baselineCharacters ?? params.output.length;
+    const originalCharacters =
+      params.baselineCharacters ?? utf8ByteLength(params.output);
     const metadata: TokenMiserObjectMetadata = {
       version: 1,
       objectId,
@@ -248,7 +251,7 @@ export class TokenMiserStore {
       originalCharacters,
       baselineParentTokens: Math.min(
         estimateTokenCount(
-          Math.min(originalCharacters, TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS),
+          Math.min(originalCharacters, TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES),
         ),
         normalizePositiveInteger(
           params.baselineParentTokenCap,
@@ -507,14 +510,14 @@ export class TokenMiserStore {
   }
 
   async confirmModelVisibleRetrievals(params: {
-    maxVisibleCharacters?: number;
+    maxVisibleBytes?: number;
     output: string;
     threadId: string;
   }): Promise<number> {
     // One Code Mode cell can emit several individually bounded retrievals, but
-    // Codex applies one shared ceiling to the outer result. Attribute each
-    // delivery by its position in that visible prefix so their sum cannot
-    // exceed the containing result.
+    // Codex applies one shared ceiling to the outer result. Its truncator keeps
+    // both the beginning and end, so attribute only the intersections with
+    // those exact UTF-8 byte-budgeted ranges.
     const candidates = [...this.pendingRetrievalDeliveries.entries()]
       .filter(([, pending]) => pending.threadId === params.threadId)
       .map(([deliveryId, pending]) => ({
@@ -524,24 +527,22 @@ export class TokenMiserStore {
       }))
       .filter((candidate) => candidate.outputOffset >= 0)
       .sort((left, right) => left.outputOffset - right.outputOffset);
-    const visibleOutputEnd = Math.min(
-      params.output.length,
-      normalizePositiveInteger(
-        params.maxVisibleCharacters,
-        Number.MAX_SAFE_INTEGER,
-      ),
+    const visibleRanges = codexVisibleStringRanges(
+      params.output,
+      normalizePositiveInteger(params.maxVisibleBytes, Number.MAX_SAFE_INTEGER),
     );
     let confirmedCharacters = 0;
     for (const { deliveryId, outputOffset, pending } of candidates) {
       this.pendingRetrievalDeliveries.delete(deliveryId);
       const visibleTextStart = outputOffset + pending.visibleTextOffset;
-      const visibleCharacters = Math.max(
-        0,
-        Math.min(
-          pending.visibleText.length,
-          visibleOutputEnd - visibleTextStart,
-        ),
-      );
+      const visibleTextEnd = visibleTextStart + pending.visibleText.length;
+      const visibleCharacters = visibleRanges.reduce((total, range) => {
+        const start = Math.max(visibleTextStart, range.start);
+        const end = Math.min(visibleTextEnd, range.end);
+        return end > start
+          ? total + utf8ByteLength(params.output.slice(start, end))
+          : total;
+      }, 0);
       await this.recordRetrieval(pending.objectId, visibleCharacters);
       confirmedCharacters += visibleCharacters;
     }
@@ -1218,6 +1219,54 @@ function normalizePositiveInteger(
   return value !== undefined && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : fallback;
+}
+
+function codexVisibleStringRanges(
+  text: string,
+  maxBytes: number,
+): Array<{ start: number; end: number }> {
+  const totalBytes = utf8ByteLength(text);
+  if (totalBytes <= maxBytes) {
+    return [{ start: 0, end: text.length }];
+  }
+  const leftBudget = Math.floor(maxBytes / 2);
+  const rightBudget = maxBytes - leftBudget;
+  const prefixEnd = utf8PrefixEnd(text, leftBudget);
+  const suffixStart = Math.max(
+    prefixEnd,
+    utf8SuffixStart(text, totalBytes - rightBudget),
+  );
+  return [
+    { start: 0, end: prefixEnd },
+    { start: suffixStart, end: text.length },
+  ].filter((range) => range.end > range.start);
+}
+
+function utf8PrefixEnd(text: string, maxBytes: number): number {
+  let bytes = 0;
+  let end = 0;
+  for (const character of text) {
+    const characterBytes = utf8ByteLength(character);
+    if (bytes + characterBytes > maxBytes) {
+      break;
+    }
+    bytes += characterBytes;
+    end += character.length;
+  }
+  return end;
+}
+
+function utf8SuffixStart(text: string, targetByteOffset: number): number {
+  let bytes = 0;
+  let index = 0;
+  for (const character of text) {
+    if (bytes >= targetByteOffset) {
+      return index;
+    }
+    bytes += utf8ByteLength(character);
+    index += character.length;
+  }
+  return text.length;
 }
 
 function isMissingFileError(error: unknown): boolean {
