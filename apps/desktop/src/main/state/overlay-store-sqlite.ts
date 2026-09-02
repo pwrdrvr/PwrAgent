@@ -1331,7 +1331,66 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       if (existing) {
         line = mergeThreadUsageLineForUpsert(line, existing);
       }
-      if (
+      // Codex hydration records expose either the last request or the
+      // thread-cumulative total. Neither can replace an already-attributed
+      // live turn aggregate without undercounting or charging prior turns.
+      // Keep the turn line authoritative while still letting the hydration
+      // write refresh shared turn timing and settings below.
+      const preservedLiveTurnAggregate =
+        (line.source === "hydration" || line.source === "backfill") &&
+        line.turnId &&
+        line.scope !== "turn"
+          ? this.stateDb.raw
+              .prepare(
+                `SELECT usage_line_id
+                 FROM thread_usage_lines
+                 WHERE provider = ?
+                   AND backend = ?
+                   AND thread_id = ?
+                   AND turn_id = ?
+                   AND source = 'live'
+                   AND scope = 'turn'
+                   AND (turn_usage_attributed IS NULL OR turn_usage_attributed = 1)
+                 ORDER BY updated_at DESC
+                 LIMIT 1`,
+              )
+              .get(
+                line.provider,
+                line.backend,
+                line.threadId,
+                line.turnId,
+              ) as { usage_line_id: string } | undefined
+          : undefined;
+      if (preservedLiveTurnAggregate) {
+        this.stateDb.raw
+          .prepare(
+            `UPDATE thread_usage_lines
+             SET status = CASE
+                   WHEN usage_line_id = ? THEN 'pending'
+                   ELSE 'superseded'
+                 END,
+                 updated_at = ?
+             WHERE provider = ?
+               AND backend = ?
+               AND thread_id = ?
+               AND turn_id = ?
+               AND (
+                 usage_line_id = ?
+                 OR source = 'hydration'
+                 OR source = 'backfill'
+               )`,
+          )
+          .run(
+            preservedLiveTurnAggregate.usage_line_id,
+            now,
+            line.provider,
+            line.backend,
+            line.threadId,
+            line.turnId,
+            preservedLiveTurnAggregate.usage_line_id,
+          );
+        line = { ...line, status: "superseded" };
+      } else if (
         (line.source === "hydration" || line.source === "backfill") &&
         line.turnId
       ) {

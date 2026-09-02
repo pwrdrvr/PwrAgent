@@ -25621,6 +25621,99 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("attributes turnless usage emitted after completion to the completed turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.5",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          last: {
+            inputTokens: 1_000,
+            cachedInputTokens: 100,
+            outputTokens: 20,
+            reasoningOutputTokens: 5,
+            totalTokens: 1_025,
+          },
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 100,
+            outputTokens: 20,
+            reasoningOutputTokens: 5,
+            totalTokens: 1_025,
+          },
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          completedAt: 1_800_000_004_000,
+          output: [],
+        },
+      },
+    });
+    const lateUsageNotification: AppServerNotification = {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        tokenUsage: {
+          last: {
+            inputTokens: 2_000,
+            cachedInputTokens: 1_800,
+            outputTokens: 30,
+            reasoningOutputTokens: 10,
+            totalTokens: 2_040,
+          },
+        },
+      },
+    };
+    await codexClient.emit(lateUsageNotification);
+    await codexClient.emit(lateUsageNotification);
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      cachedInputTokens: 1_900,
+      completedAt: 1_800_000_004_000,
+      inputTokens: 3_000,
+      outputTokens: 50,
+      reasoningOutputTokens: 15,
+      totalTokens: 3_065,
+      turnId: "turn-1",
+      turnUsageAttributed: true,
+      uncachedInputTokens: 1_100,
+      usageLineId: "codex:thread-1:turn-1:live-token-usage",
+    });
+
+    await registry.close();
+  });
+
   it("folds final and peak protocol context observations into the existing usage row", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
