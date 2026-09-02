@@ -6,6 +6,7 @@ import type {
 } from "@pwragent/shared";
 import { normalizeProfileName } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { tildifyPath } from "../../lib/tildify-path";
 import {
   usePwrAgentProfiles,
   type PwrAgentProfilesState,
@@ -16,6 +17,7 @@ import {
   SettingsSectionStack,
 } from "./SettingsLayout";
 import { CodexAuthProfileSelect } from "./CodexAuthProfileSelect";
+import { SettingsSplitPath } from "./SettingsSplitPath";
 
 export function ProfilesSettings(props: {
   desktopApi?: DesktopApi;
@@ -68,7 +70,7 @@ export function ProfilesSettings(props: {
       <SettingsSection
         eyebrow="Profiles"
         title="Profile list"
-        description="Choose which profile opens when no environment profile is set, or open another profile in a new app instance."
+        description="Choose which profile opens when no environment profile is set, or open another profile in a new app instance. A Codex auth change applies the next time that profile launches."
         chip={
           profiles.activeProfile ? `active:${profiles.activeProfile}` : "profiles"
         }
@@ -79,7 +81,7 @@ export function ProfilesSettings(props: {
         ) : profiles.profiles.length ? (
           <div className="settings-paths">
             {profiles.profiles.map((profile) => (
-              <PwrAgentProfileRow
+              <PwrAgentProfileCard
                 key={profile.name}
                 busy={busyProfile === profile.name}
                 profile={profile}
@@ -161,7 +163,7 @@ export function ProfilesSettings(props: {
   );
 }
 
-function PwrAgentProfileRow(props: {
+function PwrAgentProfileCard(props: {
   busy: boolean;
   codexProfileControl: ReactNode;
   profile: DesktopPwrAgentProfileSummary;
@@ -178,59 +180,70 @@ function PwrAgentProfileRow(props: {
 
   return (
     <div
-      className={`settings-pathrow settings-profile-row${
-        profile.active ? " is-selected" : ""
-      }`}
+      className={`settings-profile-card${profile.active ? " is-active" : ""}`}
     >
-      <div className="settings-pathrow__body">
-        <span className="settings-pathrow__title">{displayName}</span>
-        <span className="settings-pathrow__path">{profile.profileDir}</span>
-        <span className="settings-profile-row__meta">{lastUsed}</span>
-        <div className="settings-profile-row__codex">
-          <span className="settings-profile-row__label">Codex auth profile</span>
-          {props.codexProfileControl}
-          <span className="settings-profile-row__meta">
-            Applies the next time this PwrAgent profile launches.
+      <div className="settings-profile-card__head">
+        <div className="settings-profile-card__ident">
+          <span className="settings-profile-card__name" title={displayName}>
+            {displayName}
           </span>
+          {profile.active ? (
+            <span className="settings-pathrow__chip settings-pathrow__chip--ok">
+              Active
+            </span>
+          ) : null}
+          {profile.default ? (
+            <span className="settings-pathrow__chip settings-pathrow__chip--warn">
+              Startup default
+            </span>
+          ) : null}
+        </div>
+        <div className="settings-profile-card__actions">
+          <button
+            className="button button--secondary settings-profile-card__button"
+            disabled={props.busy || profile.default}
+            type="button"
+            onClick={props.onUseDefault}
+          >
+            Use on startup
+          </button>
+          <button
+            className="button button--secondary settings-profile-card__button"
+            disabled={props.busy || !canOpen}
+            type="button"
+            onClick={props.onOpen}
+          >
+            Open
+          </button>
+          {/*
+            Delete is the one irreversible action on this pane. It keeps a
+            visible button — it is not worth hiding behind a menu — but sits
+            past a wider gap so it is not a misclick neighbour of Open.
+          */}
+          <button
+            className="button button--ghost settings-profile-card__button settings-danger-button settings-profile-card__button--apart"
+            disabled={props.busy || !profile.canDelete}
+            type="button"
+            onClick={props.onDelete}
+          >
+            Delete
+          </button>
         </div>
       </div>
-      <div className="settings-pathrow__chips">
-        {profile.active ? (
-          <span className="settings-pathrow__chip settings-pathrow__chip--ok">
-            Active
-          </span>
-        ) : null}
-        {profile.default ? (
-          <span className="settings-pathrow__chip settings-pathrow__chip--warn">
-            Startup default
-          </span>
-        ) : null}
-      </div>
-      <div className="settings-profile-row__actions">
-        <button
-          className="button button--secondary settings-profile-row__button"
-          disabled={props.busy || profile.default}
-          type="button"
-          onClick={props.onUseDefault}
-        >
-          Use on startup
-        </button>
-        <button
-          className="button button--secondary settings-profile-row__button"
-          disabled={props.busy || !canOpen}
-          type="button"
-          onClick={props.onOpen}
-        >
-          Open
-        </button>
-        <button
-          className="button button--ghost settings-profile-row__button settings-profile-row__button--danger"
-          disabled={props.busy || !profile.canDelete}
-          type="button"
-          onClick={props.onDelete}
-        >
-          Delete
-        </button>
+      <p className="settings-profile-card__where">
+        <SettingsSplitPath
+          className="settings-profile-card__path"
+          title={profile.profileDir}
+          value={tildifyPath(profile.profileDir)}
+        />
+        <span aria-hidden="true" className="settings-profile-card__dot">
+          ·
+        </span>
+        <span className="settings-profile-card__when">{lastUsed}</span>
+      </p>
+      <div className="settings-profile-card__codex">
+        <span className="settings-profile-card__codex-label">Codex auth</span>
+        {props.codexProfileControl}
       </div>
     </div>
   );
@@ -283,7 +296,7 @@ function ProfileDeleteDialog(props: {
             Cancel
           </button>
           <button
-            className="button button--ghost settings-profile-row__button--danger"
+            className="button button--ghost settings-danger-button"
             disabled={props.busy}
             type="button"
             onClick={props.onConfirm}

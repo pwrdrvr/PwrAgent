@@ -5,6 +5,8 @@ import type {
 } from "@pwragent/shared";
 import { normalizeProfileName } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { tildifyPath } from "../../lib/tildify-path";
+import { SettingsSplitPath } from "./SettingsSplitPath";
 
 const CREATE_VALUE = "__create_codex_profile__";
 
@@ -36,7 +38,7 @@ export function CodexAuthProfileSelect(props: {
     <div className="settings-codex-profile-select">
       <select
         aria-label={props["aria-label"]}
-        className="settings-select"
+        className="settings-select settings-codex-profile-select__control"
         disabled={props.disabled}
         value={selectedValue}
         onChange={(event) => {
@@ -59,7 +61,7 @@ export function CodexAuthProfileSelect(props: {
         <option value={CREATE_VALUE}>Create New Codex Profile...</option>
       </select>
 
-      {selected ? <CodexAuthProfileDetails profile={selected} /> : null}
+      {selected ? <CodexAuthProfileStatus profile={selected} /> : null}
 
       {createOpen ? (
         <CodexAuthProfileCreateDialog
@@ -139,16 +141,26 @@ export function CodexAuthProfileLoginButton(props: {
   );
 }
 
-function CodexAuthProfileDetails(props: {
+/**
+ * The selected auth profile's home and state, on the same line as the
+ * control that picks it.
+ *
+ * This replaced a nested detail card that reprinted the display name already
+ * shown in the select directly above it, on the same elevation as its own
+ * parent card — 52px of row height whose only unique content was the codex
+ * home plus these chips.
+ */
+function CodexAuthProfileStatus(props: {
   profile: DesktopCodexAuthProfileCandidate;
 }) {
   const profile = props.profile;
   return (
-    <div className="settings-codex-profile-details">
-      <div className="settings-codex-profile-details__body">
-        <span className="settings-pathrow__title">{profile.displayName}</span>
-        <span className="settings-pathrow__path">{profile.codexHome}</span>
-      </div>
+    <>
+      <SettingsSplitPath
+        className="settings-codex-profile-select__home"
+        title={profile.codexHome}
+        value={tildifyPath(profile.codexHome)}
+      />
       <div className="settings-pathrow__chips">
         <span className="settings-pathrow__chip">
           {profile.source === "default" ? "default" : "profile"}
@@ -171,7 +183,7 @@ function CodexAuthProfileDetails(props: {
           </span>
         ) : null}
       </div>
-    </div>
+    </>
   );
 }
 
