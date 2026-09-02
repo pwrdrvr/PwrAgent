@@ -211,8 +211,9 @@ export function ModelsSettings(props: {
   };
 
   useEffect(() => {
-    void refreshCatalog(false, true);
-    // The settings surface is itself a catalog refresh boundary.
+    void refreshCatalog();
+    // Mount is a cache-only read. Provider discovery belongs to the explicit
+    // all-provider Refresh action below, not navigation into Settings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
 
@@ -239,13 +240,9 @@ export function ModelsSettings(props: {
     void props.onSaveCodexPath(path.trim());
   };
 
-  // Names and status for the hub index + focused-screen titles. The
-  // registry probe runs from the hub and the Codex screen (which mounts
-  // no AcpAgentsSettings); focused ACP screens probe via their own
-  // AcpAgentsSettings mount.
-  const acpCatalog = useAcpAgentCatalog(props.desktopApi, {
-    probe: props.focus === undefined || props.focus === "codex",
-  });
+  // Names and status for the hub index + focused-screen titles. This is a
+  // cache-only catalog read; explicit Refresh/Verify actions own discovery.
+  const acpCatalog = useAcpAgentCatalog(props.desktopApi);
   const orderedAcpEntries = displayOrderedAcpEntries(acpCatalog.entries);
   const focusedAcpEntry =
     props.focus && props.focus !== "codex"
@@ -1001,7 +998,7 @@ function ProviderModelDefaultsSettings(props: {
                 type="button"
                 onClick={() => void props.onRefresh()}
               >
-                {props.refreshing ? "Refreshing…" : "Refresh models"}
+                {props.refreshing ? "Refreshing…" : "Refresh all providers"}
               </button>
             }
           />
@@ -1011,7 +1008,7 @@ function ProviderModelDefaultsSettings(props: {
             sub={
               props.error
                 ? `Last refresh failed: ${props.error}`
-                : "Refresh after installing or upgrading a provider CLI."
+                : "Refresh every provider after installing or upgrading a CLI."
             }
             control={
               <button
@@ -1020,7 +1017,7 @@ function ProviderModelDefaultsSettings(props: {
                 type="button"
                 onClick={() => void props.onRefresh()}
               >
-                {props.refreshing ? "Refreshing…" : "Refresh models"}
+                {props.refreshing ? "Refreshing…" : "Refresh all providers"}
               </button>
             }
           />
