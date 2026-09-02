@@ -27,7 +27,12 @@ export default tseslint.config(
       "**/coverage/**",
       "apps/desktop/.local/**",
       "**/protocol-captures/**",
-      "**/e2e/fixtures/**",
+      // Replay fixture *data* only. The TypeScript under `e2e/fixtures/` is
+      // hand-written shared helper code — `capture-window-placement.ts`,
+      // the state seeders — and stays linted: extracting a helper out of a
+      // spec file and into here must not quietly drop it out of CI's
+      // correctness gate.
+      "**/e2e/fixtures/**/*.json",
       "**/__fixtures__/**",
     ],
   },

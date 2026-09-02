@@ -39,6 +39,34 @@ export function isPwrAgentOwnedGrokRuntime(
   return record.launchDescriptor?.env?.GROK_INSTALLER === "pwragent";
 }
 
+/**
+ * Whether the vendor Grok update check should be armed at all.
+ *
+ * E2E and the screenshot capture pipelines launch with NODE_ENV=production,
+ * which otherwise runs this check against whatever Grok build happens to sit
+ * on the host. A host one release behind then produces an `available` status,
+ * and the notice it feeds is durable (`autoDismiss: false`), so it paints
+ * "Grok update available" over the capture. On 2026-09-01 that put the toast
+ * into 8 of the 21 docs-site PNGs; which 8 was a race between the notice's
+ * async refresh and each native window grab, so consecutive frames of one
+ * flow disagreed.
+ *
+ * `auto-updater.ts` already suppresses PwrAgent's own update check under the
+ * same predicate, for the same reason — a background check must not make the
+ * UI depend on what happens to be published. This is that rule for the vendor
+ * CLI check.
+ *
+ * Only the default wiring is gated. A test that wants the check still passes
+ * `checkGrokCliUpdate` explicitly through `AcpBackendAdapterOptions`.
+ */
+export function grokUpdateChecksDisabled(params: {
+  isPackaged: boolean;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const env = params.env ?? process.env;
+  return env.PWRAGENT_E2E === "1" && !params.isPackaged;
+}
+
 export function shouldCheckGrokCliUpdate(params: {
   command: string;
   installedVersion?: string;
