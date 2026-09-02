@@ -1421,7 +1421,10 @@ function appendMarkdownBlock(
       .map((line) => `> ${line}`)
       .join("\n");
     quotedState.skillTokens.forEach((token) => {
-      state.skillTokens.push({ ...token, index: quoteStart + token.index + 2 });
+      state.skillTokens.push({
+        ...token,
+        index: quoteStart + getQuotedDraftOffset(quotedState.value, token.index),
+      });
     });
     return;
   }
@@ -1849,15 +1852,64 @@ function getMarkdownBlockPrefixLength(
   return 0;
 }
 
-function getDraftIndexAtPosition(
-  editor: NonNullable<ReturnType<typeof useEditor>>,
+function getBlockquoteInnerMarkdown(node: ProseMirrorNode): string {
+  const state: TiptapReadState = { skillTokens: [], value: "" };
+  node.forEach((child, _offset, childIndex) => {
+    appendMarkdownBlock(child, state, childIndex);
+  });
+  return state.value;
+}
+
+function getQuotedMarkdownLength(innerMarkdown: string): number {
+  let lineCount = 1;
+  for (const character of innerMarkdown) {
+    if (character === "\n") {
+      lineCount += 1;
+    }
+  }
+  return innerMarkdown.length + lineCount * 2;
+}
+
+function getQuotedDraftOffset(
+  innerMarkdown: string,
+  innerOffset: number,
+): number {
+  let quotedOffset = 2;
+  const boundedInnerOffset = Math.min(innerOffset, innerMarkdown.length);
+  for (let index = 0; index < boundedInnerOffset; index += 1) {
+    quotedOffset += innerMarkdown[index] === "\n" ? 3 : 1;
+  }
+  return quotedOffset;
+}
+
+function getInnerDraftOffset(
+  innerMarkdown: string,
+  quotedOffset: number,
+): number {
+  if (quotedOffset <= 2) {
+    return 0;
+  }
+
+  let currentQuotedOffset = 2;
+  for (let index = 0; index < innerMarkdown.length; index += 1) {
+    const width = innerMarkdown[index] === "\n" ? 3 : 1;
+    if (quotedOffset <= currentQuotedOffset + width) {
+      return index + 1;
+    }
+    currentQuotedOffset += width;
+  }
+  return innerMarkdown.length;
+}
+
+export function getDraftIndexAtDocumentPosition(
+  doc: ProseMirrorNode,
   position: number,
   mode: TiptapReadMode,
 ): number {
   let index = 0;
   let found = false;
 
-  editor.state.doc.descendants((node, pos, parent, childIndex) => {
+  doc.descendants((node, pos, parent, childIndex) => {
     if (found) {
       return false;
     }
@@ -1869,6 +1921,24 @@ function getDraftIndexAtPosition(
       }
       if (childIndex > 0) {
         index += mode === "markdown" ? 2 : 1;
+      }
+      if (mode === "markdown" && node.type.name === "blockquote") {
+        const innerMarkdown = getBlockquoteInnerMarkdown(node);
+        const nodeEnd = pos + node.nodeSize;
+        if (position >= nodeEnd) {
+          index += getQuotedMarkdownLength(innerMarkdown);
+          return false;
+        }
+        const innerDoc = node.type.schema.topNodeType.create(null, node.content);
+        const innerPosition = Math.max(1, position - pos - 1);
+        const innerOffset = getDraftIndexAtDocumentPosition(
+          innerDoc,
+          innerPosition,
+          mode,
+        );
+        index += getQuotedDraftOffset(innerMarkdown, innerOffset);
+        found = true;
+        return false;
       }
       if (mode === "markdown" && node.type.name === "horizontalRule") {
         const nodeEnd = pos + node.nodeSize;
@@ -1901,7 +1971,7 @@ function getDraftIndexAtPosition(
         node,
         parent,
         childIndex,
-        editor.state.doc,
+        doc,
         pos,
       );
       if (prefixLength > 0) {
@@ -1957,16 +2027,24 @@ function getDraftIndexAtPosition(
   return index;
 }
 
-function getPositionAtDraftIndex(
+function getDraftIndexAtPosition(
   editor: NonNullable<ReturnType<typeof useEditor>>,
+  position: number,
+  mode: TiptapReadMode,
+): number {
+  return getDraftIndexAtDocumentPosition(editor.state.doc, position, mode);
+}
+
+export function getPositionAtDocumentDraftIndex(
+  doc: ProseMirrorNode,
   draftIndex: number,
   mode: TiptapReadMode,
 ): number {
   let index = 0;
-  let position = editor.state.doc.content.size;
+  let position = doc.content.size;
   let found = false;
 
-  editor.state.doc.descendants((node, pos, parent, childIndex) => {
+  doc.descendants((node, pos, parent, childIndex) => {
     if (found) {
       return false;
     }
@@ -1980,6 +2058,26 @@ function getPositionAtDraftIndex(
           return false;
         }
         index += separatorLength;
+      }
+      if (mode === "markdown" && node.type.name === "blockquote") {
+        const innerMarkdown = getBlockquoteInnerMarkdown(node);
+        const quotedMarkdownLength = getQuotedMarkdownLength(innerMarkdown);
+        if (draftIndex > index + quotedMarkdownLength) {
+          index += quotedMarkdownLength;
+          return false;
+        }
+        const innerDoc = node.type.schema.topNodeType.create(null, node.content);
+        const innerOffset = getInnerDraftOffset(
+          innerMarkdown,
+          Math.max(0, draftIndex - index),
+        );
+        position = pos + 1 + getPositionAtDocumentDraftIndex(
+          innerDoc,
+          innerOffset,
+          mode,
+        );
+        found = true;
+        return false;
       }
       if (mode === "markdown" && node.type.name === "codeBlock") {
         const codeBlock = getCodeBlockMarkdownParts(node);
@@ -2014,7 +2112,7 @@ function getPositionAtDraftIndex(
         node,
         parent,
         childIndex,
-        editor.state.doc,
+        doc,
         pos,
       );
       if (prefixLength > 0) {
@@ -2067,6 +2165,14 @@ function getPositionAtDraftIndex(
   });
 
   return Math.max(1, position);
+}
+
+function getPositionAtDraftIndex(
+  editor: NonNullable<ReturnType<typeof useEditor>>,
+  draftIndex: number,
+  mode: TiptapReadMode,
+): number {
+  return getPositionAtDocumentDraftIndex(editor.state.doc, draftIndex, mode);
 }
 
 function getSkillSummary(attrs: Record<string, unknown>): AppServerSkillSummary {
@@ -2778,9 +2884,9 @@ export const ComposerTiptapInput = forwardRef<
       return;
     }
 
-    const current = readTiptapContent(editor, readMode);
-    const currentSignature = getContentSignature(current);
-    const currentEditorDocumentSignature = JSON.stringify(editor.getJSON());
+    let current = readTiptapContent(editor, readMode);
+    let currentSignature = getContentSignature(current);
+    let currentEditorDocumentSignature = JSON.stringify(editor.getJSON());
     const nextEditorDocumentSignature = props.editorDocument
       ? JSON.stringify(props.editorDocument)
       : undefined;
@@ -2794,6 +2900,7 @@ export const ComposerTiptapInput = forwardRef<
       }
     }
 
+    let loadedEditorDocument = false;
     if (
       nextEditorDocumentSignature &&
       currentEditorDocumentSignature !== nextEditorDocumentSignature
@@ -2805,24 +2912,51 @@ export const ComposerTiptapInput = forwardRef<
       editor.commands.setContent(props.editorDocument!, { emitUpdate: false });
       closeEditorHistory(editor);
       applySelectionRequest(editor, props.selectionRequest);
+      current = readTiptapContent(editor, readMode);
+      currentSignature = getContentSignature(current);
+      currentEditorDocumentSignature = JSON.stringify(editor.getJSON());
+      loadedEditorDocument = true;
+      if (currentSignature === propsSignature) {
+        pendingExternalSignatureRef.current = undefined;
+        return;
+      }
+    }
+
+    pendingExternalSignatureRef.current = propsSignature;
+    if (!loadedEditorDocument) {
+      pushControlledUndoEntry(editor);
+      controlledRedoStackRef.current = [];
+    }
+    const inserted = applyExternalSkillInsertion({
+      current,
+      editor,
+      nextSkillTokens: props.skillTokens,
+      nextValue: props.value,
+      readMode,
+      selectionIndex: selectionIndexRef.current,
+    });
+    const insertedSignature = inserted
+      ? getContentSignature(readTiptapContent(editor, readMode))
+      : undefined;
+    if (inserted && insertedSignature === propsSignature) {
+      pendingSelectionIndexRef.current = undefined;
       pendingExternalSignatureRef.current = undefined;
       return;
     }
 
-    pendingExternalSignatureRef.current = propsSignature;
-    pushControlledUndoEntry(editor);
-    controlledRedoStackRef.current = [];
-    if (
-      applyExternalSkillInsertion({
-        current,
-        editor,
-        nextSkillTokens: props.skillTokens,
-        nextValue: props.value,
-        readMode,
-        selectionIndex: selectionIndexRef.current,
-      })
-    ) {
-      pendingSelectionIndexRef.current = undefined;
+    pendingExternalSignatureRef.current = undefined;
+    if (nextEditorDocumentSignature && loadedEditorDocument) {
+      if (JSON.stringify(editor.getJSON()) !== nextEditorDocumentSignature) {
+        closeEditorHistory(editor);
+        editor.commands.setContent(props.editorDocument!, { emitUpdate: false });
+        closeEditorHistory(editor);
+      }
+      const restored = readTiptapContent(editor, readMode);
+      const restoredEditorDocument = editor.getJSON();
+      propsRef.current.onChange(restored.value, restored.skillTokens, {
+        editorDocument: restoredEditorDocument,
+      });
+      applySelectionRequest(editor, props.selectionRequest);
       return;
     }
 

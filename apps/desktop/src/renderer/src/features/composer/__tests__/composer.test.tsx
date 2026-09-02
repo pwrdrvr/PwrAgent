@@ -2594,6 +2594,57 @@ describe("Composer", () => {
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
   });
 
+  it("opens hash autocomplete below a multiline blockquote", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, {
+      target: {
+        value: [
+          "Warnings:",
+          "",
+          "> First warning",
+          ">",
+          "> Second warning",
+          "",
+          "Investigate #Bob",
+        ].join("\n"),
+      },
+    });
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("option", { name: /#Bob's Best Thread 3000/ }),
+    ).toBeInTheDocument();
+  });
+
   it("retires a `#` anchor that runs long with nothing to match", async () => {
     // `#` is the only trigger whose query spans spaces, so before this it
     // stayed armed for the whole rest of the line: every keystroke after a
@@ -2804,6 +2855,53 @@ describe("Composer", () => {
     await settleFederatedSearch();
 
     expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not carry controlled undo history across thread switches", async () => {
+    const threadOne: NavigationThreadSummary = {
+      id: "thread-one",
+      title: "First thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const threadTwo: NavigationThreadSummary = {
+      id: "thread-two",
+      title: "Second thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const draftStore = createComposerDraftStore();
+    const composer = (thread: NavigationThreadSummary) => (
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={thread}
+        threads={[threadOne, threadTwo]}
+      />
+    );
+    const { rerender } = render(composer(threadOne));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "Private text from the first thread" },
+    });
+    rerender(composer(threadTwo));
+    const secondThreadInput = screen.getByRole("textbox", { name: "Reply" });
+    await waitFor(() => {
+      expect(secondThreadInput).toHaveValue("");
+    });
+
+    fireEvent.keyDown(secondThreadInput, { key: "z", metaKey: true });
+
+    expect(secondThreadInput).toHaveValue("");
+    expect(secondThreadInput).not.toHaveTextContent(
+      "Private text from the first thread",
+    );
   });
 
   it("re-arms a cold `#` anchor once the query is short again", async () => {
@@ -15355,6 +15453,109 @@ describe("Composer", () => {
           undefined,
           undefined,
           ["/Users/example/Projects/catalog-portal"]
+        );
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("replaces a directory trigger after quoted Markdown without losing later edits", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/example";
+    try {
+      const launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "Repo",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        branchName: "main",
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const repoDirectory: NavigationDirectorySummary = {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 20,
+      };
+      const grokDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/example/pwrdrvr/grok-build",
+        kind: "directory",
+        label: "grok-build",
+        path: "/Users/example/pwrdrvr/grok-build",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 10,
+      };
+      const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={repoDirectory}
+          directories={[repoDirectory, grokDirectory]}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={onMaterializeLaunchpad}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      );
+
+      const beforeMention = [
+        "> 1. Notarize the custom Codex release; the current release workflow signs but contains no notarization step.",
+        "",
+        "Oh... I didn't know that would matter for this... we have both @grok",
+      ].join("\n");
+      const afterMention = [
+        "> 1. Notarize the custom Codex release; the current release workflow signs but contains no notarization step.",
+        "",
+        "Oh... I didn't know that would matter for this... we have both  ",
+      ].join("\n");
+      fireEvent.change(screen.getByLabelText("New thread"), {
+        target: { value: beforeMention },
+      });
+
+      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      fireEvent.click(
+        within(listbox).getByRole("option", { name: /grok-build/ }),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("New thread")).toHaveValue(afterMention);
+      });
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      expect(within(richInput).getByText("@grok-build")).toBeInTheDocument();
+      expect(richInput).not.toHaveTextContent("@g@grok-build");
+      expect(richInput).not.toHaveTextContent("@grok-buildok");
+
+      await clickButton("Start thread");
+
+      await waitFor(() => {
+        expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+          "directory:/repo",
+          [
+            {
+              type: "text",
+              text: [
+                "> 1. Notarize the custom Codex release; the current release workflow signs but contains no notarization step.",
+                "",
+                "Oh... I didn't know that would matter for this... we have both [@grok-build](~/pwrdrvr/grok-build)",
+              ].join("\n"),
+            },
+          ],
+          undefined,
+          undefined,
+          ["/Users/example/pwrdrvr/grok-build"],
         );
       });
     } finally {

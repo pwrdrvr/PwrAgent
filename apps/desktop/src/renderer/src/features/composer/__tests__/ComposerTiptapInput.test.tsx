@@ -1,8 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef, useState } from "react";
+import type { JSONContent } from "@tiptap/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ComposerTiptapInput } from "../ComposerTiptapInput";
+import {
+  ComposerTiptapInput,
+  getDraftIndexAtDocumentPosition,
+  getPositionAtDocumentDraftIndex,
+} from "../ComposerTiptapInput";
 import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
 
 afterEach(() => {
@@ -10,6 +15,7 @@ afterEach(() => {
 });
 
 function renderTiptapInput(props?: {
+  editorDocument?: JSONContent;
   markdownConversion?: boolean;
   value?: string;
 }) {
@@ -23,6 +29,7 @@ function renderTiptapInput(props?: {
       <ComposerTiptapInput
         id="reply"
         label="Reply"
+        editorDocument={props?.editorDocument}
         markdownConversion={props?.markdownConversion ?? true}
         onChange={(nextValue, nextSkillTokens = []) => {
           onChange(nextValue, nextSkillTokens);
@@ -169,6 +176,307 @@ const pastedCatalogSql = [
 ].join("\n");
 
 describe("ComposerTiptapInput", () => {
+  it("recovers a persisted mention mismatch from the visible editor document", async () => {
+    const editorValue = [
+      "> 1. Notarize the custom Codex release.",
+      "",
+      "We have both @grok",
+    ].join("\n");
+    const tokenIndex = editorValue.indexOf("@grok");
+    const value = `${editorValue.slice(0, tokenIndex)} ${editorValue.slice(tokenIndex + 3)}`;
+    const token: ComposerSkillToken = {
+      id: "grok-build:fixture",
+      index: tokenIndex,
+      kind: "directory",
+      name: "grok-build",
+      path: "/Users/example/pwrdrvr/grok-build",
+    };
+    const editorDocument: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "orderedList",
+              attrs: { start: 1, type: null },
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [
+                        {
+                          type: "text",
+                          text: "Notarize the custom Codex release.",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "We have both @grok" }],
+        },
+      ],
+    };
+    const onChange = vi.fn();
+
+    const result = render(
+      <ComposerTiptapInput
+        id="reply"
+        label="Reply"
+        editorDocument={{
+          type: "doc",
+          content: [{ type: "paragraph" }],
+        }}
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value=""
+      />,
+    );
+    onChange.mockClear();
+    result.rerender(
+      <ComposerTiptapInput
+        id="reply"
+        label="Reply"
+        editorDocument={editorDocument}
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[token]}
+        value={value}
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent(
+      "We have both @grok",
+    );
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(
+        editorValue,
+        [],
+        { editorDocument },
+      );
+    });
+  });
+
+  it("counts blockquote prefixes when mapping the native caret to Markdown", async () => {
+    const value = [
+      "> 1. Notarize the custom Codex release.",
+      "",
+      "We have both @grok",
+    ].join("\n");
+    const editorDocument: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "orderedList",
+              attrs: { start: 1, type: null },
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [
+                        {
+                          type: "text",
+                          text: "Notarize the custom Codex release.",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "We have both @grok" }],
+        },
+      ],
+    };
+    renderTiptapInput({ editorDocument, value });
+
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    const doc = (
+      textbox as HTMLElement & {
+        pmViewDesc?: { node?: Parameters<typeof getDraftIndexAtDocumentPosition>[0] };
+      }
+    ).pmViewDesc?.node;
+    expect(doc).toBeDefined();
+    expect(
+      getDraftIndexAtDocumentPosition(doc!, doc!.content.size, "markdown"),
+    ).toBe(value.length);
+  });
+
+  it("maps a mention token on the second quoted line past every quote prefix", async () => {
+    const value = "> First line\n> ";
+    const token: ComposerSkillToken = {
+      id: "grok-build:fixture",
+      index: value.length,
+      kind: "directory",
+      name: "grok-build",
+      path: "/Users/example/pwrdrvr/grok-build",
+    };
+    const editorDocument: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "First line" },
+                { type: "hardBreak" },
+                {
+                  type: "mention",
+                  attrs: {
+                    description: null,
+                    id: token.id,
+                    kind: token.kind,
+                    name: token.name,
+                    path: token.path,
+                    prChipModifiers: null,
+                    shortDescription: null,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const onChange = vi.fn();
+
+    render(
+      <ComposerTiptapInput
+        id="reply"
+        label="Reply"
+        editorDocument={editorDocument}
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value=""
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(
+        value,
+        [token],
+        { editorDocument: expect.any(Object) },
+      );
+    });
+  });
+
+  it("maps the quoted Markdown line end to the end of blockquote text", async () => {
+    const value = "> Context:";
+    const editorDocument: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Context:" }],
+            },
+          ],
+        },
+      ],
+    };
+    renderTiptapInput({ editorDocument, value });
+
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    const doc = (
+      textbox as HTMLElement & {
+        pmViewDesc?: { node?: Parameters<typeof getDraftIndexAtDocumentPosition>[0] };
+      }
+    ).pmViewDesc?.node;
+    expect(doc).toBeDefined();
+    const position = getPositionAtDocumentDraftIndex(
+      doc!,
+      value.length,
+      "markdown",
+    );
+    expect(position).toBe(doc!.child(0).nodeSize - 2);
+    expect(getDraftIndexAtDocumentPosition(doc!, position, "markdown"))
+      .toBe(value.length);
+  });
+
+  it("promotes a restored editor document instead of suppressing later edits", async () => {
+    const onChange = vi.fn();
+    const result = render(
+      <ComposerTiptapInput
+        id="reply"
+        label="Reply"
+        editorDocument={{
+          type: "doc",
+          content: [{ type: "paragraph" }],
+        }}
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value=""
+      />,
+    );
+    onChange.mockClear();
+    const restoredEditorDocument: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "The sentences visible in the editor are newer.",
+            },
+          ],
+        },
+      ],
+    };
+
+    result.rerender(
+      <ComposerTiptapInput
+        id="reply"
+        label="Reply"
+        editorDocument={restoredEditorDocument}
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="Stale controlled draft"
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent(
+      "The sentences visible in the editor are newer.",
+    );
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(
+        "The sentences visible in the editor are newer.",
+        [],
+        { editorDocument: restoredEditorDocument },
+      );
+    });
+  });
+
   it("keeps Alt+Enter inside the editor instead of routing it to the composer", async () => {
     const onKeyDown = vi.fn();
     render(
@@ -271,7 +579,7 @@ describe("ComposerTiptapInput", () => {
       />,
     );
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    setComposerSelection(textbox, "Context:".length);
+    setComposerSelection(textbox, "> Context:".length);
 
     fireEvent.paste(textbox, {
       clipboardData: {
@@ -516,7 +824,7 @@ describe("ComposerTiptapInput", () => {
       />,
     );
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    setComposerSelection(textbox, "Query:".length);
+    setComposerSelection(textbox, "> Query:".length);
 
     fireEvent.paste(textbox, {
       clipboardData: {
@@ -576,7 +884,7 @@ describe("ComposerTiptapInput", () => {
       />,
     );
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    setComposerSelection(textbox, "Source:".length);
+    setComposerSelection(textbox, "> Source:".length);
 
     fireEvent.paste(textbox, {
       clipboardData: {
@@ -640,7 +948,7 @@ describe("ComposerTiptapInput", () => {
       />,
     );
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    setComposerSelection(textbox, "Release notes:".length);
+    setComposerSelection(textbox, "> Release notes:".length);
 
     fireEvent.paste(textbox, {
       clipboardData: {
@@ -718,7 +1026,7 @@ describe("ComposerTiptapInput", () => {
       />,
     );
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    setComposerSelection(textbox, "Checklist:".length);
+    setComposerSelection(textbox, "> Checklist:".length);
 
     fireEvent.paste(textbox, {
       clipboardData: {
@@ -782,7 +1090,7 @@ describe("ComposerTiptapInput", () => {
       />,
     );
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    setComposerSelection(textbox, "Tasks:".length);
+    setComposerSelection(textbox, "> Tasks:".length);
 
     fireEvent.paste(textbox, {
       clipboardData: {
@@ -855,7 +1163,7 @@ describe("ComposerTiptapInput", () => {
       />,
     );
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    setComposerSelection(textbox, "Source:".length);
+    setComposerSelection(textbox, "> Source:".length);
 
     fireEvent.paste(textbox, {
       clipboardData: {
@@ -963,7 +1271,7 @@ describe("ComposerTiptapInput", () => {
       />,
     );
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
-    setComposerSelection(textbox, "Table:".length);
+    setComposerSelection(textbox, "> Table:".length);
 
     fireEvent.paste(textbox, {
       clipboardData: {
