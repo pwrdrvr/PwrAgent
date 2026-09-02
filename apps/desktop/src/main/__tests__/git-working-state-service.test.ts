@@ -8,6 +8,7 @@ import {
   GitWorkingStateService,
   probeWorktreeWorkingState,
 } from "../app-server/git-working-state-service";
+import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
 
 const execFileAsync = promisify(execFile);
 
@@ -286,6 +287,63 @@ describe("probeWorktreeWorkingState", () => {
       baseAheadCommitCount: 5,
       isBehindBase: true,
     });
+  });
+
+  it("keeps cold base inference inside the fixed Git subprocess budget", async () => {
+    const headCommit = "a".repeat(40);
+    const baseCommit = "b".repeat(40);
+    const candidateNames = [
+      "main",
+      "master",
+      "develop",
+      "development",
+      "trunk",
+      ...Array.from(
+        { length: gitSubprocessBudgets.workingStateProbe.candidateCount - 5 },
+        (_unused, index) => `release/${index}`,
+      ),
+    ];
+    const { runGit, calls } = fakeGit((args) => {
+      if (args.includes("--numstat")) return "";
+      if (args.includes("status")) return "";
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("rev-parse") && args.includes("--verify")) {
+        return `${headCommit}\n`;
+      }
+      if (args.includes("rev-parse") && args.includes("--abbrev-ref")) {
+        return "feature/fixed-budget\n";
+      }
+      if (args.includes("config")) return "";
+      if (args.includes("symbolic-ref")) return "origin/main\n";
+      if (args.includes("for-each-ref")) {
+        return candidateNames.map((name, index) => {
+          const ahead = name === "release/0" ? 1 : index + 10;
+          const behind = name === "release/0" ? 2 : index + 20;
+          return `origin/${name}\0${String(index + 1).padStart(40, "0")}\0${ahead} ${behind}`;
+        }).join("\n");
+      }
+      if (args.includes("merge-base")) return `${baseCommit}\n`;
+      if (args.includes("rev-list") && args.includes("--count")) return "0\n";
+      return undefined;
+    });
+
+    const state = await probeWorktreeWorkingState("/repo/wt", { runGit });
+
+    expect(state).toMatchObject({
+      baseBranch: "release/0",
+      baseCommit,
+      baseBehindCommitCount: 1,
+      baseAheadCommitCount: 2,
+    });
+    expect(candidateNames).toHaveLength(
+      gitSubprocessBudgets.workingStateProbe.candidateCount,
+    );
+    expect(
+      3 + 5 + (candidateNames.length * 4) + 1,
+    ).toBe(gitSubprocessBudgets.workingStateProbe.baselineGitCommands);
+    expect(calls).toHaveLength(
+      gitSubprocessBudgets.workingStateProbe.maxGitCommands,
+    );
   });
 
   it("does not infer a release base for an attached default branch checkout", async () => {

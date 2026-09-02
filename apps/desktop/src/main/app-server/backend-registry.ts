@@ -8125,8 +8125,20 @@ export class DesktopBackendRegistry {
     | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
-  private readonly pendingThreadGitWorkingStateKeys = new Set<string>();
-  private readonly threadGitWorkingStateRefreshRounds = new Set<Promise<void>>();
+  private readonly pendingThreadGitWorkingStateByPath = new Map<
+    string,
+    Promise<void>
+  >();
+  private readonly focusedThreadGitWorkingStateRefreshByPath = new Map<
+    string,
+    {
+      acceptedPushedCommitShas: string[] | undefined;
+      rerunRequested: boolean;
+      running: boolean;
+    }
+  >();
+  private readonly focusedThreadGitWorkingStateRefreshes = new Set<Promise<void>>();
+  private threadGitWorkingStateRefreshRound: Promise<void> | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadPullRequestDetachHandler:
     | ThreadPullRequestDetachHandler
@@ -12517,6 +12529,13 @@ export class DesktopBackendRegistry {
     }
 
     await this.loadThreadGitWorkingStateCache();
+    // One registry-owned automatic fleet round spans every navigation
+    // surface. Before this gate, repeated renderer and messaging snapshots
+    // reached past the paths already in flight and started rotating batches
+    // concurrently. That turned serving-path frequency into Git fleet size.
+    if (this.threadGitWorkingStateRefreshRound) {
+      return { scheduledCount: 0 };
+    }
     // Staleness is decided in exactly one place: the cache. Filtering threads
     // on `gitWorkingState` here would read the field a serving path has just
     // hydrated from that same cache, so a worktree with any row — however old
@@ -12525,16 +12544,13 @@ export class DesktopBackendRegistry {
     // Exclude in-flight worktrees before the cap, not after: a round whose
     // whole batch is already in flight must still reach the paths behind it.
     const worktreePaths = this.selectStaleThreadWorkingStatePaths(threads, {
-      exclude: this.pendingThreadGitWorkingStateKeys,
+      exclude: new Set(this.pendingThreadGitWorkingStateByPath.keys()),
       limit: options.limit ?? BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
     });
     if (worktreePaths.length === 0) {
       return { scheduledCount: 0 };
     }
 
-    for (const worktreePath of worktreePaths) {
-      this.pendingThreadGitWorkingStateKeys.add(worktreePath);
-    }
     // Carry only the threads behind this batch. The round outlives the
     // snapshot that scheduled it, and retaining every thread would hold a full
     // navigation snapshot for as long as the Git fleet runs.
@@ -12547,9 +12563,19 @@ export class DesktopBackendRegistry {
       probedThreads,
       worktreePaths,
     );
-    this.threadGitWorkingStateRefreshRounds.add(round);
+    for (const worktreePath of worktreePaths) {
+      this.pendingThreadGitWorkingStateByPath.set(worktreePath, round);
+    }
+    this.threadGitWorkingStateRefreshRound = round;
     void round.finally(() => {
-      this.threadGitWorkingStateRefreshRounds.delete(round);
+      for (const worktreePath of worktreePaths) {
+        if (this.pendingThreadGitWorkingStateByPath.get(worktreePath) === round) {
+          this.pendingThreadGitWorkingStateByPath.delete(worktreePath);
+        }
+      }
+      if (this.threadGitWorkingStateRefreshRound === round) {
+        this.threadGitWorkingStateRefreshRound = undefined;
+      }
     });
     return { scheduledCount: worktreePaths.length };
   }
@@ -12564,10 +12590,100 @@ export class DesktopBackendRegistry {
         error: error instanceof Error ? error.message : String(error),
         worktreePaths,
       });
-    } finally {
-      for (const worktreePath of worktreePaths) {
-        this.pendingThreadGitWorkingStateKeys.delete(worktreePath);
+    }
+  }
+
+  /**
+   * Schedule one focused, user-triggered, or event-triggered refresh through
+   * the same per-worktree ownership map as the automatic fleet. If an older
+   * automatic probe is active, queue exactly one follow-up instead of racing
+   * it. Later requests update a queued probe, or request one bounded rerun
+   * when the focused probe has already started.
+   */
+  scheduleWorktreeGitWorkingStateRefresh(params: {
+    acceptedPushedCommitShas?: string[];
+    worktreePath: string;
+  }): boolean {
+    const worktreePath = params.worktreePath.trim();
+    if (this.closed || !worktreePath) {
+      return false;
+    }
+    const existingFocused =
+      this.focusedThreadGitWorkingStateRefreshByPath.get(worktreePath);
+    if (existingFocused) {
+      existingFocused.acceptedPushedCommitShas =
+        params.acceptedPushedCommitShas;
+      if (existingFocused.running) {
+        existingFocused.rerunRequested = true;
       }
+      return false;
+    }
+
+    const previous = this.pendingThreadGitWorkingStateByPath.get(worktreePath);
+    const focused = {
+      acceptedPushedCommitShas: params.acceptedPushedCommitShas,
+      rerunRequested: false,
+      running: false,
+    };
+    this.focusedThreadGitWorkingStateRefreshByPath.set(worktreePath, focused);
+    let refresh: Promise<void>;
+    refresh = (async () => {
+      if (previous) {
+        await previous;
+      }
+      do {
+        if (this.closed) {
+          return;
+        }
+        focused.rerunRequested = false;
+        focused.running = true;
+        try {
+          await this.probeFocusedWorktreeGitWorkingState(
+            worktreePath,
+            focused.acceptedPushedCommitShas,
+          );
+        } catch (error) {
+          backendRegistryLog.warn("focused working-state refresh failed", {
+            error: error instanceof Error ? error.message : String(error),
+            worktreePath,
+          });
+        } finally {
+          focused.running = false;
+        }
+      } while (focused.rerunRequested);
+    })().finally(() => {
+      if (
+        this.focusedThreadGitWorkingStateRefreshByPath.get(worktreePath)
+        === focused
+      ) {
+        this.focusedThreadGitWorkingStateRefreshByPath.delete(worktreePath);
+      }
+      if (this.pendingThreadGitWorkingStateByPath.get(worktreePath) === refresh) {
+        this.pendingThreadGitWorkingStateByPath.delete(worktreePath);
+      }
+      this.focusedThreadGitWorkingStateRefreshes.delete(refresh);
+    });
+    this.pendingThreadGitWorkingStateByPath.set(worktreePath, refresh);
+    this.focusedThreadGitWorkingStateRefreshes.add(refresh);
+    return true;
+  }
+
+  private async probeFocusedWorktreeGitWorkingState(
+    worktreePath: string,
+    acceptedPushedCommitShas: string[] | undefined,
+  ): Promise<void> {
+    for await (const entry of this.gitWorkingStateService.readWorkingStateEntries(
+      [worktreePath],
+      {
+        acceptedPushedCommitShasByWorktreePath: {
+          [worktreePath]: acceptedPushedCommitShas,
+        },
+      },
+    )) {
+      await this.rememberThreadGitWorkingStateCacheEntry({
+        ...entry,
+        fetchedAt: Date.now(),
+      });
     }
   }
 
@@ -20836,7 +20952,10 @@ export class DesktopBackendRegistry {
     // clears below final: `rememberThreadGitWorkingStateCacheEntry` reloads
     // the durable cache, so a late round would refill the map and write to a
     // store that is on its way out.
-    await Promise.all([...this.threadGitWorkingStateRefreshRounds]);
+    if (this.threadGitWorkingStateRefreshRound) {
+      await this.threadGitWorkingStateRefreshRound;
+    }
+    await Promise.all([...this.focusedThreadGitWorkingStateRefreshes]);
     this.workingStateByWorktree.clear();
     this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {

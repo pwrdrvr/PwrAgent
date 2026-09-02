@@ -86,6 +86,41 @@ async function resolveWindowsJobExecutable(
   return resolved;
 }
 
+async function resolvePosixExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  if (path.isAbsolute(command)) {
+    return path.normalize(command);
+  }
+  if (command.includes(path.sep)) {
+    const absolute = path.resolve(command);
+    const result = await canRunGit(absolute, env);
+    if (result.ok) {
+      return absolute;
+    }
+    throw new Error(result.error);
+  }
+
+  for (const pathEntry of (readPathEnv(env) ?? "").split(path.delimiter)) {
+    const candidate = path.resolve(pathEntry || process.cwd(), command);
+    const result = await canRunGit(candidate, env);
+    if (result.ok) {
+      return candidate;
+    }
+  }
+  throw new Error(`Unable to resolve an absolute executable path for ${command}.`);
+}
+
+async function resolveExecutableAbsolutePath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  return process.platform === "win32"
+    ? await resolveWindowsJobExecutable(command, env)
+    : await resolvePosixExecutable(command, env);
+}
+
 export async function resolveGitExecutable(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
@@ -103,8 +138,17 @@ export async function resolveGitExecutable(
       for (const candidate of gitExecutableCandidates(childEnv)) {
         const result = await canRunGit(candidate, childEnv);
         if (result.ok) {
-          resolvedGitExecutableByEnv.set(cacheKey, candidate);
-          return candidate;
+          try {
+            const absolute = await resolveExecutableAbsolutePath(
+              candidate,
+              childEnv,
+            );
+            resolvedGitExecutableByEnv.set(cacheKey, absolute);
+            return absolute;
+          } catch (error) {
+            failures.push(`${candidate}: ${errorText(error)}`);
+            continue;
+          }
         }
         failures.push(`${candidate}: ${result.error}`);
       }

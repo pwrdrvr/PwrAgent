@@ -70,6 +70,16 @@ type BaseBranchCandidate = {
   ref: string;
   label: string;
   sourceRank: number;
+  baseTipCommit?: string;
+  baseBehindCommitCount?: number;
+  baseAheadCommitCount?: number;
+};
+
+type BaseBranchRefState = {
+  ref: string;
+  baseTipCommit: string;
+  baseBehindCommitCount?: number;
+  baseAheadCommitCount?: number;
 };
 
 function buildAcceptedPushedCommitSet(
@@ -174,6 +184,31 @@ function parseGitLines(output: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseBaseBranchRefStates(output: string | undefined): BaseBranchRefState[] {
+  return parseGitLines(output).flatMap((line) => {
+    const [rawRef, baseTipCommit, rawAheadBehind] = line.split("\0");
+    const ref = normalizeBaseBranchLabel(rawRef ?? "");
+    if (!ref) {
+      return [];
+    }
+    const [rawAhead, rawBehind] = (rawAheadBehind ?? "").trim().split(/\s+/);
+    const ahead = Number.parseInt(rawAhead ?? "", 10);
+    const behind = Number.parseInt(rawBehind ?? "", 10);
+    return [{
+      ref,
+      baseTipCommit: baseTipCommit?.trim() ?? "",
+      // `ahead-behind:HEAD` describes the candidate ref. A commit ahead of
+      // HEAD is one HEAD is behind, and vice versa.
+      ...(Number.isFinite(ahead) && Number.isFinite(behind)
+        ? {
+            baseBehindCommitCount: ahead,
+            baseAheadCommitCount: behind,
+          }
+        : {}),
+    }];
+  });
+}
+
 function normalizeBaseBranchLabel(refName: string): string {
   return refName
     .trim()
@@ -209,6 +244,7 @@ function addBaseBranchCandidate(
   seen: Set<string>,
   ref: string | undefined,
   sourceRank: number,
+  refStates: ReadonlyMap<string, BaseBranchRefState>,
 ): void {
   const normalizedRef = normalizeBaseBranchLabel(ref ?? "");
   const label = remoteAgnosticBranchName(normalizedRef);
@@ -216,7 +252,21 @@ function addBaseBranchCandidate(
     return;
   }
   seen.add(label);
-  candidates.push({ ref: normalizedRef, label, sourceRank });
+  const refState = refStates.get(normalizedRef);
+  candidates.push({
+    ref: normalizedRef,
+    label,
+    sourceRank,
+    ...(refState?.baseTipCommit
+      ? { baseTipCommit: refState.baseTipCommit }
+      : {}),
+    ...(refState?.baseBehindCommitCount === undefined
+      ? {}
+      : { baseBehindCommitCount: refState.baseBehindCommitCount }),
+    ...(refState?.baseAheadCommitCount === undefined
+      ? {}
+      : { baseAheadCommitCount: refState.baseAheadCommitCount }),
+  });
 }
 
 function isBetterBaseState(
@@ -276,19 +326,29 @@ async function resolveWorktreeBaseState(
       "refs/heads",
       "refs/remotes",
       "--sort=-committerdate",
-      "--format=%(refname:short)",
-    ]).catch(() => ""),
+      "--format=%(refname:short)%00%(objectname)%00%(ahead-behind:HEAD)",
+    ]).catch(() =>
+      runGitNoLocks([
+        "for-each-ref",
+        "refs/heads",
+        "refs/remotes",
+        "--sort=-committerdate",
+        "--format=%(refname:short)",
+      ]).catch(() => ""),
+    ),
   ]);
 
+  const refStates = parseBaseBranchRefStates(refsOutput);
+  const refStateByRef = new Map(refStates.map((state) => [state.ref, state]));
   const candidates: BaseBranchCandidate[] = [];
   const seen = new Set<string>();
-  addBaseBranchCandidate(candidates, seen, configuredBase, 0);
+  addBaseBranchCandidate(candidates, seen, configuredBase, 0, refStateByRef);
   if (!isCurrentBranchRef(remoteHead, currentBranch)) {
-    addBaseBranchCandidate(candidates, seen, remoteHead, 10);
+    addBaseBranchCandidate(candidates, seen, remoteHead, 10, refStateByRef);
   }
 
-  for (const ref of parseGitLines(refsOutput)) {
-    const label = normalizeBaseBranchLabel(ref);
+  for (const refState of refStates) {
+    const label = refState.ref;
     if (
       label === "origin/HEAD" ||
       isCurrentBranchRef(label, currentBranch) ||
@@ -296,7 +356,7 @@ async function resolveWorktreeBaseState(
     ) {
       continue;
     }
-    addBaseBranchCandidate(candidates, seen, label, 10);
+    addBaseBranchCandidate(candidates, seen, label, 10, refStateByRef);
     if (candidates.length >= MAX_BASE_BRANCH_CANDIDATES) {
       break;
     }
@@ -308,8 +368,9 @@ async function resolveWorktreeBaseState(
       })
     | undefined;
 
+  const ranked: Array<ResolvedWorktreeBaseState & { sourceRank: number }> = [];
   for (const candidate of candidates) {
-    const baseTipCommit = (
+    const baseTipCommit = candidate.baseTipCommit ?? (
       await runGitNoLocks([
         "rev-parse",
         "--verify",
@@ -320,25 +381,35 @@ async function resolveWorktreeBaseState(
       continue;
     }
 
-    const baseCommit = (
-      await runGitNoLocks(["merge-base", "HEAD", candidate.ref]).catch(() => "")
-    ).trim();
-    if (!baseCommit) {
-      continue;
+    let baseBehindCommitCount = candidate.baseBehindCommitCount;
+    let baseAheadCommitCount = candidate.baseAheadCommitCount;
+    let baseCommit = "";
+    if (
+      baseBehindCommitCount === undefined
+      || baseAheadCommitCount === undefined
+    ) {
+      // Compatibility for Git versions without the `ahead-behind` ref atom,
+      // and for a configured base that is not a branch ref. Current Git
+      // versions keep candidate evaluation in the single for-each-ref walk.
+      baseCommit = (
+        await runGitNoLocks(["merge-base", "HEAD", candidate.ref]).catch(() => "")
+      ).trim();
+      if (!baseCommit) {
+        continue;
+      }
+      const [baseBehindOutput, baseAheadOutput] = await Promise.all([
+        runGitNoLocks([
+          "rev-list",
+          "--count",
+          `${baseCommit}..${candidate.ref}`,
+        ]).catch(() => ""),
+        runGitNoLocks(["rev-list", "--count", `${baseCommit}..HEAD`]).catch(
+          () => "",
+        ),
+      ]);
+      baseBehindCommitCount = parseGitCount(baseBehindOutput);
+      baseAheadCommitCount = parseGitCount(baseAheadOutput);
     }
-
-    const [baseBehindOutput, baseAheadOutput] = await Promise.all([
-      runGitNoLocks([
-        "rev-list",
-        "--count",
-        `${baseCommit}..${candidate.ref}`,
-      ]).catch(() => ""),
-      runGitNoLocks(["rev-list", "--count", `${baseCommit}..HEAD`]).catch(
-        () => "",
-      ),
-    ]);
-    const baseBehindCommitCount = parseGitCount(baseBehindOutput);
-    const baseAheadCommitCount = parseGitCount(baseAheadOutput);
     const state: ResolvedWorktreeBaseState & { sourceRank: number } = {
       baseBranch: candidate.label,
       baseCommit,
@@ -352,10 +423,35 @@ async function resolveWorktreeBaseState(
     if (isBetterBaseState(state, best)) {
       best = state;
     }
+    ranked.push(state);
   }
 
   if (!best) {
     return undefined;
+  }
+  if (!best.baseCommit) {
+    // The ahead/behind atom gives every candidate's ranking in one Git
+    // process. Resolve the merge-base only for the winner. If a ref is
+    // disconnected, try the remaining ranked candidates in order without
+    // paying per-candidate processes in the normal connected case.
+    ranked.sort((left, right) => isBetterBaseState(left, right) ? -1 : 1);
+    for (const candidate of ranked) {
+      const candidateRef = candidates.find(
+        (entry) => entry.label === candidate.baseBranch,
+      )?.ref ?? candidate.baseBranch;
+      const baseCommit = (
+        await runGitNoLocks(["merge-base", "HEAD", candidateRef]).catch(
+          () => "",
+        )
+      ).trim();
+      if (baseCommit) {
+        best = { ...candidate, baseCommit };
+        break;
+      }
+    }
+    if (!best.baseCommit) {
+      return undefined;
+    }
   }
   const { sourceRank: _sourceRank, ...state } = best;
   return state;

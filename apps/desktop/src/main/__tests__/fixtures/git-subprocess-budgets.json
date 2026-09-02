@@ -1,0 +1,13 @@
+{
+  "workingStateProbe": {
+    "candidateCount": 24,
+    "baselineGitCommands": 105,
+    "maxGitCommands": 10
+  },
+  "automaticFleet": {
+    "worktreeCount": 100,
+    "navigationRequestsWhileInFlight": 100,
+    "baselineRoundsStarted": 13,
+    "maxRoundsStarted": 1
+  }
+}
