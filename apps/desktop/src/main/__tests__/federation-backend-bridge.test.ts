@@ -3611,7 +3611,10 @@ describe("federation backend bridge", () => {
           path: { value: "", source: "default" as const },
           discovery: { candidates: [] },
         },
-        git: { discovery: { candidates: [] } },
+        git: {
+          path: { value: "", source: "default" as const },
+          discovery: { candidates: [] },
+        },
       })),
       openApplication: vi.fn(async () => ({ opened: true as const })),
       trustCodexProject: vi.fn(async (request: TrustCodexProjectRequest) => ({

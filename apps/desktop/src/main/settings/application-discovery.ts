@@ -353,6 +353,7 @@ export async function discoverDesktopApplications(params?: {
       discovery: { candidates: [] },
     },
     git: {
+      path: { value: "", source: "default" },
       discovery: { candidates: [] },
     },
   };

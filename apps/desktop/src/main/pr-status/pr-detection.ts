@@ -4,6 +4,7 @@ import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { hasGitHubRemoteForDirectory } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
+import { getGitCommand } from "../git-command";
 
 const execFileAsync = promisify(execFile);
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
@@ -139,7 +140,7 @@ async function readTrackedRemoteBranch(params: {
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync(
-      "git",
+      getGitCommand(),
       [
         "for-each-ref",
         "--format=%(refname)%09%(upstream:remotename)%09%(upstream:remoteref)",
@@ -199,7 +200,7 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
   defaultsByRemote: Map<string, string>;
   remotes: Set<string>;
 }> {
-  const { stdout } = await execFileAsync("git", ["remote"], {
+  const { stdout } = await execFileAsync(getGitCommand(), ["remote"], {
     cwd,
     env: buildPwrAgentChildProcessEnv(process.env),
     maxBuffer: 64 * 1024,
@@ -251,7 +252,7 @@ async function readGitLine(
   args: string[],
 ): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync("git", args, {
+    const { stdout } = await execFileAsync(getGitCommand(), args, {
       cwd,
       env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: 64 * 1024,

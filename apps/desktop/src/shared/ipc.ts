@@ -513,6 +513,12 @@ export const SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL =
   "settings:check-codex-auth-profile-status";
 export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
   "settings:pick-gh-command";
+export const SETTINGS_PICK_GIT_COMMAND_CHANNEL =
+  "settings:pick-git-command";
+export const SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL =
+  "settings:refresh-git-discovery";
+export const SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL =
+  "settings:inspect-code-signatures";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
 export const APPLICATIONS_READ_CHANNEL = "applications:read";

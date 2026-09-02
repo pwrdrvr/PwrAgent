@@ -393,7 +393,10 @@ import type {
   ReadDesktopConfigBootstrapResponse,
   ReadDesktopFullAccessPolicyResponse,
   ReadDesktopMessagingSettingsResponse,
+  InspectCodeSignaturesRequest,
+  InspectCodeSignaturesResponse,
   PickGhCommandResponse,
+  PickGitCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
@@ -862,6 +865,23 @@ export type DesktopApi = {
     request?: CompleteOnboardingCodexBootstrapRequest,
   ) => Promise<CompleteOnboardingCodexBootstrapResponse>;
   pickGhCommand?: () => Promise<PickGhCommandResponse>;
+  pickGitCommand?: () => Promise<PickGitCommandResponse>;
+  /**
+   * Re-probes git candidates and returns the refreshed snapshot. Startup
+   * discovery is memoized, so a plain settings re-read serves the same
+   * candidate list back — this is what a "Re-check", or a change to the
+   * selected path, has to call to see anything new.
+   */
+  refreshGitDiscovery?: () => Promise<ReadDesktopSettingsResponse>;
+  /**
+   * Reads what the platform's code-signing system says about executables
+   * PwrAgent runs but does not ship. Deliberately separate from discovery
+   * so the probes only run for rows a settings pane is showing; results
+   * are cached in the main process on the file's identity.
+   */
+  inspectCodeSignatures?: (
+    request: InspectCodeSignaturesRequest,
+  ) => Promise<InspectCodeSignaturesResponse>;
   /** Run the per-credential connection-test probe for a settings panel.
    *  Result contains parsed identity (bot username, model IDs, codex
    *  version) — never the secret itself. */

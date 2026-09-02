@@ -32,7 +32,10 @@ import type {
   ReadDesktopConfigBootstrapResponse,
   ReadDesktopFullAccessPolicyResponse,
   ReadDesktopMessagingSettingsResponse,
+  InspectCodeSignaturesRequest,
+  InspectCodeSignaturesResponse,
   PickGhCommandResponse,
+  PickGitCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
@@ -64,7 +67,10 @@ import {
   SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
   SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
+  SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
+  SETTINGS_PICK_GIT_COMMAND_CHANNEL,
+  SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
   SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL,
@@ -101,6 +107,8 @@ import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-c
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { validateGhCommand } from "../settings/gh-discovery";
+import { validateGitCommand } from "../settings/git-discovery";
+import { CodeSignatureInspector } from "../settings/code-signature";
 import {
   CodexLoginManager,
   collectCodexStatus,
@@ -945,6 +953,18 @@ function resolveRuntimeMessagingState(
   };
 }
 
+/**
+ * One inspector per main process, so its path cache survives a Settings
+ * pane closing and reopening. Constructed lazily because the guard suites
+ * import this module without ever calling a signature handler.
+ */
+let inspector: CodeSignatureInspector | undefined;
+
+function codeSignatureInspector(): CodeSignatureInspector {
+  inspector ??= new CodeSignatureInspector();
+  return inspector;
+}
+
 function applyRuntimeMessagingSnapshot(
   snapshot: DesktopSettingsSnapshot,
 ): DesktopSettingsSnapshot {
@@ -1487,6 +1507,74 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_PICK_GIT_COMMAND_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_PICK_GIT_COMMAND_CHANNEL,
+    async (event): Promise<PickGitCommandResponse> => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+        ?? BrowserWindow.getFocusedWindow()
+        ?? undefined;
+      const result = window
+        ? await dialog.showOpenDialog(window, {
+            properties: ["openFile"],
+            title: "Choose git",
+          })
+        : await dialog.showOpenDialog({
+            properties: ["openFile"],
+            title: "Choose git",
+          });
+      if (result.canceled || !result.filePaths[0]) {
+        return { canceled: true };
+      }
+
+      const selectedPath = result.filePaths[0];
+      const candidate = await validateGitCommand({
+        command: selectedPath,
+        env: process.env,
+      });
+      if (!candidate.executable || !candidate.version) {
+        return {
+          canceled: false,
+          path: selectedPath,
+          candidate,
+          error:
+            candidate.failureReason
+            ?? candidate.versionFailureReason
+            ?? "Selected file did not respond to git --version.",
+        };
+      }
+
+      return {
+        canceled: false,
+        path: selectedPath,
+        candidate,
+      };
+    },
+  );
+
+  ipcMain.removeHandler(SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
+    async (): Promise<ReadDesktopSettingsResponse> => ({
+      snapshot: applyRuntimeMessagingSnapshot(
+        await getService(service).refreshGitDiscovery(),
+      ),
+    }),
+  );
+
+  ipcMain.removeHandler(SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL,
+    async (
+      _event,
+      request: InspectCodeSignaturesRequest,
+    ): Promise<InspectCodeSignaturesResponse> => ({
+      signatures: await codeSignatureInspector().inspectMany(
+        Array.isArray(request?.paths) ? request.paths : [],
+      ),
+    }),
+  );
+
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.handle(
     SETTINGS_TEST_CREDENTIALS_CHANNEL,
@@ -1697,6 +1785,9 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_PICK_GIT_COMMAND_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);

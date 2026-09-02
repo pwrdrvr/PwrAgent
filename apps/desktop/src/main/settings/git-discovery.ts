@@ -93,22 +93,44 @@ function dedupeGitCandidates(
 }
 
 export async function discoverGitCommands(params?: {
+  configuredCommand?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 }): Promise<DesktopGitDiscoverySnapshot> {
   const env = params?.env ?? process.env;
-  const candidates = dedupeGitCandidates(
-    await Promise.all(
-      gitCandidateInputs(env).map((candidate) =>
-        buildGitCandidate(candidate, {
-          env,
-          platform: params?.platform,
-        }),
-      ),
-    ),
-  );
+  const configuredCommand = params?.configuredCommand?.trim();
+  const build = (input: {
+    command: string | undefined;
+    source: DesktopGitCandidateSource;
+  }): Promise<DesktopGitDiscoveryCandidate | undefined> =>
+    buildGitCandidate(input, { env, platform: params?.platform });
+
+  const discovered = await Promise.all(gitCandidateInputs(env).map(build));
+  // A configured path that is already one of the well-known locations
+  // stays under the source that names it, so the row keeps reading
+  // "Apple Git" rather than the far less useful "config". The extra
+  // candidate exists only for a path discovery would never have found.
+  const configured = configuredCommand
+    ? await build({ command: configuredCommand, source: "config" })
+    : undefined;
+  const configuredIsNew =
+    configured
+    && !discovered.some((candidate) => candidate?.command === configured.command);
+
+  const candidates = dedupeGitCandidates([
+    ...discovered.slice(0, 1),
+    ...(configuredIsNew ? [configured] : []),
+    ...discovered.slice(1),
+  ]);
+
   const selected =
     candidates.find((candidate) => candidate.source === "env" && candidate.executable)
+    ?? (configured
+      ? candidates.find(
+          (candidate) =>
+            candidate.command === configured.command && candidate.executable,
+        )
+      : undefined)
     ?? candidates.find((candidate) => candidate.executable);
 
   if (selected) {
@@ -120,4 +142,24 @@ export async function discoverGitCommands(params?: {
     selectedSource: selected?.source,
     candidates,
   };
+}
+
+/**
+ * Probes one operator-chosen path the same way discovery probes a
+ * well-known one, so the manual picker can reject a file that does not
+ * answer `git --version` before it is written to config.
+ */
+export async function validateGitCommand(params: {
+  command: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): Promise<DesktopGitDiscoveryCandidate> {
+  const candidate = await buildGitCandidate(
+    { command: params.command, source: "config" },
+    { env: params.env ?? process.env, platform: params.platform },
+  );
+  if (!candidate) {
+    throw new Error("No git path was selected.");
+  }
+  return candidate;
 }

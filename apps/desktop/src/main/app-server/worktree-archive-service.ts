@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
+import { getGitCommand } from "../git-command";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,7 +74,7 @@ async function runGit(
       ownProcessTree: true,
     });
   }
-  return await execFileAsync("git", ["-C", cwd, ...args], {
+  return await execFileAsync(getGitCommand(), ["-C", cwd, ...args], {
     env,
     maxBuffer: 1024 * 1024 * 10,
   });

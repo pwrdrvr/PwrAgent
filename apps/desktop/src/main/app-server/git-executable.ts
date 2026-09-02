@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { getConfiguredGitCommand } from "../git-command";
 import { gitCandidateInputs } from "../settings/git-discovery";
 import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
 
@@ -10,12 +11,39 @@ const execFile = promisify(execFileCallback);
 const resolvedGitExecutableByEnv = new Map<string, string>();
 const resolvingGitExecutableByEnv = new Map<string, Promise<string>>();
 
+/**
+ * Ordered git candidates: the `PWRAGENT_GIT_PATH` override first (it is
+ * the `env`-sourced entry `gitCandidateInputs` contributes), then the
+ * operator's configured path, then the well-known locations. Config sits
+ * behind env so the two
+ * rank the same way here, in `discoverGitCommands`, and in the Settings
+ * pane that shows the result.
+ *
+ * The configured path also participates in the resolution cache key, so
+ * changing it in Settings invalidates a previously resolved executable
+ * rather than being masked by it.
+ */
 function gitExecutableCandidates(env: NodeJS.ProcessEnv): string[] {
-  const candidates = gitCandidateInputs(env).flatMap((candidate) => {
-    const normalized = candidate.command?.trim();
-    return normalized ? [normalized] : [];
-  });
-  return [...new Set(candidates)];
+  const inputs = gitCandidateInputs(env);
+  const normalize = (command: string | undefined): string | undefined =>
+    command?.trim() || undefined;
+  const envOverride = normalize(
+    inputs.find((candidate) => candidate.source === "env")?.command,
+  );
+  const wellKnown = inputs
+    .filter((candidate) => candidate.source !== "env")
+    .flatMap((candidate) => {
+      const command = normalize(candidate.command);
+      return command ? [command] : [];
+    });
+
+  return [
+    ...new Set(
+      [envOverride, getConfiguredGitCommand(), ...wellKnown].filter(
+        (command): command is string => Boolean(command),
+      ),
+    ),
+  ];
 }
 
 function readPathEnv(env: NodeJS.ProcessEnv): string | undefined {

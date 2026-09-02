@@ -10630,6 +10630,62 @@ textarea,
   background: var(--bg-row-active);
 }
 
+/*
+ * A candidate row rendered as the selection control itself.
+ *
+ * These lists always looked like a set of choices, but only the trailing
+ * button was a hit target — and the git list had no button at all, so
+ * clicking a row there did nothing whatsoever. The whole row is now the
+ * button, which is why this block resets the UA button box back to the
+ * shared `.settings-pathrow` layout.
+ */
+.settings-pathrow--selectable {
+  width: 100%;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.settings-pathrow--selectable:hover:not([disabled]) {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.settings-pathrow--selectable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-pathrow--selectable[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/*
+ * The "Use" affordance inside a whole-row button. Deliberately not
+ * `.button`: a button cannot nest inside a button, and painting one here
+ * would invite a click aimed at the inner control that the outer one
+ * silently handles. It reads as the row's own trailing label and picks up
+ * the accent on hover and keyboard focus.
+ */
+.settings-pathrow__use {
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-pathrow--selectable:hover:not([disabled]) .settings-pathrow__use,
+.settings-pathrow--selectable:focus-visible .settings-pathrow__use {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
 .settings-pathrow__icon {
   flex: 0 0 auto;
   display: inline-flex;

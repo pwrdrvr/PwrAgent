@@ -212,7 +212,10 @@ import type {
   SetMessagingDefaultAgentResponse,
   PickDirectoryFromDiskResponse,
   PickFileFromDiskResponse,
+  InspectCodeSignaturesRequest,
+  InspectCodeSignaturesResponse,
   PickGhCommandResponse,
+  PickGitCommandResponse,
   PickReferenceFromDiskResponse,
   ConnectPwrSnapResponse,
   OpenPwrSnapResponse,
@@ -717,7 +720,10 @@ import {
   SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
   SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
+  SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
+  SETTINGS_PICK_GIT_COMMAND_CHANNEL,
+  SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
   SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL,
@@ -1231,6 +1237,14 @@ const desktopApi = Object.freeze({
     ),
   pickGhCommand: async (): Promise<PickGhCommandResponse> =>
     await ipcRenderer.invoke(SETTINGS_PICK_GH_COMMAND_CHANNEL),
+  pickGitCommand: async (): Promise<PickGitCommandResponse> =>
+    await ipcRenderer.invoke(SETTINGS_PICK_GIT_COMMAND_CHANNEL),
+  refreshGitDiscovery: async (): Promise<ReadDesktopSettingsResponse> =>
+    await ipcRenderer.invoke(SETTINGS_REFRESH_GIT_DISCOVERY_CHANNEL),
+  inspectCodeSignatures: async (
+    request: InspectCodeSignaturesRequest,
+  ): Promise<InspectCodeSignaturesResponse> =>
+    await ipcRenderer.invoke(SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL, request),
   testSettingsCredentials: async (
     request: SettingsCredentialTestRequest,
   ): Promise<SettingsCredentialTestResult> =>

@@ -37,6 +37,7 @@ import {
   type CodexThreadMigrationMetadata,
 } from "../codex-app-server/client";
 import { buildCodexClientArgs } from "./backend-registry";
+import { getGitCommand } from "../git-command";
 
 const migrationLog = getMainLogger("pwragent:thread-migration");
 const execFileAsync = promisify(execFile);
@@ -1026,7 +1027,7 @@ async function gitBranchExists(
     return undefined;
   }
   try {
-    await execFileAsync("git", [
+    await execFileAsync(getGitCommand(), [
       "-C",
       repositoryPath,
       "rev-parse",

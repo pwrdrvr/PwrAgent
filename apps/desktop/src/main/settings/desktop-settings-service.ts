@@ -197,7 +197,7 @@ import {
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
-import { discoverGitCommands } from "./git-discovery";
+import { GIT_COMMAND_ENV, discoverGitCommands } from "./git-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
 import {
@@ -369,7 +369,10 @@ function emptyApplicationsSnapshot(): DesktopApplicationsSnapshot {
       path: { value: "", source: "default" },
       discovery: { candidates: [] },
     },
-    git: { discovery: { candidates: [] } },
+    git: {
+      path: { value: "", source: "default" },
+      discovery: { candidates: [] },
+    },
   };
 }
 
@@ -510,8 +513,15 @@ export class DesktopSettingsService {
   // Git/applications discovery remains process-lifetime memoized. Codex uses a
   // bounded coordinator shared with app-server launch so Settings and launch
   // cannot select different binaries.
-  private gitDiscoveryPromise?: Promise<DesktopGitDiscoverySnapshot>;
-  private gitDiscovery?: DesktopGitDiscoverySnapshot;
+  // Scoped to the cache entry rather than kept in a shared field, so a probe
+  // that is already obsolete by the time it resolves writes into its own
+  // entry and can never overwrite a newer snapshot. Same shape as
+  // `ghDiscoveryCache` below, and for the same reason.
+  private gitDiscoveryCache?: {
+    key: string;
+    promise: Promise<DesktopGitDiscoverySnapshot>;
+    result?: DesktopGitDiscoverySnapshot;
+  };
   private applicationsDiscoveryPromise?: Promise<DesktopApplicationsSnapshot>;
   private applicationsDiscovery?: DesktopApplicationsSnapshot;
   private codexProfiles: DesktopCodexAuthProfileDiscoverySnapshot;
@@ -677,7 +687,7 @@ export class DesktopSettingsService {
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
     const codexProfiles = this.codexProfiles;
     const ghDiscovery = this.ghDiscoveryCache?.result ?? { candidates: [] };
-    const gitDiscovery = this.gitDiscovery ?? { candidates: [] };
+    const gitDiscovery = this.gitDiscoveryCache?.result ?? { candidates: [] };
     const applications = this.applicationsDiscovery
       ?? emptyApplicationsSnapshot();
     const preferredEditorId = this.resolveConfigString(
@@ -1387,6 +1397,10 @@ export class DesktopSettingsService {
           discovery: ghDiscovery,
         },
         git: {
+          path: this.resolveString(
+            config.applications?.git?.path,
+            GIT_COMMAND_ENV,
+          ),
           discovery: gitDiscovery,
         },
       },
@@ -1591,17 +1605,27 @@ export class DesktopSettingsService {
     return structuredClone(this.codexProfiles);
   }
 
-  // git/applications discovery is config-independent (depends only on this.env
+  // Applications discovery is config-independent (depends only on this.env
   // + filesystem), so memoize the promise per instance to avoid re-spawning the
   // same probe child processes on every readSettings() call. See the cache
   // field declarations for the Windows-timeout motivation.
-  private discoverGitCommandsCached(): Promise<DesktopGitDiscoverySnapshot> {
-    this.gitDiscoveryPromise ??= discoverGitCommands({ env: this.env })
-      .then((result) => {
-        this.gitDiscovery = result;
-        return result;
+  //
+  // Git discovery takes the configured path, so it is keyed by it the same way
+  // gh discovery is: selecting a different git in Settings has to re-probe,
+  // or the pane would keep showing the previous selection as live.
+  private discoverGitCommandsCached(
+    configuredCommand?: string,
+  ): Promise<DesktopGitDiscoverySnapshot> {
+    const key = configuredCommand?.trim() ?? "";
+    if (this.gitDiscoveryCache?.key !== key) {
+      const promise = discoverGitCommands({ configuredCommand, env: this.env });
+      const cache: NonNullable<typeof this.gitDiscoveryCache> = { key, promise };
+      void promise.then((result) => {
+        cache.result = result;
       });
-    return this.gitDiscoveryPromise;
+      this.gitDiscoveryCache = cache;
+    }
+    return this.gitDiscoveryCache.promise;
   }
 
   private discoverDesktopApplicationsCached(): Promise<DesktopApplicationsSnapshot> {
@@ -2113,17 +2137,35 @@ export class DesktopSettingsService {
     assertProviderDiscoveryPermit(permit, ["startup"]);
     if (!this.startupDiscoveryAttempted) {
       this.startupDiscoveryAttempted = true;
-      const configuredGhCommand = this.configStore.read("applications").gh?.path;
+      const applications = this.configStore.read("applications");
+      const configuredGhCommand = applications.gh?.path;
       this.startupDiscoveryPromise = Promise.allSettled([
         this.runCodexDiscovery(permit),
         this.discoverGhCommandsCached(configuredGhCommand),
-        this.discoverGitCommandsCached(),
+        this.discoverGitCommandsCached(applications.git?.path),
         this.discoverDesktopApplicationsCached(),
       ]).then(() => undefined).finally(() => {
         this.startupDiscoveryPromise = undefined;
       });
     }
     await this.startupDiscoveryPromise;
+    return await this.readSettingsProjection();
+  }
+
+  /**
+   * Re-probes git candidates and returns the refreshed projection.
+   *
+   * Needed for two reasons the memoized startup probe cannot serve: the
+   * "Re-check" button (which previously only re-read the projection, so
+   * it re-rendered the same memoized snapshot), and a change to the
+   * configured path, which has to re-run selection before the pane can
+   * show which git is now live.
+   */
+  async refreshGitDiscovery(): Promise<DesktopSettingsSnapshot> {
+    this.gitDiscoveryCache = undefined;
+    await this.discoverGitCommandsCached(
+      this.configStore.read("applications").git?.path,
+    );
     return await this.readSettingsProjection();
   }
 
@@ -2548,6 +2590,38 @@ export class DesktopSettingsService {
       || configured
       || undefined
     );
+  }
+
+  /**
+   * The git the main process should spawn, or `undefined` when the
+   * operator has expressed no preference and `PATH` should decide.
+   * Installed as the `git-command` resolver at startup, so every git
+   * spawn honours the Settings pane's selection.
+   *
+   * A configured path the last discovery run found unusable is dropped.
+   * Discovery's own selection already skips a non-executable candidate, so
+   * without this the Settings pane would show one git as "In use" while
+   * every direct `getGitCommand()` spawn ran a different, broken one — the
+   * realistic case being an OS update that re-arms the Xcode license
+   * prompt under an operator who had chosen Apple's git. Env override is
+   * exempt: it is an explicit escape hatch and must not be second-guessed,
+   * and a path we have not probed is trusted rather than ignored.
+   */
+  resolveGitCommandPreference(): string | undefined {
+    const envOverride = readEnvString(this.env, GIT_COMMAND_ENV);
+    if (envOverride) {
+      return envOverride;
+    }
+
+    const configured = this.configStore.read("applications").git?.path?.trim();
+    if (!configured) {
+      return undefined;
+    }
+
+    const probed = this.gitDiscoveryCache?.result?.candidates.find(
+      (candidate) => candidate.command === configured,
+    );
+    return probed && !probed.executable ? undefined : configured;
   }
 
   private readConfig(): ConfigReadResult {

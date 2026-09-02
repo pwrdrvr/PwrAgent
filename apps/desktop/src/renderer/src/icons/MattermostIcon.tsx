@@ -1,4 +1,5 @@
-import { useSyncExternalStore, type ImgHTMLAttributes } from "react";
+import type { ImgHTMLAttributes } from "react";
+import { useBrandTheme } from "./brand-theme";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import iconBlackUrl from "../assets/mattermost/icon-black.svg";
 import iconDenimUrl from "../assets/mattermost/icon-denim.svg";
@@ -69,57 +70,6 @@ export function MattermostIcon({
 function useMattermostVariant(
   variant: MattermostIconVariant | undefined,
 ): MattermostIconVariant {
-  const themeVariant = useSyncExternalStore(
-    variant ? subscribeToNothing : subscribeToTheme,
-    resolveThemeVariant,
-    resolveDarkThemeVariant,
-  );
-
-  return variant ?? themeVariant;
-}
-
-const themeListeners = new Set<() => void>();
-let themeObserver: MutationObserver | undefined;
-
-function subscribeToTheme(listener: () => void): () => void {
-  if (
-    typeof document === "undefined"
-    || typeof MutationObserver === "undefined"
-  ) {
-    return subscribeToNothing(listener);
-  }
-
-  themeListeners.add(listener);
-  if (!themeObserver) {
-    themeObserver = new MutationObserver(() => {
-      for (const notify of themeListeners) notify();
-    });
-    themeObserver.observe(document.documentElement, {
-      attributeFilter: ["data-theme"],
-      attributes: true,
-    });
-  }
-
-  return () => {
-    themeListeners.delete(listener);
-    if (themeListeners.size === 0) {
-      themeObserver?.disconnect();
-      themeObserver = undefined;
-    }
-  };
-}
-
-function subscribeToNothing(_listener: () => void): () => void {
-  return () => undefined;
-}
-
-function resolveThemeVariant(): MattermostIconVariant {
-  return typeof document !== "undefined"
-    && document.documentElement.dataset.theme === "light"
-    ? "denim"
-    : "white";
-}
-
-function resolveDarkThemeVariant(): MattermostIconVariant {
-  return "white";
+  const theme = useBrandTheme(!variant);
+  return variant ?? (theme === "light" ? "denim" : "white");
 }

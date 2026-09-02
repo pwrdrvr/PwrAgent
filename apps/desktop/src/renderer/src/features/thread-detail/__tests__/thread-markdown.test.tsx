@@ -324,6 +324,7 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -377,6 +378,7 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -427,6 +429,7 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -529,6 +532,7 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}
@@ -715,6 +719,7 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
           git: {
+            path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
         }}

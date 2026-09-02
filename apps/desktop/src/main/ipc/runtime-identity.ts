@@ -3,10 +3,11 @@ import { execFileSync } from "node:child_process";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { RUNTIME_IDENTITY_CHANNEL } from "../../shared/ipc";
 import type { RuntimeIdentity } from "../../shared/runtime-identity";
+import { getGitCommand } from "../git-command";
 
 function readGitValue(cwd: string, args: string[]): string | undefined {
   try {
-    const value = execFileSync("git", ["-C", cwd, ...args], {
+    const value = execFileSync(getGitCommand(), ["-C", cwd, ...args], {
       encoding: "utf8",
       env: buildPwrAgentChildProcessEnv(process.env),
       stdio: ["ignore", "pipe", "ignore"],
