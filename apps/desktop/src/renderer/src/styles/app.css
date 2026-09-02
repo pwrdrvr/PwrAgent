@@ -20773,6 +20773,20 @@ a.transcript-message__messaging-origin:focus-visible {
   margin-top: 8px;
 }
 
+/* The shared PR chip has to shrink inside the review copy column just like the
+   path chips below. Keep this constraint local: sidebar PR identities should
+   retain their existing intrinsic width. */
+.transcript-review__provenance > .pr-chip {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.transcript-review__provenance .pr-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .review-chip {
   display: inline-flex;
   align-items: center;

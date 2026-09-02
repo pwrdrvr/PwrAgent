@@ -11578,7 +11578,10 @@ describe("useThreadSessionState", () => {
     });
   });
 
-  it("does not drop replay provenance when a matching live review omits it", async () => {
+  it.each([
+    ["semantic review match", "review-start-live"],
+    ["exact item-ID replacement", "review-start"],
+  ])("does not drop replay provenance during a %s", async (_case, liveItemId) => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
@@ -11644,7 +11647,7 @@ describe("useThreadSessionState", () => {
             threadId: "thread-1",
             turnId: "turn-review",
             item: {
-              id: "review-start-live",
+              id: liveItemId,
               type: "enteredReviewMode",
               review: "Review changes against origin/main",
             },
