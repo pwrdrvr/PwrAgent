@@ -222,11 +222,19 @@ export async function bringToFront(
   // fire-and-forget and macOS can constrain the frame, so the run's only
   // placement diagnostic should be an observation, not a claim.
   const placed = await electronApp.evaluate(
-    ({ BrowserWindow, screen }, options) => {
+    async ({ app, BrowserWindow, screen }, options) => {
       const win = BrowserWindow.fromId(options.id);
       if (!win) return null;
       if (options.rect) win.setBounds(options.rect);
       win.show();
+      // `win.focus()` alone does not reliably make the app frontmost on
+      // macOS, and a window that is not key draws a smaller shadow —
+      // 34pt a side instead of 56pt. `screencapture` includes the
+      // shadow, so an unfocused capture comes out 88px narrower and
+      // shorter than its siblings (3016x1936 against the committed
+      // 3104x2024) for the same 1440x900 window. `steal: true` is what
+      // actually activates the app from a background test process.
+      app.focus({ steal: true });
       win.focus();
       win.moveTop();
       // Park the pointer outside the content area.
@@ -280,7 +288,38 @@ export async function bringToFront(
     }
   }
 
-  // Give the compositor a tick to actually raise the window (and settle
-  // the move) before screencapture inspects the on-screen window list.
+  // Wait for the window to actually be key and settled on the display we
+  // put it on, rather than sleeping a fixed interval and hoping.
+  //
+  // `setBounds` returns before the window server has finished the move,
+  // and `getDisplayMatching` answers from geometry — so the placement
+  // report above can say "built-in 2x" while the capture still comes out
+  // at 1x. Three consecutive runs of one spec produced three different
+  // results this way: a correct 3104x2024, an unfocused 3016x1936, and a
+  // 1.08x capture the Swift guard refused outright. Poll the two
+  // conditions the capture actually depends on.
+  const settleDeadline = 5_000;
+  const pollInterval = 100;
+  for (let waited = 0; waited < settleDeadline; waited += pollInterval) {
+    const ready = await electronApp.evaluate(
+      ({ BrowserWindow, screen }, options) => {
+        const win = BrowserWindow.fromId(options.id);
+        if (!win) return true;
+        if (!win.isFocused()) return false;
+        if (options.expectScale === null) return true;
+        return screen.getDisplayMatching(win.getBounds()).scaleFactor
+          >= options.expectScale;
+      },
+      {
+        id: snapshot.id,
+        expectScale: target ? MINIMUM_RETINA_SCALE_FACTOR : null,
+      },
+    );
+    if (ready) break;
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+
+  // Even once both are true the compositor needs a tick before
+  // screencapture reads the on-screen window list.
   await new Promise((resolve) => setTimeout(resolve, 500));
 }

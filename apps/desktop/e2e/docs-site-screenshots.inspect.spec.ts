@@ -855,7 +855,12 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
             method: "initialize",
             result: {
               serverInfo: { name: "Replay Codex", version: "1.0.0" },
-              methods: ["thread/list", "thread/read", "turn/start"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "skills/list",
+                "turn/start",
+              ],
             },
           },
           {
@@ -907,6 +912,30 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
                 turn: { id: "turn-active", status: "inProgress" },
               },
             },
+          },
+          {
+            // The composer fetches skills once it mounts (`useThreadSkills`
+            // → `app-server:list-skills`). A fixture that cannot answer
+            // paints the raw IPC failure into the composer as
+            // `.composer__meta--error`, which is how "Replay fixture
+            // exhausted before skills/list" ended up printed across the
+            // bottom of this screenshot. The thread links no directory,
+            // so an empty list is the honest answer — this capture is
+            // about the queue, not about skills.
+            //
+            // It sits last on purpose. `consumeResponse` only searches the
+            // run of response steps starting at the cursor and stops at
+            // the first live step, and `advance()` refuses to run when the
+            // cursor is parked on an unconsumed response. Putting this
+            // above `turn-started-1` therefore breaks the advance instead
+            // ("expected response skills/list before live step
+            // turn-started-1"); the fetch lands after the turn goes
+            // in-flight, by which point the cursor has moved past the
+            // notification and this step is reachable.
+            id: "skills-list-1",
+            kind: "response",
+            method: "skills/list",
+            result: [],
           },
         ],
       },
