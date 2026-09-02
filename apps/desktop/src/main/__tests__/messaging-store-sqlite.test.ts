@@ -377,6 +377,36 @@ describe("SqliteMessagingStore", () => {
     });
   });
 
+  it("finds a root DM binding from an Agent Session thread surface", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding({
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "dm",
+        },
+      },
+    }));
+
+    await expect(
+      store.findActiveBindingForChannel({
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+        },
+      }),
+    ).resolves.toMatchObject({
+      id: "binding-1",
+      threadId: "thread-1",
+    });
+  });
+
   it("keeps default Agent assignments separate from active bindings", async () => {
     const store = await createStore();
     await store.upsertBinding(buildBinding({ threadId: "work-thread-1" }));

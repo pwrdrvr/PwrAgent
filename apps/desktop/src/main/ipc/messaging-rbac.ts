@@ -31,7 +31,7 @@ import {
   MESSAGING_RBAC_WRITE_ROLE_CHANNEL,
 } from "../../shared/ipc";
 import { getRbacPolicyService } from "../messaging/rbac-policy-service";
-import { readDesktopSettingsConfigSafe } from "../settings/desktop-config";
+import { getDesktopConfigStore } from "../settings/desktop-settings-singleton";
 
 /**
  * IPC surface for the Access Control settings pane. The renderer speaks only
@@ -143,10 +143,8 @@ const PLATFORM_CONFIG_KEYS: Array<{
  * mode is open.
  */
 function readKnownSubjects(): RbacKnownSubject[] {
-  const config = readDesktopSettingsConfigSafe();
-  const messaging = config.messaging;
+  const messaging = getDesktopConfigStore().read("messaging");
   const subjects: RbacKnownSubject[] = [];
-  if (!messaging) return subjects;
 
   for (const { key, platform } of PLATFORM_CONFIG_KEYS) {
     const platformConfig = messaging[key];

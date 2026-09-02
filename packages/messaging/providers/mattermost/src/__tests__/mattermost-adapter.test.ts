@@ -604,6 +604,14 @@ describe("MattermostAdapter — outbound deliver", () => {
     };
   }
 
+  it("reports channel-header title support", () => {
+    const adapter = makeAdapter({ createdPosts: [], patchedPosts: [] });
+
+    expect(adapter.supportsConversationTitle({
+      channel: dmChannel(),
+    })).toBe(true);
+  });
+
   function makeMessageIntent(
     audit: { channel: MessagingChannelRef; actor?: { platformUserId: string } },
   ): MessagingSurfaceIntent {

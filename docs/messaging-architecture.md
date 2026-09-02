@@ -149,6 +149,21 @@ private delivery suppresses the source-conversation final response. Provider
 user IDs and DM routing remain validated and opaque inside the adapter; the
 Agent cannot select an arbitrary recipient.
 
+The scoped `rename_current_messaging_conversation` tool lets an Agent rename
+only the messaging conversation or thread that started its active turn. The
+controller passes the normalized source channel and opaque routing state to
+the adapter's existing `setConversationTitle` capability; the Agent receives
+no provider token and cannot select another channel. This is distinct from
+renaming the PwrAgent thread. A successful tool rename persists the returned
+title on the active binding and notifies desktop surfaces immediately;
+provider title-change events continue to reconcile changes made elsewhere.
+
+`get_current_messaging_surface` exposes rename discovery as two independent
+facts under `conversationCapabilities.rename`: `supported` comes from the
+provider's current-surface predicate, while `allowed` reflects the initiating
+actor's `thread.settings.name` permission. Keeping them separate distinguishes
+a provider limitation from an RBAC denial before the Agent attempts the tool.
+
 `send_messaging_file` is the opt-in companion for generated files that are not
 already in the assistant response (rendered PDFs, zips, installers). Do not use
 it for images the model will embed in the final reply; those already mirror to
@@ -247,7 +262,7 @@ Different platforms deliver button clicks back to the bot through different tran
 | Telegram | Long-poll callbacks via `grammy` | The same connection used for `posted`-style events. |
 | Discord | Gateway component-interaction events via `discord.js` | The same gateway connection. |
 | **Mattermost** | **Out-of-band HTTP POST** to a URL the bot supplies as `integration.url` on each rendered button | **A small HTTP listener bound to `127.0.0.1:<port>`** inside the adapter package. Production deployments expose it through Cloudflare Tunnel or Tailscale Funnel; the listener never binds to a public interface. HMAC-signed `integration.context` defends against forged callbacks (the platform doesn't sign them). |
-| Slack | Socket Mode events via `@slack/socket-mode` | The outbound WebSocket carries message events, button clicks, and slash-command payloads. No public callback URL is needed for v1. Operators create a **customer-owned** Slack app from the versioned official manifest next to this provider (`packages/messaging/providers/slack/manifests/`). PwrAgent does not ship a shared Slack app or client secret. Events API inbound is not implemented; leftover `inboundMode=events` configs are coerced to Socket Mode. |
+| Slack | Socket Mode events via `@slack/socket-mode` | The outbound WebSocket carries message events, button clicks, slash-command payloads, and Agent Session stop/title events. No public callback URL is needed. Operators create a **customer-owned** Slack app from the versioned official manifest next to this provider (`packages/messaging/providers/slack/manifests/`). PwrAgent does not ship a shared Slack app or client secret. Events API inbound is not implemented; leftover `inboundMode=events` configs are coerced to Socket Mode. |
 | Feishu / Lark | Persistent connection via `@larksuiteoapi/node-sdk` | The outbound SDK WebSocket carries message events and interactive-card callbacks by default. Webhook mode remains as a fallback for deployments that explicitly choose an HTTP callback URL. |
 | LINE | Signed webhooks via `X-Line-Signature` | LINE is webhook-only. The adapter verifies the HMAC-SHA256 signature over the raw body before parsing, then normalizes message/postback/follow/join events. Production deployments expose the localhost listener through the same tunnel pattern as Mattermost. |
 

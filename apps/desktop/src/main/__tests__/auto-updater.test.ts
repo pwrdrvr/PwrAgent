@@ -9,13 +9,15 @@ const checkForUpdatesMock = vi.fn();
 const setFeedURLMock = vi.fn();
 const resolveUpdateChannelMock = vi.fn();
 const resolveUpdateTrainMock = vi.fn();
-const configWrittenListeners = new Set<() => void>();
-const onConfigWrittenMock = vi.fn((listener: () => void) => {
-  configWrittenListeners.add(listener);
-  return () => {
-    configWrittenListeners.delete(listener);
-  };
-});
+const updateDomainListeners = new Set<() => void>();
+const subscribeConfigStoreMock = vi.fn(
+  (_domains: readonly string[], listener: () => void) => {
+    updateDomainListeners.add(listener);
+    return () => {
+      updateDomainListeners.delete(listener);
+    };
+  },
+);
 const logInfoMock = vi.fn();
 const logWarnMock = vi.fn();
 const fetchMock = vi.fn();
@@ -36,7 +38,7 @@ const autoUpdaterMock = {
 };
 
 vi.mock("electron", () => ({
-  app: { isPackaged: false },
+  app: { getVersion: () => "1.0.0-beta.7", isPackaged: false },
   BrowserWindow: {
     getAllWindows: vi.fn(() => [
       {
@@ -64,10 +66,12 @@ vi.mock("electron-updater", () => ({
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
-  getDesktopSettingsService: vi.fn(() => ({
-    resolveUpdateChannel: resolveUpdateChannelMock,
-    resolveUpdateTrain: resolveUpdateTrainMock,
-    onConfigWritten: onConfigWrittenMock,
+  getDesktopConfigStore: vi.fn(() => ({
+    read: vi.fn(() => ({
+      channel: resolveUpdateChannelMock(),
+      train: resolveUpdateTrainMock(),
+    })),
+    subscribe: subscribeConfigStoreMock,
   })),
 }));
 
@@ -205,8 +209,8 @@ describe("auto updater", () => {
     resolveUpdateChannelMock.mockReturnValue("latest");
     resolveUpdateTrainMock.mockReset();
     resolveUpdateTrainMock.mockReturnValue("stable");
-    configWrittenListeners.clear();
-    onConfigWrittenMock.mockClear();
+    updateDomainListeners.clear();
+    subscribeConfigStoreMock.mockClear();
     logInfoMock.mockReset();
     logWarnMock.mockReset();
     autoUpdaterMock.allowDowngrade = false;
@@ -382,7 +386,7 @@ describe("auto updater", () => {
     expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
 
     resolveUpdateTrainMock.mockReturnValue("stable");
-    for (const listener of configWrittenListeners) {
+    for (const listener of updateDomainListeners) {
       listener();
     }
 
@@ -399,7 +403,7 @@ describe("auto updater", () => {
     expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
 
     resolveUpdateTrainMock.mockReturnValue("beta");
-    for (const listener of configWrittenListeners) {
+    for (const listener of updateDomainListeners) {
       listener();
     }
 

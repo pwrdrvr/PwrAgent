@@ -11,7 +11,7 @@ import type {
   AutomationSourceMessageDestination,
   AutomationWeekday,
   CreateAutomationRequest,
-  DesktopSettingsSnapshot,
+  DesktopMessagingSettingsProjection,
   InboundPreviewMessage,
   InboundTopicOption,
   MessagingChannelKind,
@@ -36,7 +36,6 @@ import {
   validateAutomationScheduleDefinition,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { readDesktopSettingsCoalesced } from "../../lib/settings-read-coordinator";
 import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
@@ -385,14 +384,15 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
   useEffect(() => {
     const desktopApi = props.desktopApi;
-    if (!desktopApi?.readSettings) {
+    const readMessagingSettings = desktopApi?.readMessagingSettings;
+    if (!readMessagingSettings) {
       setEnabledProviders(DEFAULT_INBOUND_PROVIDERS);
       return;
     }
     let cancelled = false;
     void (async () => {
       try {
-        const response = await readDesktopSettingsCoalesced(desktopApi);
+        const response = await readMessagingSettings();
         if (cancelled) return;
         setEnabledProviders(readEnabledProviders(response.snapshot));
         setProviderGroups(readProviderGroups(response.snapshot));
@@ -585,7 +585,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     if (!captureEntryId) return;
     const subscribe = props.desktopApi?.onMessagingPairingChanged;
     const approve = props.desktopApi?.approveMessagingPairing;
-    const readSettings = props.desktopApi?.readSettings;
+    const readMessagingSettings = props.desktopApi?.readMessagingSettings;
     if (!subscribe) return;
     return subscribe((event) => {
       if (event.entry.id !== captureEntryId) return;
@@ -614,7 +614,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       void (async () => {
         try {
           await approve?.({ entryId: event.entry.id });
-          const response = await readSettings?.();
+          const response = await readMessagingSettings?.();
           if (response) {
             setProviderGroups(readProviderGroups(response.snapshot));
           }
@@ -3072,7 +3072,7 @@ function buildDestinationSnapshot(params: {
 }
 
 function readEnabledProviders(
-  snapshot: DesktopSettingsSnapshot,
+  snapshot: DesktopMessagingSettingsProjection,
 ): MessagingChannelKind[] {
   const messaging = snapshot.messaging;
   const providers: MessagingChannelKind[] = [];
@@ -3085,7 +3085,9 @@ function readEnabledProviders(
   return providers;
 }
 
-function readProviderGroups(snapshot: DesktopSettingsSnapshot): ProviderGroups {
+function readProviderGroups(
+  snapshot: DesktopMessagingSettingsProjection,
+): ProviderGroups {
   const toGroup = (contact: { id: string; displayName?: string }) => ({
     id: contact.id,
     title: contact.displayName ? `${contact.displayName}` : contact.id,

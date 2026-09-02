@@ -10,10 +10,33 @@ const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn(async () => [] as unknown[]);
+const listBackendsMock = vi.fn(async () => ({ backends: [], fetchedAt: 1 }));
 const invalidateAcpBackendDiscoveryMock = vi.fn();
 const getDesktopBackendRegistryMock = vi.fn(() => ({
   invalidateAcpBackendDiscovery: invalidateAcpBackendDiscoveryMock,
+  listBackends: listBackendsMock,
   listThreads: listThreadsMock,
+}));
+const desktopConfigStoreMock = vi.hoisted(() => ({
+  configRevision: vi.fn(() => "config-revision"),
+  fileStatus: vi.fn(() => ({ kind: "valid", contentHash: "hash", observedAt: 20 })),
+  recordProviderDiscovery: vi.fn(),
+  read: vi.fn((domain: string) =>
+    domain === "general"
+      ? {
+          appearance: {
+            theme: "system",
+            density: "mission-control",
+            sidebarTextSize: "md",
+            transcriptTextSize: "md",
+          },
+        }
+      : {
+          completed: true,
+          completedSource: "migrated",
+        },
+  ),
+  version: vi.fn(() => 1),
 }));
 const childProcessMocks = vi.hoisted(() => ({
   execFile: vi.fn(),
@@ -77,6 +100,9 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
     instanceId: "test-instance",
     effectiveMessagingEnabled: false,
     leaseHeld: false,
+    disabledReason: undefined as string | undefined,
+    disabledReasonKind: undefined as "lease_held" | undefined,
+    leaseHolder: undefined as { instanceId: string } | undefined,
   })),
 }));
 
@@ -148,6 +174,11 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: getDesktopBackendRegistryMock,
 }));
 
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopConfigStore: vi.fn(() => desktopConfigStoreMock),
+  getDesktopSettingsService: vi.fn(),
+}));
+
 vi.mock("../messaging/messaging-runtime", () => ({
   getDesktopMessagingRuntime: vi.fn(() => runtimeMock),
 }));
@@ -205,6 +236,7 @@ describe("settings ipc", () => {
     handlers.clear();
     disposeDesktopBackendRegistryMock.mockClear();
     invalidateAcpBackendDiscoveryMock.mockClear();
+    listBackendsMock.mockClear();
     listThreadsMock.mockClear();
     listThreadsMock.mockResolvedValue([]);
     getDesktopBackendRegistryMock.mockClear();
@@ -270,14 +302,27 @@ describe("settings ipc", () => {
       disposeSettingsIpcHandlers,
     } = await import("../ipc/settings");
     const {
+      SETTINGS_READ_BOOTSTRAP_CHANNEL,
       SETTINGS_READ_CHANNEL,
       SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
       SETTINGS_REPLACE_SECRET_CHANNEL,
       SETTINGS_WRITE_CONFIG_CHANNEL,
     } = await import("../../shared/ipc");
     const refreshCodexDiscovery = vi.spyOn(service, "refreshCodexDiscovery");
+    const readSettings = vi.spyOn(service, "readSettingsProjection");
 
     registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_READ_BOOTSTRAP_CHANNEL)?.({}),
+    ).resolves.toMatchObject({
+      snapshot: {
+        version: 1,
+        configRevision: "config-revision",
+        onboarding: { completed: true },
+      },
+    });
+    expect(readSettings).not.toHaveBeenCalled();
 
     await expect(
       handlers.get(SETTINGS_READ_CHANNEL)?.({}),
@@ -294,10 +339,17 @@ describe("settings ipc", () => {
         },
       },
     });
-    await handlers.get(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL)?.({}, {});
+    expect(desktopConfigStoreMock.recordProviderDiscovery).not.toHaveBeenCalled();
+    await expect(
+      handlers.get(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL)?.({}, {}),
+    ).rejects.toThrow("requires a Settings or setup user-action intent");
+    await handlers.get(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL)?.({}, {
+      discoveryIntent: "settings-user-action",
+    });
     expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
+    readSettings.mockClear();
 
-    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+    const writeResponse = await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
       {},
       {
         patch: {
@@ -309,23 +361,91 @@ describe("settings ipc", () => {
         },
       },
     );
+    expect(writeResponse).toMatchObject({
+      update: {
+        normalizedPatch: {
+          experimental: { diffCondensation: { enabled: true } },
+        },
+        scheduledProviderRefreshes: [],
+      },
+      snapshot: {
+        experimental: {
+          diffCondensation: { enabled: { value: true } },
+        },
+      },
+    });
     expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
-    await handlers.get(SETTINGS_REPLACE_SECRET_CHANNEL)?.(
+    expect(readSettings).toHaveBeenCalledOnce();
+    const secretResponse = await handlers.get(SETTINGS_REPLACE_SECRET_CHANNEL)?.(
       {},
       {
         secret: "discordBotToken",
         value: "discord-secret",
       },
     );
+    expect(secretResponse).toEqual({
+      secret: "discordBotToken",
+      state: {
+        configured: true,
+        source: "keychain",
+        writable: true,
+      },
+    });
+    expect(readSettings).toHaveBeenCalledOnce();
 
     const readResponse = await handlers.get(SETTINGS_READ_CHANNEL)?.({});
     const encoded = JSON.stringify(readResponse);
     expect(encoded).toContain("diffCondensation");
     expect(encoded).not.toContain("123456789:secret-token");
     expect(encoded).not.toContain("discord-secret");
+    expect(readSettings).toHaveBeenCalledTimes(2);
 
     disposeSettingsIpcHandlers();
     expect(handlers.has(SETTINGS_READ_CHANNEL)).toBe(false);
+    expect(handlers.has(SETTINGS_READ_BOOTSTRAP_CHANNEL)).toBe(false);
+  });
+
+  it("includes live lease state in the targeted messaging projection", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+    await service.writeConfigPatchTargeted({
+      messaging: { enabled: true },
+    });
+    runtimeMock.isEnabled.mockReturnValue(false);
+    leaseCoordinatorMock.snapshot.mockReturnValueOnce({
+      instanceId: "test-instance",
+      effectiveMessagingEnabled: false,
+      leaseHeld: true,
+      disabledReason: "Messaging is active in another PwrAgent instance.",
+      disabledReasonKind: "lease_held",
+      leaseHolder: { instanceId: "other-instance" },
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_READ_MESSAGING_CHANNEL } = await import("../../shared/ipc");
+
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_READ_MESSAGING_CHANNEL)?.({}),
+    ).resolves.toMatchObject({
+      snapshot: {
+        messaging: {
+          enabled: { value: true },
+        },
+        runtime: {
+          disabled: true,
+          overrideActive: true,
+          disabledReasonKind: "lease_held",
+          leaseHolder: { instanceId: "other-instance" },
+        },
+      },
+    });
   });
 
   it("uses startup messaging identity as the last credential result when no manual test ran", async () => {
@@ -361,7 +481,7 @@ describe("settings ipc", () => {
     });
   });
 
-  it("disposes backend clients after model settings change", async () => {
+  it("does not rebuild backend clients after targeted model settings changes", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
     const service = new DesktopSettingsService({
@@ -426,8 +546,8 @@ describe("settings ipc", () => {
       },
     );
 
-    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
-    expect(invalidateAcpBackendDiscoveryMock).toHaveBeenCalledTimes(1);
+    expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
+    expect(invalidateAcpBackendDiscoveryMock).not.toHaveBeenCalled();
   });
 
   it("does not run the saved Codex path when discovery rejected it", async () => {
@@ -511,6 +631,36 @@ describe("settings ipc", () => {
     expect(providerMocks.buildSlackCreateAppUrl).toHaveBeenCalledTimes(1);
     expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
       "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+    );
+
+    disposeSettingsIpcHandlers();
+  });
+
+  it("opens Slack Apps and returns the manifest for an existing app update", async () => {
+    const service = {
+      readSettings: vi.fn(),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const { SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL)?.(
+        {},
+        { mode: "update", open: true },
+      ),
+    ).resolves.toMatchObject({
+      opened: true,
+      oversized: false,
+      url: "https://api.slack.com/apps",
+      manifestJson: "{}",
+    });
+    expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "https://api.slack.com/apps",
     );
 
     disposeSettingsIpcHandlers();
@@ -636,14 +786,9 @@ describe("settings ipc", () => {
     const codexHome = path.join(tempRoot, "codex");
     vi.stubEnv("CODEX_HOME", codexHome);
     const service = {
-      readSettings: vi.fn(async () => ({
-        models: {
-          codex: {
-            discovery: {
-              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
-            },
-          },
-        },
+      resolveCodexCommand: vi.fn(async () => ({
+        command: "/Applications/Codex.app/Contents/Resources/codex",
+        source: "config" as const,
       })),
     } as unknown as DesktopSettingsService;
     const loginUrl =
@@ -697,14 +842,9 @@ describe("settings ipc", () => {
     const codexHome = path.join(tempRoot, "codex");
     vi.stubEnv("CODEX_HOME", codexHome);
     const service = {
-      readSettings: vi.fn(async () => ({
-        models: {
-          codex: {
-            discovery: {
-              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
-            },
-          },
-        },
+      resolveCodexCommand: vi.fn(async () => ({
+        command: "/Applications/Codex.app/Contents/Resources/codex",
+        source: "config" as const,
       })),
     } as unknown as DesktopSettingsService;
     const loginUrl =
@@ -752,14 +892,9 @@ describe("settings ipc", () => {
     const codexHome = path.join(tempRoot, "codex");
     vi.stubEnv("CODEX_HOME", codexHome);
     const service = {
-      readSettings: vi.fn(async () => ({
-        models: {
-          codex: {
-            discovery: {
-              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
-            },
-          },
-        },
+      resolveCodexCommand: vi.fn(async () => ({
+        command: "/Applications/Codex.app/Contents/Resources/codex",
+        source: "config" as const,
       })),
     } as unknown as DesktopSettingsService;
     childProcessMocks.spawn.mockImplementation((_command: string, args: string[]) => {
@@ -1029,7 +1164,7 @@ describe("settings ipc", () => {
       ).toBe(true);
       const discoveredOnly = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
         {},
-        { refresh: true, probeCapabilities: false },
+        { refresh: true, discoveryIntent: "settings-user-action", probeCapabilities: false },
       )) as { entries?: unknown[] } | undefined;
       expect(discoveredOnly?.entries).toEqual(
         expect.arrayContaining([
@@ -1052,7 +1187,7 @@ describe("settings ipc", () => {
       );
       const refreshed = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
         {},
-        { refresh: true, force: true, registryIds: ["gemini"] },
+        { refresh: true, discoveryIntent: "settings-user-action", force: true, registryIds: ["gemini"] },
       )) as { entries?: unknown[] } | undefined;
       expect(refreshed?.entries).toEqual(
         expect.arrayContaining([
@@ -1225,7 +1360,7 @@ describe("settings ipc", () => {
       registerSettingsIpcHandlers(service);
       const refreshed = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
         {},
-        { refresh: true },
+        { refresh: true, discoveryIntent: "settings-user-action" },
       )) as { entries?: Array<Record<string, unknown>> } | undefined;
       expect(refreshed?.entries).toEqual(
         expect.arrayContaining([
@@ -1274,7 +1409,7 @@ describe("settings ipc", () => {
     initializeAppState();
     try {
       registerSettingsIpcHandlers(service);
-      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true, discoveryIntent: "settings-user-action" });
 
       expect(
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
@@ -1337,7 +1472,7 @@ describe("settings ipc", () => {
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
-      configPath: path.join(tempRoot, "config.toml"),
+      configPath: profileConfigPath,
       env: {},
       secretStore: new MemoryDesktopSecretStore(),
       now: () => 20,
@@ -1371,7 +1506,7 @@ describe("settings ipc", () => {
 
       const refreshed = (await handlers
         .get(ACP_AGENTS_LIST_CHANNEL)
-        ?.({}, { refresh: true, force: true })) as
+        ?.({}, { refresh: true, discoveryIntent: "settings-user-action", force: true })) as
         | { entries?: Array<{ registryId: string; installed: boolean }> }
         | undefined;
 
@@ -1472,7 +1607,7 @@ describe("settings ipc", () => {
         acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities;
 
       // First refresh: the agent is undiscovered → it must be probed once.
-      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true, discoveryIntent: "settings-user-action" });
       expect(probe).toHaveBeenCalledTimes(1);
       expect(probe).toHaveBeenLastCalledWith(
         expect.anything(),
@@ -1481,7 +1616,7 @@ describe("settings ipc", () => {
 
       // Second refresh: cached capabilities are fresh + version-matched → the
       // expensive probe must be skipped (no new launch).
-      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true, discoveryIntent: "settings-user-action" });
       expect(probe).toHaveBeenCalledTimes(1);
 
       localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
@@ -1510,7 +1645,7 @@ describe("settings ipc", () => {
       ]);
       const discoveredOnly = (await handlers
         .get(ACP_AGENTS_LIST_CHANNEL)
-        ?.({}, { refresh: true, probeCapabilities: false })) as
+        ?.({}, { refresh: true, discoveryIntent: "settings-user-action", probeCapabilities: false })) as
         | {
             entries?: Array<{
               registryId: string;
@@ -1531,7 +1666,7 @@ describe("settings ipc", () => {
 
       // A discovery-only version change invalidates the old runtime cache, so
       // the next ordinary refresh must probe the upgraded CLI.
-      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true, discoveryIntent: "settings-user-action" });
       expect(probe).toHaveBeenCalledTimes(2);
 
       // A forced refresh arriving immediately after that probe reuses its
@@ -1539,7 +1674,7 @@ describe("settings ipc", () => {
       // must not create a rapid-fire sequential launch.
       await handlers
         .get(ACP_AGENTS_LIST_CHANNEL)
-        ?.({}, { refresh: true, force: true });
+        ?.({}, { refresh: true, discoveryIntent: "settings-user-action", force: true });
       expect(probe).toHaveBeenCalledTimes(2);
     } finally {
       disposeAppState();
@@ -1617,13 +1752,13 @@ describe("settings ipc", () => {
       // Force bypasses an old cache, but a forced caller that arrives while
       // the same ordinary probe is active must ride that pass instead of
       // launching the same runtime in parallel.
-      const regular = handler?.({}, { refresh: true });
+      const regular = handler?.({}, { refresh: true, discoveryIntent: "settings-user-action" });
       await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
-      const forcedFollower = handler?.({}, { refresh: true, force: true });
-      const regularFollower = handler?.({}, { refresh: true });
+      const forcedFollower = handler?.({}, { refresh: true, discoveryIntent: "settings-user-action", force: true });
+      const regularFollower = handler?.({}, { refresh: true, discoveryIntent: "settings-user-action" });
       const targetedForced = handler?.(
         {},
-        { refresh: true, force: true, registryIds: ["gemini"] },
+        { refresh: true, discoveryIntent: "settings-user-action", force: true, registryIds: ["gemini"] },
       );
       releaseProbe?.();
       await Promise.all([
@@ -1636,7 +1771,7 @@ describe("settings ipc", () => {
 
       // A late duplicate that arrives just after the shared pass completed
       // reuses that same result instead of starting a sequential second probe.
-      await handler?.({}, { refresh: true, force: true });
+      await handler?.({}, { refresh: true, discoveryIntent: "settings-user-action", force: true });
       expect(probe).toHaveBeenCalledTimes(1);
 
       // The reverse ordering also coordinates the actual per-provider probe:
@@ -1649,11 +1784,11 @@ describe("settings ipc", () => {
       );
       const targetedFirst = handler?.(
         {},
-        { refresh: true, force: true, registryIds: ["gemini"] },
+        { refresh: true, discoveryIntent: "settings-user-action", force: true, registryIds: ["gemini"] },
       );
       await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
       localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
-      const allProvidersSecond = handler?.({}, { refresh: true, force: true });
+      const allProvidersSecond = handler?.({}, { refresh: true, discoveryIntent: "settings-user-action", force: true });
       releaseProbe?.();
       await Promise.all([targetedFirst, allProvidersSecond]);
       expect(probe).toHaveBeenCalledTimes(2);
@@ -1794,6 +1929,10 @@ describe("settings ipc", () => {
       expect(listThreadsMock).toHaveBeenCalledExactlyOnceWith({
         callerReason: "onboarding-bootstrap",
       });
+      expect(listBackendsMock).toHaveBeenCalledExactlyOnceWith(
+        { includeUnavailable: true, refreshModels: true },
+        expect.objectContaining({ intent: "setup-user-action" }),
+      );
       expect(response.connectInitiated).toBe(true);
       expect(onConfigPatchWritten).toHaveBeenCalledTimes(1);
     });
@@ -1812,6 +1951,7 @@ describe("settings ipc", () => {
 
       expect(fs.readFileSync(configPath, "utf8")).toContain("completed = true");
       await new Promise((resolve) => setImmediate(resolve));
+      expect(listBackendsMock).not.toHaveBeenCalled();
       expect(listThreadsMock).not.toHaveBeenCalled();
       expect(response.connectInitiated).toBe(false);
     });
@@ -1840,6 +1980,7 @@ describe("settings ipc", () => {
       expect(fs.readFileSync(configPath, "utf8")).toBe(originalBytes);
       await new Promise((resolve) => setImmediate(resolve));
       expect(listThreadsMock).toHaveBeenCalledTimes(2);
+      expect(listBackendsMock).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -327,8 +327,8 @@ export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
 export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
   "settings:resolve-messaging-contact";
 /**
- * Builds the official Slack create-from-manifest URL and optionally
- * opens it in the system browser. Request: `SlackCreateAppRequest`.
+ * Prepares the official Slack manifest and opens either create-from-manifest
+ * or existing-app management. Request: `SlackCreateAppRequest`.
  * Response: `SlackCreateAppResponse`. The renderer never opens the
  * Slack login page itself.
  */
@@ -496,6 +496,10 @@ export const WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL =
   "window:copy-local-diagnostics-info";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
 export const SETTINGS_READ_CHANNEL = "settings:read";
+export const SETTINGS_READ_BOOTSTRAP_CHANNEL = "settings:read-bootstrap";
+export const SETTINGS_READ_MESSAGING_CHANNEL = "settings:read-messaging";
+export const SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL =
+  "settings:read-full-access-policy";
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";
 export const SETTINGS_REPLACE_SECRET_CHANNEL = "settings:replace-secret";
 export const SETTINGS_CLEAR_SECRET_CHANNEL = "settings:clear-secret";

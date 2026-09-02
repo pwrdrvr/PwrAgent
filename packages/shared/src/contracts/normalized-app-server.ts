@@ -1740,6 +1740,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "navigation/providerThreads/refreshed";
+      params: {
+        failedProviders: number;
+      };
+    }
+  | {
       method: "backend/acpUpdateStatus/updated";
       params: {
         backend: AppServerBackendKind;

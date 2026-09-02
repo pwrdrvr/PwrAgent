@@ -193,6 +193,47 @@ turn cancellation and terminal private-response routing can cancel pending
 work or remove an already-mounted card. Completed keys retain a bounded
 sequence tombstone so delayed events cannot reopen a terminal card.
 
+### Agent session lifecycle
+
+`activity.sessionState` is the channel-neutral durable conversation lifecycle
+for providers that expose an agent-session surface. Slack maps `processing`,
+`suspended`, `active`, and `closed` directly to `agents.sessions.setStatus`.
+The ordinary typing `state` remains authoritative for providers without that
+surface. Slack coalesces unchanged status writes and refreshes a genuinely
+long-running `processing` session before Slack's one-hour timeout instead of
+turning the controller's ten-second typing lease into API traffic.
+
+Slack Agent Sessions are authoritative. The adapter uses
+`assistant.threads.setStatus` or `assistant.threads.setTitle` only as an
+exclusive compatibility fallback after the corresponding Agent Sessions API
+is unavailable; it never dual-writes one transition. Explicit conversation
+name sync uses `agents.sessions.rename`. Slack-originated title changes update
+binding-local conversation metadata and never silently rename the global
+PwrAgent thread.
+
+Agent turns can invoke `rename_current_messaging_conversation` for their active
+messaging origin. Desktop orchestration resolves that origin and calls the
+same optional `setConversationTitle` adapter method used by the status-card
+Sync Name action. The tool cannot supply an arbitrary destination, and the
+adapter continues to own provider-specific identifiers, title limits, and API
+translation. Agents should use this operation instead of Browser or Computer
+Use when the user asks to name the current platform thread or conversation.
+After a successful update, desktop orchestration persists the returned title
+on the active binding and notifies local surfaces without waiting for a
+provider metadata echo.
+Adapters that implement title updates should also implement
+`supportsConversationTitle` with the same surface predicate they use before a
+title update. `get_current_messaging_surface` reports that result separately
+from the initiating actor's `thread.settings.name` permission as
+`conversationCapabilities.rename.supported` and `.allowed`.
+
+`agent_session_stopped` is normalized as the existing `status:stop` callback,
+so it passes through the same RBAC and active-turn checks as PwrAgent's status
+card control. A rejected or failed stop re-signals the truthful session state;
+Slack's click is a request and does not itself prove that backend work stopped.
+Terminal streams send an explicit `session_status`, and internal `dense`
+working cards normalize to Slack's documented `timeline` task display mode.
+
 - chunk long messages according to platform limits
 - preserve inline code and fenced code when supported
 - escape or neutralize markdown dialect hazards

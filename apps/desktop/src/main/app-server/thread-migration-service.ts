@@ -28,7 +28,6 @@ import { normalizeProfileName } from "../profile";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import {
-  discoverCodexAuthProfiles,
   resolveDefaultCodexHome,
   resolveCodexHomeForProfile,
   type ResolvedCodexCommandCandidate,
@@ -68,10 +67,14 @@ type ThreadMigrationServiceOptions = {
   destination: DestinationMigrationBackend;
   settingsService?: Pick<
     DesktopSettingsService,
-    "readSettings" | "resolveCodexCommandPreference" | "resolveCodexSpawnEnv"
+    | "resolveCodexCommandPreference"
+    | "resolveCodexSpawnEnv"
   > & Partial<Pick<
     DesktopSettingsService,
-    "resolveCodexCommand" | "resolveCodexSpawnEnvAsync"
+    | "readCodexProfiles"
+    | "readModelsConfig"
+    | "resolveCodexCommand"
+    | "resolveCodexSpawnEnvAsync"
   >>;
   sourceClientFactory?: (params: {
     codexHome: string;
@@ -106,17 +109,14 @@ export class ThreadMigrationService {
 
   async listSources(): Promise<ListThreadMigrationSourcesResponse> {
     const settingsService = this.getSettingsService();
-    const settings = await settingsService.readSettings();
+    if (!settingsService.readModelsConfig || !settingsService.readCodexProfiles) {
+      throw new Error("Targeted model/profile settings are unavailable.");
+    }
+    const configuredProfile = settingsService.readModelsConfig().codex?.profile;
     const activeCodexProfile = normalizeSourceProfile(
-      settings.models.codex.profile.value,
+      configuredProfile,
     );
-    const discovery =
-      settings.models.codex.profiles ??
-      discoverCodexAuthProfiles({
-        configuredProfile: activeCodexProfile,
-        env: this.options.env,
-        homeDir: this.options.homeDir,
-      });
+    const discovery = settingsService.readCodexProfiles();
 
     return {
       activeCodexProfile,
@@ -724,10 +724,14 @@ export class ThreadMigrationService {
 
   private getSettingsService(): Pick<
     DesktopSettingsService,
-    "readSettings" | "resolveCodexCommandPreference" | "resolveCodexSpawnEnv"
+    | "resolveCodexCommandPreference"
+    | "resolveCodexSpawnEnv"
   > & Partial<Pick<
     DesktopSettingsService,
-    "resolveCodexCommand" | "resolveCodexSpawnEnvAsync"
+    | "readCodexProfiles"
+    | "readModelsConfig"
+    | "resolveCodexCommand"
+    | "resolveCodexSpawnEnvAsync"
   >> {
     return this.options.settingsService ?? getDesktopSettingsService();
   }

@@ -110,6 +110,54 @@ function acpEntry(
 }
 
 describe("AI provider onboarding", () => {
+  it("runs setup-authorized Codex and ACP discovery when the step opens", async () => {
+    const discoveredSnapshot = codexSnapshot({
+      command: "/usr/local/bin/codex",
+      version: "0.126.0",
+    });
+    const applySnapshot = vi.fn();
+    const refreshCodexDiscovery = vi.fn(async () => ({
+      snapshot: discoveredSnapshot,
+    }));
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: Date.now(),
+      entries: [acpEntry("qwen")],
+    }));
+    const onAcpEntriesChange = vi.fn();
+    const settings = {
+      snapshot: noCodexSnapshot,
+      refresh: vi.fn(async () => undefined),
+      applySnapshot,
+    } as unknown as DesktopSettingsState;
+
+    render(
+      <BackendRequirementsStep
+        settings={settings}
+        desktopApi={{
+          listAcpAgents,
+          refreshCodexDiscovery,
+        } as DesktopApi}
+        acpEntries={[]}
+        onAcpEntriesChange={onAcpEntriesChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
+      expect(refreshCodexDiscovery).toHaveBeenCalledWith({
+        discoveryIntent: "setup-user-action",
+      });
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: false });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "setup-user-action",
+        refresh: true,
+        probeCapabilities: false,
+      });
+      expect(applySnapshot).toHaveBeenCalledWith(discoveredSnapshot);
+      expect(onAcpEntriesChange).toHaveBeenCalledWith([acpEntry("qwen")]);
+    });
+  });
+
   it("requires a version-validated Codex candidate before enabling Continue", () => {
     expect(
       isBackendRequirementSatisfied(
@@ -227,6 +275,7 @@ describe("AI provider onboarding", () => {
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({ refresh: false });
       expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "setup-user-action",
         refresh: true,
         probeCapabilities: false,
       });
@@ -252,6 +301,7 @@ describe("AI provider onboarding", () => {
     );
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "setup-user-action",
         refresh: true,
         force: true,
         registryIds: ["gemini"],
@@ -358,6 +408,7 @@ describe("AI provider onboarding", () => {
     );
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalledTimes(2));
     listAcpAgents.mockClear();
+    refreshCodexDiscovery.mockClear();
     onAcpEntriesChange.mockClear();
     dispatchEvent.mockClear();
 
@@ -368,6 +419,7 @@ describe("AI provider onboarding", () => {
     await waitFor(() => {
       expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
       expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "setup-user-action",
         refresh: true,
         probeCapabilities: false,
       });

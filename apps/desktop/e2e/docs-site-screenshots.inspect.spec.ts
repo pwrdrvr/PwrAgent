@@ -3,8 +3,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { bringToFront } from "./fixtures/capture-window-placement";
 import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
 import { seedAllMessagingProvidersEnabledConfig } from "./fixtures/docs-site-state-seeding";
 import {
@@ -83,21 +84,25 @@ if (process.env.PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE === "1") {
   }
 }
 
-async function bringToFront(electronApp: ElectronApplication): Promise<void> {
-  await electronApp.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (!win) return;
-    win.show();
-    win.focus();
-    win.moveTop();
-  });
-  await new Promise((resolve) => setTimeout(resolve, 500));
-}
-
-function captureNative(outputBasename: string): void {
+function captureNative(
+  outputBasename: string,
+  options?: { titleSubstring?: string },
+): void {
   mkdirSync(screenshotDir, { recursive: true });
   const outputPath = path.join(screenshotDir, outputBasename);
-  execFileSync(captureScript, ["Electron", outputPath], { stdio: "inherit" });
+  const args = ["Electron", outputPath];
+  if (options?.titleSubstring) {
+    args.push(`--title=${options.titleSubstring}`);
+  }
+  // The Swift script refuses a sub-Retina capture and tells the operator to
+  // "Pass --allow-low-dpi" — which is only actionable if something here can
+  // pass it. On a 1x-only machine (external-display-only desk, a VM, the
+  // Tart lab guest) this is the difference between a documented override
+  // and one that requires editing the spec.
+  if (process.env.PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI === "1") {
+    args.push("--allow-low-dpi");
+  }
+  execFileSync(captureScript, args, { stdio: "inherit" });
 }
 
 /**
@@ -705,16 +710,9 @@ test("messaging-activity-blocked — Messaging Activity showing rejected inbound
     }
     await activityWindow.waitForLoadState("load");
 
-    await app.electronApp.evaluate(({ BrowserWindow }, titleSubstring) => {
-      const win = BrowserWindow.getAllWindows().find((w) =>
-        w.getTitle().includes(titleSubstring),
-      );
-      if (!win) return;
-      win.show();
-      win.focus();
-      win.moveTop();
-    }, "Messaging Activity");
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Same title the capture below passes as `--title=`, so placement and
+    // raise both act on the window that actually gets photographed.
+    await bringToFront(app.electronApp, "Messaging Activity");
 
     // Two nested regions share `aria-label="Messaging activity"`
     // (the outer window shell and the inner screen); .first() pins
@@ -728,16 +726,9 @@ test("messaging-activity-blocked — Messaging Activity showing rejected inbound
       activityWindow.getByText(/Rejected inbound from Riley Chen/).first(),
     ).toBeVisible();
 
-    mkdirSync(screenshotDir, { recursive: true });
-    execFileSync(
-      captureScript,
-      [
-        "Electron",
-        path.join(screenshotDir, "messaging-activity-blocked.png"),
-        "--title=Messaging Activity",
-      ],
-      { stdio: "inherit" },
-    );
+    captureNative("messaging-activity-blocked.png", {
+      titleSubstring: "Messaging Activity",
+    });
   } finally {
     await app.close();
   }

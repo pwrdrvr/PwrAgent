@@ -130,6 +130,20 @@ describe("icon library", () => {
       }
       expect(sources.size).toBe(3);
     });
+
+    it("uses the official blurple asset by default", () => {
+      const { container: blurpleContainer } = render(
+        <DiscordIcon variant="blurple" />,
+      );
+      const blurpleSrc = blurpleContainer
+        .querySelector("img")
+        ?.getAttribute("src");
+      cleanup();
+
+      const { container } = render(<DiscordIcon />);
+
+      expect(container.querySelector("img")).toHaveAttribute("src", blurpleSrc);
+    });
   });
 
   describe("MattermostIcon", () => {

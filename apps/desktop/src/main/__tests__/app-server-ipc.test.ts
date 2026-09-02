@@ -147,19 +147,27 @@ const prAutomationSettings = vi.hoisted(() => {
     budgetCapacity: 30,
     budgetRefillPerMinute: 1,
   };
-  const configWrittenListeners = new Set<() => void>();
+  const configDomainListeners = new Set<() => void>();
+  const read = vi.fn(() => ({
+    backgroundPrPolling: state.backgroundPrPollingEnabled,
+    prAutoDispatchAllowed: state.prAutoDispatchAllowed,
+    prAutoDispatchBudgetCapacity: state.budgetCapacity,
+    prAutoDispatchBudgetRefillPerMinute: state.budgetRefillPerMinute,
+    pausePrAutoDispatchWhenBudgetEmpty: state.pauseWhenBudgetEmpty,
+  }));
   return {
     state,
-    onConfigWritten: vi.fn((listener: () => void) => {
-      configWrittenListeners.add(listener);
-      return () => configWrittenListeners.delete(listener);
+    read,
+    subscribe: vi.fn((_domains: readonly string[], listener: () => void) => {
+      configDomainListeners.add(listener);
+      return () => configDomainListeners.delete(listener);
     }),
     emitConfigWritten: () => {
-      for (const listener of configWrittenListeners) {
+      for (const listener of configDomainListeners) {
         listener();
       }
     },
-    resetConfigWrittenListeners: () => configWrittenListeners.clear(),
+    resetConfigWrittenListeners: () => configDomainListeners.clear(),
     readSettings: vi.fn(async () => ({
       git: {
         backgroundPrPolling: {
@@ -198,6 +206,7 @@ const resolveGitHubReposForDirectory = vi.hoisted(() =>
 );
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const getStartupProviderRefreshStatus = vi.fn();
 const listThreads = vi.fn(async (request?: {
   archived?: boolean;
   backend?: "codex" | "acp:grok";
@@ -877,8 +886,14 @@ vi.mock("../log", () => ({
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopConfigStore: () => ({
+    read: prAutomationSettings.read,
+    subscribe: prAutomationSettings.subscribe,
+  }),
   getDesktopSettingsService: () => ({
-    onConfigWritten: prAutomationSettings.onConfigWritten,
+    readExperimentalConfig: () => ({
+      diffCondensation: { enabled: false },
+    }),
     readSettings: prAutomationSettings.readSettings,
   }),
 }));
@@ -982,6 +997,7 @@ vi.mock("../app-server/backend-registry", () => {
     updateDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     getQueuedTurnsSnapshot: () => ({}),
+    getStartupProviderRefreshStatus,
     rememberCompleteNavigationSnapshot,
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
@@ -1047,7 +1063,8 @@ describe("app server ipc", () => {
     prAutomationSettings.state.budgetCapacity = 30;
     prAutomationSettings.state.budgetRefillPerMinute = 1;
     prAutomationSettings.resetConfigWrittenListeners();
-    prAutomationSettings.onConfigWritten.mockClear();
+    prAutomationSettings.subscribe.mockClear();
+    prAutomationSettings.read.mockClear();
     prAutomationSettings.readSettings.mockClear();
     handlers.clear();
     archiveThread.mockClear();
@@ -1701,7 +1718,7 @@ describe("app server ipc", () => {
       capacity: 1_000,
       refillPerMinute: 60,
     });
-    expect(prAutomationSettings.readSettings).toHaveBeenCalledTimes(1);
+    expect(prAutomationSettings.read).toHaveBeenCalledTimes(1);
     expect(getPrAutoDispatchBudgetStatus).toHaveBeenCalledWith({
       config: {
         capacity: 1_000,
@@ -1787,24 +1804,8 @@ describe("app server ipc", () => {
     })).toMatchObject({ autoFixEnabled: true });
   });
 
-  it("does not let a stale settings read re-enable Auto-fix PR", async () => {
+  it("applies a published kill switch without an asynchronous settings race", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
-    let resolveStaleRead:
-      | ((settings: {
-          git: {
-            backgroundPrPolling: { value: boolean };
-            prAutoDispatchAllowed: { value: boolean };
-            prAutoDispatchBudgetCapacity: { value: number };
-            prAutoDispatchBudgetRefillPerMinute: { value: number };
-            pausePrAutoDispatchWhenBudgetEmpty: { value: boolean };
-          };
-        }) => void)
-      | undefined;
-    prAutomationSettings.readSettings.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        resolveStaleRead = resolve;
-      }),
-    );
     getThreadOverlayState.mockResolvedValue({
       backend: "codex",
       threadId: "thread-1",
@@ -1816,14 +1817,13 @@ describe("app server ipc", () => {
     registerAppServerIpcHandlers();
     await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
     await vi.waitFor(() => {
-      expect(prAutomationSettings.readSettings).toHaveBeenCalledTimes(1);
+      expect(prAutomationSettings.read).toHaveBeenCalledTimes(1);
     });
-    expect(resolveStaleRead).toEqual(expect.any(Function));
 
     prAutomationSettings.state.prAutoDispatchAllowed = false;
     prAutomationSettings.emitConfigWritten();
     await vi.waitFor(() => {
-      expect(prAutomationSettings.readSettings).toHaveBeenCalledTimes(2);
+      expect(prAutomationSettings.read).toHaveBeenCalledTimes(2);
     });
 
     const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
@@ -1838,17 +1838,6 @@ describe("app server ipc", () => {
         autoFixAllowed: false,
       });
     });
-
-    resolveStaleRead?.({
-      git: {
-        backgroundPrPolling: { value: true },
-        prAutoDispatchAllowed: { value: true },
-        prAutoDispatchBudgetCapacity: { value: 30 },
-        prAutoDispatchBudgetRefillPerMinute: { value: 1 },
-        pausePrAutoDispatchWhenBudgetEmpty: { value: true },
-      },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const status = await autoDispatchHandlers?.inspect({
       backend: "codex",
@@ -2166,6 +2155,7 @@ describe("app server ipc", () => {
 
   it("aggregates navigation snapshots across backends by default", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
 
     registerAppServerIpcHandlers();
 
@@ -2224,6 +2214,7 @@ describe("app server ipc", () => {
         backend: "codex",
         executionMode: "default",
       },
+      providerRefresh: { state: "checking" },
     });
   });
 
@@ -3442,9 +3433,10 @@ describe("app server ipc", () => {
   it("uses one active recent page for lightweight navigation refreshes", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
       {},
       {
         forceRefresh: true,
@@ -3466,6 +3458,9 @@ describe("app server ipc", () => {
         partial: true,
       }),
     );
+    expect(response).toEqual(expect.objectContaining({
+      providerRefresh: { state: "checking" },
+    }));
     expect(rememberCompleteNavigationSnapshot).not.toHaveBeenCalled();
   });
 

@@ -8,11 +8,6 @@ import {
 import { createPortal } from "react-dom";
 import type { ThreadExecutionMode } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
-import {
-  invalidateDesktopSettingsRead,
-  readDesktopSettingsCoalesced,
-  rememberDesktopSettingsSnapshot,
-} from "./settings-read-coordinator";
 
 /**
  * The renderer's single gate on escalating a thread to Full Access.
@@ -66,11 +61,11 @@ function loadDismissed(desktopApi: DesktopApi): Promise<void> {
   const token = ++dismissedReadToken;
   dismissedRead = (async () => {
     try {
-      const response = await readDesktopSettingsCoalesced(desktopApi);
-      publishDismissed(
-        response.snapshot.experimental.fullAccessRiskWarningDismissed?.value
-          === true,
-      );
+      if (!desktopApi.readFullAccessPolicy) {
+        throw new Error("Full Access policy is unavailable.");
+      }
+      const response = await desktopApi.readFullAccessPolicy();
+      publishDismissed(response.fullAccessRiskWarningDismissed);
     } catch {
       // Unreadable settings leave the warning on: the gate fails closed,
       // and the next request retries the read.
@@ -86,11 +81,9 @@ async function persistDismissed(desktopApi: DesktopApi): Promise<void> {
   if (!desktopApi.writeSettingsConfig) {
     throw new Error("Could not save the Full Access warning preference.");
   }
-  invalidateDesktopSettingsRead(desktopApi);
-  const response = await desktopApi.writeSettingsConfig({
+  await desktopApi.writeSettingsConfig({
     patch: { experimental: { fullAccessRiskWarningDismissed: true } },
   });
-  rememberDesktopSettingsSnapshot(desktopApi, response);
   publishDismissed(true);
 }
 
@@ -145,7 +138,7 @@ export function useExecutionModeSelection(
   const desktopApi = options.desktopApi;
 
   useEffect(() => {
-    if (!ownsPreference || !desktopApi?.readSettings) {
+    if (!ownsPreference || !desktopApi?.readFullAccessPolicy) {
       return;
     }
     let active = true;

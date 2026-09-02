@@ -14,9 +14,9 @@ const runtimeMock = vi.hoisted(() => ({
   stop: vi.fn(async () => undefined),
 }));
 const settingsServiceMock = vi.hoisted(() => ({
-  readSettings: vi.fn(),
+  readMessagingSettings: vi.fn(),
   resolveSlackBotTokenSync: vi.fn(),
-  writeConfigPatch: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
+  writeConfigPatchTargeted: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
 }));
 const pairingStoreMock = vi.hoisted(() => ({
   markStatus: vi.fn(),
@@ -167,10 +167,10 @@ describe("messaging status ipc", () => {
     runtimeMock.onPairingChanged.mockClear();
     runtimeMock.onPlatformStatus.mockClear();
     runtimeMock.stop.mockClear();
-    settingsServiceMock.readSettings.mockReset();
+    settingsServiceMock.readMessagingSettings.mockReset();
     settingsServiceMock.resolveSlackBotTokenSync.mockReset();
-    settingsServiceMock.writeConfigPatch.mockClear();
-    settingsServiceMock.writeConfigPatch.mockResolvedValue({
+    settingsServiceMock.writeConfigPatchTargeted.mockClear();
+    settingsServiceMock.writeConfigPatchTargeted.mockResolvedValue({
       configPath: "/tmp/pwragent-config.toml",
     });
     pairingStoreMock.markStatus.mockReset();
@@ -366,7 +366,7 @@ describe("messaging status ipc", () => {
     };
     const consumed = { ...entry, status: "consumed" };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    settingsServiceMock.readSettings.mockResolvedValue(lineSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(lineSettingsSnapshot());
     pairingStoreMock.markStatus.mockReturnValue(consumed);
 
     registerMessagingStatusIpcHandlers();
@@ -375,7 +375,7 @@ describe("messaging status ipc", () => {
       handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id }),
     ).resolves.toMatchObject({ added: true, entry: consumed });
 
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         line: {
           authorizedUserIds: [
@@ -401,7 +401,7 @@ describe("messaging status ipc", () => {
       await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id });
     };
 
-    settingsServiceMock.readSettings.mockResolvedValue(lineSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(lineSettingsSnapshot());
 
     await approve({
       id: "pairing-line-group",
@@ -434,7 +434,7 @@ describe("messaging status ipc", () => {
       },
     });
 
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(1, {
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenNthCalledWith(1, {
       messaging: {
         line: {
           authorizedGroups: [
@@ -443,7 +443,7 @@ describe("messaging status ipc", () => {
         },
       },
     });
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(2, {
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenNthCalledWith(2, {
       messaging: {
         line: {
           authorizedRooms: [
@@ -478,7 +478,7 @@ describe("messaging status ipc", () => {
     };
     const consumed = { ...entry, status: "consumed" };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(slackSettingsSnapshot());
     pairingStoreMock.markStatus.mockReturnValue(consumed);
 
     registerMessagingStatusIpcHandlers();
@@ -491,7 +491,7 @@ describe("messaging status ipc", () => {
     ).resolves.toMatchObject({ added: true, entry: consumed });
 
     expect(slackProviderMock.resolveContact).not.toHaveBeenCalled();
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         slack: {
           authorizedChannels: [
@@ -501,7 +501,7 @@ describe("messaging status ipc", () => {
       },
     });
 
-    settingsServiceMock.writeConfigPatch.mockClear();
+    settingsServiceMock.writeConfigPatchTargeted.mockClear();
     pairingStoreMock.markStatus.mockReturnValue(consumed);
 
     await expect(
@@ -511,7 +511,7 @@ describe("messaging status ipc", () => {
       ),
     ).resolves.toMatchObject({ added: true, entry: consumed });
 
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         slack: {
           authorizedUserIds: [
@@ -542,7 +542,7 @@ describe("messaging status ipc", () => {
     };
     const observedWithTarget = { ...entry, approvedTargets: ["team"] };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(slackSettingsSnapshot());
     pairingStoreMock.recordApproval.mockReturnValue(observedWithTarget);
 
     registerMessagingStatusIpcHandlers();
@@ -555,7 +555,7 @@ describe("messaging status ipc", () => {
     ).resolves.toMatchObject({ added: true, entry: observedWithTarget });
 
     // Team approval writes the workspace allowlist using the observed team ID.
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         slack: {
           authorizedWorkspaces: [
@@ -680,7 +680,7 @@ describe("messaging status ipc", () => {
       },
     };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(slackSettingsSnapshot());
     pairingStoreMock.recordApproval.mockReturnValue(entry);
 
     registerMessagingStatusIpcHandlers();
@@ -721,11 +721,11 @@ describe("messaging status ipc", () => {
         bucketId: "T025C2NKT",
       },
     };
-    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(slackSettingsSnapshot());
     pairingStoreMock.recordApproval.mockReturnValue(entry);
 
     const approve = async (target: string) => {
-      settingsServiceMock.writeConfigPatch.mockClear();
+      settingsServiceMock.writeConfigPatchTargeted.mockClear();
       runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
       registerMessagingStatusIpcHandlers();
       await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
@@ -736,7 +736,7 @@ describe("messaging status ipc", () => {
 
     // Channel approval uses the channel name (parentTitle), never "hi".
     await approve("conversation");
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         slack: {
           authorizedChannels: [{ id: "G01N9LZU287", displayName: "signals-chat" }],
@@ -747,7 +747,7 @@ describe("messaging status ipc", () => {
     // Team approval uses the workspace ID with a blank name (never the
     // channel name), so a Lookup can fill it in.
     await approve("team");
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         slack: {
           authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "" }],
@@ -778,7 +778,7 @@ describe("messaging status ipc", () => {
     };
     const consumed = { ...entry, status: "consumed" };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    settingsServiceMock.readSettings.mockResolvedValue(discordSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(discordSettingsSnapshot());
     pairingStoreMock.markStatus.mockReturnValue(consumed);
 
     registerMessagingStatusIpcHandlers();
@@ -788,7 +788,7 @@ describe("messaging status ipc", () => {
       { entryId: entry.id },
     );
 
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         discord: {
           authorizedGuilds: [
@@ -820,7 +820,7 @@ describe("messaging status ipc", () => {
       },
     };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(slackSettingsSnapshot());
     pairingStoreMock.recordApproval.mockReturnValue(entry);
 
     registerMessagingStatusIpcHandlers();
@@ -830,7 +830,7 @@ describe("messaging status ipc", () => {
       { entryId: entry.id, target: "conversation", consume: false },
     );
 
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         slack: {
           authorizedChannels: [{ id: "G01N9LZU287", displayName: "signals-chat" }],
@@ -859,7 +859,7 @@ describe("messaging status ipc", () => {
       },
     };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(slackSettingsSnapshot());
     settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
     slackProviderMock.resolveContact.mockResolvedValue({
       status: "ok",
@@ -879,7 +879,7 @@ describe("messaging status ipc", () => {
       { botToken: "xoxb-token" },
       { id: "T025C2NKT", kind: "workspace" },
     );
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         slack: {
           authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "PwrDrvr" }],
@@ -907,7 +907,7 @@ describe("messaging status ipc", () => {
       },
     };
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    settingsServiceMock.readSettings.mockResolvedValue(slackSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(slackSettingsSnapshot());
     settingsServiceMock.resolveSlackBotTokenSync.mockReturnValue("xoxb-token");
     slackProviderMock.resolveContact.mockRejectedValue(new Error("network down"));
     pairingStoreMock.recordApproval.mockReturnValue(entry);
@@ -919,7 +919,7 @@ describe("messaging status ipc", () => {
       { entryId: entry.id, target: "team", consume: false },
     );
 
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenCalledWith({
       messaging: {
         slack: {
           authorizedWorkspaces: [{ id: "T025C2NKT", displayName: "" }],
@@ -937,7 +937,7 @@ describe("messaging status ipc", () => {
       await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id });
     };
 
-    settingsServiceMock.readSettings.mockResolvedValue(feishuSettingsSnapshot());
+    settingsServiceMock.readMessagingSettings.mockReturnValue(feishuSettingsSnapshot());
 
     await approve({
       id: "pairing-feishu-user",
@@ -975,7 +975,7 @@ describe("messaging status ipc", () => {
       },
     });
 
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(1, {
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenNthCalledWith(1, {
       messaging: {
         feishu: {
           authorizedChats: [
@@ -987,7 +987,7 @@ describe("messaging status ipc", () => {
         },
       },
     });
-    expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(2, {
+    expect(settingsServiceMock.writeConfigPatchTargeted).toHaveBeenNthCalledWith(2, {
       messaging: {
         feishu: {
           authorizedChats: [
@@ -1059,47 +1059,39 @@ describe("messaging status ipc", () => {
 
 function lineSettingsSnapshot() {
   return {
-    messaging: {
-      line: {
-        authorizedUserIds: { value: [], source: "default" },
-        authorizedGroups: { value: [], source: "default" },
-        authorizedRooms: { value: [], source: "default" },
-      },
+    line: {
+      authorizedUserIds: { value: [], source: "default" },
+      authorizedGroups: { value: [], source: "default" },
+      authorizedRooms: { value: [], source: "default" },
     },
   };
 }
 
 function feishuSettingsSnapshot() {
   return {
-    messaging: {
-      feishu: {
-        authorizedUserIds: { value: [], source: "default" },
-        authorizedChats: { value: [], source: "default" },
-        authorizedTenants: { value: [], source: "default" },
-      },
+    feishu: {
+      authorizedUserIds: { value: [], source: "default" },
+      authorizedChats: { value: [], source: "default" },
+      authorizedTenants: { value: [], source: "default" },
     },
   };
 }
 
 function discordSettingsSnapshot() {
   return {
-    messaging: {
-      discord: {
-        authorizedUserIds: { value: [], source: "default" },
-        authorizedGuilds: { value: [], source: "default" },
-      },
+    discord: {
+      authorizedUserIds: { value: [], source: "default" },
+      authorizedGuilds: { value: [], source: "default" },
     },
   };
 }
 
 function slackSettingsSnapshot() {
   return {
-    messaging: {
-      slack: {
-        authorizedUserIds: { value: [], source: "default" },
-        authorizedWorkspaces: { value: [], source: "default" },
-        authorizedChannels: { value: [], source: "default" },
-      },
+    slack: {
+      authorizedUserIds: { value: [], source: "default" },
+      authorizedWorkspaces: { value: [], source: "default" },
+      authorizedChannels: { value: [], source: "default" },
     },
   };
 }

@@ -203,6 +203,10 @@ function buildDelta(params: {
     params.current.launchpadDefaults,
     params.previous.launchpadDefaults,
   );
+  const providerRefreshChanged = !isDeepStrictEqual(
+    params.current.providerRefresh,
+    params.previous.providerRefresh,
+  );
   const threadOrderChanges = buildKeySequenceChanges(
     threadChanges.currentKeys,
     previousThreadKeys,
@@ -219,7 +223,8 @@ function buildDelta(params: {
     || directoryChanges.upserted.length > 0
     || directoryOrderChanges.changed
     || inboxChanges.changed
-    || launchpadDefaultsChanged;
+    || launchpadDefaultsChanged
+    || providerRefreshChanged;
   if (!changed) {
     return undefined;
   }
@@ -250,6 +255,9 @@ function buildDelta(params: {
       : {}),
     ...(launchpadDefaultsChanged
       ? { launchpadDefaults: params.current.launchpadDefaults }
+      : {}),
+    ...(providerRefreshChanged
+      ? { providerRefresh: params.current.providerRefresh }
       : {}),
   };
 }

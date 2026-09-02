@@ -27,11 +27,9 @@ const localHostInfo: FederationHostInfo = {
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
-    readSettings: async () => ({
-      federation: {
-        instanceLabel: { value: "Local Mac", source: "config" },
-        instanceNotes: { value: "Primary dev machine", source: "config" },
-      },
+    readFederationConfig: () => ({
+      instanceLabel: "Local Mac",
+      instanceNotes: "Primary dev machine",
     }),
   }),
 }));

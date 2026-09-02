@@ -24,10 +24,11 @@ export type DiscordIconProps = Omit<
  * Official Discord Symbol asset from Discord's brand kit. Discord
  * permits white, black, and Blurple variants, but forbids recoloring
  * or reconfiguring the mark, so this renders the verbatim SVG via img.
+ * Blurple is the default because it remains visible on both PwrAgent themes.
  */
 export function DiscordIcon({
   size = DEFAULT_ICON_SIZE,
-  variant = "white",
+  variant = "blurple",
   alt = "",
   ...rest
 }: DiscordIconProps) {

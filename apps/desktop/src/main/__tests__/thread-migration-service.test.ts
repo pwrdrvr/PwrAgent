@@ -57,6 +57,16 @@ function makeSettingsSnapshot(activeProfile = "work"): DesktopSettingsSnapshot {
   } as unknown as DesktopSettingsSnapshot;
 }
 
+function makeTargetedSettings(activeProfile = "work") {
+  const snapshot = makeSettingsSnapshot(activeProfile);
+  return {
+    readModelsConfig: () => ({
+      codex: { profile: activeProfile },
+    }),
+    readCodexProfiles: () => snapshot.models.codex.profiles,
+  };
+}
+
 function makeReplay(text = "hello"): AppServerThreadReplay {
   return {
     entries: [],
@@ -92,10 +102,14 @@ function makeSourceThread(
 
 describe("ThreadMigrationService", () => {
   it("lists source profiles without the active Codex profile", async () => {
+    const snapshot = makeSettingsSnapshot("work");
     const service = new ThreadMigrationService({
       destination: {} as never,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        readModelsConfig: () => ({
+          codex: { profile: "work" },
+        }),
+        readCodexProfiles: () => snapshot.models.codex.profiles,
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -136,7 +150,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination: {} as never,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexCommand: async () => ({
           command: "/nvm/bin/codex",
@@ -231,7 +245,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination: {} as never,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -301,7 +315,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -362,7 +376,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -447,7 +461,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -521,7 +535,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -608,7 +622,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -675,7 +689,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -780,7 +794,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -896,7 +910,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -947,7 +961,7 @@ describe("ThreadMigrationService", () => {
     const service = new ThreadMigrationService({
       destination,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        ...makeTargetedSettings("work"),
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },

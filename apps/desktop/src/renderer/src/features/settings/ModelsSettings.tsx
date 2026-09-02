@@ -182,12 +182,16 @@ export function ModelsSettings(props: {
       let acpRegistryRefreshed = false;
       if (force && props.desktopApi.listAcpAgents) {
         await props.desktopApi.listAcpAgents({
+          discoveryIntent: "settings-user-action",
           refresh: true,
           force: true,
         });
         acpRegistryRefreshed = true;
       }
       const response = await props.desktopApi.listBackends({
+        ...((force || refreshModels)
+          ? { discoveryIntent: "settings-user-action" as const }
+          : {}),
         includeUnavailable: true,
         ...(force || refreshModels ? { refreshModels: true } : {}),
       });

@@ -105,6 +105,8 @@ function applyDelta(
       inboxThreadKeys,
       launchpadDefaults:
         delta.launchpadDefaults ?? previous.snapshot.launchpadDefaults,
+      providerRefresh:
+        delta.providerRefresh ?? previous.snapshot.providerRefresh,
     },
   };
 }

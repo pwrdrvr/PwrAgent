@@ -412,12 +412,8 @@ async function refreshProviderCatalogOnFirstSelection(
   }
   providerCatalogsRefreshedThisSession.add(backend);
   try {
-    if (backend.startsWith("acp:") && desktopApi.listAcpAgents) {
-      await desktopApi.listAcpAgents({ refresh: true });
-    }
     await desktopApi.listBackends({
       includeUnavailable: true,
-      refreshModels: backend,
     });
     window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
   } catch {

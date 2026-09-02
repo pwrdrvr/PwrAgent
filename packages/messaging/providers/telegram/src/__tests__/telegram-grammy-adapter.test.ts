@@ -791,6 +791,23 @@ describe("TelegramAdapter source-relative delivery", () => {
     expect(sent[0]).toMatchObject({ chat_id: -100123 });
     expect(sent[0]?.message_thread_id).toBeUndefined();
   });
+
+  it("reports title support only for forum topics", () => {
+    const { adapter } = adapterWithCapture();
+
+    expect(adapter.supportsConversationTitle({
+      channel: topicReplyIntent("source_thread").audit.channel,
+    })).toBe(true);
+    expect(adapter.supportsConversationTitle({
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "-100123",
+          kind: "channel",
+        },
+      },
+    })).toBe(false);
+  });
 });
 
 function createGrammyBot(): TelegramGrammyBotLike & {

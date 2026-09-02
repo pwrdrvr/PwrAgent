@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   DesktopSettingsConfigPatch,
-  DesktopSettingsSnapshot,
+  DesktopMessagingSettingsProjection,
   MessagingChannelKind,
   MessagingDegradationReason,
   MessagingPlatformActivitySummary,
@@ -19,7 +19,6 @@ import { useFederationPeerConnectivity } from "../../lib/useFederationPeerConnec
 import { SettingsIcon } from "../../icons/SettingsIcon";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { readDesktopSettingsCoalesced } from "../../lib/settings-read-coordinator";
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
   enabled: "Enabled",
@@ -101,7 +100,7 @@ export function MessagingStatusBar(props: {
   );
   const [sessionOverride, setSessionOverride] = useState<boolean | null>(null);
   const [settingsSnapshot, setSettingsSnapshot] =
-    useState<DesktopSettingsSnapshot | null>(null);
+    useState<DesktopMessagingSettingsProjection | null>(null);
   const [activityByPlatform, setActivityByPlatform] = useState<
     Partial<Record<MessagingChannelKind, PlatformActivitySummary>>
   >({});
@@ -124,8 +123,8 @@ export function MessagingStatusBar(props: {
   });
 
   const runtimeMessagingEnabled =
-    settingsSnapshot?.runtime?.messaging?.disabled !== undefined
-      ? !settingsSnapshot.runtime.messaging.disabled
+    settingsSnapshot?.runtime?.disabled !== undefined
+      ? !settingsSnapshot.runtime.disabled
       : null;
   const displayStatuses = useMemo(
     () => withConfiguredSettingsStatuses(statuses, settingsSnapshot),
@@ -164,12 +163,12 @@ export function MessagingStatusBar(props: {
   useEffect(() => {
     if (
       !desktopApi?.getMessagingPlatformStatuses
-      || !desktopApi?.readSettings
+      || !desktopApi?.readMessagingSettings
     ) {
       return;
     }
     let cancelled = false;
-    void readDesktopSettingsCoalesced(desktopApi).then((response) => {
+    void desktopApi.readMessagingSettings().then((response) => {
       if (!cancelled) setSettingsSnapshot(response.snapshot);
     }).catch(() => {
       // Settings screen owns user-facing errors; keep this controller quiet.
@@ -183,12 +182,12 @@ export function MessagingStatusBar(props: {
     if (
       !open
       || !desktopApi?.getMessagingPlatformStatuses
-      || !desktopApi?.readSettings
+      || !desktopApi?.readMessagingSettings
     ) {
       return;
     }
     let cancelled = false;
-    void readDesktopSettingsCoalesced(desktopApi).then((response) => {
+    void desktopApi.readMessagingSettings().then((response) => {
       if (!cancelled) setSettingsSnapshot(response.snapshot);
     }).catch(() => {
       // Settings screen owns user-facing errors; keep this controller quiet.
@@ -296,10 +295,10 @@ export function MessagingStatusBar(props: {
       [platform]: true,
     }));
     try {
-      const response = await desktopApi.writeSettingsConfig({
-        patch: platformEnabledPatch(platform, enabled),
-      });
-      setSettingsSnapshot(response.snapshot);
+      const patch = platformEnabledPatch(platform, enabled);
+      await desktopApi.writeSettingsConfig({ patch });
+      const response = await desktopApi.readMessagingSettings?.();
+      if (response) setSettingsSnapshot(response.snapshot);
     } catch (error) {
       setPlatformToggleError(
         error instanceof Error
@@ -626,7 +625,7 @@ function PlatformStatusRow(props: {
 
 function withConfiguredSettingsStatuses(
   runtimeStatuses: readonly MessagingPlatformStatus[],
-  snapshot: DesktopSettingsSnapshot | null,
+  snapshot: DesktopMessagingSettingsProjection | null,
 ): MessagingPlatformStatus[] {
   if (!snapshot) return [...runtimeStatuses];
   const seen = new Set(runtimeStatuses.map((status) => status.platform));
@@ -645,7 +644,7 @@ function withConfiguredSettingsStatuses(
 }
 
 function platformConfiguredFromSnapshot(
-  snapshot: DesktopSettingsSnapshot,
+  snapshot: DesktopMessagingSettingsProjection,
   platform: ConfigurableMessagingPlatform,
 ): boolean {
   switch (platform) {
@@ -665,7 +664,7 @@ function platformConfiguredFromSnapshot(
 }
 
 function platformIdentityFromSnapshot(
-  snapshot: DesktopSettingsSnapshot,
+  snapshot: DesktopMessagingSettingsProjection,
   platform: ConfigurableMessagingPlatform,
 ): Pick<MessagingPlatformStatus, "account" | "detail"> {
   switch (platform) {
@@ -689,7 +688,7 @@ function configurablePlatform(
 }
 
 function platformEnabledFromSnapshot(
-  snapshot: DesktopSettingsSnapshot | null,
+  snapshot: DesktopMessagingSettingsProjection | null,
   platform: MessagingChannelKind,
 ): boolean | undefined {
   if (!snapshot || !configurablePlatform(platform)) return undefined;

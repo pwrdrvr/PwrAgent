@@ -8,6 +8,8 @@ import type {
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopCodexAuthProfileDiscoverySnapshot,
+  DesktopCodexCandidateSource,
+  DesktopCodexDiscoverySnapshot,
   DesktopCodexProfileModel,
   DesktopFederationMode,
   DesktopGitDiscoverySnapshot,
@@ -17,6 +19,7 @@ import type {
   DesktopMessagingAuthorizationMode,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
+  DesktopMessagingSettingsProjection,
   DesktopMessagingResponseMode,
   DesktopMessagingSlackChannelUserAccessMode,
   DesktopMessagingSlackDmAccessMode,
@@ -90,13 +93,21 @@ import {
 } from "../federation/federation-noise";
 
 import {
-  applyDesktopSettingsPatch,
-  readDesktopSettingsConfig,
   resolveDesktopConfigPath,
   userHomeWorktreesRoot,
   type DesktopSettingsConfig,
 } from "./desktop-config";
+import { DesktopConfigStore } from "./config-store/desktop-config-store";
+import type { ConfigUpdateResult } from "./config-store/desktop-config-store";
+import {
+  CONFIG_DOMAIN_KEYS,
+  resolveSpendAlertPolicy,
+  resolveToolOutputAlertPolicy,
+  type ConfigDomainMap,
+  type ProviderProjection,
+} from "./config-store/config-domains";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
+import { resolveMessagingSettingsDomain } from "../messaging/messaging-settings-domain";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
@@ -203,6 +214,10 @@ import {
   CODEX_DISCOVERY_SUCCESS_TTL_MS,
   CodexDiscoveryCoordinator,
 } from "../codex-discovery-coordinator";
+import {
+  assertProviderDiscoveryPermit,
+  type ProviderDiscoveryPermit,
+} from "./provider-discovery-permit";
 import type {
   ManagedCodexCheckMode,
   ManagedCodexRuntime,
@@ -245,8 +260,9 @@ type DesktopSettingsServiceOptions = {
   codexDiscoveryCoordinator?: Pick<
     CodexDiscoveryCoordinator,
     "discover" | "invalidate" | "resolve"
-  >;
+  > & Partial<Pick<CodexDiscoveryCoordinator, "peek">>;
   configPath?: string;
+  configStore?: DesktopConfigStore;
   defaultDeveloperMode?: boolean;
   defaultManagedGrokBuilds?: boolean;
   ensureManagedCodexRuntime?: (options: {
@@ -292,6 +308,66 @@ type ConfigReadResult = {
   config: DesktopSettingsConfig;
   error?: string;
 };
+
+function providerConfigSection(provider: ProviderProjection): {
+  cliPath?: string;
+  enabled?: boolean;
+  managedBuilds?: boolean;
+} {
+  return {
+    enabled: provider.configured.enabled,
+    ...(provider.configured.commandOverride
+      ? { cliPath: provider.configured.commandOverride }
+      : {}),
+    ...(provider.configured.managedBuilds !== undefined
+      ? { managedBuilds: provider.configured.managedBuilds }
+      : {}),
+  };
+}
+
+function codexDiscoveryFromProvider(
+  provider: ProviderProjection,
+): DesktopCodexDiscoverySnapshot {
+  const selectedCommand = provider.lastKnownGood?.selectedCommand;
+  const sourceIsValid = (
+    source: string,
+  ): source is DesktopCodexCandidateSource =>
+    source === "env"
+    || source === "config"
+    || source === "path"
+    || source === "application";
+  const candidates = (provider.lastKnownGood?.candidates ?? [])
+    .filter((candidate) => sourceIsValid(candidate.source))
+    .map((candidate) => ({
+      command: candidate.command,
+      source: candidate.source as DesktopCodexCandidateSource,
+      executable: !candidate.failureReason,
+      selected: candidate.command === selectedCommand,
+      ...(candidate.version ? { version: candidate.version } : {}),
+      ...(candidate.failureReason
+        ? { failureReason: candidate.failureReason }
+        : {}),
+    }));
+  return {
+    candidates,
+    ...(selectedCommand ? { selectedCommand } : {}),
+    ...(provider.validation.error ? { error: provider.validation.error } : {}),
+  };
+}
+
+function emptyApplicationsSnapshot(): DesktopApplicationsSnapshot {
+  return {
+    editors: [],
+    terminals: [],
+    preferredEditorId: { value: "", source: "default" },
+    preferredTerminalId: { value: "", source: "default" },
+    gh: {
+      path: { value: "", source: "default" },
+      discovery: { candidates: [] },
+    },
+    git: { discovery: { candidates: [] } },
+  };
+}
 
 const DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS = 500;
 const MAX_MESSAGING_INPUT_DEBOUNCE_MS = 5_000;
@@ -421,6 +497,7 @@ export class DesktopSettingsService {
   private readonly env: NodeJS.ProcessEnv;
   private readonly argv: readonly string[];
   private readonly configPath: string;
+  private readonly configStore: DesktopConfigStore;
   private readonly configWriteListeners = new Set<() => void>();
   private readonly now: () => number;
   private readonly startupCodexHome?: string;
@@ -430,14 +507,19 @@ export class DesktopSettingsService {
   // bounded coordinator shared with app-server launch so Settings and launch
   // cannot select different binaries.
   private gitDiscoveryPromise?: Promise<DesktopGitDiscoverySnapshot>;
+  private gitDiscovery?: DesktopGitDiscoverySnapshot;
   private applicationsDiscoveryPromise?: Promise<DesktopApplicationsSnapshot>;
+  private applicationsDiscovery?: DesktopApplicationsSnapshot;
+  private codexProfiles: DesktopCodexAuthProfileDiscoverySnapshot;
+  private managedCodexError?: string;
   private readonly codexDiscoveryCoordinator: Pick<
     CodexDiscoveryCoordinator,
     "discover" | "invalidate" | "resolve"
-  >;
+  > & Partial<Pick<CodexDiscoveryCoordinator, "peek">>;
   private ghDiscoveryCache?: {
     key: string;
     promise: ReturnType<typeof discoverGhCommands>;
+    result?: Awaited<ReturnType<typeof discoverGhCommands>>;
   };
   private codexSpawnEnv?: NodeJS.ProcessEnv;
   private codexSpawnEnvHydratedAt?: number;
@@ -446,9 +528,14 @@ export class DesktopSettingsService {
   private terminalSpawnEnv?: NodeJS.ProcessEnv;
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private managedCodexRuntime?: ManagedCodexRuntime;
+  private readonly managedCodexSelectionListeners = new Set<(
+    change: ManagedCodexSelectionChange,
+  ) => Promise<unknown> | unknown>();
   private managedCodexUpdateAbortController?: AbortController;
   private managedCodexRuntimeSwitchPending = false;
   private managedCodexRuntimeSwitchAttempt?: Promise<void>;
+  private startupDiscoveryAttempted = false;
+  private startupDiscoveryPromise?: Promise<void>;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -456,10 +543,19 @@ export class DesktopSettingsService {
     this.configPath =
       options.configPath ??
       resolveDesktopConfigPath({ argv: this.argv, env: this.env });
+    this.configStore = options.configStore ?? new DesktopConfigStore({
+      configPath: this.configPath,
+    });
     this.now = options.now ?? Date.now;
     this.startupCodexHome = resolveCodexHomeForProfile(
-      this.readConfig().config.models?.codex?.profile,
+      this.configStore.read("models").codex?.profile,
       { env: this.env },
+    );
+    this.codexProfiles = normalizeCodexProfilesSnapshot(
+      discoverCodexAuthProfiles({
+        configuredProfile: this.configStore.read("models").codex?.profile,
+        env: this.env,
+      }),
     );
     this.codexDiscoveryCoordinator =
       options.codexDiscoveryCoordinator
@@ -469,9 +565,7 @@ export class DesktopSettingsService {
       });
   }
 
-  async readSettings(options: {
-    forceCodexDiscovery?: boolean;
-  } = {}): Promise<DesktopSettingsSnapshot> {
+  async readSettingsProjection(): Promise<DesktopSettingsSnapshot> {
     const { config, error } = this.readConfig();
     const secretStorage = this.options.secretStore.describe();
 
@@ -570,41 +664,18 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
-    const managedCodexCheckMode =
-      options.forceCodexDiscovery === true ? "force" : "ttl";
-    let managedCodexRuntime: ManagedCodexRuntime | undefined;
-    let managedCodexError: string | undefined;
-    try {
-      managedCodexRuntime = await this.resolveManagedCodexRuntime(
-        config,
-        managedCodexCheckMode,
-      );
-    } catch (error) {
-      // A previously enabled profile must keep Settings available when its
-      // managed binary is missing or an update service is offline. Runtime
-      // launch remains strict and will not fall back to arbitrary Codex.
-      managedCodexError = error instanceof Error ? error.message : String(error);
-    }
+    const managedCodexRuntime = this.managedCodexRuntime;
+    const managedCodexError = this.managedCodexError;
     const codexDiscoveryCommand = managedCodexRuntime?.command
       ?? this.resolveCodexCommandPreferenceFromConfig(config);
-    const codexDiscovery = await this.codexDiscoveryCoordinator.discover(
+    const codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
       codexDiscoveryCommand,
-      {
-        allowStaleSuccess: true,
-        force: options.forceCodexDiscovery === true,
-      },
-    );
-    const codexProfiles = normalizeCodexProfilesSnapshot(
-      discoverCodexAuthProfiles({
-        configuredProfile: config.models?.codex?.profile,
-        env: this.env,
-      }),
-    );
-    const ghDiscovery = await this.discoverGhCommandsCached(
-      config.applications?.gh?.path,
-    );
-    const gitDiscovery = await this.discoverGitCommandsCached();
-    const applications = await this.discoverDesktopApplicationsCached();
+    ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
+    const codexProfiles = this.codexProfiles;
+    const ghDiscovery = this.ghDiscoveryCache?.result ?? { candidates: [] };
+    const gitDiscovery = this.gitDiscovery ?? { candidates: [] };
+    const applications = this.applicationsDiscovery
+      ?? emptyApplicationsSnapshot();
     const preferredEditorId = this.resolveConfigString(
       config.applications?.editor?.preferredId,
     );
@@ -1350,18 +1421,191 @@ export class DesktopSettingsService {
     };
   }
 
+  readMessagingConfig(): ConfigDomainMap["messaging"] {
+    return this.configStore.read("messaging");
+  }
+
+  readMessagingSettings(): DesktopSettingsSnapshot["messaging"] {
+    return resolveMessagingSettingsDomain(this.readMessagingConfig(), this.env);
+  }
+
+  async readMessagingProjection(): Promise<DesktopMessagingSettingsProjection> {
+    const override = resolveRuntimeMessagingOverride({
+      argv: this.argv,
+      env: this.env,
+    });
+    const secretStorageAvailable = this.options.secretStore.describe().available;
+    const [
+      telegramBotToken,
+      discordBotToken,
+      mattermostBotToken,
+      mattermostHmacSecret,
+      slackBotToken,
+      slackAppToken,
+      slackSigningSecret,
+      feishuAppId,
+      feishuAppSecret,
+      feishuEncryptKey,
+      feishuVerificationToken,
+      lineChannelAccessToken,
+      lineChannelSecret,
+    ] = await Promise.all([
+      this.readSecretState(
+        "telegramBotToken",
+        TELEGRAM_BOT_TOKEN_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "discordBotToken",
+        DISCORD_BOT_TOKEN_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "mattermostBotToken",
+        MATTERMOST_BOT_TOKEN_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "mattermostHmacSecret",
+        MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "slackBotToken",
+        SLACK_BOT_TOKEN_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "slackAppToken",
+        SLACK_APP_TOKEN_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "slackSigningSecret",
+        SLACK_SIGNING_SECRET_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "feishuAppId",
+        FEISHU_APP_ID_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "feishuAppSecret",
+        FEISHU_APP_SECRET_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "feishuEncryptKey",
+        FEISHU_ENCRYPT_KEY_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "feishuVerificationToken",
+        FEISHU_VERIFICATION_TOKEN_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "lineChannelAccessToken",
+        LINE_CHANNEL_ACCESS_TOKEN_ENV,
+        secretStorageAvailable,
+      ),
+      this.readSecretState(
+        "lineChannelSecret",
+        LINE_CHANNEL_SECRET_ENV,
+        secretStorageAvailable,
+      ),
+    ]);
+    const messaging = this.readMessagingSettings();
+    return {
+      fetchedAt: this.now(),
+      messaging: {
+        ...messaging,
+        telegram: { ...messaging.telegram, botToken: telegramBotToken },
+        discord: { ...messaging.discord, botToken: discordBotToken },
+        mattermost: {
+          ...messaging.mattermost,
+          botToken: mattermostBotToken,
+          hmacSecret: mattermostHmacSecret,
+        },
+        slack: {
+          ...messaging.slack,
+          botToken: slackBotToken,
+          appToken: slackAppToken,
+          signingSecret: slackSigningSecret,
+        },
+        feishu: {
+          ...messaging.feishu,
+          appId: feishuAppId,
+          appSecret: feishuAppSecret,
+          encryptKey: feishuEncryptKey,
+          verificationToken: feishuVerificationToken,
+        },
+        line: {
+          ...messaging.line,
+          channelAccessToken: lineChannelAccessToken,
+          channelSecret: lineChannelSecret,
+        },
+      },
+      runtime: {
+        disabled: override.disabled,
+        overrideActive: override.disabled,
+        ...(override.disabled
+          ? { disabledReasonKind: "explicit_override" as const }
+          : {}),
+        ...(override.reason ? { disabledReason: override.reason } : {}),
+      },
+    };
+  }
+
+  readFullAccessRiskWarningDismissed(): boolean {
+    return this.readExperimentalConfig().fullAccessRiskWarningDismissed
+      ?? false;
+  }
+
+  readGeneralConfig(): ConfigDomainMap["general"]["settings"] {
+    return this.configStore.read("general").settings;
+  }
+
+  readExperimentalConfig(): ConfigDomainMap["experimental"] {
+    return this.configStore.read("experimental");
+  }
+
+  readFederationConfig(): ConfigDomainMap["federation"] {
+    return this.configStore.read("federation");
+  }
+
+  readModelsConfig(): ConfigDomainMap["models"] {
+    return this.configStore.read("models");
+  }
+
+  readProvidersConfig(): ConfigDomainMap["providers"] {
+    return this.configStore.read("providers");
+  }
+
+  readCodexProfiles(): DesktopCodexAuthProfileDiscoverySnapshot {
+    return structuredClone(this.codexProfiles);
+  }
+
   // git/applications discovery is config-independent (depends only on this.env
   // + filesystem), so memoize the promise per instance to avoid re-spawning the
   // same probe child processes on every readSettings() call. See the cache
   // field declarations for the Windows-timeout motivation.
   private discoverGitCommandsCached(): Promise<DesktopGitDiscoverySnapshot> {
-    this.gitDiscoveryPromise ??= discoverGitCommands({ env: this.env });
+    this.gitDiscoveryPromise ??= discoverGitCommands({ env: this.env })
+      .then((result) => {
+        this.gitDiscovery = result;
+        return result;
+      });
     return this.gitDiscoveryPromise;
   }
 
   private discoverDesktopApplicationsCached(): Promise<DesktopApplicationsSnapshot> {
     this.applicationsDiscoveryPromise ??= discoverDesktopApplications({
       env: this.env,
+    }).then((result) => {
+      this.applicationsDiscovery = result;
+      return result;
     });
     return this.applicationsDiscoveryPromise;
   }
@@ -1371,188 +1615,142 @@ export class DesktopSettingsService {
   ): ReturnType<typeof discoverGhCommands> {
     const key = configuredCommand ?? "";
     if (this.ghDiscoveryCache?.key !== key) {
-      this.ghDiscoveryCache = {
-        key,
-        promise: discoverGhCommands({ configuredCommand, env: this.env }),
-      };
+      const promise = discoverGhCommands({ configuredCommand, env: this.env });
+      const cache: NonNullable<typeof this.ghDiscoveryCache> = { key, promise };
+      void promise.then((result) => {
+        cache.result = result;
+      });
+      this.ghDiscoveryCache = cache;
     }
     return this.ghDiscoveryCache.promise;
   }
 
   resolveWorktreeStorage(): DesktopWorktreeStorageLocation {
-    return this.resolveWorktrees(this.readConfig().config.worktrees?.storage)
+    const storage = this.configStore.read("worktrees").storage;
+    return this.resolveWorktrees(storage)
       .storage.value;
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {
-    return this.resolveUpdateSelection(this.readConfig().config.updates).channel
+    const updates = this.configStore.read("updates");
+    return this.resolveUpdateSelection(updates).channel
       .value;
   }
 
   resolveUpdateTrain(): DesktopUpdateTrain {
-    return this.resolveUpdateSelection(this.readConfig().config.updates).train
+    const updates = this.configStore.read("updates");
+    return this.resolveUpdateSelection(updates).train
       .value;
   }
 
   resolveDeveloperMode(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.developerMode,
+      this.readGeneralConfig().developerMode,
       this.defaultDeveloperMode(),
     ).value;
   }
 
   resolveHotCpuProfilingEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.hotCpuProfilingEnabled,
+      this.readGeneralConfig().hotCpuProfilingEnabled,
       false,
     ).value;
   }
 
   resolveHotCpuProfilingCaptureHeapSnapshot(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.hotCpuProfilingCaptureHeapSnapshot,
+      this.readGeneralConfig().hotCpuProfilingCaptureHeapSnapshot,
       false,
     ).value;
   }
 
   resolveHotCpuProfilingStartDelayMs(): DesktopHotCpuProfileStartDelayMs {
     return this.resolveHotCpuProfileStartDelayMs(
-      this.readConfig().config.general?.hotCpuProfilingStartDelayMs,
+      this.readGeneralConfig().hotCpuProfilingStartDelayMs,
     ).value;
   }
 
   resolveHotCpuProfilingTriggerMode(): DesktopHotCpuProfileTriggerMode {
     return this.resolveHotCpuProfileTriggerMode(
-      this.readConfig().config.general?.hotCpuProfilingTriggerMode,
+      this.readGeneralConfig().hotCpuProfilingTriggerMode,
     ).value;
   }
 
   resolveHotCpuProfilingSlowburnThresholdPercent(): number {
     return this.resolveHotCpuSlowburnThresholdPercent(
-      this.readConfig().config.general?.hotCpuProfilingSlowburnThresholdPercent,
+      this.readGeneralConfig().hotCpuProfilingSlowburnThresholdPercent,
     ).value;
   }
 
   resolveHotCpuProfilingHeapSnapshotLimit(): number {
     return this.resolveHotCpuHeapSnapshotLimit(
-      this.readConfig().config.general?.hotCpuProfilingHeapSnapshotLimit,
+      this.readGeneralConfig().hotCpuProfilingHeapSnapshotLimit,
     ).value;
   }
 
   resolveIntegratedTerminalWindowsShell(): DesktopIntegratedTerminalWindowsShell {
+    const windowsShell = this.configStore.read("integratedTerminal").windowsShell;
     return this.resolveIntegratedTerminalWindowsShellValue(
-      this.readConfig().config.integratedTerminal?.windowsShell,
+      windowsShell,
     ).value;
   }
 
   resolveConfirmQuitWithInProgressThreads(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.confirmQuitWithInProgressThreads,
+      this.readGeneralConfig().confirmQuitWithInProgressThreads,
       true,
     ).value;
   }
 
   resolvePdfAnalysisEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.pdfAnalysisEnabled,
+      this.readGeneralConfig().pdfAnalysisEnabled,
       true,
     ).value;
   }
 
   resolveNotificationsEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.notificationsEnabled,
+      this.readGeneralConfig().notificationsEnabled,
       false,
     ).value;
   }
 
   resolveTokenMiserEnabled(): boolean {
-    return this.resolveConfigBoolean(
-      this.readConfig().config.experimental?.tokenMiserEnabled,
-      false,
-    ).value;
+    return this.configStore.read("experimental").tokenMiserEnabled ?? false;
   }
 
   resolveTokenMiserDefaultEnabled(): boolean {
-    return this.resolveConfigBoolean(
-      this.readConfig().config.experimental?.tokenMiserDefaultEnabled,
-      true,
-    ).value;
+    return this.configStore.read("experimental").tokenMiserDefaultEnabled
+      ?? true;
   }
 
   resolveToolOutputAlertPolicy(): DesktopToolOutputAlertPolicy {
-    const config = this.readConfig().config.general?.toolOutputAlerts;
-    return {
-      outputCapHitsEnabled: this.resolveConfigBoolean(
-        config?.outputCapHitsEnabled,
-        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.outputCapHitsEnabled,
-      ).value,
-      repeatedLargeOutputsEnabled: this.resolveConfigBoolean(
-        config?.repeatedLargeOutputsEnabled,
-        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputsEnabled,
-      ).value,
-      repeatedLargeOutputMinimumCalls: this.resolveBoundedConfigInteger(
-        config?.repeatedLargeOutputMinimumCalls,
-        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumCalls,
-        MIN_REPEATED_LARGE_OUTPUT_CALLS,
-        MAX_REPEATED_LARGE_OUTPUT_CALLS,
-      ).value,
-      repeatedLargeOutputMinimumPercent: this.resolveBoundedConfigInteger(
-        config?.repeatedLargeOutputMinimumPercent,
-        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumPercent,
-        MIN_REPEATED_LARGE_OUTPUT_PERCENT,
-        MAX_REPEATED_LARGE_OUTPUT_PERCENT,
-      ).value,
-      repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
-        config?.repeatedQueuedChecksEnabled,
-        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,
-      ).value,
-    };
+    return resolveToolOutputAlertPolicy(this.configStore.read("general"));
   }
 
   resolveSpendAlertPolicy(): DesktopSpendAlertPolicy {
-    const config = this.readConfig().config.general?.spendAlerts;
-    return {
-      activeTurnSpendEnabled: this.resolveConfigBoolean(
-        config?.activeTurnSpendEnabled,
-        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendEnabled,
-      ).value,
-      activeTurnSpendThresholdUsd: this.resolveBoundedConfigAmount(
-        config?.activeTurnSpendThresholdUsd,
-        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendThresholdUsd,
-        MIN_SPEND_ALERT_THRESHOLD_USD,
-        MAX_SPEND_ALERT_THRESHOLD_USD,
-      ).value,
-      threadSpendEnabled: this.resolveConfigBoolean(
-        config?.threadSpendEnabled,
-        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendEnabled,
-      ).value,
-      threadSpendThresholdUsd: this.resolveBoundedConfigAmount(
-        config?.threadSpendThresholdUsd,
-        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendThresholdUsd,
-        MIN_SPEND_ALERT_THRESHOLD_USD,
-        MAX_SPEND_ALERT_THRESHOLD_USD,
-      ).value,
-    };
+    return resolveSpendAlertPolicy(this.configStore.read("general"));
   }
 
   resolveCodexDefaultModeRequestUserInput(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.experimental?.codexDefaultModeRequestUserInput,
+      this.readExperimentalConfig().codexDefaultModeRequestUserInput,
       false,
     ).value;
   }
 
   resolveManagedReviewEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.experimental?.managedReview,
+      this.readExperimentalConfig().managedReview,
       false,
     ).value;
   }
 
   resolveDefaultPrAutoDispatchEnabled(): boolean {
+    const git = this.configStore.read("git");
     return this.resolveConfigBoolean(
-      this.readConfig().config.git?.defaultPrAutoDispatchEnabled,
+      git?.defaultPrAutoDispatchEnabled,
       DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
     ).value;
   }
@@ -1572,8 +1770,7 @@ export class DesktopSettingsService {
    * gate stays dormant until the wizard PR flips the constant.
    */
   resolveOnboardingCompleted(): boolean {
-    return this.resolveOnboarding(this.readConfig().config.onboarding)
-      .completed.value;
+    return this.configStore.read("onboarding").completed;
   }
 
   /**
@@ -1590,37 +1787,38 @@ export class DesktopSettingsService {
     return !this.resolveOnboardingCompleted();
   }
 
-  async writeConfigPatch(
+  async writeConfigPatchTargeted(
     patch: DesktopSettingsConfigPatch,
-  ): Promise<DesktopSettingsSnapshot> {
-    const current = this.readConfig();
-    if (current.error) {
+    discoveryPermit?: ProviderDiscoveryPermit,
+  ): Promise<ConfigUpdateResult<keyof ConfigDomainMap>> {
+    const fileStatus = this.configStore.fileStatus();
+    if (fileStatus.kind === "invalid") {
       throw new Error(
-        `Cannot save settings because ${this.configPath} could not be parsed: ${current.error}`,
+        `Cannot save settings because ${this.configPath} could not be parsed: ${fileStatus.error}`,
       );
     }
+    const tokenMiserEnabled =
+      this.configStore.read("experimental").tokenMiserEnabled ?? false;
     const enablingTokenMiser =
       patch.experimental?.tokenMiserEnabled === true
-      && !this.resolveConfigBoolean(
-        current.config.experimental?.tokenMiserEnabled,
-        false,
-      ).value;
+      && !tokenMiserEnabled;
     const disablingTokenMiser =
       patch.experimental?.tokenMiserEnabled === false
-      && this.resolveConfigBoolean(
-        current.config.experimental?.tokenMiserEnabled,
-        false,
-      ).value;
+      && tokenMiserEnabled;
     // The switch is a transaction from the operator's perspective: acquire a
     // usable managed Codex first, then persist availability. A failed first
     // install leaves the feature off instead of selecting an arbitrary Codex.
     if (enablingTokenMiser && this.options.ensureManagedCodexRuntime) {
+      assertProviderDiscoveryPermit(discoveryPermit, [
+        "settings-user-action",
+        "setup-user-action",
+      ]);
       await this.ensureManagedCodexRuntime("force");
     }
     if (disablingTokenMiser) {
       this.abortManagedCodexUpdate();
     }
-    applyDesktopSettingsPatch(this.configPath, patch);
+    const update = await this.configStore.write(patch, CONFIG_DOMAIN_KEYS);
     if (
       patch.models?.codex?.path !== undefined
       || patch.experimental?.tokenMiserEnabled !== undefined
@@ -1641,7 +1839,7 @@ export class DesktopSettingsService {
         || appearancePatch.sidebarTextSize !== undefined
         || appearancePatch.transcriptTextSize !== undefined)
     ) {
-      const next = this.readConfig().config.general?.appearance;
+      const next = update.values.general?.appearance;
       this.options.onAppearanceChange?.({
         theme: next?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
         density: next?.density ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
@@ -1664,7 +1862,7 @@ export class DesktopSettingsService {
     if (patch.experimental?.tokenMiserEnabled !== undefined) {
       await this.managedCodexRuntimeSwitchAttempt;
     }
-    return this.readSettings();
+    return update;
   }
 
   /**
@@ -1683,16 +1881,16 @@ export class DesktopSettingsService {
   async replaceSecret(
     secret: DesktopSettingsSecretName,
     value: string,
-  ): Promise<DesktopSettingsSnapshot> {
+  ): Promise<DesktopSettingsSecretState> {
     await this.options.secretStore.setSecret(secret, value);
-    return this.readSettings();
+    return await this.readAndPublishSecretState(secret);
   }
 
   async clearSecret(
     secret: DesktopSettingsSecretName,
-  ): Promise<DesktopSettingsSnapshot> {
+  ): Promise<DesktopSettingsSecretState> {
     await this.options.secretStore.deleteSecret(secret);
-    return this.readSettings();
+    return await this.readAndPublishSecretState(secret);
   }
 
   async getOrCreateFederationIdentityKeyPair(): Promise<FederationIdentityKeyPair> {
@@ -1832,7 +2030,7 @@ export class DesktopSettingsService {
   resolveMattermostServerUrlSync(): string | undefined {
     return (
       readEnvString(this.env, MATTERMOST_SERVER_URL_ENV)
-      ?? this.readConfig().config.messaging?.mattermost?.serverUrl
+      ?? this.readMessagingConfig().mattermost?.serverUrl
       ?? undefined
     );
   }
@@ -1869,7 +2067,7 @@ export class DesktopSettingsService {
   }
 
   resolveFeishuTenantUrlSync(): string | undefined {
-    const config = this.readConfig().config.messaging?.feishu;
+    const config = this.readMessagingConfig().feishu;
     const tenantRegion = this.resolveFeishuTenantRegion(config?.tenantRegion).value;
     const configTenantUrl =
       config?.tenantUrl === FEISHU_DEFAULT_TENANT_URL ||
@@ -1895,7 +2093,9 @@ export class DesktopSettingsService {
   }
 
   resolveCodexCommandPreference(): string | undefined {
-    return this.resolveCodexCommandPreferenceFromConfig(this.readConfig().config);
+    return this.resolveCodexCommandPreferenceFromConfig({
+      models: this.readModelsConfig(),
+    });
   }
 
   /** Codex home pinned when this process started; config changes need restart. */
@@ -1903,14 +2103,108 @@ export class DesktopSettingsService {
     return this.startupCodexHome;
   }
 
-  async refreshCodexDiscovery(): Promise<DesktopSettingsSnapshot> {
+  async refreshStartupDiscovery(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<DesktopSettingsSnapshot> {
+    assertProviderDiscoveryPermit(permit, ["startup"]);
+    if (!this.startupDiscoveryAttempted) {
+      this.startupDiscoveryAttempted = true;
+      const configuredGhCommand = this.configStore.read("applications").gh?.path;
+      this.startupDiscoveryPromise = Promise.allSettled([
+        this.runCodexDiscovery(permit),
+        this.discoverGhCommandsCached(configuredGhCommand),
+        this.discoverGitCommandsCached(),
+        this.discoverDesktopApplicationsCached(),
+      ]).then(() => undefined).finally(() => {
+        this.startupDiscoveryPromise = undefined;
+      });
+    }
+    await this.startupDiscoveryPromise;
+    return await this.readSettingsProjection();
+  }
+
+  async refreshCodexDiscovery(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<DesktopSettingsSnapshot> {
+    assertProviderDiscoveryPermit(permit, [
+      "settings-user-action",
+      "setup-user-action",
+    ]);
+    await this.runCodexDiscovery(permit);
+    return await this.readSettingsProjection();
+  }
+
+  private async runCodexDiscovery(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<void> {
+    assertProviderDiscoveryPermit(permit);
     this.codexSpawnEnvHydratedAt = undefined;
-    return await this.readSettings({ forceCodexDiscovery: true });
+    const config = this.readConfig().config;
+    const checkMode = permit.intent === "startup" ? "ttl" : "force";
+    const previousManagedCommand =
+      this.managedCodexRuntime?.command
+      ?? this.configStore.read("providers").codex.lastKnownGood?.selectedCommand;
+    try {
+      this.managedCodexRuntime = await this.resolveManagedCodexRuntime(
+        config,
+        checkMode,
+      );
+      this.managedCodexError = undefined;
+    } catch (error) {
+      this.managedCodexError = error instanceof Error
+        ? error.message
+        : String(error);
+    }
+    if (
+      this.managedCodexRuntime
+      && this.resolveTokenMiserEnabled()
+      && this.managedCodexRuntime.command !== previousManagedCommand
+    ) {
+      this.managedCodexRuntimeSwitchPending = true;
+      await this.publishManagedCodexSelectionChange({
+        enabled: true,
+        reason: "update",
+        runtime: this.managedCodexRuntime,
+      });
+    }
+    const configuredCommand = this.managedCodexRuntime?.command
+      ?? this.resolveCodexCommandPreferenceFromConfig(config);
+    const discovery = await this.codexDiscoveryCoordinator.discover(
+      configuredCommand,
+      {
+        allowStaleSuccess: permit.intent === "startup",
+        force: permit.intent !== "startup",
+      },
+    );
+    this.codexProfiles = normalizeCodexProfilesSnapshot(
+      discoverCodexAuthProfiles({
+        configuredProfile: config.models?.codex?.profile,
+        env: this.env,
+      }),
+    );
+    const selected = discovery.candidates.find((candidate) => candidate.selected);
+    this.configStore.recordProviderDiscovery("codex", {
+      candidates: discovery.candidates.map((candidate) => ({
+        command: candidate.command,
+        source: candidate.source,
+        ...(candidate.version ? { version: candidate.version } : {}),
+        ...(candidate.failureReason || candidate.versionFailureReason
+          ? {
+              failureReason:
+                candidate.failureReason ?? candidate.versionFailureReason,
+            }
+          : {}),
+      })),
+      ...(discovery.error ? { error: discovery.error } : {}),
+      ...(discovery.selectedCommand
+        ? { selectedCommand: discovery.selectedCommand }
+        : {}),
+      ...(selected?.version ? { selectedVersion: selected.version } : {}),
+    });
   }
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
-    const config = this.readConfig().config;
-    const managedRuntime = await this.ensureManagedCodexRuntimeIfEnabled("ttl");
+    const managedRuntime = this.managedCodexRuntime;
     if (managedRuntime) {
       return {
         command: managedRuntime.command,
@@ -1918,139 +2212,84 @@ export class DesktopSettingsService {
         version: managedRuntime.metadata.version,
       };
     }
-    return await this.codexDiscoveryCoordinator.resolve(
-      this.resolveCodexCommandPreferenceFromConfig(config),
-    );
+    const configuredCommand = this.resolveCodexCommandPreference();
+    const cached = this.codexDiscoveryCoordinator.peek?.(configuredCommand)
+      ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
+    const selected = cached.candidates.find((candidate) => candidate.selected);
+    if (!selected) {
+      throw new Error(
+        "Codex discovery has not selected an executable. Refresh Codex in Settings.",
+      );
+    }
+    return {
+      command: selected.command,
+      source: selected.source,
+      ...(selected.version ? { version: selected.version } : {}),
+    };
   }
 
   /**
-   * Keep managed Codex update traffic strictly inside the global experiment
-   * gate. The hourly wake-up is cheap; the runtime manager owns the 24-hour
-   * network TTL and immutable-release validation.
+   * Publish already-completed managed Codex selections to runtime owners.
+   *
+   * This observer is intentionally passive. It must never install, update,
+   * probe, or launch Codex. Those operations are admitted only by an explicit
+   * startup, Settings, or setup discovery permit.
    */
   watchManagedCodexRuntime(
     listener: (
       change: ManagedCodexSelectionChange,
     ) => Promise<unknown> | unknown,
-    options: { intervalMs?: number } = {},
+    _options: { intervalMs?: number } = {},
   ): () => void {
-    const intervalMs = options.intervalMs ?? MANAGED_CODEX_UPDATE_POLL_INTERVAL_MS;
     let enabled = this.resolveTokenMiserEnabled();
-    let lastAnnouncedCommand = this.managedCodexRuntime?.command;
-    let announceFirstSuccessfulCheck =
-      enabled && lastAnnouncedCommand === undefined;
-    let timer: NodeJS.Timeout | undefined;
-    let stopped = false;
-
-    const clearTimer = () => {
-      if (timer) {
-        clearInterval(timer);
-        timer = undefined;
-      }
-    };
-    const announce = (change: ManagedCodexSelectionChange): Promise<void> => {
-      const attempt = Promise.resolve()
-        .then(() => listener(change))
-        .then(() => undefined)
-        .catch((error) => {
-          getMainLogger("pwragent:managed-codex").warn(
-            "managed-codex-selection-change-failed",
-            { error: error instanceof Error ? error.message : String(error) },
-          );
-        });
-      this.managedCodexRuntimeSwitchAttempt = attempt;
-      return attempt;
-    };
-    const checkForUpdate = async () => {
-      if (stopped || !this.resolveTokenMiserEnabled()) return;
-      const signal = this.resolveManagedCodexUpdateSignal();
-      try {
-        const runtime = await this.ensureManagedCodexRuntimeIfEnabled("ttl", {
-          signal,
-          waitForUpdate: true,
-        });
-        if (
-          !runtime
-          || stopped
-          || signal.aborted
-          || !this.resolveTokenMiserEnabled()
-        ) {
-          return;
-        }
-        if (lastAnnouncedCommand === undefined) {
-          lastAnnouncedCommand = runtime.command;
-          if (announceFirstSuccessfulCheck) {
-            announceFirstSuccessfulCheck = false;
-            this.managedCodexRuntimeSwitchPending = true;
-            await announce({ enabled: true, reason: "update", runtime });
-          }
-        } else if (runtime.command !== lastAnnouncedCommand) {
-          lastAnnouncedCommand = runtime.command;
-          announceFirstSuccessfulCheck = false;
-          this.managedCodexRuntimeSwitchPending = true;
-          await announce({ enabled: true, reason: "update", runtime });
-        }
-      } catch (error) {
-        if (
-          stopped
-          || signal.aborted
-          || !this.resolveTokenMiserEnabled()
-        ) {
-          return;
-        }
-        announceFirstSuccessfulCheck = true;
-        getMainLogger("pwragent:managed-codex").warn(
-          "managed-codex-background-update-failed",
-          { error: error instanceof Error ? error.message : String(error) },
-        );
-      }
-    };
-    const armTimer = () => {
-      clearTimer();
-      if (!stopped && this.resolveTokenMiserEnabled()) {
-        timer = setInterval(() => {
-          void checkForUpdate();
-        }, intervalMs);
-      }
-    };
-
-    if (enabled) {
-      void checkForUpdate();
-      armTimer();
-    }
-    const unsubscribe = this.onConfigWritten(() => {
+    this.managedCodexSelectionListeners.add(listener);
+    const onExperimentalChanged = () => {
       const nextEnabled = this.resolveTokenMiserEnabled();
       if (nextEnabled === enabled) return;
       enabled = nextEnabled;
       if (enabled) {
-        lastAnnouncedCommand = this.managedCodexRuntime?.command;
-        announceFirstSuccessfulCheck = lastAnnouncedCommand === undefined;
         this.managedCodexRuntimeSwitchPending = true;
-        void checkForUpdate();
-        armTimer();
       } else {
         this.abortManagedCodexUpdate();
-        clearTimer();
-        lastAnnouncedCommand = undefined;
-        announceFirstSuccessfulCheck = false;
         this.managedCodexRuntimeSwitchPending = false;
         this.managedCodexRuntime = undefined;
       }
-      void announce({
+      void this.publishManagedCodexSelectionChange({
         enabled,
         reason: "availability",
         ...(enabled && this.managedCodexRuntime
           ? { runtime: this.managedCodexRuntime }
           : {}),
       });
-    });
+    };
+    const unsubscribe = this.configStore.subscribe(
+      ["experimental"],
+      onExperimentalChanged,
+    );
 
     return () => {
-      stopped = true;
-      this.abortManagedCodexUpdate();
-      clearTimer();
+      this.managedCodexSelectionListeners.delete(listener);
       unsubscribe();
     };
+  }
+
+  private async publishManagedCodexSelectionChange(
+    change: ManagedCodexSelectionChange,
+  ): Promise<void> {
+    const attempt = Promise.all(
+      [...this.managedCodexSelectionListeners].map(async (listener) => {
+        try {
+          await listener(change);
+        } catch (error) {
+          getMainLogger("pwragent:managed-codex").warn(
+            "managed-codex-selection-change-failed",
+            { error: error instanceof Error ? error.message : String(error) },
+          );
+        }
+      }),
+    ).then(() => undefined);
+    this.managedCodexRuntimeSwitchAttempt = attempt;
+    await attempt;
   }
 
   requiresManagedTokenMiserActivation(): boolean {
@@ -2066,16 +2305,16 @@ export class DesktopSettingsService {
   }
 
   resolveProviderModelDefaults() {
-    return this.readConfig().config.models?.providerDefaults ?? {};
+    return this.readModelsConfig().providerDefaults ?? {};
   }
 
   resolveProviderThreadModelMigrations() {
-    return this.readConfig().config.models?.providerThreadMigrations ?? {};
+    return this.readModelsConfig().providerThreadMigrations ?? {};
   }
 
   resolveCodexFastAllowed(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.models?.codex?.allowFast,
+      this.readModelsConfig().codex?.allowFast,
       true,
     ).value;
   }
@@ -2247,20 +2486,6 @@ export class DesktopSettingsService {
     });
   }
 
-  private async ensureManagedCodexRuntimeIfEnabled(
-    checkMode: ManagedCodexCheckMode,
-    options: {
-      signal?: AbortSignal;
-      waitForUpdate?: boolean;
-    } = {},
-  ): Promise<ManagedCodexRuntime | undefined> {
-    return await this.resolveManagedCodexRuntime(
-      this.readConfig().config,
-      checkMode,
-      options,
-    );
-  }
-
   private async ensureManagedCodexRuntime(
     checkMode: ManagedCodexCheckMode,
     options: {
@@ -2313,24 +2538,49 @@ export class DesktopSettingsService {
   }
 
   resolveGhCommandPreference(): string | undefined {
+    const configured = this.configStore.read("applications").gh?.path;
     return (
       readEnvString(this.env, GH_COMMAND_ENV)
-      || this.readConfig().config.applications?.gh?.path
+      || configured
       || undefined
     );
   }
 
   private readConfig(): ConfigReadResult {
-    try {
-      return {
-        config: readDesktopSettingsConfig(this.configPath),
-      };
-    } catch (error) {
-      return {
-        config: {},
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
+    const providers = this.configStore.read("providers");
+    const onboarding = this.configStore.read("onboarding");
+    const fileStatus = this.configStore.fileStatus();
+    return {
+      config: structuredClone({
+        general: this.configStore.read("general").settings,
+        onboarding: onboarding.completedSource === "migrated"
+          ? {}
+          : {
+              completed: onboarding.completed,
+              ...(onboarding.completedSource
+                ? { completedSource: onboarding.completedSource }
+                : {}),
+            },
+        experimental: this.configStore.read("experimental"),
+        messaging: this.configStore.read("messaging"),
+        federation: this.configStore.read("federation"),
+        models: this.configStore.read("models"),
+        acpAgents: {
+          gemini: providerConfigSection(providers.gemini),
+          grok: providerConfigSection(providers.grok),
+          kimi: providerConfigSection(providers.kimi),
+          qwen: providerConfigSection(providers.qwen),
+        },
+        applications: this.configStore.read("applications"),
+        git: this.configStore.read("git"),
+        updates: this.configStore.read("updates"),
+        worktrees: this.configStore.read("worktrees"),
+        ui: this.configStore.read("ui"),
+        integratedTerminal: this.configStore.read("integratedTerminal"),
+        imageUploads: this.configStore.read("imageUploads"),
+      } satisfies DesktopSettingsConfig),
+      ...(fileStatus.kind === "invalid" ? { error: fileStatus.error } : {}),
+    };
   }
 
   private defaultDeveloperMode(): boolean {
@@ -3120,6 +3370,18 @@ export class DesktopSettingsService {
     }
   }
 
+  private async readAndPublishSecretState(
+    secret: DesktopSettingsSecretName,
+  ): Promise<DesktopSettingsSecretState> {
+    const state = await this.readSecretState(
+      secret,
+      secretEnvironmentKey(secret),
+      this.options.secretStore.describe().available,
+    );
+    this.configStore.recordSecretPresence(secret, state);
+    return state;
+  }
+
   private resolveSecretSync(
     secret: DesktopSettingsSecretName,
     envKey: string | undefined,
@@ -3128,6 +3390,47 @@ export class DesktopSettingsService {
       (envKey ? readEnvString(this.env, envKey) : undefined)
       ?? this.options.secretStore.getSecretSync?.(secret)
     );
+  }
+}
+
+function secretEnvironmentKey(
+  secret: DesktopSettingsSecretName,
+): string | undefined {
+  switch (secret) {
+    case "telegramBotToken":
+      return TELEGRAM_BOT_TOKEN_ENV;
+    case "discordBotToken":
+      return DISCORD_BOT_TOKEN_ENV;
+    case "mattermostBotToken":
+      return MATTERMOST_BOT_TOKEN_ENV;
+    case "mattermostHmacSecret":
+      return MATTERMOST_CALLBACK_HMAC_SECRET_ENV;
+    case "slackBotToken":
+      return SLACK_BOT_TOKEN_ENV;
+    case "slackAppToken":
+      return SLACK_APP_TOKEN_ENV;
+    case "slackSigningSecret":
+      return SLACK_SIGNING_SECRET_ENV;
+    case "feishuAppId":
+      return FEISHU_APP_ID_ENV;
+    case "feishuAppSecret":
+      return FEISHU_APP_SECRET_ENV;
+    case "feishuEncryptKey":
+      return FEISHU_ENCRYPT_KEY_ENV;
+    case "feishuVerificationToken":
+      return FEISHU_VERIFICATION_TOKEN_ENV;
+    case "lineChannelAccessToken":
+      return LINE_CHANNEL_ACCESS_TOKEN_ENV;
+    case "lineChannelSecret":
+      return LINE_CHANNEL_SECRET_ENV;
+    case "federationInstancePrivateKey":
+    case "federationNoiseStaticPrivateKey":
+    case "federationCloudflareClientCertificate":
+    case "federationCloudflareClientPrivateKey":
+    case "federationCloudflareAccessClientId":
+    case "federationCloudflareAccessClientSecret":
+    case "pwrsnapMcpCredential":
+      return undefined;
   }
 }
 

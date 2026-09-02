@@ -148,7 +148,15 @@ import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
 } from "./runtime-federation-lease";
-import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
+import {
+  disposeDesktopConfigStore,
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "./settings/desktop-settings-singleton";
+import {
+  issueProviderDiscoveryPermit,
+  type ProviderDiscoveryPermit,
+} from "./settings/provider-discovery-permit";
 import {
   disposeAppState,
   initializeAppState,
@@ -157,7 +165,7 @@ import {
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
 import { prewarmWindowsJobWrapper } from "./windows-job-wrapper";
-import { createMainWindow, syncHotCpuProfilersFromSettings } from "./window";
+import { createMainWindow } from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
@@ -393,8 +401,8 @@ function logBootDecision(decision: ProfileBootDecision): void {
   }
 }
 
-function prewarmInitialThreadList(): void {
-  if (getDesktopSettingsService().isCodexBootstrapDeferred()) {
+function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
+  if (!getDesktopConfigStore().read("onboarding").completed) {
     mainLog.info("startup thread list prewarm deferred until onboarding completes");
     recordStartupProfileEvent({
       type: "startup-thread-list-prewarm:deferred",
@@ -402,6 +410,13 @@ function prewarmInitialThreadList(): void {
     return;
   }
   const startedAt = Date.now();
+  const startupSettingsDiscovery = getDesktopSettingsService()
+    .refreshStartupDiscovery(permit)
+    .catch((error) => {
+      mainLog.warn("startup settings discovery failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   void getDesktopBackendRegistry()
     .listThreads({
       callerReason: "startup-prewarm",
@@ -410,6 +425,18 @@ function prewarmInitialThreadList(): void {
       skipArchivedMetadataRefresh: true,
     })
     .then((threads) => {
+      // The durable thread snapshot above is allowed to paint immediately.
+      // A cold profile has no executable selection yet, though, so its live
+      // provider refresh must wait for the one permitted startup discovery to
+      // publish that selection. Keeping this dependency in the background
+      // preserves fast startup without racing the Codex transport.
+      void startupSettingsDiscovery.then(() =>
+        getDesktopBackendRegistry().refreshProvidersAtStartup(permit),
+      ).catch((error) => {
+        mainLog.warn("startup provider refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
       recordStartupProfileEvent({
         type: "startup-thread-list-prewarm:completed",
         detail: {
@@ -510,6 +537,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeQuitBlockerIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
+  disposeDesktopConfigStore();
   disposeWindowPointerIpcHandlers();
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
@@ -934,7 +962,9 @@ function refreshProfileMenus(): void {
 }
 
 function installApplicationMenu(): void {
-  const developerMode = getDesktopSettingsService().resolveDeveloperMode();
+  const developerMode =
+    getDesktopConfigStore().read("general").settings.developerMode
+    ?? !app.isPackaged;
   const profiles = listDesktopPwrAgentProfiles().profiles;
   const windows = BrowserWindow.getAllWindows()
     .filter((window) => !window.isDestroyed())
@@ -1189,6 +1219,7 @@ export function bootstrapApp(): void {
       },
     });
     reportAutoVacuumConversion(initializeAppState(bootMode).autoVacuum);
+    getDesktopConfigStore();
     // Skip the focus-request watcher in bootstrap mode. The watcher
     // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
     // catch "focus existing window" requests from sibling PwrAgent
@@ -1291,7 +1322,19 @@ export function bootstrapApp(): void {
     registerQuitBlockerIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
+        const codexRuntimeChanged = patch.models?.codex?.path !== undefined;
+        const acpRuntimeChanged = patch.acpAgents !== undefined;
+        if (codexRuntimeChanged || acpRuntimeChanged) {
+          await getDesktopBackendRegistry().invalidateProviderRuntimeSelections({
+            acp: acpRuntimeChanged,
+            codex: codexRuntimeChanged,
+          });
+        }
         if (patch.federation !== undefined) {
+          // Store subscriptions also cover external config-file edits. Keep
+          // direct settings writes awaiting the same single-flight restart so
+          // consecutive mode changes cannot collapse into the first restart
+          // and leave the runtime serving an obsolete mode.
           await getDesktopFederationRuntime().restart();
         }
         if (
@@ -1304,9 +1347,15 @@ export function bootstrapApp(): void {
           patch.general?.hotCpuProfilingHeapSnapshotLimit !== undefined
         ) {
           installApplicationMenu();
-          syncHotCpuProfilersFromSettings("settings-changed");
         }
       },
+    });
+    getDesktopConfigStore().subscribe(["federation"], () => {
+      void getDesktopFederationRuntime().restart().catch((error) => {
+        mainLog.error("federation runtime config refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     });
     registerWindowPointerIpcHandlers();
     if (isDevelopment) {
@@ -1328,6 +1377,48 @@ export function bootstrapApp(): void {
         process.env,
         options,
       ),
+    );
+    let messagingConfigFingerprint = JSON.stringify({
+      messaging: getDesktopConfigStore().read("messaging"),
+      pdfAnalysisEnabled:
+        getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
+        ?? true,
+    });
+    getDesktopConfigStore().subscribe(
+      ["general", "messaging"],
+      () => {
+        const nextFingerprint = JSON.stringify({
+          messaging: getDesktopConfigStore().read("messaging"),
+          pdfAnalysisEnabled:
+            getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
+            ?? true,
+        });
+        if (nextFingerprint === messagingConfigFingerprint) {
+          return;
+        }
+        messagingConfigFingerprint = nextFingerprint;
+        const runtimeOverride = resolveRuntimeMessagingOverride();
+        void getRuntimeMessagingLeaseCoordinator()
+          .applyLatestConfig(
+            messagingRuntime,
+            (options) =>
+              loadDesktopMessagingConfigFromSettings(
+                getDesktopSettingsService(),
+                process.env,
+                options,
+              ),
+            {
+              allowStart:
+                !runtimeOverride.disabled || messagingRuntime.isEnabled(),
+              logStartupEligibility: true,
+            },
+          )
+          .catch((error) => {
+            mainLog.error("messaging runtime config refresh failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+      },
     );
     getDesktopBackendRegistry().setMessagingArchiveCleaner({
       requestBindingRevokeAllForThread: (request) =>
@@ -1381,7 +1472,7 @@ export function bootstrapApp(): void {
     quitAppOnMainWindowClose(mainWindow);
     recordStartupProfileEvent({ type: "main-window-create:end" });
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
-    prewarmInitialThreadList();
+    prewarmInitialThreadList(issueProviderDiscoveryPermit("startup"));
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:scheduled" });
 
     // Wire up auto-update *after* the window is created so a slow update

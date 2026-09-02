@@ -13,6 +13,11 @@ import { fileURLToPath } from "node:url";
 import type {
   FederationRemoteTarget,
 } from "@pwragent/shared";
+import {
+  DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
+  DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
+  DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
+} from "@pwragent/shared";
 import type { WindowShowThreadRequest } from "../shared/window-show-thread";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
@@ -26,7 +31,10 @@ import { getMainLogger } from "./log";
 import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import { resolveActiveProfilePath } from "./profile";
-import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
+import {
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "./settings/desktop-settings-singleton";
 import { attachWindowFocusSync } from "./window-focus-sync";
 import { attachWindowFullscreenSync } from "./window-fullscreen-sync";
 import {
@@ -531,10 +539,9 @@ export function createMainWindow(options?: {
       config: hotCpuConfig,
       getAppMetrics: () => app.getAppMetrics(),
       onHeapSnapshotLimitReached: async () => {
-        await getDesktopSettingsService().writeConfigPatch({
+        await getDesktopSettingsService().writeConfigPatchTargeted({
           general: { hotCpuProfilingCaptureHeapSnapshot: false },
         });
-        syncHotCpuProfilersFromSettings("heap-snapshot-limit-reached");
       },
       onProfileWritten: (event) => {
         for (const subscriber of subscribersForChannel(
@@ -592,22 +599,39 @@ export function createMainWindow(options?: {
         return;
       }
 
-      const settingsService = getDesktopSettingsService();
+      const settings = getDesktopConfigStore().read("general").settings;
       const captureHeapSnapshot =
-        settingsService.resolveHotCpuProfilingCaptureHeapSnapshot();
+        settings.hotCpuProfilingCaptureHeapSnapshot ?? false;
       const hotCpuConfig = resolveHotCpuProfileConfig({
         captureHeapSnapshot,
         enabled:
-          settingsService.resolveHotCpuProfilingEnabled() ||
+          (settings.hotCpuProfilingEnabled ?? false) ||
           captureHeapSnapshot,
-        heapSnapshotLimit:
-          settingsService.resolveHotCpuProfilingHeapSnapshotLimit(),
+        heapSnapshotLimit: Math.min(
+          3,
+          Math.max(
+            2,
+            Math.round(settings.hotCpuProfilingHeapSnapshotLimit ?? 2),
+          ),
+        ),
         outputRoot: resolveHotCpuProfileOutputRoot(),
         repoRoot: resolveRepoRoot(),
-        slowburnThresholdPercent:
-          settingsService.resolveHotCpuProfilingSlowburnThresholdPercent(),
-        startDelayMs: settingsService.resolveHotCpuProfilingStartDelayMs(),
-        triggerMode: settingsService.resolveHotCpuProfilingTriggerMode(),
+        slowburnThresholdPercent: Math.min(
+          100,
+          Math.max(
+            1,
+            Math.round(
+              settings.hotCpuProfilingSlowburnThresholdPercent
+              ?? DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT,
+            ),
+          ),
+        ),
+        startDelayMs:
+          settings.hotCpuProfilingStartDelayMs
+          ?? DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
+        triggerMode:
+          settings.hotCpuProfilingTriggerMode
+          ?? DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
       });
 
       if (!hotCpuConfig.enabled) {
@@ -655,6 +679,10 @@ export function createMainWindow(options?: {
     void hotCpuProfilerSyncQueue;
   };
   hotCpuProfilerSyncHandlers.set(window.id, syncHotCpuProfiler);
+  const unsubscribeHotCpuSettings = getDesktopConfigStore().subscribe(
+    ["general"],
+    () => syncHotCpuProfiler("settings-changed"),
+  );
 
   const heapMonitorPromise = (async () => {
     const heapConfig = resolveHeapMonitorConfig({
@@ -808,6 +836,7 @@ export function createMainWindow(options?: {
 
   window.on("closed", () => {
     hotCpuProfilerSyncHandlers.delete(window.id);
+    unsubscribeHotCpuSettings();
     stopHeapMonitor("window-closed");
     void stopHotCpuProfiler("window-closed");
   });

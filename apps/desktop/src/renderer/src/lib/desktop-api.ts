@@ -363,6 +363,7 @@ import type {
   DesktopTextSize,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
+  DesktopSettingsSecretWriteResponse,
   DesktopSettingsWriteResponse,
   GenerateFederationInviteRequest,
   GenerateFederationInviteResponse,
@@ -388,6 +389,9 @@ import type {
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  ReadDesktopConfigBootstrapResponse,
+  ReadDesktopFullAccessPolicyResponse,
+  ReadDesktopMessagingSettingsResponse,
   PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
@@ -823,17 +827,20 @@ export type DesktopApi = {
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  readConfigBootstrap?: () => Promise<ReadDesktopConfigBootstrapResponse>;
+  readMessagingSettings?: () => Promise<ReadDesktopMessagingSettingsResponse>;
+  readFullAccessPolicy?: () => Promise<ReadDesktopFullAccessPolicyResponse>;
   writeSettingsConfig?: (
     request: WriteDesktopSettingsConfigRequest
   ) => Promise<DesktopSettingsWriteResponse>;
   replaceSettingsSecret?: (
     request: ReplaceDesktopSettingsSecretRequest
-  ) => Promise<DesktopSettingsWriteResponse>;
+  ) => Promise<DesktopSettingsSecretWriteResponse>;
   clearSettingsSecret?: (
     request: ClearDesktopSettingsSecretRequest
-  ) => Promise<DesktopSettingsWriteResponse>;
+  ) => Promise<DesktopSettingsSecretWriteResponse>;
   refreshCodexDiscovery?: (
-    request?: RefreshDesktopCodexDiscoveryRequest
+    request: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
   createCodexAuthProfile?: (
     request: CreateDesktopCodexAuthProfileRequest,
@@ -860,7 +867,7 @@ export type DesktopApi = {
   testSettingsCredentials?: (
     request: SettingsCredentialTestRequest,
   ) => Promise<SettingsCredentialTestResult>;
-  /** Open Slack's create-from-manifest page in the system browser. */
+  /** Open Slack's create-from-manifest page or existing-app management. */
   openSlackCreateApp?: (
     request?: SlackCreateAppRequest,
   ) => Promise<SlackCreateAppResponse>;

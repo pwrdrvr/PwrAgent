@@ -557,23 +557,30 @@ describe("discord adapter", () => {
       },
       now: () => 1234,
     });
+    const threadChannel = {
+      channel: "discord" as const,
+      conversation: {
+        id: "thread-channel-1",
+        kind: "channel" as const,
+        parentId: "guild-1",
+      },
+    };
+    const threadRoutingState = {
+      opaque: {
+        channelType: 11,
+        isThread: true,
+      },
+    };
+
+    expect(adapter.supportsConversationTitle({
+      channel: threadChannel,
+      routingState: threadRoutingState,
+    })).toBe(true);
 
     await expect(
       adapter.setConversationTitle({
-        channel: {
-          channel: "discord",
-          conversation: {
-            id: "thread-channel-1",
-            kind: "channel",
-            parentId: "guild-1",
-          },
-        },
-        routingState: {
-          opaque: {
-            channelType: 11,
-            isThread: true,
-          },
-        },
+        channel: threadChannel,
+        routingState: threadRoutingState,
         title: "Thread one",
       }),
     ).resolves.toMatchObject({
@@ -583,6 +590,17 @@ describe("discord adapter", () => {
     expect(updateChannelName).toHaveBeenCalledWith("thread-channel-1", {
       name: "Thread one",
     });
+
+    expect(adapter.supportsConversationTitle({
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "plain-channel-1",
+          kind: "channel",
+          parentId: "guild-1",
+        },
+      },
+    })).toBe(false);
 
     await expect(
       adapter.setConversationTitle({

@@ -43,7 +43,7 @@ code side).
 | `thread.settings.response_mode` | settings | Set whether the bot answers every message or only when mentioned (affects the whole conversation). |
 | `thread.settings.permissions_mode` | settings | Switch the sandbox/default permissions mode (non-full-access targets only). |
 | `thread.settings.execution_mode` | settings | Switch the sandbox/network execution mode (non-full-access targets only). |
-| `thread.settings.name` | settings | Sync the thread name to the conversation. |
+| `thread.settings.name` | settings | Sync or agent-rename the current messaging conversation. |
 | `thread.settings.skills` | settings | Open the skills browser and change enabled skills (all `skills:*` sub-actions). |
 | `thread.control.stop` | control | Interrupt the running turn. |
 | `thread.control.compact` | control | Compact the thread's context. |

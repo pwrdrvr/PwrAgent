@@ -10,6 +10,7 @@ import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
   MessagingAdapter,
   MessagingBackendBridge,
+  MessagingConversationTitleSupportRequest,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
 } from "./core/messaging-adapter";
@@ -29,6 +30,7 @@ import type {
   MessagingPlatformHealth,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  MessagingToolUpdateMode,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
 } from "@pwragent/shared";
@@ -82,7 +84,7 @@ import {
 } from "./messaging-config";
 import {
   createMessagingResponseModeSnapshot,
-  resolveMessagingResponseModeForChannel,
+  type MessagingResponseModeSnapshot,
 } from "./messaging-response-mode";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { resolvePwragentRoot } from "../profile";
@@ -158,6 +160,9 @@ export type DesktopMessagingAdapter = {
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  supportsConversationTitle?(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean;
   getManagedConversationRights?(
     request: MessagingManagedConversationRightsRequest,
   ): Promise<MessagingManagedConversationRightsResult>;
@@ -221,7 +226,6 @@ type RunningMessagingAdapter = {
   unsubscribeRateLimit?: () => void;
   unsubscribeReconnect?: () => void;
   unsubscribeRuntimeError?: () => void;
-  updateResponseModeSnapshot(config: DesktopMessagingConfig): void;
 };
 
 type RunningMessagingAuthorization = {
@@ -233,6 +237,16 @@ type FullAccessPolicySnapshot = {
   controls: DesktopMessagingFullAccessControls;
   revision: number;
 };
+
+type MessagingAdmissionPolicySnapshot = Readonly<{
+  managerToolUpdateDefaultMode: MessagingToolUpdateMode;
+  pdfAnalysisEnabled: boolean;
+  responseModes: Readonly<
+    Record<MessagingChannelKind, MessagingResponseModeSnapshot>
+  >;
+  showStreamingOption: boolean;
+  toolUpdateDefaultMode: MessagingToolUpdateMode;
+}>;
 
 function snapshotFullAccessControls(
   controls: DesktopMessagingFullAccessControls | undefined,
@@ -323,6 +337,25 @@ const CONFIGURABLE_MESSAGING_CHANNELS = [
   "slack",
   "telegram",
 ] as const satisfies readonly MessagingChannelKind[];
+
+function snapshotMessagingAdmissionPolicy(
+  config: DesktopMessagingConfig,
+): MessagingAdmissionPolicySnapshot {
+  const responseModes = Object.fromEntries(
+    CONFIGURABLE_MESSAGING_CHANNELS.map((channel) => [
+      channel,
+      createMessagingResponseModeSnapshot({ channel, config }),
+    ]),
+  ) as Record<MessagingChannelKind, MessagingResponseModeSnapshot>;
+  return Object.freeze({
+    managerToolUpdateDefaultMode:
+      config.managerToolUpdateDefaultMode ?? "show_none",
+    pdfAnalysisEnabled: config.pdfAnalysisEnabled !== false,
+    responseModes: Object.freeze(responseModes),
+    showStreamingOption: config.showStreamingOption ?? false,
+    toolUpdateDefaultMode: config.toolUpdateDefaultMode ?? "show_some",
+  });
+}
 
 export type MessagingPairingChangedEvent = {
   at: number;
@@ -454,6 +487,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     controls: snapshotFullAccessControls(undefined),
     revision: 0,
   };
+  private messagingAdmissionPolicySnapshot =
+    snapshotMessagingAdmissionPolicy({});
   /**
    * Listeners notified whenever any controller mutates a binding
    * (create / refresh metadata / sync title / detach / revoke). The
@@ -604,6 +639,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
     this.applyFullAccessPolicySnapshot(config);
+    this.applyMessagingAdmissionPolicySnapshot(config);
     try {
       await this.applyConfigNow(config, options);
       this.clearStartupFailuresForDisabledPlatforms(config);
@@ -1339,12 +1375,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return false;
     }
     const binding = await params.store.findActiveBindingForChannel(event.channel);
-    const responseMode = resolveMessagingResponseModeForChannel({
-      bindingResponseMode: binding?.preferences?.responseMode,
-      channel: params.channel,
-      channelRef: event.channel,
-      config: await this.loadConfig(),
-    });
+    const responseMode = this.messagingAdmissionPolicySnapshot
+      .responseModes[params.channel].resolve({
+        bindingResponseMode: binding?.preferences?.responseMode,
+        channelRef: event.channel,
+      });
     if (responseMode !== "mention_only") {
       return false;
     }
@@ -1401,10 +1436,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       actorIds: authorizedActorIds,
       actorIdSet: new Set(authorizedActorIds),
     };
-    let responseModeSnapshot = createMessagingResponseModeSnapshot({
-      channel: adapter.channel,
-      config,
-    });
     const deliveryBudget = new MessagingDeliveryBudget();
     if (adapter.clientRateLimitStrategy === "sdk-managed") {
       messagingLog.warn(`${adapter.channel}: SDK-managed rate-limit retries are enabled`, {
@@ -1423,24 +1454,24 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       channel: adapter.channel,
       deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
-      pdfAnalysisEnabled: async () =>
-        (await this.loadConfig()).pdfAnalysisEnabled !== false,
+      pdfAnalysisEnabled: () =>
+        this.messagingAdmissionPolicySnapshot.pdfAnalysisEnabled,
       store,
       activityLog: getDesktopMessagingActivityLog,
       streamingResponsesDefault: streamingResponsesDefaultForChannel(
         config,
         adapter.channel,
       ),
-      showStreamingOption: async () =>
-        (await this.loadConfig()).showStreamingOption ?? false,
+      showStreamingOption: () =>
+        this.messagingAdmissionPolicySnapshot.showStreamingOption,
       responseModeForConversation: (channel) =>
-        responseModeSnapshot.resolve({ channelRef: channel }),
-      toolUpdateDefaultMode: async (targetKind) => {
-        const config = await this.loadConfig();
-        return targetKind === "agent_thread"
-          ? config.managerToolUpdateDefaultMode ?? "show_none"
-          : config.toolUpdateDefaultMode ?? "show_some";
-      },
+        this.messagingAdmissionPolicySnapshot
+          .responseModes[adapter.channel]
+          .resolve({ channelRef: channel }),
+      toolUpdateDefaultMode: (targetKind) =>
+        targetKind === "agent_thread"
+          ? this.messagingAdmissionPolicySnapshot.managerToolUpdateDefaultMode
+          : this.messagingAdmissionPolicySnapshot.toolUpdateDefaultMode,
       fullAccessControls: () => this.fullAccessPolicySnapshot.controls,
       fullAccessControlsSource: "runtime-snapshot",
       fullAccessPolicyRevision: () => this.fullAccessPolicySnapshot.revision,
@@ -1663,12 +1694,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       unsubscribeRateLimit,
       unsubscribeReconnect,
       unsubscribeRuntimeError,
-      updateResponseModeSnapshot: (nextConfig) => {
-        responseModeSnapshot = createMessagingResponseModeSnapshot({
-          channel: adapter.channel,
-          config: nextConfig,
-        });
-      },
     });
     this.syncRunningAdapterLists();
     this.setPlatformHealth(adapter.channel, "enabled", {
@@ -1808,7 +1833,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     running.config = next.config;
     running.fingerprint = next.fingerprint;
-    running.updateResponseModeSnapshot(next.config);
     this.recordDiagnosticActivity({
       platform: adapter.channel,
       summary: `Hot-applied messaging config: ${adapter.channel}`,
@@ -2973,6 +2997,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       controls,
       revision: this.fullAccessPolicySnapshot.revision + 1,
     };
+  }
+
+  private applyMessagingAdmissionPolicySnapshot(
+    config: DesktopMessagingConfig,
+  ): void {
+    this.messagingAdmissionPolicySnapshot =
+      snapshotMessagingAdmissionPolicy(config);
   }
 
   private rememberFullAccessWarningDismissal(params: {

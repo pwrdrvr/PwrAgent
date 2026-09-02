@@ -151,7 +151,11 @@ const setFederatedThreadMessageHandlerMock = vi.fn();
 const setFederatedThreadInspectionHandlerMock = vi.fn();
 const setFederatedThreadMutationHandlerMock = vi.fn();
 const setFederatedThreadControlHandlerMock = vi.fn();
+const invalidateProviderRuntimeSelectionsMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
+const refreshProvidersAtStartupMock = vi.fn<() => Promise<void>>(
+  async () => undefined,
+);
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
@@ -194,9 +198,13 @@ const StartupCpuProfilerMock = vi.fn(function StartupCpuProfiler() {
 });
 const resolveDeveloperModeMock = vi.fn(() => true);
 const isCodexBootstrapDeferredMock = vi.fn(() => false);
+const refreshStartupDiscoveryMock = vi.fn<() => Promise<void>>(
+  async () => undefined,
+);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
   isCodexBootstrapDeferred: isCodexBootstrapDeferredMock,
+  refreshStartupDiscovery: refreshStartupDiscoveryMock,
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
 const resolveActiveProfileNameMock = vi.fn(() => "default");
@@ -503,6 +511,15 @@ vi.mock("../state/app-state", () => ({
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
+  disposeDesktopConfigStore: vi.fn(),
+  getDesktopConfigStore: vi.fn(() => ({
+    read: vi.fn((domain: string) =>
+      domain === "onboarding"
+        ? { completed: !isCodexBootstrapDeferredMock() }
+        : { settings: { developerMode: resolveDeveloperModeMock() } },
+    ),
+    subscribe: vi.fn(() => () => undefined),
+  })),
   getDesktopSettingsService: getDesktopSettingsServiceMock,
 }));
 
@@ -526,7 +543,9 @@ const runtimeFederationLeaseCoordinatorMock = {
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
+    invalidateProviderRuntimeSelections: invalidateProviderRuntimeSelectionsMock,
     listThreads: listThreadsMock,
+    refreshProvidersAtStartup: refreshProvidersAtStartupMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
     setPwrAgentFederationHandler: setPwrAgentFederationHandlerMock,
@@ -741,8 +760,14 @@ describe("bootstrapApp", () => {
     setFederatedThreadInspectionHandlerMock.mockReset();
     setFederatedThreadMutationHandlerMock.mockReset();
     setFederatedThreadControlHandlerMock.mockReset();
+    invalidateProviderRuntimeSelectionsMock.mockReset();
+    invalidateProviderRuntimeSelectionsMock.mockResolvedValue(undefined);
     listThreadsMock.mockReset();
     listThreadsMock.mockResolvedValue([]);
+    refreshProvidersAtStartupMock.mockReset();
+    refreshProvidersAtStartupMock.mockResolvedValue(undefined);
+    refreshStartupDiscoveryMock.mockReset();
+    refreshStartupDiscoveryMock.mockResolvedValue(undefined);
     disposeDesktopMessagingRuntimeMock.mockReset();
     disposeDesktopMessagingRuntimeMock.mockResolvedValue(undefined);
     registerMessagingStatusIpcHandlersMock.mockReset();
@@ -872,6 +897,36 @@ describe("bootstrapApp", () => {
       expect.objectContaining({ onFocus: expect.any(Function) }),
     );
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates live provider runtimes after executable settings change", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../index");
+    await flushMicrotasks();
+    const registration = registerSettingsIpcHandlersMock.mock.calls[0]?.[1] as
+      | {
+          onConfigPatchWritten?: (patch: {
+            acpAgents?: Record<string, { cliPath?: string }>;
+            models?: { codex?: { path?: string } };
+          }) => Promise<void>;
+        }
+      | undefined;
+
+    await registration?.onConfigPatchWritten?.({
+      models: { codex: { path: "/replacement/codex" } },
+    });
+    await registration?.onConfigPatchWritten?.({
+      acpAgents: { kimi: { cliPath: "/replacement/kimi" } },
+    });
+
+    expect(invalidateProviderRuntimeSelectionsMock).toHaveBeenNthCalledWith(1, {
+      acp: false,
+      codex: true,
+    });
+    expect(invalidateProviderRuntimeSelectionsMock).toHaveBeenNthCalledWith(2, {
+      acp: true,
+      codex: false,
+    });
   });
 
   it("does not infer a boot failure when the main window is slow to show", async () => {
@@ -1227,6 +1282,34 @@ describe("bootstrapApp", () => {
       maxPages: 1,
       skipArchivedMetadataRefresh: true,
     });
+  });
+
+  it("waits for startup discovery before refreshing live provider threads", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    let finishDiscovery: (() => void) | undefined;
+    refreshStartupDiscoveryMock.mockReturnValue(new Promise<void>((resolve) => {
+      finishDiscovery = () => resolve();
+    }));
+    listThreadsMock.mockResolvedValue([]);
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(listThreadsMock).toHaveBeenCalledWith({
+      callerReason: "startup-prewarm",
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
+    });
+    expect(refreshProvidersAtStartupMock).not.toHaveBeenCalled();
+
+    finishDiscovery?.();
+    await flushMicrotasks();
+
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "startup" }),
+    );
   });
 
   it("skips the prewarm when the Codex bootstrap is deferred for onboarding", async () => {

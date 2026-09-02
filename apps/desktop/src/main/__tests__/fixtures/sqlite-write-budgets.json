@@ -48,6 +48,20 @@
     "rowsChanged": 140,
     "statements": 209
   },
+  "config-store-config-revision": {
+    "commits": 1,
+    "note": "one atomic durable config publication per changed config revision; ordinary domain reads write nothing",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "config-store-provider-refresh": {
+    "commits": 1,
+    "note": "one provider-scoped last-known-good publication per successful discovery; refresh metadata remains in memory",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "deferred-check-alert": {
     "commits": 1,
     "note": "five in-memory 30-second deferred checks and one persisted alert boundary",
@@ -97,6 +111,20 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "messaging-agent-conversation-rename": {
+    "commits": 5,
+    "note": "one agent-driven conversation rename persists the binding title and re-renders the status card inline (no bus event exists for binding-local mutations); bounded by explicit tool calls, not per turn or per item",
+    "observedWalBytes": 78280,
+    "rowsChanged": 5,
+    "statements": 5
+  },
+  "messaging-binding-revoke": {
+    "commits": 11,
+    "note": "one bus-driven binding revoke including Agent Session close status",
+    "observedWalBytes": 131840,
+    "rowsChanged": 9,
+    "statements": 11
+  },
   "messaging-outbound-file-activity": {
     "commits": 1,
     "note": "one send_messaging_file audit row; this runs per agent tool call, so the row count must not grow with attachment parts",
@@ -117,6 +145,13 @@
     "observedWalBytes": 65920,
     "rowsChanged": 3,
     "statements": 3
+  },
+  "provider-thread-snapshot-refresh": {
+    "commits": 1,
+    "note": "one secret-free provider thread projection per successful full provider list, never per thread",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
   },
   "runtime-lease-dead-owner-takeover": {
     "commits": 5,

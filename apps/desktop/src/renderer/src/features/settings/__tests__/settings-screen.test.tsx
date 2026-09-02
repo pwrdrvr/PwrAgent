@@ -698,12 +698,16 @@ describe("SettingsScreen", () => {
       .not.toBeInTheDocument();
     await waitFor(() => {
       expect(listBackends).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
         includeUnavailable: true,
         refreshModels: true,
       });
     });
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        refresh: true,
+      });
     });
     fireEvent.click(
       await screen.findByRole("button", { name: "Open Grok settings" }),
@@ -4612,6 +4616,8 @@ describe("SettingsScreen", () => {
     );
 
     expect(screen.getByRole("button", { name: "Create Slack app" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy manifest" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Open Slack Apps" })).toBeEnabled();
     expect(screen.getAllByText(/customer-owned Slack app/i).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Create Slack app" }));
     await waitFor(() => {
@@ -5447,11 +5453,13 @@ describe("SettingsScreen", () => {
     });
 
     expect(await screen.findByText("scratch")).toBeInTheDocument();
-    expect(screen.getByText("/home/example/.pwragent/profiles/dev")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("/home/example/.pwragent/profiles/dev"),
+    ).toBeInTheDocument();
 
     const scratchRow = screen
       .getByText("scratch")
-      .closest(".settings-profile-row") as HTMLElement;
+      .closest(".settings-profile-card") as HTMLElement;
     expect(
       within(scratchRow).getByRole("combobox", {
         name: "Codex auth profile for scratch",
@@ -5558,9 +5566,12 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    // The path renders as a head + pinned tail pair for middle
+    // truncation, so its text is split across two spans; the container
+    // carries the untruncated value on `title`.
     const workRow = screen
-      .getByText("/home/example/.pwragent/profiles/work")
-      .closest(".settings-profile-row") as HTMLElement;
+      .getByTitle("/home/example/.pwragent/profiles/work")
+      .closest(".settings-profile-card") as HTMLElement;
     fireEvent.click(within(workRow).getByRole("button", { name: "Use on startup" }));
 
     await waitFor(() => {

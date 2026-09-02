@@ -1300,6 +1300,11 @@ export type NavigationSnapshot = {
   inboxThreadKeys: string[];
   directories: NavigationDirectorySummary[];
   launchpadDefaults: NavigationLaunchpadDefaults;
+  /** Background provider hydration after a durable startup publication. */
+  providerRefresh?: {
+    state: "checking" | "degraded" | "ready";
+    failedProviders?: number;
+  };
 };
 
 /** Normalize thread-key fields received from pre-v48 stores or older peers. */
@@ -1417,6 +1422,7 @@ export type NavigationSnapshotTransportDelta = {
   /** Complete inbox order, present only when existing identities moved. */
   inboxThreadKeys?: string[];
   launchpadDefaults?: NavigationLaunchpadDefaults;
+  providerRefresh?: NavigationSnapshot["providerRefresh"];
 };
 
 export type NavigationSnapshotTransportChanges = {

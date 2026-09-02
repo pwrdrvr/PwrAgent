@@ -1,4 +1,5 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import {
   federationTargetForChannelSubscriber,
   subscribersForChannel,
@@ -457,6 +458,17 @@ export function registerAgentIpcHandlers(): void {
             return await getDesktopFederationRuntime()
               .remoteBackend(request.federationTarget)
               .listBackends(stripFederationTarget(request));
+          }
+          if (request?.refreshModels !== undefined) {
+            if (!request.discoveryIntent) {
+              throw new Error(
+                "Provider model discovery requires a Settings user-action intent.",
+              );
+            }
+            return await registry.listBackends(
+              request,
+              issueProviderDiscoveryPermit(request.discoveryIntent),
+            );
           }
           return await registry.listBackends(request);
         },

@@ -25,6 +25,7 @@ import type {
   MessagingChannelRef,
   MessagingClientRateLimitStrategy,
   MessagingConversationKind,
+  MessagingConversationTitleSupportRequest,
   MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundEvent,
@@ -181,6 +182,9 @@ export type MattermostProviderAdapter = {
     title: string;
     updatedAt: number;
   }>;
+  supportsConversationTitle?(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean;
   start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop(): Promise<void>;
 };
@@ -805,6 +809,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         errorMessage,
       };
     }
+  }
+
+  supportsConversationTitle(
+    _request: MessagingConversationTitleSupportRequest,
+  ): boolean {
+    return true;
   }
 
   // -------------------------------------------------------------

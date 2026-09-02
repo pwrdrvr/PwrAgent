@@ -16,6 +16,7 @@ import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import { installedAcpAgentSettingsEntry } from "../ipc/settings";
 import { isPathWithin } from "../../shared/path-within";
 import { StateDb } from "../state/state-db";
+import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 
 type ProviderCase = {
   expectedArgs: string[];
@@ -69,7 +70,9 @@ describeExecutableAcp("ACP runtime path overrides", () => {
             await discoverSingleProvider({ env, registryId, rootDir: tempDir }),
           ],
         });
-        await adapter.listAvailableAgents();
+        await adapter.discoverAvailableAgents(
+          issueProviderDiscoveryPermit("startup"),
+        );
         await adapter.close();
         adapter = undefined;
 
@@ -103,6 +106,9 @@ describeExecutableAcp("ACP runtime path overrides", () => {
           ],
         });
 
+        await adapter.discoverAvailableAgents(
+          issueProviderDiscoveryPermit("settings-user-action"),
+        );
         const client = await adapter.getClient(
           `acp:${registryId}` as AcpBackendId,
         );
@@ -217,6 +223,9 @@ describeExecutableAcp("ACP runtime path overrides", () => {
         ],
       });
 
+      await adapter.discoverAvailableAgents(
+        issueProviderDiscoveryPermit("startup"),
+      );
       const firstClient = await adapter.getClient("acp:grok");
       await firstClient.startSession({
         cwd: tempDir,
@@ -226,6 +235,9 @@ describeExecutableAcp("ACP runtime path overrides", () => {
 
       overridePath = second.overrideCommand;
       adapter.invalidateLocalAgentDiscovery();
+      await adapter.discoverAvailableAgents(
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
       const secondClient = await adapter.getClient("acp:grok");
       await secondClient.startSession({
         cwd: tempDir,

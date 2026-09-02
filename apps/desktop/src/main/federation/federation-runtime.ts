@@ -121,7 +121,6 @@ import {
   type FederatedThreadRef,
   type DesktopApplicationsSnapshot,
   type DesktopFederationMode,
-  type DesktopSettingsSnapshot,
   type HandoffThreadWorkspaceRequest,
   type GetNavigationSnapshotRequest,
   type GetWorktreeUnpublishedCommitDiffRequest,
@@ -253,6 +252,10 @@ import {
   buildFederationHealthStatus,
   publicPeerSummary,
 } from "./federation-health";
+import {
+  resolveFederationRuntimeConfig,
+  type FederationRuntimeConfig,
+} from "./federation-runtime-config";
 import {
   FEDERATION_PTY_EXIT_METHOD,
   FEDERATION_PTY_OUTPUT_METHOD,
@@ -1100,9 +1103,9 @@ export class DesktopFederationRuntime {
   }
 
   async health(): Promise<FederationHealthStatus> {
-    const settings = await getDesktopSettingsService().readSettings();
+    const config = this.readRuntimeConfig();
     const health = buildFederationHealthStatus({
-      settings,
+      config,
       // Transfer counters attach here and only here — visiblePeers()
       // feeds the gossiped peer directory too, and these numbers
       // describe OUR socket with each peer, not facts about the peer.
@@ -1115,8 +1118,8 @@ export class DesktopFederationRuntime {
       unavailableReason: this.gatewayListenerError,
     });
     if (
-      settings.federation.mode.value === "client" ||
-      settings.federation.mode.value === "dual"
+      config.mode === "client" ||
+      config.mode === "dual"
     ) {
       // An auth-class failure (bad pin, revoked enrollment, version
       // skew) is terminal until the operator re-pairs — reporting it as
@@ -1137,7 +1140,7 @@ export class DesktopFederationRuntime {
       const endpoints =
         this.configuredEndpoints.length > 0
           ? this.configuredEndpoints
-          : settings.federation.gatewayEndpoints.value;
+          : config.gatewayEndpoints;
       health.gatewayEndpoints = endpoints.map((url) => ({
         url,
         state: "idle",
@@ -1152,8 +1155,7 @@ export class DesktopFederationRuntime {
     // multi-path endpoints has no legacy `gateway_url`, and the enrollment
     // card would otherwise show a paired gateway with no address.
     health.clientEnrollment = this.readClientEnrollment(
-      settings.federation.gatewayEndpoints.value[0]?.trim()
-        || settings.federation.gatewayUrl.value.trim(),
+      config.gatewayEndpoints[0],
     );
     health.localCelestialIcon = this.activeCelestialAssignments().find(
       (assignment) => assignment.instanceId === health.instanceId,
@@ -1162,7 +1164,7 @@ export class DesktopFederationRuntime {
     // is correct even before the runtime has started (federation disabled,
     // or health read during boot).
     health.localLabel =
-      settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
+      config.instanceLabel || defaultInstanceLabel();
     health.localProfileName = isAppStateInitialized()
       ? getAppStateDb().getMeta("profile_name") || undefined
       : undefined;
@@ -1217,8 +1219,7 @@ export class DesktopFederationRuntime {
     // the forgotten gateway with no pins left to satisfy it.
     stateDb.setMeta(GATEWAY_LAST_ENDPOINT_META_KEY, "");
     const settingsService = getDesktopSettingsService();
-    const settings = await settingsService.readSettings();
-    const mode = settings.federation.mode.value;
+    const mode = this.readRuntimeConfig().mode;
     if (mode === "client" || mode === "disabled") {
       // A pure client's own key material only matters to the gateway it
       // just forgot, so drop it too. This is the documented recovery when
@@ -1229,7 +1230,7 @@ export class DesktopFederationRuntime {
       await settingsService.clearSecret("federationInstancePrivateKey");
       await settingsService.clearSecret("federationNoiseStaticPrivateKey");
     }
-    await settingsService.writeConfigPatch({
+    await settingsService.writeConfigPatchTargeted({
       federation: {
         gatewayUrl: "",
         gatewayEndpoints: [],
@@ -1477,21 +1478,19 @@ export class DesktopFederationRuntime {
       FederationTailscaleAdvertisement | undefined
     >;
   }): Promise<{ invite: string; expiresAt: number }> {
-    const settings = await getDesktopSettingsService().readSettings();
-    const mode = settings.federation.mode.value;
+    const config = this.readRuntimeConfig();
+    const mode = config.mode;
     if (mode !== "gateway" && mode !== "dual") {
       throw new Error(
         "Invites are issued by the gateway. Switch Mode to gateway or dual first.",
       );
     }
-    const advertisedEndpoints = settings.federation.advertisedEndpoints.value
-      .map((endpoint) => endpoint.trim())
-      .filter((endpoint) => endpoint.length > 0);
+    const advertisedEndpoints = config.advertisedEndpoints;
     const gatewayEndpoints =
       advertisedEndpoints.length > 0
         ? advertisedEndpoints
         : await this.defaultAdvertisedEndpoints(
-            settings,
+            config,
             request.readTailscaleAdvertisement,
           );
     const gatewayUrl = gatewayEndpoints[0];
@@ -1521,7 +1520,7 @@ export class DesktopFederationRuntime {
         gatewayInstanceId: this.ensureLocalInstanceId(),
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
         gatewayUrl,
-        gatewayEndpoints,
+        gatewayEndpoints: [...gatewayEndpoints],
         gatewayNoisePublicKey: noise.publicKeyBase64,
         expiresAt,
       }),
@@ -1538,12 +1537,12 @@ export class DesktopFederationRuntime {
    * stranger. See federation-advertised-endpoints.ts for the ordering rules.
    */
   private async defaultAdvertisedEndpoints(
-    settings: DesktopSettingsSnapshot,
+    config: FederationRuntimeConfig,
     readTailscaleAdvertisement?: () => Promise<
       FederationTailscaleAdvertisement | undefined
     >,
   ): Promise<string[]> {
-    const publicUrl = settings.federation.publicUrl.value.trim();
+    const publicUrl = config.publicUrl;
     if (!publicUrl && !this.listenUrl) {
       // Nothing designated a URL and no listener is up to name. Minting an
       // invite here would hand a peer endpoints that cannot answer until the
@@ -1557,8 +1556,8 @@ export class DesktopFederationRuntime {
     }
     const tailscale = await readTailscaleAdvertisement?.();
     const endpoints = buildFederationAdvertisedEndpoints({
-      listenHost: settings.federation.listenHost.value,
-      listenPort: settings.federation.listenPort.value,
+      listenHost: config.listenHost,
+      listenPort: config.listenPort,
       hostname: hostname(),
       platform: process.platform,
       interfaceAddresses: collectFederationInterfaceAddresses(),
@@ -1594,10 +1593,9 @@ export class DesktopFederationRuntime {
     stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, String(Date.now()));
     // Importing on a listening instance must not silently kill its
     // listener: gateway/dual become dual, everything else becomes client.
-    const currentMode = (await getDesktopSettingsService().readSettings())
-      .federation.mode.value;
+    const currentMode = this.readRuntimeConfig().mode;
     const gatewayEndpoints = payload.gatewayEndpoints ?? [payload.gatewayUrl];
-    await getDesktopSettingsService().writeConfigPatch({
+    await getDesktopSettingsService().writeConfigPatchTargeted({
       federation: {
         mode:
           currentMode === "gateway" || currentMode === "dual"
@@ -2288,16 +2286,16 @@ export class DesktopFederationRuntime {
 
   private async restartNow(): Promise<void> {
     await this.stop();
-    const settings = await getDesktopSettingsService().readSettings();
+    const config = this.readRuntimeConfig();
     this.instanceLabel =
-      settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
-    this.instanceNotes = settings.federation.instanceNotes.value.trim();
+      config.instanceLabel || defaultInstanceLabel();
+    this.instanceNotes = config.instanceNotes;
     try {
       this.localHostInfo = await collectFederationHostInfo();
     } catch {
       this.localHostInfo = undefined;
     }
-    const mode = settings.federation.mode.value;
+    const mode = config.mode;
     // The profile-scoped lease decides which app instance may run federation
     // for this profile: instances sharing a profile present the same
     // federation instance identity, so without the lease two of them evict
@@ -2312,7 +2310,7 @@ export class DesktopFederationRuntime {
         return;
       }
       try {
-        await this.startAfterLeaseAcquired(mode, settings);
+        await this.startAfterLeaseAcquired(mode, config);
       } catch (error) {
         // A startup failure after acquisition (e.g. unreadable federation
         // key material) must not keep the profile lease with no runtime
@@ -2326,12 +2324,18 @@ export class DesktopFederationRuntime {
     if (mode === "disabled") {
       return;
     }
-    await this.startAfterLeaseAcquired(mode, settings);
+    await this.startAfterLeaseAcquired(mode, config);
+  }
+
+  private readRuntimeConfig(): FederationRuntimeConfig {
+    return resolveFederationRuntimeConfig(
+      getDesktopSettingsService().readFederationConfig(),
+    );
   }
 
   private async startAfterLeaseAcquired(
     mode: DesktopFederationMode,
-    settings: DesktopSettingsSnapshot,
+    config: FederationRuntimeConfig,
   ): Promise<void> {
     this.stopping = false;
     // Startup fence: a concurrent stop flips `stopping` and bumps `walkEpoch`.
@@ -2438,8 +2442,8 @@ export class DesktopFederationRuntime {
         gatewayInstanceId: localInstanceId,
         gatewayPrivateKeyPem: gatewayIdentity.privateKeyPem,
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
-        host: settings.federation.listenHost.value,
-        port: settings.federation.listenPort.value,
+        host: config.listenHost,
+        port: config.listenPort,
         store: this.store(),
         noiseStatic,
         onConnection: (connection) => this.registerGatewayConnection(connection),
@@ -2479,9 +2483,7 @@ export class DesktopFederationRuntime {
     }
 
     if (mode === "client" || mode === "dual") {
-      const configured = settings.federation.gatewayEndpoints.value
-        .map((endpoint) => endpoint.trim())
-        .filter((endpoint) => endpoint.length > 0);
+      const configured = config.gatewayEndpoints;
       // Last line of defense before anything is dialed: the config file is
       // hand-editable and may predate the scheme allowlist.
       const endpoints = configured.filter(isFederationGatewayEndpointUrl);
@@ -2584,7 +2586,7 @@ export class DesktopFederationRuntime {
     const keyPair = await getDesktopSettingsService()
       .getOrCreateFederationIdentityKeyPair();
     const settingsService = getDesktopSettingsService();
-    const settings = await settingsService.readSettings();
+    const config = this.readRuntimeConfig();
     const cloudflareCredentials =
       await settingsService.resolveFederationCloudflareCredentials();
     const sshEndpoint = isFederationSshEndpointUrl(gatewayUrl)
@@ -2598,19 +2600,19 @@ export class DesktopFederationRuntime {
     const acceptsCloudflareCredentials =
       federationEndpointAcceptsCloudflareCredentials({
         endpoint: gatewayUrl,
-        cloudflareEndpoint: settings.federation.cloudflareEndpoint.value,
+        cloudflareEndpoint: config.cloudflareEndpoint,
         configuredEndpointCount: this.configuredEndpoints.length,
       });
     const cloudflareMtlsEnabled =
       acceptsCloudflareCredentials
-      && settings.federation.cloudflareMtlsEnabled.value;
+      && config.cloudflareMtlsEnabled;
     const cloudflareAccessEnabled =
       acceptsCloudflareCredentials
-      && settings.federation.cloudflareAccessServiceAuthEnabled.value;
+      && config.cloudflareAccessServiceAuthEnabled;
     if (
       !acceptsCloudflareCredentials
-      && (settings.federation.cloudflareMtlsEnabled.value
-        || settings.federation.cloudflareAccessServiceAuthEnabled.value)
+      && (config.cloudflareMtlsEnabled
+        || config.cloudflareAccessServiceAuthEnabled)
     ) {
       log.info("federation endpoint is not the designated Cloudflare endpoint", {
         withheldCredentials: true,
@@ -2670,14 +2672,14 @@ export class DesktopFederationRuntime {
       inviteToken: pendingInviteToken || undefined,
       label:
         this.instanceLabel ||
-        settings.federation.instanceLabel.value.trim() ||
+        config.instanceLabel ||
         defaultInstanceLabel(),
       // Advertise which profile this instance runs so peers can tell
       // several enrollments of the same machine apart in their UI.
       profileName: getAppStateDb().getMeta("profile_name") || undefined,
       // Always a string: present-but-empty clears the gateway's stored
       // notes when the operator erases theirs (absent means "old client").
-      notes: this.instanceNotes ?? settings.federation.instanceNotes.value.trim(),
+      notes: this.instanceNotes ?? config.instanceNotes,
       host: this.localHostInfo,
       // All client traffic rides this one socket, so the counters land
       // on the gateway's row — including relayed sibling traffic.

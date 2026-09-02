@@ -89,6 +89,14 @@ export class CodexDiscoveryCoordinator {
     this.cache.clear();
   }
 
+  /** Return the last successful observation without starting a probe. */
+  peek(configuredCommand?: string): CodexDiscoverySnapshot | undefined {
+    const cached = this.cache.get(configuredCommand?.trim() ?? "");
+    return cached?.outcome.kind === "snapshot"
+      ? cached.outcome.snapshot
+      : undefined;
+  }
+
   async discover(
     configuredCommand?: string,
     request: CodexDiscoveryRequest = {},

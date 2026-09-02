@@ -16,12 +16,15 @@ import type {
   AppUpdateReleaseVersions,
   AppUpdateStatus,
 } from "../shared/app-metadata";
-import type {
-  DesktopUpdateChannel,
-  DesktopUpdateTrain,
+import {
+  DESKTOP_UPDATE_CHANNEL_DEFAULT,
+  DESKTOP_UPDATE_TRAIN_DEFAULT,
+  inferDesktopUpdateSelection,
+  type DesktopUpdateChannel,
+  type DesktopUpdateTrain,
 } from "@pwragent/shared";
 import { getMainLogger } from "./log";
-import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
+import { getDesktopConfigStore } from "./settings/desktop-settings-singleton";
 import {
   markUpdateInstallInProgress,
   markUpdateInstallUpdaterQuitReady,
@@ -96,7 +99,7 @@ export function readAppUpdateStatus(): AppUpdateStatus {
 
 function currentUpdateChannel(): DesktopUpdateChannel {
   try {
-    return getDesktopSettingsService().resolveUpdateChannel();
+    return currentUpdateSelection().channel;
   } catch (err) {
     log.warn("failed to read update channel setting", {
       message: err instanceof Error ? err.message : String(err),
@@ -107,13 +110,27 @@ function currentUpdateChannel(): DesktopUpdateChannel {
 
 function currentUpdateTrain(): DesktopUpdateTrain {
   try {
-    return getDesktopSettingsService().resolveUpdateTrain();
+    return currentUpdateSelection().train;
   } catch (err) {
     log.warn("failed to read update train setting", {
       message: err instanceof Error ? err.message : String(err),
     });
     return "stable";
   }
+}
+
+function currentUpdateSelection(): {
+  channel: DesktopUpdateChannel;
+  train: DesktopUpdateTrain;
+} {
+  const updates = getDesktopConfigStore().read("updates");
+  if (updates.channel === undefined && updates.train === undefined) {
+    return inferDesktopUpdateSelection(app.getVersion());
+  }
+  return {
+    channel: updates.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+    train: updates.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
+  };
 }
 
 function updateSelectionKey(
@@ -134,10 +151,16 @@ let lastLoggedUpdatePosture: string | null = null;
 // serves. It stays alongside `allowPrerelease` so both halves of the feed
 // posture are set — and logged — in one greppable place.
 function configureAutoUpdaterChannel(
-  updateChannel: DesktopUpdateChannel = currentUpdateChannel(),
-  updateTrain: DesktopUpdateTrain = currentUpdateTrain(),
+  updateChannel?: DesktopUpdateChannel,
+  updateTrain?: DesktopUpdateTrain,
   options: { allowDowngrade?: boolean } = {},
 ): void {
+  const current =
+    updateChannel === undefined || updateTrain === undefined
+      ? currentUpdateSelection()
+      : undefined;
+  updateChannel ??= current?.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT;
+  updateTrain ??= current?.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT;
   autoUpdater.allowPrerelease =
     updateTrain === "beta" || updateChannel === "prerelease";
   autoUpdater.allowDowngrade = options.allowDowngrade === true;
@@ -342,8 +365,10 @@ export async function checkForAppUpdatesNow(
 
   updateCheckInFlight = (async () => {
     try {
-      const updateChannel = currentUpdateChannel();
-      const updateTrain = currentUpdateTrain();
+      const {
+        channel: updateChannel,
+        train: updateTrain,
+      } = currentUpdateSelection();
       const updateSelection = updateSelectionKey(updateTrain, updateChannel);
       reconcileDownloadedUpdateEligibility(updateSelection);
       const downloadedResult = downloadedUpdateMatchesChannel(updateSelection);
@@ -978,7 +1003,7 @@ export function initAutoUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = true;
   configureAutoUpdaterChannel();
   try {
-    getDesktopSettingsService().onConfigWritten(() => {
+    getDesktopConfigStore().subscribe(["updates"], () => {
       reconcileDownloadedUpdateEligibility();
     });
   } catch (err) {

@@ -975,6 +975,11 @@ export type MessagingActivityIntent = MessagingBaseSurfaceIntent & {
   kind: "activity";
   activity: "typing";
   leaseMs?: number;
+  /**
+   * Optional richer conversation lifecycle for providers with a durable
+   * agent-session surface. Providers without one continue to use `state`.
+   */
+  sessionState?: "processing" | "active" | "suspended" | "closed";
   state: "active" | "idle";
 };
 
@@ -1343,6 +1348,11 @@ export type MessagingConversationTitleUpdateRequest = {
   title: string;
 };
 
+export type MessagingConversationTitleSupportRequest = Omit<
+  MessagingConversationTitleUpdateRequest,
+  "title"
+>;
+
 export type MessagingConversationTitleUpdateResult = {
   channel: MessagingChannelKind;
   conversation: MessagingConversationRef;
@@ -1531,7 +1541,13 @@ export type MessagingInboundMediaEvent = MessagingInboundBaseEvent & {
 
 export type MessagingInboundLifecycleEvent = MessagingInboundBaseEvent & {
   kind: "lifecycle";
-  lifecycle: "bound" | "detached" | "revoked" | "adapter_started" | "adapter_stopped";
+  lifecycle:
+    | "bound"
+    | "detached"
+    | "revoked"
+    | "adapter_started"
+    | "adapter_stopped"
+    | "metadata_changed";
 };
 
 export type MessagingInboundEvent =

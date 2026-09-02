@@ -43,6 +43,7 @@ import {
   type MessagingDeliveryResult,
   type MessagingInboundCallbackEvent,
   type MessagingInboundEvent,
+  type MessagingInboundLifecycleEvent,
   type MessagingInboundTextEvent,
   type MessagingJsonValue,
   type MessagingSurfaceIntent,
@@ -56,6 +57,14 @@ import {
   updateWorkingCardActivities,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
+import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
+import {
+  measureSqliteWrites,
+  resetSqliteWriteMetrics,
+  SQLITE_WRITE_METRICS_ENV,
+} from "../state/sqlite-write-metrics";
+import { StateDb } from "../state/state-db";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import type { MessagingOutboundFileAccess } from "../messaging/core/messaging-outbound-file";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
 import type { MessagingPermissionId } from "@pwragent/shared";
@@ -4653,6 +4662,12 @@ describe("MessagingController", () => {
             kind: "channel",
             title: "Ops",
           },
+          conversationCapabilities: {
+            rename: {
+              allowed: true,
+              supported: false,
+            },
+          },
           managedConversation: {
             canCreateChild: true,
             providerSupportsCreation: true,
@@ -4698,6 +4713,243 @@ describe("MessagingController", () => {
         routingState: event.routingState,
       }),
     );
+  });
+
+  it("reports conversation rename support separately from actor permission", async () => {
+    const supportsConversationTitle = vi.fn(() => true);
+    const harness = await createHarness({
+      channel: "slack",
+      rbacPolicy: rbacProviderGranting(["message.reply"]),
+      supportsConversationTitle,
+    });
+    const event = buildTextEvent("Can this Slack thread be renamed?", {
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+        },
+      },
+      routingState: {
+        opaque: {
+          channelId: "D012ABCDEF0",
+          threadTs: "1782234671.392669",
+        },
+      },
+    });
+    await harness.store.upsertBinding({
+      id: "binding:slack:thread:1782234671.392669:D012ABCDEF0:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_messaging_surface",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          conversationCapabilities: {
+            rename: {
+              allowed: false,
+              supported: true,
+            },
+          },
+        },
+      },
+    });
+    expect(supportsConversationTitle).toHaveBeenCalledWith({
+      actor: event.actor,
+      channel: event.channel,
+      routingState: event.routingState,
+    });
+  });
+
+  it("lets an Agent rename the messaging conversation that started its turn", async () => {
+    const setConversationTitle = vi.fn(
+      async (
+        request: Parameters<NonNullable<MessagingAdapter["setConversationTitle"]>>[0],
+      ) => ({
+        channel: "slack" as const,
+        conversation: {
+          ...request.channel.conversation,
+          title: request.title,
+        },
+        outcome: "updated" as const,
+        title: request.title,
+        updatedAt: 1000,
+      }),
+    );
+    const harness = await createHarness({
+      channel: "slack",
+      setConversationTitle,
+    });
+    const event = buildTextEvent("Name this Slack thread Gone Fishin'", {
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+        },
+      },
+      routingState: {
+        opaque: {
+          channelId: "D012ABCDEF0",
+          threadTs: "1782234671.392669",
+        },
+      },
+    });
+    await harness.store.upsertBinding({
+      id: "binding:slack:thread:1782234671.392669:D012ABCDEF0:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "rename_current_messaging_conversation",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: { title: "  Gone   Fishin'  " },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          kind: "thread",
+          parentId: "1782234671.392669",
+          title: "Gone Fishin'",
+        },
+        outcome: "renamed",
+        title: "Gone Fishin'",
+        updatedAt: 1000,
+      },
+    });
+    expect(setConversationTitle).toHaveBeenCalledWith({
+      actor: event.actor,
+      channel: event.channel,
+      routingState: event.routingState,
+      title: "Gone Fishin'",
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(event.channel),
+    ).resolves.toMatchObject({
+      channel: {
+        conversation: {
+          title: "Gone Fishin'",
+        },
+      },
+    });
+    expect(harness.onBindingChanged).toHaveBeenCalled();
+  });
+
+  it("budgets the binding write for an agent-driven conversation rename", async () => {
+    const previousMetricsSetting = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-rename-writes-"));
+    tempDirs.push(tempDir);
+    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const store = new SqliteMessagingStore(stateDb);
+      const harness = await createHarness({
+        channel: "slack",
+        setConversationTitle: async (request) => ({
+          channel: "slack",
+          conversation: request.channel.conversation,
+          outcome: "updated",
+          title: request.title,
+          updatedAt: 2_000,
+        }),
+        store,
+      });
+      const event = buildTextEvent("Name this Slack thread", {
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "D012ABCDEF0",
+            kind: "thread",
+            parentConversationId: "D012ABCDEF0",
+            parentId: "1782234671.392669",
+          },
+        },
+        routingState: {
+          opaque: {
+            channelId: "D012ABCDEF0",
+            threadTs: "1782234671.392669",
+          },
+        },
+      });
+      await store.upsertBinding({
+        id: "binding:slack:thread:1782234671.392669:D012ABCDEF0:codex:thread-1",
+        authorizedActorIds: ["user-1"],
+        backend: "codex",
+        channel: event.channel,
+        createdAt: 1_000,
+        routingState: event.routingState,
+        targetKind: "agent_thread",
+        threadId: "thread-1",
+        updatedAt: 1_000,
+      });
+      await harness.controller.handleInboundEvent(event);
+      resetSqliteWriteMetrics();
+
+      const { result, writes } = await measureSqliteWrites(
+        async () => await harness.controller.handlePwrAgentMessagingRequest({
+          operation: "rename_current_messaging_conversation",
+          context: {
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+          args: { title: "Persisted Slack title" },
+        }),
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      expectSqliteWriteBudget({
+        note: "one agent-driven conversation rename persists the binding title",
+        scenario: "messaging-agent-conversation-rename",
+        writes,
+      });
+    } finally {
+      stateDb.close();
+      if (previousMetricsSetting === undefined) {
+        delete process.env[SQLITE_WRITE_METRICS_ENV];
+      } else {
+        process.env[SQLITE_WRITE_METRICS_ENV] = previousMetricsSetting;
+      }
+    }
   });
 
   it("preserves a concrete live messaging origin for ordinary Codex turns only", async () => {
@@ -8491,6 +8743,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.find((intent) => intent.kind === "activity")).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "processing",
       state: "active",
     });
   });
@@ -8518,6 +8771,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "processing",
       state: "active",
     });
 
@@ -8540,6 +8794,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "active",
       state: "idle",
     });
   });
@@ -10497,7 +10752,12 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
-    expect(harness.delivered).toHaveLength(3);
+    expect(harness.delivered).toHaveLength(4);
+    expect(harness.delivered.at(-4)).toMatchObject({
+      kind: "activity",
+      sessionState: "closed",
+      state: "idle",
+    });
     expect(harness.delivered.at(-3)).toMatchObject({
       kind: "status",
       actions: [],
@@ -10530,6 +10790,55 @@ describe("MessagingController", () => {
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
     ).resolves.toBeUndefined();
+  });
+
+  it("budgets SQLite writes for a bus-driven binding revoke", async () => {
+    const previousMetricsSetting = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-detach-writes-"));
+    tempDirs.push(tempDir);
+    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const store = new SqliteMessagingStore(stateDb);
+      const harness = await createHarness({ channel: "slack", store });
+      const rootChannel: MessagingChannelRef = {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "dm",
+        },
+      };
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        channel: rootChannel,
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }));
+      const binding = await store.findActiveBindingForChannel(rootChannel);
+      expect(binding).toBeDefined();
+      resetSqliteWriteMetrics();
+
+      const { result, writes } = await measureSqliteWrites(
+        async () => await harness.controller.handleBindingRevokeRequest(binding!),
+      );
+
+      expect(result).toBe(true);
+      expectSqliteWriteBudget({
+        note: "one bus-driven binding revoke including Agent Session close status",
+        scenario: "messaging-binding-revoke",
+        writes,
+      });
+    } finally {
+      stateDb.close();
+      if (previousMetricsSetting === undefined) {
+        delete process.env[SQLITE_WRITE_METRICS_ENV];
+      } else {
+        process.env[SQLITE_WRITE_METRICS_ENV] = previousMetricsSetting;
+      }
+    }
   });
 
   it("uses /detach to stop Monitor when no thread is bound", async () => {
@@ -10594,8 +10903,8 @@ describe("MessagingController", () => {
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
-      expect(harness.delivered).toHaveLength(4);
-      expect(harness.delivered.at(-4)).toMatchObject({
+      expect(harness.delivered).toHaveLength(5);
+      expect(harness.delivered.at(-5)).toMatchObject({
         kind: "confirmation",
         title: "Monitor detached",
         actions: [],
@@ -10605,6 +10914,11 @@ describe("MessagingController", () => {
           fallback: "fail",
         },
         targetSurface: monitorSurface,
+      });
+      expect(harness.delivered.at(-4)).toMatchObject({
+        kind: "activity",
+        sessionState: "closed",
+        state: "idle",
       });
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "confirmation",
@@ -18099,6 +18413,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "active",
       state: "idle",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
@@ -19033,6 +19348,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "suspended",
       state: "idle",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
@@ -22543,9 +22859,143 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     });
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      sessionState: "active",
+      state: "idle",
+    });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Turn: interrupted"),
+    });
+  });
+
+  it("resolves a native Agent Session stop from a thread surface to its root DM binding", async () => {
+    const rootChannel: MessagingChannelRef = {
+      channel: "slack",
+      conversation: {
+        id: "D012ABCDEF0",
+        isDirectMessage: true,
+        kind: "dm",
+      },
+    };
+    const harness = await createHarness({ channel: "slack" });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "bind:codex:thread-1",
+      channel: rootChannel,
+      value: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+    }));
+    await expect(
+      harness.store.findActiveBindingForChannel(rootChannel),
+    ).resolves.toMatchObject({ threadId: "thread-1" });
+    await harness.controller.handleInboundEvent(buildTextEvent("start work", {
+      channel: rootChannel,
+    }));
+    expect(harness.startTurn).toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "status:stop",
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+        },
+      },
+      value: { source: "agent_session_stopped" },
+    }));
+
+    expect(harness.interruptTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(harness.delivered).toEqual(expect.not.arrayContaining([
+      expect.objectContaining({ title: "Action expired" }),
+    ]));
+  });
+
+  it("applies Agent Session title metadata from a thread surface to its root DM binding", async () => {
+    const rootChannel: MessagingChannelRef = {
+      channel: "slack",
+      conversation: {
+        id: "D012ABCDEF0",
+        isDirectMessage: true,
+        kind: "dm",
+      },
+    };
+    const harness = await createHarness({ channel: "slack" });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "bind:codex:thread-1",
+      channel: rootChannel,
+      value: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+    }));
+
+    await harness.controller.handleInboundEvent({
+      id: "event-agent-session-title",
+      kind: "lifecycle",
+      actor: { platformUserId: "user-1" },
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+          title: "New Agent Session title",
+        },
+      },
+      lifecycle: "metadata_changed",
+      receivedAt: 1000,
+    } satisfies MessagingInboundLifecycleEvent);
+
+    await expect(
+      harness.store.findActiveBindingForChannel(rootChannel),
+    ).resolves.toMatchObject({
+      channel: {
+        conversation: {
+          kind: "dm",
+          title: "New Agent Session title",
+        },
+      },
+    });
+  });
+
+  it("restores processing status when the backend rejects a native stop request", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+    harness.interruptTurn.mockRejectedValueOnce(new Error("interrupt unavailable"));
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "status:stop",
+      value: { source: "agent_session_stopped" },
+    }));
+
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "activity",
+      sessionState: "processing",
+      state: "active",
+    }));
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "error",
+      title: "Stop failed",
+      body: "interrupt unavailable",
+    }));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "working",
     });
   });
 
@@ -23927,7 +24377,9 @@ describe("send_messaging_file agent tool", () => {
   });
 });
 
-async function createHarness(options?: {
+async function createHarness<
+  Store extends MessagingControllerOptions["store"] = MessagingStore,
+>(options?: {
   deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
@@ -23992,6 +24444,7 @@ async function createHarness(options?: {
     MessagingBackendBridge["setAcpSessionRuntimeOption"]
   >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
+  supportsConversationTitle?: MessagingAdapter["supportsConversationTitle"];
   supportsMessagingPdfTools?: NonNullable<
     MessagingBackendBridge["supportsMessagingPdfTools"]
   >;
@@ -24017,6 +24470,7 @@ async function createHarness(options?: {
     | MessagingToolUpdateMode
     | ((targetKind: "thread" | "agent_thread") => MessagingToolUpdateMode);
   showStreamingOption?: boolean;
+  store?: Store;
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
@@ -24050,9 +24504,9 @@ async function createHarness(options?: {
   steerTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
   updateDirectoryLaunchpad: ReturnType<typeof vi.fn>;
-  store: MessagingStore;
+  store: Store;
 }> {
-  const store = await createStore();
+  const store = (options?.store ?? await createStore()) as Store;
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
     capabilityProfile: options?.capabilityProfile ?? PERMISSIVE_CAPABILITY_PROFILE,
@@ -24084,6 +24538,9 @@ async function createHarness(options?: {
     ),
     ...(options?.setConversationTitle
       ? { setConversationTitle: options.setConversationTitle }
+      : {}),
+    ...(options?.supportsConversationTitle
+      ? { supportsConversationTitle: options.supportsConversationTitle }
       : {}),
     ...(options?.getManagedConversationRights
       ? { getManagedConversationRights: options.getManagedConversationRights }

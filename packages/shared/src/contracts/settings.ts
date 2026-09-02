@@ -1342,6 +1342,47 @@ export type ReadDesktopSettingsResponse = {
   snapshot: DesktopSettingsSnapshot;
 };
 
+/**
+ * Credential-free startup projection. Reading it is an in-memory config-store
+ * lookup and must never trigger provider, application, Git, or secret
+ * discovery.
+ */
+export type DesktopConfigBootstrapSnapshot = {
+  version: number;
+  configRevision: string;
+  configError?: string;
+  appearance: {
+    theme: DesktopAppearanceTheme;
+    density: DesktopAppearanceDensity;
+    sidebarTextSize: DesktopTextSize;
+    transcriptTextSize: DesktopTextSize;
+  };
+  onboarding: {
+    completed: boolean;
+    completedSource: DesktopOnboardingCompletedSource | "";
+  };
+};
+
+export type ReadDesktopConfigBootstrapResponse = {
+  snapshot: DesktopConfigBootstrapSnapshot;
+};
+
+/** Credential-free messaging projection for runtime renderer surfaces. */
+export type DesktopMessagingSettingsProjection = {
+  fetchedAt: number;
+  messaging: DesktopSettingsSnapshot["messaging"];
+  runtime: DesktopSettingsSnapshot["runtime"]["messaging"];
+};
+
+export type ReadDesktopMessagingSettingsResponse = {
+  snapshot: DesktopMessagingSettingsProjection;
+};
+
+/** Single-key policy projection used by every Full Access confirmation. */
+export type ReadDesktopFullAccessPolicyResponse = {
+  fullAccessRiskWarningDismissed: boolean;
+};
+
 export type WriteDesktopSettingsConfigRequest = {
   patch: DesktopSettingsConfigPatch;
 };
@@ -1355,7 +1396,9 @@ export type ClearDesktopSettingsSecretRequest = {
   secret: DesktopSettingsSecretName;
 };
 
-export type RefreshDesktopCodexDiscoveryRequest = Record<string, never>;
+export type RefreshDesktopCodexDiscoveryRequest = {
+  discoveryIntent: "settings-user-action" | "setup-user-action";
+};
 
 export type CreateDesktopCodexAuthProfileRequest = {
   profile: string;
@@ -1409,8 +1452,38 @@ export type PickGhCommandResponse = {
   candidate?: DesktopGhDiscoveryCandidate;
 };
 
+export type DesktopConfigDomainKey =
+  | "general"
+  | "onboarding"
+  | "experimental"
+  | "messaging"
+  | "federation"
+  | "models"
+  | "providers"
+  | "applications"
+  | "git"
+  | "updates"
+  | "worktrees"
+  | "ui"
+  | "integratedTerminal"
+  | "imageUploads";
+
+export type DesktopSettingsConfigUpdate = {
+  version: number;
+  configRevision: string;
+  changedDomains: readonly DesktopConfigDomainKey[];
+  normalizedPatch: DesktopSettingsConfigPatch;
+  scheduledProviderRefreshes: readonly string[];
+};
+
 export type DesktopSettingsWriteResponse = {
+  update: DesktopSettingsConfigUpdate;
   snapshot: DesktopSettingsSnapshot;
+};
+
+export type DesktopSettingsSecretWriteResponse = {
+  secret: DesktopSettingsSecretName;
+  state: DesktopSettingsSecretState;
 };
 
 export type DesktopPwrAgentProfileSummary = {
@@ -1851,10 +1924,12 @@ export type SettingsCredentialTestRequest = {
   kind: SettingsCredentialTestKind;
 };
 
-/** Open Slack's create-from-manifest page in the system browser. */
+/** Prepare the current Slack manifest for a new or existing app. */
 export type SlackCreateAppRequest = {
   /** When true (default), also open the URL via the OS browser. */
   open?: boolean;
+  /** Create a new app from the manifest, or open Slack Apps to update one. */
+  mode?: "create" | "update";
 };
 
 export type SlackCreateAppResponse = {

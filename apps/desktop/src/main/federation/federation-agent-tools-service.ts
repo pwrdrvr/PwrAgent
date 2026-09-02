@@ -640,7 +640,7 @@ async function localInstanceDescriptor(
   health: FederationHealthStatus,
   collectHostInfo: () => Promise<FederationHostInfo>,
 ): Promise<FederationInstanceDescriptor> {
-  const settings = await getDesktopSettingsService().readSettings();
+  const federation = getDesktopSettingsService().readFederationConfig();
   let host: FederationHostInfo | undefined;
   try {
     host = await collectHostInfo();
@@ -650,14 +650,14 @@ async function localInstanceDescriptor(
   return {
     instanceId: health.instanceId ?? "local",
     label:
-      settings.federation.instanceLabel.value.trim() || defaultInstanceLabel(),
+      federation.instanceLabel?.trim() || defaultInstanceLabel(),
     isLocal: true,
     // Reachable by definition; health.status describes the federation
     // listener, not this instance's ability to take work.
     status: "connected",
     capabilities: [...FEDERATION_CAPABILITIES],
     role: health.role,
-    notes: settings.federation.instanceNotes.value.trim() || undefined,
+    notes: federation.instanceNotes?.trim() || undefined,
     icon: health.localCelestialIcon,
     ...(host ? { host } : {}),
   };

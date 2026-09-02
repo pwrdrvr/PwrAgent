@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  DesktopMessagingSettingsProjection,
   DesktopSettingsSnapshot,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
@@ -319,7 +320,7 @@ describe("MessagingStatusBar", () => {
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => statuses),
       onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
-      readSettings: vi.fn(async () => ({
+      readMessagingSettings: vi.fn(async () => ({
         snapshot: messagingSettingsSnapshot(
           { telegram: true },
           { runtimeMessagingDisabled: true },
@@ -353,12 +354,19 @@ describe("MessagingStatusBar", () => {
       },
     ] satisfies MessagingPlatformStatus[];
     const writeSettingsConfig = vi.fn(async () => ({
-      snapshot: messagingSettingsSnapshot({ telegram: false }),
+      update: {
+        version: 2,
+        configRevision: "next",
+        changedDomains: ["messaging"] as const,
+        normalizedPatch: { messaging: { telegram: { enabled: false } } },
+        scheduledProviderRefreshes: [],
+      },
+      snapshot: {} as DesktopSettingsSnapshot,
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => statuses),
       onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
-      readSettings: vi.fn(async () => ({
+      readMessagingSettings: vi.fn(async () => ({
         snapshot: messagingSettingsSnapshot({ telegram: true }),
       })),
       writeSettingsConfig,
@@ -392,12 +400,19 @@ describe("MessagingStatusBar", () => {
       disabledReasonKind: "runtime_stopped" as const,
     }));
     const writeSettingsConfig = vi.fn(async () => ({
-      snapshot: messagingSettingsSnapshot({ telegram: false }),
+      update: {
+        version: 2,
+        configRevision: "next",
+        changedDomains: ["messaging"] as const,
+        normalizedPatch: { messaging: { telegram: { enabled: false } } },
+        scheduledProviderRefreshes: [],
+      },
+      snapshot: {} as DesktopSettingsSnapshot,
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => statuses),
       onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
-      readSettings: vi.fn(async () => ({
+      readMessagingSettings: vi.fn(async () => ({
         snapshot: messagingSettingsSnapshot({ telegram: true }),
       })),
       setMessagingEnabled,
@@ -424,15 +439,19 @@ describe("MessagingStatusBar", () => {
 
   it("shows configured disabled platforms omitted by runtime startup and enables them from the row", async () => {
     const writeSettingsConfig = vi.fn(async () => ({
-      snapshot: messagingSettingsSnapshot(
-        { line: true },
-        { configured: { line: true } },
-      ),
+      update: {
+        version: 2,
+        configRevision: "next",
+        changedDomains: ["messaging"] as const,
+        normalizedPatch: { messaging: { line: { enabled: true } } },
+        scheduledProviderRefreshes: [],
+      },
+      snapshot: {} as DesktopSettingsSnapshot,
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => []),
       onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
-      readSettings: vi.fn(async () => ({
+      readMessagingSettings: vi.fn(async () => ({
         snapshot: messagingSettingsSnapshot(
           { line: false },
           { configured: { line: true } },
@@ -594,7 +613,7 @@ describe("MessagingStatusBar", () => {
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses,
       onMessagingPlatformStatusEvent,
-      readSettings: vi.fn(),
+      readMessagingSettings: vi.fn(),
       setMessagingEnabled: vi.fn(),
       writeSettingsConfig: vi.fn(),
       getMessagingActivitySummary: vi.fn(),
@@ -624,7 +643,7 @@ describe("MessagingStatusBar", () => {
       // not fold them into the peer's list.
       expect(onMessagingPlatformStatusEvent).not.toHaveBeenCalled();
       // No local settings/activity polling for a remote window.
-      expect(desktopApi.readSettings).not.toHaveBeenCalled();
+      expect(desktopApi.readMessagingSettings).not.toHaveBeenCalled();
       expect(desktopApi.getMessagingActivitySummary).not.toHaveBeenCalled();
 
       // Read-only: no master toggle, no per-platform switches, no
@@ -742,7 +761,7 @@ function messagingSettingsSnapshot(enabled: {
     line?: boolean;
   };
   runtimeMessagingDisabled?: boolean;
-} = {}): DesktopSettingsSnapshot {
+} = {}): DesktopMessagingSettingsProjection {
   const setting = (value: boolean) => ({ value, source: "config" });
   const secret = (configured: boolean | undefined) => ({
     configured: configured ?? false,
@@ -750,10 +769,9 @@ function messagingSettingsSnapshot(enabled: {
     writable: true,
   });
   return {
+    fetchedAt: 1,
     runtime: {
-      messaging: {
-        disabled: options.runtimeMessagingDisabled ?? false,
-      },
+      disabled: options.runtimeMessagingDisabled ?? false,
     },
     messaging: {
       telegram: { enabled: setting(enabled.telegram ?? true) },
@@ -766,5 +784,5 @@ function messagingSettingsSnapshot(enabled: {
         channelAccessToken: secret(options.configured?.line),
       },
     },
-  } as unknown as DesktopSettingsSnapshot;
+  } as unknown as DesktopMessagingSettingsProjection;
 }

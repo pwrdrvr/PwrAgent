@@ -873,7 +873,7 @@ export function MessagingSettings(props: {
               <SettingsTestBlock
                 kind="discord"
                 desktopApi={props.desktopApi}
-                icon={<DiscordIcon size={14} variant="white" />}
+                icon={<DiscordIcon size={14} />}
                 defaultName="Your bot"
                 defaultSub="discord.com/api/v10"
               />
@@ -1282,7 +1282,7 @@ export function MessagingSettings(props: {
           ) : null}
           <SettingsField
             label="Connect Slack"
-            sub="Create a customer-owned Slack app from PwrAgent's official manifest, then paste the two tokens."
+            sub="Set up the Slack app, then paste the two tokens below."
             control={
               <SlackConnectCard
                 desktopApi={props.desktopApi}
