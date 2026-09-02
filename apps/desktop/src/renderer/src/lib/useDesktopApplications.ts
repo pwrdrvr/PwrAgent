@@ -6,6 +6,7 @@ export function useDesktopApplications(params: {
   desktopApi?: DesktopApi;
   localApplications?: DesktopApplicationsSnapshot;
   remoteInstanceId?: string;
+  suspended?: boolean;
 }): DesktopApplicationsSnapshot | undefined {
   const [remoteApplications, setRemoteApplications] = useState<{
     applications: DesktopApplicationsSnapshot;
@@ -13,7 +14,11 @@ export function useDesktopApplications(params: {
   }>();
 
   useEffect(() => {
-    if (!params.remoteInstanceId || !params.desktopApi?.readApplications) {
+    if (
+      !params.remoteInstanceId
+      || params.suspended
+      || !params.desktopApi?.readApplications
+    ) {
       setRemoteApplications(undefined);
       return;
     }
@@ -41,7 +46,7 @@ export function useDesktopApplications(params: {
     return () => {
       cancelled = true;
     };
-  }, [params.desktopApi, params.remoteInstanceId]);
+  }, [params.desktopApi, params.remoteInstanceId, params.suspended]);
 
   if (!params.remoteInstanceId) {
     return params.localApplications;

@@ -1408,10 +1408,15 @@ function DesktopAppShell(props: {
     desktopApi,
     target: activeFederationTarget,
   });
+  const remoteReadsSuspended = Boolean(
+    activeFederationTarget
+    && (!peerConnectivity.ready || !peerConnectivity.connected),
+  );
   const applications = useDesktopApplications({
     desktopApi,
     localApplications: settings.snapshot?.applications,
     remoteInstanceId: remoteApplicationInstanceId,
+    suspended: remoteReadsSuspended,
   });
   // Keep the backend-error toast's thread lookup fresh without making the
   // toast subscription depend on (and re-subscribe to) the thread list.
@@ -1442,7 +1447,7 @@ function DesktopAppShell(props: {
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,
-    suspended: !peerConnectivity.connected,
+    suspended: remoteReadsSuspended,
   });
   const startupBackend = useMemo(
     () => resolveNewThreadBackend(backendSummaries.backends),
@@ -1769,7 +1774,7 @@ function DesktopAppShell(props: {
     () => readRendererFederationTarget()
       ? [{
           federationTarget: activeFederationTarget,
-          suspended: !peerConnectivity.connected,
+          suspended: remoteReadsSuspended,
         }]
       : [
           { federationTarget: undefined },
@@ -1779,7 +1784,7 @@ function DesktopAppShell(props: {
         ],
     [
       activeFederationTarget,
-      peerConnectivity.connected,
+      remoteReadsSuspended,
       scheduledActionFederationTargets,
     ],
   );
@@ -1977,6 +1982,14 @@ function DesktopAppShell(props: {
       return;
     }
 
+    // A restored selection is already a valid startup landing. Backend
+    // discovery can change scope while that remote owner is still resolving;
+    // do not reinterpret a transient empty result as first-run evidence.
+    if (navigation.selectedThreadKey) {
+      startupLandingStateRef.current = "complete";
+      return;
+    }
+
     if (!startupBackend) {
       // A discovery failure is not proof that the profile has no configured
       // provider. Let a later refresh make the startup decision instead of
@@ -1992,14 +2005,6 @@ function DesktopAppShell(props: {
     }
 
     startupLandingStateRef.current = "complete";
-    if (navigation.selectedThreadKey) {
-      // Navigation already landed on a thread: a selection restored across a
-      // renderer reload, or the snapshot's fallback pick. Swapping that for
-      // the workspace composer flashes the thread's transcript and leaves a
-      // back entry pointing at it, so the composer is the startup landing
-      // only when there is no thread to show.
-      return;
-    }
     setMainView("thread");
     void openWorkspaceLaunchpad(startupBackend.kind);
   }, [
@@ -2019,6 +2024,7 @@ function DesktopAppShell(props: {
     initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
     liveTranscriptEventFiltering:
       settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
+    suspended: remoteReadsSuspended,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
   const skills = useThreadSkills({
@@ -2153,7 +2159,7 @@ function DesktopAppShell(props: {
       !navigation.selectedThread ||
       // A remote thread cannot accept input while its owning instance is
       // unreachable — typing would only queue into a dead RPC.
-      !peerConnectivity.connected ||
+      remoteReadsSuspended ||
       !backendSummaries.backends.some(
         (backend) =>
           backend.kind === navigation.selectedThread?.source &&
@@ -2161,7 +2167,7 @@ function DesktopAppShell(props: {
       ),
     composerImplementation: settings.composerImplementation,
     composerDraftStore,
-    desktopApi: threadDesktopApi,
+    desktopApi: remoteReadsSuspended ? undefined : threadDesktopApi,
     launchpadError: navigation.launchpadError,
     onProviderSelected: refreshSelectedAcpProvider,
     onShowNotice: showAppNotice,
