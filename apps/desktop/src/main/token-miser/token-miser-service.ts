@@ -563,17 +563,16 @@ export class TokenMiserService {
       toolName: member.toolName,
       summary: parsed.members.get(member.toolCallId) ?? "Completed tool result.",
     }));
-    const replacement = capModelVisibleText(JSON.stringify({
-      kind: "tool_output_group_summary",
+    const replacement = buildCappedGroupReplacement({
       groupId: payload.cell_id,
+      groupMembers,
+      maxBytes:
+        payload.max_output_tokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
       summary: parsed.summary.summary,
-      members: groupMembers.map((member) => ({
-        objectId: member.objectId,
-        toolName: member.toolName,
-        summary: member.summary,
-      })),
-      sourceMaterial: "Available by group and member reference when required.",
-    }, null, 2), payload.max_output_tokens);
+    });
+    if (!replacement) {
+      return undefined;
+    }
     const storedOutput: TokenMiserGroupStoredOutput = {
       version: 1,
       groupId: payload.cell_id,
@@ -735,15 +734,15 @@ export class TokenMiserService {
     }
 
     const objectId = randomUUID();
-    const replacement = capTextToUtf8Bytes(
-      buildReplacement({
-        objectId,
-        summary: decision.summary,
-      }),
-      params.maxReplacementBytes
-      ?? TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
-      "… summary truncated",
-    );
+    const replacement = buildCappedReplacement({
+      maxBytes:
+        params.maxReplacementBytes ?? TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+      objectId,
+      summary: decision.summary,
+    });
+    if (!replacement) {
+      return undefined;
+    }
     const parentModel = await this.options.resolveParentModel?.(
       params.threadId,
     ).catch(() => undefined);
@@ -909,23 +908,25 @@ function buildSummaryPrompt(
   payload: TokenMiserPostToolUsePayload,
   output: string,
 ): string {
-  return capHelperPrompt([
+  const metadata = [
     `Tool: ${payload.tool_name}`,
     `Visible parent intent before the call: ${payload.parent_intent ?? "Not available"}`,
     `Tool input: ${serializeToolResponse(payload.tool_input)}`,
     "Ordinary model-visible output cap: 10000 estimated tokens",
     `Output characters: ${output.length}`,
-    "",
-    "Tool output:",
+  ].join("\n");
+  return buildHelperPromptWithReservedOutput({
+    metadata,
     output,
-  ].join("\n"));
+    outputLabel: "Tool output:",
+  });
 }
 
 function buildCodeModeSummaryPrompt(
   payload: TokenMiserCodeModeOutputPayload,
   output: string,
 ): string {
-  return capHelperPrompt([
+  const metadata = [
     "Tool: Code Mode",
     `Call ID: ${payload.call_id}`,
     `Cell ID: ${payload.cell_id}`,
@@ -934,10 +935,12 @@ function buildCodeModeSummaryPrompt(
     `Script: ${payload.script ?? "Not available"}`,
     `Model-visible output budget: ${payload.max_output_tokens} tokens`,
     `Output characters: ${output.length}`,
-    "",
-    "Script output:",
+  ].join("\n");
+  return buildHelperPromptWithReservedOutput({
+    metadata,
     output,
-  ].join("\n"));
+    outputLabel: "Script output:",
+  });
 }
 
 function buildGroupedCodeModeSummaryPrompt(
@@ -947,43 +950,117 @@ function buildGroupedCodeModeSummaryPrompt(
   const header = [
     "Summarize this completed parallel Code Mode cell as one group.",
     `Group ID: ${payload.cell_id}`,
-    `Visible parent intent before the cell: ${payload.parent_intent ?? "Not available"}`,
     `Script status: ${payload.script_status}`,
-    `Script: ${payload.script ?? "Not available"}`,
     `Model-visible output budget: ${payload.max_output_tokens} tokens`,
     "Return one factual group summary and one factual summary for every toolCallId.",
     "Broad parallel probes are expected. Do not recommend serial follow-up operations.",
     `Member IDs: ${members.map((member) => member.toolCallId).join(", ")}`,
   ].join("\n");
+  const contextMetadata = [
+    `Visible parent intent before the cell: ${payload.parent_intent ?? "Not available"}`,
+    `Script: ${payload.script ?? "Not available"}`,
+    ...members.map((member) => [
+      `toolCallId: ${member.toolCallId}`,
+      `toolInput: ${member.toolInput}`,
+    ].join("\n")),
+  ].join("\n");
   const memberHeaders = members.map((member, index) => [
-    "",
     `Member ${index + 1}`,
     `toolCallId: ${member.toolCallId}`,
     `toolName: ${member.toolName}`,
-    `toolInput: ${member.toolInput}`,
     `outputCharacters: ${member.output.length}`,
     "output:",
   ].join("\n"));
-  const fixedPrompt = [header, ...memberHeaders].join("\n");
+  const assemblePrompt = (metadata: string, outputs: readonly string[]) => [
+    header,
+    "",
+    "Context metadata:",
+    metadata,
+    ...memberHeaders.flatMap((memberHeader, index) => [
+      "",
+      memberHeader,
+      outputs[index] ?? "",
+    ]),
+  ].join("\n");
+  const promptBudget = helperPromptBudget();
+  const emptyPrompt = assemblePrompt("", members.map(() => ""));
+  const reservedOutputBytes = Math.min(
+    TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+    members.reduce(
+      (total, member) => total + utf8ByteLength(member.output),
+      0,
+    ),
+  );
+  const metadataBudget = Math.max(
+    0,
+    promptBudget
+    - reservedOutputBytes
+    - utf8ByteLength(emptyPrompt),
+  );
+  const boundedMetadata = capTextToUtf8Bytes(
+    contextMetadata,
+    metadataBudget,
+    "\n… context metadata truncated",
+  );
+  const fixedPrompt = assemblePrompt(boundedMetadata, members.map(() => ""));
   const outputBudget = Math.max(
     0,
-    TOKEN_MISER_HELPER_INPUT_CAP_BYTES
-    - utf8ByteLength(TOKEN_MISER_SYSTEM_PROMPT)
-    - utf8ByteLength(fixedPrompt)
-    - members.length,
+    promptBudget - utf8ByteLength(fixedPrompt),
   );
   const memberBudgets = distributeFairByteBudget(
     members.map((member) => utf8ByteLength(member.output)),
     outputBudget,
   );
-  const memberSections = memberHeaders.map(
-    (memberHeader, index) => `${memberHeader}\n${capTextToUtf8Bytes(
-      members[index]!.output,
+  const boundedOutputs = members.map(
+    (member, index) => capTextToUtf8Bytes(
+      member.output,
       memberBudgets[index]!,
       "\n… member output truncated",
-    )}`,
+    ),
   );
-  return capHelperPrompt([header, ...memberSections].join("\n"));
+  return assemblePrompt(boundedMetadata, boundedOutputs);
+}
+
+function buildHelperPromptWithReservedOutput(params: {
+  metadata: string;
+  output: string;
+  outputLabel: string;
+}): string {
+  const separator = `\n\n${params.outputLabel}\n`;
+  const promptBudget = helperPromptBudget();
+  const reservedOutputBytes = Math.min(
+    TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+    utf8ByteLength(params.output),
+  );
+  const metadataBudget = Math.max(
+    0,
+    promptBudget
+    - reservedOutputBytes
+    - utf8ByteLength(separator),
+  );
+  const metadata = capTextToUtf8Bytes(
+    params.metadata,
+    metadataBudget,
+    "\n… metadata truncated",
+  );
+  const outputBudget = Math.max(
+    0,
+    promptBudget - utf8ByteLength(metadata) - utf8ByteLength(separator),
+  );
+  const output = capTextToUtf8Bytes(
+    params.output,
+    outputBudget,
+    "\n… source truncated at the projected 20k-token Luna input cap",
+  );
+  return `${metadata}${separator}${output}`;
+}
+
+function helperPromptBudget(): number {
+  return Math.max(
+    0,
+    TOKEN_MISER_HELPER_INPUT_CAP_BYTES
+    - utf8ByteLength(TOKEN_MISER_SYSTEM_PROMPT),
+  );
 }
 
 function distributeFairByteBudget(
@@ -1019,30 +1096,6 @@ function distributeFairByteBudget(
   return budgets;
 }
 
-function capHelperPrompt(prompt: string): string {
-  // Luna may inspect one additional parent-sized window so it can retain a
-  // useful fact that ordinary pass-through truncation would have discarded.
-  // Its reported usage remains authoritative for gate cost accounting.
-  const promptBudget = Math.max(
-    0,
-    TOKEN_MISER_HELPER_INPUT_CAP_BYTES
-    - utf8ByteLength(TOKEN_MISER_SYSTEM_PROMPT),
-  );
-  return capTextToUtf8Bytes(
-    prompt,
-    promptBudget,
-    "\n… source truncated at the projected 20k-token Luna input cap",
-  );
-}
-
-function capModelVisibleText(text: string, maxOutputTokens: number): string {
-  return capTextToUtf8Bytes(
-    text,
-    maxOutputTokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
-    "\n… summary truncated",
-  );
-}
-
 function capTextToUtf8Bytes(
   text: string,
   maxBytes: number,
@@ -1058,22 +1111,97 @@ function capTextToUtf8Bytes(
   return `${takeUtf8Prefix(text, maxBytes - markerBytes)}${marker}`;
 }
 
+function buildCappedReplacement(params: {
+  maxBytes: number;
+  objectId: string;
+  summary: TokenMiserSummary;
+}): string | undefined {
+  const full = buildReplacement(params);
+  if (utf8ByteLength(full) <= params.maxBytes) {
+    return full;
+  }
+  const reference = `Output reference: ${params.objectId}`;
+  if (utf8ByteLength(reference) > params.maxBytes) {
+    return undefined;
+  }
+  const separator = "\n\n";
+  const bodyBudget = Math.max(
+    0,
+    params.maxBytes - utf8ByteLength(reference) - utf8ByteLength(separator),
+  );
+  const body = capTextToUtf8Bytes(
+    buildReplacementBody(params.summary),
+    bodyBudget,
+    "… summary truncated",
+  );
+  return body ? `${body}${separator}${reference}` : reference;
+}
+
 function buildReplacement(params: {
   objectId: string;
   summary: TokenMiserSummary;
 }): string {
-  const details = params.summary.usefulDetails.length > 0
-    ? params.summary.usefulDetails.map((detail) => `- ${detail}`).join("\n")
-    : "- No additional facts were retained.";
   return [
-    `Summary: ${params.summary.summary}`,
-    "",
-    "Facts:",
-    details,
+    buildReplacementBody(params.summary),
     "",
     `Output reference: ${params.objectId}`,
     "Exact source material is available when required.",
   ].join("\n");
+}
+
+function buildReplacementBody(summary: TokenMiserSummary): string {
+  const details = summary.usefulDetails.length > 0
+    ? summary.usefulDetails.map((detail) => `- ${detail}`).join("\n")
+    : "- No additional facts were retained.";
+  return [
+    `Summary: ${summary.summary}`,
+    "",
+    "Facts:",
+    details,
+  ].join("\n");
+}
+
+function buildCappedGroupReplacement(params: {
+  groupId: string;
+  groupMembers: TokenMiserGroupMemberSummary[];
+  maxBytes: number;
+  summary: string;
+}): string | undefined {
+  const full = JSON.stringify({
+    kind: "tool_output_group_summary",
+    groupId: params.groupId,
+    summary: params.summary,
+    members: params.groupMembers.map((member) => ({
+      objectId: member.objectId,
+      toolName: member.toolName,
+      summary: member.summary,
+    })),
+    sourceMaterial: "Available by group and member reference when required.",
+  }, null, 2);
+  if (utf8ByteLength(full) <= params.maxBytes) {
+    return full;
+  }
+  const compact = JSON.stringify({
+    kind: "tool_output_group_summary",
+    groupId: params.groupId,
+    summary: "Summary truncated to retain recovery references.",
+    members: params.groupMembers.map((member) => ({
+      objectId: member.objectId,
+      toolName: member.toolName,
+    })),
+    sourceMaterial: "Retrieve source material by group or member reference.",
+  });
+  if (utf8ByteLength(compact) <= params.maxBytes) {
+    return compact;
+  }
+  const referencesOnly = JSON.stringify({
+    kind: "tool_output_group_reference",
+    groupId: params.groupId,
+    members: params.groupMembers.map((member) => member.objectId),
+  });
+  return utf8ByteLength(referencesOnly) <= params.maxBytes
+    ? referencesOnly
+    : undefined;
 }
 
 function parseSummary(value: unknown): TokenMiserSummary | undefined {

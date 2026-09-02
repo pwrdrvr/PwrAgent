@@ -6,11 +6,6 @@ import {
 } from "./agent-tool-definition.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
 import type { TokenMiserGroupBatchOperation } from "../token-miser/token-miser-store.js";
-import {
-  TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
-  takeUtf8Prefix,
-  utf8ByteLength,
-} from "../token-miser/token-miser-types.js";
 
 export function buildTokenMiserToolDefinitions(
   store?: TokenMiserStore,
@@ -166,7 +161,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_all_token_miser_output",
       description:
-        "Read the preserved tool result up to the 10k-token parent-result cap as plain text in Code Mode or a text content block over MCP. Use line-range reads for additional material. The source must belong to the invoking thread.",
+        "Read the complete preserved tool result as plain text in Code Mode or a text content block over MCP. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -210,12 +205,6 @@ async function retrievalSuccess(params: {
   visibleText: string;
 }) {
   let visibleText = params.visibleText;
-  // Bound the tool response itself as well as the later outer Code Mode cell.
-  // The first boundary prevents a requested minified line from becoming an
-  // enormous nested result; confirmation enforces the shared outer ceiling.
-  const maxResponseCharacters =
-    params.maxResponseCharacters
-    ?? Number.MAX_SAFE_INTEGER;
   while (true) {
     const delivery = await params.store.prepareRetrievalDelivery({
       objectId: params.objectId,
@@ -230,8 +219,8 @@ async function retrievalSuccess(params: {
       structuredContent: params.structuredContent,
     };
     if (
-      delivery.text.length <= maxResponseCharacters
-      && utf8ByteLength(delivery.text) <= TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES
+      !params.maxResponseCharacters
+      || delivery.text.length <= params.maxResponseCharacters
     ) {
       return agentToolSuccess(payload, {
         contentItems: [{ type: "inputText", text: delivery.text }],
@@ -239,22 +228,10 @@ async function retrievalSuccess(params: {
       });
     }
     params.store.abandonRetrievalDelivery(delivery.deliveryId);
-    const characterOverflow = Math.max(
-      0,
-      delivery.text.length - maxResponseCharacters,
-    );
-    const byteOverflowCharacters = Math.max(
-      0,
-      delivery.text.length
-      - takeUtf8Prefix(
-        delivery.text,
-        TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
-      ).length,
-    );
     const nextLength = Math.max(
       0,
       visibleText.length
-      - Math.max(characterOverflow, byteOverflowCharacters)
+      - (delivery.text.length - params.maxResponseCharacters)
       - 64,
     );
     if (nextLength >= visibleText.length) {

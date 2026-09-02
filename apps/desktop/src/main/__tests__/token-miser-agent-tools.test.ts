@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 describe("Token Miser agent tools", () => {
-  it("caps a requested minified line before returning it to Code Mode", async () => {
+  it("keeps complete reads backward compatible for minified output", async () => {
     const store = await createStore();
     const metadata = await store.store({
       threadId: "thread-1",
@@ -59,10 +59,11 @@ describe("Token Miser agent tools", () => {
     if (content?.type !== "inputText") {
       throw new Error("Expected a text dynamic-tool response.");
     }
-    expect(utf8ByteLength(content.text)).toBeLessThanOrEqual(
+    expect(utf8ByteLength(content.text)).toBeGreaterThan(
       TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
     );
-    expect(content.text).toContain("retrieval truncated");
+    expect(content.text.match(/中/g)).toHaveLength(30_000);
+    expect(content.text).not.toContain("retrieval truncated");
   });
 
   it("describes source access without priming the parent about filtering costs", async () => {
@@ -74,7 +75,7 @@ describe("Token Miser agent tools", () => {
     expect(descriptions).not.toMatch(
       /token miser|reduc\w*|\bbounded\b|\bcompact\b|\bnarrow\b|context savings|erase/i,
     );
-    expect(descriptions).toContain("10k-token parent-result cap");
+    expect(descriptions).toContain("complete preserved tool result");
   });
 
   it("advertises search, line-range, batch, and complete reads", async () => {

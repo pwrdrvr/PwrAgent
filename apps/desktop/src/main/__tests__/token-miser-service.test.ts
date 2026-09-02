@@ -489,6 +489,42 @@ describe("TokenMiserService per-thread override", () => {
     });
     expect(await service.preparePostToolUse(payload("large"))).toBeUndefined();
   });
+
+  it("reserves Luna capacity for direct tool output after large metadata", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async (_request: {
+      prompt: string;
+      system: string;
+    }) => ({
+      status: "ok" as const,
+      object: {
+        disposition: "summarize" as const,
+        summary: "The source marker was available.",
+        usefulDetails: [],
+      },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+
+    await service.preparePostToolUse({
+      ...payload(`${"o".repeat(30_000)}DIRECT_OUTPUT_GOLD`),
+      parent_intent: "intent metadata ".repeat(10_000),
+      tool_input: { query: "input metadata ".repeat(10_000) },
+    });
+
+    const request = generateSummary.mock.calls[0]![0];
+    expect(request.prompt).toContain("Tool output:\n");
+    expect(request.prompt).toContain("DIRECT_OUTPUT_GOLD");
+    expect(
+      utf8ByteLength(request.prompt) + utf8ByteLength(request.system),
+    ).toBeLessThanOrEqual(
+      20_000 * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+    );
+  });
 });
 
 describe("TokenMiserService code-mode reduction", () => {
@@ -575,6 +611,45 @@ describe("TokenMiserService code-mode reduction", () => {
     const request = generateSummary.mock.calls[0]![0];
     expect(request.prompt).toContain(withinByteBudget);
     expect(request.prompt).not.toContain(beyondByteBudget);
+    expect(
+      utf8ByteLength(request.prompt) + utf8ByteLength(request.system),
+    ).toBeLessThanOrEqual(
+      20_000 * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+    );
+  });
+
+  it("reserves Luna capacity for script output after a large script", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async (_request: {
+      prompt: string;
+      system: string;
+    }) => ({
+      status: "ok" as const,
+      object: {
+        disposition: "summarize" as const,
+        summary: "The script output marker was available.",
+        usefulDetails: [],
+      },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+
+    await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: `${"o".repeat(30_000)}SCRIPT_OUTPUT_GOLD`,
+      }]),
+      parent_intent: "intent metadata ".repeat(10_000),
+      script: "const metadata = 'x';\n".repeat(10_000),
+    });
+
+    const request = generateSummary.mock.calls[0]![0];
+    expect(request.prompt).toContain("Script output:\n");
+    expect(request.prompt).toContain("SCRIPT_OUTPUT_GOLD");
     expect(
       utf8ByteLength(request.prompt) + utf8ByteLength(request.system),
     ).toBeLessThanOrEqual(
@@ -877,6 +952,59 @@ describe("TokenMiserService code-mode reduction", () => {
       .toBe(0);
   });
 
+  it("keeps every group recovery ID in a capped replacement", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary: async () => ({
+        status: "ok",
+        object: {
+          disposition: "summarize",
+          summary: "group summary ".repeat(100),
+          usefulDetails: [],
+          members: [
+            { toolCallId: "nested-1", summary: "first summary ".repeat(50) },
+            { toolCallId: "nested-2", summary: "second summary ".repeat(50) },
+          ],
+        },
+      }),
+      thresholdCharacters: 1,
+      codeModeGroupingVersion: () => 1,
+    });
+    for (const [toolCallId, output] of [
+      ["nested-1", "first preserved output"],
+      ["nested-2", "second preserved output"],
+    ] as const) {
+      await service.captureNestedPostToolUse({
+        ...payload(output),
+        is_code_mode_nested: true,
+        token_miser_grouping_version: 1,
+        code_mode_cell_id: "cell-1",
+        code_mode_tool_call_id: toolCallId,
+      });
+    }
+
+    const prepared = await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: "combined grouped output",
+      }]),
+      max_output_tokens: 150,
+    });
+
+    expect(prepared).toBeDefined();
+    await prepared!.staged.commit();
+    const replacement = prepared!.response.replacement[0]!.text;
+    expect(utf8ByteLength(replacement)).toBeLessThanOrEqual(600);
+    expect(() => JSON.parse(replacement)).not.toThrow();
+    const [metadata] = await store.listMetadata();
+    expect(replacement).toContain("cell-1");
+    for (const member of metadata!.groupMembers!) {
+      expect(replacement).toContain(member.objectId);
+    }
+  });
+
   it("shares Luna's 20k projected-input cap across every grouped member", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async (_request: {
@@ -906,14 +1034,16 @@ describe("TokenMiserService code-mode reduction", () => {
       codeModeGroupingVersion: () => 1,
     });
     await service.captureNestedPostToolUse({
-      ...payload(`${"a".repeat(20_000)}FIRST_MEMBER_GOLD${"a".repeat(40_000)}`),
+      ...payload(`${"a".repeat(15_000)}FIRST_MEMBER_GOLD${"a".repeat(45_000)}`),
+      tool_input: { query: "first metadata ".repeat(10_000) },
       is_code_mode_nested: true,
       token_miser_grouping_version: 1,
       code_mode_cell_id: "cell-1",
       code_mode_tool_call_id: "nested-1",
     });
     await service.captureNestedPostToolUse({
-      ...payload(`${"b".repeat(20_000)}SECOND_MEMBER_GOLD${"b".repeat(40_000)}`),
+      ...payload(`${"b".repeat(15_000)}SECOND_MEMBER_GOLD${"b".repeat(45_000)}`),
+      tool_input: { query: "second metadata ".repeat(10_000) },
       is_code_mode_nested: true,
       token_miser_grouping_version: 1,
       code_mode_cell_id: "cell-1",
@@ -1084,7 +1214,9 @@ describe("TokenMiserService code-mode reduction", () => {
     });
 
     const [metadata] = await store.listMetadata();
-    expect(response!.replacement![0]!.text.length).toBeLessThanOrEqual(100);
+    const replacement = response!.replacement![0]!.text;
+    expect(replacement.length).toBeLessThanOrEqual(100);
+    expect(replacement).toContain(`Output reference: ${metadata!.objectId}`);
     expect(metadata!.baselineParentTokens).toBe(25);
     expect(metadata!.replacementCharacters).toBeLessThanOrEqual(
       100 + codeModePayload([]).model_visible_overhead_characters,
@@ -1092,6 +1224,29 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(metadata!.replacementCharacters).toBeGreaterThan(
       codeModePayload([]).model_visible_overhead_characters,
     );
+  });
+
+  it("fails open when the recovery reference cannot fit the resolved budget", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary: async () => ({
+        status: "ok",
+        object: {
+          disposition: "summarize",
+          summary: "A long script result.",
+          usefulDetails: [],
+        },
+      }),
+      thresholdCharacters: 1,
+    });
+
+    expect(await service.prepareCodeModeOutput({
+      ...codeModePayload([{ type: "input_text", text: "x".repeat(1_000) }]),
+      max_output_tokens: 5,
+    })).toBeUndefined();
+    expect(await store.listMetadata()).toEqual([]);
   });
 
   it("echoes Codex actionable state exactly and accounts for its model-visible envelope", async () => {
