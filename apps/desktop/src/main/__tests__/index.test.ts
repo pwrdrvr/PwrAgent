@@ -151,7 +151,7 @@ const setFederatedThreadMessageHandlerMock = vi.fn();
 const setFederatedThreadInspectionHandlerMock = vi.fn();
 const setFederatedThreadMutationHandlerMock = vi.fn();
 const setFederatedThreadControlHandlerMock = vi.fn();
-const invalidateProviderRuntimeSelectionsMock = vi.fn(async () => undefined);
+const synchronizeProviderRuntimeSelectionsMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const refreshProvidersAtStartupMock = vi.fn<() => Promise<void>>(
   async () => undefined,
@@ -543,7 +543,7 @@ const runtimeFederationLeaseCoordinatorMock = {
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
-    invalidateProviderRuntimeSelections: invalidateProviderRuntimeSelectionsMock,
+    synchronizeProviderRuntimeSelections: synchronizeProviderRuntimeSelectionsMock,
     listThreads: listThreadsMock,
     refreshProvidersAtStartup: refreshProvidersAtStartupMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
@@ -760,8 +760,8 @@ describe("bootstrapApp", () => {
     setFederatedThreadInspectionHandlerMock.mockReset();
     setFederatedThreadMutationHandlerMock.mockReset();
     setFederatedThreadControlHandlerMock.mockReset();
-    invalidateProviderRuntimeSelectionsMock.mockReset();
-    invalidateProviderRuntimeSelectionsMock.mockResolvedValue(undefined);
+    synchronizeProviderRuntimeSelectionsMock.mockReset();
+    synchronizeProviderRuntimeSelectionsMock.mockResolvedValue(undefined);
     listThreadsMock.mockReset();
     listThreadsMock.mockResolvedValue([]);
     refreshProvidersAtStartupMock.mockReset();
@@ -899,7 +899,7 @@ describe("bootstrapApp", () => {
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates live provider runtimes after executable settings change", async () => {
+  it("synchronizes live provider runtimes after executable settings change", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     await import("../index");
     await flushMicrotasks();
@@ -919,14 +919,7 @@ describe("bootstrapApp", () => {
       acpAgents: { kimi: { cliPath: "/replacement/kimi" } },
     });
 
-    expect(invalidateProviderRuntimeSelectionsMock).toHaveBeenNthCalledWith(1, {
-      acp: false,
-      codex: true,
-    });
-    expect(invalidateProviderRuntimeSelectionsMock).toHaveBeenNthCalledWith(2, {
-      acp: true,
-      codex: false,
-    });
+    expect(synchronizeProviderRuntimeSelectionsMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not infer a boot failure when the main window is slow to show", async () => {
