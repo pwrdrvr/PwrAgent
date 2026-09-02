@@ -21481,6 +21481,41 @@ a.transcript-message__messaging-origin:focus-visible {
   }
 }
 
+/* The sweep is the app's most repeated motion — one beam per running turn, so
+   a busy fleet paints eight or more 1800ms loops at once in the operator's
+   peripheral vision, on every surface at once. It was the one animated
+   indicator in the renderer with no reduced-motion rule at all.
+
+   Held, not hidden. This beam is the ONLY thing on a thread row that says a
+   turn is running, and its idle counterpart (`.signal-count__dormant-scanner`)
+   is an empty track of exactly this footprint — switching the beam off would
+   make "running" and "nothing running" the same pixels, on the readout that
+   exists to answer "can I quit now?".
+
+   So it parks at frame 50% of its own keyframes: centred, `opacity: 1`, glow
+   intact. That is the brightest frame of the loop, which is what a mark with
+   no motion left needs, and it is a pose the operator already knows. A bare
+   `animation: none` would instead fall back to frame 0% — hard left at 0.76
+   opacity, the dimmest frame, reading as a bar that has not started, and
+   pinned to the same edge the dormant track anchors.
+
+   `translateX(travel / 2)` centres it in every variant without a new number:
+   `--thinking-scanner-travel` is defined as the track width minus the beam
+   width in both sizes (62 − 18 = 44, 16 − 6 = 10), which is why the sweep ends
+   flush at the right edge.
+
+   No JS branches on the preference, so the mount-time epoch pin in
+   ThinkingScanner.tsx is untouched: this rule never starts or restarts an
+   animation under a live element, it only replaces the one that was there when
+   the element mounted. */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-scanner__beam {
+    animation: none;
+    opacity: 1;
+    transform: translateX(calc(var(--thinking-scanner-travel) / 2));
+  }
+}
+
 .transcript-activity__header {
   display: flex;
   align-items: baseline;

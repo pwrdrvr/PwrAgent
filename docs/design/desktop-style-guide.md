@@ -321,6 +321,29 @@ pans it. That is a direct-manipulation depth cue, not decoration — it only
 moves when the map moves, by a tenth as far, and it is pinned under
 `prefers-reduced-motion`. Do not extend it to other surfaces.
 
+### Reduced motion
+
+Every looping animation needs a decision under
+`prefers-reduced-motion: reduce`, and
+`styles/__tests__/reduced-motion-contract.test.ts` fails until one is made.
+There are three answers:
+
+- **Stop it.** The default, for motion that decorates a state something else
+  already states — the `status-blink` dot pulse, the Star Map card rise.
+- **Hold it.** For a mark that is the *only* thing saying a state is live. Do
+  not switch it off; park it in a still pose that still reads as that state.
+  The thinking scanner's beam holds frame 50% of its own sweep — centred, full
+  opacity — because its idle counterpart is an empty track of the same size,
+  and a beam switched off would make "running" and "idle" identical pixels.
+- **Let it run.** Only when the motion is the sole signal of progress and has
+  no still alternative — the composer's Run-button ring, which replaces the
+  play glyph with a bare spinner. Give a standalone ring a text or `aria-busy`
+  companion and it stops belonging in this category.
+
+Prefer "hold it" to "let it run": a still pose that carries the meaning is
+almost always available, and reaching for the exemption is how eight beams
+ended up sweeping through a preference that asked them not to.
+
 ## Copy Rules
 
 PwrAgent UI copy should sound like product UI, not demo narration.
