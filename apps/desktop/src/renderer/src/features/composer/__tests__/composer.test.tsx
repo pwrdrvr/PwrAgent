@@ -2594,6 +2594,57 @@ describe("Composer", () => {
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
   });
 
+  it("opens hash autocomplete below a multiline blockquote", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, {
+      target: {
+        value: [
+          "Warnings:",
+          "",
+          "> First warning",
+          ">",
+          "> Second warning",
+          "",
+          "Investigate #Bob",
+        ].join("\n"),
+      },
+    });
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("option", { name: /#Bob's Best Thread 3000/ }),
+    ).toBeInTheDocument();
+  });
+
   it("retires a `#` anchor that runs long with nothing to match", async () => {
     // `#` is the only trigger whose query spans spaces, so before this it
     // stayed armed for the whole rest of the line: every keystroke after a
