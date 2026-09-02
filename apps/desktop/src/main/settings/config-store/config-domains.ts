@@ -73,6 +73,9 @@ export type ProviderProjection = Readonly<{
     managedBuilds?: boolean;
   }>;
   lastKnownGood?: Readonly<{
+    /** Configuration dependency fingerprint this observation verified. Older
+     * durable rows omit it and are normalized from their enclosing row. */
+    dependencyFingerprint?: string;
     selectedCommand?: string;
     selectedVersion?: string;
     candidates: readonly ProviderCandidateSummary[];
@@ -179,6 +182,16 @@ export function normalizeConfigDomains(params: {
         provider,
       });
       const previous = params.previousProviders?.[provider];
+      const lastKnownGood = previous?.lastKnownGood
+        ? {
+            ...previous.lastKnownGood,
+            dependencyFingerprint:
+              previous.lastKnownGood.dependencyFingerprint
+              ?? previous.dependencyFingerprint,
+          }
+        : undefined;
+      const restoredLastKnownGood =
+        lastKnownGood?.dependencyFingerprint === dependencyFingerprint;
       const projection: ProviderProjection = {
         provider,
         dependencyFingerprint,
@@ -190,15 +203,20 @@ export function normalizeConfigDomains(params: {
             ? { managedBuilds: config.acpAgents.grok.managedBuilds }
             : {}),
         },
-        ...(previous?.lastKnownGood
-          ? { lastKnownGood: previous.lastKnownGood }
+        ...(lastKnownGood
+          ? { lastKnownGood }
           : {}),
         validation:
           previous?.dependencyFingerprint === dependencyFingerprint
             ? previous.validation
-            : {
-                state: previous?.lastKnownGood ? "stale" : "unknown",
-              },
+            : restoredLastKnownGood
+              ? {
+                  state: "valid",
+                  lastAttemptAt: lastKnownGood.validatedAt,
+                }
+              : {
+                  state: previous?.lastKnownGood ? "stale" : "unknown",
+                },
       };
       return [provider, projection];
     }),
@@ -240,6 +258,16 @@ export function normalizeConfigDomains(params: {
     integratedTerminal: config.integratedTerminal ?? {},
     imageUploads: config.imageUploads ?? {},
   });
+}
+
+export function providerLastKnownGoodMatchesConfig(
+  provider: ProviderProjection,
+): boolean {
+  const lastKnownGood = provider.lastKnownGood;
+  if (!lastKnownGood) return false;
+  return (
+    lastKnownGood.dependencyFingerprint ?? provider.dependencyFingerprint
+  ) === provider.dependencyFingerprint;
 }
 
 export function providerDependencyFingerprint(params: {

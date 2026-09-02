@@ -91,6 +91,7 @@ export class ProviderRefreshCoordinator {
         ...latest,
         lastKnownGood: {
           ...result,
+          dependencyFingerprint: current.dependencyFingerprint,
           validatedAt: (this.options.now ?? Date.now)(),
         },
         validation: {

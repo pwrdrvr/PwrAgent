@@ -104,6 +104,9 @@ export type AcpInstalledAgentRecord = {
   allowlistRuleId: string;
   installedAt: number;
   updatedAt: number;
+  /** Provider-config fingerprint under which this launch record was
+   * discovered. Missing only on durable rows created by older builds. */
+  configDependencyFingerprint?: string;
   launchDescriptor?: AcpLaunchDescriptor;
   capabilities?: AcpAgentCapabilities;
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;

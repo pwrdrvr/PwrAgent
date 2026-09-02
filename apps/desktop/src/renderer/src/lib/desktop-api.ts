@@ -389,6 +389,7 @@ import type {
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  DesktopSettingsRuntimeChangedEvent,
   ReadDesktopConfigBootstrapResponse,
   ReadDesktopFullAccessPolicyResponse,
   ReadDesktopMessagingSettingsResponse,
@@ -1205,7 +1206,9 @@ export type DesktopApi = {
       transcriptTextSize: DesktopTextSize;
     }) => void,
   ) => () => void;
-  onSettingsRuntimeChanged?: (callback: () => void) => () => void;
+  onSettingsRuntimeChanged?: (
+    callback: (event?: DesktopSettingsRuntimeChangedEvent) => void,
+  ) => () => void;
   onCodexEnvironmentSetupProgress?: (
     callback: (event: CodexEnvironmentSetupProgressEvent) => void,
   ) => () => void;

@@ -171,7 +171,7 @@ export function ModelsSettings(props: {
 
   const refreshCatalog = async (
     force = false,
-    refreshModels = false,
+    refreshModels: true | "codex" | false = false,
   ): Promise<void> => {
     if (!props.desktopApi?.listBackends) {
       setCatalogError("Provider model discovery is unavailable in this build.");
@@ -188,12 +188,15 @@ export function ModelsSettings(props: {
         });
         acpRegistryRefreshed = true;
       }
+      const requestedModelRefresh = force ? true : refreshModels;
       const response = await props.desktopApi.listBackends({
         ...((force || refreshModels)
           ? { discoveryIntent: "settings-user-action" as const }
           : {}),
         includeUnavailable: true,
-        ...(force || refreshModels ? { refreshModels: true } : {}),
+        ...(requestedModelRefresh
+          ? { refreshModels: requestedModelRefresh }
+          : {}),
       });
       setBackends(response.backends);
       setCatalogError(undefined);
@@ -211,8 +214,9 @@ export function ModelsSettings(props: {
   };
 
   useEffect(() => {
-    void refreshCatalog(false, true);
-    // The settings surface is itself a catalog refresh boundary.
+    void refreshCatalog();
+    // Mount is a cache-only read. Provider discovery belongs to the explicit
+    // all-provider Refresh action below, not navigation into Settings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
 
@@ -239,13 +243,9 @@ export function ModelsSettings(props: {
     void props.onSaveCodexPath(path.trim());
   };
 
-  // Names and status for the hub index + focused-screen titles. The
-  // registry probe runs from the hub and the Codex screen (which mounts
-  // no AcpAgentsSettings); focused ACP screens probe via their own
-  // AcpAgentsSettings mount.
-  const acpCatalog = useAcpAgentCatalog(props.desktopApi, {
-    probe: props.focus === undefined || props.focus === "codex",
-  });
+  // Names and status for the hub index + focused-screen titles. This is a
+  // cache-only catalog read; explicit Refresh/Verify actions own discovery.
+  const acpCatalog = useAcpAgentCatalog(props.desktopApi);
   const orderedAcpEntries = displayOrderedAcpEntries(acpCatalog.entries);
   const focusedAcpEntry =
     props.focus && props.focus !== "codex"
@@ -333,27 +333,42 @@ export function ModelsSettings(props: {
             sub="Detected on this machine. The newest supported version is used automatically."
             source={codexSource}
             control={
-              <div
-                className="settings-paths"
-                aria-label="Codex discovery"
-                data-codex-path-actions
-              >
-                {autoCandidates.length === 0 ? (
-                  <p className="settings-empty">No Codex candidates found.</p>
-                ) : (
-                  autoCandidates.map((candidate) => (
-                    <CodexCandidateRow
-                      key={`${candidate.source}:${candidate.command}`}
-                      candidate={candidate}
-                      disabled={props.saving || envForced}
-                      onUse={(command) => {
-                        setCodexPath(command);
-                        saveCodexPath(command);
-                      }}
-                    />
-                  ))
-                )}
-              </div>
+              <>
+                <div
+                  className="settings-paths"
+                  aria-label="Codex discovery"
+                  data-codex-path-actions
+                >
+                  {autoCandidates.length === 0 ? (
+                    <p className="settings-empty">No Codex candidates found.</p>
+                  ) : (
+                    autoCandidates.map((candidate) => (
+                      <CodexCandidateRow
+                        key={`${candidate.source}:${candidate.command}`}
+                        candidate={candidate}
+                        disabled={props.saving || envForced}
+                        onUse={(command) => {
+                          setCodexPath(command);
+                          saveCodexPath(command);
+                        }}
+                      />
+                    ))
+                  )}
+                </div>
+                <div
+                  className="settings-inline-actions"
+                  data-codex-path-actions
+                >
+                  <button
+                    className="button button--secondary"
+                    disabled={refreshingCatalog || props.saving}
+                    type="button"
+                    onClick={() => void refreshCatalog(false, "codex")}
+                  >
+                    {refreshingCatalog ? "Refreshing…" : "Refresh Codex"}
+                  </button>
+                </div>
+              </>
             }
           />
           <SettingsField
@@ -1001,7 +1016,7 @@ function ProviderModelDefaultsSettings(props: {
                 type="button"
                 onClick={() => void props.onRefresh()}
               >
-                {props.refreshing ? "Refreshing…" : "Refresh models"}
+                {props.refreshing ? "Refreshing…" : "Refresh all providers"}
               </button>
             }
           />
@@ -1011,7 +1026,7 @@ function ProviderModelDefaultsSettings(props: {
             sub={
               props.error
                 ? `Last refresh failed: ${props.error}`
-                : "Refresh after installing or upgrading a provider CLI."
+                : "Refresh every provider after installing or upgrading a CLI."
             }
             control={
               <button
@@ -1020,7 +1035,7 @@ function ProviderModelDefaultsSettings(props: {
                 type="button"
                 onClick={() => void props.onRefresh()}
               >
-                {props.refreshing ? "Refreshing…" : "Refresh models"}
+                {props.refreshing ? "Refreshing…" : "Refresh all providers"}
               </button>
             }
           />

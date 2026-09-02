@@ -95,6 +95,9 @@ export function AcpAgentsSettings(props: {
           : {}),
         refresh: refreshRegistry,
         ...(force ? { force: true } : {}),
+        ...(refreshRegistry && props.only
+          ? { registryIds: [props.only] }
+          : {}),
       });
       setEntries(response.entries);
       setError(response.error);
@@ -111,10 +114,10 @@ export function AcpAgentsSettings(props: {
     }
   }
 
-  // Run the initial load exactly once. Mount renders cached agents immediately
-  // (refresh(false) — pure cache read, no launches), then a registry refresh
-  // that only probes undiscovered/stale agents. The ref guards React StrictMode
-  // double-invoking this effect in dev (main also coalesces refreshes).
+  // Run the initial cache read exactly once. Mounting or focusing a provider
+  // must never probe or launch it; the row's Refresh/Save actions own that
+  // provider-scoped discovery budget. The ref only collapses StrictMode's
+  // double-invoked mount effect.
   const didInitialLoad = useRef(false);
   useEffect(() => {
     if (didInitialLoad.current) {
@@ -125,7 +128,7 @@ export function AcpAgentsSettings(props: {
       return;
     }
     didInitialLoad.current = true;
-    void refresh(false).then(() => refresh(true));
+    void refresh(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
 

@@ -85,6 +85,7 @@ import {
   acpProviderCommandOverrideFromSnapshot,
   acpProviderEnabledFromSnapshot,
   managedGrokBuildsEnabledFromSnapshot,
+  providerProjectionForRegistryId,
 } from "../settings/config-store/provider-runtime-config";
 import {
   getDesktopBackendRegistry,
@@ -166,10 +167,10 @@ function invalidateAcpRefreshCacheAfterWrite(
 }
 
 // Coalesces concurrent ACP refreshes. A refresh runs cheap local discovery and
-// may launch agents to probe capabilities; React StrictMode double-fires the
-// settings-pane mount effect (dev) and users can double-click "Discover new",
-// so without this two passes would launch the same agents in parallel. Pure
-// cache reads (refresh === false) never launch and are not coalesced.
+// may launch agents to probe capabilities; users can double-click an explicit
+// refresh or trigger overlapping setup and Settings actions, so without this
+// two passes would launch the same agents in parallel. Pure cache reads
+// (refresh === false) never launch and are not coalesced.
 //
 // We track provider scope so narrower requests can ride an in-flight superset.
 // Force bypasses old durable capability freshness; it never justifies launching
@@ -519,7 +520,7 @@ async function listInstalledAndLocalAcpAgents(
           preferences[registryId] = { overridePath: override };
         }
       }
-      discovered = await discoverLocalAcpAgentRecords({
+      discovered = (await discoverLocalAcpAgentRecords({
         enabledRegistryIds: discoveryRegistryIds,
         managedGrok: {
           enabled:
@@ -537,6 +538,17 @@ async function listInstalledAndLocalAcpAgents(
         },
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
         ...(options?.env ? { env: options.env } : {}),
+      })).map((record) => {
+        const configDependencyFingerprint = providerProjectionForRegistryId(
+          providers,
+          record.registryId,
+        )?.dependencyFingerprint;
+        return {
+          ...record,
+          ...(configDependencyFingerprint
+            ? { configDependencyFingerprint }
+            : {}),
+        };
       });
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
       const now = Date.now();

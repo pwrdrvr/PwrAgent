@@ -361,6 +361,7 @@ import type {
   WriteStarMapWorkspaceRequest,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  DesktopSettingsRuntimeChangedEvent,
   ReadDesktopConfigBootstrapResponse,
   ReadDesktopFullAccessPolicyResponse,
   ReadDesktopMessagingSettingsResponse,
@@ -2232,8 +2233,13 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
     };
   },
-  onSettingsRuntimeChanged: (callback: () => void): (() => void) => {
-    const listener = () => callback();
+  onSettingsRuntimeChanged: (
+    callback: (event?: DesktopSettingsRuntimeChangedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload?: DesktopSettingsRuntimeChangedEvent,
+    ) => callback(payload);
     ipcRenderer.on(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL, listener);

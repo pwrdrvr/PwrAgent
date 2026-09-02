@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   AcpAgentSettingsEntry,
   DesktopSettingsSnapshot,
@@ -45,28 +45,17 @@ export type AcpAgentCatalogState = {
 /**
  * Light read of the ACP agent catalog for surfaces that need names and
  * status but do not own the full per-agent editing flow: the settings
- * nav sub-items and the AI Providers hub index. Reads the cached
- * catalog immediately; with `probe` it then asks the registry to
- * refresh stale agents once per mount (the main process coalesces
- * concurrent refreshes) and re-reads when any surface announces new
- * summaries.
+ * nav sub-items and the AI Providers hub index. Reads only the cached
+ * catalog and re-reads when an explicit Settings/setup action announces new
+ * summaries. Mounting navigation or a provider screen is never authority to
+ * probe or launch an agent.
  */
 export function useAcpAgentCatalog(
   desktopApi: DesktopApi | undefined,
-  options?: { probe?: boolean },
 ): AcpAgentCatalogState {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const probe = options?.probe === true;
-  // The probe runs once per mounted consumer, not once per effect run —
-  // `probe` flips with hub↔focused navigation and re-probing (plus the
-  // event fan-out it triggers) on every hop is pure churn.
-  const probedRef = useRef(false);
-  // Set just before this instance dispatches the refresh event so its
-  // own listener can skip the echo — the dispatching read already holds
-  // the fresh response.
-  const selfAnnouncedRef = useRef(false);
   const listAcpAgents = desktopApi?.listAcpAgents;
 
   useEffect(() => {
@@ -74,23 +63,11 @@ export function useAcpAgentCatalog(
       return;
     }
     let disposed = false;
-    const read = async (refresh: boolean): Promise<void> => {
+    const read = async (): Promise<void> => {
       try {
         const response = await listAcpAgents({
-          refresh,
-          ...(refresh
-            ? { discoveryIntent: "settings-user-action" as const }
-            : {}),
+          refresh: false,
         });
-        if (refresh) {
-          // The main-process cache refreshed even if this consumer was
-          // cleaned up mid-flight (hub→focused navigation), so always
-          // announce — other catalog consumers have no push channel.
-          if (!disposed) {
-            selfAnnouncedRef.current = true;
-          }
-          window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
-        }
         if (disposed) {
           return;
         }
@@ -109,22 +86,13 @@ export function useAcpAgentCatalog(
       }
     };
     const onSummariesRefreshed = (): void => {
-      if (selfAnnouncedRef.current) {
-        selfAnnouncedRef.current = false;
-        return;
-      }
-      void read(false);
+      void read();
     };
     window.addEventListener(
       BACKEND_SUMMARIES_REFRESH_EVENT,
       onSummariesRefreshed,
     );
-    if (probe && !probedRef.current) {
-      probedRef.current = true;
-      void read(false).then(() => read(true));
-    } else {
-      void read(false);
-    }
+    void read();
     return () => {
       disposed = true;
       window.removeEventListener(
@@ -132,7 +100,7 @@ export function useAcpAgentCatalog(
         onSummariesRefreshed,
       );
     };
-  }, [listAcpAgents, probe]);
+  }, [listAcpAgents]);
 
   return { entries, loaded, error, unavailable: listAcpAgents === undefined };
 }
