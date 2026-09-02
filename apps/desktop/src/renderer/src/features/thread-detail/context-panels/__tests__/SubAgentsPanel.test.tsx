@@ -186,6 +186,46 @@ describe("SubAgentsPanel", () => {
     expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
   });
 
+  it("limits completed native workers while preserving current and managed monitors", () => {
+    const now = Date.now();
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: [
+            {
+              monitorId: "codex-native:stale-worker",
+              task: "Stale native worker",
+              status: "success",
+              createdAt: now - (2 * 24 * 60 * 60 * 1000),
+              updatedAt: now - (2 * 24 * 60 * 60 * 1000),
+              completedAt: now - (2 * 24 * 60 * 60 * 1000),
+            },
+            {
+              monitorId: "codex-native:active-worker",
+              task: "Active native worker",
+              status: "running",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+            {
+              monitorId: "monitor:managed-history",
+              task: "Managed monitor history",
+              status: "success",
+              createdAt: 1,
+              updatedAt: 1,
+              completedAt: 1,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.queryByText("Stale native worker")).not.toBeInTheDocument();
+    expect(screen.getByText("Active native worker")).toBeInTheDocument();
+    expect(screen.getByText("Managed monitor history")).toBeInTheDocument();
+  });
+
   it("shows Token Miser's per-gate cost equation", () => {
     render(
       <SubAgentsPanel

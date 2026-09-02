@@ -21,6 +21,7 @@ import {
   buildFederatedThreadRef,
   buildNavigationSnapshot,
   buildThreadIdentityKey,
+  CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
   MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
@@ -1895,7 +1896,6 @@ class MockBackendClient {
   async listNativeSubAgentThreads(params?: {
     filter?: string;
     limit?: number;
-    maxPages?: number;
   }): Promise<AppServerThreadSummary[]> {
     this.listNativeSubAgentThreadsCallCount += 1;
     this.lastListNativeSubAgentThreadsParams = params;
@@ -13049,7 +13049,6 @@ script = "echo setup"
     });
     expect(codexClient.lastListNativeSubAgentThreadsParams).toEqual({
       limit: 50,
-      maxPages: 1,
     });
     expect(codexClient.readThreadCalls).toEqual([]);
 
@@ -42051,6 +42050,7 @@ script = "printf setup"
   });
 
   it("groups native Codex workers below their ordinary parent without making rows", async () => {
+    const now = Date.now();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -42070,8 +42070,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 30,
-          updatedAt: 30,
+          createdAt: now - CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS - 2,
+          updatedAt: now - CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS - 1,
           threadStatus: "idle",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",
@@ -42086,8 +42086,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 20,
-          updatedAt: 20,
+          createdAt: now - (2 * CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS),
+          updatedAt: now - (2 * CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS),
           threadStatus: "active",
           codexNativeSubAgent: {
             parentThreadId: "thread-worker-a",
@@ -42102,8 +42102,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 10,
-          updatedAt: 10,
+          createdAt: now - 20,
+          updatedAt: now - 10,
           threadStatus: "idle",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",
@@ -42127,8 +42127,8 @@ script = "printf setup"
       {
         threadId: "thread-worker-a",
         title: "Draft release notes",
-        createdAt: 10,
-        updatedAt: 10,
+        createdAt: now - 20,
+        updatedAt: now - 10,
         threadStatus: "idle",
         depth: 1,
         agentNickname: "release-writer",
@@ -42137,22 +42137,12 @@ script = "printf setup"
       {
         threadId: "thread-worker-a-child",
         title: "Check release links",
-        createdAt: 20,
-        updatedAt: 20,
+        createdAt: now - (2 * CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS),
+        updatedAt: now - (2 * CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS),
         threadStatus: "active",
         depth: 2,
         agentNickname: "link-checker",
         agentRole: "researcher",
-      },
-      {
-        threadId: "thread-worker-b",
-        title: "Review release notes",
-        createdAt: 30,
-        updatedAt: 30,
-        threadStatus: "idle",
-        depth: 1,
-        agentNickname: "release-reviewer",
-        agentRole: "reviewer",
       },
     ]);
     expect(codexClient.listNativeSubAgentThreadsCallCount).toBe(1);
@@ -42166,9 +42156,9 @@ script = "printf setup"
       )?.subAgents,
     ).toEqual([
       expect.objectContaining({
-        monitorId: "codex-native:thread-worker-b",
-        monitorThreadId: "thread-worker-b",
-        agentName: "release-reviewer",
+        monitorId: "codex-native:thread-worker-a",
+        monitorThreadId: "thread-worker-a",
+        agentName: "release-writer",
         status: "success",
       }),
       expect.objectContaining({
@@ -42177,12 +42167,6 @@ script = "printf setup"
         agentName: "link-checker",
         status: "running",
       }),
-      expect.objectContaining({
-        monitorId: "codex-native:thread-worker-a",
-        monitorThreadId: "thread-worker-a",
-        agentName: "release-writer",
-        status: "success",
-      }),
     ]);
 
     await registry.close();
@@ -42190,6 +42174,7 @@ script = "printf setup"
 
   it("backfills native Codex cards and pricing from durable child turn usage", async () => {
     const nativeThreadId = "thread-epicurus";
+    const now = Date.now();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -42209,8 +42194,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 20,
-          updatedAt: 40,
+          createdAt: now - 40,
+          updatedAt: now - 20,
           threadStatus: "idle",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",
@@ -42342,6 +42327,7 @@ script = "printf setup"
   it("repairs missing native Codex pricing from an existing card usage snapshot", async () => {
     const nativeThreadId = "thread-epicurus";
     const monitorId = `codex-native:${nativeThreadId}`;
+    const now = Date.now();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -42361,8 +42347,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 20,
-          updatedAt: 40,
+          createdAt: now - 40,
+          updatedAt: now - 20,
           threadStatus: "idle",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",
