@@ -229,6 +229,20 @@ export async function bringToFront(
       win.show();
       win.focus();
       win.moveTop();
+      // Park the pointer outside the content area.
+      //
+      // Moving the window slides it out from under the OS cursor, which
+      // does not move with it — so whatever now sits at the cursor's
+      // screen position picks up `:hover`. That is how a Settings
+      // capture ended up with two nav items highlighted: the spec
+      // clicked "Profiles" while the window was at x=2056, placement
+      // moved it to x=28, and the stationary cursor landed on
+      // "General", whose `:hover` rule paints the same box as
+      // `.is-active`. Which element gets hit depends on how far the
+      // window happened to move, so it is nondeterministic — the same
+      // failure mode as the update toast this pipeline already
+      // suppresses. No capture drives hover deliberately.
+      win.webContents.sendInputEvent({ type: "mouseMove", x: -10, y: -10 });
       const observed = win.getBounds();
       const display = screen.getDisplayMatching(observed);
       return {

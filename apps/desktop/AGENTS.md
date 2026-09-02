@@ -351,9 +351,12 @@ Two layers now prevent it:
   warns if no 2x display is attached, and throws if the window a capture
   targets cannot be found rather than silently capturing an unplaced
   one. Its selection rule is pure and unit-tested in
-  `e2e/fixtures/__tests__/capture-window-placement.test.ts`; the
-  `evaluate` callbacks only read and write Electron state, because
-  anything inside one is unreachable from Vitest.
+  `src/main/__tests__/capture-window-placement.test.ts`; the `evaluate`
+  callbacks only read and write Electron state, because anything inside
+  one is unreachable from Vitest. That test lives under `src/main/`
+  rather than beside the fixture because `e2e/` is Playwright's
+  `testDir` and its default `testMatch` claims `*.test.ts` — the same
+  reason `sub-agent-state-seeding.test.ts` sits there.
 * `scripts/capture-window.swift` stages each capture in a temp file,
   checks the observed scale, and exits 6 **without touching the
   destination** when it lands below ~1.5x — or when the staged file
@@ -375,6 +378,18 @@ arm the vendor Grok CLI update check (`grokUpdateChecksDisabled` in
 would otherwise paint "Grok update available" over whatever the
 capture happens to catch. `auto-updater.ts` gates PwrAgent's own
 update check on the same predicate.
+
+Hover is suppressed too, for the same reason. Placement slides the
+window out from under the OS cursor, which does not move with it, so
+whatever lands at the cursor's screen position picks up `:hover` — and
+which element that is depends on how far the window moved. A Settings
+→ Profiles capture came back with two nav items highlighted this way:
+the spec clicked "Profiles" at x=2056, placement moved the window to
+x=28, and the stationary cursor came to rest on "General", whose
+`:hover` rule paints the same box as `.is-active`. `bringToFront`
+therefore parks the pointer at (-10, -10) via `sendInputEvent` after
+placing the window. No capture drives hover deliberately; if one ever
+needs to, it has to set the hover after `bringToFront`, not before.
 
 Pieces, all under `apps/desktop/`:
 
