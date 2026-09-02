@@ -216,6 +216,32 @@
   - Use `release` for packaging, signing, notarization, distribution, and automatic updates.
   - Use `docs` for documentation.
   - Use `tests` for test coverage, fixtures, and test infrastructure.
+- Prefer before/after screenshots on PRs that change visible UI.
+  - Use 100% contrived fixture data when possible.
+  - If a screenshot is not 100% contrived, show it to the operator and wait for approval before attaching. Redact anything that must not ship (secrets, tokens, customer data, private thread text, account identifiers).
+- GitHub CLI 2.99+ (`gh` v2.99.0) can attach images and videos with the repeatable `--attach` flag on `gh pr create`, `gh pr edit`, and `gh pr comment`.
+  - Reference the local path in the Markdown body so `gh` rewrites it to the uploaded URL in place. Unreferenced attachments are appended at the end.
+  - Example:
+
+    ```bash
+    gh pr create \
+      --title "fix(desktop): tighten composer padding" \
+      --body-file /tmp/pr-body.md \
+      --attach ./before.png \
+      --attach ./after.png
+    ```
+
+    With this body:
+
+    ```markdown
+    ## Before
+    ![composer before](./before.png)
+
+    ## After
+    ![composer after](./after.png)
+    ```
+
+  - Alt text can also follow the path after `#`, as in `--attach './after.png#composer after'`. Update `gh` to v2.99.0 or later before using `--attach`.
 
 ## Release / Distribution
 
