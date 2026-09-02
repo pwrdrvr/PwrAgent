@@ -142,12 +142,23 @@ export class DesktopConfigStore {
       config: {},
       previousProviders,
     });
+    const durableDomains = durableConfig
+      ? deepFreeze({
+          ...durableConfig.domains,
+          // Provider discoveries have their own atomic durable boundary and
+          // can be newer than the whole-config snapshot. Hydrate those rows
+          // over the config snapshot so startup can immediately reuse the
+          // latest verified launch identity without probing the machine.
+          providers:
+            previousProviders ?? durableConfig.domains.providers,
+        })
+      : undefined;
     this.snapshot = deepFreeze({
       version: 0,
       durableSchemaVersion: CONFIG_STORE_DURABLE_SCHEMA_VERSION,
       configFile: { kind: "missing", observedAt: this.now() },
       configRevision: durableConfig?.configRevision ?? "defaults",
-      domains: durableConfig?.domains ?? defaults,
+      domains: durableDomains ?? defaults,
       secretPresence: options.readSecretPresence?.() ?? {},
     });
     this.reloadFromDisk("startup");

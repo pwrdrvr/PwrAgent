@@ -153,6 +153,9 @@ const setFederatedThreadMutationHandlerMock = vi.fn();
 const setFederatedThreadControlHandlerMock = vi.fn();
 const invalidateProviderRuntimeSelectionsMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
+const refreshProvidersAtStartupMock = vi.fn<() => Promise<void>>(
+  async () => undefined,
+);
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
@@ -195,10 +198,13 @@ const StartupCpuProfilerMock = vi.fn(function StartupCpuProfiler() {
 });
 const resolveDeveloperModeMock = vi.fn(() => true);
 const isCodexBootstrapDeferredMock = vi.fn(() => false);
+const refreshStartupDiscoveryMock = vi.fn<() => Promise<void>>(
+  async () => undefined,
+);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
   isCodexBootstrapDeferred: isCodexBootstrapDeferredMock,
-  refreshStartupDiscovery: vi.fn(async () => undefined),
+  refreshStartupDiscovery: refreshStartupDiscoveryMock,
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
 const resolveActiveProfileNameMock = vi.fn(() => "default");
@@ -539,6 +545,7 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
     invalidateProviderRuntimeSelections: invalidateProviderRuntimeSelectionsMock,
     listThreads: listThreadsMock,
+    refreshProvidersAtStartup: refreshProvidersAtStartupMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
     setPwrAgentFederationHandler: setPwrAgentFederationHandlerMock,
@@ -757,6 +764,10 @@ describe("bootstrapApp", () => {
     invalidateProviderRuntimeSelectionsMock.mockResolvedValue(undefined);
     listThreadsMock.mockReset();
     listThreadsMock.mockResolvedValue([]);
+    refreshProvidersAtStartupMock.mockReset();
+    refreshProvidersAtStartupMock.mockResolvedValue(undefined);
+    refreshStartupDiscoveryMock.mockReset();
+    refreshStartupDiscoveryMock.mockResolvedValue(undefined);
     disposeDesktopMessagingRuntimeMock.mockReset();
     disposeDesktopMessagingRuntimeMock.mockResolvedValue(undefined);
     registerMessagingStatusIpcHandlersMock.mockReset();
@@ -1271,6 +1282,34 @@ describe("bootstrapApp", () => {
       maxPages: 1,
       skipArchivedMetadataRefresh: true,
     });
+  });
+
+  it("waits for startup discovery before refreshing live provider threads", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    let finishDiscovery: (() => void) | undefined;
+    refreshStartupDiscoveryMock.mockReturnValue(new Promise<void>((resolve) => {
+      finishDiscovery = () => resolve();
+    }));
+    listThreadsMock.mockResolvedValue([]);
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(listThreadsMock).toHaveBeenCalledWith({
+      callerReason: "startup-prewarm",
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
+    });
+    expect(refreshProvidersAtStartupMock).not.toHaveBeenCalled();
+
+    finishDiscovery?.();
+    await flushMicrotasks();
+
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
+    expect(refreshProvidersAtStartupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "startup" }),
+    );
   });
 
   it("skips the prewarm when the Codex bootstrap is deferred for onboarding", async () => {

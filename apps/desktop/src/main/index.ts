@@ -410,7 +410,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     return;
   }
   const startedAt = Date.now();
-  void getDesktopSettingsService()
+  const startupSettingsDiscovery = getDesktopSettingsService()
     .refreshStartupDiscovery(permit)
     .catch((error) => {
       mainLog.warn("startup settings discovery failed", {
@@ -425,7 +425,18 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       skipArchivedMetadataRefresh: true,
     })
     .then((threads) => {
-      void getDesktopBackendRegistry().refreshProvidersAtStartup(permit);
+      // The durable thread snapshot above is allowed to paint immediately.
+      // A cold profile has no executable selection yet, though, so its live
+      // provider refresh must wait for the one permitted startup discovery to
+      // publish that selection. Keeping this dependency in the background
+      // preserves fast startup without racing the Codex transport.
+      void startupSettingsDiscovery.then(() =>
+        getDesktopBackendRegistry().refreshProvidersAtStartup(permit),
+      ).catch((error) => {
+        mainLog.warn("startup provider refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
       recordStartupProfileEvent({
         type: "startup-thread-list-prewarm:completed",
         detail: {

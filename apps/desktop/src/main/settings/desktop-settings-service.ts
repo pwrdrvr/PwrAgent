@@ -2141,7 +2141,9 @@ export class DesktopSettingsService {
     this.codexSpawnEnvHydratedAt = undefined;
     const config = this.readConfig().config;
     const checkMode = permit.intent === "startup" ? "ttl" : "force";
-    const previousManagedCommand = this.managedCodexRuntime?.command;
+    const previousManagedCommand =
+      this.managedCodexRuntime?.command
+      ?? this.configStore.read("providers").codex.lastKnownGood?.selectedCommand;
     try {
       this.managedCodexRuntime = await this.resolveManagedCodexRuntime(
         config,

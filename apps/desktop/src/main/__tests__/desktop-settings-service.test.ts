@@ -10,6 +10,7 @@ import {
 } from "../settings/desktop-secret-store";
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 
 // `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
 // test injects one, and the kit's probe runs `codex --version` against every
@@ -1356,6 +1357,80 @@ describe("DesktopSettingsService", () => {
       runtime,
     });
     stop();
+  });
+
+  it("does not announce an unchanged durable managed runtime at startup", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, [
+      "[experimental]",
+      "token_miser_enabled = true",
+      "",
+    ].join("\n"));
+    const runtime = {
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.200.0-pwragent.1-test.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1 as const,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.200.0-pwragent.1",
+        version: "0.200.0-pwragent.1",
+      },
+    };
+    const configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{
+        command: runtime.command,
+        source: "config",
+        version: runtime.metadata.version,
+      }],
+      selectedCommand: runtime.command,
+      selectedVersion: runtime.metadata.version,
+    });
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({
+          candidates: [{
+            command: runtime.command,
+            executable: true,
+            selected: true,
+            source: "config" as const,
+            version: runtime.metadata.version,
+          }],
+          selectedCommand: runtime.command,
+          selectedSource: "config" as const,
+        })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: runtime.command,
+          source: "config" as const,
+          version: runtime.metadata.version,
+        })),
+      },
+      configPath,
+      configStore,
+      ensureManagedCodexRuntime: vi.fn(async () => runtime),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const changes = vi.fn();
+    const stop = service.watchManagedCodexRuntime(changes);
+
+    await service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
+
+    expect(changes).not.toHaveBeenCalled();
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+      command: runtime.command,
+    });
+    stop();
+    configStore.dispose();
   });
 
   it("does not start a managed Codex update from a passive observer", async () => {

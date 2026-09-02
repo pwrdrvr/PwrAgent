@@ -172,6 +172,38 @@ theme = "dark"
     expect(persisted.payload).not.toContain("secret-value");
   });
 
+  it("hydrates a newer durable provider row over the config snapshot", async () => {
+    const fixture = createFixture("");
+    const discoverProvider = vi.fn(async () => ({
+      candidates: [{
+        command: "/opt/pwragent/codex",
+        source: "path",
+        version: "1.2.3",
+      }],
+      selectedCommand: "/opt/pwragent/codex",
+      selectedVersion: "1.2.3",
+    }));
+    const store = fixture.createStore({ discoverProvider });
+    await store.refreshProvider(
+      "codex",
+      issueProviderDiscoveryPermit("startup"),
+    );
+    store.dispose();
+
+    const discoverAfterRestart = vi.fn(async () => ({ candidates: [] }));
+    const restarted = fixture.createStore({
+      discoverProvider: discoverAfterRestart,
+    });
+
+    expect(
+      restarted.read("providers").codex.lastKnownGood?.selectedCommand,
+    ).toBe("/opt/pwragent/codex");
+    expect(
+      restarted.read("providers").codex.lastKnownGood?.selectedVersion,
+    ).toBe("1.2.3");
+    expect(discoverAfterRestart).not.toHaveBeenCalled();
+  });
+
   it("rejects provider refresh without an issued discovery permit", async () => {
     const fixture = createFixture("");
     const discoverProvider = vi.fn(async () => ({ candidates: [] }));
