@@ -2869,6 +2869,7 @@ export function Composer(props: ComposerProps) {
           pullRequestLinks,
         );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
+  const [editorScopeKey, setEditorScopeKey] = useState(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const pendingDraftRetargetRef = useRef<
     | {
@@ -4837,6 +4838,7 @@ export function Composer(props: ComposerProps) {
     }
 
     activeComposerScopeKeyRef.current = composerScopeKey;
+    setEditorScopeKey(composerScopeKey);
     const current = pasteScopeRef.current;
     if (retargetingDraft && current.key === previousScopeKey) {
       current.key = composerScopeKey;
@@ -10864,6 +10866,7 @@ export function Composer(props: ComposerProps) {
           </fieldset>
         ) : (
           <ComposerTiptapInput
+            key={editorScopeKey}
             ref={inputRef}
             id="thread-composer"
             ariaActiveDescendant={activeAutocompleteOptionId}
