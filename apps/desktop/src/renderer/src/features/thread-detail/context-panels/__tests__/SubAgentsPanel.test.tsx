@@ -223,6 +223,7 @@ describe("SubAgentsPanel", () => {
 
     expect(screen.queryByText("Stale native worker")).not.toBeInTheDocument();
     expect(screen.getByText("Active native worker")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "PwrAgent 1" }));
     expect(screen.getByText("Managed monitor history")).toBeInTheDocument();
   });
 
