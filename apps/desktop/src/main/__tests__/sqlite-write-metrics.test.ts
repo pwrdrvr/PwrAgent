@@ -691,6 +691,74 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("repairs a handoff misclassified as a native sub-agent in one boundary write", async () => {
+    await store.setThreadParent({
+      backend: "codex",
+      threadId: "handoff-child",
+      parentThreadId: "handoff-parent",
+    });
+    await store.setThreadHandoffOrigin({
+      backend: "codex",
+      threadId: "handoff-child",
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "handoff-parent",
+        sourceTurnId: "turn-handoff-parent",
+        seedMode: "clean",
+        groupingMode: "subthread",
+        createdAt: 1_800_000_000_000,
+        workspace: {
+          mode: "new_worktree",
+          cwd: "/tmp/pwragent-handoff-child",
+          git: {
+            kind: "git_worktree",
+            worktreeCreationAvailable: true,
+          },
+        },
+      },
+    });
+    await store.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: "watcher-thread",
+      subAgent: {
+        monitorId: "codex-native:handoff-child",
+        task: "Codex subagent handoff-c",
+        status: "success",
+        createdAt: 1_800_000_000_100,
+        updatedAt: 1_800_000_000_200,
+        backend: "codex",
+        monitorThreadId: "handoff-child",
+        monitorTurnId: "turn-watcher",
+        outcome: "success",
+        completedAt: 1_800_000_000_200,
+      },
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(store.repairMisclassifiedHandoffSubAgents()).toMatchObject({
+        removedSubAgents: 1,
+        repairedParentThreads: 1,
+      });
+    });
+    expectSqliteWriteBudget({
+      // The repair scans existing monitor cards by their already-used payload
+      // marker and writes all affected parent overlays in one transaction. It
+      // runs only for stale metadata, so a repaired profile adds no idle cost.
+      note:
+        "one stale native-subagent card removed from a grouped handoff watcher overlay",
+      scenario: "handoff-subagent-metadata-repair",
+      writes,
+    });
+
+    const repeated = await measureSqliteWrites(async () => {
+      expect(store.repairMisclassifiedHandoffSubAgents()).toMatchObject({
+        removedSubAgents: 0,
+        repairedParentThreads: 0,
+      });
+    });
+    expect(repeated.writes.commits).toBe(0);
+  });
+
   it("repairs missing native sub-agent pricing in one boundary write", async () => {
     const nativeThreadId = "thread-epicurus-partial";
     await store.upsertThreadSubAgent({

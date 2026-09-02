@@ -76,6 +76,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "handoff-subagent-metadata-repair": {
+    "commits": 1,
+    "note": "one stale native-subagent card removed from a grouped handoff watcher overlay",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "idle-hour-runtime-leases": {
     "commits": 0,
     "note": "one idle hour: PID-owned messaging and federation leases",

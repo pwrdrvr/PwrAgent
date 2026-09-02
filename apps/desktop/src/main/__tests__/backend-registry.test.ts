@@ -26587,6 +26587,74 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("does not project a grouped handoff as a Codex native sub-agent", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadParent({
+      backend: "codex",
+      threadId: "handoff-child",
+      parentThreadId: "handoff-parent",
+    });
+    await overlayStore.setThreadHandoffOrigin({
+      backend: "codex",
+      threadId: "handoff-child",
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "handoff-parent",
+        sourceTurnId: "turn-handoff-parent",
+        seedMode: "clean",
+        groupingMode: "subthread",
+        createdAt: 1_800_000_000_000,
+        workspace: {
+          mode: "new_worktree",
+          cwd: "/tmp/pwragent-handoff-child",
+          git: {
+            kind: "git_worktree",
+            worktreeCreationAvailable: true,
+          },
+        },
+      },
+    });
+    const upsertThreadSubAgent = vi.spyOn(
+      overlayStore,
+      "upsertThreadSubAgent",
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "watcher-thread",
+        turnId: "turn-watcher",
+        item: {
+          id: "collab-wait-handoff",
+          type: "collabAgentToolCall",
+          tool: "wait",
+          status: "completed",
+          receiverThreadIds: ["handoff-child"],
+          agentsStates: {
+            "handoff-child": { status: "completed" },
+          },
+        },
+      },
+    } as AppServerNotification);
+
+    expect(upsertThreadSubAgent).not.toHaveBeenCalled();
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "watcher-thread",
+      }),
+    ).resolves.toBeUndefined();
+
+    await registry.close();
+  });
+
   it("fills Codex native sub-agent names from parent assistant output", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

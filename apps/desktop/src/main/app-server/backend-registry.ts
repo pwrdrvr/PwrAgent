@@ -24623,6 +24623,20 @@ export class DesktopBackendRegistry {
     parentThreadId: string;
     receiverThreadId: string;
   }): Promise<void> {
+    const receiverOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.receiverThreadId,
+    });
+    if (receiverOverlay?.handoffOrigin?.groupingMode === "subthread") {
+      // A monitor can wait on or inspect an ordinary PwrAgent handoff. Codex
+      // reports that collaboration item with receiver thread IDs just like a
+      // native worker call, but the receiver remains a durable navigation
+      // thread. Never project it into the monitor's sub-agent cards.
+      this.codexNativeSubAgentParents.delete(params.receiverThreadId);
+      this.clearCodexNativeSubAgentReconciliation(params.receiverThreadId);
+      return;
+    }
+
     const now = Date.now();
     this.codexNativeSubAgentParents.set(params.receiverThreadId, params.parentThreadId);
     const overlay = await this.overlayStore.getThreadOverlayState({
