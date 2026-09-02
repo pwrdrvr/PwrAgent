@@ -3684,6 +3684,108 @@ describe("useThreadSessionState", () => {
     ).toHaveLength(1);
   });
 
+  it("keeps identical user messages from different turns in the message projection", async () => {
+    const launchpadText = "Run the same verification again.";
+    const desktopApi: DesktopApi = {
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "previous-user",
+              role: "user" as const,
+              text: launchpadText,
+              createdAt: 500,
+              turn: {
+                id: "turn-previous",
+                status: "completed" as const,
+              },
+            },
+            {
+              type: "message" as const,
+              id: "assistant-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I am starting the new verification.",
+              createdAt: 2_000,
+              turn: {
+                id: "turn-1",
+                status: "in_progress" as const,
+                startedAt: 1_000,
+              },
+            },
+          ],
+          messages: [
+            {
+              id: "previous-user",
+              role: "user" as const,
+              text: launchpadText,
+              createdAt: 500,
+            },
+            {
+              id: "assistant-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I am starting the new verification.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: true,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const { result, rerender } = renderHook(
+      ({ includeLaunchpadState }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+            ...(includeLaunchpadState
+              ? {
+                  optimisticUserMessage: {
+                    text: launchpadText,
+                    createdAt: 1_000,
+                  },
+                  optimisticActiveTurn: {
+                    id: "turn-1",
+                    statusText: "Thinking",
+                    startedAt: 1_000,
+                  },
+                }
+              : {}),
+          },
+        }),
+      { initialProps: { includeLaunchpadState: true } },
+    );
+
+    await waitForThreadHydration(result);
+    rerender({ includeLaunchpadState: false });
+    await waitFor(() => {
+      expect(
+        result.current.entries
+          .filter((entry) => entry.type === "message" && entry.role === "user")
+          .map((entry) => entry.id)
+      ).toEqual([
+        "previous-user",
+        "optimistic-launchpad-codex:thread-1",
+      ]);
+    });
+    expect(
+      result.current.messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.id)
+    ).toEqual([
+      "previous-user",
+      "optimistic-launchpad-codex:thread-1",
+    ]);
+  });
+
   it("keeps a duplicate optimistic user message when the launch item completes", async () => {
     const messageText = "Please update the TanStack Virtual lockfile.";
     let authoritativeEntries: AppServerThreadEntry[] = [];
