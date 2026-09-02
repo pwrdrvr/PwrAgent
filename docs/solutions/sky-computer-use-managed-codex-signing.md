@@ -66,7 +66,14 @@ registration automatically if the update fails. It does not read Codex-owned
 configuration files directly. Before changing a non-trampoline launcher, it
 records only that launcher's command and arguments under `~/.pwragent/local/`;
 environment values remain in Codex's registration and are not copied into the
-backup.
+backup. Reapplying with a different ChatGPT application or PwrAgent root moves
+that original-launcher backup instead of replacing it with the old trampoline.
+
+The helper refuses to mutate a registration with non-default fields that
+`codex mcp add` cannot reproduce, including working directories, inherited
+environment-variable names, enablement, tool filters, and timeouts. It also
+redacts child-process command lines from errors because those arguments can
+contain MCP environment values.
 
 Inspect without changing anything:
 
