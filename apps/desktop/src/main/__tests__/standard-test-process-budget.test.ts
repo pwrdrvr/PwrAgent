@@ -18,6 +18,12 @@ const EXPECTED_PROJECTS = [
   "shared",
 ];
 const OS_WORKER_PROCESS_BUDGET_PER_TEST_FILE = 0;
+const EXPECTED_POOLS = {
+  "desktop-main": process.platform === "win32" ? "forks" : "threads",
+  "desktop-renderer": "threads",
+  messaging: "threads",
+  shared: "threads",
+} as const;
 
 type ConfiguredProject = {
   test?: {
@@ -27,7 +33,7 @@ type ConfiguredProject = {
 };
 
 describe("standard test process budget", () => {
-  it("keeps every project on an in-process worker pool", () => {
+  it("keeps every project on its production-equivalent worker pool", () => {
     const projects = configuredProjects();
 
     expect(projects.map((project) => project.test?.name).sort()).toEqual(
@@ -35,19 +41,32 @@ describe("standard test process budget", () => {
     );
     expect(projects).toHaveLength(EXPECTED_PROJECTS.length);
     expect(
-      projects.map((project) => ({
-        name: project.test?.name,
-        osWorkerProcessesPerTestFile:
-          project.test?.pool === "threads" ? 0 : 1,
-      })),
-    ).toEqual(
-      EXPECTED_PROJECTS.map((name) => ({
-        name,
-        osWorkerProcessesPerTestFile:
-          OS_WORKER_PROCESS_BUDGET_PER_TEST_FILE,
-      })),
-    );
+      Object.fromEntries(
+        projects.map((project) => [project.test?.name, project.test?.pool]),
+      ),
+    ).toEqual(EXPECTED_POOLS);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps the POSIX OS worker process budget at zero per test file",
+    () => {
+      const projects = configuredProjects();
+
+      expect(
+        projects.map((project) => ({
+          name: project.test?.name,
+          osWorkerProcessesPerTestFile:
+            project.test?.pool === "threads" ? 0 : 1,
+        })),
+      ).toEqual(
+        EXPECTED_PROJECTS.map((name) => ({
+          name,
+          osWorkerProcessesPerTestFile:
+            OS_WORKER_PROCESS_BUDGET_PER_TEST_FILE,
+        })),
+      );
+    },
+  );
 });
 
 function configuredProjects(): ConfiguredProject[] {
