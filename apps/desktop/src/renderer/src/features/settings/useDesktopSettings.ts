@@ -38,6 +38,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const readGenerationRef = useRef(0);
   const configWriteInFlightRef = useRef(false);
   const pendingRuntimeRefreshVersionRef = useRef<number | null | undefined>(
     undefined,
@@ -48,15 +49,24 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       return;
     }
 
+    const generation = ++readGenerationRef.current;
     setLoading(true);
     setError(undefined);
     try {
       const response = await desktopApi.readSettings({});
-      setSnapshot(response.snapshot);
+      if (readGenerationRef.current === generation) {
+        setSnapshot(response.snapshot);
+      }
     } catch (readError) {
-      setError(readError instanceof Error ? readError.message : String(readError));
+      if (readGenerationRef.current === generation) {
+        setError(
+          readError instanceof Error ? readError.message : String(readError),
+        );
+      }
     } finally {
-      setLoading(false);
+      if (readGenerationRef.current === generation) {
+        setLoading(false);
+      }
     }
   }, [desktopApi]);
 
@@ -66,6 +76,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
 
   useEffect(() => {
     void read();
+    return () => {
+      readGenerationRef.current += 1;
+    };
   }, [read]);
 
   useEffect(() => {
@@ -90,6 +103,8 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         return false;
       }
 
+      readGenerationRef.current += 1;
+      setLoading(false);
       setSaving(true);
       configWriteInFlightRef.current = true;
       setError(undefined);
@@ -98,6 +113,11 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: WriteDesktopSettingsConfigRequest = { patch };
         const response = await desktopApi.writeSettingsConfig(request);
         appliedVersion = response.update.version;
+        // The write response is authoritative over any cache read that began
+        // before it completed. A queued newer config event starts a fresh read
+        // below after this snapshot is adopted.
+        readGenerationRef.current += 1;
+        setLoading(false);
         setSnapshot(response.snapshot);
         if (
           patch.models?.codex?.path !== undefined
@@ -193,6 +213,8 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
 
   const applySnapshot = useCallback(
     (nextSnapshot: DesktopSettingsSnapshot): void => {
+      readGenerationRef.current += 1;
+      setLoading(false);
       setSnapshot(nextSnapshot);
     },
     [],

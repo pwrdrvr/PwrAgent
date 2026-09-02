@@ -44,6 +44,13 @@ export type ConfigDomainChange<K extends keyof ConfigDomainMap> = Readonly<{
   values: Readonly<Pick<ConfigDomainMap, K>>;
 }>;
 
+export type ConfigStoreUpdate = Readonly<{
+  version: number;
+  configRevision: string;
+  configFile: ConfigFileStatus;
+  changedDomains: readonly (keyof ConfigDomainMap)[];
+}>;
+
 export type ConfigStoreDiagnosticEvent = Readonly<{
   operation:
     | "config-parse"
@@ -80,6 +87,9 @@ export class DesktopConfigStore {
   private readonly durable?: DurableConfigSnapshotStore;
   private readonly now: () => number;
   private readonly subscriptions = new Set<Subscription>();
+  private readonly updateSubscriptions = new Set<
+    (event: ConfigStoreUpdate) => void
+  >();
   private diagnosticEventCount = 0;
   private readonly diagnosticOperationCounts: Record<
     ConfigStoreDiagnosticEvent["operation"],
@@ -215,6 +225,16 @@ export class DesktopConfigStore {
     this.subscriptions.add(subscription);
     return () => {
       this.subscriptions.delete(subscription);
+    };
+  }
+
+  subscribeUpdates(listener: (event: ConfigStoreUpdate) => void): () => void {
+    // Unlike a domain subscription, this observes invalid/repair publications
+    // whose normalized values are unchanged. It is notification only and
+    // carries no provider discovery authority.
+    this.updateSubscriptions.add(listener);
+    return () => {
+      this.updateSubscriptions.delete(listener);
     };
   }
 
@@ -505,6 +525,7 @@ export class DesktopConfigStore {
     this.watcher = undefined;
     this.providerRefresh?.dispose();
     this.subscriptions.clear();
+    this.updateSubscriptions.clear();
   }
 
   private publish(params: {
@@ -572,6 +593,14 @@ export class DesktopConfigStore {
     changedDomains: readonly (keyof ConfigDomainMap)[],
     snapshot: ConfigStoreSnapshot,
   ): void {
+    for (const listener of this.updateSubscriptions) {
+      listener({
+        version: snapshot.version,
+        configRevision: snapshot.configRevision,
+        configFile: snapshot.configFile,
+        changedDomains,
+      });
+    }
     if (changedDomains.length === 0) {
       return;
     }

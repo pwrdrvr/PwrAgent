@@ -182,6 +182,16 @@ export function normalizeConfigDomains(params: {
         provider,
       });
       const previous = params.previousProviders?.[provider];
+      const lastKnownGood = previous?.lastKnownGood
+        ? {
+            ...previous.lastKnownGood,
+            dependencyFingerprint:
+              previous.lastKnownGood.dependencyFingerprint
+              ?? previous.dependencyFingerprint,
+          }
+        : undefined;
+      const restoredLastKnownGood =
+        lastKnownGood?.dependencyFingerprint === dependencyFingerprint;
       const projection: ProviderProjection = {
         provider,
         dependencyFingerprint,
@@ -193,22 +203,20 @@ export function normalizeConfigDomains(params: {
             ? { managedBuilds: config.acpAgents.grok.managedBuilds }
             : {}),
         },
-        ...(previous?.lastKnownGood
-          ? {
-              lastKnownGood: {
-                ...previous.lastKnownGood,
-                dependencyFingerprint:
-                  previous.lastKnownGood.dependencyFingerprint
-                  ?? previous.dependencyFingerprint,
-              },
-            }
+        ...(lastKnownGood
+          ? { lastKnownGood }
           : {}),
         validation:
           previous?.dependencyFingerprint === dependencyFingerprint
             ? previous.validation
-            : {
-                state: previous?.lastKnownGood ? "stale" : "unknown",
-              },
+            : restoredLastKnownGood
+              ? {
+                  state: "valid",
+                  lastAttemptAt: lastKnownGood.validatedAt,
+                }
+              : {
+                  state: previous?.lastKnownGood ? "stale" : "unknown",
+                },
       };
       return [provider, projection];
     }),
@@ -259,8 +267,7 @@ export function providerLastKnownGoodMatchesConfig(
   if (!lastKnownGood) return false;
   return (
     lastKnownGood.dependencyFingerprint ?? provider.dependencyFingerprint
-  ) === provider.dependencyFingerprint
-    && provider.validation.state !== "stale";
+  ) === provider.dependencyFingerprint;
 }
 
 export function providerDependencyFingerprint(params: {

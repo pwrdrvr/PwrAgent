@@ -64,6 +64,55 @@ describe("useDesktopSettings", () => {
     });
   });
 
+  it("discards an older settings read that resolves after a newer refresh", async () => {
+    type ReadResponse = Awaited<ReturnType<
+      NonNullable<DesktopApi["readSettings"]>
+    >>;
+    let runtimeChanged:
+      | Parameters<NonNullable<DesktopApi["onSettingsRuntimeChanged"]>>[0]
+      | undefined;
+    const resolveReads: Array<(response: ReadResponse) => void> = [];
+    const readSettings = vi
+      .fn<NonNullable<DesktopApi["readSettings"]>>()
+      .mockImplementation(async () => await new Promise((resolve) => {
+        resolveReads.push(resolve);
+      }));
+    const desktopApi: DesktopApi = {
+      onSettingsRuntimeChanged: (callback) => {
+        runtimeChanged = callback;
+        return () => {
+          runtimeChanged = undefined;
+        };
+      },
+      readSettings,
+    };
+    const { result } = renderHook(() => useDesktopSettings(desktopApi));
+    await vi.waitFor(() => {
+      expect(readSettings).toHaveBeenCalledOnce();
+      expect(runtimeChanged).toBeDefined();
+    });
+
+    act(() => runtimeChanged?.({
+      version: 2,
+      configRevision: "newer",
+      changedDomains: ["providers"],
+    }));
+    await vi.waitFor(() => expect(readSettings).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      resolveReads[1]?.({ snapshot: {
+        fetchedAt: 2,
+      } as DesktopSettingsSnapshot });
+    });
+    expect(result.current.snapshot?.fetchedAt).toBe(2);
+
+    await act(async () => {
+      resolveReads[0]?.({ snapshot: {
+        fetchedAt: 1,
+      } as DesktopSettingsSnapshot });
+    });
+    expect(result.current.snapshot?.fetchedAt).toBe(2);
+  });
+
   it("coalesces its own config event while preserving a newer external edit", async () => {
     let runtimeChanged:
       | Parameters<NonNullable<DesktopApi["onSettingsRuntimeChanged"]>>[0]

@@ -789,6 +789,43 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("refreshes only Codex from the focused Codex screen", async () => {
+    const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
+      async () => ({ fetchedAt: 1000, backends: [] }),
+    );
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+      async () => ({ fetchedAt: 1000, entries: [] }),
+    );
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listAcpAgents, listBackends }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
+    const refresh = await screen.findByRole("button", {
+      name: "Refresh Codex",
+    });
+    await waitFor(() => expect(listBackends).toHaveBeenCalled());
+    listBackends.mockClear();
+    listAcpAgents.mockClear();
+    fireEvent.click(refresh);
+
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledExactlyOnceWith({
+        discoveryIntent: "settings-user-action",
+        includeUnavailable: true,
+        refreshModels: "codex",
+      });
+    });
+    expect(listAcpAgents).not.toHaveBeenCalled();
+  });
+
   it("names the active PwrAgent Codex path environment override", () => {
     const base = createSnapshot();
     const snapshot = createSnapshot({

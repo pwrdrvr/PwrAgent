@@ -260,6 +260,43 @@ cli_path = "/opt/qwen-one"
     );
   });
 
+  it("restores matching last-known-good state when provider config is reverted", async () => {
+    const fixture = createFixture(`
+[acp_agents.qwen]
+cli_path = "/opt/qwen-one"
+`);
+    const discoverProvider = vi.fn(async ({ projection }) => ({
+      candidates: [],
+      selectedCommand: projection.configured.commandOverride,
+      selectedVersion: "1.0.0",
+    }));
+    const store = fixture.createStore({ discoverProvider });
+    await store.refreshProvider(
+      "qwen",
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    fs.writeFileSync(
+      fixture.configPath,
+      "[acp_agents.qwen]\ncli_path = \"/opt/qwen-two\"\n",
+      "utf8",
+    );
+    store.reloadFromDisk("watch");
+    expect(store.read("providers").qwen.validation.state).toBe("stale");
+
+    fs.writeFileSync(
+      fixture.configPath,
+      "[acp_agents.qwen]\ncli_path = \"/opt/qwen-one\"\n",
+      "utf8",
+    );
+    store.reloadFromDisk("watch");
+
+    const restored = store.read("providers").qwen;
+    expect(restored.validation.state).toBe("valid");
+    expect(providerLastKnownGoodMatchesConfig(restored)).toBe(true);
+    expect(restored.lastKnownGood?.selectedCommand).toBe("/opt/qwen-one");
+    expect(discoverProvider).toHaveBeenCalledOnce();
+  });
+
   it("does not let a stale provider completion overwrite a newer fingerprint", async () => {
     const fixture = createFixture(`
 [acp_agents.qwen]
@@ -446,6 +483,29 @@ cli_path = "/opt/qwen-one"
 
     expect(store.fileStatus().kind).toBe("valid");
     expect(store.read("general").appearance.theme).toBe("light");
+  });
+
+  it("publishes config status changes when normalized domains do not change", () => {
+    const source = "[general.appearance]\ntheme = \"dark\"\n";
+    const fixture = createFixture(source);
+    const store = fixture.createStore();
+    const listener = vi.fn();
+    store.subscribeUpdates(listener);
+    fs.writeFileSync(fixture.configPath, "[general\n", "utf8");
+
+    store.reloadFromDisk("watch");
+
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({
+      changedDomains: [],
+      configFile: expect.objectContaining({ kind: "invalid" }),
+    }));
+    fs.writeFileSync(fixture.configPath, source, "utf8");
+    store.reloadFromDisk("watch");
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({
+      changedDomains: [],
+      configFile: expect.objectContaining({ kind: "valid" }),
+    }));
   });
 
   it("observes an atomic external config replacement", async () => {

@@ -171,7 +171,7 @@ export function ModelsSettings(props: {
 
   const refreshCatalog = async (
     force = false,
-    refreshModels = false,
+    refreshModels: true | "codex" | false = false,
   ): Promise<void> => {
     if (!props.desktopApi?.listBackends) {
       setCatalogError("Provider model discovery is unavailable in this build.");
@@ -188,12 +188,15 @@ export function ModelsSettings(props: {
         });
         acpRegistryRefreshed = true;
       }
+      const requestedModelRefresh = force ? true : refreshModels;
       const response = await props.desktopApi.listBackends({
         ...((force || refreshModels)
           ? { discoveryIntent: "settings-user-action" as const }
           : {}),
         includeUnavailable: true,
-        ...(force || refreshModels ? { refreshModels: true } : {}),
+        ...(requestedModelRefresh
+          ? { refreshModels: requestedModelRefresh }
+          : {}),
       });
       setBackends(response.backends);
       setCatalogError(undefined);
@@ -330,27 +333,42 @@ export function ModelsSettings(props: {
             sub="Detected on this machine. The newest supported version is used automatically."
             source={codexSource}
             control={
-              <div
-                className="settings-paths"
-                aria-label="Codex discovery"
-                data-codex-path-actions
-              >
-                {autoCandidates.length === 0 ? (
-                  <p className="settings-empty">No Codex candidates found.</p>
-                ) : (
-                  autoCandidates.map((candidate) => (
-                    <CodexCandidateRow
-                      key={`${candidate.source}:${candidate.command}`}
-                      candidate={candidate}
-                      disabled={props.saving || envForced}
-                      onUse={(command) => {
-                        setCodexPath(command);
-                        saveCodexPath(command);
-                      }}
-                    />
-                  ))
-                )}
-              </div>
+              <>
+                <div
+                  className="settings-paths"
+                  aria-label="Codex discovery"
+                  data-codex-path-actions
+                >
+                  {autoCandidates.length === 0 ? (
+                    <p className="settings-empty">No Codex candidates found.</p>
+                  ) : (
+                    autoCandidates.map((candidate) => (
+                      <CodexCandidateRow
+                        key={`${candidate.source}:${candidate.command}`}
+                        candidate={candidate}
+                        disabled={props.saving || envForced}
+                        onUse={(command) => {
+                          setCodexPath(command);
+                          saveCodexPath(command);
+                        }}
+                      />
+                    ))
+                  )}
+                </div>
+                <div
+                  className="settings-inline-actions"
+                  data-codex-path-actions
+                >
+                  <button
+                    className="button button--secondary"
+                    disabled={refreshingCatalog || props.saving}
+                    type="button"
+                    onClick={() => void refreshCatalog(false, "codex")}
+                  >
+                    {refreshingCatalog ? "Refreshing…" : "Refresh Codex"}
+                  </button>
+                </div>
+              </>
             }
           />
           <SettingsField

@@ -15,7 +15,6 @@ import {
   disposeDesktopConfigStore,
   getDesktopConfigStore,
 } from "./config-store/desktop-config-store-singleton";
-import { CONFIG_DOMAIN_KEYS } from "./config-store/config-domains";
 import { resolveDesktopConfigPath } from "./desktop-config";
 
 let desktopSettingsService: DesktopSettingsService | undefined;
@@ -76,12 +75,11 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     configStore.subscribe(["general"], ({ values }) => {
       broadcastAppearanceChange(values.general.appearance);
     });
-    configStore.subscribe(
-      CONFIG_DOMAIN_KEYS,
-      ({ version, changedDomains }) => {
+    configStore.subscribeUpdates(
+      ({ version, configRevision, changedDomains }) => {
         const payload = {
           version,
-          configRevision: configStore.configRevision(),
+          configRevision,
           changedDomains,
         };
         for (const webContents of subscribersForChannel(

@@ -503,10 +503,6 @@ export class DesktopSettingsService {
   private readonly configPath: string;
   private readonly configStore: DesktopConfigStore;
   private readonly configWriteListeners = new Set<() => void>();
-  private readonly secretStates = new Map<
-    DesktopSettingsSecretName,
-    DesktopSettingsSecretState
-  >();
   private readonly now: () => number;
   private readonly startupCodexHome?: string;
   private loggedObsoleteComposerConfig = false;
@@ -3340,10 +3336,10 @@ export class DesktopSettingsService {
     envKey: string | undefined,
     storageAvailable: boolean,
   ): Promise<DesktopSettingsSecretState> {
-    const cached = this.secretStates.get(secret);
-    if (cached) return cached;
+    // The profile database is shared by processes. Sample presence for every
+    // projection so a secret created outside Settings cannot stay cached as
+    // absent; secret values themselves are never read here.
     const state = await this.loadSecretState(secret, envKey, storageAvailable);
-    this.secretStates.set(secret, state);
     this.configStore.recordSecretPresence(secret, state);
     return state;
   }
@@ -3394,13 +3390,11 @@ export class DesktopSettingsService {
   private async readAndPublishSecretState(
     secret: DesktopSettingsSecretName,
   ): Promise<DesktopSettingsSecretState> {
-    this.secretStates.delete(secret);
-    const state = await this.readSecretState(
+    return await this.readSecretState(
       secret,
       secretEnvironmentKey(secret),
       this.options.secretStore.describe().available,
     );
-    return state;
   }
 
   private resolveSecretSync(
