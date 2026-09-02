@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   AppServerBackendKind,
   FederationInstanceId,
@@ -24,6 +32,14 @@ import { useDesktopApi } from "../../lib/desktop-api";
 import { useDesktopSettings } from "../settings/useDesktopSettings";
 import { ThreadChip } from "./ThreadChip";
 import { detailMatchesInvocationItem } from "./tool-call-details";
+import {
+  clampDetailsHeight,
+  readStoredSavingsLayout,
+  SAVINGS_DETAILS_MIN_HEIGHT,
+  SAVINGS_RESULTS_MIN_HEIGHT,
+  writeStoredSavingsLayout,
+} from "./token-miser-savings-layout";
+import type { SavingsSectionKey } from "./token-miser-savings-layout";
 import {
   describeSameTrajectoryCostChange,
   TOKEN_MISER_PENDING_PRICING_CAPTION,
@@ -1107,6 +1123,262 @@ function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
   );
 }
 
+/**
+ * The three terms as shares of the unfiltered cost.
+ *
+ * Only drawn when the gate came out ahead. With negative savings the parts sum
+ * past the whole, and a bar overflowing its own track reads as a rendering
+ * fault rather than as an overspend — that case states itself in words above.
+ */
+function buildSavingsSplit(
+  savings: ThreadTokenMiserSavings,
+): { avoided: number; gate: number; revealed: number } | undefined {
+  const whole = savings.withoutGateCostMicros;
+  if (whole <= 0 || savings.savingsMicros <= 0) return undefined;
+  return {
+    avoided: savings.savingsMicros / whole * 100,
+    gate: savings.gateCostMicros / whole * 100,
+    revealed: savings.revealedCostMicros / whole * 100,
+  };
+}
+
+type SavingsDetailMeasurement = {
+  availableHeight: number;
+  detailsHeight: number;
+};
+
+const EMPTY_SAVINGS_MEASUREMENT: SavingsDetailMeasurement = {
+  availableHeight: 0,
+  detailsHeight: 0,
+};
+
+/**
+ * Per-machine view state for the lens: which reference rows are unfolded, and
+ * how tall the operator dragged the detail stack.
+ *
+ * Called before this component's early returns so the hook order never depends
+ * on whether a thread has gate decisions.
+ */
+function useSavingsLayout() {
+  const [layout, setLayout] = useState(readStoredSavingsLayout);
+  const [measurement, setMeasurement] = useState(EMPTY_SAVINGS_MEASUREMENT);
+  useEffect(() => {
+    writeStoredSavingsLayout(layout);
+  }, [layout]);
+  const toggleSection = useCallback(
+    (key: SavingsSectionKey, open: boolean) => {
+      setLayout((current) => ({
+        ...current,
+        openSections: open
+          ? current.openSections.includes(key)
+            ? current.openSections
+            : [...current.openSections, key]
+          : current.openSections.filter((entry) => entry !== key),
+      }));
+    },
+    [],
+  );
+  const resizeDetails = useCallback((height: number, available: number) => {
+    setLayout((current) => ({
+      ...current,
+      detailsHeight: clampDetailsHeight(height, available),
+    }));
+  }, []);
+  /* The stack measures itself after every render, so this has to return the
+     identical object when nothing moved — a fresh object each time would
+     re-render, re-measure, and never settle. */
+  const measure = useCallback((next: SavingsDetailMeasurement) => {
+    setMeasurement((current) =>
+      current.availableHeight === next.availableHeight
+        && current.detailsHeight === next.detailsHeight
+        ? current
+        : next);
+  }, []);
+  return { layout, measure, measurement, resizeDetails, toggleSection };
+}
+
+/**
+ * The folding reference rows, above the results list.
+ *
+ * `flex-shrink` is load-bearing: the operator's dragged height is a preference,
+ * not a floor, so a short window still gives the results list its three rows
+ * and lets this stack scroll instead.
+ */
+function SavingsDetailStack(props: {
+  children: ReactNode;
+  height: number | undefined;
+  onMeasure: (measurement: SavingsDetailMeasurement) => void;
+}) {
+  const stackRef = useRef<HTMLDivElement>(null);
+  const onMeasure = props.onMeasure;
+  useLayoutEffect(() => {
+    const node = stackRef.current;
+    if (!node) return;
+    onMeasure({
+      availableHeight: node.parentElement?.getBoundingClientRect().height ?? 0,
+      detailsHeight: node.getBoundingClientRect().height,
+    });
+  });
+  return (
+    <div
+      className="incident-explorer__savings-details"
+      ref={stackRef}
+      style={props.height === undefined
+        ? undefined
+        : { height: `${props.height}px` }}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+/** How far the operator dragged the split, as the 0–100 a separator reports. */
+function savingsSplitShare(measurement: SavingsDetailMeasurement): number {
+  const ceiling = measurement.availableHeight - SAVINGS_RESULTS_MIN_HEIGHT;
+  const span = ceiling - SAVINGS_DETAILS_MIN_HEIGHT;
+  if (span <= 0) return 0;
+  const share =
+    (measurement.detailsHeight - SAVINGS_DETAILS_MIN_HEIGHT) / span * 100;
+  return Math.round(Math.min(100, Math.max(0, share)));
+}
+
+const SAVINGS_GRIP_KEY_STEP = 24;
+
+/**
+ * The handle between the reference rows and the results list.
+ *
+ * Reported as a percentage rather than pixels because a focusable separator
+ * with no `aria-valuemax` is read against the default 0–100, and the pixel
+ * ceiling moves with the window.
+ */
+function SavingsSplitGrip(props: {
+  measurement: SavingsDetailMeasurement;
+  onResize: (height: number, available: number) => void;
+}) {
+  const dragRef = useRef<{ startHeight: number; startY: number }>(undefined);
+  const measurement = props.measurement;
+  const onResize = props.onResize;
+  return (
+    <div
+      aria-label="Resize the Token Miser detail rows"
+      aria-orientation="horizontal"
+      aria-valuenow={savingsSplitShare(measurement)}
+      className="incident-explorer__savings-grip"
+      onKeyDown={(event) => {
+        const step = event.key === "ArrowUp"
+          ? -SAVINGS_GRIP_KEY_STEP
+          : event.key === "ArrowDown"
+            ? SAVINGS_GRIP_KEY_STEP
+            : undefined;
+        if (step === undefined) return;
+        event.preventDefault();
+        onResize(
+          measurement.detailsHeight + step,
+          measurement.availableHeight,
+        );
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        dragRef.current = {
+          startHeight: measurement.detailsHeight,
+          startY: event.clientY,
+        };
+      }}
+      onPointerMove={(event) => {
+        const drag = dragRef.current;
+        if (!drag) return;
+        onResize(
+          drag.startHeight + (event.clientY - drag.startY),
+          measurement.availableHeight,
+        );
+      }}
+      onPointerUp={(event) => {
+        dragRef.current = undefined;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+      }}
+      role="separator"
+      tabIndex={0}
+    >
+      <span aria-hidden="true" />
+    </div>
+  );
+}
+
+/** One headline number on a folded row: bright value, muted label. */
+type SavingsFact = {
+  label: string;
+  value: string;
+  /**
+   * Dimmed, never hidden. A zero here is an answer — no compactions, nothing
+   * read back — and dropping the row would read as a missing measurement.
+   */
+  zero?: boolean;
+};
+
+type SavingsFigure = SavingsFact & { detail?: string };
+
+/**
+ * A reference section: one scannable line folded, a labelled grid unfolded.
+ *
+ * Built from the same disclosure primitive as the result rows below rather
+ * than `<details>`, so both stacks on this screen open the same way.
+ */
+function SavingsDetailSection(props: {
+  children?: ReactNode;
+  facts: SavingsFact[];
+  label: string;
+  onToggle: (key: SavingsSectionKey, open: boolean) => void;
+  open: boolean;
+  sectionKey: SavingsSectionKey;
+}) {
+  return (
+    <section
+      aria-label={props.label}
+      className="incident-explorer__savings-section"
+      data-open={props.open}
+    >
+      <button
+        aria-expanded={props.open}
+        className="incident-explorer__savings-section-row"
+        onClick={() => props.onToggle(props.sectionKey, !props.open)}
+        type="button"
+      >
+        <span aria-hidden="true" className="incident-explorer__savings-chevron" />
+        <span className="incident-explorer__savings-section-label">
+          {props.label}
+        </span>
+        <span className="incident-explorer__savings-facts">
+          {props.facts.map((fact) => (
+            <span data-zero={fact.zero === true} key={fact.label}>
+              <b>{fact.value}</b> {fact.label}
+            </span>
+          ))}
+        </span>
+      </button>
+      {props.open ? props.children : null}
+    </section>
+  );
+}
+
+function SavingsFigureGrid(props: { figures: SavingsFigure[] }) {
+  return (
+    <dl className="incident-explorer__savings-figures">
+      {props.figures.map((figure) => (
+        <div data-zero={figure.zero === true} key={figure.label}>
+          <dt>{figure.label}</dt>
+          <dd>
+            {figure.value}
+            {figure.detail ? <span>{figure.detail}</span> : null}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 function TokenMiserSavingsLens(props: {
   comparison?: TokenMiserContextComparison;
   compactions: readonly ThreadCompactionRecord[];
@@ -1120,6 +1392,8 @@ function TokenMiserSavingsLens(props: {
   tokenMiser?: ThreadToolAccounting["tokenMiser"];
   usageLines: readonly ThreadUsageLineRecord[];
 }) {
+  const { layout, measure, measurement, resizeDetails, toggleSection } =
+    useSavingsLayout();
   const tokenMiser = props.tokenMiser;
   if (!tokenMiser) {
     return (
@@ -1134,16 +1408,23 @@ function TokenMiserSavingsLens(props: {
   if (!props.comparison) {
     return (
       <div className="incident-explorer__savings">
-        <TokenMiserContextTimeline
-          compactions={props.compactions}
-          usageLines={props.usageLines}
-        />
-        <TokenMiserCodeModeStats
-          tokenMiser={tokenMiser}
-        />
-        <p className="incident-explorer__savings-empty">
-          No reducer decision was recorded.
-        </p>
+        <div className="incident-explorer__savings-hero">
+          <p className="incident-explorer__savings-empty">
+            No reducer decision was recorded.
+          </p>
+          <TokenMiserContextTimeline
+            compactions={props.compactions}
+            usageLines={props.usageLines}
+          />
+        </div>
+        <SavingsDetailStack height={layout.detailsHeight} onMeasure={measure}>
+          <TokenMiserCodeModeStats
+            onToggle={toggleSection}
+            open={layout.openSections.includes("code-mode")}
+            tokenMiser={tokenMiser}
+          />
+        </SavingsDetailStack>
+        <SavingsSplitGrip measurement={measurement} onResize={resizeDetails} />
         <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
       </div>
     );
@@ -1185,10 +1466,13 @@ function TokenMiserSavingsLens(props: {
         savings.savingsMicros,
       )
     : undefined;
+  const split = savings ? buildSavingsSplit(savings) : undefined;
+  const summarizedCount = tokenMiser.interceptionCount
+    - (tokenMiser.passThroughCount ?? 0);
   return (
     <div className="incident-explorer__savings">
       <div className="incident-explorer__savings-hero">
-        <div>
+        <div className="incident-explorer__savings-headline">
           {savings ? (
             <>
               <p className="incident-explorer__eyebrow">
@@ -1207,7 +1491,110 @@ function TokenMiserSavingsLens(props: {
                   <span>{sameTrajectoryCostChange.sentence}</span>
                 ) : null}
               </p>
-              {props.threadCostMicros > 0 ? (
+              <dl className="incident-explorer__savings-equation">
+                <div
+                  className="incident-explorer__savings-term"
+                  title={`${formatCompactTokens(tokenMiser.baselineParentTokens)} uncached`
+                    + (cachedBaselineTokens > 0
+                      ? ` + ${formatCompactTokens(cachedBaselineTokens)} cached`
+                      : "")
+                    + ` at ${savings.parentModel ?? "the parent model"} rates`}
+                >
+                  <dt>Without the gate</dt>
+                  <dd>
+                    {formatMicrosCurrency(
+                      savings.withoutGateCostMicros,
+                      savings.currency,
+                    )}
+                  </dd>
+                </div>
+                <span aria-hidden="true" className="incident-explorer__savings-operator">
+                  −
+                </span>
+                <div
+                  className="incident-explorer__savings-term"
+                  title={`${formatCompactTokens(props.gateTokens)} charged by `
+                    + `${savings.gateModel ?? "the helper"}`}
+                >
+                  <dt>Gate compute</dt>
+                  <dd>
+                    {formatMicrosCurrency(savings.gateCostMicros, savings.currency)}
+                  </dd>
+                </div>
+                <span aria-hidden="true" className="incident-explorer__savings-operator">
+                  −
+                </span>
+                <div
+                  className="incident-explorer__savings-term"
+                  title={`${formatCompactTokens(revealedTokens)} uncached`
+                    + (cachedRevealedTokens > 0
+                      ? ` + ${formatCompactTokens(cachedRevealedTokens)} cached`
+                      : "")
+                    + (tokenMiser.passThroughCount
+                      ? " · summaries, retrievals, and deliberate pass-throughs"
+                      : " · summaries and retrievals")}
+                >
+                  <dt>Revealed to parent</dt>
+                  <dd>
+                    {formatMicrosCurrency(
+                      savings.revealedCostMicros,
+                      savings.currency,
+                    )}
+                  </dd>
+                </div>
+                <span aria-hidden="true" className="incident-explorer__savings-operator">
+                  =
+                </span>
+                <div
+                  className="incident-explorer__savings-term"
+                  data-result="true"
+                >
+                  <dt>{savings.savingsMicros >= 0 ? "Saved" : "Overhead"}</dt>
+                  <dd>
+                    {formatMicrosCurrency(
+                      Math.abs(savings.savingsMicros),
+                      savings.currency,
+                    )}
+                  </dd>
+                </div>
+              </dl>
+              {split ? (
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="incident-explorer__savings-split"
+                  >
+                    <i data-part="avoided" style={{ width: `${split.avoided}%` }} />
+                    <i data-part="gate" style={{ width: `${split.gate}%` }} />
+                    <i data-part="revealed" style={{ width: `${split.revealed}%` }} />
+                  </span>
+                  <p className="incident-explorer__savings-split-caption">
+                    <span>
+                      <b>{Math.round(split.avoided)}%</b> avoided
+                      {" · "}<b>{Math.round(split.gate)}%</b> gate
+                      {" · "}<b>{Math.round(split.revealed)}%</b> revealed
+                    </span>
+                    {props.threadCostMicros > 0 ? (
+                      <span>
+                        observed{" "}
+                        <b>
+                          {formatMicrosCurrency(
+                            props.threadCostMicros,
+                            savings.currency,
+                          )}
+                        </b>
+                        {" · unfiltered "}
+                        <b>
+                          {formatMicrosCurrency(
+                            props.threadCostMicros + savings.savingsMicros,
+                            savings.currency,
+                          )}
+                        </b>
+                      </span>
+                    ) : null}
+                  </p>
+                </>
+              ) : props.threadCostMicros > 0 ? (
                 <p className="incident-explorer__savings-compare">
                   Observed thread cost{" "}
                   <b>
@@ -1226,7 +1613,9 @@ function TokenMiserSavingsLens(props: {
             </>
           ) : (
             <>
-              <p className="incident-explorer__eyebrow">Kept out of the parent's context</p>
+              <p className="incident-explorer__eyebrow">
+                Kept out of the parent's context
+              </p>
               <p className="incident-explorer__savings-figure">
                 <strong>
                   {formatCompactTokens(props.comparison.avoidedParentTokens)}
@@ -1237,117 +1626,154 @@ function TokenMiserSavingsLens(props: {
                   {cachedReplayCount === 1 ? "replay" : "replays"}
                 </span>
               </p>
+              <dl className="incident-explorer__savings-tokens">
+                <div>
+                  <dt>Without the gate</dt>
+                  <dd>{formatCompactTokens(tokenMiser.baselineParentTokens)}</dd>
+                </div>
+                <div>
+                  <dt>Actual parent context</dt>
+                  <dd>{formatCompactTokens(revealedTokens)}</dd>
+                </div>
+                <div>
+                  <dt>Gate compute</dt>
+                  <dd>
+                    {props.gateTokens > 0
+                      ? formatCompactTokens(props.gateTokens)
+                      : "—"}
+                    <span>
+                      {props.gateCostMicros > 0
+                        ? formatMicrosCurrency(
+                            props.gateCostMicros,
+                            props.currency ?? "USD",
+                          )
+                        : "awaiting the pricing ledger"}
+                    </span>
+                  </dd>
+                </div>
+              </dl>
               <p className="incident-explorer__savings-compare">
                 {TOKEN_MISER_PENDING_PRICING_CAPTION}
               </p>
             </>
           )}
         </div>
-        {savings ? (
-          <dl className="incident-explorer__savings-terms" data-terms="3">
-            <div>
-              <dt>1 · Without the gate</dt>
-              <dd>
-                {formatMicrosCurrency(savings.withoutGateCostMicros, savings.currency)}
-                <span>
-                  {partialPricingPrefix}
-                  {formatCompactTokens(tokenMiser.baselineParentTokens)} uncached
-                  {cachedBaselineTokens > 0
-                    ? ` + ${formatCompactTokens(cachedBaselineTokens)} cached`
-                    : ""}
-                  {" · gated tool output at "}
-                  {savings.parentModel ?? "the parent model"} rates
-                </span>
-              </dd>
-            </div>
-            <div>
-              <dt>2 · Gate compute</dt>
-              <dd>
-                {formatMicrosCurrency(savings.gateCostMicros, savings.currency)}
-                <span>
-                  {formatCompactTokens(props.gateTokens)} total ·{" "}
-                  {savings.gateModel ?? "helper"}
-                </span>
-              </dd>
-            </div>
-            <div>
-              <dt>3 · Revealed to parent</dt>
-              <dd>
-                {formatMicrosCurrency(savings.revealedCostMicros, savings.currency)}
-                <span>
-                  {partialPricingPrefix}
-                  {formatCompactTokens(revealedTokens)} uncached
-                  {cachedRevealedTokens > 0
-                    ? ` + ${formatCompactTokens(cachedRevealedTokens)} cached`
-                    : ""}
-                  {tokenMiser.passThroughCount
-                    ? " · summaries, retrievals, and deliberate pass-throughs"
-                    : " · summaries and retrievals"}
-                </span>
-              </dd>
-            </div>
-          </dl>
-        ) : (
-          <dl className="incident-explorer__savings-terms">
-            <div>
-              <dt>Without the gate</dt>
-              <dd>{formatCompactTokens(tokenMiser.baselineParentTokens)}</dd>
-            </div>
-            <div>
-              <dt>Actual parent context</dt>
-              <dd>{formatCompactTokens(revealedTokens)}</dd>
-            </div>
-            <div>
-              <dt>Gate compute</dt>
-              <dd>
-                {props.gateTokens > 0
-                  ? formatCompactTokens(props.gateTokens)
-                  : "—"}
-                {props.gateCostMicros > 0 ? (
-                  <span>
-                    {formatMicrosCurrency(props.gateCostMicros, props.currency ?? "USD")}
-                  </span>
-                ) : (
-                  <span>awaiting the pricing ledger</span>
-                )}
-              </dd>
-            </div>
-          </dl>
-        )}
+        <TokenMiserContextTimeline
+          compactions={props.compactions}
+          usageLines={props.usageLines}
+        />
       </div>
 
-      <p className="incident-explorer__savings-caption">
-        {tokenMiser.passThroughCount
-          ? `${(tokenMiser.interceptionCount - tokenMiser.passThroughCount).toLocaleString()} summarized · ${tokenMiser.passThroughCount.toLocaleString()} passed through`
-          : `${tokenMiser.interceptionCount.toLocaleString()} gated ${tokenMiser.interceptionCount === 1 ? "call" : "calls"}`} ·{" "}
-        {tokenMiser.passThroughCount
-          ? hasCompleteDispositionBreakdown
-            ? `${formatCompactTokens(summarizedReplacementTokens)} summary tokens · ${formatCompactTokens(passedThroughReplacementTokens)} pass-through tokens`
-            : `${formatCompactTokens(tokenMiser.replacementTokens)} revealed before retrieval`
-          : `${formatCompactTokens(tokenMiser.replacementTokens)} of summaries`} ·{" "}
-        {tokenMiser.retrievedTokens > 0
-          ? `${formatCompactTokens(tokenMiser.retrievedTokens)} read back later`
-          : "nothing read back later"}
-      </p>
-      <p className="incident-explorer__savings-caption">
-        {tokenMiser.interceptionCount.toLocaleString()} decisions
-        {" · "}{(tokenMiser.helperDecisionCount ?? 0).toLocaleString()} Luna evaluations
-        {" · "}{(tokenMiser.policyPassThroughCount ?? 0).toLocaleString()} policy pass-throughs
-        {" · "}{(tokenMiser.helperPassThroughCount ?? 0).toLocaleString()} helper pass-throughs
-      </p>
-      <TokenMiserContextTimeline
-        compactions={props.compactions}
-        usageLines={props.usageLines}
-      />
-      <TokenMiserCompactionStats
-        compactions={props.compactions}
-        contextWindow={props.contextWindow}
-        currency={props.currency}
-      />
+      <SavingsDetailStack height={layout.detailsHeight} onMeasure={measure}>
+        <SavingsDetailSection
+          facts={[
+            { label: "decisions", value: tokenMiser.interceptionCount.toLocaleString() },
+            { label: "summarized", value: summarizedCount.toLocaleString() },
+            ...(tokenMiser.passThroughCount
+              ? [{
+                  label: "passed through",
+                  value: tokenMiser.passThroughCount.toLocaleString(),
+                }]
+              : []),
+            {
+              label: "kept out of parent",
+              value: formatCompactTokens(props.comparison.avoidedParentTokens),
+            },
+            {
+              label: "read back",
+              value: formatCompactTokens(tokenMiser.retrievedTokens),
+              zero: tokenMiser.retrievedTokens === 0,
+            },
+          ]}
+          label="Decisions"
+          onToggle={toggleSection}
+          open={layout.openSections.includes("decisions")}
+          sectionKey="decisions"
+        >
+          <SavingsFigureGrid
+            figures={[
+              {
+                detail: tokenMiser.passThroughCount
+                  ? hasCompleteDispositionBreakdown
+                    ? `${formatCompactTokens(summarizedReplacementTokens)} of summaries`
+                    : `${formatCompactTokens(tokenMiser.replacementTokens)} revealed before retrieval`
+                  : `${formatCompactTokens(tokenMiser.replacementTokens)} of summaries`,
+                label: "Summarized",
+                value: summarizedCount.toLocaleString(),
+              },
+              {
+                detail: [
+                  ...((tokenMiser.policyPassThroughCount ?? 0)
+                    + (tokenMiser.helperPassThroughCount ?? 0) > 0
+                    ? [`${(tokenMiser.policyPassThroughCount ?? 0).toLocaleString()} policy`
+                      + ` · ${(tokenMiser.helperPassThroughCount ?? 0).toLocaleString()} helper`]
+                    : []),
+                  ...(hasCompleteDispositionBreakdown && tokenMiser.passThroughCount
+                    ? [`${formatCompactTokens(passedThroughReplacementTokens)} tokens`]
+                    : []),
+                ].join(" · ") || undefined,
+                label: "Passed through",
+                value: (tokenMiser.passThroughCount ?? 0).toLocaleString(),
+                zero: (tokenMiser.passThroughCount ?? 0) === 0,
+              },
+              {
+                label: "Luna evaluations",
+                value: (tokenMiser.helperDecisionCount ?? 0).toLocaleString(),
+                zero: (tokenMiser.helperDecisionCount ?? 0) === 0,
+              },
+              {
+                detail: `${partialPricingPrefix}`
+                  + `${formatCompactTokens(tokenMiser.baselineParentTokens)} uncached`
+                  + (cachedBaselineTokens > 0
+                    ? ` · ${formatCompactTokens(cachedBaselineTokens)} cached`
+                    : ""),
+                label: "Kept out of parent",
+                value: formatCompactTokens(props.comparison.avoidedParentTokens),
+              },
+              {
+                detail: `${partialPricingPrefix}`
+                  + `${formatCompactTokens(revealedTokens)} uncached`
+                  + (cachedRevealedTokens > 0
+                    ? ` · ${formatCompactTokens(cachedRevealedTokens)} cached`
+                    : ""),
+                label: "Revealed to parent",
+                value: formatCompactTokens(revealedTokens),
+              },
+              {
+                detail: tokenMiser.retrievedTokens > 0
+                  ? undefined
+                  : "nothing read back later",
+                label: "Read back later",
+                value: formatCompactTokens(tokenMiser.retrievedTokens),
+                zero: tokenMiser.retrievedTokens === 0,
+              },
+              ...(savings?.parentModel
+                ? [{ label: "Parent rates", value: savings.parentModel }]
+                : []),
+              ...(savings?.gateModel
+                ? [{ label: "Gate model", value: savings.gateModel }]
+                : []),
+            ]}
+          />
+        </SavingsDetailSection>
 
-      <TokenMiserCodeModeStats
-        tokenMiser={tokenMiser}
-      />
+        <TokenMiserCompactionStats
+          compactions={props.compactions}
+          contextWindow={props.contextWindow}
+          currency={props.currency}
+          onToggle={toggleSection}
+          open={layout.openSections.includes("boundaries")}
+        />
+
+        <TokenMiserCodeModeStats
+          onToggle={toggleSection}
+          open={layout.openSections.includes("code-mode")}
+          tokenMiser={tokenMiser}
+        />
+      </SavingsDetailStack>
+
+      <SavingsSplitGrip measurement={measurement} onResize={resizeDetails} />
+
       <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
     </div>
   );
@@ -1564,6 +1990,8 @@ function TokenMiserCompactionStats(props: {
   compactions: readonly ThreadCompactionRecord[];
   contextWindow?: TokenMiserContextWindowSummary;
   currency?: string;
+  onToggle: (key: SavingsSectionKey, open: boolean) => void;
+  open: boolean;
 }) {
   const coldReplayTokens = props.compactions.reduce(
     (total, entry) => total + (entry.coldUncachedTokens ?? 0),
@@ -1573,42 +2001,94 @@ function TokenMiserCompactionStats(props: {
     (total, entry) => total + (entry.coldCostMicros ?? 0),
     0,
   );
+  const currency = props.currency ?? "USD";
+  const contextWindow = props.contextWindow;
+  const nearLimit = contextWindow !== undefined
+    && contextWindow.peakModelContextWindow > 0
+    && contextWindow.peakTokens / contextWindow.peakModelContextWindow >= 0.85;
   return (
-    <section className="incident-explorer__gates" aria-label="Context boundaries">
-      <div className="incident-explorer__gates-head">
-        <p className="incident-explorer__eyebrow">Context boundaries</p>
-      </div>
-      <p className="incident-explorer__savings-caption">
-        {props.compactions.length.toLocaleString()} parent compactions
-        {" · "}{formatCompactTokens(coldReplayTokens)} compaction-attributed cold replay tokens
-        {" · "}{coldReplayCostMicros > 0
-          ? formatMicrosCurrency(coldReplayCostMicros, props.currency ?? "USD")
-          : "no attributed cold-replay cost"}
+    <SavingsDetailSection
+      facts={[
+        {
+          label: props.compactions.length === 1 ? "compaction" : "compactions",
+          value: props.compactions.length.toLocaleString(),
+          zero: props.compactions.length === 0,
+        },
+        ...(contextWindow
+          ? [
+              {
+                label: "peak of window",
+                value: formatContextWindowShare(
+                  contextWindow.peakTokens,
+                  contextWindow.peakModelContextWindow,
+                ),
+              },
+              {
+                label: "final",
+                value: formatCompactTokens(contextWindow.finalTokens),
+              },
+            ]
+          : []),
+        {
+          label: "cold replay",
+          value: formatMicrosCurrency(coldReplayCostMicros, currency),
+          zero: coldReplayCostMicros === 0,
+        },
+      ]}
+      label="Context boundaries"
+      onToggle={props.onToggle}
+      open={props.open}
+      sectionKey="boundaries"
+    >
+      <SavingsFigureGrid
+        figures={[
+          {
+            label: "Parent compactions",
+            value: props.compactions.length.toLocaleString(),
+            zero: props.compactions.length === 0,
+          },
+          {
+            detail: formatMicrosCurrency(coldReplayCostMicros, currency),
+            label: "Cold replay tokens",
+            value: formatCompactTokens(coldReplayTokens),
+            zero: coldReplayTokens === 0,
+          },
+          ...(contextWindow
+            ? [
+                {
+                  detail: formatContextWindowPoint(
+                    contextWindow.peakTokens,
+                    contextWindow.peakModelContextWindow,
+                  ),
+                  label: "Peak context",
+                  value: formatContextWindowShare(
+                    contextWindow.peakTokens,
+                    contextWindow.peakModelContextWindow,
+                  ),
+                },
+                {
+                  detail: formatContextWindowPoint(
+                    contextWindow.finalTokens,
+                    contextWindow.finalModelContextWindow,
+                  ),
+                  label: "Final context",
+                  value: formatContextWindowShare(
+                    contextWindow.finalTokens,
+                    contextWindow.finalModelContextWindow,
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      />
+      <p className="incident-explorer__savings-note">
+        {contextWindow
+          ? "Token Miser replay savings stop at each recorded compaction boundary."
+          : "Token Miser replay savings stop at each recorded compaction boundary."
+            + " Peak and final context were not observed by this PwrAgent version."}
+        {nearLimit ? " Warning: this thread approached the context limit." : ""}
       </p>
-      <p className="incident-explorer__savings-caption">
-        Token Miser replay savings stop at each recorded compaction boundary.
-      </p>
-      {props.contextWindow ? (
-        <p className="incident-explorer__savings-caption">
-          Peak context {formatContextWindowPoint(
-            props.contextWindow.peakTokens,
-            props.contextWindow.peakModelContextWindow,
-          )}
-          {" · "}final context {formatContextWindowPoint(
-            props.contextWindow.finalTokens,
-            props.contextWindow.finalModelContextWindow,
-          )}
-          {props.contextWindow.peakTokens
-            / props.contextWindow.peakModelContextWindow >= 0.85
-            ? " · warning: this thread approached the context limit"
-            : ""}
-        </p>
-      ) : (
-        <p className="incident-explorer__savings-caption">
-          Peak and final context were not observed by this PwrAgent version.
-        </p>
-      )}
-    </section>
+    </SavingsDetailSection>
   );
 }
 
@@ -1650,6 +2130,18 @@ function buildContextWindowSummary(
   };
 }
 
+/**
+ * Just the share, for a folded row that has no space for the fraction.
+ *
+ * Whole percent rather than the one decimal `formatContextWindowPoint` keeps:
+ * this is the scannable landmark, and the exact figure sits beside it the
+ * moment the row is unfolded.
+ */
+function formatContextWindowShare(tokens: number, window: number): string {
+  if (window <= 0) return "—";
+  return `${Math.round(tokens / window * 100)}%`;
+}
+
 function formatContextWindowPoint(tokens: number, window: number): string {
   return `${formatCompactTokens(tokens)} / ${formatCompactTokens(window)} (${(
     tokens / window * 100
@@ -1657,41 +2149,100 @@ function formatContextWindowPoint(tokens: number, window: number): string {
 }
 
 function TokenMiserCodeModeStats(props: {
+  onToggle: (key: SavingsSectionKey, open: boolean) => void;
+  open: boolean;
   tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
 }) {
   const codeMode = props.tokenMiser.codeMode;
   if (!codeMode || codeMode.callCount === 0) return null;
   const commandCells = codeMode.commandCellCount ?? 0;
   const nestedCommands = codeMode.nestedCommandInvocationCount ?? 0;
+  const dispatchClusters = codeMode.dispatchClusterCount ?? 0;
+  const multiInvocation = codeMode.multiInvocationClusterCount ?? 0;
+  /* Gated and direct decompose callCount, which is why both belong on this
+     row. The reducer's own totals live on Decisions and are not repeated. */
+  const gatedCount = codeMode.summarizedCount + codeMode.passThroughCount;
   return (
-    <section className="incident-explorer__gates" aria-label="Code Mode behavior">
-      <div className="incident-explorer__gates-head">
-        <p className="incident-explorer__eyebrow">Code Mode behavior</p>
-      </div>
-      <p className="incident-explorer__savings-caption">
-        {codeMode.callCount.toLocaleString()} Code Mode calls
-        {" · "}{commandCells.toLocaleString()} command-bearing cells
-        {" · "}{nestedCommands.toLocaleString()} nested command invocations
-        {" · "}{commandCells > 0
-          ? (nestedCommands / commandCells).toFixed(2)
-          : "0.00"} per command cell
-        {" · "}{(codeMode.dispatchClusterCount ?? 0).toLocaleString()} dispatch clusters
-        {" · "}{(codeMode.multiInvocationClusterCount ?? 0).toLocaleString()} multi-invocation
-        {(codeMode.multiInvocationClusterCount ?? 0) > 0
-          ? ` (largest ${(codeMode.largestDispatchCluster ?? 0).toLocaleString()})`
-          : ""}
-      </p>
-      <p className="incident-explorer__savings-caption">
-        {(codeMode.directCommandCellCount ?? 0).toLocaleString()} direct command cells
-        {" · "}{props.tokenMiser.interceptionCount.toLocaleString()} reducer decisions
-        {" · "}{codeMode.summarizedCount.toLocaleString()} summarized
-        {" · "}{codeMode.passThroughCount.toLocaleString()} explicit pass-through
-        {" · "}{(codeMode.patchCellCount ?? 0).toLocaleString()} patch cells
-        {" · "}{(codeMode.otherCellCount ?? 0).toLocaleString()} other cells
-        {" · "}{codeMode.retrievalCount.toLocaleString()} retrieval cells
-        {" · "}{(codeMode.pollingCellCount ?? 0).toLocaleString()} polling cells
-      </p>
-    </section>
+    <SavingsDetailSection
+      facts={[
+        {
+          label: codeMode.callCount === 1 ? "call" : "calls",
+          value: codeMode.callCount.toLocaleString(),
+        },
+        {
+          label: "gated",
+          value: gatedCount.toLocaleString(),
+          zero: gatedCount === 0,
+        },
+        {
+          label: "direct",
+          value: codeMode.directCount.toLocaleString(),
+          zero: codeMode.directCount === 0,
+        },
+        {
+          label: "command cells",
+          value: commandCells.toLocaleString(),
+          zero: commandCells === 0,
+        },
+        {
+          label: "dispatch clusters",
+          value: dispatchClusters.toLocaleString(),
+          zero: dispatchClusters === 0,
+        },
+      ]}
+      label="Code Mode"
+      onToggle={props.onToggle}
+      open={props.open}
+      sectionKey="code-mode"
+    >
+      <SavingsFigureGrid
+        figures={[
+          {
+            detail: `${nestedCommands.toLocaleString()} nested · `
+              + `${commandCells > 0
+                ? (nestedCommands / commandCells).toFixed(2)
+                : "0.00"} per cell`,
+            label: "Command-bearing cells",
+            value: commandCells.toLocaleString(),
+            zero: commandCells === 0,
+          },
+          {
+            detail: `${multiInvocation.toLocaleString()} multi-invocation`
+              + (multiInvocation > 0
+                ? ` · largest ${(codeMode.largestDispatchCluster ?? 0).toLocaleString()}`
+                : ""),
+            label: "Dispatch clusters",
+            value: dispatchClusters.toLocaleString(),
+            zero: dispatchClusters === 0,
+          },
+          {
+            label: "Direct command cells",
+            value: (codeMode.directCommandCellCount ?? 0).toLocaleString(),
+            zero: (codeMode.directCommandCellCount ?? 0) === 0,
+          },
+          {
+            label: "Patch cells",
+            value: (codeMode.patchCellCount ?? 0).toLocaleString(),
+            zero: (codeMode.patchCellCount ?? 0) === 0,
+          },
+          {
+            label: "Other cells",
+            value: (codeMode.otherCellCount ?? 0).toLocaleString(),
+            zero: (codeMode.otherCellCount ?? 0) === 0,
+          },
+          {
+            label: "Retrieval cells",
+            value: codeMode.retrievalCount.toLocaleString(),
+            zero: codeMode.retrievalCount === 0,
+          },
+          {
+            label: "Polling cells",
+            value: (codeMode.pollingCellCount ?? 0).toLocaleString(),
+            zero: (codeMode.pollingCellCount ?? 0) === 0,
+          },
+        ]}
+      />
+    </SavingsDetailSection>
   );
 }
 
