@@ -18,6 +18,8 @@ import { RailStatusChip } from "./RailStatusChip";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
 import {
+  type SubAgentLens,
+  subAgentLens,
   subAgentOriginSentence,
   subAgentUsageLabel,
 } from "./subagent-kind";
@@ -32,10 +34,47 @@ type SubAgentsPanelProps = {
   thread: NavigationThreadSummary;
 };
 
+const SUB_AGENT_LENSES: Array<{
+  id: SubAgentLens;
+  label: string;
+}> = [
+  { id: "harness", label: "Harness" },
+  { id: "token-miser", label: "Token Miser" },
+  { id: "pwragent", label: "PwrAgent" },
+];
+
 /** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
   const { onDetailsModalOpenChange } = props;
+  const [requestedLens, setRequestedLens] = useState<SubAgentLens>("harness");
+  const lensCounts = SUB_AGENT_LENSES.reduce<Record<SubAgentLens, number>>(
+    (counts, lens) => ({
+      ...counts,
+      [lens.id]: subAgents.filter(
+        (subAgent) => subAgentLens(subAgent) === lens.id,
+      ).length,
+    }),
+    {
+      harness: 0,
+      "token-miser": 0,
+      pwragent: 0,
+    },
+  );
+  const availableLenses = SUB_AGENT_LENSES.filter(
+    (lens) => lensCounts[lens.id] > 0,
+  );
+  const preferredLens =
+    availableLenses.find((lens) => lens.id === "harness")?.id
+    ?? availableLenses.find((lens) => lens.id === "pwragent")?.id
+    ?? availableLenses[0]?.id
+    ?? "harness";
+  const activeLens = lensCounts[requestedLens] > 0
+    ? requestedLens
+    : preferredLens;
+  const visibleSubAgents = subAgents.filter(
+    (subAgent) => subAgentLens(subAgent) === activeLens,
+  );
   // Track the open dialog by id, not by the summary object: the snapshot the
   // Details button was clicked with goes stale the moment the sub-agent
   // streams another update, and the dialog would sit on frozen status, timing,
@@ -116,8 +155,44 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
       {loading ? (
         <p className="context-empty">Loading sub-agents…</p>
       ) : subAgents.length > 0 ? (
-        <ul className="context-list context-list--cards">
-          {subAgents.map((subAgent) => {
+        <>
+          {availableLenses.length > 1 ? (
+            <div
+              aria-label="Sub-agent ownership"
+              className="subagent-lens-switch"
+              role="tablist"
+            >
+              {availableLenses.map((lens) => (
+                <button
+                  aria-label={`${lens.label} ${lensCounts[lens.id]}`}
+                  aria-controls="subagent-lens-panel"
+                  aria-selected={activeLens === lens.id}
+                  className="subagent-lens-switch__button"
+                  id={`subagent-lens-${lens.id}`}
+                  key={lens.id}
+                  role="tab"
+                  type="button"
+                  onClick={() => setRequestedLens(lens.id)}
+                >
+                  <span>{lens.label}</span>
+                  <span className="subagent-lens-switch__count">
+                    {lensCounts[lens.id]}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <ul
+            aria-labelledby={
+              availableLenses.length > 1
+                ? `subagent-lens-${activeLens}`
+                : undefined
+            }
+            className="context-list context-list--cards"
+            id="subagent-lens-panel"
+            role={availableLenses.length > 1 ? "tabpanel" : undefined}
+          >
+          {visibleSubAgents.map((subAgent) => {
             const tone = subAgentTone(subAgent.status);
             const originSentence = subAgentOriginSentence(subAgent);
             const backend = subAgent.backend ?? props.thread.source;
@@ -224,7 +299,8 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
               </li>
             );
           })}
-        </ul>
+          </ul>
+        </>
       ) : (
         <p className="context-empty">
           No sub-agents yet. Delegated monitors, reviews, and observed native

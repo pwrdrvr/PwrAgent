@@ -49,6 +49,73 @@ const thread: NavigationThreadSummary = {
 };
 
 describe("SubAgentsPanel", () => {
+  it("separates harness, Token Miser, and PwrAgent sub-agents", () => {
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: [
+            {
+              monitorId: "system:token-miser:gate-1",
+              task: "Gate noisy output",
+              status: "success",
+              createdAt: 1_800_000_000_200,
+              updatedAt: 1_800_000_000_300,
+            },
+            {
+              monitorId: "codex-native:child-1",
+              task: "Inspect native worker",
+              status: "running",
+              createdAt: 1_800_000_000_100,
+              updatedAt: 1_800_000_000_100,
+            },
+            ...thread.subAgents!,
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "Harness 1" }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Inspect native worker")).toBeInTheDocument();
+    expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
+    expect(screen.queryByText("Watch the deployment")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Token Miser 1" }));
+    expect(screen.getByText("Gate noisy output")).toBeInTheDocument();
+    expect(screen.queryByText("Inspect native worker")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "PwrAgent 2" }));
+    expect(screen.getByText("Watch the deployment")).toBeInTheDocument();
+    expect(screen.getByText("Finished work")).toBeInTheDocument();
+    expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
+  });
+
+  it("prefers PwrAgent when a thread has no harness-managed sub-agents", () => {
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: [
+            {
+              monitorId: "system:token-miser:gate-1",
+              task: "Gate noisy output",
+              status: "success",
+              createdAt: 1_800_000_000_200,
+              updatedAt: 1_800_000_000_300,
+            },
+            ...thread.subAgents!,
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "PwrAgent 2" }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Watch the deployment")).toBeInTheDocument();
+    expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
+  });
+
   it("shows Token Miser's per-gate cost equation", () => {
     render(
       <SubAgentsPanel
