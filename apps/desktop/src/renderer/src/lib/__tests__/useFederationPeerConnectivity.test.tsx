@@ -5,6 +5,7 @@ import type { DesktopApi } from "../desktop-api";
 import { useFederationPeerConnectivity } from "../useFederationPeerConnectivity";
 
 function buildDesktopApi(params: {
+  rejectHealth?: boolean;
   seededStatus?: "connected" | "disconnected";
 }): {
   desktopApi: DesktopApi;
@@ -12,24 +13,29 @@ function buildDesktopApi(params: {
 } {
   let listener: ((event: AgentEvent) => void) | undefined;
   const desktopApi: DesktopApi = {
-    readFederationHealth: vi.fn(async () => ({
-      health: {
-        enabled: true,
-        role: "client" as const,
-        status: "connected" as const,
-        peers: params.seededStatus
-          ? [
-              {
-                id: "peer_one",
-                label: "Mac-Mini-M4",
-                role: "gateway" as const,
-                status: params.seededStatus,
-                capabilities: [],
-              },
-            ]
-          : [],
-      },
-    })),
+    readFederationHealth: vi.fn(async () => {
+      if (params.rejectHealth) {
+        throw new Error("Federation health is temporarily unavailable.");
+      }
+      return {
+        health: {
+          enabled: true,
+          role: "client" as const,
+          status: "connected" as const,
+          peers: params.seededStatus
+            ? [
+                {
+                  id: "peer_one",
+                  label: "Mac-Mini-M4",
+                  role: "gateway" as const,
+                  status: params.seededStatus,
+                  capabilities: [],
+                },
+              ]
+            : [],
+        },
+      };
+    }),
     onAgentEvent: vi.fn((callback: (event: AgentEvent) => void) => {
       listener = callback;
       return () => {
@@ -115,5 +121,23 @@ describe("useFederationPeerConnectivity", () => {
       emit(peerStatusEvent("peer_other", "disconnected"));
     });
     expect(result.current.connected).toBe(true);
+  });
+
+  it("releases readiness when the health seed fails", async () => {
+    const { desktopApi } = buildDesktopApi({ rejectHealth: true });
+    const { result } = renderHook(() =>
+      useFederationPeerConnectivity({
+        desktopApi,
+        target: { scope: "remote", instanceId: "peer_one" },
+      }),
+    );
+
+    expect(result.current.ready).toBe(false);
+    expect(result.current.connected).toBe(true);
+    await waitFor(() => {
+      expect(result.current.ready).toBe(true);
+    });
+    expect(result.current.connected).toBe(true);
+    expect(result.current.status).toBeUndefined();
   });
 });

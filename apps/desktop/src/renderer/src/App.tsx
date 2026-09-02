@@ -1982,11 +1982,11 @@ function DesktopAppShell(props: {
       return;
     }
 
-    // A restored selection is already a valid startup landing. Backend
-    // discovery can change scope while that remote owner is still resolving;
-    // do not reinterpret a transient empty result as first-run evidence.
-    if (navigation.selectedThreadKey) {
-      startupLandingStateRef.current = "complete";
+    // Backend discovery changes scope after restoring a remote selection.
+    // While its owner is unresolved or disconnected, the previous local
+    // result is not evidence that setup is required. Keep the decision
+    // pending so reconnect can provide authoritative remote capabilities.
+    if (navigation.selectedThreadKey && remoteReadsSuspended) {
       return;
     }
 
@@ -2005,6 +2005,9 @@ function DesktopAppShell(props: {
     }
 
     startupLandingStateRef.current = "complete";
+    if (navigation.selectedThreadKey) {
+      return;
+    }
     setMainView("thread");
     void openWorkspaceLaunchpad(startupBackend.kind);
   }, [
@@ -2015,6 +2018,7 @@ function DesktopAppShell(props: {
     navigation.selectedThreadKey,
     onboardingOpen,
     openWorkspaceLaunchpad,
+    remoteReadsSuspended,
     settings.snapshot?.onboarding?.completed.value,
     startupBackend,
   ]);

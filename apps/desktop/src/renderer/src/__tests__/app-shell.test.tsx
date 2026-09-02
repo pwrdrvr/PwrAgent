@@ -3298,7 +3298,7 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
-  it("reopens onboarding on startup when no backend can create a thread", async () => {
+  it("reopens onboarding when a stale selection has no usable backend", async () => {
     const ensureDirectoryLaunchpad = vi.fn();
 
     Object.defineProperty(window, "pwragent", {
@@ -3353,8 +3353,19 @@ describe("App", () => {
           backend: "all" as const,
           fetchedAt: Date.now(),
           unchanged: false,
-          inboxThreadKeys: [],
-          threads: [],
+          inboxThreadKeys: ["codex:stale-thread"],
+          threads: [{
+            id: "stale-thread",
+            title: "Stale historical thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: {
+              inInbox: true,
+              reason: "new-thread" as const,
+            },
+            updatedAt: 1,
+          }],
           directories: [],
           launchpadDefaults: {
             backend: "codex" as const,

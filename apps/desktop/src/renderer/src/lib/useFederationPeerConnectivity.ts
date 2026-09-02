@@ -33,6 +33,7 @@ export function useFederationPeerConnectivity(params: {
   const desktopApi = params.desktopApi;
   const instanceId = params.target?.instanceId;
   const [state, setState] = useState<{
+    healthSeedFailed?: boolean;
     instanceId?: string;
     ready: boolean;
     status?: FederationConnectionState;
@@ -75,7 +76,14 @@ export function useFederationPeerConnectivity(params: {
         }
       })
       .catch(() => {
-        // Health is a seed; the event stream below is the live source.
+        if (cancelled) return;
+        // A failed seed is not evidence that the peer is disconnected. Let
+        // remote reads proceed; a later status event remains authoritative.
+        setState((current) =>
+          current.instanceId === instanceId && !current.ready
+            ? { healthSeedFailed: true, instanceId, ready: true }
+            : current,
+        );
       });
     const unsubscribe = desktopApi?.onAgentEvent?.((event) => {
       if (event.notification.method !== "federation/peerStatus/changed") {
@@ -109,6 +117,7 @@ export function useFederationPeerConnectivity(params: {
       connected:
         !instanceId
         || (!healthReadable && !targetReady)
+        || targetState?.healthSeedFailed === true
         || !ready
         || targetState?.status === "connected",
       ready,
