@@ -3253,6 +3253,55 @@ function matchesAuthoritativeLaunchpadMessage(
   });
 }
 
+function hasAuthoritativeLaunchpadMessageProjection(params: {
+  candidate: LaunchpadMessageCandidate;
+  entries: AppServerThreadEntry[];
+  messages: AppServerThreadMessage[];
+  reconciledMessageId?: string;
+}): boolean {
+  if (params.reconciledMessageId) {
+    return params.messages.some(
+      (message) => message.id === params.reconciledMessageId
+    );
+  }
+
+  const messageEntriesById = new Map<string, AppServerThreadMessageEntry>();
+  for (const entry of params.entries) {
+    if (entry.type === "message") {
+      messageEntriesById.set(entry.id, entry);
+    }
+  }
+
+  return params.messages.some((message) => {
+    if (
+      !messageMatchesOptimisticEntry(message, params.candidate.entry, {
+        allowImageUrlMismatch: true,
+      })
+    ) {
+      return false;
+    }
+
+    const matchingEntry = messageEntriesById.get(message.id);
+    if (!matchingEntry) {
+      // A message without its renderable entry is the split-hydration case
+      // this placeholder bridges. Once an entry exists, its turn disambiguates
+      // identical text submitted by a different turn.
+      return true;
+    }
+    if (
+      params.candidate.turnId
+      && matchingEntry.turn?.id !== params.candidate.turnId
+    ) {
+      return false;
+    }
+
+    return matchesAuthoritativeLaunchpadMessage(
+      matchingEntry,
+      params.candidate,
+    );
+  });
+}
+
 function mergeCompletedUserMessageWithOptimisticEntry(
   message: AppServerThreadMessageEntry,
   optimisticEntries: AppServerThreadEntry[]
@@ -6846,6 +6895,9 @@ export function useThreadSessionState(params: {
     threadKey && launchpadMessageCandidateRef.current?.threadKey === threadKey
       ? launchpadMessageCandidateRef.current.candidate
       : undefined;
+  const selectedReconciledLaunchpadMessageId = threadKey
+    ? reconciledLaunchpadMessageIdsRef.current[threadKey]
+    : undefined;
   const selectedRetainedLiveEntries = useMemo(() => {
     if (!threadKey || selectedRetainedLiveEntryVersion === undefined) {
       return [];
@@ -6856,16 +6908,14 @@ export function useThreadSessionState(params: {
     () => pruneOptimisticEntries(
       selectedSession?.optimisticEntries ?? [],
       selectedSession?.response,
-      threadKey
-        ? reconciledLaunchpadMessageIdsRef.current[threadKey]
-        : undefined,
+      selectedReconciledLaunchpadMessageId,
       selectedLaunchpadMessageCandidate,
     ),
     [
       selectedSession?.optimisticEntries,
       selectedSession?.response,
       selectedLaunchpadMessageCandidate,
-      threadKey,
+      selectedReconciledLaunchpadMessageId,
     ],
   );
   const visibleOptimisticEntries = useMemo(
@@ -6904,12 +6954,13 @@ export function useThreadSessionState(params: {
   const visibleOptimisticMessageEntries = useMemo(() => {
     const authoritativeLaunchpadMessageExists = Boolean(
       selectedLaunchpadMessageCandidate
-      && selectedSession?.response?.replay.messages.some((message) =>
-        matchesAuthoritativeLaunchpadMessage(
-          { type: "message", ...message },
-          selectedLaunchpadMessageCandidate,
-        )
-      )
+      && selectedSession?.response
+      && hasAuthoritativeLaunchpadMessageProjection({
+        candidate: selectedLaunchpadMessageCandidate,
+        entries: selectedSession.response.replay.entries,
+        messages: selectedSession.response.replay.messages,
+        reconciledMessageId: selectedReconciledLaunchpadMessageId,
+      })
     );
 
     return visibleOptimisticEntries.filter(
@@ -6922,7 +6973,8 @@ export function useThreadSessionState(params: {
     );
   }, [
     selectedLaunchpadMessageCandidate,
-    selectedSession?.response?.replay.messages,
+    selectedReconciledLaunchpadMessageId,
+    selectedSession?.response,
     visibleOptimisticEntries,
   ]);
   const mergedTailMessages = useMemo(
