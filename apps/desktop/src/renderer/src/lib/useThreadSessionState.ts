@@ -4117,12 +4117,17 @@ function threadMessageOriginFromUnknown(
     record.kind === "sub-agent"
       ? threadMessageSubAgentOriginFromUnknown(record.subAgent)
       : undefined;
+  const prAutomation =
+    record.kind === "pwragent"
+      ? threadMessagePrAutomationOriginFromUnknown(record.prAutomation)
+      : undefined;
   const source = record.sourceThread;
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     return {
       kind: record.kind,
       ...(messaging ? { messaging } : {}),
       ...(subAgent ? { subAgent } : {}),
+      ...(prAutomation ? { prAutomation } : {}),
     };
   }
   const sourceRecord = source as Record<string, unknown>;
@@ -4133,6 +4138,7 @@ function threadMessageOriginFromUnknown(
     return {
       kind: record.kind,
       ...(messaging ? { messaging } : {}),
+      ...(prAutomation ? { prAutomation } : {}),
     };
   }
   return {
@@ -4155,6 +4161,46 @@ function threadMessageOriginFromUnknown(
     },
     ...(messaging ? { messaging } : {}),
     ...(subAgent ? { subAgent } : {}),
+    ...(prAutomation ? { prAutomation } : {}),
+  };
+}
+
+function threadMessagePrAutomationOriginFromUnknown(
+  value: unknown,
+): AppServerThreadMessageOrigin["prAutomation"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    (record.kind !== "auto-fix" && record.kind !== "watch")
+    || typeof record.prKey !== "string"
+    || typeof record.prNumber !== "number"
+    || typeof record.headSha !== "string"
+  ) {
+    return undefined;
+  }
+  const eventKinds = Array.isArray(record.eventKinds)
+    ? record.eventKinds.filter(
+        (eventKind): eventKind is "ci-failure" | "merge-conflict" =>
+          eventKind === "ci-failure" || eventKind === "merge-conflict",
+      )
+    : undefined;
+  return {
+    kind: record.kind,
+    prKey: record.prKey,
+    prNumber: record.prNumber,
+    ...(typeof record.prTitle === "string"
+      ? { prTitle: record.prTitle }
+      : {}),
+    ...(typeof record.failedCheckUrl === "string"
+      ? { failedCheckUrl: record.failedCheckUrl }
+      : {}),
+    headSha: record.headSha,
+    ...(eventKinds ? { eventKinds } : {}),
+    ...(record.outcome === "success" || record.outcome === "failure"
+      ? { outcome: record.outcome }
+      : {}),
   };
 }
 

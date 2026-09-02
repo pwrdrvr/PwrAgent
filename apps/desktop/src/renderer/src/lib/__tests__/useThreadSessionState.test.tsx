@@ -3180,6 +3180,84 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("preserves PR automation provenance on a live user message", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "acp:grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async () => readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            item: {
+              id: "user-message-2",
+              type: "userMessage",
+              content: [{ type: "text", text: "Repair the failing PR." }],
+              origin: {
+                kind: "pwragent",
+                prAutomation: {
+                  kind: "auto-fix",
+                  prKey: "pwrdrvr/PwrAgent#1948",
+                  prNumber: 1948,
+                  prTitle: "Fix disappearing launch message",
+                  failedCheckUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/1",
+                  headSha: "c6f1ab8df5304858c8b83cefbe1c7e8822a9571b",
+                  eventKinds: ["ci-failure", "merge-conflict"],
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toHaveLength(1);
+    expect(result.current.entries[0]).toMatchObject({
+      type: "message",
+      role: "user",
+      origin: {
+        kind: "pwragent",
+        prAutomation: {
+          kind: "auto-fix",
+          prKey: "pwrdrvr/PwrAgent#1948",
+          prNumber: 1948,
+          prTitle: "Fix disappearing launch message",
+          failedCheckUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/1",
+          headSha: "c6f1ab8df5304858c8b83cefbe1c7e8822a9571b",
+          eventKinds: ["ci-failure", "merge-conflict"],
+        },
+      },
+    });
+  });
+
   it("does not duplicate a final reported by both item and turn completion", async () => {
     let agentEventHandler:
       | ((event: {
