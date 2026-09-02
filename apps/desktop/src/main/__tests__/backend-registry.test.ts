@@ -25412,7 +25412,7 @@ command = "pnpm dev"
       await registry.listBackends({ includeUnavailable: true })
     ).backends.find((backend) => backend.kind === "codex");
     expect(codexBackend?.capabilities.startReview).toBe(true);
-    expect(codexBackend?.capabilities.startDetachedReview).toBe(false);
+    expect(codexBackend?.capabilities.startDetachedReview).toBe(true);
 
     const response = await registry.startReview({
       backend: "codex",
@@ -26445,7 +26445,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("persists native review provenance on the existing sub-agent write", async () => {
+  it("persists detached native review provenance on the existing sub-agent write", async () => {
     const context: AppServerReviewContext = {
       workspacePath: "/repo",
       projectLabel: "PwrAgent",
@@ -26482,7 +26482,7 @@ command = "pnpm dev"
       backend: "codex",
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "origin/main" },
-      delivery: "inline",
+      delivery: "detached",
     });
 
     await expect(
