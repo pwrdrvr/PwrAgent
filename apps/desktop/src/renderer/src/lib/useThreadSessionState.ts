@@ -6951,18 +6951,37 @@ export function useThreadSessionState(params: {
     ),
     [selectedSession?.response?.replay.entries, visibleOptimisticEntries],
   );
-  const visibleOptimisticMessageEntries = useMemo(() => {
-    const authoritativeLaunchpadMessageExists = Boolean(
-      selectedLaunchpadMessageCandidate
-      && selectedSession?.response
+  const visibleLaunchpadMessageCandidate = useMemo(
+    () => selectedLaunchpadMessageCandidate
+      && visibleLocalOptimisticEntries.some(
+        (entry) => entry.id === selectedLaunchpadMessageCandidate.entry.id,
+      )
+      ? selectedLaunchpadMessageCandidate
+      : undefined,
+    [selectedLaunchpadMessageCandidate, visibleLocalOptimisticEntries],
+  );
+  const selectedResponseEntries = selectedSession?.response?.replay.entries;
+  const selectedResponseMessages = selectedSession?.response?.replay.messages;
+  const authoritativeLaunchpadMessageExists = useMemo(
+    () => Boolean(
+      visibleLaunchpadMessageCandidate
+      && selectedResponseEntries
+      && selectedResponseMessages
       && hasAuthoritativeLaunchpadMessageProjection({
-        candidate: selectedLaunchpadMessageCandidate,
-        entries: selectedSession.response.replay.entries,
-        messages: selectedSession.response.replay.messages,
+        candidate: visibleLaunchpadMessageCandidate,
+        entries: selectedResponseEntries,
+        messages: selectedResponseMessages,
         reconciledMessageId: selectedReconciledLaunchpadMessageId,
       })
-    );
-
+    ),
+    [
+      selectedReconciledLaunchpadMessageId,
+      selectedResponseEntries,
+      selectedResponseMessages,
+      visibleLaunchpadMessageCandidate,
+    ],
+  );
+  const visibleOptimisticMessageEntries = useMemo(() => {
     return visibleOptimisticEntries.filter(
       (entry): entry is AppServerThreadMessageEntry =>
         entry.type === "message"
@@ -6972,9 +6991,8 @@ export function useThreadSessionState(params: {
         )
     );
   }, [
+    authoritativeLaunchpadMessageExists,
     selectedLaunchpadMessageCandidate,
-    selectedReconciledLaunchpadMessageId,
-    selectedSession?.response,
     visibleOptimisticEntries,
   ]);
   const mergedTailMessages = useMemo(
