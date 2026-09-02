@@ -608,6 +608,7 @@ describe("ThreadContextPanel", () => {
   });
 
   it("labels Codex native sub-agent usage separately from monitor usage", () => {
+    const now = Date.now();
     const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
     (window as Window & { pwragent?: unknown }).pwragent = {
       openSubAgentTranscriptWindow,
@@ -622,9 +623,9 @@ describe("ThreadContextPanel", () => {
             monitorId: "codex-native:019ed7df-5876-7882-9b75-7fd647372da7",
             task: "Check PR status",
             status: "success",
-            createdAt: 2000,
-            completedAt: 3000,
-            updatedAt: 2500,
+            createdAt: now - 2000,
+            completedAt: now - 1000,
+            updatedAt: now - 1000,
             agentName: "Peirce",
             lastMessage: "PR #783 is open and all required checks are passing.",
             monitorThreadId: "019ed7df-5876-7882-9b75-7fd647372da7",
