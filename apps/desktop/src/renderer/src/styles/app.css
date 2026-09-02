@@ -22362,7 +22362,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .subagent-lens-switch__button[aria-selected="true"] {
   background: var(--bg-panel-elevated);
   color: var(--text-primary);
-  box-shadow: 0 1px 2px var(--shadow-color);
+  box-shadow: 0 1px 3px var(--shadow-tint-soft);
 }
 
 .subagent-lens-switch__button:focus-visible {
