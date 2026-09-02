@@ -3238,6 +3238,20 @@ textarea,
   -webkit-app-region: no-drag;
 }
 
+/* The first row under the masthead does not re-pad against it. Every other
+   boundary in the rail is paid for twice — 6px from the row above and 6px
+   from the row below — but the window's top edge contributes nothing, so
+   the masthead's own 6px of air was the only thing above its buttons while
+   12px sat below them. The band already ends with its air; this row adding
+   6px more is what made the chrome read as stuck to the top edge.
+
+   Adjacency, not `:first-of-type`: the federation window swaps which
+   `.runtime-identity` renders first, and a rail with no runtime row at all
+   should leave the rule inert rather than move the next thing up. */
+.sidebar__masthead + .runtime-identity {
+  padding-top: 0;
+}
+
 .sidebar__menu--profile {
   right: auto;
   left: 0;
@@ -11974,14 +11988,23 @@ textarea,
    map, deliberately, so a press can never start both a window drag and a
    canvas pan. Not rendered on Windows (painted `.activity-titlebar` above
    the map) or Linux (OS frame); hidden in fullscreen, which
-   `star-map-window.ts` forwards to `<html data-fullscreen>`. */
+   `star-map-window.ts` forwards to `<html data-fullscreen>`.
+
+   Its height is the shared chrome band, because on this window the strip
+   IS the visible title bar: the row inside it centers on `--chrome-band-h`
+   and so do the stoplights, so a strip of any other height puts unequal
+   air above and below the one row it contains. It was 52px, which centered
+   the row when the band paid for its position with a 14px top padding;
+   once the band centered itself the strip left 8.5px above the chips and
+   20.5px below. 40px is still a generous drag handle - a native macOS
+   title bar is 28. */
 .star-map-window__titlebar {
   position: absolute;
   top: 0;
   right: 0;
   left: 0;
   z-index: 2;
-  height: 52px;
+  height: var(--chrome-band-h);
   backdrop-filter: blur(12px) saturate(135%);
   -webkit-app-region: drag;
 }

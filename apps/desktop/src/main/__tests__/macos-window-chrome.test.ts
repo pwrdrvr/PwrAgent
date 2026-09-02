@@ -232,6 +232,29 @@ describe("macOS window chrome", () => {
     }
   });
 
+  it("gives the chrome row equal air above and below it", () => {
+    // A band centred in `--chrome-band-h` puts the same air above and
+    // below its row, and then the next thing down adds its own — so the
+    // window's top edge, which contributes nothing, ends up the tight
+    // side. Two surfaces paid for that and both are asserted here.
+
+    // The Star Map's glass strip IS its title bar, so its height is the
+    // band; at 52px it left 8.5px over the chips and 20.5px under them.
+    expect(
+      ruleFor(".star-map-window__titlebar").join("\n"),
+      "the Star Map drag strip should be the shared band",
+    ).toContain("height: var(--chrome-band-h);");
+
+    // The rail's first row does not re-pad against the masthead. Every
+    // other boundary there is paid twice (6px each side); the top edge
+    // pays once, so this row's own 6px put 12px under the buttons and 6
+    // above them.
+    expect(
+      paddingOf(ruleFor(".sidebar__masthead + .runtime-identity"), "top"),
+      "the row under the masthead should not re-pad against the band",
+    ).toBe("0");
+  });
+
   it("keeps the Windows caption strip taller than its OS overlay", () => {
     // On win32 `.activity-titlebar` IS the Window Controls Overlay strip,
     // and this change moved its height onto `--chrome-band-h`. The OS draws
