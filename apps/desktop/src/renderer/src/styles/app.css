@@ -3219,6 +3219,10 @@ textarea,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* `overflow: hidden` makes this line box a clip box, so the pill's
+     `line-height: 1` would shave the glyphs. `normal` is the font's own
+     ink box — see `.runtime-identity__text`. */
+  line-height: normal;
 }
 
 .runtime-identity {
@@ -3227,14 +3231,21 @@ textarea,
   min-width: 0;
   align-items: center;
   gap: 6px;
+  /* 6px above and below, so the boundary between two adjacent chrome rows
+     is 12px — the same 12px `.sidebar__section` pays below the last row.
+     Every gap in the chrome stack is this one number; do not tune one edge
+     in isolation. See the uniform-rhythm note on `.sidebar__section`. */
   padding: 6px 0;
-  /* Pull out to the lane inset so the pills and their divider line up with
-     the thread/directory cards below instead of sitting at the wider rail
+  /* Pull out to the lane inset so the pills line up with the
+     thread/directory cards below instead of sitting at the wider rail
      inset. This is an auto-width flex row, so the negative margin simply
      shrinks it onto the lane edges (cf. `.lens-switch`, which needs an
      explicit width). See `--sidebar-masthead-pull` on `.sidebar`. */
   margin-inline: var(--sidebar-masthead-pull);
-  border-bottom: 1px solid var(--border-subtle);
+  /* No bottom rule. Each row is already a line of bordered pills, so a
+     full-width divider under them drew a second frame around content that
+     was framed — and the two rules cut a 3-item chrome stack into three
+     boxes that read as unrelated. Separation here is the 12px of air. */
   -webkit-app-region: no-drag;
 }
 
@@ -3300,6 +3311,16 @@ textarea,
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
+  /* `overflow: hidden` (needed for the truncation above) makes this line box
+     a CLIP box, not just a spacing one — so the pill's `line-height: 1`
+     shaved the glyphs instead of merely crowding them. At 10.5px the mono
+     stack asks for 13px of ink, ascent 10 + descent 3, inside a 10.5px box:
+     2px off the ascenders and 0.5px off the descenders, so `/`, `y`, `g`,
+     and `p` lost their tails. `normal` is that ink box exactly, derived from
+     the font rather than guessed, so it stays right if the stack ever
+     changes — and it centers the text in the pill, which a hand-picked
+     ratio does not. Same remedy as `.review-chip__label`. */
+  line-height: normal;
 }
 
 .thread-header__title,
@@ -3309,13 +3330,24 @@ textarea,
 }
 
 /* Only ever worn together with `--fill`, so this padding is the gap between
-   the runtime-identity divider and the lens switch. 16px read as a hole: the
-   row above it is 6px of padding around a single line of text, so the strip
-   was floating away from the chrome it belongs to. 10px keeps the lens switch
-   legible as its own band without the drift. */
+   the last runtime-identity row and the lens switch — and it is the third
+   and last gap in the sidebar's chrome stack, so it has to agree with the
+   other two rather than be tuned on its own.
+
+   The stack now pays one number, 12px, at every internal boundary: two
+   adjacent `.runtime-identity` rows each contribute 6px, and this 6px plus
+   the last row's 6px closes the stack. Before, the gaps were 13px and 17px —
+   the strip visibly drifted further from the chrome above it at each step.
+   Change one of these and change all three.
+
+   The gap ABOVE the first row is not this number and is not platform-neutral.
+   On macOS and Linux it is the masthead band's own trailing air (~11.5px for
+   a 17px wordmark centered in the 40px band), which is why
+   `.sidebar__masthead + .runtime-identity` drops its top padding. On Windows
+   the masthead is `display: none`, that adjacency still matches, and the
+   first pill lands flush at 0. Do not quote a single number for that edge. */
 .sidebar__section {
-  padding: 10px 0 0;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 6px 0 0;
 }
 
 .sidebar__section--fill {
