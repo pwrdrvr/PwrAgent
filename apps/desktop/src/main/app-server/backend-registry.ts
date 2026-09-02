@@ -8096,7 +8096,7 @@ export class DesktopBackendRegistry {
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
   private readonly pendingThreadGitWorkingStateKeys = new Set<string>();
-  private readonly threadGitWorkingStateRefreshRounds = new Set<Promise<void>>();
+  private threadGitWorkingStateRefreshRound: Promise<void> | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadPullRequestDetachHandler:
     | ThreadPullRequestDetachHandler
@@ -12423,6 +12423,13 @@ export class DesktopBackendRegistry {
     }
 
     await this.loadThreadGitWorkingStateCache();
+    // One registry-owned automatic fleet round spans every navigation
+    // surface. Before this gate, repeated renderer and messaging snapshots
+    // reached past the paths already in flight and started rotating batches
+    // concurrently. That turned serving-path frequency into Git fleet size.
+    if (this.threadGitWorkingStateRefreshRound) {
+      return { scheduledCount: 0 };
+    }
     // Staleness is decided in exactly one place: the cache. Filtering threads
     // on `gitWorkingState` here would read the field a serving path has just
     // hydrated from that same cache, so a worktree with any row — however old
@@ -12453,9 +12460,11 @@ export class DesktopBackendRegistry {
       probedThreads,
       worktreePaths,
     );
-    this.threadGitWorkingStateRefreshRounds.add(round);
+    this.threadGitWorkingStateRefreshRound = round;
     void round.finally(() => {
-      this.threadGitWorkingStateRefreshRounds.delete(round);
+      if (this.threadGitWorkingStateRefreshRound === round) {
+        this.threadGitWorkingStateRefreshRound = undefined;
+      }
     });
     return { scheduledCount: worktreePaths.length };
   }
@@ -20742,7 +20751,9 @@ export class DesktopBackendRegistry {
     // clears below final: `rememberThreadGitWorkingStateCacheEntry` reloads
     // the durable cache, so a late round would refill the map and write to a
     // store that is on its way out.
-    await Promise.all([...this.threadGitWorkingStateRefreshRounds]);
+    if (this.threadGitWorkingStateRefreshRound) {
+      await this.threadGitWorkingStateRefreshRound;
+    }
     this.workingStateByWorktree.clear();
     this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {

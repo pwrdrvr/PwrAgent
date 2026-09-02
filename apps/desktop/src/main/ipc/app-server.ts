@@ -193,7 +193,6 @@ import {
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
 import {
-  BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
@@ -2310,10 +2309,16 @@ class DesktopAppServerService {
           this.applyCachedWorktreeWorkingState(thread),
         ),
       );
-    this.startWorktreeWorkingStateRefresh({
-      automatic: true,
-      worktreePaths: this.collectThreadWorktreePaths(canonicalSnapshot.threads),
-    });
+    // The registry owns the one automatic fleet round shared by renderer,
+    // messaging, and federated navigation. Focused, user, and event-driven
+    // refreshes still use this window's single-worktree lane below.
+    void getDesktopBackendRegistry()
+      .refreshThreadGitWorkingStates(canonicalSnapshot.threads)
+      .catch((error) => {
+        logDebug("worktreeWorkingStateRefresh:failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
 
     const remotePins = await this.mergePinnedRemoteThreads();
 
@@ -2616,19 +2621,6 @@ class DesktopAppServerService {
         maxBytes: request.maxBytes,
       },
     );
-  }
-
-  private collectThreadWorktreePaths(
-    threads: NavigationSnapshot["threads"],
-  ): string[] {
-    const paths = new Set<string>();
-    for (const thread of threads) {
-      const worktreePath = this.resolveThreadWorkingStatePath(thread);
-      if (worktreePath) {
-        paths.add(worktreePath);
-      }
-    }
-    return [...paths];
   }
 
   private rememberThreadWorktreePaths(
@@ -3325,7 +3317,6 @@ class DesktopAppServerService {
    * invalidation) bypasses freshness. Returns the number of worktrees scheduled.
    */
   private startWorktreeWorkingStateRefresh(params: {
-    automatic: boolean;
     worktreePaths: string[];
     force?: boolean;
   }): number {
@@ -3385,7 +3376,6 @@ class DesktopAppServerService {
     }
     return {
       scheduled: this.startWorktreeWorkingStateRefresh({
-        automatic: false,
         worktreePaths: [worktreePath],
         force,
       }) > 0,
@@ -3393,14 +3383,10 @@ class DesktopAppServerService {
   }
 
   /**
-   * Everything lane-specific about picking a batch: the automatic navigation
-   * lane sees the whole fleet and takes a capped, rotating slice, while the
-   * focused and user-triggered lanes name one worktree and want it now.
-   * Freshness and the rotation order are shared policy — see
-   * `app-server/thread-working-state-refresh-policy.ts`.
+   * Focused and user-triggered lanes name one worktree and want it now. The
+   * registry owns automatic fleet selection and coalescing.
    */
   private selectWorktreeWorkingStateRefreshCandidates(params: {
-    automatic: boolean;
     worktreePaths: string[];
     force?: boolean;
   }): string[] {
@@ -3408,9 +3394,6 @@ class DesktopAppServerService {
       cache: getDesktopBackendRegistry().getThreadGitWorkingStateCache(),
       exclude: this.pendingWorktreeWorkingStateKeys,
       ...(params.force ? { force: true } : {}),
-      ...(params.automatic
-        ? { limit: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE }
-        : {}),
       worktreePaths: params.worktreePaths,
     });
   }
@@ -3504,7 +3487,6 @@ class DesktopAppServerService {
       getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
       void this.loadThreadGitWorkingStateCache().then(() => {
         this.startWorktreeWorkingStateRefresh({
-          automatic: false,
           worktreePaths: [worktreePath],
           force: true,
         });
@@ -5126,7 +5108,6 @@ class DesktopAppServerService {
       getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
       void this.loadThreadGitWorkingStateCache().then(() => {
         this.startWorktreeWorkingStateRefresh({
-          automatic: false,
           worktreePaths: [worktreePath],
           force: true,
         });

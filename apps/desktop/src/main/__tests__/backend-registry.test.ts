@@ -98,6 +98,7 @@ import {
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
 import { GitDirectoryService } from "../app-server/git-directory-service";
+import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -3565,7 +3566,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("coalesces a background working-state probe already in flight", async () => {
+  it("keeps repeated navigation inside the automatic fleet-round budget", async () => {
     const worktreePath = "/worktrees/PwrAgnt";
     let releaseProbe: (() => void) | undefined;
     const probeReleased = new Promise<void>((resolve) => {
@@ -3591,29 +3592,40 @@ describe("DesktopBackendRegistry", () => {
       } as unknown as GitWorkingStateService,
       overlayStore,
     });
-    const threads = [
-      multiProjectThread({ worktreePath }),
-      multiProjectThread({ worktreePath: `${worktreePath}-2` }),
-    ];
+    const worktreePaths = Array.from(
+      { length: gitSubprocessBudgets.automaticFleet.worktreeCount },
+      (_unused, index) => `${worktreePath}-${index}`,
+    );
+    const threads = worktreePaths.map((path) =>
+      multiProjectThread({ worktreePath: path }),
+    );
+    expect(Math.ceil(
+      worktreePaths.length / BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+    )).toBe(gitSubprocessBudgets.automaticFleet.baselineRoundsStarted);
 
     try {
       await expect(
-        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
-      ).resolves.toEqual({ scheduledCount: 1 });
-      // The first worktree is in flight, so a capped round has to reach past
-      // it rather than re-selecting it and scheduling nothing.
-      await expect(
-        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
-      ).resolves.toEqual({ scheduledCount: 1 });
-      await expect(
-        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
-      ).resolves.toEqual({ scheduledCount: 0 });
+        registry.refreshThreadGitWorkingStates(threads),
+      ).resolves.toEqual({
+        scheduledCount: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+      });
+      for (
+        let request = 1;
+        request < gitSubprocessBudgets.automaticFleet.navigationRequestsWhileInFlight;
+        request += 1
+      ) {
+        await expect(
+          registry.refreshThreadGitWorkingStates(threads),
+        ).resolves.toEqual({ scheduledCount: 0 });
+      }
       await expectEventually(
         async () => readWorkingStateEntries.mock.calls.length,
-        2,
+        gitSubprocessBudgets.automaticFleet.maxRoundsStarted,
       );
       expect(readWorkingStateEntries.mock.calls.map(([paths]) => paths))
-        .toEqual([[worktreePath], [`${worktreePath}-2`]]);
+        .toEqual([
+          worktreePaths.slice(0, BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE),
+        ]);
     } finally {
       releaseProbe?.();
       await registry.close();
