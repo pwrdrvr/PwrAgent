@@ -8229,6 +8229,7 @@ export class DesktopBackendRegistry {
   private tokenMiserPostToolUseExactOutputVersion?: number;
   private tokenMiserRuntimePreparationFailure?: string;
   private codexRuntimeRestartPending = false;
+  private managedCodexRuntimeSwitchPending = false;
   private codexRuntimeRestartPromise?: Promise<boolean>;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
@@ -8639,6 +8640,7 @@ export class DesktopBackendRegistry {
             version: change.runtime?.metadata.version,
           });
           this.codexRuntimeRestartPending = true;
+          this.managedCodexRuntimeSwitchPending = true;
           return this.maybeRestartCodexForManagedRuntimeChange();
         }),
       );
@@ -9664,6 +9666,24 @@ export class DesktopBackendRegistry {
         ? [...summaries, ...acpSummaries]
         : [...summaries, ...acpSummaries].filter((backend) => backend.available),
     };
+  }
+
+  async invalidateProviderRuntimeSelections(params: {
+    acp: boolean;
+    codex: boolean;
+  }): Promise<void> {
+    if (params.acp) {
+      this.acpBackend.invalidateLocalAgentDiscovery();
+    }
+    if (!params.codex) return;
+    // A settings write is authority to stop using the obsolete executable,
+    // not to discover or launch its replacement. The reconnectable client
+    // resolves the new command only when the next permitted discovery or
+    // ordinary provider operation initializes it.
+    this.codexBackendSummary = undefined;
+    this.modelCatalog.invalidate("codex");
+    this.codexRuntimeRestartPending = true;
+    await this.maybeRestartCodexForManagedRuntimeChange();
   }
 
   /**
@@ -26394,9 +26414,11 @@ export class DesktopBackendRegistry {
       return await this.codexRuntimeRestartPromise;
     }
 
+    const completesManagedSwitch = this.managedCodexRuntimeSwitchPending;
     const restart = (async () => {
       if (this.hasActiveCodexRuntimeWork()) return false;
       this.codexRuntimeRestartPending = false;
+      this.managedCodexRuntimeSwitchPending = false;
       await this.codexClient.close();
       this.tokenMiserServerCapabilities.delete(this.codexClient);
       this.tokenMiserReducerCapabilityState = undefined;
@@ -26406,7 +26428,9 @@ export class DesktopBackendRegistry {
       if (this.resolveTokenMiserEnabledFn()) {
         await this.prepareTokenMiserRuntime({ prune: true });
       }
-      this.markManagedCodexRuntimeSwitchCompleteFn();
+      if (completesManagedSwitch) {
+        this.markManagedCodexRuntimeSwitchCompleteFn();
+      }
       return true;
     })();
     this.codexRuntimeRestartPromise = restart;
@@ -26414,6 +26438,9 @@ export class DesktopBackendRegistry {
       return await restart;
     } catch (error) {
       this.codexRuntimeRestartPending = true;
+      if (completesManagedSwitch) {
+        this.managedCodexRuntimeSwitchPending = true;
+      }
       backendRegistryLog.warn("managed Codex restart failed", {
         error: error instanceof Error ? error.message : String(error),
       });

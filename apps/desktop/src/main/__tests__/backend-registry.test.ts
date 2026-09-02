@@ -2872,6 +2872,25 @@ describe("DesktopBackendRegistry", () => {
     expect(stopWatching).toHaveBeenCalledOnce();
   });
 
+  it("disconnects idle Codex after its configured path changes", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const markSwitchComplete = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.invalidateProviderRuntimeSelections({
+      acp: false,
+      codex: true,
+    });
+
+    expect(codexClient.closeCallCount).toBe(1);
+    expect(markSwitchComplete).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
   it("defers managed Codex reconnect until active turns are idle", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const markSwitchComplete = vi.fn();

@@ -151,6 +151,7 @@ const setFederatedThreadMessageHandlerMock = vi.fn();
 const setFederatedThreadInspectionHandlerMock = vi.fn();
 const setFederatedThreadMutationHandlerMock = vi.fn();
 const setFederatedThreadControlHandlerMock = vi.fn();
+const invalidateProviderRuntimeSelectionsMock = vi.fn(async () => undefined);
 const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
@@ -536,6 +537,7 @@ const runtimeFederationLeaseCoordinatorMock = {
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
+    invalidateProviderRuntimeSelections: invalidateProviderRuntimeSelectionsMock,
     listThreads: listThreadsMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
@@ -751,6 +753,8 @@ describe("bootstrapApp", () => {
     setFederatedThreadInspectionHandlerMock.mockReset();
     setFederatedThreadMutationHandlerMock.mockReset();
     setFederatedThreadControlHandlerMock.mockReset();
+    invalidateProviderRuntimeSelectionsMock.mockReset();
+    invalidateProviderRuntimeSelectionsMock.mockResolvedValue(undefined);
     listThreadsMock.mockReset();
     listThreadsMock.mockResolvedValue([]);
     disposeDesktopMessagingRuntimeMock.mockReset();
@@ -882,6 +886,36 @@ describe("bootstrapApp", () => {
       expect.objectContaining({ onFocus: expect.any(Function) }),
     );
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates live provider runtimes after executable settings change", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../index");
+    await flushMicrotasks();
+    const registration = registerSettingsIpcHandlersMock.mock.calls[0]?.[1] as
+      | {
+          onConfigPatchWritten?: (patch: {
+            acpAgents?: Record<string, { cliPath?: string }>;
+            models?: { codex?: { path?: string } };
+          }) => Promise<void>;
+        }
+      | undefined;
+
+    await registration?.onConfigPatchWritten?.({
+      models: { codex: { path: "/replacement/codex" } },
+    });
+    await registration?.onConfigPatchWritten?.({
+      acpAgents: { kimi: { cliPath: "/replacement/kimi" } },
+    });
+
+    expect(invalidateProviderRuntimeSelectionsMock).toHaveBeenNthCalledWith(1, {
+      acp: false,
+      codex: true,
+    });
+    expect(invalidateProviderRuntimeSelectionsMock).toHaveBeenNthCalledWith(2, {
+      acp: true,
+      codex: false,
+    });
   });
 
   it("does not infer a boot failure when the main window is slow to show", async () => {

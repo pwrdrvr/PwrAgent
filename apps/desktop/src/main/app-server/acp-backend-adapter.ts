@@ -1967,10 +1967,12 @@ export class AcpBackendAdapter {
     const current = this.localAgentSnapshot.map((agent) => {
       const durableAgent = durableByBackend.get(agent.backendId);
       durableByBackend.delete(agent.backendId);
-      return durableAgent
-        && acpAgentLaunchIdentity(durableAgent) === acpAgentLaunchIdentity(agent)
-        ? durableAgent
-        : agent;
+      // Settings discovery persists a verified replacement before runtime
+      // surfaces read it. That durable observation is newer than this
+      // adapter's in-memory discovery snapshot, so it must win even when the
+      // launch identity changed; resolveClient will retain an active owner or
+      // replace an idle one at the normal ownership boundary.
+      return durableAgent ?? agent;
     });
     return [...current, ...durableByBackend.values()];
   }

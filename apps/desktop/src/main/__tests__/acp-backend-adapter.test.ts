@@ -3489,6 +3489,81 @@ describe("AcpBackendAdapter", () => {
     expect(secondDispose).toHaveBeenCalledOnce();
   });
 
+  it("adopts a newer durable launch identity over stale local discovery", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const firstAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      activeCommand: "/path/kimi",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "/path/kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const replacementAgent: AcpInstalledAgentRecord = {
+      ...firstAgent,
+      activeCommand: "/replacement/kimi",
+      launchDescriptor: {
+        ...firstAgent.launchDescriptor!,
+        command: "/replacement/kimi",
+      },
+    };
+    let durableAgent = firstAgent;
+    const firstClient = {
+      dispose: vi.fn(async () => undefined),
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      initialize: vi.fn(async () => undefined),
+    };
+    const secondClient = {
+      dispose: vi.fn(async () => undefined),
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      initialize: vi.fn(async () => undefined),
+    };
+    const createAcpClient = vi
+      .fn()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => durableAgent,
+        listInstalledAgents: () => [durableAgent],
+        upsertInstalledAgent: (agent) => {
+          durableAgent = agent;
+        },
+      },
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [firstAgent],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+
+    // Settings discovery owns its own explicit probe and writes the shared
+    // durable cache. The adapter's earlier local snapshot must not override it.
+    durableAgent = replacementAgent;
+    await expect(adapter.listAvailableAgents()).resolves.toEqual([
+      expect.objectContaining({ activeCommand: "/replacement/kimi" }),
+    ]);
+    await expect(adapter.getClient(backendId)).resolves.toBe(secondClient);
+    expect(createAcpClient).toHaveBeenNthCalledWith(2, replacementAgent);
+    expect(firstClient.dispose).toHaveBeenCalledOnce();
+
+    await adapter.close();
+  });
+
   it("replaces the owner of a loadable session after launch identity changes", async () => {
     const backendId = "acp:gemini" as AcpBackendId;
     const firstAgent: AcpInstalledAgentRecord = {

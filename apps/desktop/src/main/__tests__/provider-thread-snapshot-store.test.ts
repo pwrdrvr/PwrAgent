@@ -33,6 +33,17 @@ describe("ProviderThreadSnapshotStore", () => {
           titleSource: "explicit",
           linkedDirectories: [],
           updatedAt: 41,
+          summary: "operator prompt that must not enter sqlite",
+          codexEnvironmentRuntime: {
+            environmentId: "local",
+            environmentName: "Local",
+            executionTarget: "local",
+            setupOutput: "private command output",
+          },
+          codexNativeSubAgents: [{
+            threadId: "worker-1",
+            title: "prompt-derived worker task",
+          }],
         },
       ],
     });
@@ -55,6 +66,39 @@ describe("ProviderThreadSnapshotStore", () => {
       .get("codex") as string;
     expect(payload).not.toContain("transcript");
     expect(payload).not.toContain("secret");
+    expect(payload).not.toContain("operator prompt");
+    expect(payload).not.toContain("private command output");
+    expect(payload).not.toContain("prompt-derived worker task");
+    expect(store.list()[0]?.threads[0]).not.toHaveProperty("summary");
+    expect(store.list()[0]?.threads[0]).not.toHaveProperty(
+      "codexEnvironmentRuntime",
+    );
+    expect(store.list()[0]?.threads[0]).not.toHaveProperty(
+      "codexNativeSubAgents",
+    );
+  });
+
+  it("scrubs prompt-derived fields from an existing durable row", () => {
+    const { db, store } = createStore();
+    db.raw.prepare(
+      `INSERT INTO provider_thread_snapshots(
+         backend, schema_version, observed_at, payload
+       ) VALUES (?, ?, ?, ?)`,
+    ).run("codex", 1, 1, JSON.stringify([{
+      id: "thread-legacy",
+      source: "codex",
+      title: "Legacy thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      summary: "legacy prompt preview",
+    }]));
+
+    expect(store.list()[0]?.threads[0]).not.toHaveProperty("summary");
+    const payload = db.raw
+      .prepare("SELECT payload FROM provider_thread_snapshots WHERE backend = ?")
+      .pluck()
+      .get("codex") as string;
+    expect(payload).not.toContain("legacy prompt preview");
   });
 
   it("ignores incompatible and malformed durable rows", () => {
