@@ -23162,6 +23162,15 @@ export class DesktopBackendRegistry {
         if (!nativeThread) {
           continue;
         }
+        const childOverlay = params.overlaysByThreadId[nativeThread.id];
+        if (childOverlay?.handoffOrigin?.groupingMode === "subthread") {
+          // Codex can report an ordinary PwrAgent handoff through its native
+          // worker metadata. Keep the durable handoff in navigation and do
+          // not let thread-list discovery recreate the stale worker card.
+          this.codexNativeSubAgentParents.delete(nativeThread.id);
+          this.clearCodexNativeSubAgentReconciliation(nativeThread.id);
+          continue;
+        }
         const monitorId = codexNativeSubAgentId(nativeThread.id);
         const parentOverlay = params.overlaysByThreadId[parent.id];
         const existing = parentOverlay?.subAgents?.find(
@@ -23186,7 +23195,6 @@ export class DesktopBackendRegistry {
           nativeThread.serviceTier
           ?? existing?.monitorUsage?.serviceTier
           ?? parent.serviceTier;
-        const childOverlay = params.overlaysByThreadId[nativeThread.id];
         const hasPersistedTurnUsage = Boolean(
           childOverlay?.immutableUsageActivities?.some(
             (activity) =>
@@ -25089,6 +25097,20 @@ export class DesktopBackendRegistry {
     parentThreadId: string;
     receiverThreadId: string;
   }): Promise<void> {
+    const receiverOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.receiverThreadId,
+    });
+    if (receiverOverlay?.handoffOrigin?.groupingMode === "subthread") {
+      // A monitor can wait on or inspect an ordinary PwrAgent handoff. Codex
+      // reports that collaboration item with receiver thread IDs just like a
+      // native worker call, but the receiver remains a durable navigation
+      // thread. Never project it into the monitor's sub-agent cards.
+      this.codexNativeSubAgentParents.delete(params.receiverThreadId);
+      this.clearCodexNativeSubAgentReconciliation(params.receiverThreadId);
+      return;
+    }
+
     const now = Date.now();
     this.codexNativeSubAgentParents.set(params.receiverThreadId, params.parentThreadId);
     const overlay = await this.overlayStore.getThreadOverlayState({
