@@ -6352,6 +6352,47 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         // A malformed unrelated overlay must not block navigation.
       }
     }
+
+    // A supported older PwrAgent instance can still recreate a native-worker
+    // card for an ordinary grouped handoff after the v56 repair has run. Keep
+    // navigation correct without repeating that repair: resolve only the
+    // already-discovered child keys through the threads primary key and leave
+    // the stale parent card untouched.
+    const canonicalKeyByStorageKey = new Map(
+      Array.from(threadKeys, (threadKey) => [
+        encodeThreadIdentityKeyForStorage(threadKey),
+        threadKey,
+      ]),
+    );
+    const storageKeys = Array.from(canonicalKeyByStorageKey.keys());
+    if (storageKeys.length > 0) {
+      const candidateRows = this.stateDb.raw
+        .prepare(
+          `SELECT thread_id, payload FROM threads
+           WHERE thread_id IN (SELECT value FROM json_each(?))`,
+        )
+        .all(JSON.stringify(storageKeys)) as Array<{
+          payload: string;
+          thread_id: string;
+        }>;
+      for (const candidate of candidateRows) {
+        try {
+          const overlay = normalizeThreadOverlayState(
+            JSON.parse(candidate.payload) as ThreadOverlayState,
+          );
+          if (overlay.handoffOrigin?.groupingMode === "subthread") {
+            const canonicalKey = canonicalKeyByStorageKey.get(
+              candidate.thread_id,
+            );
+            if (canonicalKey) {
+              threadKeys.delete(canonicalKey);
+            }
+          }
+        } catch {
+          // A malformed unrelated child overlay must not block navigation.
+        }
+      }
+    }
     return threadKeys;
   }
 

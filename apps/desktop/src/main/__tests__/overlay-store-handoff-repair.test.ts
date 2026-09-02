@@ -179,6 +179,55 @@ describe("StateDb — handoff navigation migration", () => {
     ).resolves.toMatchObject({ subAgents: [] });
   });
 
+  it("keeps a handoff visible when an older instance recreates the stale card", async () => {
+    await seedMisclassifiedHandoff(store);
+    stateDb.raw.pragma("user_version = 55");
+    expect(reopenAndCountImmediateTransactions()).toBe(1);
+
+    // Simulate a supported pre-v56 instance sharing the profile after the
+    // migration has committed.
+    await seedMisclassifiedHandoff(store);
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 1_800_000_002_000,
+      threads: [
+        {
+          id: "handoff-parent",
+          title: "Parent investigation",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: 1_800_000_000_000,
+          linkedDirectories: [],
+        },
+        {
+          id: "handoff-child",
+          title: "Repair the child issue",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: 1_800_000_000_200,
+          linkedDirectories: [],
+        },
+      ],
+    });
+
+    expect(snapshot.threads.map((thread) => thread.id)).toEqual([
+      "handoff-parent",
+      "handoff-child",
+    ]);
+    await expect(
+      store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "watcher-thread",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId: "codex-native:handoff-child",
+        }),
+      ],
+    });
+  });
+
   it("preserves a peer update committed before the serialized migration begins", async () => {
     await seedMisclassifiedHandoff(store);
     stateDb.raw.pragma("user_version = 55");
