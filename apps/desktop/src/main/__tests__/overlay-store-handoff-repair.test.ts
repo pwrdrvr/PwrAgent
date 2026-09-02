@@ -1,14 +1,19 @@
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
-import { StateDb } from "../state/state-db";
+import {
+  CURRENT_STATE_DB_USER_VERSION,
+  StateDb,
+} from "../state/state-db";
 import {
   createTempStateDb,
-  openInMemoryStateDb,
   removeTempStateDbDir,
 } from "./sqlite-test-utils";
 
+let dbPath: string;
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
+let tempDir: string;
 
 async function seedMisclassifiedHandoff(
   targetStore: SqliteOverlayStore,
@@ -63,19 +68,67 @@ async function seedMisclassifiedHandoff(
   });
 }
 
+function reopenAndCountImmediateTransactions(): number {
+  const originalTransaction = Database.prototype.transaction;
+  let immediateTransactions = 0;
+  const transactionSpy = vi
+    .spyOn(Database.prototype, "transaction")
+    .mockImplementation(function transaction(
+      this: Database.Database,
+      callback,
+    ) {
+      const transaction = originalTransaction.call(this, callback) as unknown as
+        Record<string, unknown>;
+      const wrapped = ((...args: unknown[]) =>
+        (transaction as unknown as (...values: unknown[]) => unknown)(
+          ...args
+        )) as unknown as Record<string, unknown>;
+      for (const variant of ["default", "deferred", "immediate", "exclusive"]) {
+        const originalVariant = transaction[variant];
+        if (typeof originalVariant !== "function") continue;
+        Object.defineProperty(wrapped, variant, {
+          configurable: true,
+          value: (...args: unknown[]) => {
+            if (variant === "immediate") {
+              immediateTransactions += 1;
+            }
+            return originalVariant(...args);
+          },
+          writable: true,
+        });
+      }
+      return wrapped as unknown as ReturnType<typeof originalTransaction>;
+    });
+  stateDb.close();
+  try {
+    stateDb = StateDb.open(dbPath);
+  } finally {
+    transactionSpy.mockRestore();
+  }
+  store = new SqliteOverlayStore(stateDb);
+  return immediateTransactions;
+}
+
 beforeEach(() => {
-  stateDb = openInMemoryStateDb();
+  ({ dbPath, tempDir } = createTempStateDb("pwragent-handoff-repair-"));
+  stateDb = StateDb.open(dbPath);
   store = new SqliteOverlayStore(stateDb);
 });
 
 afterEach(() => {
   stateDb.close();
+  removeTempStateDbDir(tempDir);
 });
 
-describe("SqliteOverlayStore — handoff navigation repair", () => {
-  it("keeps a grouped handoff visible when a monitor misclassified it as a native sub-agent", async () => {
+describe("StateDb — handoff navigation migration", () => {
+  it("repairs a grouped handoff hidden by a native sub-agent card once during schema migration", async () => {
     await seedMisclassifiedHandoff(store);
+    stateDb.raw.pragma("user_version = 55");
+    expect(reopenAndCountImmediateTransactions()).toBe(1);
 
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
     const snapshot = await store.reconcileNavigationSnapshot({
       backend: "all",
       fetchedAt: 1_800_000_001_000,
@@ -116,23 +169,32 @@ describe("SqliteOverlayStore — handoff navigation repair", () => {
         threadId: "watcher-thread",
       }),
     ).resolves.toMatchObject({ subAgents: [] });
+
+    expect(reopenAndCountImmediateTransactions()).toBe(0);
+    await expect(
+      store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "watcher-thread",
+      }),
+    ).resolves.toMatchObject({ subAgents: [] });
   });
 
-  it("preserves a peer update committed after repair candidate discovery", async () => {
-    const { dbPath, tempDir } = createTempStateDb(
-      "pwragent-handoff-repair-race-",
-    );
-    stateDb.close();
-    stateDb = StateDb.open(dbPath);
-    store = new SqliteOverlayStore(stateDb);
-    const peerStateDb = StateDb.open(dbPath);
-    const peerStore = new SqliteOverlayStore(peerStateDb);
-
-    try {
-      await seedMisclassifiedHandoff(store);
-      const originalTransaction = stateDb.raw.transaction.bind(stateDb.raw);
-      vi.spyOn(stateDb.raw, "transaction").mockImplementationOnce(
-        (callback) => {
+  it("preserves a peer update committed before the serialized migration begins", async () => {
+    await seedMisclassifiedHandoff(store);
+    stateDb.raw.pragma("user_version = 55");
+    const peerStateDb = stateDb;
+    const peerStore = store;
+    const originalTransaction = Database.prototype.transaction;
+    let injectedPeerUpdate = false;
+    const transactionSpy = vi
+      .spyOn(Database.prototype, "transaction")
+      .mockImplementation(function transaction(
+        this: Database.Database,
+        callback,
+      ) {
+        const transaction = originalTransaction.call(this, callback);
+        if (!injectedPeerUpdate) {
+          injectedPeerUpdate = true;
           void peerStore.upsertThreadSubAgent({
             backend: "codex",
             threadId: "watcher-thread",
@@ -147,32 +209,35 @@ describe("SqliteOverlayStore — handoff navigation repair", () => {
               monitorTurnId: "turn-concurrent",
             },
           });
-          return originalTransaction(callback);
-        },
-      );
+        }
+        return transaction;
+      });
 
-      expect(store.repairMisclassifiedHandoffSubAgents()).toMatchObject({
-        removedSubAgents: 1,
-        repairedParentThreads: 1,
-      });
-      await expect(
-        store.getThreadOverlayState({
-          backend: "codex",
-          threadId: "watcher-thread",
-        }),
-      ).resolves.toMatchObject({
-        subAgents: [
-          expect.objectContaining({
-            monitorId: "monitor:concurrent-update",
-          }),
-        ],
-      });
+    let migratedStateDb: StateDb | undefined;
+    try {
+      migratedStateDb = StateDb.open(dbPath);
     } finally {
-      peerStateDb.close();
-      stateDb.close();
-      removeTempStateDbDir(tempDir);
-      stateDb = openInMemoryStateDb();
-      store = new SqliteOverlayStore(stateDb);
+      transactionSpy.mockRestore();
     }
+    expect(injectedPeerUpdate).toBe(true);
+    peerStateDb.close();
+    if (!migratedStateDb) {
+      throw new Error("Expected the migrated state database to open.");
+    }
+    stateDb = migratedStateDb;
+    store = new SqliteOverlayStore(stateDb);
+
+    await expect(
+      store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "watcher-thread",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId: "monitor:concurrent-update",
+        }),
+      ],
+    });
   });
 });

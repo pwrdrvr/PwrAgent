@@ -797,8 +797,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const backendState = this.getBackend(params.backend);
     const firstSnapshot = !backendState?.lastSnapshotHash;
     const persistReconciliation = params.partial !== true;
-    const { managedSubAgentThreadKeys } =
-      this.repairMisclassifiedHandoffSubAgents();
+    const managedSubAgentThreadKeys = this.listManagedSubAgentThreadKeys();
     // Parent overlays are the durable source of truth for PwrAgent-managed
     // workers. Filter by that relationship as well as provider metadata so
     // children created by older builds cannot leak into local or federated
@@ -6325,42 +6324,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       : overlay;
   }
 
-  /**
-   * Removes stale native-worker cards that point at durable grouped handoffs.
-   *
-   * The existing monitor-card scan already bounds the candidate set. If it
-   * finds a possible repair, the affected parents and receivers are re-read
-   * after acquiring SQLite's cross-process write lock. Every changed parent is
-   * then persisted in that one transaction. A clean profile performs reads
-   * only.
-   */
-  repairMisclassifiedHandoffSubAgents(): {
-    managedSubAgentThreadKeys: Set<string>;
-    removedSubAgents: number;
-    repairedParentThreads: number;
-  } {
+  private listManagedSubAgentThreadKeys(): Set<string> {
     const rows = this.stateDb.raw
       .prepare(
         `SELECT payload FROM threads
          WHERE payload LIKE '%"monitorThreadId"%'`,
       )
       .all() as Array<{ payload: string }>;
-    const candidateOverlayByThreadKey = new Map<
-      string,
-      ThreadOverlayState | undefined
-    >();
-    const managedSubAgentThreadKeys = new Set<string>();
-    const repairParentThreadKeys = new Set<string>();
-
-    const readCandidateOverlay = (
-      threadKey: string,
-    ): ThreadOverlayState | undefined => {
-      if (!candidateOverlayByThreadKey.has(threadKey)) {
-        candidateOverlayByThreadKey.set(threadKey, this.getThread(threadKey));
-      }
-      return candidateOverlayByThreadKey.get(threadKey);
-    };
-
+    const threadKeys = new Set<string>();
     for (const row of rows) {
       try {
         const overlay = normalizeThreadOverlayState(
@@ -6375,97 +6346,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           ) {
             continue;
           }
-
-          const threadKey = buildThreadIdentityKey(backend, threadId);
-          const candidateOverlay = readCandidateOverlay(threadKey);
-          const isGroupedHandoff =
-            candidateOverlay?.handoffOrigin?.groupingMode === "subthread";
-          if (isGroupedHandoff) {
-            // A grouped handoff is an ordinary durable navigation thread.
-            // Older monitor transcripts could project it as a native Codex
-            // worker when they inspected the child by ID. Keep the handoff in
-            // navigation even before the stale card is repaired.
-            if (subAgent.monitorId.startsWith("codex-native:")) {
-              repairParentThreadKeys.add(
-                buildThreadIdentityKey(overlay.backend, overlay.threadId),
-              );
-            }
-            continue;
-          }
-
-          managedSubAgentThreadKeys.add(threadKey);
+          threadKeys.add(buildThreadIdentityKey(backend, threadId));
         }
       } catch {
         // A malformed unrelated overlay must not block navigation.
       }
     }
-
-    let removedSubAgents = 0;
-    let repairedParentThreads = 0;
-    if (repairParentThreadKeys.size > 0) {
-      const repair = this.stateDb.raw.transaction(() => {
-        const lockedCandidateOverlayByThreadKey = new Map<
-          string,
-          ThreadOverlayState | undefined
-        >();
-        const readLockedCandidateOverlay = (
-          threadKey: string,
-        ): ThreadOverlayState | undefined => {
-          if (!lockedCandidateOverlayByThreadKey.has(threadKey)) {
-            lockedCandidateOverlayByThreadKey.set(
-              threadKey,
-              this.getThread(threadKey),
-            );
-          }
-          return lockedCandidateOverlayByThreadKey.get(threadKey);
-        };
-
-        for (const parentThreadKey of repairParentThreadKeys) {
-          const parent = this.getThread(parentThreadKey);
-          if (!parent) continue;
-
-          let changed = false;
-          const subAgents = (parent.subAgents ?? []).filter((subAgent) => {
-            const threadId = subAgent.monitorThreadId?.trim();
-            const backend = subAgent.backend ?? parent.backend;
-            if (
-              !threadId
-              || (backend === parent.backend && threadId === parent.threadId)
-            ) {
-              return true;
-            }
-
-            const threadKey = buildThreadIdentityKey(backend, threadId);
-            const candidateOverlay = readLockedCandidateOverlay(threadKey);
-            const isGroupedHandoff =
-              candidateOverlay?.handoffOrigin?.groupingMode === "subthread";
-            if (isGroupedHandoff) {
-              managedSubAgentThreadKeys.delete(threadKey);
-              if (subAgent.monitorId.startsWith("codex-native:")) {
-                changed = true;
-                removedSubAgents += 1;
-                return false;
-              }
-              return true;
-            }
-
-            managedSubAgentThreadKeys.add(threadKey);
-            return true;
-          });
-          if (changed) {
-            this.putThread(parentThreadKey, { ...parent, subAgents });
-            repairedParentThreads += 1;
-          }
-        }
-      });
-      repair.immediate();
-    }
-
-    return {
-      managedSubAgentThreadKeys,
-      removedSubAgents,
-      repairedParentThreads,
-    };
+    return threadKeys;
   }
 
   /**

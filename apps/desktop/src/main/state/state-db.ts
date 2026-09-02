@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 55;
+export const CURRENT_STATE_DB_USER_VERSION = 56;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1593,8 +1593,19 @@ export class StateDb {
       if ((db.pragma("user_version", { simple: true }) as number) < 55) {
         db.transaction(() => {
           ensureThreadUsageTurnContextColumns(db);
-          db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+          db.pragma("user_version = 55");
         })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 56) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 56) {
+            return;
+          }
+          if (!freshDatabase) {
+            repairMisclassifiedHandoffSubAgents(db);
+          }
+          db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+        }).immediate();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
@@ -2142,6 +2153,103 @@ function readArrangementUpdatedAt(payload: string): number {
       : Number.NEGATIVE_INFINITY;
   } catch {
     return Number.NEGATIVE_INFINITY;
+  }
+}
+
+function repairMisclassifiedHandoffSubAgents(
+  db: BetterSqlite3.Database,
+): void {
+  if (!tableExists(db, "threads")) return;
+
+  const identityKey = (backend: string, threadId: string): string =>
+    JSON.stringify([backend, threadId]);
+  const groupedHandoffThreadKeys = new Set<string>();
+  const handoffRows = db
+    .prepare(
+      `SELECT payload FROM threads
+       WHERE payload LIKE '%"groupingMode":"subthread"%'`,
+    )
+    .all() as Array<{ payload: string }>;
+
+  for (const row of handoffRows) {
+    try {
+      const overlay = JSON.parse(row.payload) as {
+        backend?: unknown;
+        handoffOrigin?: { groupingMode?: unknown };
+        threadId?: unknown;
+      };
+      if (
+        typeof overlay.backend === "string"
+        && typeof overlay.threadId === "string"
+        && overlay.handoffOrigin?.groupingMode === "subthread"
+      ) {
+        groupedHandoffThreadKeys.add(
+          identityKey(overlay.backend, overlay.threadId),
+        );
+      }
+    } catch {
+      // Preserve malformed rows for the normal defensive reader to ignore.
+    }
+  }
+
+  const watcherRows = db
+    .prepare(
+      `SELECT thread_id, payload FROM threads
+       WHERE payload LIKE '%"monitorThreadId"%'`,
+    )
+    .all() as Array<{ payload: string; thread_id: string }>;
+  const updateWatcher = db.prepare(
+    "UPDATE threads SET payload = ? WHERE thread_id = ?",
+  );
+
+  for (const row of watcherRows) {
+    try {
+      const overlay = JSON.parse(row.payload) as {
+        backend?: unknown;
+        subAgents?: unknown;
+      };
+      if (
+        typeof overlay.backend !== "string"
+        || !Array.isArray(overlay.subAgents)
+      ) {
+        continue;
+      }
+
+      const parentBackend = overlay.backend;
+      let changed = false;
+      const subAgents = overlay.subAgents.filter((value) => {
+        if (!value || typeof value !== "object") return true;
+        const subAgent = value as {
+          backend?: unknown;
+          monitorId?: unknown;
+          monitorThreadId?: unknown;
+        };
+        const backend = typeof subAgent.backend === "string"
+          ? subAgent.backend
+          : parentBackend;
+        const monitorThreadId = subAgent.monitorThreadId;
+        if (
+          typeof subAgent.monitorId !== "string"
+          || !subAgent.monitorId.startsWith("codex-native:")
+          || typeof monitorThreadId !== "string"
+          || !groupedHandoffThreadKeys.has(
+            identityKey(backend, monitorThreadId.trim()),
+          )
+        ) {
+          return true;
+        }
+        changed = true;
+        return false;
+      });
+      if (changed) {
+        updateWatcher.run(
+          JSON.stringify({ ...overlay, subAgents }),
+          row.thread_id,
+        );
+      }
+    } catch {
+      // Preserve malformed rows for the normal defensive reader to ignore.
+    }
   }
 }
 
