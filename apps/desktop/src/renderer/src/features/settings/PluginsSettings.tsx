@@ -491,7 +491,7 @@ export function PluginsSettings(props: {
                 Cancel
               </button>
               <button
-                className="button button--ghost settings-profile-row__button--danger"
+                className="button button--ghost settings-danger-button"
                 disabled={actionsDisabled}
                 type="button"
                 onClick={() => void removeServer()}
