@@ -33,7 +33,9 @@ platform labels, activity rows, and thread binding chips with tooltips.
 The full wordmark is too small to read at 12-14px. We therefore render
 Discord's official Symbol SVGs verbatim via `<img>`, do not apply
 `currentColor`, CSS filters, effects, or path edits, and default to the
-white variant on the desktop app's dark surfaces.
+Blurple variant because it remains visible across the desktop app's light
+and dark themes. Callers may select the official white or black variant for
+surfaces whose background is independent of the app theme.
 
 ## Updating these files
 

@@ -17,7 +17,7 @@ export const MESSAGING_PLATFORM_ICONS: Partial<
   Record<MessagingChannelKind, (props: IconProps) => ReactElement>
 > = {
   telegram: ({ size }) => <TelegramIcon size={size} variant="color" />,
-  discord: ({ size }) => <DiscordIcon size={size} variant="blurple" />,
+  discord: ({ size }) => <DiscordIcon size={size} />,
   mattermost: ({ size }) => <MattermostIcon size={size} />,
   slack: ({ size }) => <SlackIcon size={size} />,
   feishu: ({ size }) => <FeishuIcon size={size} />,

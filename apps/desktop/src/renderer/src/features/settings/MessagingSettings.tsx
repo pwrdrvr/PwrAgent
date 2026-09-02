@@ -873,7 +873,7 @@ export function MessagingSettings(props: {
               <SettingsTestBlock
                 kind="discord"
                 desktopApi={props.desktopApi}
-                icon={<DiscordIcon size={14} variant="white" />}
+                icon={<DiscordIcon size={14} />}
                 defaultName="Your bot"
                 defaultSub="discord.com/api/v10"
               />
