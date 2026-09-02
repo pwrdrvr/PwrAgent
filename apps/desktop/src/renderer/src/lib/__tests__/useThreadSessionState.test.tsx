@@ -1837,7 +1837,6 @@ describe("useThreadSessionState", () => {
         },
       });
     });
-
     expect(transcriptLabels(result.current.entries)).toEqual([
       "message:Older history",
       "message:Earlier prompt",
@@ -8772,7 +8771,7 @@ describe("useThreadSessionState", () => {
               id: "turn-1",
               status: "completed",
               startedAt: 1_000,
-              completedAt: 4_000,
+              completedAt: 1_800_000_004_000,
               output: [{ type: "text", text: "Done." }],
             },
           },
@@ -8791,7 +8790,28 @@ describe("useThreadSessionState", () => {
           id: "turn-1",
           status: "completed",
           startedAt: 1_000,
-          completedAt: 4_000,
+          completedAt: 1_800_000_004_000,
+        },
+      });
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 112_017,
+                cached_input_tokens: 111_232,
+                output_tokens: 319,
+                reasoning_output_tokens: 90,
+                total_tokens: 112_426,
+              },
+            },
+          },
         },
       });
     });
@@ -8824,11 +8844,11 @@ describe("useThreadSessionState", () => {
     ]);
     expect(result.current.entries.at(-1)).toMatchObject({
       id: "live-turn-usage-turn-1",
-      createdAt: 4_000,
+      createdAt: 1_800_000_004_000,
       turn: {
         id: "turn-1",
         status: "completed",
-        completedAt: 4_000,
+        completedAt: 1_800_000_004_000,
       },
     });
 
@@ -8840,7 +8860,10 @@ describe("useThreadSessionState", () => {
           params: {
             threadId: "thread-1",
             pricing: {
-              lines: [authoritativeTurnUsageLine()],
+              lines: [{
+                ...authoritativeTurnUsageLine(),
+                completedAt: 1_800_000_004_000,
+              }],
               summaries: [],
             },
           },
@@ -8855,11 +8878,11 @@ describe("useThreadSessionState", () => {
     ]);
     expect(result.current.entries.at(-1)).toMatchObject({
       id: "live-turn-usage-turn-1",
-      createdAt: 4_000,
+      createdAt: 1_800_000_004_000,
       turn: {
         id: "turn-1",
         status: "completed",
-        completedAt: 4_000,
+        completedAt: 1_800_000_004_000,
       },
       usageLine: {
         usageLineId: "codex:thread-1:turn-1:live-token-usage",

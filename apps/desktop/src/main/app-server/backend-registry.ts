@@ -4164,6 +4164,45 @@ function subtractTaskMonitorTokenUsage(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function addTaskMonitorTokenUsage(
+  first: TaskMonitorTokenUsageBreakdown,
+  second: TaskMonitorTokenUsageBreakdown,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const result: TaskMonitorTokenUsageBreakdown = {};
+  for (const key of [
+    "cachedInputTokens",
+    "inputTokens",
+    "uncachedInputTokens",
+    "outputTokens",
+    "reasoningOutputTokens",
+    "totalTokens",
+  ] as const) {
+    const firstValue = first[key];
+    const secondValue = second[key];
+    if (typeof firstValue === "number" || typeof secondValue === "number") {
+      result[key] = (firstValue ?? 0) + (secondValue ?? 0);
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function taskMonitorTokenUsageEqual(
+  first: TaskMonitorTokenUsageBreakdown | undefined,
+  second: TaskMonitorTokenUsageBreakdown | undefined,
+): boolean {
+  if (!first || !second) {
+    return false;
+  }
+  return (
+    first.cachedInputTokens === second.cachedInputTokens
+    && first.inputTokens === second.inputTokens
+    && first.uncachedInputTokens === second.uncachedInputTokens
+    && first.outputTokens === second.outputTokens
+    && first.reasoningOutputTokens === second.reasoningOutputTokens
+    && first.totalTokens === second.totalTokens
+  );
+}
+
 function canSubtractTaskMonitorTokenUsage(
   total: TaskMonitorTokenUsageBreakdown,
   baseline: TaskMonitorTokenUsageBreakdown,
@@ -7587,6 +7626,17 @@ type LiveThreadUsageEmitWork = {
   threadId: string;
 };
 
+type RecentlyCompletedThreadUsageTurn = {
+  completedAt?: number;
+  startedAt?: number;
+  turnId: string;
+};
+
+type LiveThreadUsageAggregate = {
+  latestUsage?: TaskMonitorTokenUsageBreakdown;
+  usage: TaskMonitorTokenUsageBreakdown;
+};
+
 type DerivedLiveThreadTokenUsage = {
   // Whether turnTokenUsage is a real measurement of this turn — a per-turn
   // delta or a per-request "last" snapshot — vs a fallback to a whole-thread
@@ -7852,6 +7902,14 @@ export class DesktopBackendRegistry {
       turnId: string;
       usage: TaskMonitorTokenUsageBreakdown;
     }
+  >();
+  private readonly liveThreadUsageAggregates = new Map<
+    string,
+    LiveThreadUsageAggregate
+  >();
+  private readonly recentlyCompletedThreadUsageTurns = new Map<
+    string,
+    RecentlyCompletedThreadUsageTurn
   >();
   // Per-turn tally of observed context replays (key: backend:threadId:turnId).
   private readonly liveThreadReplayObservations = new Map<
@@ -23817,6 +23875,7 @@ export class DesktopBackendRegistry {
   }
 
   private deriveLiveThreadTokenUsage(params: {
+    appendLatestUsage?: boolean;
     backend: AppServerBackendKind;
     observationSequence?: number;
     threadId: string;
@@ -23828,7 +23887,7 @@ export class DesktopBackendRegistry {
       return { attributed: false, turnTokenUsage: params.tokenUsage };
     }
 
-    if (!records.totalUsage || !params.turnId) {
+    if (!params.turnId) {
       return {
         // A "last" snapshot is this request's own usage; anything else here is
         // a bare/whole payload we can't attribute to the turn.
@@ -23845,6 +23904,36 @@ export class DesktopBackendRegistry {
       params.turnId,
       "live-token-usage",
     ].join(":");
+    if (!records.totalUsage) {
+      const currentUsage = records.latestUsage ?? records.currentUsage;
+      if (!currentUsage) {
+        return { attributed: false, turnTokenUsage: params.tokenUsage };
+      }
+      const previousAggregate = this.liveThreadUsageAggregates.get(key);
+      const turnTokenUsage =
+        params.appendLatestUsage
+        && records.latestUsage
+        && previousAggregate
+          ? taskMonitorTokenUsageEqual(
+              previousAggregate.latestUsage,
+              records.latestUsage,
+            )
+            ? previousAggregate.usage
+            : addTaskMonitorTokenUsage(
+                previousAggregate.usage,
+                records.latestUsage,
+              ) ?? records.latestUsage
+          : currentUsage;
+      this.liveThreadUsageAggregates.set(key, {
+        ...(records.latestUsage ? { latestUsage: records.latestUsage } : {}),
+        usage: turnTokenUsage,
+      });
+      return {
+        attributed: Boolean(records.latestUsage),
+        turnTokenUsage,
+      };
+    }
+
     let baseline = this.liveThreadUsageBaselines.get(key);
     let seededBaselineTokenUsage: TaskMonitorTokenUsageBreakdown | undefined;
     const cumulativeKey = [params.backend, params.threadId].join(":");
@@ -23900,19 +23989,24 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const turnTokenUsage = baseline
+    const derivedTurnUsage = baseline
       ? subtractTaskMonitorTokenUsage(records.totalUsage, baseline)
       : undefined;
+    const turnTokenUsage =
+      derivedTurnUsage
+      ?? records.latestUsage
+      ?? records.currentUsage
+      ?? records.totalUsage;
+    this.liveThreadUsageAggregates.set(key, {
+      ...(records.latestUsage ? { latestUsage: records.latestUsage } : {}),
+      usage: turnTokenUsage,
+    });
     return {
       // Attributed when we computed a per-turn delta or have this request's
       // "last" snapshot; not when we fall back to the whole cumulative total.
-      attributed: Boolean(turnTokenUsage) || Boolean(records.latestUsage),
+      attributed: Boolean(derivedTurnUsage) || Boolean(records.latestUsage),
       cumulativeTokenUsage: records.totalUsage,
-      turnTokenUsage:
-        turnTokenUsage ??
-        records.latestUsage ??
-        records.currentUsage ??
-        records.totalUsage,
+      turnTokenUsage,
       ...(seededBaselineTokenUsage ? { seededBaselineTokenUsage } : {}),
     };
   }
@@ -24222,6 +24316,16 @@ export class DesktopBackendRegistry {
       this.finishLiveThreadUsageDerivation(work);
       return;
     }
+    const explicitTurnId = notification.params.turnId ?? undefined;
+    const rememberedCompletedTurn = this.recentlyCompletedThreadUsageTurns.get(
+      [event.backend, threadId].join(":"),
+    );
+    const recentlyCompletedTurn =
+      rememberedCompletedTurn
+      && (!explicitTurnId || explicitTurnId === rememberedCompletedTurn.turnId)
+      ? rememberedCompletedTurn
+      : undefined;
+    const turnId = explicitTurnId ?? recentlyCompletedTurn?.turnId;
     await work.precedingDerivation;
     let derivedUsage: DerivedLiveThreadTokenUsage | undefined;
     let contextDrop: ObservedContextWindowDrop | undefined;
@@ -24245,11 +24349,11 @@ export class DesktopBackendRegistry {
       ) {
         return;
       }
-      if (notification.params.turnId) {
+      if (turnId) {
         const reviewKey = buildReviewSubAgentKey(
           event.backend,
           threadId,
-          notification.params.turnId,
+          turnId,
         );
         if (
           this.activeReviewSubAgents.has(reviewKey)
@@ -24261,11 +24365,12 @@ export class DesktopBackendRegistry {
 
       const tokenUsage = notification.params.tokenUsage;
       derivedUsage = this.deriveLiveThreadTokenUsage({
+        appendLatestUsage: Boolean(recentlyCompletedTurn),
         backend: event.backend,
         observationSequence: work.observationSequence,
         threadId,
         tokenUsage,
-        turnId: notification.params.turnId ?? undefined,
+        turnId,
       });
       contextDrop = detectObservedContextWindowDrop({
         cursor: this.liveThreadReplayInputCursor.get(
@@ -24277,13 +24382,13 @@ export class DesktopBackendRegistry {
         backend: event.backend,
         threadId,
         tokenUsage,
-        turnId: notification.params.turnId ?? undefined,
+        turnId,
       });
       contextWindow = this.observeLiveThreadContextWindow({
         backend: event.backend,
         threadId,
         tokenUsage,
-        turnId: notification.params.turnId ?? undefined,
+        turnId,
       });
     } finally {
       // Publish the cumulative cursor before any overlay or sqlite await lets
@@ -24298,7 +24403,7 @@ export class DesktopBackendRegistry {
         backend: event.backend,
         contextDrop,
         threadId,
-        turnId: notification.params.turnId ?? undefined,
+        turnId,
       });
     }
 
@@ -24327,10 +24432,21 @@ export class DesktopBackendRegistry {
         "effort",
       ]) ??
       overlay?.reasoningEffort;
-    const usageTiming = resolveLiveThreadUsageTiming({
+    const resolvedUsageTiming = resolveLiveThreadUsageTiming({
       overlay,
-      turnId: notification.params.turnId ?? undefined,
+      turnId,
     });
+    const usageTiming = {
+      ...resolvedUsageTiming,
+      ...(recentlyCompletedTurn?.completedAt !== undefined
+        && resolvedUsageTiming.completedAt === undefined
+          ? { completedAt: recentlyCompletedTurn.completedAt }
+          : {}),
+      ...(recentlyCompletedTurn?.startedAt !== undefined
+        && resolvedUsageTiming.startedAt === undefined
+          ? { startedAt: recentlyCompletedTurn.startedAt }
+          : {}),
+    };
     const line = buildLiveThreadUsageLine({
       attributed: derivedUsage.attributed,
       backend: event.backend,
@@ -24344,7 +24460,7 @@ export class DesktopBackendRegistry {
       serviceTier,
       threadId,
       tokenUsage: derivedUsage.turnTokenUsage,
-      turnId: notification.params.turnId ?? undefined,
+      turnId,
     });
     if (!line) {
       return;
@@ -24368,7 +24484,7 @@ export class DesktopBackendRegistry {
           overlay,
           serviceTier,
           threadId,
-          turnId: notification.params.turnId ?? undefined,
+          turnId,
           usageTiming,
         });
       } catch (error) {
@@ -36216,7 +36332,50 @@ export class DesktopBackendRegistry {
     } as AgentEvent);
   }
 
+  private trackRecentThreadUsageTurn(event: AgentEvent): void {
+    if (event.notification.method === "turn/started") {
+      const threadId = event.notification.params.threadId;
+      const key = [event.backend, threadId].join(":");
+      const completedTurn = this.recentlyCompletedThreadUsageTurns.get(key);
+      if (completedTurn) {
+        this.liveThreadUsageAggregates.delete([
+          event.backend,
+          threadId,
+          completedTurn.turnId,
+          "live-token-usage",
+        ].join(":"));
+      }
+      this.recentlyCompletedThreadUsageTurns.delete(key);
+      return;
+    }
+    if (
+      event.notification.method !== "turn/completed"
+      && event.notification.method !== "turn/failed"
+      && event.notification.method !== "turn/cancelled"
+    ) {
+      return;
+    }
+    const turnId = turnIdFromTerminalNotification(event.notification);
+    if (!turnId) {
+      return;
+    }
+    const turn = readRecord(event.notification.params.turn);
+    const completedAt = completedAtFromTerminalNotification(event.notification);
+    const startedAt = normalizeNotificationTimestamp(
+      turn?.startedAt ?? turn?.started_at,
+    );
+    this.recentlyCompletedThreadUsageTurns.set(
+      [event.backend, event.notification.params.threadId].join(":"),
+      {
+        turnId,
+        ...(typeof completedAt === "number" ? { completedAt } : {}),
+        ...(typeof startedAt === "number" ? { startedAt } : {}),
+      },
+    );
+  }
+
   private emit(event: AgentEvent): Promise<void> {
+    this.trackRecentThreadUsageTurn(event);
     const isLiveThreadUsage =
       event.notification.method === "thread/tokenUsage/updated";
     if (isLiveThreadUsage && this.closed) {

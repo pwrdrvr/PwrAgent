@@ -439,54 +439,57 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
-  it("keeps an attributed live turn aggregate when hydration only has request usage", async () => {
-    await store.upsertThreadUsageLine({
-      line: buildUsageLine({
-        cachedInputTokens: 24_545_792,
+  it.each(["latest-request", "total"] as const)(
+    "keeps an attributed live turn aggregate when hydration only has %s usage",
+    async (scope) => {
+      await store.upsertThreadUsageLine({
+        line: buildUsageLine({
+          cachedInputTokens: 24_545_792,
+          inputTokens: 25_139_426,
+          outputTokens: 66_567,
+          reasoningOutputTokens: 24_064,
+          scope: "turn",
+          source: "live",
+          status: "pending",
+          totalTokens: 25_205_993,
+          turnUsageAttributed: true,
+          uncachedInputTokens: 593_634,
+          usageLineId: "codex:thread-1:turn-1:live-token-usage",
+        }),
+      });
+
+      await store.upsertThreadUsageLine({
+        line: buildUsageLine({
+          cachedInputTokens: 111_232,
+          completedAt: 55_000,
+          inputTokens: 112_017,
+          outputTokens: 319,
+          reasoningOutputTokens: 90,
+          scope,
+          source: "hydration",
+          status: "finalized",
+          totalTokens: 112_426,
+          uncachedInputTokens: 785,
+          usageLineId: `codex:thread-1:turn-1:${scope}:item-9`,
+        }),
+      });
+
+      const pricing = await store.readThreadPricing({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({
+        completedAt: 55_000,
         inputTokens: 25_139_426,
-        outputTokens: 66_567,
-        reasoningOutputTokens: 24_064,
         scope: "turn",
         source: "live",
-        status: "pending",
-        totalTokens: 25_205_993,
-        turnUsageAttributed: true,
-        uncachedInputTokens: 593_634,
         usageLineId: "codex:thread-1:turn-1:live-token-usage",
-      }),
-    });
-
-    await store.upsertThreadUsageLine({
-      line: buildUsageLine({
-        cachedInputTokens: 111_232,
-        completedAt: 55_000,
-        inputTokens: 112_017,
-        outputTokens: 319,
-        reasoningOutputTokens: 90,
-        scope: "latest-request",
-        source: "hydration",
-        status: "finalized",
-        totalTokens: 112_426,
-        uncachedInputTokens: 785,
-        usageLineId: "codex:thread-1:turn-1:latest-request:item-9",
-      }),
-    });
-
-    const pricing = await store.readThreadPricing({
-      backend: "codex",
-      threadId: "thread-1",
-    });
-
-    expect(pricing.lines).toHaveLength(1);
-    expect(pricing.lines[0]).toMatchObject({
-      completedAt: 55_000,
-      inputTokens: 25_139_426,
-      scope: "turn",
-      source: "live",
-      usageLineId: "codex:thread-1:turn-1:live-token-usage",
-    });
-    expect(pricing.summaries[0]?.usageLineCount).toBe(1);
-  });
+      });
+      expect(pricing.summaries[0]?.usageLineCount).toBe(1);
+    },
+  );
 
   it("keeps the original usage line timestamp when live usage is updated", async () => {
     await store.upsertThreadUsageLine({

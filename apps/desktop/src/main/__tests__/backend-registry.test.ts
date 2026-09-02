@@ -25478,12 +25478,12 @@ command = "pnpm dev"
         turn: {
           id: "turn-1",
           status: "completed",
-          completedAt: 4_000,
+          completedAt: 1_800_000_004_000,
           output: [],
         },
       },
     });
-    await codexClient.emit({
+    const lateUsageNotification: AppServerNotification = {
       method: "thread/tokenUsage/updated",
       params: {
         threadId: "thread-1",
@@ -25495,16 +25495,11 @@ command = "pnpm dev"
             reasoningOutputTokens: 10,
             totalTokens: 2_040,
           },
-          total: {
-            inputTokens: 3_000,
-            cachedInputTokens: 1_900,
-            outputTokens: 50,
-            reasoningOutputTokens: 15,
-            totalTokens: 3_065,
-          },
         },
       },
-    });
+    };
+    await codexClient.emit(lateUsageNotification);
+    await codexClient.emit(lateUsageNotification);
 
     const pricing = await overlayStore.readThreadPricing({
       backend: "codex",
@@ -25513,7 +25508,7 @@ command = "pnpm dev"
     expect(pricing.lines).toHaveLength(1);
     expect(pricing.lines[0]).toMatchObject({
       cachedInputTokens: 1_900,
-      completedAt: 4_000,
+      completedAt: 1_800_000_004_000,
       inputTokens: 3_000,
       outputTokens: 50,
       reasoningOutputTokens: 15,
