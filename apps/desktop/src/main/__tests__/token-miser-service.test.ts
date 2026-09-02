@@ -11,6 +11,10 @@ import type {
   TokenMiserCodeModeOutputPayload,
   TokenMiserPostToolUsePayload,
 } from "../token-miser/token-miser-types";
+import {
+  TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+  TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
+} from "../token-miser/token-miser-types";
 
 const temporaryDirectories: string[] = [];
 const BEHAVIOR_PRIMING_LANGUAGE =
@@ -249,6 +253,52 @@ describe("TokenMiserService", () => {
     expect(await store.listMetadata()).toEqual([]);
   });
 
+  it("caps direct retrieval accounting at the ordinary 10k-token result limit", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolUseId: "tool-source",
+      toolName: "Code Mode",
+      output: "x".repeat(100_000),
+      replacementCharacters: 100,
+      summary: { summary: "Large source", usefulDetails: [] },
+    });
+    const result = await store.readAll({
+      objectId: metadata.objectId,
+      threadId: "thread-1",
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId,
+      threadId: "thread-1",
+      visibleText: result!.text,
+    });
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary: async () => ({
+        status: "failed",
+        reason: "retrievals bypass Luna",
+      }),
+      thresholdCharacters: 1,
+    });
+
+    await service.preparePostToolUse({
+      ...payload(delivery!.text),
+      tool_name: "pwragent",
+      tool_input: {
+        tool: "read_all_token_miser_output",
+        objectId: metadata.objectId,
+      },
+    });
+
+    expect((await store.readMetadata(metadata.objectId))!.retrievedCharacters)
+      .toBeLessThanOrEqual(
+        TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
+        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+      );
+  });
+
   it("does not mistake a direct source search for Token Miser retrieval", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
@@ -435,6 +485,53 @@ describe("TokenMiserService per-thread override", () => {
 });
 
 describe("TokenMiserService code-mode reduction", () => {
+  it("limits Luna to 20k projected input tokens while retaining the second 10k", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async (_request: {
+      prompt: string;
+      system: string;
+    }) => ({
+      status: "ok" as const,
+      object: {
+        disposition: "summarize",
+        summary: "The bounded source contained the requested marker.",
+        usefulDetails: [],
+      },
+      helperThreadId: "helper-thread-code-mode",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      tokenUsage: { inputTokens: 20_000, outputTokens: 40 },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+    const secondWindowGold = "SECOND_TEN_THOUSAND_TOKEN_GOLD";
+    const beyondHelperCap = "BEYOND_LUNA_SOURCE_CAP";
+    const output = [
+      "a".repeat(50_000),
+      secondWindowGold,
+      "b".repeat(35_000),
+      beyondHelperCap,
+      "c".repeat(50_000),
+    ].join("");
+
+    await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text",
+      text: output,
+    }]));
+
+    const request = generateSummary.mock.calls[0]![0];
+    const prompt = request.prompt;
+    expect(prompt).toContain(secondWindowGold);
+    expect(prompt).not.toContain(beyondHelperCap);
+    expect(prompt.length + request.system.length).toBeLessThanOrEqual(
+      20_000 * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    );
+  });
+
   it("stores text output with neutral code-mode context and authoritative overhead", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
@@ -535,6 +632,48 @@ describe("TokenMiserService code-mode reduction", () => {
       replacementCharacters: 24,
     });
     expect(metadata?.helperUsage).toBeUndefined();
+  });
+
+  it("accounts only the original 10k-token result when Luna passes through", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary: async () => ({
+        status: "ok",
+        object: {
+          disposition: "pass_through",
+          summary: "The requested result should pass through.",
+          usefulDetails: [],
+        },
+        helperThreadId: "helper-pass-through",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "medium",
+        tokenUsage: { inputTokens: 20_000, outputTokens: 20 },
+      }),
+      thresholdCharacters: 1,
+    });
+
+    expect(await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: "x".repeat(100_000),
+      }]),
+      script: "text(await tools.exec_command({ cmd: 'focused-query' }))",
+    })).toBeUndefined();
+
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({
+      disposition: "passed_through",
+      baselineParentTokens: TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
+      replacementCharacters:
+        TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
+        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+      helperUsage: {
+        helperThreadId: "helper-pass-through",
+        model: "gpt-5.6-luna",
+      },
+    });
   });
 
   it("exempts a mandatory Code Mode instruction read deterministically", async () => {
@@ -688,6 +827,62 @@ describe("TokenMiserService code-mode reduction", () => {
       .toBe(0);
   });
 
+  it("shares Luna's 20k projected-input cap across every grouped member", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async (_request: {
+      prompt: string;
+      system: string;
+    }) => ({
+      status: "ok" as const,
+      object: {
+        disposition: "summarize",
+        summary: "Both grouped probes completed.",
+        usefulDetails: [],
+        members: [
+          { toolCallId: "nested-1", summary: "First result." },
+          { toolCallId: "nested-2", summary: "Second result." },
+        ],
+      },
+      helperThreadId: "helper-group-cap",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      tokenUsage: { inputTokens: 20_000, outputTokens: 50 },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+      codeModeGroupingVersion: () => 1,
+    });
+    await service.captureNestedPostToolUse({
+      ...payload(`${"a".repeat(20_000)}FIRST_MEMBER_GOLD${"a".repeat(40_000)}`),
+      is_code_mode_nested: true,
+      token_miser_grouping_version: 1,
+      code_mode_cell_id: "cell-1",
+      code_mode_tool_call_id: "nested-1",
+    });
+    await service.captureNestedPostToolUse({
+      ...payload(`${"b".repeat(20_000)}SECOND_MEMBER_GOLD${"b".repeat(40_000)}`),
+      is_code_mode_nested: true,
+      token_miser_grouping_version: 1,
+      code_mode_cell_id: "cell-1",
+      code_mode_tool_call_id: "nested-2",
+    });
+
+    await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text",
+      text: "combined grouped output",
+    }]));
+
+    const request = generateSummary.mock.calls[0]![0];
+    expect(request.prompt).toContain("FIRST_MEMBER_GOLD");
+    expect(request.prompt).toContain("SECOND_MEMBER_GOLD");
+    expect(request.prompt.length + request.system.length).toBeLessThanOrEqual(
+      20_000 * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    );
+  });
+
   it("passes a coherent parallel group through without running a second generic evaluation", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
@@ -831,12 +1026,13 @@ describe("TokenMiserService code-mode reduction", () => {
       thresholdCharacters: 1,
     });
 
-    await prepareAndCommit(service, {
+    const response = await prepareAndCommit(service, {
       ...codeModePayload([{ type: "input_text", text: "x".repeat(1_000) }]),
       max_output_tokens: 25,
     });
 
     const [metadata] = await store.listMetadata();
+    expect(response!.replacement![0]!.text.length).toBeLessThanOrEqual(100);
     expect(metadata!.baselineParentTokens).toBe(25);
     expect(metadata!.replacementCharacters).toBeLessThanOrEqual(
       100 + codeModePayload([]).model_visible_overhead_characters,
@@ -929,6 +1125,81 @@ describe("TokenMiserService code-mode reduction", () => {
     })).toBeUndefined();
     expect(generateSummary).not.toHaveBeenCalled();
     expect(await store.listMetadata()).toEqual([]);
+  });
+
+  it("shares the 10k parent cap across multiple retrievals in one Code Mode cell", async () => {
+    const store = await createStore();
+    const source = async (objectId: string, fill: string) => {
+      const metadata = await store.store({
+        objectId,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        toolUseId: `tool-${fill}`,
+        toolName: "Code Mode",
+        output: fill.repeat(30_000),
+        replacementCharacters: 100,
+        summary: { summary: `${fill} source`, usefulDetails: [] },
+      });
+      const result = await store.readAll({ objectId, threadId: "thread-1" });
+      const delivery = await store.prepareRetrievalDelivery({
+        objectId,
+        threadId: "thread-1",
+        visibleText: result!.text,
+      });
+      return { delivery: delivery!.text, metadata };
+    };
+    const first = await source("11111111-1111-4111-8111-111111111111", "a");
+    const second = await source("22222222-2222-4222-8222-222222222222", "b");
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary: async () => ({
+        status: "failed",
+        reason: "retrieval cells bypass Luna",
+      }),
+      thresholdCharacters: 1,
+    });
+
+    await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: `${first.delivery}\n${second.delivery}`,
+      }]),
+      script: [
+        "const one = await tools.pwragent__read_all_token_miser_output({ objectId: 'one' });",
+        "const two = await tools.pwragent__read_all_token_miser_output({ objectId: 'two' });",
+        "text(one); text(two);",
+      ].join("\n"),
+    });
+
+    const firstUpdated = await store.readMetadata(first.metadata.objectId);
+    const secondUpdated = await store.readMetadata(second.metadata.objectId);
+    const retrievedCharacters =
+      firstUpdated!.retrievedCharacters + secondUpdated!.retrievedCharacters;
+    expect(retrievedCharacters).toBeGreaterThan(30_000);
+    expect(retrievedCharacters).toBeLessThanOrEqual(
+      TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
+      * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    );
+
+    for (const cumulativeInputTokens of [1_000, 2_000, 3_000]) {
+      await Promise.all([
+        store.recordParentModelRequest({
+          cumulativeInputTokens,
+          objectId: first.metadata.objectId,
+        }),
+        store.recordParentModelRequest({
+          cumulativeInputTokens,
+          objectId: second.metadata.objectId,
+        }),
+      ]);
+    }
+    const replayedFirst = await store.readMetadata(first.metadata.objectId);
+    const replayedSecond = await store.readMetadata(second.metadata.objectId);
+    expect(
+      replayedFirst!.cachedRevealedTokens!
+      + replayedSecond!.cachedRevealedTokens!,
+    ).toBeLessThanOrEqual(TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS + 50);
   });
 
   it("does not mistake a Code Mode source search for Token Miser retrieval", async () => {

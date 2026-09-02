@@ -6,6 +6,7 @@ import {
 } from "./agent-tool-definition.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
 import type { TokenMiserGroupBatchOperation } from "../token-miser/token-miser-store.js";
+import { TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS } from "../token-miser/token-miser-types.js";
 
 export function buildTokenMiserToolDefinitions(
   store?: TokenMiserStore,
@@ -18,7 +19,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "search_token_miser_output",
       description:
-        "Search one preserved tool result by literal text. Code Mode receives a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
+        "Search one preserved tool result by literal text. The returned matches remain subject to the 10k-token parent-result cap. Code Mode receives a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -58,7 +59,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_token_miser_output",
       description:
-        "Read an inclusive line range from one preserved tool result. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
+        "Read an inclusive line range from one preserved tool result. The returned range remains subject to the 10k-token parent-result cap, including one very long line. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -161,7 +162,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_all_token_miser_output",
       description:
-        "Read the complete preserved tool result as plain text in Code Mode or a text content block over MCP. The source must belong to the invoking thread.",
+        "Read the preserved tool result up to the 10k-token parent-result cap as plain text in Code Mode or a text content block over MCP. Use line-range reads for additional material. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -205,6 +206,12 @@ async function retrievalSuccess(params: {
   visibleText: string;
 }) {
   let visibleText = params.visibleText;
+  // Bound the tool response itself as well as the later outer Code Mode cell.
+  // The first boundary prevents a requested minified line from becoming an
+  // enormous nested result; confirmation enforces the shared outer ceiling.
+  const maxResponseCharacters =
+    params.maxResponseCharacters
+    ?? TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS;
   while (true) {
     const delivery = await params.store.prepareRetrievalDelivery({
       objectId: params.objectId,
@@ -219,8 +226,7 @@ async function retrievalSuccess(params: {
       structuredContent: params.structuredContent,
     };
     if (
-      !params.maxResponseCharacters
-      || delivery.text.length <= params.maxResponseCharacters
+      delivery.text.length <= maxResponseCharacters
     ) {
       return agentToolSuccess(payload, {
         contentItems: [{ type: "inputText", text: delivery.text }],
@@ -231,7 +237,7 @@ async function retrievalSuccess(params: {
     const nextLength = Math.max(
       0,
       visibleText.length
-      - (delivery.text.length - params.maxResponseCharacters)
+      - (delivery.text.length - maxResponseCharacters)
       - 64,
     );
     if (nextLength >= visibleText.length) {

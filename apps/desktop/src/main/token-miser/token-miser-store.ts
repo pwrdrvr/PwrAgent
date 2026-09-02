@@ -89,6 +89,7 @@ type PendingRetrievalDelivery = {
   objectId: string;
   threadId: string;
   visibleText: string;
+  visibleTextOffset: number;
   wrappedText: string;
 };
 
@@ -499,29 +500,50 @@ export class TokenMiserStore {
       objectId: params.objectId,
       threadId: params.threadId,
       visibleText: params.visibleText,
+      visibleTextOffset: begin.length + 1,
       wrappedText,
     });
     return { deliveryId, text: wrappedText };
   }
 
   async confirmModelVisibleRetrievals(params: {
+    maxVisibleCharacters?: number;
     output: string;
     threadId: string;
   }): Promise<number> {
-    const candidates = [...this.pendingRetrievalDeliveries.entries()].filter(
-      ([, pending]) => pending.threadId === params.threadId,
+    // One Code Mode cell can emit several individually bounded retrievals, but
+    // Codex applies one shared ceiling to the outer result. Attribute each
+    // delivery by its position in that visible prefix so their sum cannot
+    // exceed the containing result.
+    const candidates = [...this.pendingRetrievalDeliveries.entries()]
+      .filter(([, pending]) => pending.threadId === params.threadId)
+      .map(([deliveryId, pending]) => ({
+        deliveryId,
+        outputOffset: params.output.indexOf(pending.wrappedText),
+        pending,
+      }))
+      .filter((candidate) => candidate.outputOffset >= 0)
+      .sort((left, right) => left.outputOffset - right.outputOffset);
+    const visibleOutputEnd = Math.min(
+      params.output.length,
+      normalizePositiveInteger(
+        params.maxVisibleCharacters,
+        Number.MAX_SAFE_INTEGER,
+      ),
     );
     let confirmedCharacters = 0;
-    for (const [deliveryId, pending] of candidates) {
-      if (!params.output.includes(pending.wrappedText)) {
-        continue;
-      }
+    for (const { deliveryId, outputOffset, pending } of candidates) {
       this.pendingRetrievalDeliveries.delete(deliveryId);
-      await this.recordRetrieval(
-        pending.objectId,
-        pending.visibleText.length,
+      const visibleTextStart = outputOffset + pending.visibleTextOffset;
+      const visibleCharacters = Math.max(
+        0,
+        Math.min(
+          pending.visibleText.length,
+          visibleOutputEnd - visibleTextStart,
+        ),
       );
-      confirmedCharacters += pending.visibleText.length;
+      await this.recordRetrieval(pending.objectId, visibleCharacters);
+      confirmedCharacters += visibleCharacters;
     }
     return confirmedCharacters;
   }

@@ -3,6 +3,8 @@ import {
   TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
   TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS,
   TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+  TOKEN_MISER_HELPER_INPUT_CAP_CHARACTERS,
+  TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
   serializeToolResponse,
   type TokenMiserCodeModeOutputPayload,
   type TokenMiserCodeModeReductionOutput,
@@ -258,6 +260,7 @@ export class TokenMiserService {
     }
     if (isDirectTokenMiserRetrievalInvocation(payload)) {
       await this.options.store.confirmModelVisibleRetrievals({
+        maxVisibleCharacters: TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
         output: serializeToolResponse(
           payload.token_miser_exact_tool_response,
         ),
@@ -362,7 +365,13 @@ export class TokenMiserService {
       ).length,
     });
     if (retrieval) {
+      // The reducer observes exact Code Mode output before Codex applies its
+      // model-visible ceiling. Confirm only the prefix eligible to cross that
+      // boundary; otherwise one minified line can become an unbounded debit.
       await this.options.store.confirmModelVisibleRetrievals({
+        maxVisibleCharacters:
+          payload.max_output_tokens
+          * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
         output,
         threadId: payload.thread_id,
       });
@@ -442,11 +451,11 @@ export class TokenMiserService {
       prompt: buildCodeModeSummaryPrompt(payload, output),
       signal: options.signal,
       baselineParentTokenCap: payload.max_output_tokens,
-      replacementCharacters: (text) => Math.min(
-        text.length,
+      maxReplacementCharacters:
         payload.max_output_tokens
         * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-      ) + payload.model_visible_overhead_characters
+      replacementCharacters: (text) =>
+        text.length + payload.model_visible_overhead_characters
         + this.codeModeActionableStateCharacters(payload),
     });
     if (!prepared) {
@@ -552,7 +561,7 @@ export class TokenMiserService {
       toolName: member.toolName,
       summary: parsed.members.get(member.toolCallId) ?? "Completed tool result.",
     }));
-    const replacement = JSON.stringify({
+    const replacement = capModelVisibleText(JSON.stringify({
       kind: "tool_output_group_summary",
       groupId: payload.cell_id,
       summary: parsed.summary.summary,
@@ -562,7 +571,7 @@ export class TokenMiserService {
         summary: member.summary,
       })),
       sourceMaterial: "Available by group and member reference when required.",
-    }, null, 2);
+    }, null, 2), payload.max_output_tokens);
     const storedOutput: TokenMiserGroupStoredOutput = {
       version: 1,
       groupId: payload.cell_id,
@@ -587,11 +596,8 @@ export class TokenMiserService {
       output: JSON.stringify(storedOutput),
       baselineCharacters: outerOutput.length,
       baselineParentTokenCap: payload.max_output_tokens,
-      replacementCharacters: Math.min(
-        replacement.length,
-        payload.max_output_tokens
-        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-      ) + payload.model_visible_overhead_characters
+      replacementCharacters:
+        replacement.length + payload.model_visible_overhead_characters
         + this.codeModeActionableStateCharacters(payload),
       summary: parsed.summary,
       disposition: "summarized",
@@ -683,6 +689,7 @@ export class TokenMiserService {
     prompt: string;
     signal?: AbortSignal;
     baselineParentTokenCap?: number;
+    maxReplacementCharacters?: number;
     replacementCharacters?: (replacement: string) => number;
   }): Promise<{
     disposition: "summarized";
@@ -726,10 +733,15 @@ export class TokenMiserService {
     }
 
     const objectId = randomUUID();
-    const replacement = buildReplacement({
-      objectId,
-      summary: decision.summary,
-    });
+    const replacement = capTextToCharacters(
+      buildReplacement({
+        objectId,
+        summary: decision.summary,
+      }),
+      params.maxReplacementCharacters
+      ?? TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
+      "… summary truncated",
+    );
     const parentModel = await this.options.resolveParentModel?.(
       params.threadId,
     ).catch(() => undefined);
@@ -895,7 +907,7 @@ function buildSummaryPrompt(
   payload: TokenMiserPostToolUsePayload,
   output: string,
 ): string {
-  return [
+  return capHelperPrompt([
     `Tool: ${payload.tool_name}`,
     `Visible parent intent before the call: ${payload.parent_intent ?? "Not available"}`,
     `Tool input: ${serializeToolResponse(payload.tool_input)}`,
@@ -904,14 +916,14 @@ function buildSummaryPrompt(
     "",
     "Tool output:",
     output,
-  ].join("\n");
+  ].join("\n"));
 }
 
 function buildCodeModeSummaryPrompt(
   payload: TokenMiserCodeModeOutputPayload,
   output: string,
 ): string {
-  return [
+  return capHelperPrompt([
     "Tool: Code Mode",
     `Call ID: ${payload.call_id}`,
     `Cell ID: ${payload.cell_id}`,
@@ -923,14 +935,14 @@ function buildCodeModeSummaryPrompt(
     "",
     "Script output:",
     output,
-  ].join("\n");
+  ].join("\n"));
 }
 
 function buildGroupedCodeModeSummaryPrompt(
   payload: TokenMiserCodeModeOutputPayload,
   members: CapturedGroupMember[],
 ): string {
-  return [
+  const header = [
     "Summarize this completed parallel Code Mode cell as one group.",
     `Group ID: ${payload.cell_id}`,
     `Visible parent intent before the cell: ${payload.parent_intent ?? "Not available"}`,
@@ -939,17 +951,108 @@ function buildGroupedCodeModeSummaryPrompt(
     `Model-visible output budget: ${payload.max_output_tokens} tokens`,
     "Return one factual group summary and one factual summary for every toolCallId.",
     "Broad parallel probes are expected. Do not recommend serial follow-up operations.",
-    ...members.flatMap((member, index) => [
-      "",
-      `Member ${index + 1}`,
-      `toolCallId: ${member.toolCallId}`,
-      `toolName: ${member.toolName}`,
-      `toolInput: ${member.toolInput}`,
-      `outputCharacters: ${member.output.length}`,
-      "output:",
-      member.output,
-    ]),
+    `Member IDs: ${members.map((member) => member.toolCallId).join(", ")}`,
   ].join("\n");
+  const memberHeaders = members.map((member, index) => [
+    "",
+    `Member ${index + 1}`,
+    `toolCallId: ${member.toolCallId}`,
+    `toolName: ${member.toolName}`,
+    `toolInput: ${member.toolInput}`,
+    `outputCharacters: ${member.output.length}`,
+    "output:",
+  ].join("\n"));
+  const fixedPrompt = [header, ...memberHeaders].join("\n");
+  const outputBudget = Math.max(
+    0,
+    TOKEN_MISER_HELPER_INPUT_CAP_CHARACTERS
+    - TOKEN_MISER_SYSTEM_PROMPT.length
+    - fixedPrompt.length
+    - members.length,
+  );
+  const memberBudgets = distributeFairCharacterBudget(
+    members.map((member) => member.output.length),
+    outputBudget,
+  );
+  const memberSections = memberHeaders.map(
+    (memberHeader, index) => `${memberHeader}\n${capTextToCharacters(
+      members[index]!.output,
+      memberBudgets[index]!,
+      "\n… member output truncated",
+    )}`,
+  );
+  return capHelperPrompt([header, ...memberSections].join("\n"));
+}
+
+function distributeFairCharacterBudget(
+  lengths: readonly number[],
+  totalBudget: number,
+): number[] {
+  const budgets = lengths.map(() => 0);
+  let remainingBudget = totalBudget;
+  let remaining = lengths.map((_, index) => index);
+  while (remaining.length > 0 && remainingBudget > 0) {
+    const share = Math.floor(remainingBudget / remaining.length);
+    const completed = remaining.filter((index) => lengths[index]! <= share);
+    if (completed.length > 0) {
+      for (const index of completed) {
+        budgets[index] = lengths[index]!;
+        remainingBudget -= lengths[index]!;
+      }
+      const completedSet = new Set(completed);
+      remaining = remaining.filter((index) => !completedSet.has(index));
+      continue;
+    }
+    for (const index of remaining) {
+      budgets[index] = share;
+      remainingBudget -= share;
+    }
+    for (const index of remaining) {
+      if (remainingBudget <= 0) break;
+      budgets[index] = budgets[index]! + 1;
+      remainingBudget -= 1;
+    }
+    break;
+  }
+  return budgets;
+}
+
+function capHelperPrompt(prompt: string): string {
+  // Luna may inspect one additional parent-sized window so it can retain a
+  // useful fact that ordinary pass-through truncation would have discarded.
+  // Its reported usage remains authoritative for gate cost accounting.
+  const promptBudget = Math.max(
+    0,
+    TOKEN_MISER_HELPER_INPUT_CAP_CHARACTERS
+    - TOKEN_MISER_SYSTEM_PROMPT.length,
+  );
+  return capTextToCharacters(
+    prompt,
+    promptBudget,
+    "\n… source truncated at the projected 20k-token Luna input cap",
+  );
+}
+
+function capModelVisibleText(text: string, maxOutputTokens: number): string {
+  return capTextToCharacters(
+    text,
+    maxOutputTokens * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    "\n… summary truncated",
+  );
+}
+
+function capTextToCharacters(
+  text: string,
+  maxCharacters: number,
+  marker: string,
+): string {
+  if (text.length <= maxCharacters) {
+    return text;
+  }
+  if (maxCharacters <= marker.length) {
+    return text.slice(0, maxCharacters);
+  }
+  return `${text.slice(0, maxCharacters - marker.length)}${marker}`;
 }
 
 function buildReplacement(params: {
