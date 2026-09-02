@@ -1283,6 +1283,129 @@ describe("useThreadSessionState", () => {
     expect(liveEntryIdReads).toBeLessThanOrEqual(liveEntryCount * 12);
   });
 
+  it("does not rescan split-hydrated launch messages for every live update", async () => {
+    const historyMessageCount = 48;
+    const liveUpdateCount = 12;
+    const launchpadText = "Keep this prompt visible while the turn starts.";
+
+    async function measureMessageTextReads(
+      includeLaunchpadState: boolean,
+    ): Promise<number> {
+      let messageTextReads = 0;
+      const messageEntries: AppServerThreadMessageEntry[] = Array.from(
+        { length: historyMessageCount },
+        (_value, index) => ({
+          ...messageEntry({
+            id: `history-${index}`,
+            role: "user",
+            text: `Historical prompt ${index}`,
+            createdAt: index,
+          }),
+          turn: {
+            id: `history-turn-${index}`,
+            status: "completed" as const,
+          },
+        }),
+      );
+      const entries: AppServerThreadEntry[] = messageEntries;
+      const hydratedLaunchMessage: AppServerThreadMessage = {
+        id: "hydrated-launch",
+        role: "user",
+        text: launchpadText,
+        createdAt: 1_000,
+      };
+      const messages: AppServerThreadMessage[] = [
+        ...messageEntries.map(
+          ({ type: _type, turn: _turn, ...message }) => message,
+        ),
+        hydratedLaunchMessage,
+      ].map((message) => new Proxy(message, {
+        get(target, property, receiver) {
+          if (property === "text") {
+            messageTextReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }));
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread: async ({ backend, threadId }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries,
+            messages,
+            pagination: {
+              supportsPagination: true,
+              hasPreviousPage: false,
+            },
+          },
+        }),
+      };
+      const { result, rerender, unmount } = renderHook(
+        ({ showLaunchpadState }) =>
+          useThreadSessionState({
+            desktopApi,
+            thread: {
+              ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+              ...(showLaunchpadState
+                ? {
+                    optimisticUserMessage: {
+                      text: launchpadText,
+                      createdAt: 1_000,
+                    },
+                    optimisticActiveTurn: {
+                      id: "turn-1",
+                      statusText: "Thinking",
+                      startedAt: 1_000,
+                    },
+                  }
+                : {}),
+            },
+          }),
+        { initialProps: { showLaunchpadState: includeLaunchpadState } },
+      );
+
+      await waitForThreadHydration(result);
+      rerender({ showLaunchpadState: false });
+      await waitFor(() => {
+        expect(result.current.messages.at(-1)?.id).toBe("hydrated-launch");
+      });
+      messageTextReads = 0;
+
+      for (let index = 0; index < liveUpdateCount; index += 1) {
+        act(() => {
+          result.current.upsertLiveTranscriptEntry({
+            type: "activity",
+            id: `live-activity-${index}`,
+            summary: `Live activity ${index}`,
+            createdAt: 2_000 + index,
+            details: [],
+            turn: {
+              id: "turn-1",
+              status: "in_progress",
+              startedAt: 1_000,
+            },
+          });
+        });
+      }
+
+      const measuredReads = messageTextReads;
+      unmount();
+      return measuredReads;
+    }
+
+    const baselineReads = await measureMessageTextReads(false);
+    const launchpadReads = await measureMessageTextReads(true);
+
+    // Launch-message correlation may inspect the hydrated projection once,
+    // but live tail updates must not multiply that full-transcript scan.
+    expect(launchpadReads - baselineReads).toBeLessThanOrEqual(
+      (historyMessageCount + 1) * 2,
+    );
+  });
+
   it("coalesces reviews and suppresses duplicates across page-tail boundaries", async () => {
     const fullReview = [
       "Full review comments:",
