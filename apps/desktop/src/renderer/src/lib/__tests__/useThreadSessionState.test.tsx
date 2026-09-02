@@ -3603,6 +3603,87 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("keeps the launchpad prompt visible while messages hydrate ahead of entries", async () => {
+    const launchpadText = "Keep this prompt visible while the turn starts.";
+    const desktopApi: DesktopApi = {
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I am starting the investigation.",
+              createdAt: 2_000,
+            },
+          ],
+          messages: [
+            {
+              id: "hydrated-user",
+              role: "user" as const,
+              text: launchpadText,
+              createdAt: 1_000,
+            },
+            {
+              id: "assistant-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I am starting the investigation.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: true,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const { result, rerender } = renderHook(
+      ({ includeLaunchpadState }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+            ...(includeLaunchpadState
+              ? {
+                  optimisticUserMessage: {
+                    text: launchpadText,
+                    createdAt: 1_000,
+                  },
+                  optimisticActiveTurn: {
+                    id: "turn-1",
+                    statusText: "Thinking",
+                    startedAt: 1_000,
+                  },
+                }
+              : {}),
+          },
+        }),
+      { initialProps: { includeLaunchpadState: true } },
+    );
+
+    await waitForThreadHydration(result);
+    rerender({ includeLaunchpadState: false });
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        `user:${launchpadText}`,
+        "assistant:I am starting the investigation.",
+      ]);
+    });
+    expect(
+      result.current.messages.filter((message) => message.role === "user")
+    ).toHaveLength(1);
+  });
+
   it("keeps a duplicate optimistic user message when the launch item completes", async () => {
     const messageText = "Please update the TanStack Virtual lockfile.";
     let authoritativeEntries: AppServerThreadEntry[] = [];
