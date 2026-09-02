@@ -180,6 +180,41 @@ describe("AcpAgentsSettings — Grok build channel", () => {
     });
   });
 
+  it("does not imply the newest build is running when it is not", async () => {
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1_000,
+      entries: [
+        grokEntry({
+          activeCommand: "/Users/me/.grok/bin/grok",
+          managedBuild: {
+            repository: "pwrdrvr/grok-build",
+            installedTag: "pwragent-v1.0.4-pwragent.2",
+            checkedAt: Date.now(),
+            installedAt: Date.now(),
+          },
+        }),
+      ],
+    }));
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={acpSnapshot("grok", "/Users/me/.grok/bin/grok")}
+        onManagedGrokBuildsChange={vi.fn(async () => true)}
+      />,
+    );
+
+    // The newest verified build is on disk and none of it is running: an
+    // operator reads "newest verified build" as "this is what my threads use".
+    expect(
+      await screen.findByText(/not in use, another Grok install is active/),
+    ).toBeInTheDocument();
+    // The row's own sub-line legitimately contains "newest verified build";
+    // the status line must not.
+    expect(screen.queryByText(/installed · newest verified build/))
+      .not.toBeInTheDocument();
+  });
+
   it("labels which product each detected Grok binary is", async () => {
     const managed = `${MANAGED_VERSIONS}/pwragent-v1.0.4-pwragent.2/grok`;
     const listAcpAgents = vi.fn(async () => ({

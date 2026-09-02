@@ -517,6 +517,13 @@ async function decorateManagedGrokBuild(
 
   const summary = await readManagedGrokInstallSummary();
   const activeTag = managedGrokTagForCommand(entry.activeCommand);
+  // `pinnedBehind` is what the pane and the durable notice cite as the *cause*
+  // ("a manual path pins X"), so verify that cause rather than inferring it
+  // from a tag mismatch. The managed root is machine-wide: a sibling instance
+  // or profile can install a newer tag while this instance's durable record
+  // still names the older one, and a mismatch alone would then accuse an
+  // override that does not exist.
+  const pinnedBy = acpProviderCommandOverrideFromSnapshot(providers, "grok");
   const managedBuild: AcpManagedBuildStatus = {
     repository: MANAGED_GROK_REPOSITORY,
     ...(summary
@@ -530,7 +537,11 @@ async function decorateManagedGrokBuild(
     // Only a managed build can be *behind* this channel. A vendor install is
     // on a different channel entirely, and calling it "behind" a `-pwragent`
     // tag is exactly the cross-channel comparison this work exists to remove.
-    ...(summary && activeTag !== undefined && activeTag !== summary.tag
+    ...(summary
+      && activeTag !== undefined
+      && activeTag !== summary.tag
+      && pinnedBy !== undefined
+      && pinnedBy === entry.activeCommand
       ? { pinnedBehind: true }
       : {}),
   };

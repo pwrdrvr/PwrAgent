@@ -1351,6 +1351,12 @@ describe("settings ipc", () => {
     const { AcpAgentStore } = await import("../acp/acp-agent-store");
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    // The pin has to be a real configured override, because that is the cause
+    // `pinnedBehind` reports. A bare tag mismatch is not enough.
+    fs.writeFileSync(
+      path.join(tempRoot, "config.toml"),
+      `[acp_agents.grok]\ncli_path = "${pinnedCommand}"\n`,
+    );
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
       env: {},
@@ -1413,6 +1419,108 @@ describe("settings ipc", () => {
         { command: "/Users/me/.grok/bin/grok" },
       ]);
       expect(grok?.instances?.[1]?.pwrAgentBuild).toBeUndefined();
+    } finally {
+      disposeAppState();
+    }
+  });
+
+  it("does not report a pin, or a channel, that the config does not have", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const managedRoot = path.join(tempRoot, "agents", "grok");
+    fs.mkdirSync(managedRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(managedRoot, "managed-release.json"),
+      JSON.stringify({
+        asset: "pwragent-grok-1.0.5-pwragent.1-macos-universal.tar.gz",
+        checkedAt: 5_000,
+        installedAt: 4_000,
+        repository: "pwrdrvr/grok-build",
+        schemaVersion: 1,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v1.0.5-pwragent.1",
+      }),
+    );
+    const olderCommand = path.join(
+      managedRoot,
+      "versions",
+      "pwragent-v1.0.4-pwragent.2",
+      "grok",
+    );
+    // The managed root is machine-wide, so a sibling instance can install a
+    // newer tag while this record still names the older one. That is a tag
+    // mismatch with no override behind it, and the durable notice it would
+    // feed tells the operator to clear a manual path that does not exist.
+    fs.writeFileSync(
+      path.join(tempRoot, "config.toml"),
+      "[acp_agents.grok]\nmanaged_builds = false\n",
+    );
+
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState("bootstrap");
+    try {
+      new AcpAgentStore(getAppStateDb()).upsertInstalledAgent({
+        backendId: "acp:grok",
+        registryId: "grok",
+        name: "Grok",
+        version: "1.0.4-pwragent.2",
+        distributionKind: "local",
+        distributionSource: "grok agent stdio",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-grok-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        activeCommand: olderCommand,
+        instances: [
+          { command: olderCommand, version: "1.0.4-pwragent.2", source: "fallback" },
+        ],
+        launchDescriptor: {
+          backendId: "acp:grok",
+          registryId: "grok",
+          distributionKind: "local",
+          command: olderCommand,
+          args: ["agent", "stdio"],
+          env: { NO_COLOR: "1" },
+        },
+      });
+      registerSettingsIpcHandlers(service);
+
+      const response = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: false },
+      )) as { entries?: AcpAgentSettingsEntry[] } | undefined;
+      const grok = response?.entries?.find(
+        (entry) => entry.registryId === "grok",
+      );
+
+      // Managed builds are off, so the pane must not report a channel at all
+      // — no installed tag, no "Check for updates" for a channel the operator
+      // disabled.
+      expect(grok?.managedBuild).toBeUndefined();
+      // Provenance survives the channel being off: the binary is still ours,
+      // so the vendor updater still must not claim it.
+      expect(grok).toMatchObject({ pwrAgentManagedRuntime: true });
+      expect(grok?.instances?.[0]).toMatchObject({
+        pwrAgentBuild: true,
+        pwrAgentBuildTag: "pwragent-v1.0.4-pwragent.2",
+      });
     } finally {
       disposeAppState();
     }

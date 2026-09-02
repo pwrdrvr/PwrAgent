@@ -146,12 +146,14 @@ describe("buildManagedGrokBuildNotice", () => {
 
   it("names the PwrAgent channel and links its own release page", () => {
     const onOpenReleasePage = vi.fn();
+    const onDismiss = vi.fn();
     const notice = buildManagedGrokBuildNotice({
       entry: grokEntry(undefined, {
         managedBuild: managed,
         pwrAgentManagedRuntime: true,
         version: "1.0.4-pwragent.2",
       }),
+      onDismiss,
       onOpenReleasePage,
     });
 
@@ -168,10 +170,36 @@ describe("buildManagedGrokBuildNotice", () => {
     expect(onOpenReleasePage).toHaveBeenCalledWith(
       "https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.5-pwragent.1",
     );
+    // The managed channel has no persisted acknowledgement, so closing the
+    // toast has to be remembered by the producer or the next refresh upserts
+    // the identical id straight back.
+    notice?.onDismiss?.();
+    expect(onDismiss).toHaveBeenCalledWith("pwragent-v1.0.5-pwragent.1");
+  });
+
+  it("stays closed for a tag the operator already dismissed", () => {
+    const entry = grokEntry(undefined, {
+      managedBuild: managed,
+      pwrAgentManagedRuntime: true,
+    });
+    expect(buildManagedGrokBuildNotice({
+      dismissedTag: "pwragent-v1.0.5-pwragent.1",
+      entry,
+      onDismiss: vi.fn(),
+      onOpenReleasePage: vi.fn(),
+    })).toBeUndefined();
+    // A newer verified build is a new question, so it asks again.
+    expect(buildManagedGrokBuildNotice({
+      dismissedTag: "pwragent-v1.0.4-pwragent.2",
+      entry,
+      onDismiss: vi.fn(),
+      onOpenReleasePage: vi.fn(),
+    })).toBeDefined();
   });
 
   it("stays silent when the channel can resolve itself", () => {
     const onOpenReleasePage = vi.fn();
+    const onDismiss = vi.fn();
     // Not pinned: PwrAgent installs the newest build itself, so there is
     // nothing to ask the operator for.
     expect(buildManagedGrokBuildNotice({
@@ -179,15 +207,18 @@ describe("buildManagedGrokBuildNotice", () => {
         managedBuild: { ...managed, pinnedBehind: false },
         pwrAgentManagedRuntime: true,
       }),
+      onDismiss,
       onOpenReleasePage,
     })).toBeUndefined();
     // A vendor install is on the other channel entirely.
     expect(buildManagedGrokBuildNotice({
       entry: grokEntry(undefined, { managedBuild: managed }),
+      onDismiss,
       onOpenReleasePage,
     })).toBeUndefined();
     expect(buildManagedGrokBuildNotice({
       entry: grokEntry(undefined, { pwrAgentManagedRuntime: true }),
+      onDismiss,
       onOpenReleasePage,
     })).toBeUndefined();
   });

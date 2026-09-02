@@ -23,7 +23,7 @@ import { pipeline } from "node:stream/promises";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { ManagedGrokSignatureRejectedEvent } from "../../shared/managed-grok-signature.js";
-import { resolvePwragentRoot } from "../profile.js";
+import { managedGrokRoot } from "./grok-build-channel.js";
 import { getMainLogger } from "../log.js";
 import { verifyMatchingPlatformSignature } from "../managed-runtime-signature.js";
 
@@ -217,44 +217,57 @@ export type ManagedGrokInstallSummary = {
 export async function readManagedGrokInstallSummary(options?: {
   rootDir?: string;
 }): Promise<ManagedGrokInstallSummary | undefined> {
-  const rootDir = options?.rootDir ?? path.join(
-    resolvePwragentRoot(),
-    "agents",
-    "grok",
+  const metadata = await readManagedGrokMetadata(
+    options?.rootDir ?? managedGrokRoot(),
   );
+  return metadata
+    ? {
+        tag: metadata.tag,
+        checkedAt: metadata.checkedAt,
+        installedAt: metadata.installedAt,
+      }
+    : undefined;
+}
+
+/**
+ * Parse and validate `managed-release.json`. One validator for one on-disk
+ * format: both the runtime path and the reporting path read this file, and a
+ * second copy of these checks would let the pane name a tag the runtime path
+ * rejects. Platform-asset agreement is deliberately NOT checked here — that
+ * asks whether the cache is usable on this machine, which is the runtime
+ * path's question, not "what did the last check install".
+ */
+async function readManagedGrokMetadata(
+  rootDir: string,
+): Promise<ManagedGrokMetadata | undefined> {
+  let metadata: Partial<ManagedGrokMetadata>;
   try {
-    const metadata = JSON.parse(
+    metadata = JSON.parse(
       await readFile(path.join(rootDir, "managed-release.json"), "utf8"),
     ) as Partial<ManagedGrokMetadata>;
-    if (
-      metadata.schemaVersion !== MANAGED_GROK_METADATA_VERSION
-      || metadata.repository !== MANAGED_GROK_REPOSITORY
-      || typeof metadata.tag !== "string"
-      || !isManagedGrokTagEligible(metadata.tag)
-      || typeof metadata.checkedAt !== "number"
-      || typeof metadata.installedAt !== "number"
-    ) {
-      return undefined;
-    }
-    return {
-      tag: metadata.tag,
-      checkedAt: metadata.checkedAt,
-      installedAt: metadata.installedAt,
-    };
   } catch {
     // No install yet, or unreadable metadata. Both mean "nothing to report".
     return undefined;
   }
+  if (
+    metadata.schemaVersion !== MANAGED_GROK_METADATA_VERSION
+    || metadata.repository !== MANAGED_GROK_REPOSITORY
+    || typeof metadata.tag !== "string"
+    || !isManagedGrokTagEligible(metadata.tag)
+    || typeof metadata.asset !== "string"
+    || typeof metadata.sha256 !== "string"
+    || typeof metadata.checkedAt !== "number"
+    || typeof metadata.installedAt !== "number"
+  ) {
+    return undefined;
+  }
+  return metadata as ManagedGrokMetadata;
 }
 
 export async function ensureManagedGrokRuntime(
   options: ManagedGrokRuntimeOptions = {},
 ): Promise<ManagedGrokRuntime | undefined> {
-  const rootDir = options.rootDir ?? path.join(
-    resolvePwragentRoot(),
-    "agents",
-    "grok",
-  );
+  const rootDir = options.rootDir ?? managedGrokRoot();
   const existing = activeChecks.get(rootDir);
   if (existing) {
     return await existing;
@@ -824,19 +837,8 @@ async function readCachedRuntime(
   options: ManagedGrokRuntimeOptions,
 ): Promise<ManagedGrokRuntime | undefined> {
   try {
-    const metadata = JSON.parse(
-      await readFile(path.join(rootDir, "managed-release.json"), "utf8"),
-    ) as Partial<ManagedGrokMetadata>;
-    if (
-      metadata.schemaVersion !== MANAGED_GROK_METADATA_VERSION
-      || metadata.repository !== MANAGED_GROK_REPOSITORY
-      || typeof metadata.tag !== "string"
-      || !isManagedGrokTagEligible(metadata.tag)
-      || typeof metadata.asset !== "string"
-      || typeof metadata.sha256 !== "string"
-      || typeof metadata.checkedAt !== "number"
-      || typeof metadata.installedAt !== "number"
-    ) {
+    const metadata = await readManagedGrokMetadata(rootDir);
+    if (!metadata) {
       return undefined;
     }
     const assetPlatform = managedGrokAssetPlatform(
@@ -854,7 +856,7 @@ async function readCachedRuntime(
       ...bundleValidationOptions(options),
       tag: metadata.tag,
     });
-    return { command, metadata: metadata as ManagedGrokMetadata };
+    return { command, metadata };
   } catch (error) {
     // Every other failure here is ordinary (no install yet, a partially
     // written directory, unreadable metadata) and resolves by reinstalling.

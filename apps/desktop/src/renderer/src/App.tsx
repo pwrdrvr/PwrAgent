@@ -129,7 +129,10 @@ import {
 import type { CodexMissingThreadsSignal } from "./features/notifications/codex-missing-threads-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
-import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
+import {
+  GROK_UPDATE_NOTICE_ID_PREFIXES,
+  GrokCliUpdateNotice,
+} from "./features/notifications/GrokCliUpdateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
@@ -635,10 +638,12 @@ function DesktopAppShell(props: {
   const syncGrokCliUpdateNotice = useCallback((
     notice: AppNoticeToastNotice | undefined,
   ): void => {
-    dispatchAppNotice({
-      type: "dismiss-prefix",
-      prefix: "acp-update:acp:grok:",
-    });
+    // Sweep every id family this producer can emit, not just the vendor one:
+    // both its notices are durable, so one left standing after its condition
+    // cleared would sit on screen until the window reloaded.
+    for (const prefix of GROK_UPDATE_NOTICE_ID_PREFIXES) {
+      dispatchAppNotice({ type: "dismiss-prefix", prefix });
+    }
     if (notice) {
       showAppNotice(notice);
     }

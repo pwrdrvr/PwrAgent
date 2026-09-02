@@ -436,11 +436,18 @@ function AcpAgentSection(props: {
               props.managedGrokBuilds && entry.managedBuild ? (
                 <ManagedBuildStatus
                   managedBuild={entry.managedBuild}
-                  busy={pathControlsDisabled}
+                  // Deliberately not `pathControlsDisabled`: that folds in
+                  // `envForced`, which says the CLI *path* comes from the
+                  // environment. A release check has nothing to do with which
+                  // path is in effect, so an env override must not disable it.
+                  busy={props.saving === true || pathUpdating}
                   refreshing={props.refreshing === true}
                   onCheckForUpdates={() => void refreshPathStatus()}
                   onUseNewestBuild={
-                    props.onCliPathChange
+                    // Clearing the config override cannot dislodge an
+                    // environment one, so the button is absent rather than
+                    // disabled when it could not do what it says.
+                    props.onCliPathChange && !envForced
                       ? () => {
                           void commitPath("");
                         }
@@ -483,6 +490,10 @@ function AcpAgentSection(props: {
                       instance.pwrAgentBuildTag !== undefined
                       && instance.pwrAgentBuildTag
                         === entry.managedBuild?.installedTag;
+                    // Explicit keys: this array is spliced between renders
+                    // (the channel chip appears once discovery labels the
+                    // instance), and SettingsPathRow's `tone-index` fallback
+                    // only holds for a stable array.
                     const chips: SettingsPathRowChip[] = [];
                     // Which product this binary is, before which version it
                     // is: "v1.0.5" next to "v1.0.4-pwragent.2" reads as one
@@ -492,18 +503,21 @@ function AcpAgentSection(props: {
                       chips.push(
                         instance.pwrAgentBuild
                           ? {
+                              key: "channel",
                               label: "PwrAgent build",
                               tone: newestManagedBuild ? "ok" : "muted",
                             }
-                          : { label: "xAI build", tone: "muted" },
+                          : { key: "channel", label: "xAI build", tone: "muted" },
                       );
                     }
                     chips.push(
                       {
+                        key: "source",
                         label: instance.source === "override" ? "override" : "path",
                         tone: "muted",
                       },
                       {
+                        key: "version",
                         label: instance.version
                           ? `v${instance.version}`
                           : "version unknown",
@@ -511,7 +525,11 @@ function AcpAgentSection(props: {
                       },
                     );
                     if (!active) {
-                      chips.push({ label: "available", tone: "muted" });
+                      chips.push({
+                        key: "availability",
+                        label: "available",
+                        tone: "muted",
+                      });
                     }
                     return (
                       <SettingsPathRow
@@ -670,20 +688,28 @@ function ManagedBuildStatus(props: {
   const { managedBuild } = props;
   const pinned = managedBuild.pinnedBehind === true;
   const checkedAt = managedBuild.checkedAt;
+  // Three states, because "installed" and "running" are different facts. An
+  // operator whose manual path points at a vendor install has the newest
+  // verified build on disk and is not running any of it; saying only
+  // "installed · newest verified build" would read as "this is what my threads
+  // use".
+  const inUse = managedBuild.activeTag !== undefined;
   return (
     <div className="acp-build">
       <p className="acp-build__line">
         {managedBuild.installedTag ? (
           <>
             <span
-              className={`status-dot${pinned ? " status-dot--warning" : " status-dot--ok"}`}
+              className={`status-dot${inUse && !pinned ? " status-dot--ok" : " status-dot--warning"}`}
               aria-hidden="true"
             />
             <span className="acp-build__tag">{managedBuild.installedTag}</span>
             <span className="acp-build__state">
               {pinned
                 ? `installed and verified · not in use, a manual path pins ${managedBuild.activeTag}`
-                : "installed · newest verified build"}
+                : inUse
+                  ? "installed · newest verified build"
+                  : "installed and verified · not in use, another Grok install is active"}
               {checkedAt !== undefined
                 ? ` · checked ${acpRelativeTime(checkedAt)}`
                 : ""}
