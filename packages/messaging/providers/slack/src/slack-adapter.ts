@@ -321,6 +321,14 @@ type SlackUserProfile = {
   username?: string;
 };
 
+type ValidatedSlackAgentSessionIds = {
+  channelId: string;
+  eventTs: string;
+  teamId?: string;
+  threadTs: string;
+  userId: string;
+};
+
 export type SlackProviderAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
@@ -1137,7 +1145,16 @@ export class SlackAdapter implements SlackProviderAdapter {
   supportsConversationTitle(
     request: MessagingConversationTitleSupportRequest,
   ): boolean {
-    return slackAgentSessionTarget(request.channel, request.routingState) !== undefined;
+    const agentRenameAvailable =
+      typeof Reflect.get(this.api, "renameAgentSession") === "function";
+    const assistantTitleAvailable =
+      typeof Reflect.get(this.api, "setAssistantThreadTitle") === "function";
+    const hasRenameApi =
+      (agentRenameAvailable && !this.agentSessionRenameDisabled)
+      || (assistantTitleAvailable
+        && !this.assistantThreadTitleDisabled);
+    return hasRenameApi
+      && slackAgentSessionTarget(request.channel, request.routingState) !== undefined;
   }
 
   async getManagedConversationRights(
@@ -1307,11 +1324,11 @@ export class SlackAdapter implements SlackProviderAdapter {
       return;
     }
     if (event?.type === "agent_session_stopped") {
-      await this.handleAgentSessionStopped(event, body?.team_id);
+      await this.handleAgentSessionStopped(event, body?.team_id, receipt);
       return;
     }
     if (event?.type === "agent_session_title_changed") {
-      await this.handleAgentSessionTitleChanged(event, body?.team_id);
+      await this.handleAgentSessionTitleChanged(event, body?.team_id, receipt);
       return;
     }
     if (!event || (event.type !== "message" && event.type !== "app_mention")) {
@@ -1323,6 +1340,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   private async handleAgentSessionStopped(
     event: AgentSessionStoppedEvent,
     envelopeTeamId?: unknown,
+    receipt: MessagingInboundReceipt = captureMessagingInboundReceipt(this.now()),
   ): Promise<void> {
     if (!this.listener) return;
     const ids = this.validateAgentSessionEventIds({
@@ -1339,19 +1357,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       );
     if (!streamingMessageTimestamps) return;
 
-    const actor = await this.actorForSlackUser(ids.userId);
-    const channel = await this.channelRefForSlack({
-      channelId: ids.channelId,
-      channelType: ids.channelId.startsWith("D") ? "im" : undefined,
-      peerTitle: actor.displayName ?? actor.username,
-      teamId: ids.teamId,
-      threadTs: ids.threadTs,
-      ts: ids.eventTs,
-    });
-    const routingState = this.routingStateForChannel(channel, {
-      teamId: ids.teamId,
-      ts: ids.eventTs,
-    });
+    const { actor, channel, routingState } = this.minimalAgentSessionContext(ids);
     const authorization = this.authorizeInbound({
       actor,
       channel,
@@ -1376,18 +1382,20 @@ export class SlackAdapter implements SlackProviderAdapter {
       channel,
       interaction: sourceSurface,
       sourceSurface,
-      receivedAt: this.now(),
+      receivedAt: receipt.receivedAt,
       routingState,
       value: {
         source: "agent_session_stopped",
         streamingMessageTimestamps,
       },
     });
+    this.enrichAgentSessionContext(ids);
   }
 
   private async handleAgentSessionTitleChanged(
     event: AgentSessionTitleChangedEvent,
     envelopeTeamId?: unknown,
+    receipt: MessagingInboundReceipt = captureMessagingInboundReceipt(this.now()),
   ): Promise<void> {
     const ids = this.validateAgentSessionEventIds({
       channelId: event.channel,
@@ -1405,19 +1413,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     );
     if (!this.listener) return;
 
-    const actor = await this.actorForSlackUser(ids.userId);
-    const channel = await this.channelRefForSlack({
-      channelId: ids.channelId,
-      channelType: ids.channelId.startsWith("D") ? "im" : undefined,
-      peerTitle: actor.displayName ?? actor.username,
-      teamId: ids.teamId,
-      threadTs: ids.threadTs,
-      ts: ids.eventTs,
-    });
-    const routingState = this.routingStateForChannel(channel, {
-      teamId: ids.teamId,
-      ts: ids.eventTs,
-    });
+    const { actor, channel, routingState } = this.minimalAgentSessionContext(ids);
     const authorization = this.authorizeInbound({
       actor,
       channel,
@@ -1440,9 +1436,10 @@ export class SlackAdapter implements SlackProviderAdapter {
         },
       },
       lifecycle: "metadata_changed",
-      receivedAt: this.now(),
+      receivedAt: receipt.receivedAt,
       routingState,
     });
+    this.enrichAgentSessionContext(ids);
   }
 
   private async publishAppHomes(userIds: readonly string[]): Promise<void> {
@@ -3050,13 +3047,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     teamId?: unknown;
     threadTs: unknown;
     userId: unknown;
-  }): {
-    channelId: string;
-    eventTs: string;
-    teamId?: string;
-    threadTs: string;
-    userId: string;
-  } | undefined {
+  }): ValidatedSlackAgentSessionIds | undefined {
     const channelValidation = validateSlackChannelId(params.channelId);
     if (!channelValidation.ok) {
       logSlackInvalidIdentifier({
@@ -3308,6 +3299,75 @@ export class SlackAdapter implements SlackProviderAdapter {
         ...(options.ts ? { ts: options.ts } : {}),
       },
     };
+  }
+
+  private minimalAgentSessionContext(
+    ids: ValidatedSlackAgentSessionIds,
+  ): {
+    actor: MessagingActorIdentity;
+    channel: MessagingChannelRef;
+    routingState: MessagingAdapterState;
+  } {
+    const contact = this.config.authorizedActorIds.find(
+      (item) => item.id === ids.userId,
+    );
+    const profile = this.userProfileCache.get(ids.userId);
+    const username = profile?.username ?? contact?.username;
+    const displayName =
+      profile?.displayName
+      ?? contact?.displayName
+      ?? username;
+    const actor: MessagingActorIdentity = {
+      platformUserId: ids.userId,
+      ...(displayName ? { displayName } : {}),
+      ...(username ? { username } : {}),
+    };
+    const directMessage = ids.channelId.startsWith("D");
+    const parentTitle =
+      this.conversationTitleCache.get(ids.channelId)
+      ?? (directMessage ? displayName : undefined);
+    const title = this.threadTitleCache.get(
+      slackAgentSessionKey(ids.channelId, ids.threadTs),
+    );
+    const channel: MessagingChannelRef = {
+      channel: this.channel,
+      conversation: {
+        id: ids.channelId,
+        kind: "thread",
+        ...(directMessage ? { isDirectMessage: true } : {}),
+        ...(ids.teamId ? { workspaceId: ids.teamId } : {}),
+        parentConversationId: ids.channelId,
+        parentId: ids.threadTs,
+        ...(parentTitle ? { parentTitle } : {}),
+        ...(title ? { title } : {}),
+      },
+    };
+    return {
+      actor,
+      channel,
+      routingState: this.routingStateForChannel(channel, {
+        teamId: ids.teamId,
+        ts: ids.eventTs,
+      }),
+    };
+  }
+
+  private enrichAgentSessionContext(ids: ValidatedSlackAgentSessionIds): void {
+    void (async () => {
+      const actor = await this.actorForSlackUser(ids.userId);
+      await this.channelRefForSlack({
+        channelId: ids.channelId,
+        channelType: ids.channelId.startsWith("D") ? "im" : undefined,
+        peerTitle: actor.displayName ?? actor.username,
+        teamId: ids.teamId,
+        threadTs: ids.threadTs,
+        ts: ids.eventTs,
+      });
+    })().catch((error) => {
+      this.logger.debug?.("slack Agent Session context enrichment failed", {
+        reason: slackErrorReason(error),
+      });
+    });
   }
 
   private async actorForSlackUser(

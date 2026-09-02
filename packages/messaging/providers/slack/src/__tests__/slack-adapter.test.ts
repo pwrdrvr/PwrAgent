@@ -529,11 +529,21 @@ describe("SlackAdapter", () => {
 
   it("maps Slack's native Agent Session stop event to the existing status stop control", async () => {
     const socket = fakeSocket();
+    let releaseUserLookup: (() => void) | undefined;
+    const userLookupPending = new Promise<void>((resolve) => {
+      releaseUserLookup = resolve;
+    });
+    const api = fakeApi({});
+    api.usersInfo = async () => {
+      await userLookupPending;
+      return undefined;
+    };
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
-      api: fakeApi({}),
+      api,
       socketClient: socket,
+      now: () => 1_234,
     });
     const events: MessagingInboundEvent[] = [];
     await adapter.start(async (event) => {
@@ -568,7 +578,9 @@ describe("SlackAdapter", () => {
         source: "agent_session_stopped",
         streamingMessageTimestamps: ["1782234987.693923"],
       },
+      receivedAt: 1_234,
     });
+    releaseUserLookup?.();
   });
 
   it.each([
@@ -634,11 +646,18 @@ describe("SlackAdapter", () => {
 
   it("records Slack Agent Session title changes as binding metadata", async () => {
     const socket = fakeSocket();
+    let currentTime = 5_678;
+    const api = fakeApi({});
+    api.usersInfo = async () => {
+      currentTime = 9_999;
+      return undefined;
+    };
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
-      api: fakeApi({}),
+      api,
       socketClient: socket,
+      now: () => currentTime,
     });
     const events: MessagingInboundEvent[] = [];
     await adapter.start(async (event) => {
@@ -662,6 +681,7 @@ describe("SlackAdapter", () => {
     expect(events[0]).toMatchObject({
       kind: "lifecycle",
       lifecycle: "metadata_changed",
+      receivedAt: 5_678,
       channel: {
         conversation: {
           id: "C012ABCDEF0",
@@ -1427,6 +1447,46 @@ describe("SlackAdapter", () => {
         title: "Compatibility bridge 2",
       },
     ]);
+  });
+
+  it("withdraws title support after both Slack rename APIs reject the app", async () => {
+    const agentUnsupported = Object.assign(new Error("not_an_agent"), {
+      data: { error: "not_an_agent" },
+    });
+    const assistantUnsupported = Object.assign(new Error("not_assistant"), {
+      data: { error: "not_assistant" },
+    });
+    const api = fakeApi({});
+    api.renameAgentSession = async () => {
+      throw agentUnsupported;
+    };
+    api.setAssistantThreadTitle = async () => {
+      throw assistantUnsupported;
+    };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+    });
+    const request = {
+      channel: {
+        channel: "slack" as const,
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread" as const,
+          parentId: "1712023030.000000",
+          parentConversationId: "C012ABCDEF0",
+        },
+      },
+      title: "Unavailable rename",
+    };
+
+    expect(adapter.supportsConversationTitle(request)).toBe(true);
+    await expect(adapter.setConversationTitle(request)).resolves.toMatchObject({
+      outcome: "unsupported",
+    });
+    expect(adapter.supportsConversationTitle(request)).toBe(false);
   });
 
   it("returns structured rate-limit feedback when Slack rejects a send", async () => {

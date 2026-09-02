@@ -218,6 +218,9 @@ Sync Name action. The tool cannot supply an arbitrary destination, and the
 adapter continues to own provider-specific identifiers, title limits, and API
 translation. Agents should use this operation instead of Browser or Computer
 Use when the user asks to name the current platform thread or conversation.
+After a successful update, desktop orchestration persists the returned title
+on the active binding and notifies local surfaces without waiting for a
+provider metadata echo.
 Adapters that implement title updates should also implement
 `supportsConversationTitle` with the same surface predicate they use before a
 title update. `get_current_messaging_surface` reports that result separately

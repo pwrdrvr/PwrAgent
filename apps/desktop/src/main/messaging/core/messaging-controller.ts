@@ -17446,11 +17446,34 @@ export class MessagingController {
       };
     }
 
+    const renamedConversation = {
+      ...result.conversation,
+      title: result.title,
+    };
+    if (origin.origin.binding) {
+      const updatedBinding = await this.options.store.upsertBinding({
+        ...origin.origin.binding,
+        channel: {
+          ...origin.origin.binding.channel,
+          conversation: {
+            ...origin.origin.binding.channel.conversation,
+            ...renamedConversation,
+          },
+        },
+        updatedAt: result.updatedAt,
+      });
+      origin.origin.binding = updatedBinding;
+      if (origin.origin.deliveryBinding?.id === updatedBinding.id) {
+        origin.origin.deliveryBinding = updatedBinding;
+      }
+      this.notifyBindingChanged("agent-rename-conversation");
+    }
+
     return {
       ok: true,
       data: {
         channel: result.channel,
-        conversation: summarizeMessagingConversation(result.conversation),
+        conversation: summarizeMessagingConversation(renamedConversation),
         outcome: "renamed",
         title: result.title,
         updatedAt: result.updatedAt,

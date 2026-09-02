@@ -97,6 +97,13 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "messaging-agent-conversation-rename": {
+    "commits": 2,
+    "note": "one agent-driven conversation rename persists the binding title",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "messaging-binding-revoke": {
     "commits": 11,
     "note": "one bus-driven binding revoke including Agent Session close status",

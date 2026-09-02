@@ -4862,6 +4862,94 @@ describe("MessagingController", () => {
       routingState: event.routingState,
       title: "Gone Fishin'",
     });
+    await expect(
+      harness.store.findActiveBindingForChannel(event.channel),
+    ).resolves.toMatchObject({
+      channel: {
+        conversation: {
+          title: "Gone Fishin'",
+        },
+      },
+    });
+    expect(harness.onBindingChanged).toHaveBeenCalled();
+  });
+
+  it("budgets the binding write for an agent-driven conversation rename", async () => {
+    const previousMetricsSetting = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-rename-writes-"));
+    tempDirs.push(tempDir);
+    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const store = new SqliteMessagingStore(stateDb);
+      const harness = await createHarness({
+        channel: "slack",
+        setConversationTitle: async (request) => ({
+          channel: "slack",
+          conversation: request.channel.conversation,
+          outcome: "updated",
+          title: request.title,
+          updatedAt: 2_000,
+        }),
+        store,
+      });
+      const event = buildTextEvent("Name this Slack thread", {
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "D012ABCDEF0",
+            kind: "thread",
+            parentConversationId: "D012ABCDEF0",
+            parentId: "1782234671.392669",
+          },
+        },
+        routingState: {
+          opaque: {
+            channelId: "D012ABCDEF0",
+            threadTs: "1782234671.392669",
+          },
+        },
+      });
+      await store.upsertBinding({
+        id: "binding:slack:thread:1782234671.392669:D012ABCDEF0:codex:thread-1",
+        authorizedActorIds: ["user-1"],
+        backend: "codex",
+        channel: event.channel,
+        createdAt: 1_000,
+        routingState: event.routingState,
+        targetKind: "agent_thread",
+        threadId: "thread-1",
+        updatedAt: 1_000,
+      });
+      await harness.controller.handleInboundEvent(event);
+      resetSqliteWriteMetrics();
+
+      const { result, writes } = await measureSqliteWrites(
+        async () => await harness.controller.handlePwrAgentMessagingRequest({
+          operation: "rename_current_messaging_conversation",
+          context: {
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+          args: { title: "Persisted Slack title" },
+        }),
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      expectSqliteWriteBudget({
+        note: "one agent-driven conversation rename persists the binding title",
+        scenario: "messaging-agent-conversation-rename",
+        writes,
+      });
+    } finally {
+      stateDb.close();
+      if (previousMetricsSetting === undefined) {
+        delete process.env[SQLITE_WRITE_METRICS_ENV];
+      } else {
+        process.env[SQLITE_WRITE_METRICS_ENV] = previousMetricsSetting;
+      }
+    }
   });
 
   it("preserves a concrete live messaging origin for ordinary Codex turns only", async () => {

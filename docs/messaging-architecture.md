@@ -154,8 +154,9 @@ only the messaging conversation or thread that started its active turn. The
 controller passes the normalized source channel and opaque routing state to
 the adapter's existing `setConversationTitle` capability; the Agent receives
 no provider token and cannot select another channel. This is distinct from
-renaming the PwrAgent thread. Provider title-change events remain responsible
-for refreshing stored binding metadata.
+renaming the PwrAgent thread. A successful tool rename persists the returned
+title on the active binding and notifies desktop surfaces immediately;
+provider title-change events continue to reconcile changes made elsewhere.
 
 `get_current_messaging_surface` exposes rename discovery as two independent
 facts under `conversationCapabilities.rename`: `supported` comes from the
