@@ -20822,13 +20822,6 @@ a.transcript-message__messaging-origin:focus-visible {
   outline: none;
 }
 
-.review-chip--pull-request:hover,
-.review-chip--pull-request:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--bg-panel-hover);
-  outline: none;
-}
-
 /* "no PR at review time" is an answer, not a control. Dashed and muted so it
    reads as a recorded absence rather than something to click. */
 .review-chip--empty {

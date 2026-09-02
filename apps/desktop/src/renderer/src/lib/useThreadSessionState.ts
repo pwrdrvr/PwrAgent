@@ -560,7 +560,18 @@ function mergeTranscriptEntries(
           && reviewEntriesMatch(entry, optimisticEntry)
       );
       if (matchingReviewIndex !== -1) {
-        merged[matchingReviewIndex] = optimisticEntry;
+        const matched = merged[matchingReviewIndex];
+        merged[matchingReviewIndex] = matched?.type === "review"
+          ? {
+              ...optimisticEntry,
+              ...(optimisticEntry.context ?? matched.context
+                ? { context: optimisticEntry.context ?? matched.context }
+                : {}),
+              ...(optimisticEntry.reviewer ?? matched.reviewer
+                ? { reviewer: optimisticEntry.reviewer ?? matched.reviewer }
+                : {}),
+            }
+          : optimisticEntry;
         rebuildAppendIndexes();
         continue;
       }

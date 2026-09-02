@@ -32,6 +32,7 @@ import type {
   AppServerNotification,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
+  AppServerReviewContext,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadActivityEntry,
@@ -25886,6 +25887,146 @@ command = "pnpm dev"
       threadId: "thread-fork",
     });
     expect(overlay?.forkBaselineCaptured).toBe(true);
+
+    await registry.close();
+  });
+
+  it("persists native review provenance on the existing sub-agent write", async () => {
+    const context: AppServerReviewContext = {
+      workspacePath: "/repo",
+      projectLabel: "PwrAgent",
+      gitBranch: "fix/review-provenance",
+      baseBranch: "origin/main",
+      pullRequest: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1939,
+        headRefName: "fix/review-provenance",
+        baseRefName: "main",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1939",
+      },
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      startReviewResult: {
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    vi.spyOn(
+      registry as unknown as {
+        resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
+      },
+      "resolveReviewContext",
+    ).mockResolvedValue(context);
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId: "review:turn-review-1",
+          reviewContext: context,
+        }),
+      ],
+    });
+
+    await registry.close();
+  });
+
+  it("reattaches persisted provenance to native review replay", async () => {
+    const context: AppServerReviewContext = {
+      workspacePath: "/repo",
+      projectLabel: "PwrAgent",
+      gitBranch: "fix/review-provenance",
+      baseBranch: "origin/main",
+      pullRequest: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1939,
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1939",
+      },
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [
+            {
+              monitorId: "review:turn-review-1",
+              task: "Review changes against origin/main",
+              status: "success",
+              createdAt: 1_000,
+              updatedAt: 2_000,
+              backend: "codex",
+              preferredModel: "gpt-5.6-sol",
+              preferredReasoningEffort: "high",
+              monitorThreadId: "thread-1",
+              monitorTurnId: "turn-review-1",
+              reviewContext: context,
+            },
+          ],
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "review",
+            id: "review-start",
+            review: "changes against 'origin/main'",
+            displayText: "Review changes against origin/main",
+            turn: {
+              id: "turn-review-1",
+              status: "completed",
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response.replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "review-start",
+        context,
+        reviewer: {
+          backend: "codex",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+        },
+      }),
+    ]);
 
     await registry.close();
   });

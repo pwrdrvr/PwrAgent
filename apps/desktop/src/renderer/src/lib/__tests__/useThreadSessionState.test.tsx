@@ -11569,9 +11569,96 @@ describe("useThreadSessionState", () => {
         projectLabel: "PwrAgent",
         gitBranch: "fix/dock-icon",
         baseBranch: "origin/main",
-        pullRequest: { number: 1918, baseRefName: "main" },
+        pullRequest: {
+          number: 1918,
+          baseRefName: "main",
+        },
       },
       reviewer: { backend: "codex", model: "gpt-5.6-sol" },
+    });
+  });
+
+  it("does not drop replay provenance when a matching live review omits it", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const context = {
+      workspacePath: "/Users/dev/pwrdrvr/PwrAgent",
+      projectLabel: "PwrAgent",
+      gitBranch: "fix/dock-icon",
+      baseBranch: "origin/main",
+      pullRequest: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1918,
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1918",
+      },
+    };
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "review",
+              id: "review-start",
+              review: "Review changes against origin/main",
+              displayText: "Review changes against origin/main",
+              context,
+              turn: {
+                id: "turn-review",
+                status: "in_progress",
+              },
+            },
+          ],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "review-start-live",
+              type: "enteredReviewMode",
+              review: "Review changes against origin/main",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+      expect(result.current.entries[0]).toMatchObject({
+        type: "review",
+        context,
+      });
     });
   });
 

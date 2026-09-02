@@ -1,9 +1,16 @@
-import type { AppServerReviewContext } from "@pwragent/shared";
+import type {
+  AppServerReviewContext,
+  AppServerReviewPullRequest,
+  PrSummary,
+} from "@pwragent/shared";
+import { useMemo } from "react";
 import { reviewComparedPastPullRequestBase } from "../../../../shared/review-command";
 import { BranchIcon } from "../../icons/BranchIcon";
 import { FolderIcon } from "../../icons/FolderIcon";
 import { WorktreeIcon } from "../../icons/WorktreeIcon";
+import { useLivePullRequest } from "../../lib/pull-request-links";
 import { CopyableThreadChip } from "../navigation/ThreadMetaChips";
+import { PrChip } from "../pr-status/PrChip";
 
 type ReviewProvenanceProps = {
   context: AppServerReviewContext;
@@ -14,14 +21,16 @@ type ReviewProvenanceProps = {
  * line never says which. The chips answer that before the card gets to what the
  * review found: which project, which branch, and which pull request.
  *
- * Everything here is frozen — resolved once when the review started. Nothing on
- * this row is looked up again, so a card from last month keeps saying what was
- * true when its review ran.
+ * The association is frozen — resolved once when the review started — so a
+ * card from last month keeps naming the workspace, branch, and PR it reviewed.
+ * The PR chip may hydrate that same PR identity with current canonical status;
+ * status can move without relabelling what the review was about.
  */
 export function ReviewProvenance(props: ReviewProvenanceProps) {
   const context = props.context;
   const isWorktree = Boolean(context.repositoryPath);
   const projectLabel = context.projectLabel ?? "Project";
+  const branch = context.gitBranch?.trim();
   const branchLabel = formatBranchLabel(context);
   const pullRequest = context.pullRequest;
 
@@ -49,26 +58,20 @@ export function ReviewProvenance(props: ReviewProvenanceProps) {
       </CopyableThreadChip>
 
       {branchLabel ? (
-        <span className="review-chip">
+        <CopyableThreadChip
+          aria-label={`Copy branch ${branch ?? branchLabel}`}
+          className="review-chip path-copy-target"
+          value={branch ?? branchLabel}
+        >
           <span aria-hidden="true" className="review-chip__icon">
             <BranchIcon size={12} />
           </span>
           <span className="review-chip__label">{branchLabel}</span>
-        </span>
+        </CopyableThreadChip>
       ) : null}
 
       {pullRequest ? (
-        <a
-          className="review-chip review-chip--pull-request"
-          href={pullRequest.url}
-          rel="noopener noreferrer"
-          target="_blank"
-          title={pullRequest.title ?? undefined}
-        >
-          <span className="review-chip__label">
-            {`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}
-          </span>
-        </a>
+        <ReviewPullRequestChip pullRequest={pullRequest} />
       ) : pullRequest === null ? (
         // Distinct from an absent field: the branch was checked and carried no
         // pull request. Saying so is the difference between an answer and a
@@ -79,6 +82,30 @@ export function ReviewProvenance(props: ReviewProvenanceProps) {
       ) : null}
     </div>
   );
+}
+
+function ReviewPullRequestChip(props: {
+  pullRequest: AppServerReviewPullRequest;
+}) {
+  const fallback = useMemo<PrSummary>(
+    () => ({ ...props.pullRequest, state: "unknown" }),
+    [props.pullRequest],
+  );
+  const pullRequest = useLivePullRequest(fallback);
+  return (
+    <PrChip
+      pr={pullRequest}
+      showRepoPrefix
+      onOpen={openPullRequest}
+    />
+  );
+}
+
+function openPullRequest(url: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 /**

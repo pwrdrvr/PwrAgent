@@ -5963,17 +5963,18 @@ function reviewEntryReviewer(
 
 /**
  * Native review entries come from the provider transcript, which does not
- * carry the reviewer configuration. The durable review sub-agent summary is
- * the authority for that configuration, including after an app restart.
+ * carry reviewer configuration or PwrAgent's frozen workspace/PR provenance.
+ * The durable review sub-agent summary is the authority for both, including
+ * after an app restart.
  */
-function attachReviewEntryReviewers(params: {
+function attachReviewEntryMetadata(params: {
   replay: AppServerThreadReplay;
   subAgents?: ThreadSubAgentSummary[];
 }): AppServerThreadReplay {
-  const reviewerByTurnId = new Map<
-    string,
-    NonNullable<AppServerThreadReviewEntry["reviewer"]>
-  >();
+  const metadataByTurnId = new Map<string, {
+    context?: AppServerReviewContext;
+    reviewer: NonNullable<AppServerThreadReviewEntry["reviewer"]>;
+  }>();
   for (const subAgent of params.subAgents ?? []) {
     if (
       !subAgent.monitorId.startsWith("review:")
@@ -5986,16 +5987,19 @@ function attachReviewEntryReviewers(params: {
       subAgent.preferredModel
       ?? subAgent.monitorUsage?.model
       ?? subAgent.monitorUsage?.cost?.model;
-    reviewerByTurnId.set(subAgent.monitorTurnId, {
-      backend: subAgent.backend,
-      ...(model ? { model } : {}),
-      ...(subAgent.preferredReasoningEffort
-        ? { reasoningEffort: subAgent.preferredReasoningEffort }
-        : {}),
+    metadataByTurnId.set(subAgent.monitorTurnId, {
+      ...(subAgent.reviewContext ? { context: subAgent.reviewContext } : {}),
+      reviewer: {
+        backend: subAgent.backend,
+        ...(model ? { model } : {}),
+        ...(subAgent.preferredReasoningEffort
+          ? { reasoningEffort: subAgent.preferredReasoningEffort }
+          : {}),
+      },
     });
   }
 
-  if (reviewerByTurnId.size === 0) {
+  if (metadataByTurnId.size === 0) {
     return params.replay;
   }
 
@@ -6004,27 +6008,33 @@ function attachReviewEntryReviewers(params: {
     if (entry.type !== "review" || !entry.turn?.id) {
       return entry;
     }
-    const durableReviewer = reviewerByTurnId.get(entry.turn.id);
-    if (!durableReviewer) {
+    const metadata = metadataByTurnId.get(entry.turn.id);
+    if (!metadata) {
       return entry;
     }
-    const model = entry.reviewer?.model ?? durableReviewer.model;
+    const model = entry.reviewer?.model ?? metadata.reviewer.model;
     const reasoningEffort =
-      entry.reviewer?.reasoningEffort ?? durableReviewer.reasoningEffort;
+      entry.reviewer?.reasoningEffort ?? metadata.reviewer.reasoningEffort;
     const reviewer = {
-      backend: entry.reviewer?.backend ?? durableReviewer.backend,
+      backend: entry.reviewer?.backend ?? metadata.reviewer.backend,
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
     };
+    const context = entry.context ?? metadata.context;
     if (
       entry.reviewer?.backend === reviewer.backend
       && entry.reviewer?.model === reviewer.model
       && entry.reviewer?.reasoningEffort === reviewer.reasoningEffort
+      && entry.context === context
     ) {
       return entry;
     }
     changed = true;
-    return { ...entry, reviewer };
+    return {
+      ...entry,
+      reviewer,
+      ...(context ? { context } : {}),
+    };
   });
   return changed ? { ...params.replay, entries } : params.replay;
 }
@@ -10617,7 +10627,7 @@ export class DesktopBackendRegistry {
       replayWithTranscriptOverlays,
       messageOrigins,
     );
-    const replayWithReviewers = attachReviewEntryReviewers({
+    const replayWithReviewMetadata = attachReviewEntryMetadata({
       replay: replayWithMessageOrigins,
       subAgents: overlay?.subAgents,
     });
@@ -10663,10 +10673,10 @@ export class DesktopBackendRegistry {
         : {}),
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
-      ...(replayWithReviewers.threadStatus
-        ? { threadStatus: replayWithReviewers.threadStatus }
+      ...(replayWithReviewMetadata.threadStatus
+        ? { threadStatus: replayWithReviewMetadata.threadStatus }
         : {}),
-      replay: replayWithReviewers,
+      replay: replayWithReviewMetadata,
     };
   }
 
@@ -12612,7 +12622,7 @@ export class DesktopBackendRegistry {
       replayWithImmutableUsage,
       messageOrigins,
     );
-    const replayWithReviewers = attachReviewEntryReviewers({
+    const replayWithReviewMetadata = attachReviewEntryMetadata({
       replay: replayWithMessageOrigins,
       subAgents: overlay?.subAgents,
     });
@@ -12675,10 +12685,10 @@ export class DesktopBackendRegistry {
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
-      ...(replayWithReviewers.threadStatus
-        ? { threadStatus: replayWithReviewers.threadStatus }
+      ...(replayWithReviewMetadata.threadStatus
+        ? { threadStatus: replayWithReviewMetadata.threadStatus }
         : {}),
-      replay: replayWithReviewers,
+      replay: replayWithReviewMetadata,
     };
   }
 
@@ -25079,6 +25089,9 @@ export class DesktopBackendRegistry {
         : {}),
       monitorThreadId: record.reviewThreadId,
       monitorTurnId: record.turnId,
+      ...(record.context ?? existing?.reviewContext
+        ? { reviewContext: record.context ?? existing?.reviewContext }
+        : {}),
       ...(patch.lastMessage ?? existing?.lastMessage
         ? { lastMessage: patch.lastMessage ?? existing?.lastMessage }
         : {}),
