@@ -102,6 +102,30 @@ describe("resolveReviewRunMode", () => {
     expect(decision.helpText).toMatch(/not this thread's primary workspace/);
   });
 
+  it("keeps the project-linked local provider workspace primary", () => {
+    const parent = thread();
+    parent.projectKey = "/repo/primary";
+    parent.linkedDirectories.push({
+      id: "/repo/secondary",
+      kind: "worktree",
+      label: "secondary",
+      path: "/repo/secondary",
+      worktreePath: "/worktrees/secondary",
+    });
+    const decision = resolveReviewRunMode({
+      ownerSummary: reviewer("codex", true),
+      requestedRunMode: "inline",
+      reviewerBackend: "codex",
+      reviewerSummary: reviewer("codex", true),
+      thread: parent,
+      workspaceCwd: "/repo/primary",
+    });
+
+    expect(decision.runMode).toBe("inline");
+    expect(decision.controlDisabled).toBe(false);
+    expect(decision.helpText).toBeUndefined();
+  });
+
   it("forces ACP review providers into managed children", () => {
     const decision = resolveReviewRunMode({
       ownerSummary: reviewer("acp:grok", true),

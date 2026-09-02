@@ -5686,9 +5686,8 @@ describe("Composer", () => {
     expect(location).toBeDisabled();
     expect(location).toHaveAttribute("data-value", "managed-child");
     expect(
-      location.closest(".composer__review-location-chip")
-        ?.getAttribute("data-tooltip"),
-    ).toMatch(
+      location.closest(".composer__review-location-chip"),
+    ).toHaveAccessibleName(
       /Grok, a different provider/,
     );
 
@@ -9987,10 +9986,12 @@ describe("Composer", () => {
     expect(location).toBeDisabled();
     expect(location).toHaveAttribute("data-value", "inline");
     expect(location).toHaveTextContent("Owner default");
-    expect(
-      location.closest(".composer__review-location-chip")
-        ?.getAttribute("data-tooltip"),
-    ).toMatch(
+    const locationChip = location.closest(".composer__review-location-chip");
+    expect(locationChip).toHaveAccessibleName(
+      /owner's configured default/,
+    );
+    fireEvent.focus(locationChip!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
       /owner's configured default/,
     );
   });
@@ -10077,12 +10078,19 @@ describe("Composer", () => {
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
 
     const location = screen.getByRole("button", { name: "Review location" });
+    const locationChip = location.closest(".composer__review-location-chip");
+    fireEvent.focus(location);
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent(
+      "Codex cannot run this review in a subagent.",
+    );
+    expect(locationChip).not.toContainElement(tooltip);
     fireEvent.click(location);
     const subagent = screen.getByRole("option", { name: "Subagent" });
     expect(subagent).toBeDisabled();
-    expect(location.closest(".composer__review-location-chip")).toHaveAttribute(
-      "data-tooltip",
-      "Codex cannot run this review in a subagent.",
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(locationChip).toHaveAccessibleName(
+      /Codex cannot run this review in a subagent/,
     );
   });
 
@@ -10155,9 +10163,8 @@ describe("Composer", () => {
     expect(location).toBeDisabled();
     expect(location).toHaveAttribute("data-value", "managed-child");
     expect(
-      location.closest(".composer__review-location-chip")
-        ?.getAttribute("data-tooltip"),
-    ).toMatch(
+      location.closest(".composer__review-location-chip"),
+    ).toHaveAccessibleName(
       /not this thread's primary workspace/,
     );
     await clickButton("Start review");

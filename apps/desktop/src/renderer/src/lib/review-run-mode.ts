@@ -20,18 +20,43 @@ function normalizeWorkspacePath(value?: string): string | undefined {
   return normalized || undefined;
 }
 
+function findProjectWorkspaceCwd(
+  thread: NavigationThreadSummary,
+): string | undefined {
+  const projectKey = normalizeWorkspacePath(thread.projectKey);
+  if (!projectKey) return undefined;
+
+  return thread.linkedDirectories
+    .flatMap((directory) => {
+      const workspaceCwd = normalizeWorkspacePath(
+        directory.worktreePath ?? directory.path,
+      );
+      const matchLength = [directory.worktreePath, directory.path]
+        .map(normalizeWorkspacePath)
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .filter((candidate) => (
+          projectKey === candidate
+          || projectKey.startsWith(`${candidate}/`)
+        ))
+        .reduce((longest, candidate) => Math.max(longest, candidate.length), 0);
+      return workspaceCwd && matchLength > 0
+        ? [{ matchLength, workspaceCwd }]
+        : [];
+    })
+    .sort((left, right) => right.matchLength - left.matchLength)[0]
+    ?.workspaceCwd;
+}
+
 function usesSecondaryWorkspace(
   thread: NavigationThreadSummary,
   workspaceCwd?: string,
 ): boolean {
   if (thread.source !== "codex") return false;
   const selected = normalizeWorkspacePath(workspaceCwd);
-  const fallbackPrimary =
-    thread.linkedDirectories.find((directory) => directory.kind === "worktree")
-    ?? thread.linkedDirectories.find((directory) => directory.kind === "local")
-    ?? thread.linkedDirectories[0];
+  const fallbackPrimary = thread.linkedDirectories[0];
   const primary = normalizeWorkspacePath(
     findPreferredReviewWorkspaceCwd(thread)
+    ?? findProjectWorkspaceCwd(thread)
     ?? fallbackPrimary?.worktreePath
     ?? fallbackPrimary?.path
     ?? thread.projectKey,
