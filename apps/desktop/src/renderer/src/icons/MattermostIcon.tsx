@@ -70,6 +70,6 @@ export function MattermostIcon({
 function useMattermostVariant(
   variant: MattermostIconVariant | undefined,
 ): MattermostIconVariant {
-  const theme = useBrandTheme();
+  const theme = useBrandTheme(!variant);
   return variant ?? (theme === "light" ? "denim" : "white");
 }

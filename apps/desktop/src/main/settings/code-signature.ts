@@ -92,6 +92,12 @@ export class CodeSignatureInspector {
       return { path, trust: "unsupported" };
     }
 
+    // Checked before the `stat` below, not after. Two callers that arrive
+    // together would otherwise both suspend on their own `stat`, both
+    // resume to an empty map, and both spawn a probe for the same file.
+    const inFlight = this.inFlight.get(path);
+    if (inFlight) return await inFlight;
+
     // Identity is the file itself, not its name: a Homebrew upgrade
     // rewrites `/opt/homebrew/bin/git` in place, and the cache has to
     // notice. mtime + size is what `stat` can give cheaply.
@@ -101,6 +107,8 @@ export class CodeSignatureInspector {
       return cached.signature;
     }
 
+    // Re-checked: another caller can have registered a probe while this one
+    // was suspended on `stat`.
     const pending = this.inFlight.get(path);
     if (pending) return await pending;
 
@@ -129,20 +137,42 @@ export class CodeSignatureInspector {
     }
   }
 
+  /**
+   * Claims the slot before suspending, and hands it directly to the next
+   * waiter instead of releasing it back to the pool.
+   *
+   * Incrementing after the `await` was the bug: the released waiter only
+   * increments once its microtask runs, so any call arriving in that
+   * window read a count that was one too low, passed the check, and the
+   * limit was exceeded. Waking a waiter now leaves `active` untouched —
+   * the slot is transferred, never briefly free — so no arrival can slip
+   * through it, and a re-check on resume keeps a `while` unnecessary.
+   */
   private async withSlot<T>(run: () => Promise<T>): Promise<T> {
     if (this.active >= MAX_CONCURRENT_PROBES) {
       await new Promise<void>((resolve) => this.queue.push(resolve));
+    } else {
+      this.active += 1;
     }
-    this.active += 1;
     try {
       return await run();
     } finally {
-      this.active -= 1;
-      this.queue.shift()?.();
+      const next = this.queue.shift();
+      if (next) {
+        next();
+      } else {
+        this.active -= 1;
+      }
     }
   }
 
-  private async probe(path: string): Promise<DesktopCodeSignature> {
+  /**
+   * The one subprocess-spawning step, kept `protected` so a test can
+   * substitute it. Everything above it — the identity cache, the in-flight
+   * dedupe, the concurrency limit — is platform-independent logic that
+   * would otherwise only be reachable by running `codesign` for real.
+   */
+  protected async probe(path: string): Promise<DesktopCodeSignature> {
     return this.platform === "win32"
       ? await this.probeWindows(path)
       : await this.probeMac(path);

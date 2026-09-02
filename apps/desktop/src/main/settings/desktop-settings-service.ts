@@ -513,9 +513,15 @@ export class DesktopSettingsService {
   // Git/applications discovery remains process-lifetime memoized. Codex uses a
   // bounded coordinator shared with app-server launch so Settings and launch
   // cannot select different binaries.
-  private gitDiscoveryPromise?: Promise<DesktopGitDiscoverySnapshot>;
-  private gitDiscovery?: DesktopGitDiscoverySnapshot;
-  private gitDiscoveryCacheKey?: string;
+  // Scoped to the cache entry rather than kept in a shared field, so a probe
+  // that is already obsolete by the time it resolves writes into its own
+  // entry and can never overwrite a newer snapshot. Same shape as
+  // `ghDiscoveryCache` below, and for the same reason.
+  private gitDiscoveryCache?: {
+    key: string;
+    promise: Promise<DesktopGitDiscoverySnapshot>;
+    result?: DesktopGitDiscoverySnapshot;
+  };
   private applicationsDiscoveryPromise?: Promise<DesktopApplicationsSnapshot>;
   private applicationsDiscovery?: DesktopApplicationsSnapshot;
   private codexProfiles: DesktopCodexAuthProfileDiscoverySnapshot;
@@ -681,7 +687,7 @@ export class DesktopSettingsService {
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
     const codexProfiles = this.codexProfiles;
     const ghDiscovery = this.ghDiscoveryCache?.result ?? { candidates: [] };
-    const gitDiscovery = this.gitDiscovery ?? { candidates: [] };
+    const gitDiscovery = this.gitDiscoveryCache?.result ?? { candidates: [] };
     const applications = this.applicationsDiscovery
       ?? emptyApplicationsSnapshot();
     const preferredEditorId = this.resolveConfigString(
@@ -1611,17 +1617,15 @@ export class DesktopSettingsService {
     configuredCommand?: string,
   ): Promise<DesktopGitDiscoverySnapshot> {
     const key = configuredCommand?.trim() ?? "";
-    if (this.gitDiscoveryCacheKey !== key || !this.gitDiscoveryPromise) {
-      this.gitDiscoveryCacheKey = key;
-      this.gitDiscoveryPromise = discoverGitCommands({
-        configuredCommand,
-        env: this.env,
-      }).then((result) => {
-        this.gitDiscovery = result;
-        return result;
+    if (this.gitDiscoveryCache?.key !== key) {
+      const promise = discoverGitCommands({ configuredCommand, env: this.env });
+      const cache: NonNullable<typeof this.gitDiscoveryCache> = { key, promise };
+      void promise.then((result) => {
+        cache.result = result;
       });
+      this.gitDiscoveryCache = cache;
     }
-    return this.gitDiscoveryPromise;
+    return this.gitDiscoveryCache.promise;
   }
 
   private discoverDesktopApplicationsCached(): Promise<DesktopApplicationsSnapshot> {
@@ -2158,8 +2162,7 @@ export class DesktopSettingsService {
    * show which git is now live.
    */
   async refreshGitDiscovery(): Promise<DesktopSettingsSnapshot> {
-    this.gitDiscoveryPromise = undefined;
-    this.gitDiscoveryCacheKey = undefined;
+    this.gitDiscoveryCache = undefined;
     await this.discoverGitCommandsCached(
       this.configStore.read("applications").git?.path,
     );
@@ -2594,14 +2597,31 @@ export class DesktopSettingsService {
    * operator has expressed no preference and `PATH` should decide.
    * Installed as the `git-command` resolver at startup, so every git
    * spawn honours the Settings pane's selection.
+   *
+   * A configured path the last discovery run found unusable is dropped.
+   * Discovery's own selection already skips a non-executable candidate, so
+   * without this the Settings pane would show one git as "In use" while
+   * every direct `getGitCommand()` spawn ran a different, broken one — the
+   * realistic case being an OS update that re-arms the Xcode license
+   * prompt under an operator who had chosen Apple's git. Env override is
+   * exempt: it is an explicit escape hatch and must not be second-guessed,
+   * and a path we have not probed is trusted rather than ignored.
    */
   resolveGitCommandPreference(): string | undefined {
-    const configured = this.configStore.read("applications").git?.path;
-    return (
-      readEnvString(this.env, GIT_COMMAND_ENV)
-      || configured
-      || undefined
+    const envOverride = readEnvString(this.env, GIT_COMMAND_ENV);
+    if (envOverride) {
+      return envOverride;
+    }
+
+    const configured = this.configStore.read("applications").git?.path?.trim();
+    if (!configured) {
+      return undefined;
+    }
+
+    const probed = this.gitDiscoveryCache?.result?.candidates.find(
+      (candidate) => candidate.command === configured,
     );
+    return probed && !probed.executable ? undefined : configured;
   }
 
   private readConfig(): ConfigReadResult {

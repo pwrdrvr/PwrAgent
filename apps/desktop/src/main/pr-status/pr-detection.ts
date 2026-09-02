@@ -139,7 +139,8 @@ async function readTrackedRemoteBranch(params: {
 }): Promise<TrackedRemoteBranch | undefined> {
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync(getGitCommand(),
+    ({ stdout } = await execFileAsync(
+      getGitCommand(),
       [
         "for-each-ref",
         "--format=%(refname)%09%(upstream:remotename)%09%(upstream:remoteref)",

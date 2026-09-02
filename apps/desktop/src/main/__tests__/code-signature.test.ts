@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile as write } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DesktopCodeSignature } from "@pwragent/shared";
 import {
+  CodeSignatureInspector,
   parseAuthenticodeOutput,
   parseCodesignDisplay,
 } from "../settings/code-signature";
@@ -135,5 +140,140 @@ describe("parseAuthenticodeOutput", () => {
 
   it("reads unparseable output as unknown", () => {
     expect(parseAuthenticodeOutput("not json").trust).toBe("unknown");
+  });
+});
+
+/**
+ * The inspector's own logic — identity cache, in-flight dedupe, and the
+ * concurrency cap — with the one subprocess step stubbed out. Left
+ * untested, the parsers above are green while the class around them
+ * re-probes on every render or runs an unbounded burst of `codesign`
+ * processes, neither of which any parser assertion can see.
+ */
+class StubInspector extends CodeSignatureInspector {
+  readonly probed: string[] = [];
+  peakConcurrency = 0;
+  private running = 0;
+
+  constructor(
+    private readonly gate?: Promise<void>,
+    platform: NodeJS.Platform = "darwin",
+  ) {
+    super({ platform });
+  }
+
+  protected override async probe(path: string): Promise<DesktopCodeSignature> {
+    this.probed.push(path);
+    this.running += 1;
+    this.peakConcurrency = Math.max(this.peakConcurrency, this.running);
+    try {
+      await (this.gate ?? Promise.resolve());
+      return { path, trust: "adhoc" };
+    } finally {
+      this.running -= 1;
+    }
+  }
+}
+
+describe("CodeSignatureInspector", () => {
+  let directory: string;
+
+  beforeEach(async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "pwragent-code-signature-"));
+  });
+
+  afterEach(async () => {
+    await rm(directory, { force: true, recursive: true });
+  });
+
+  async function writeFile(name: string, contents: string): Promise<string> {
+    const target = path.join(directory, name);
+    await write(target, contents, "utf8");
+    return target;
+  }
+
+  it("serves a cached reading without probing again", async () => {
+    const target = await writeFile("git", "one");
+    const inspector = new StubInspector();
+
+    await inspector.inspect(target);
+    await inspector.inspect(target);
+
+    expect(inspector.probed).toEqual([target]);
+  });
+
+  it("re-probes when the file at the same path changes", async () => {
+    const target = await writeFile("git", "one");
+    const inspector = new StubInspector();
+    await inspector.inspect(target);
+
+    // A Homebrew upgrade rewrites the same path in place, which is the
+    // case the mtime+size key exists to notice.
+    await write(target, "two-is-longer", "utf8");
+    await inspector.inspect(target);
+
+    expect(inspector.probed).toEqual([target, target]);
+  });
+
+  it("probes an unreadable path every time rather than caching a guess", async () => {
+    const missing = path.join(directory, "absent");
+    const inspector = new StubInspector();
+
+    await inspector.inspect(missing);
+    await inspector.inspect(missing);
+
+    expect(inspector.probed).toEqual([missing, missing]);
+  });
+
+  it("collapses concurrent requests for one path into a single probe", async () => {
+    const target = await writeFile("git", "one");
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const inspector = new StubInspector(gate);
+
+    const both = Promise.all([inspector.inspect(target), inspector.inspect(target)]);
+    open();
+    const [first, second] = await both;
+
+    expect(inspector.probed).toEqual([target]);
+    expect(first).toEqual(second);
+  });
+
+  it("never runs more than four probes at once", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const inspector = new StubInspector(gate);
+    const targets = await Promise.all(
+      Array.from({ length: 12 }, (_value, index) =>
+        writeFile(`tool-${index}`, `contents-${index}`),
+      ),
+    );
+
+    const pending = inspector.inspectMany(targets);
+    // Every caller stats its file before it reaches the limiter, so settle
+    // that I/O first and assert the cap while all twelve are outstanding.
+    await vi.waitFor(() => {
+      expect(inspector.probed).toHaveLength(4);
+    });
+    expect(inspector.peakConcurrency).toBe(4);
+
+    open();
+    await pending;
+    expect(inspector.peakConcurrency).toBe(4);
+    expect(inspector.probed).toHaveLength(12);
+  });
+
+  it("reports unsupported without probing on a platform with no signing", async () => {
+    const inspector = new StubInspector(undefined, "linux");
+
+    expect(await inspector.inspect("/usr/bin/git")).toEqual({
+      path: "/usr/bin/git",
+      trust: "unsupported",
+    });
+    expect(inspector.probed).toEqual([]);
   });
 });

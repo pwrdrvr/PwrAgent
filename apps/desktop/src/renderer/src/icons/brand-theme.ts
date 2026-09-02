@@ -14,19 +14,33 @@ import { useSyncExternalStore } from "react";
  */
 export type BrandTheme = "light" | "dark";
 
-export function useBrandTheme(): BrandTheme {
-  return useSyncExternalStore(subscribe, readBrandTheme, readServerBrandTheme);
+/**
+ * Pass `enabled: false` when the caller has an explicit variant and cannot
+ * use the answer. A fixed-variant icon that still subscribed would add a
+ * listener to the shared set and hold the document-wide MutationObserver
+ * open for a value it ignores.
+ */
+export function useBrandTheme(enabled = true): BrandTheme {
+  return useSyncExternalStore(
+    enabled ? subscribe : subscribeToNothing,
+    readBrandTheme,
+    readServerBrandTheme,
+  );
 }
 
 const listeners = new Set<() => void>();
 let observer: MutationObserver | undefined;
+
+function subscribeToNothing(_listener: () => void): () => void {
+  return () => undefined;
+}
 
 function subscribe(listener: () => void): () => void {
   if (
     typeof document === "undefined"
     || typeof MutationObserver === "undefined"
   ) {
-    return () => undefined;
+    return subscribeToNothing(listener);
   }
 
   listeners.add(listener);

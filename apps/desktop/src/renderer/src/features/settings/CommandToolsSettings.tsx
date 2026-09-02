@@ -59,9 +59,18 @@ export function GitToolSection(props: {
   const envForced = gitPath.source === "env";
   const selected = discovery.candidates.find((candidate) => candidate.selected);
   const hasWorkingGit = discovery.candidates.some((candidate) => candidate.executable);
+  const configuredCommand = gitPath.value.trim();
   const visibleCandidates = discovery.candidates.filter(
     (candidate) =>
-      candidate.executable || isXcodeLicenseCandidate(candidate) || !hasWorkingGit,
+      candidate.executable
+      || isXcodeLicenseCandidate(candidate)
+      // The operator's own choice always stays on screen. Filtering it out
+      // with the rest of the broken candidates is how a selection that has
+      // stopped working becomes invisible: the pane would show some other
+      // git as "In use" with nothing saying a different one is configured,
+      // and no row to clear.
+      || candidate.command === configuredCommand
+      || !hasWorkingGit,
   );
   const xcodeLicenseCandidate = discovery.candidates.find((candidate) =>
     isXcodeLicenseCandidate(candidate)
@@ -85,6 +94,11 @@ export function GitToolSection(props: {
         await desktopApi.refreshGitDiscovery();
       }
       await props.onRefresh();
+    } catch (caught) {
+      // Every caller reaches this through `void`, so an uncaught rejection
+      // here is invisible: the spinner clears, the rows do not change, and
+      // the operator is told nothing. Mirrors the gh section's `load`.
+      setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setLoading(false);
     }
@@ -92,7 +106,12 @@ export function GitToolSection(props: {
 
   const saveGitPath = async (path: string): Promise<void> => {
     setError(undefined);
-    await props.onSaveGitPath(path);
+    try {
+      await props.onSaveGitPath(path);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      return;
+    }
     await refresh();
   };
 
@@ -303,7 +322,12 @@ export function GhToolSection(props: {
   const resolvedVersion = selected?.version;
   const sourceLabel = gh.path.source === "default" ? "auto" : gh.path.source;
   const saveGhPath = async (path: string): Promise<void> => {
-    await props.onSaveGhPath(path);
+    try {
+      await props.onSaveGhPath(path);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      return;
+    }
     await load(true);
   };
 

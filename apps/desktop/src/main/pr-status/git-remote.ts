@@ -218,7 +218,8 @@ async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
-        const result = await execFileAsync(getGitCommand(),
+        const result = await execFileAsync(
+          getGitCommand(),
           ["remote", "get-url", "--all", name],
           {
             cwd,

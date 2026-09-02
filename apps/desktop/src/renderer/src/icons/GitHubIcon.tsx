@@ -37,7 +37,7 @@ export function GitHubIcon({
   alt = "",
   ...rest
 }: GitHubIconProps) {
-  const theme = useBrandTheme();
+  const theme = useBrandTheme(!variant);
   const resolved = variant ?? (theme === "light" ? "black" : "white");
   return (
     <img
