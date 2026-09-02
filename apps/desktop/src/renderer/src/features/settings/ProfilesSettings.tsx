@@ -242,7 +242,18 @@ function PwrAgentProfileCard(props: {
         <span className="settings-profile-card__when">{lastUsed}</span>
       </p>
       <div className="settings-profile-card__codex">
-        <span className="settings-profile-card__codex-label">Codex auth</span>
+        {/*
+          Sighted-only: the select carries the full name ("Codex auth
+          profile for <name>") on its own `aria-label`, so announcing this
+          span too would read the same words twice, the first time as text
+          with no owner.
+        */}
+        <span
+          aria-hidden="true"
+          className="settings-profile-card__codex-label"
+        >
+          Codex auth
+        </span>
         {props.codexProfileControl}
       </div>
     </div>

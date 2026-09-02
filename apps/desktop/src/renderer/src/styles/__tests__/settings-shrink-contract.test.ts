@@ -51,11 +51,37 @@ describe("settings panel shrink contract", () => {
     ".settings-profile-card__ident",
     ".settings-profile-card__where",
     ".settings-profile-card__codex",
+    // The leaf, not just the containers. This is the one actually holding
+    // a nowrap run — a container that can shrink around a child that
+    // cannot has not solved anything. Both path call sites compose this
+    // class, so asserting it here covers them without each re-declaring
+    // the property.
+    ".settings-splitpath",
   ])("lets %s shrink below its content", (selector) => {
     // A flex child's `min-width: auto` is its content size, so dropping any
     // one of these puts the nowrap paths and buttons back in charge of the
     // card's width and the clip starts eating them again.
     expect(ruleBody(selector)).toMatch(/min-width:\s*0/);
+  });
+
+  it("clips the split path rather than letting it size the row", () => {
+    // `min-width: 0` alone is not enough for a nowrap run: without the
+    // clip the head span still paints past the box it was shrunk into.
+    const body = ruleBody(".settings-splitpath");
+    expect(body).toMatch(/overflow:\s*hidden/);
+    expect(ruleBody(".settings-splitpath__head")).toMatch(
+      /text-overflow:\s*ellipsis/,
+    );
+    // The tail is pinned — that is the whole point of the split.
+    expect(ruleBody(".settings-splitpath__tail")).toMatch(/flex:\s*0 0 auto/);
+  });
+
+  it("keeps the codex auth select legible when the row cannot wrap further", () => {
+    // `.settings-select` sets `min-width: 0`; this rule is the floor that
+    // stops the control shrinking past a usable width in a narrow window.
+    expect(ruleBody(".settings-codex-profile-select__control")).toMatch(
+      /min-width:\s*(?!0)\d+px/,
+    );
   });
 });
 
@@ -65,20 +91,16 @@ describe("settings panel shrink contract", () => {
  * the profile row's three never did, so they rendered at 16px in a pane
  * whose largest body text is 13.5px. That is the "chonky" half of the same
  * report.
+ *
+ * The real fix is a `font-size` on `.button` itself; until that lands, this
+ * asserts the local override is present. It deliberately pins only rules
+ * this pane owns — a neighbouring button's size is not this contract's to
+ * hold.
  */
 describe("settings button scale", () => {
   it("sizes the profile card's actions to the pane, not the UA default", () => {
     const body = ruleBody(".settings-profile-card__button");
     expect(body).toMatch(/font-size:\s*12px/);
     expect(body).toMatch(/min-height:\s*28px/);
-  });
-
-  it("keeps the settings bulk controls at their own smaller scale", () => {
-    // The neighbour this is measured against. If someone normalizes the two
-    // to one size, that is a deliberate design change and both rows of this
-    // contract should move together.
-    expect(ruleBody(".settings-section-controls__button")).toMatch(
-      /font-size:\s*11px/,
-    );
   });
 });

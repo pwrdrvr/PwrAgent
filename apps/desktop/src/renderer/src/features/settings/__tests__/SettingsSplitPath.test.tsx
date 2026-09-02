@@ -52,7 +52,7 @@ describe("SettingsSplitPath", () => {
     expect(parts("~")).toEqual({ head: "~", tail: undefined, text: "~" });
   });
 
-  it("carries the untruncated value on title, defaulting to the display value", () => {
+  it("carries the untruncated value on title when the display value is tildified", () => {
     render(
       <SettingsSplitPath
         title="/var/folders/07/abc/.pwragent/profiles/default"
@@ -62,7 +62,9 @@ describe("SettingsSplitPath", () => {
     expect(
       screen.getByTitle("/var/folders/07/abc/.pwragent/profiles/default"),
     ).toBeInTheDocument();
+  });
 
+  it("falls back to the display value when no title is given", () => {
     render(<SettingsSplitPath value="~/.codex" />);
     expect(screen.getByTitle("~/.codex")).toBeInTheDocument();
   });

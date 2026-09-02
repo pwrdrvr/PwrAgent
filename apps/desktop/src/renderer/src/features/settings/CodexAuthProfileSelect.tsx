@@ -12,6 +12,14 @@ const CREATE_VALUE = "__create_codex_profile__";
 
 type CreationStep = "form" | "waiting" | "authenticated";
 
+/**
+ * Renders as THREE siblings, not one box: the select, the selected
+ * profile's codex home, and its state chips. The wrapper carries
+ * `display: contents`, so the parent owns the layout — render this
+ * inside a wrapping flex row (`.settings-profile-card__codex` is the
+ * only one today). A block or grid parent stacks the three parts with
+ * no error and no failing test.
+ */
 export function CodexAuthProfileSelect(props: {
   "aria-label": string;
   desktopApi?: DesktopApi;
