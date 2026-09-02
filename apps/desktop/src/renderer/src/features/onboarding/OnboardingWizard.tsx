@@ -1939,7 +1939,7 @@ export function BackendRequirementsStep(props: {
   const [geminiLoginState, setGeminiLoginState] = useState<
     "idle" | "running" | "ready"
   >("idle");
-  const initialAcpLoadStarted = useRef(false);
+  const initialDiscoveryStarted = useRef(false);
   const snapshot = props.settings.snapshot;
   const discovery = snapshot?.models.codex.discovery;
   const codexCandidate = selectedCodexCandidate(snapshot);
@@ -1994,28 +1994,21 @@ export function BackendRequirementsStep(props: {
   }, [props.desktopApi, props.settings, refreshing, updateAcpEntries]);
 
   useEffect(() => {
-    if (initialAcpLoadStarted.current || !props.desktopApi?.listAcpAgents) return;
-    initialAcpLoadStarted.current = true;
+    if (
+      initialDiscoveryStarted.current
+      || !props.desktopApi?.listAcpAgents
+    ) return;
+    initialDiscoveryStarted.current = true;
     void props.desktopApi
       .listAcpAgents({ refresh: false })
       .then((response) => {
         updateAcpEntries(response.entries);
-        return props.desktopApi?.listAcpAgents?.({
-          discoveryIntent: "setup-user-action",
-          refresh: true,
-          probeCapabilities: false,
-        });
-      })
-      .then((response) => {
-        if (!response) return;
-        updateAcpEntries(response.entries);
-        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
-        if (response.error) setError(response.error);
+        return refresh();
       })
       .catch((caught: unknown) => {
         setError(caught instanceof Error ? caught.message : String(caught));
       });
-  }, [props.desktopApi, updateAcpEntries]);
+  }, [props.desktopApi, refresh, updateAcpEntries]);
 
   const backendInstalled = (id: OnboardingBackendId): boolean =>
     id === "codex"
