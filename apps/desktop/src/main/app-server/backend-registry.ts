@@ -23684,13 +23684,6 @@ export class DesktopBackendRegistry {
     const available = Boolean(lastKnownGood?.selectedCommand);
     const methods: string[] = [];
     const capabilities = buildCapabilities(methods, "codex");
-    if (
-      this.resolveManagedReviewEnabledFn()
-      && capabilities.createThread
-      && capabilities.startTurn
-    ) {
-      capabilities.startReview = true;
-    }
     const unavailableReason = provider?.validation.error
       ?? "Codex discovery has not completed yet.";
     return {
