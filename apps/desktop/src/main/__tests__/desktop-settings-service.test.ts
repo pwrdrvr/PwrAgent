@@ -2698,7 +2698,9 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await service.readSettings();
+    await service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
     ensureManagedCodexRuntime.mockClear();
 
     expect(service.resolveIntegratedTerminalCommands()).toEqual([
