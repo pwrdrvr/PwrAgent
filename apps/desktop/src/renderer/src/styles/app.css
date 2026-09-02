@@ -18043,6 +18043,23 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* The term's token basis, named for a screen reader without painting it. The
+   compact equation moved that text into `title`, which is a pointer-only
+   affordance. Scoped to this lens for the same reason `.star-map-card__state`
+   is scoped to the map: a repo-wide visually-hidden primitive deserves its own
+   decision. */
+.incident-explorer__savings-basis {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .incident-explorer__savings-term[data-result="true"] dt,
 .incident-explorer__savings-term[data-result="true"] dd {
   color: var(--accent);
@@ -18444,6 +18461,9 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 11px;
   margin: -3px 0;
   cursor: row-resize;
+  /* The drag owns the vertical axis. Without this a touch or precision-pointer
+     gesture scrolls instead, and the scroll cancels the pointer capture. */
+  touch-action: none;
 }
 
 .incident-explorer__savings-grip span {

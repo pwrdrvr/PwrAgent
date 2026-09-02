@@ -634,6 +634,67 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     });
   });
 
+  /* jsdom implements no pointer capture at all, so the grip's own calls have
+     to be stubbed for a drag to reach the handlers. Everything the assertions
+     read — the captured start height, the delta, and when the drag ends — is
+     still the component's. */
+  function stubPointerCapture(node: HTMLElement): void {
+    let captured = false;
+    Object.assign(node, {
+      hasPointerCapture: () => captured,
+      releasePointerCapture: () => {
+        captured = false;
+      },
+      setPointerCapture: () => {
+        captured = true;
+      },
+    });
+  }
+
+  it("resizes the detail stack while the pointer is down", async () => {
+    installApi({ readThread: async () => buildSavingsResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const grip = await screen.findByRole("separator", {
+      name: "Resize the Token Miser detail rows",
+    });
+    stubPointerCapture(grip);
+    const stack = document.querySelector(".incident-explorer__savings-details");
+    expect(stack).not.toHaveAttribute("style");
+
+    fireEvent.pointerDown(grip, { button: 0, clientY: 400, pointerId: 1 });
+    fireEvent.pointerMove(grip, { clientY: 520, pointerId: 1 });
+
+    // jsdom reports no geometry, so the clamp hands back its floor whatever
+    // the drag asked for. What this pins is that the drag ran and committed a
+    // height, which is the half the keyboard test cannot reach.
+    await waitFor(() => {
+      expect(stack).toHaveStyle({ height: `${SAVINGS_DETAILS_MIN_HEIGHT}px` });
+    });
+  });
+
+  /* A gesture the OS takes over ends in lostpointercapture, never pointerup.
+     Clearing the drag only on pointerup left it armed, and every later hover
+     across the handle then resized the split with no button held. */
+  it("stops resizing when a drag is cancelled instead of released", async () => {
+    installApi({ readThread: async () => buildSavingsResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const grip = await screen.findByRole("separator", {
+      name: "Resize the Token Miser detail rows",
+    });
+    stubPointerCapture(grip);
+    fireEvent.pointerDown(grip, { button: 0, clientY: 400, pointerId: 1 });
+    fireEvent.lostPointerCapture(grip, { pointerId: 1 });
+    fireEvent.pointerMove(grip, { clientY: 900, pointerId: 1 });
+
+    const stack = document.querySelector(".incident-explorer__savings-details");
+    expect(stack).not.toHaveAttribute("style");
+    expect(readStoredSavingsLayout().detailsHeight).toBeUndefined();
+  });
+
   it("shows the priced savings equation and how much of it was observed", async () => {
     const response = buildResponse();
     response.pricing = {
@@ -702,14 +763,25 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     const splitCaption = screen
       .getByText("avoided · gate · revealed")
       .closest("p");
-    expect(splitCaption).toHaveTextContent("51% avoided · 7% gate · 41% revealed");
+    // 51.5, 7.4 and 41.2 percent. The last term absorbs the rounding, so the
+    // three printed shares close on 100 instead of the 99 that rounding each
+    // of them on its own produces.
+    expect(splitCaption).toHaveTextContent("51% avoided · 7% gate · 42% revealed");
     expect(splitCaption).toHaveTextContent("observed $0.36 · unfiltered $0.71");
     expect(
       screen.getByText(/Directly observed · 47 payload replays across 4 gates, each counted at a request boundary/),
     ).toBeInTheDocument();
 
-    // The token basis of each term moved onto the decisions row rather than
-    // paying for two lines of sub-caption under every term.
+    // The basis stays readable to a screen reader even though the compact
+    // equation only paints it into a `title`. `toHaveTextContent` descends,
+    // which is the point: it sees what the accessibility tree sees.
+    expect(screen.getByText("Without the gate").closest("div"))
+      .toHaveTextContent("40k uncached + 1,850k cached at gpt-5.6-terra rates");
+    expect(screen.getByText("Gate compute").closest("div"))
+      .toHaveTextContent("0 charged by gpt-5.6-luna");
+
+    // The token basis of each term also lands on the decisions row rather than
+    // paying for two lines of visible sub-caption under every term.
     openSavingsSection("Decisions");
     const decisions = savingsSection("Decisions");
     expect(decisions.getByText(/40k uncached · 1,850k cached/))
@@ -767,6 +839,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     await screen.findByText("Estimated same-trajectory overhead");
     expect(screen.getByText("33.3% more than estimated unfiltered cost"))
       .toBeInTheDocument();
+    /* With negative savings the parts sum past the whole, and a bar
+       overflowing its own track reads as a rendering fault. The overspend
+       states itself in words above instead. */
+    expect(screen.queryByText("avoided · gate · revealed")).not.toBeInTheDocument();
+    expect(document.querySelector(".incident-explorer__savings-split")).toBeNull();
   });
 
   // Reconstructed replays are inferred from later tool calls and cannot see
