@@ -8659,6 +8659,178 @@ describe("useThreadSessionState", () => {
     expect(result.current.runningTurnUsageText).toBeUndefined();
   });
 
+  it("consolidates trailing request usage into one authoritative turn-end row", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        pricing: {
+          lines: [],
+          summaries: [],
+        },
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          model: "gpt-5.6-sol",
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 25_027_409,
+                cached_input_tokens: 24_434_560,
+                output_tokens: 66_248,
+                reasoning_output_tokens: 23_974,
+                total_tokens: 25_117_631,
+              },
+              total_token_usage: {
+                input_tokens: 25_027_409,
+                cached_input_tokens: 24_434_560,
+                output_tokens: 66_248,
+                reasoning_output_tokens: 23_974,
+                total_tokens: 25_117_631,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              startedAt: 1_000,
+              completedAt: 4_000,
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 112_017,
+                cached_input_tokens: 111_232,
+                output_tokens: 319,
+                reasoning_output_tokens: 90,
+                total_tokens: 112_426,
+              },
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/pricing/updated",
+          params: {
+            threadId: "thread-1",
+            pricing: {
+              lines: [
+                {
+                  backend: "codex",
+                  cachedInputCostMicros: 9_818_317,
+                  cachedInputTokens: 24_545_792,
+                  completedAt: 4_000,
+                  createdAt: 1_000,
+                  currency: "USD",
+                  inputTokens: 25_139_426,
+                  model: "gpt-5.6-sol",
+                  outputCostMicros: 1_812_620,
+                  outputTokens: 66_567,
+                  priceStatus: "priced",
+                  provider: "openai",
+                  reasoningOutputTokens: 24_064,
+                  scope: "turn",
+                  serviceTier: "standard",
+                  source: "live",
+                  status: "pending",
+                  threadId: "thread-1",
+                  totalCostMicros: 14_005_473,
+                  totalTokens: 25_205_993,
+                  turnId: "turn-1",
+                  turnUsageAttributed: true,
+                  uncachedInputCostMicros: 2_374_536,
+                  uncachedInputTokens: 593_634,
+                  usageLineId: "codex:thread-1:turn-1:live-token-usage",
+                },
+              ],
+              summaries: [],
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Done.",
+      "activity:Turn usage: 593,634 uncached in · 24,545,792 cached · 66,567 out (24,064 reasoning) · $14.01 list price",
+    ]);
+    expect(result.current.entries.at(-1)).toMatchObject({
+      id: "live-turn-usage-turn-1",
+      createdAt: 4_000,
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        completedAt: 4_000,
+      },
+      usageLine: {
+        usageLineId: "codex:thread-1:turn-1:live-token-usage",
+        totalCostMicros: 14_005_473,
+      },
+    });
+  });
+
   it("prices finalized active-turn usage from the token usage notification model", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     const desktopApi: DesktopApi = {
