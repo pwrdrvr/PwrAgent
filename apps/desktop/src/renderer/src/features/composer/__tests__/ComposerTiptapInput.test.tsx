@@ -322,6 +322,68 @@ describe("ComposerTiptapInput", () => {
     ).toBe(value.length);
   });
 
+  it("maps a mention token on the second quoted line past every quote prefix", async () => {
+    const value = "> First line\n> ";
+    const token: ComposerSkillToken = {
+      id: "grok-build:fixture",
+      index: value.length,
+      kind: "directory",
+      name: "grok-build",
+      path: "/Users/example/pwrdrvr/grok-build",
+    };
+    const editorDocument: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "First line" },
+                { type: "hardBreak" },
+                {
+                  type: "mention",
+                  attrs: {
+                    description: null,
+                    id: token.id,
+                    kind: token.kind,
+                    name: token.name,
+                    path: token.path,
+                    prChipModifiers: null,
+                    shortDescription: null,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const onChange = vi.fn();
+
+    render(
+      <ComposerTiptapInput
+        id="reply"
+        label="Reply"
+        editorDocument={editorDocument}
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value=""
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(
+        value,
+        [token],
+        { editorDocument: expect.any(Object) },
+      );
+    });
+  });
+
   it("maps the quoted Markdown line end to the end of blockquote text", async () => {
     const value = "> Context:";
     const editorDocument: JSONContent = {

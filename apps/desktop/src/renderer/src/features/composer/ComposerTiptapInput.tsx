@@ -1421,7 +1421,10 @@ function appendMarkdownBlock(
       .map((line) => `> ${line}`)
       .join("\n");
     quotedState.skillTokens.forEach((token) => {
-      state.skillTokens.push({ ...token, index: quoteStart + token.index + 2 });
+      state.skillTokens.push({
+        ...token,
+        index: quoteStart + getQuotedDraftOffset(quotedState.value, token.index),
+      });
     });
     return;
   }
