@@ -40,7 +40,11 @@ import Foundation
 //   * `screencapture -l` renders at the backing scale of the display the
 //     window is on, with no way to ask for 2x. So the capture lands in a
 //     temp file, gets its scale verified, and only then replaces the
-//     destination — see the `minimumBackingScale` check below.
+//     destination — see the `minimumBackingScale` check below. The
+//     verification fails closed: a staged file that cannot be decoded is
+//     refused, not waved through. The replace itself goes through
+//     `replaceItemAt`, so a failure there cannot leave the destination
+//     missing.
 //   * Screen Recording permission is required for `screencapture -l`.
 //     The first invocation triggers the system prompt; subsequent runs
 //     are silent. CI environments will need this granted to whichever
@@ -48,21 +52,21 @@ import Foundation
 //
 // Exits with:
 //   0 — success
-//   2 — usage error
+//   2 — usage error, or an unrecognized argument
 //   3 — no matching window
 //   4 — screencapture failed
 //   5 — output file not produced, or could not be moved into place
-//   6 — capture came out below Retina scale (see --allow-low-dpi)
+//   6 — capture came out below Retina scale, or could not be decoded to
+//       check (see --allow-low-dpi)
 
 let args = CommandLine.arguments
 
+let usage =
+  "usage: capture-window.swift <owner-name-substring> <output-path> "
+  + "[--title=<title-substring>] [--allow-low-dpi]\n"
+
 guard args.count >= 3 else {
-  FileHandle.standardError.write(
-    Data(
-      "usage: capture-window.swift <owner-name-substring> <output-path> [--title=<title-substring>]\n"
-        .utf8
-    )
-  )
+  FileHandle.standardError.write(Data(usage.utf8))
   exit(2)
 }
 
@@ -74,9 +78,16 @@ var allowLowResolution = false
 for raw in args.dropFirst(3) {
   if raw.hasPrefix("--title=") {
     titleSubstring = String(raw.dropFirst("--title=".count))
-  }
-  if raw == "--allow-low-dpi" {
+  } else if raw == "--allow-low-dpi" {
     allowLowResolution = true
+  } else {
+    // Reject rather than ignore. The exit-6 message tells the operator to
+    // "Pass --allow-low-dpi"; silently dropping a near miss like
+    // `--allow-low-dpi=1` sends them round that loop believing they did.
+    FileHandle.standardError.write(
+      Data("unrecognized argument '\(raw)'\n\(usage)".utf8)
+    )
+    exit(2)
   }
 }
 
@@ -170,6 +181,10 @@ do {
 process.waitUntilExit()
 
 if process.terminationStatus != 0 {
+  // `screencapture` can fail after creating a partial file. Nothing else
+  // reclaims it — every name carries a fresh UUID — and `defer` does not
+  // run on `exit()` in a top-level script, so clean up explicitly here.
+  try? FileManager.default.removeItem(atPath: stagingPath)
   let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
   FileHandle.standardError.write(
     Data("screencapture exited with status \(process.terminationStatus)\n".utf8)
@@ -193,13 +208,33 @@ guard FileManager.default.fileExists(atPath: stagingPath) else {
 // once it is next to the Retina asset it replaced. Refuse rather than
 // degrade the committed screenshots.
 //
-// Ratio, not exact multiple: the shadow adds ~56pt on each side, so a
-// 1440pt-wide window lands near 1.08 at 1x and near 2.16 at 2x. 1.5
-// separates them with room to spare on either side.
-let minimumBackingScale: CGFloat = 1.5
-if !allowLowResolution, logicalWidth > 0,
-  let staged = NSBitmapImageRep(data: FileManager.default.contents(atPath: stagingPath) ?? Data())
-{
+// This check fails *closed*. A staged file we cannot decode is not a
+// reason to proceed — it is the strongest evidence yet that the capture
+// went wrong, and proceeding would move it over a good committed PNG.
+// (`logicalWidth` needs no guard: `windowMatches` already proved
+// `Width > 1` on this same dictionary.)
+if !allowLowResolution {
+  guard
+    let stagedData = FileManager.default.contents(atPath: stagingPath),
+    let staged = NSBitmapImageRep(data: stagedData)
+  else {
+    try? FileManager.default.removeItem(atPath: stagingPath)
+    FileHandle.standardError.write(
+      Data(
+        """
+        screencapture produced a file that could not be decoded as an image, so \
+        its resolution cannot be verified. \(outputPath) was left untouched.
+
+        """.utf8
+      )
+    )
+    exit(6)
+  }
+
+  // Ratio, not exact multiple: the shadow adds ~56pt on each side, so a
+  // 1440pt-wide window lands near 1.08 at 1x and near 2.16 at 2x. 1.5
+  // separates them with room to spare on either side.
+  let minimumBackingScale: CGFloat = 1.5
   let observedScale = CGFloat(staged.pixelsWide) / logicalWidth
   if observedScale < minimumBackingScale {
     try? FileManager.default.removeItem(atPath: stagingPath)
@@ -219,12 +254,20 @@ if !allowLowResolution, logicalWidth > 0,
   }
 }
 
-// Verified — now replace the destination.
+// Verified — now replace the destination, atomically.
+//
+// `replaceItemAt` is the point of the staging file. The obvious
+// alternative — remove the destination, then move — has a window in
+// which the committed Retina PNG is already gone: if the move then
+// fails (a `PWRAGENT_DOCS_SITE_REPO` checkout on another volume makes
+// this a cross-device copy that can hit ENOSPC), the asset is destroyed
+// and the replacement discarded. `replaceItemAt` leaves the original in
+// place on failure, and works whether or not the destination exists.
 do {
-  if FileManager.default.fileExists(atPath: outputPath) {
-    try FileManager.default.removeItem(atPath: outputPath)
-  }
-  try FileManager.default.moveItem(atPath: stagingPath, toPath: outputPath)
+  _ = try FileManager.default.replaceItemAt(
+    URL(fileURLWithPath: outputPath),
+    withItemAt: URL(fileURLWithPath: stagingPath)
+  )
 } catch {
   try? FileManager.default.removeItem(atPath: stagingPath)
   FileHandle.standardError.write(

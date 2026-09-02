@@ -185,4 +185,20 @@ describe("grokUpdateChecksDisabled", () => {
       env: { PWRAGENT_E2E: "0" },
     })).toBe(false);
   });
+
+  // The production caller — acp-backend-adapter.ts — omits `env`, so the
+  // `?? process.env` default is the only branch that actually ships. Every
+  // assertion above passes `env` inline and would stay green if that
+  // default were changed to `{}`, which would silently re-arm the check
+  // and put the toast back into the next capture run.
+  it("falls back to process.env when no env is supplied", () => {
+    vi.stubEnv("PWRAGENT_E2E", "1");
+    expect(grokUpdateChecksDisabled({ isPackaged: false })).toBe(true);
+    expect(grokUpdateChecksDisabled({ isPackaged: true })).toBe(false);
+
+    vi.stubEnv("PWRAGENT_E2E", "");
+    expect(grokUpdateChecksDisabled({ isPackaged: false })).toBe(false);
+
+    vi.unstubAllEnvs();
+  });
 });

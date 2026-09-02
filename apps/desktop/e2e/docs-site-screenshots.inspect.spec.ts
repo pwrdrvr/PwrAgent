@@ -84,10 +84,25 @@ if (process.env.PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE === "1") {
   }
 }
 
-function captureNative(outputBasename: string): void {
+function captureNative(
+  outputBasename: string,
+  options?: { titleSubstring?: string },
+): void {
   mkdirSync(screenshotDir, { recursive: true });
   const outputPath = path.join(screenshotDir, outputBasename);
-  execFileSync(captureScript, ["Electron", outputPath], { stdio: "inherit" });
+  const args = ["Electron", outputPath];
+  if (options?.titleSubstring) {
+    args.push(`--title=${options.titleSubstring}`);
+  }
+  // The Swift script refuses a sub-Retina capture and tells the operator to
+  // "Pass --allow-low-dpi" — which is only actionable if something here can
+  // pass it. On a 1x-only machine (external-display-only desk, a VM, the
+  // Tart lab guest) this is the difference between a documented override
+  // and one that requires editing the spec.
+  if (process.env.PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI === "1") {
+    args.push("--allow-low-dpi");
+  }
+  execFileSync(captureScript, args, { stdio: "inherit" });
 }
 
 /**
@@ -711,16 +726,9 @@ test("messaging-activity-blocked — Messaging Activity showing rejected inbound
       activityWindow.getByText(/Rejected inbound from Riley Chen/).first(),
     ).toBeVisible();
 
-    mkdirSync(screenshotDir, { recursive: true });
-    execFileSync(
-      captureScript,
-      [
-        "Electron",
-        path.join(screenshotDir, "messaging-activity-blocked.png"),
-        "--title=Messaging Activity",
-      ],
-      { stdio: "inherit" },
-    );
+    captureNative("messaging-activity-blocked.png", {
+      titleSubstring: "Messaging Activity",
+    });
   } finally {
     await app.close();
   }

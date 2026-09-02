@@ -103,6 +103,14 @@ function captureNative(
   if (options?.titleSubstring) {
     args.push(`--title=${options.titleSubstring}`);
   }
+  // The Swift script refuses a sub-Retina capture and tells the operator to
+  // "Pass --allow-low-dpi" — which is only actionable if something here can
+  // pass it. On a 1x-only machine (external-display-only desk, a VM, the
+  // Tart lab guest) this is the difference between a documented override
+  // and one that requires editing the spec.
+  if (process.env.PWRAGENT_SCREENSHOT_ALLOW_LOW_DPI === "1") {
+    args.push("--allow-low-dpi");
+  }
   execFileSync(captureScript, args, {
     stdio: "inherit",
   });
@@ -319,21 +327,13 @@ test("closed-by-default — Messaging Activity rejecting unauthorized inbound", 
       );
     }
 
-    // Bring the activity window to front so it's actually visible on
-    // screen. The BrowserWindow was created with `show: false` and is
-    // normally shown on `ready-to-show`, but during automated capture
-    // we want to be explicit so `toBeVisible` checks succeed and
-    // `screencapture -l` finds the window in the on-screen list.
-    await app.electronApp.evaluate(({ BrowserWindow }, titleSubstring) => {
-      const win = BrowserWindow.getAllWindows().find((w) =>
-        w.getTitle().includes(titleSubstring),
-      );
-      if (!win) return;
-      win.show();
-      win.focus();
-      win.moveTop();
-    }, "Messaging Activity");
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Place and raise the activity window. The BrowserWindow was created
+    // with `show: false` and is normally shown on `ready-to-show`, but
+    // during automated capture we want to be explicit so `toBeVisible`
+    // checks succeed and `screencapture -l` finds it in the on-screen
+    // list. The title is the same one `captureNative` passes as
+    // `--title=` below, so placement and capture act on one window.
+    await bringToFront(app.electronApp, "Messaging Activity");
 
     // The Activity screen polls `listMessagingActivity` on mount, so
     // the seeded rows land on the first frame. Two nested sections

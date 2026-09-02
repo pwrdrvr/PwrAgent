@@ -65,7 +65,12 @@ export default defineConfig({
             "apps/desktop/src/main/__tests__/**/*.test.ts",
             "apps/desktop/src/main/agent-tools/__tests__/**/*.test.ts",
             "apps/desktop/src/preload/__tests__/**/*.test.ts",
-            "apps/desktop/src/shared/__tests__/**/*.test.ts"
+            "apps/desktop/src/shared/__tests__/**/*.test.ts",
+            // E2E *fixture* logic, not E2E specs. A helper whose only home
+            // is inside a Playwright `evaluate` callback is unreachable from
+            // here, so the ones worth testing export their pure part and
+            // keep the callback to reading and writing Electron state.
+            "apps/desktop/e2e/fixtures/__tests__/**/*.test.ts"
           ],
           // Windows only in effect: warms the Job-object wrapper that owns
           // `git worktree remove` so its one-time PowerShell + helper-compile
