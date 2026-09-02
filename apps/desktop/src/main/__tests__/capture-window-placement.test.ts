@@ -1,12 +1,3 @@
-import { describe, expect, it } from "vitest";
-import {
-  centeredIn,
-  MINIMUM_RETINA_SCALE_FACTOR,
-  overflowsWorkArea,
-  pickCaptureDisplay,
-  type DisplaySummary,
-} from "../capture-window-placement";
-
 /**
  * The display-selection rule behind the screenshot captures.
  *
@@ -16,7 +7,22 @@ import {
  * Playwright serializes those bodies into the Electron main process, so
  * nothing inside one is reachable from Vitest. A comparator edit that
  * inverted the built-in preference would have typechecked and passed CI.
+ *
+ * It lives here rather than beside the fixture for the same reason
+ * `sub-agent-state-seeding.test.ts` does: `e2e/` is Playwright's
+ * `testDir`, and its default `testMatch` claims `*.test.ts`, so a vitest
+ * file under it gets collected as a spec and dies on the first
+ * `describe`.
  */
+
+import { describe, expect, it } from "vitest";
+import {
+  centeredIn,
+  MINIMUM_RETINA_SCALE_FACTOR,
+  overflowsWorkArea,
+  pickCaptureDisplay,
+  type DisplaySummary,
+} from "../../../e2e/fixtures/capture-window-placement";
 
 function display(
   overrides: Partial<DisplaySummary> & { scaleFactor: number },
