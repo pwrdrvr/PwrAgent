@@ -35,6 +35,12 @@ export default defineConfig({
       {
         test: {
           name: "messaging",
+          // Vitest 4 defaults to forks, which execs a fresh Node process for
+          // every test file. With hundreds of files and many concurrent
+          // worktrees, that executable churn overwhelms macOS provenance
+          // checks. Threads retain Vitest's default per-file isolation without
+          // creating an OS process per file.
+          pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "node",
@@ -44,6 +50,7 @@ export default defineConfig({
       {
         test: {
           name: "shared",
+          pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "node",
@@ -53,6 +60,7 @@ export default defineConfig({
       {
         test: {
           name: "desktop-main",
+          pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           hookTimeout: HOOK_TIMEOUT_MS,
@@ -93,6 +101,7 @@ export default defineConfig({
       {
         test: {
           name: "desktop-renderer",
+          pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "jsdom",
