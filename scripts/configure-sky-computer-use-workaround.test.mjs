@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildMcpAddArgs,
@@ -11,7 +12,7 @@ import {
 describe("configure Sky Computer Use workaround", () => {
   it("defaults to a status check", () => {
     expect(parseArgs([])).toEqual({
-      chatgptApp: "/Applications/ChatGPT.app",
+      chatgptApp: path.resolve("/Applications/ChatGPT.app"),
       codexCommand: undefined,
       mode: "status",
       pwragentRoot: undefined,
@@ -32,10 +33,10 @@ describe("configure Sky Computer Use workaround", () => {
       "--pwragent-root",
       "/tmp/pwragent",
     ])).toEqual({
-      chatgptApp: "/Volumes/Tools/ChatGPT.app",
-      codexCommand: "/opt/codex",
+      chatgptApp: path.resolve("/Volumes/Tools/ChatGPT.app"),
+      codexCommand: path.resolve("/opt/codex"),
       mode: "apply",
-      pwragentRoot: "/tmp/pwragent",
+      pwragentRoot: path.resolve("/tmp/pwragent"),
     });
   });
 
