@@ -617,10 +617,9 @@ test.describe("federation remote window", () => {
       await expect(
         window.locator(".federation-disconnected-banner"),
       ).toBeVisible({ timeout: 30_000 });
-      await expect(window.locator(".transcript-error")).toContainText(
-        "not connected",
-        { timeout: 30_000 },
-      );
+      // Peer readiness suspends hydration before IPC, so the expected outage
+      // state is the reconnecting banner without a raw handler exception.
+      await expect(window.locator(".transcript-error")).toHaveCount(0);
 
       await localRow.click();
       await expect(window.getByText("Local thread is ready.")).toBeVisible();

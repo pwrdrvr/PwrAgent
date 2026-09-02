@@ -4535,6 +4535,7 @@ export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
   initialHistoryLimit?: number;
   liveTranscriptEventFiltering?: boolean;
+  suspended?: boolean;
   thread?: NavigationThreadSummary;
 }): {
   activeTurnId?: string;
@@ -4589,7 +4590,12 @@ export function useThreadSessionState(params: {
   setViewport: (viewport?: ThreadViewportState) => void;
   viewport?: ThreadViewportState;
 } {
-  const { desktopApi, liveTranscriptEventFiltering = false, thread } = params;
+  const {
+    desktopApi,
+    liveTranscriptEventFiltering = false,
+    suspended = false,
+    thread,
+  } = params;
   const threadKey = thread
     ? threadSummaryIdentityKey(thread)
     : undefined;
@@ -4759,6 +4765,9 @@ export function useThreadSessionState(params: {
 
   const loadLatest = useCallback(
     async (targetThread: NavigationThreadSummary): Promise<void> => {
+      if (suspended) {
+        return;
+      }
       const readThread = desktopApi?.readThread;
       const targetThreadKey = threadSummaryIdentityKey(targetThread);
       const hydrationVersion = getThreadHydrationVersion(targetThread);
@@ -5072,6 +5081,7 @@ export function useThreadSessionState(params: {
       desktopApi?.recordStartupProfileEvent,
       initialHistoryLimit,
       logStaleThinkingState,
+      suspended,
       updateSession,
     ]
   );

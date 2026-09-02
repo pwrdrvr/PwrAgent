@@ -3058,6 +3058,147 @@ describe("App", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("waits for peer health before reading a restored remote thread", async () => {
+    const peerHealth = createDeferred<{
+      health: {
+        enabled: true;
+        role: "client";
+        status: "connected";
+        peers: Array<{
+          id: string;
+          label: string;
+          role: "client";
+          status: "disconnected";
+          capabilities: [];
+        }>;
+      };
+    }>();
+    const remoteTarget = {
+      scope: "remote" as const,
+      instanceId: "peer-restored-offline",
+    };
+    const listBackends = vi.fn(async (request?: {
+      federationTarget?: FederationTarget;
+    }) => {
+      if (request?.federationTarget) {
+        throw new Error("Remote backend read must wait for peer health.");
+      }
+      return { fetchedAt: Date.now(), backends: [] };
+    });
+    const readApplications = vi.fn(async () => {
+      throw new Error("Remote applications read must wait for peer health.");
+    });
+    const readThread = vi.fn(async () => {
+      throw new Error("Remote thread read must wait for peer health.");
+    });
+    const checkThreadBranchDrift = vi.fn(async () => {
+      throw new Error("Remote branch read must wait for peer health.");
+    });
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as DesktopSettingsSnapshot,
+        }),
+        listBackends,
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:remote-thread"],
+          threads: [{
+            id: "remote-thread",
+            title: "Restored remote thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            gitBranch: "main",
+            linkedDirectories: [],
+            inbox: {
+              inInbox: true,
+              reason: "new-thread" as const,
+            },
+            updatedAt: 1,
+            federation: {
+              ref: {
+                backend: "codex" as const,
+                target: remoteTarget,
+                threadId: "remote-thread",
+              },
+              instanceLabel: "Offline studio",
+              peerStatus: "disconnected" as const,
+            },
+          }],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        readFederationHealth: vi.fn(() => peerHealth.promise),
+        readApplications,
+        readThread,
+        checkThreadBranchDrift,
+        markThreadSeen: async () => ({
+          backend: "codex" as const,
+          threadId: "remote-thread",
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: "Restored remote thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await flushReactUpdates();
+    await flushReactUpdates();
+    await flushReactUpdates();
+
+    expect({
+      remoteBackendReads: listBackends.mock.calls.filter(
+        ([request]) => request?.federationTarget,
+      ).length,
+      applicationReads: readApplications.mock.calls.length,
+      threadReads: readThread.mock.calls.length,
+      branchDriftReads: checkThreadBranchDrift.mock.calls.length,
+      onboardingVisible: Boolean(
+        screen.queryByRole("heading", { name: /A few short choices/i }),
+      ),
+    }).toEqual({
+      remoteBackendReads: 0,
+      applicationReads: 0,
+      threadReads: 0,
+      branchDriftReads: 0,
+      onboardingVisible: false,
+    });
+  });
+
   it("preserves replay fixture navigation instead of opening the startup composer", async () => {
     const ensureDirectoryLaunchpad = vi.fn();
 
@@ -3157,7 +3298,7 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
-  it("reopens onboarding on startup when no backend can create a thread", async () => {
+  it("reopens onboarding when a stale selection has no usable backend", async () => {
     const ensureDirectoryLaunchpad = vi.fn();
 
     Object.defineProperty(window, "pwragent", {
@@ -3212,8 +3353,19 @@ describe("App", () => {
           backend: "all" as const,
           fetchedAt: Date.now(),
           unchanged: false,
-          inboxThreadKeys: [],
-          threads: [],
+          inboxThreadKeys: ["codex:stale-thread"],
+          threads: [{
+            id: "stale-thread",
+            title: "Stale historical thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: {
+              inInbox: true,
+              reason: "new-thread" as const,
+            },
+            updatedAt: 1,
+          }],
           directories: [],
           launchpadDefaults: {
             backend: "codex" as const,
