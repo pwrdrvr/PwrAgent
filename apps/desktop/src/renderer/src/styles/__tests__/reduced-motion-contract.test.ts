@@ -92,33 +92,62 @@ function parseStyleRules(source: string): StyleRule[] {
     prelude += char;
   }
 
+  if (frames.length > 0) {
+    // An unbalanced walk mis-nests everything after the offending brace, and
+    // the failure mode is silent under-reporting: rules land under the wrong
+    // at-rule stack and the gate stops seeing them. The parser has no string
+    // or `url()` awareness, so a future `content: "{"` would do exactly that.
+    throw new Error(
+      `app.css did not parse into balanced rules (${frames.length} unclosed)`,
+    );
+  }
+
   return rules;
 }
 
 const rules = parseStyleRules(css);
 
+// Hoisted: `hasMotionQuery` runs once per rule while `reducedSelectors` is
+// built, and recompiling a constant pattern thousands of times buys nothing.
+const MOTION_QUERY_PATTERNS = {
+  "no-preference": /prefers-reduced-motion:\s*no-preference\b/,
+  "reduce": /prefers-reduced-motion:\s*reduce\b/,
+} as const;
+
 /** True when this at-rule stack contains a reduced-motion query of `kind`. */
 function hasMotionQuery(
   atRules: readonly string[],
-  kind: "reduce" | "no-preference",
+  kind: keyof typeof MOTION_QUERY_PATTERNS,
 ): boolean {
-  return atRules.some((atRule) =>
-    new RegExp(`prefers-reduced-motion:\\s*${kind}\\b`).test(atRule),
-  );
+  return atRules.some((atRule) => MOTION_QUERY_PATTERNS[kind].test(atRule));
 }
 
 /**
- * Selectors that are neutralized by name inside a `reduce` query.
+ * Selectors whose ANIMATION is settled by name inside a `reduce` query.
  *
- * Matched on the selector STRING, not on cascade semantics: a rule that stops
- * `.foo .bar` does not settle what `.bar` does on its own, and treating it as
- * if it did is how `.pending-spinner`'s deliberate exemption would have gone
- * unnoticed. A descendant-scoped fix therefore does not satisfy the gate for
- * the bare selector — the author has to say which they meant.
+ * Two narrowings, and both are load-bearing:
+ *
+ * The rule has to declare an `animation` property. Appearing in a `reduce`
+ * block is not the same as being stopped by one — `.star-map__sky`,
+ * `.star-map-card` and `.settings-nav__sublist` are all in `reduce` blocks
+ * that only touch `transform` or `transition`, so a plain membership test
+ * would hand any of them a free pass the day someone gives it a looping
+ * animation. Declaring `animation` (rather than literally `animation: none`)
+ * is the right bar: `.onboarding-wizard__safety-ack-flash` legitimately
+ * settles the preference by swapping in a non-looping animation.
+ *
+ * And it is matched on the selector STRING, not on cascade semantics: a rule
+ * that stops `.foo .bar` does not settle what `.bar` does on its own, and
+ * treating it as if it did is how `.pending-spinner`'s deliberate exemption
+ * would have gone unnoticed.
  */
 const reducedSelectors = new Set(
   rules
-    .filter((rule) => hasMotionQuery(rule.atRules, "reduce"))
+    .filter(
+      (rule) =>
+        hasMotionQuery(rule.atRules, "reduce")
+        && /(?:^|[;{\s])animation(?:-[a-z-]+)?:/.test(rule.body),
+    )
     .flatMap((rule) => rule.selectors),
 );
 
@@ -153,18 +182,34 @@ describe("app.css reduced-motion contract", () => {
     );
   });
 
+  it("does not count a reduce rule that leaves the animation alone", () => {
+    // The narrowing that makes `reducedSelectors` mean something. These two
+    // sit in `reduce` blocks that only zero a `transition`, so they must NOT
+    // register as an animation decision — otherwise giving either one a
+    // looping animation later would pass the gate with nothing stopping it.
+    // A canary, because widening the filter back out breaks no other test.
+    expect(reducedSelectors.has(".automations-table__disclosure")).toBe(false);
+    expect(reducedSelectors.has(".settings-nav__sublist")).toBe(false);
+    // While a rule that does settle the animation still registers.
+    expect(reducedSelectors.has(".status-dot--blink")).toBe(true);
+    expect(reducedSelectors.has(".thinking-scanner__beam")).toBe(true);
+  });
+
   it("gives every infinite animation a reduced-motion decision", () => {
     const undecided = loopingRules
-      .filter(
-        (rule) =>
-          !hasMotionQuery(rule.atRules, "no-preference")
-          && !rule.selectors.every(
-            (selector) =>
-              reducedSelectors.has(selector)
-              || selector in MOTION_EXEMPTIONS,
-          ),
-      )
-      .flatMap((rule) => rule.selectors);
+      .filter((rule) => !hasMotionQuery(rule.atRules, "no-preference"))
+      // Only the selectors that actually lack a decision — reporting a
+      // partially-covered rule's whole selector list would point the author at
+      // selectors that are already settled.
+      .flatMap((rule) =>
+        rule.selectors.filter(
+          (selector) =>
+            !reducedSelectors.has(selector)
+            // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so a
+            // selector named `constructor` or `toString` would exempt itself.
+            && !Object.hasOwn(MOTION_EXEMPTIONS, selector),
+        ),
+      );
 
     // Named in the message, not just counted: the point of failing here is to
     // hand the author the selector they have to make a call about.
@@ -175,9 +220,12 @@ describe("app.css reduced-motion contract", () => {
     // An exemption for a selector that no longer loops is stale permission
     // sitting in the file, so the list is pinned in both directions.
     const looping = new Set(loopingRules.flatMap((rule) => rule.selectors));
-    for (const selector of Object.keys(MOTION_EXEMPTIONS)) {
+    for (const [selector, reason] of Object.entries(MOTION_EXEMPTIONS)) {
       expect(looping.has(selector)).toBe(true);
       expect(reducedSelectors.has(selector)).toBe(false);
+      // The reason is the whole cost of an exemption. An empty one is an
+      // undecided animation wearing a decision's clothes.
+      expect(reason.trim().length).toBeGreaterThan(0);
     }
   });
 });
@@ -206,6 +254,14 @@ describe("thinking scanner under reduced motion", () => {
     );
   });
 
+  it("drops the compositor promotion along with the animation", () => {
+    // `will-change` is on the beam for the sweep. Left standing under the
+    // preference it promotes a layer per scanner for an element that never
+    // changes again — on precisely the busy-fleet case this rule targets.
+    expect(sweeping?.body).toMatch(/will-change:\s*opacity,\s*transform;/);
+    expect(parked?.body).toMatch(/will-change:\s*auto;/);
+  });
+
   it("holds the brightest frame of the sweep, not a second pose", () => {
     // The parked values must BE the sweep's 50% keyframe. If someone retunes
     // that keyframe, this pins the two together so the still state stays the
@@ -218,9 +274,27 @@ describe("thinking scanner under reduced motion", () => {
       /transform:\s*translateX\(var\(--thinking-scanner-travel\)\);/,
     );
     // And the base rule keeps the frame-0% pose, which is what the override
-    // above exists to replace.
+    // above exists to replace. Guarded, because `expect(undefined).toMatch`
+    // reports "received value must be a string" rather than naming the rule
+    // that went missing.
+    expect(sweeping).toBeDefined();
     expect(sweeping?.body).toMatch(/opacity:\s*0\.76;/);
     expect(sweeping?.body).toMatch(/transform:\s*translateX\(0\);/);
+  });
+
+  it("re-pins live beams when the preference changes", () => {
+    // The reduce rule CANCELS the sweep, so flipping the preference back off
+    // builds a new animation on the moment of the flip instead of the shared
+    // epoch — leaving every beam already on screen out of phase with every one
+    // mounted afterwards. `ThinkingScanner` listens for that and re-pins.
+    // Without the listener the CSS above is a silent regression of PR #1187.
+    const scanner = readFileSync(
+      path.resolve(testDir, "../../features/thread-detail/ThinkingScanner.tsx"),
+      "utf8",
+    );
+    expect(scanner).toMatch(/matchMedia\(\s*"\(prefers-reduced-motion: reduce\)"\s*\)/);
+    expect(scanner).toMatch(/addEventListener\(\s*"change"/);
+    expect(scanner).toContain("querySelectorAll(\".thinking-scanner__beam\")");
   });
 
   it("keeps travel equal to track width minus beam width in every variant", () => {
@@ -244,13 +318,21 @@ describe("thinking scanner under reduced motion", () => {
       // Without it, `width` matches inside `--thinking-scanner-beam-width`
       // and every variant reports its beam width as its track width — which
       // makes the arithmetic below agree with itself and assert nothing.
+      expect(rule, `app.css defines ${selector} with a travel`).toBeDefined();
       const read = (property: string) =>
-        Number(rule?.body.match(new RegExp(`(?<![-\\w])${property}:\\s*(\\d+)px`))?.[1]);
+        Number(
+          rule?.body.match(new RegExp(`(?<![-\\w])${property}:\\s*(\\d+)px`))?.[1],
+        );
 
       expect(read("width")).toBe(expected.width);
       expect(read("--thinking-scanner-beam-width")).toBe(expected.beam);
       expect(read("--thinking-scanner-travel")).toBe(expected.travel);
-      expect(expected.travel).toBe(expected.width - expected.beam);
+      // Against the values read out of the CSS, not against the literals
+      // above: comparing the table to itself is a tautology that no change to
+      // `app.css` can fail, which is not what the comment above promises.
+      expect(read("--thinking-scanner-travel")).toBe(
+        read("width") - read("--thinking-scanner-beam-width"),
+      );
     }
   });
 
@@ -262,12 +344,16 @@ describe("thinking scanner under reduced motion", () => {
     const dormant = rules.find(
       (rule) =>
         rule.selectors.includes(".signal-count__dormant-scanner")
-        && /width:/.test(rule.body),
+        && /(?<![-\w])width:/.test(rule.body),
     );
-    expect(dormant?.body).toMatch(/width:\s*16px;/);
+    expect(dormant).toBeDefined();
+    expect(dormant?.body).toMatch(/(?<![-\w])width:\s*16px;/);
     expect(dormant?.body).toMatch(/height:\s*6px;/);
-    // And it must stay a bare track — a dormant bar that grew a fill would
-    // become indistinguishable from the parked beam.
-    expect(dormant?.body).not.toMatch(/--thinking-scanner-tint/);
+    // And it must stay a bare, flat track. Asserting the neutral surface token
+    // it paints, rather than the absence of `--thinking-scanner-tint`: a fill
+    // is far likelier to arrive as a plain `background: var(--accent…)` or a
+    // gradient, neither of which mentions the scanner's tint variable at all.
+    expect(dormant?.body).toMatch(/background:\s*var\(--bg-panel-hover\);/);
+    expect(dormant?.body).not.toMatch(/gradient|--accent/);
   });
 });

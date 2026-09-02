@@ -21504,15 +21504,22 @@ a.transcript-message__messaging-origin:focus-visible {
    width in both sizes (62 − 18 = 44, 16 − 6 = 10), which is why the sweep ends
    flush at the right edge.
 
-   No JS branches on the preference, so the mount-time epoch pin in
-   ThinkingScanner.tsx is untouched: this rule never starts or restarts an
-   animation under a live element, it only replaces the one that was there when
-   the element mounted. */
+   Nothing branches the RENDER on the preference, so no scanner is torn down
+   when it flips. But this rule DOES cancel a live animation, which is the
+   trap the `.signal-count__dormant-scanner` note above describes: turning the
+   preference back off builds a new animation whose start time is the moment of
+   the flip, not the shared epoch. `ThinkingScanner.tsx` listens for the change
+   and re-pins every beam on screen — do not drop that listener.
+
+   `will-change` goes with the animation. The beam is promoted for a sweep it
+   is no longer running, and this is exactly the case with the most scanners on
+   screen at once. */
 @media (prefers-reduced-motion: reduce) {
   .thinking-scanner__beam {
     animation: none;
     opacity: 1;
     transform: translateX(calc(var(--thinking-scanner-travel) / 2));
+    will-change: auto;
   }
 }
 

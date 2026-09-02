@@ -325,8 +325,8 @@ moves when the map moves, by a tenth as far, and it is pinned under
 
 Every looping animation needs a decision under
 `prefers-reduced-motion: reduce`, and
-`styles/__tests__/reduced-motion-contract.test.ts` fails until one is made.
-There are three answers:
+[reduced-motion-contract.test.ts](../../apps/desktop/src/renderer/src/styles/__tests__/reduced-motion-contract.test.ts)
+fails until one is made. There are three answers:
 
 - **Stop it.** The default, for motion that decorates a state something else
   already states — the `status-blink` dot pulse, the Star Map card rise.
@@ -343,6 +343,14 @@ There are three answers:
 Prefer "hold it" to "let it run": a still pose that carries the meaning is
 almost always available, and reaching for the exemption is how eight beams
 ended up sweeping through a preference that asked them not to.
+
+One trap in both "stop it" and "hold it": the query **cancels** a running
+animation rather than pausing it, so turning the preference back off builds a
+new one starting at the moment of the flip. Any animation whose phase is
+synchronized across elements — the thinking scanner pins every beam to one
+document-timeline epoch — has to re-synchronize on that change, or the marks
+already on screen drift permanently against the ones mounted afterwards.
+`ThinkingScanner.tsx` is the worked example.
 
 ## Copy Rules
 
