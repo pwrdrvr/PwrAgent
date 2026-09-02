@@ -22,6 +22,7 @@ import type {
   MessagingAttachmentDownloadResult,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
+  MessagingConversationTitleSupportRequest,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingFilePart,
@@ -296,6 +297,9 @@ export type DiscordProviderAdapter = {
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  supportsConversationTitle(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean;
   getManagedConversationRights?(
     request: MessagingManagedConversationRightsRequest,
   ): Promise<MessagingManagedConversationRightsResult>;
@@ -861,6 +865,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         updatedAt: this.now(),
       };
     }
+  }
+
+  supportsConversationTitle(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean {
+    return isDiscordThreadConversation(request);
   }
 
   async getManagedConversationRights(
@@ -2952,7 +2962,7 @@ function discordConversationUrl(params: {
 }
 
 function isDiscordThreadConversation(
-  request: MessagingConversationTitleUpdateRequest,
+  request: MessagingConversationTitleSupportRequest,
 ): boolean {
   return isDiscordThreadChannel(request.channel, request.routingState);
 }

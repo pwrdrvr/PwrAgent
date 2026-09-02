@@ -9149,6 +9149,56 @@ textarea,
   color: var(--danger-text);
 }
 
+/* Existing-app manifest block. Kept out of the create row because the two
+   are different jobs for different people: creating an app is first-run,
+   replacing a manifest is maintenance a connected operator returns for. */
+.slack-connect__update {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Card-local echo of `.settings-group-label`. Same tokens; the panel-level
+   primitive carries panel padding and a full-width rule, neither of which
+   belongs inside a field control. */
+.slack-connect__grouplabel {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Mirrors `.settings-pairing__message` and `.settings-copyvalue`: a mono
+   value pill next to a Copy button that acknowledges on itself. The copy
+   is the whole payload of this task, so it needs a resting home on screen
+   rather than existing only on the clipboard. */
+.slack-connect__copyrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.slack-connect__manifest {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-update-channel {
   display: flex;
   flex-direction: column;

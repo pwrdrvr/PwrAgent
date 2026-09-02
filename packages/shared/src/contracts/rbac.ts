@@ -715,6 +715,8 @@ export type MessagingDynamicToolCategory =
  *   - thread_orchestration → `tools.thread_orchestration` (inject messages, handoff, attach dirs)
  *   - app_management / automation_inspection → `tools.instance_management`
  *   - messaging_context: `get_current_messaging_surface` is benign (ungated);
+ *     `rename_current_messaging_conversation` changes the current surface name
+ *     → `thread.settings.name`;
  *     `send_private_response` is also ungated (terminal private text);
  *     `send_messaging_file` delivers a local file to the current surface →
  *     `message.reply`; `attach_thread_here` binds a conversation to a thread
@@ -740,6 +742,9 @@ export function permissionForDynamicTool(
     case "app_management":
       return "tools.instance_management";
     case "messaging_context":
+      if (tool === "rename_current_messaging_conversation") {
+        return "thread.settings.name";
+      }
       if (tool === "attach_thread_here") {
         return "thread.resume";
       }

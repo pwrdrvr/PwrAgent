@@ -860,7 +860,7 @@ export type DesktopApi = {
   testSettingsCredentials?: (
     request: SettingsCredentialTestRequest,
   ) => Promise<SettingsCredentialTestResult>;
-  /** Open Slack's create-from-manifest page in the system browser. */
+  /** Open Slack's create-from-manifest page or existing-app management. */
   openSlackCreateApp?: (
     request?: SlackCreateAppRequest,
   ) => Promise<SlackCreateAppResponse>;

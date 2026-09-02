@@ -16,6 +16,7 @@ export const PWRAGENT_MESSAGING_TOOL_NAMESPACE = "pwragent_messaging";
 
 export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
   "get_current_messaging_surface",
+  "rename_current_messaging_conversation",
   "send_private_response",
   "send_messaging_file",
   "attach_thread_here",
@@ -132,16 +133,28 @@ export type PwrAgentMessagingOutboundAttachmentSummary = {
   supportsImageUpload: boolean;
 };
 
+export type PwrAgentMessagingConversationCapabilitiesSummary = {
+  rename: {
+    allowed: boolean;
+    supported: boolean;
+  };
+};
+
 export type PwrAgentMessagingLocationSummary = {
   actor?: PwrAgentMessagingActorSummary;
   binding?: PwrAgentMessagingBindingSummary;
   channel: MessagingChannelKind;
   conversation: PwrAgentMessagingConversationSummary;
+  conversationCapabilities: PwrAgentMessagingConversationCapabilitiesSummary;
   managedConversation: PwrAgentMessagingManagedConversationSummary;
   outboundAttachments: PwrAgentMessagingOutboundAttachmentSummary;
 };
 
 export type GetCurrentMessagingSurfaceToolArgs = Record<string, never>;
+
+export type RenameCurrentMessagingConversationToolArgs = {
+  title: string;
+};
 
 export type SendPrivateResponseToolArgs = {
   awaitReply?: boolean;
@@ -226,6 +239,14 @@ export type SendPrivateResponseResult = {
   recipient: PwrAgentMessagingActorSummary;
 };
 
+export type RenameCurrentMessagingConversationResult = {
+  channel: MessagingChannelKind;
+  conversation: PwrAgentMessagingConversationSummary;
+  outcome: "renamed";
+  title: string;
+  updatedAt: number;
+};
+
 export type SendMessagingFileResult = {
   channel: MessagingChannelKind;
   conversation: PwrAgentMessagingConversationSummary;
@@ -292,6 +313,7 @@ export type PwrAgentMessagingToolImage = {
 export type PwrAgentMessagingToolArgsByOperation = {
   get_current_messaging_surface: GetCurrentMessagingSurfaceToolArgs;
   get_current_location: GetCurrentMessagingSurfaceToolArgs;
+  rename_current_messaging_conversation: RenameCurrentMessagingConversationToolArgs;
   send_private_response: SendPrivateResponseToolArgs;
   send_messaging_file: SendMessagingFileToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
@@ -323,6 +345,7 @@ export type PwrAgentMessagingResponse =
         | {
             location: PwrAgentMessagingLocationSummary;
           }
+        | RenameCurrentMessagingConversationResult
         | SendPrivateResponseResult
         | SendMessagingFileResult
         | AttachThreadHereResult

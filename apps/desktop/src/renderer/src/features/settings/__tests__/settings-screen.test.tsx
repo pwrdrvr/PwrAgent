@@ -4612,6 +4612,8 @@ describe("SettingsScreen", () => {
     );
 
     expect(screen.getByRole("button", { name: "Create Slack app" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy manifest" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Open Slack Apps" })).toBeEnabled();
     expect(screen.getAllByText(/customer-owned Slack app/i).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Create Slack app" }));
     await waitFor(() => {

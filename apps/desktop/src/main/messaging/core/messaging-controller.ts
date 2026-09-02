@@ -57,6 +57,7 @@ import type {
   MessagingPermissionId,
   MessagingToolUpdateMode,
   PwrAgentMessagingBoundThreadSummary,
+  PwrAgentMessagingConversationCapabilitiesSummary,
   PwrAgentMessagingLocationSummary,
   PwrAgentMessagingManagedConversationSummary,
   PwrAgentMessagingOutboundAttachmentSummary,
@@ -1172,6 +1173,10 @@ export class MessagingController {
           },
         };
       }
+      case "rename_current_messaging_conversation":
+        return await this.renameCurrentMessagingConversationFromAgentMessagingOrigin(
+          request,
+        );
       case "send_private_response":
         return await this.sendPrivateResponseFromAgentMessagingOrigin(request);
       case "send_messaging_file":
@@ -2379,13 +2384,24 @@ export class MessagingController {
           })
         : undefined;
     const managedConversation = managedTopic?.conversation;
+    // Root-conversation fallback lookup can resolve a DM binding from a
+    // thread-shaped Agent Session event. Passing `binding.channel` keeps the
+    // merge's identity guard satisfied so those fresher titles land — but it
+    // also makes that guard a self-comparison, so the caller has to decide
+    // for itself whether this event describes the binding's own
+    // conversation. Routing state is the part that must not cross over:
+    // adopting a thread's `threadTs` here would silently re-anchor every
+    // later status card, reply, and working card into that thread.
+    const describesSameConversation =
+      buildMessagingConversationKey(binding.channel)
+      === buildMessagingConversationKey(channel);
     const merged = await this.options.store.mergeBindingChannelMetadata({
       ancestorTitle: incoming.ancestorTitle ?? managedConversation?.ancestorTitle,
       bindingId: binding.id,
-      channel,
+      channel: binding.channel,
       observedAt,
       parentTitle: incoming.parentTitle ?? managedConversation?.parentTitle,
-      routingState: routingStateUpdate,
+      routingState: describesSameConversation ? routingStateUpdate : undefined,
       title: incoming.title ?? managedConversation?.title,
     });
     if (!merged?.changed) return;
@@ -11777,6 +11793,21 @@ export class MessagingController {
       requiredPermission &&
       !(await this.requirePermission(event, requiredPermission, actionId))
     ) {
+      if (
+        actionId === "status:stop"
+        && readStringValue(event.value, "source") === "agent_session_stopped"
+      ) {
+        const binding = await this.options.store.findActiveBindingForChannel(
+          event.channel,
+        );
+        const activeTurn = binding ? this.getActiveTurn(binding) : undefined;
+        if (binding && activeTurn) {
+          await this.signalTurnActivity(binding, activeTurn, {
+            force: true,
+            reason: "agent_session_stop_denied",
+          });
+        }
+      }
       return;
     }
     // Detach is exempt: it removes the LOCAL binding record and never touches
@@ -14090,12 +14121,36 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    await this.options.backend.interruptTurn?.({
-      backend: binding.backend,
-      federationTarget: federationTargetForBinding(binding),
-      threadId: binding.threadId,
-      turnId: targetTurn.turnId,
-    });
+    try {
+      await this.options.backend.interruptTurn?.({
+        backend: binding.backend,
+        federationTarget: federationTargetForBinding(binding),
+        threadId: binding.threadId,
+        turnId: targetTurn.turnId,
+      });
+    } catch (error) {
+      if (activeTurn) {
+        await this.signalTurnActivity(binding, activeTurn, {
+          force: true,
+          reason: "stop_failed",
+        });
+      }
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-stop-failed"),
+          createdAt: this.now(),
+          title: "Stop failed",
+          body: error instanceof Error
+            ? error.message
+            : "The backend did not accept the stop request.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
     if (
       !activeTurn ||
       (activeTurnIsInterruptible && activeTurn.turnId === targetTurn.turnId)
@@ -14536,6 +14591,18 @@ export class MessagingController {
         { force: true },
       );
     }
+    await this.deliver(
+      buildActivityIntent({
+        id: this.newIntentId("activity-closed"),
+        activity: "typing",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        sessionState: "closed",
+        state: "idle",
+      }),
+      binding,
+      event,
+    );
     await this.flushToolUpdatesForBinding(binding, { clear: true });
     await this.stopMonitoringForBinding(binding, event, {
       deliverStatus: options.deliverMonitorStatus,
@@ -15955,6 +16022,11 @@ export class MessagingController {
     options?: { force?: boolean; reason?: string; refreshMs?: number },
   ): Promise<void> {
     const state = activeTurn.status === "working" ? "active" : "idle";
+    const sessionState = activeTurn.status === "working"
+      ? "processing"
+      : activeTurn.status === "waiting"
+        ? "suspended"
+        : "active";
     const now = this.now();
     const lastSignaledAt = this.typingActivityLastSignaledAt.get(binding.id);
     const refreshMs = options?.refreshMs ?? TYPING_ACTIVITY_REFRESH_MS;
@@ -15983,6 +16055,7 @@ export class MessagingController {
         bindingId: binding.id,
         createdAt: now,
         leaseMs: state === "active" ? TYPING_ACTIVITY_LEASE_MS : undefined,
+        sessionState,
         state,
       }),
       binding,
@@ -17326,6 +17399,102 @@ export class MessagingController {
     };
   }
 
+  private async renameCurrentMessagingConversationFromAgentMessagingOrigin(
+    request: Extract<
+      PwrAgentMessagingRequest,
+      { operation: "rename_current_messaging_conversation" }
+    >,
+  ): Promise<PwrAgentMessagingResponse> {
+    const title = normalizeConversationTitle(
+      typeof request.args?.title === "string" ? request.args.title : undefined,
+    );
+    if (!title || title.length > 200) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "rename_current_messaging_conversation requires title between 1 and 200 characters.",
+        },
+      };
+    }
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return origin;
+    }
+    if (!this.options.adapter.setConversationTitle) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message:
+            "This messaging provider does not support renaming the current conversation.",
+        },
+      };
+    }
+
+    const result = await this.options.adapter.setConversationTitle({
+      actor: origin.origin.event.actor,
+      channel: origin.origin.event.channel,
+      routingState:
+        origin.origin.event.routingState ?? origin.origin.binding?.routingState,
+      title,
+    });
+    if (result.outcome !== "updated") {
+      return {
+        ok: false,
+        error: {
+          code: result.outcome === "unsupported"
+            ? "unsupported_operation"
+            : "internal_error",
+          message:
+            result.errorMessage
+            ?? "The messaging provider could not rename the current conversation.",
+        },
+      };
+    }
+
+    const renamedConversation = {
+      ...result.conversation,
+      title: result.title,
+    };
+    if (origin.origin.binding) {
+      const updatedBinding = await this.options.store.upsertBinding({
+        ...origin.origin.binding,
+        channel: {
+          ...origin.origin.binding.channel,
+          conversation: {
+            ...origin.origin.binding.channel.conversation,
+            ...renamedConversation,
+          },
+        },
+        updatedAt: result.updatedAt,
+      });
+      origin.origin.binding = updatedBinding;
+      if (origin.origin.deliveryBinding?.id === updatedBinding.id) {
+        origin.origin.deliveryBinding = updatedBinding;
+      }
+      this.notifyBindingChanged("agent-rename-conversation");
+      // Binding-local mutation with no registry event behind it, so the
+      // status card needs the inline render too — the bus never fires for
+      // this, and the provider's own rename echo (Slack's
+      // `agent_session_title_changed`) only fires for a participant's
+      // rename, never for ours.
+      await this.renderBindingStatus(updatedBinding, origin.origin.event);
+    }
+
+    return {
+      ok: true,
+      data: {
+        channel: result.channel,
+        conversation: summarizeMessagingConversation(renamedConversation),
+        outcome: "renamed",
+        title: result.title,
+        updatedAt: result.updatedAt,
+      },
+    };
+  }
+
   private async sendPrivateResponseFromAgentMessagingOrigin(
     request: Extract<
       PwrAgentMessagingRequest,
@@ -18289,8 +18458,27 @@ export class MessagingController {
         : {}),
       channel: origin.event.channel.channel,
       conversation: summarizeMessagingConversation(origin.event.channel.conversation),
+      conversationCapabilities: this.summarizeConversationCapabilities(origin),
       managedConversation: await this.resolveManagedConversationSummary(origin),
       outboundAttachments: this.summarizeOutboundAttachments(),
+    };
+  }
+
+  private summarizeConversationCapabilities(
+    origin: ActiveAgentMessagingOrigin,
+  ): PwrAgentMessagingConversationCapabilitiesSummary {
+    const permissions = this.resolveActorPermissions(origin.event);
+    return {
+      rename: {
+        allowed:
+          permissions === null
+          || permissions.permissions.has("thread.settings.name"),
+        supported: this.options.adapter.supportsConversationTitle?.({
+          actor: origin.event.actor,
+          channel: origin.event.channel,
+          routingState: origin.event.routingState ?? origin.binding?.routingState,
+        }) === true,
+      },
     };
   }
 

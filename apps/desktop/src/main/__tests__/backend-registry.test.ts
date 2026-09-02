@@ -28303,6 +28303,12 @@ command = "pnpm dev"
                 kind: "channel",
                 title: "ops",
               },
+              conversationCapabilities: {
+                rename: {
+                  allowed: true,
+                  supported: true,
+                },
+              },
               managedConversation: {
                 canCreateChild: true,
                 operations: [],

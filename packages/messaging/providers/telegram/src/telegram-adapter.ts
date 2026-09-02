@@ -9,6 +9,7 @@ import type {
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
   MessagingCallbackHandleStore,
+  MessagingConversationTitleSupportRequest,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
@@ -448,6 +449,9 @@ export type TelegramProviderAdapter = {
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  supportsConversationTitle(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean;
   getManagedConversationRights(
     request: MessagingManagedConversationRightsRequest,
   ): Promise<MessagingManagedConversationRightsResult>;
@@ -1264,6 +1268,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         updatedAt: this.now(),
       };
     }
+  }
+
+  supportsConversationTitle(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean {
+    const conversation = request.channel.conversation;
+    const target =
+      this.telegramStateFromChannel(conversation)
+      ?? this.telegramStateFromSurface(request.routingState);
+    return conversation.kind === "topic" && Boolean(target?.messageThreadId);
   }
 
   async getManagedConversationRights(

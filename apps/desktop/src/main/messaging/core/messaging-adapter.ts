@@ -66,12 +66,11 @@ import type {
   MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
   MessagingImagePart,
-  MessagingActorIdentity,
-  MessagingAdapterState,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
-  MessagingChannelRef,
-  MessagingChannelKind,
+  MessagingConversationTitleSupportRequest,
+  MessagingConversationTitleUpdateRequest,
+  MessagingConversationTitleUpdateResult,
   MessagingManagedConversationActionRequest,
   MessagingManagedConversationActionResult,
   MessagingManagedConversationCreateRequest,
@@ -84,21 +83,11 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 
-export type MessagingConversationTitleUpdateRequest = {
-  actor?: MessagingActorIdentity;
-  channel: MessagingChannelRef;
-  routingState?: MessagingAdapterState;
-  title: string;
-};
-
-export type MessagingConversationTitleUpdateResult = {
-  channel: MessagingChannelKind;
-  conversation: MessagingChannelRef["conversation"];
-  errorMessage?: string;
-  outcome: "updated" | "unsupported" | "failed";
-  title: string;
-  updatedAt: number;
-};
+export type {
+  MessagingConversationTitleSupportRequest,
+  MessagingConversationTitleUpdateRequest,
+  MessagingConversationTitleUpdateResult,
+} from "@pwragent/messaging-interface";
 
 export type MessagingLastAssistantReply = {
   createdAt?: number;
@@ -135,6 +124,9 @@ export type MessagingAdapter = {
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  supportsConversationTitle?(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean;
   getManagedConversationRights?(
     request: MessagingManagedConversationRightsRequest,
   ): Promise<MessagingManagedConversationRightsResult>;

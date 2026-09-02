@@ -124,6 +124,7 @@ import {
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const ACP_UPDATE_SNOOZE_MS = 24 * 60 * 60_000;
+const SLACK_APP_MANAGEMENT_URL = "https://api.slack.com/apps";
 // Codex profile login now runs through @pwrdrvr/codex-discovery's
 // CodexLoginManager (extracted from this file's inline flow). PwrAgnt owns the
 // instance so the Electron seam — `shell.openExternal` — is injected and the
@@ -1403,17 +1404,20 @@ export function registerSettingsIpcHandlers(
     ): Promise<SlackCreateAppResponse> => {
       const slackProvider = await import("@pwragent/messaging-provider-slack");
       const prepared = slackProvider.buildSlackCreateAppUrl();
+      const url = request.mode === "update"
+        ? SLACK_APP_MANAGEMENT_URL
+        : prepared.url;
       const shouldOpen = request.open !== false;
       let opened = false;
       if (shouldOpen) {
-        if (!isSafeExternalOpenUrl(prepared.url)) {
-          throw new Error("Refused to open an unsafe Slack create-app URL.");
+        if (!isSafeExternalOpenUrl(url)) {
+          throw new Error("Refused to open an unsafe Slack app URL.");
         }
-        await shell.openExternal(prepared.url);
+        await shell.openExternal(url);
         opened = true;
       }
       return {
-        url: prepared.url,
+        url,
         oversized: prepared.oversized,
         manifestJson: prepared.manifestJson,
         opened,

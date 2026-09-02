@@ -68,6 +68,12 @@ describe("PwrAgent legacy agent tool namespaces", () => {
             kind: "channel" as const,
             title: "ops",
           },
+          conversationCapabilities: {
+            rename: {
+              allowed: true,
+              supported: true,
+            },
+          },
           managedConversation: {
             canCreateChild: true,
             operations: [],

@@ -1,0 +1,116 @@
+{
+  "_metadata": {
+    "major_version": 1,
+    "minor_version": 1
+  },
+  "display_information": {
+    "name": "PwrAgent",
+    "description": "Your coding agent, running on your computer.",
+    "background_color": "#000000"
+  },
+  "features": {
+    "agent_view": {
+      "agent_description": "Run and supervise coding agents on your own computer from Slack."
+    },
+    "app_home": {
+      "home_tab_enabled": true,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "PwrAgent",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/pwragent_resume",
+        "description": "choose a thread to control from this conversation",
+        "should_escape": false
+      },
+      {
+        "command": "/pwragent_agent",
+        "description": "choose an Agent thread, or manage the default with /agent default",
+        "should_escape": false
+      },
+      {
+        "command": "/pwragent_new",
+        "description": "start a new thread from a project",
+        "should_escape": false
+      },
+      {
+        "command": "/pwragent_status",
+        "description": "show the current binding and controls",
+        "should_escape": false
+      },
+      {
+        "command": "/pwragent_detach",
+        "description": "detach this conversation from its thread",
+        "should_escape": false
+      },
+      {
+        "command": "/pwragent_monitor",
+        "description": "monitor recent PwrAgent threads once per minute",
+        "should_escape": false
+      },
+      {
+        "command": "/pwragent_schedule",
+        "description": "schedule a message for the bound thread",
+        "should_escape": false
+      },
+      {
+        "command": "/pwragent_scheduled",
+        "description": "list or manage scheduled messages",
+        "should_escape": false
+      },
+      {
+        "command": "/pwragent_help",
+        "description": "show this message",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "pkce_enabled": false,
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "assistant:write",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "commands",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "agent_session_stopped",
+        "agent_session_title_changed",
+        "app_home_opened",
+        "app_mention",
+        "app_uninstalled",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "tokens_revoked"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

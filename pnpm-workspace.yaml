@@ -5,6 +5,9 @@ packages:
   - packages/messaging/providers/*
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  # Slack's 27 Aug 2026 Agent Sessions types are required for this integration.
+  - '@slack/types@3.1.0'
+  - '@slack/web-api@8.1.0'
   - '@pwrdrvr/codex-app-server-protocol@0.133.0'
   - '@modelcontextprotocol/sdk@1.30.0'
   - '@pwrdrvr/agent-core'
