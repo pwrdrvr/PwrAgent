@@ -3508,6 +3508,7 @@ describe("AcpBackendAdapter", () => {
     };
     const replacementAgent: AcpInstalledAgentRecord = {
       ...firstAgent,
+      updatedAt: firstAgent.updatedAt + 1,
       activeCommand: "/replacement/kimi",
       launchDescriptor: {
         ...firstAgent.launchDescriptor!,

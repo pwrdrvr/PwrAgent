@@ -1968,11 +1968,19 @@ export class AcpBackendAdapter {
       const durableAgent = durableByBackend.get(agent.backendId);
       durableByBackend.delete(agent.backendId);
       // Settings discovery persists a verified replacement before runtime
-      // surfaces read it. That durable observation is newer than this
-      // adapter's in-memory discovery snapshot, so it must win even when the
-      // launch identity changed; resolveClient will retain an active owner or
-      // replace an idle one at the normal ownership boundary.
-      return durableAgent ?? agent;
+      // surfaces read it. A strictly newer durable observation must win even
+      // when the launch identity changed; an explicit adapter discovery at
+      // the same or a newer revision remains authoritative. This also keeps
+      // compatibility diagnostics from being masked by an older usable
+      // runtime record. resolveClient retains an active owner or replaces an
+      // idle one at the normal ownership boundary.
+      return durableAgent
+        && (
+          acpAgentLaunchIdentity(durableAgent) === acpAgentLaunchIdentity(agent)
+          || durableAgent.updatedAt > agent.updatedAt
+        )
+        ? durableAgent
+        : agent;
     });
     return [...current, ...durableByBackend.values()];
   }
