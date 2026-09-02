@@ -137,6 +137,7 @@ describe("buildXaiGrokCliUpdateNotice", () => {
 describe("buildManagedGrokBuildNotice", () => {
   const managed = {
     repository: "pwrdrvr/grok-build",
+    channel: "latest" as const,
     installedTag: "pwragent-v1.0.5-pwragent.1",
     activeTag: "pwragent-v1.0.4-pwragent.2",
     checkedAt: 100,

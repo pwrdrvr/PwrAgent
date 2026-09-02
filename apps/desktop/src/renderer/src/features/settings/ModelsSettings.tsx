@@ -9,6 +9,7 @@ import type {
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
+  DesktopUpdateChannel,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
@@ -121,6 +122,9 @@ export function ModelsSettings(props: {
   onAcpEnabledChange: (registryId: string, enabled: boolean) => Promise<void>;
   /** Persist the Grok managed-build preference. */
   onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  onManagedGrokBuildChannelChange?: (
+    channel: DesktopUpdateChannel,
+  ) => Promise<boolean>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
   const [backends, setBackends] = useState<BackendSummary[]>(
@@ -478,6 +482,9 @@ export function ModelsSettings(props: {
           onCliPathChange={props.onAcpCliPathChange}
           onEnabledChange={props.onAcpEnabledChange}
           onManagedGrokBuildsChange={props.onManagedGrokBuildsChange}
+          onManagedGrokBuildChannelChange={
+            props.onManagedGrokBuildChannelChange
+          }
         />
       </SettingsSectionStack>
     );

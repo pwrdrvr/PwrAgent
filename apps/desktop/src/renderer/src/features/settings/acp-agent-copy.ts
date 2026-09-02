@@ -42,3 +42,12 @@ export function acpRelativeTime(timestamp: number, now = Date.now()): string {
   if (deltaHours < 24) return `${deltaHours}h ago`;
   return `${Math.round(deltaHours / 24)}d ago`;
 }
+
+/**
+ * The version inside a grok-build tag: `pwragent-v1.0.12-pwragent.2` reads as
+ * `1.0.12-pwragent.2`. The repository prefix is the same on every tag, so in a
+ * control that shows two of them side by side it is noise.
+ */
+export function managedGrokBuildVersion(tag: string): string {
+  return tag.startsWith("pwragent-v") ? tag.slice("pwragent-v".length) : tag;
+}

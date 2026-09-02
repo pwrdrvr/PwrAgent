@@ -62,6 +62,7 @@ import {
   DESKTOP_UPDATE_TRAIN_DEFAULT,
   inferDesktopUpdateSelection,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
+  MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MAX_REPEATED_LARGE_OUTPUT_CALLS,
@@ -314,6 +315,7 @@ function providerConfigSection(provider: ProviderProjection): {
   cliPath?: string;
   enabled?: boolean;
   managedBuilds?: boolean;
+  managedBuildChannel?: DesktopUpdateChannel;
 } {
   return {
     enabled: provider.configured.enabled,
@@ -322,6 +324,9 @@ function providerConfigSection(provider: ProviderProjection): {
       : {}),
     ...(provider.configured.managedBuilds !== undefined
       ? { managedBuilds: provider.configured.managedBuilds }
+      : {}),
+    ...(provider.configured.managedBuildChannel !== undefined
+      ? { managedBuildChannel: provider.configured.managedBuildChannel }
       : {}),
   };
 }
@@ -1362,6 +1367,9 @@ export class DesktopSettingsService {
             config.acpAgents?.grok?.managedBuilds
             ?? this.options.defaultManagedGrokBuilds
             ?? true,
+          managedBuildChannel:
+            config.acpAgents?.grok?.managedBuildChannel
+            ?? MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
         },
         kimi: {
           cliPath: this.resolveString(

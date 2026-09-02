@@ -1530,6 +1530,108 @@ describe("settings ipc", () => {
     }
   });
 
+  it("reports the track the operator picked and what each track resolved to", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const managedRoot = path.join(tempRoot, "agents", "grok");
+    fs.mkdirSync(managedRoot, { recursive: true });
+    // The state the Prerelease track exists for: a build is published for
+    // testing and the promoted one is a version behind it.
+    fs.writeFileSync(
+      path.join(managedRoot, "managed-release.json"),
+      JSON.stringify({
+        asset: "pwragent-grok-1.0.5-pwragent.1-macos-universal.tar.gz",
+        channel: "prerelease",
+        checkedAt: 5_000,
+        installedAt: 4_000,
+        latestTag: "pwragent-v1.0.4-pwragent.2",
+        prereleaseTag: "pwragent-v1.0.5-pwragent.1",
+        repository: "pwrdrvr/grok-build",
+        schemaVersion: 1,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v1.0.5-pwragent.1",
+      }),
+    );
+    fs.writeFileSync(
+      path.join(tempRoot, "config.toml"),
+      "[acp_agents.grok]\nmanaged_build_channel = \"prerelease\"\n",
+    );
+    const activeCommand = path.join(
+      managedRoot,
+      "versions",
+      "pwragent-v1.0.5-pwragent.1",
+      "grok",
+    );
+
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState("bootstrap");
+    try {
+      new AcpAgentStore(getAppStateDb()).upsertInstalledAgent({
+        backendId: "acp:grok",
+        registryId: "grok",
+        name: "Grok",
+        version: "1.0.5-pwragent.1",
+        distributionKind: "local",
+        distributionSource: "grok agent stdio",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-grok-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        activeCommand,
+        instances: [
+          { command: activeCommand, version: "1.0.5-pwragent.1", source: "fallback" },
+        ],
+        launchDescriptor: {
+          backendId: "acp:grok",
+          registryId: "grok",
+          distributionKind: "local",
+          command: activeCommand,
+          args: ["agent", "stdio"],
+          env: { NO_COLOR: "1" },
+        },
+      });
+      registerSettingsIpcHandlers(service);
+
+      const response = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: false },
+      )) as { entries?: AcpAgentSettingsEntry[] } | undefined;
+      const grok = response?.entries?.find(
+        (entry) => entry.registryId === "grok",
+      );
+
+      expect(grok?.managedBuild).toMatchObject({
+        channel: "prerelease",
+        latestTag: "pwragent-v1.0.4-pwragent.2",
+        prereleaseTag: "pwragent-v1.0.5-pwragent.1",
+        installedTag: "pwragent-v1.0.5-pwragent.1",
+        activeTag: "pwragent-v1.0.5-pwragent.1",
+      });
+      // Following a build published for testing is not being held back by a
+      // pin. Nothing here needs a person.
+      expect(grok?.managedBuild?.pinnedBehind).toBeUndefined();
+    } finally {
+      disposeAppState();
+    }
+  });
+
   it("persists legacy Kimi diagnostics without probing or retaining models", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
@@ -1632,6 +1734,7 @@ describe("settings ipc", () => {
         expect.objectContaining({
           enabledRegistryIds: ["gemini", "grok", "kimi", "qwen"],
           managedGrok: {
+            channel: "latest",
             enabled: true,
             checkMode: "once-per-process",
             requirePlatformSignature: false,

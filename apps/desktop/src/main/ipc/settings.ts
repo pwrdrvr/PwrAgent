@@ -85,6 +85,7 @@ import {
 import {
   acpProviderCommandOverrideFromSnapshot,
   acpProviderEnabledFromSnapshot,
+  managedGrokBuildChannelFromSnapshot,
   managedGrokBuildsEnabledFromSnapshot,
   providerProjectionForRegistryId,
 } from "../settings/config-store/provider-runtime-config";
@@ -526,11 +527,19 @@ async function decorateManagedGrokBuild(
   const pinnedBy = acpProviderCommandOverrideFromSnapshot(providers, "grok");
   const managedBuild: AcpManagedBuildStatus = {
     repository: MANAGED_GROK_REPOSITORY,
+    channel: managedGrokBuildChannelFromSnapshot(providers),
     ...(summary
       ? {
           installedTag: summary.tag,
           checkedAt: summary.checkedAt,
           installedAt: summary.installedAt,
+          // Both tracks as the last check resolved them. A check that fell
+          // back to the Atom feed knows one track only, so a missing tag here
+          // means "not observed", never "no such release".
+          ...(summary.latestTag ? { latestTag: summary.latestTag } : {}),
+          ...(summary.prereleaseTag
+            ? { prereleaseTag: summary.prereleaseTag }
+            : {}),
         }
       : {}),
     ...(activeTag !== undefined ? { activeTag } : {}),
@@ -626,6 +635,7 @@ async function listInstalledAndLocalAcpAgents(
       discovered = (await discoverLocalAcpAgentRecords({
         enabledRegistryIds: discoveryRegistryIds,
         managedGrok: {
+          channel: managedGrokBuildChannelFromSnapshot(providers),
           enabled:
             managedGrokBuildsEnabledFromSnapshot(
               providers,

@@ -1,3 +1,5 @@
+import type { DesktopUpdateChannel } from "@pwragent/shared";
+import { MANAGED_GROK_BUILD_CHANNEL_DEFAULT } from "@pwragent/shared";
 import type {
   ConfigDomainMap,
   ProviderProjection,
@@ -43,6 +45,24 @@ export function acpProviderCommandOverrideFromSnapshot(
   }
   return providerProjectionForRegistryId(providers, registryId)
     ?.configured.commandOverride;
+}
+
+/**
+ * Which grok-build track the managed runtime follows for this profile.
+ *
+ * Latest is the default and the safe answer: it serves only releases the
+ * operator promoted out of testing. Prerelease stays selectable even when both
+ * tracks resolve to the same tag, because that is the state an operator sits
+ * in between publishing a build and promoting it.
+ */
+export function managedGrokBuildChannelFromSnapshot(
+  providers: ConfigDomainMap["providers"],
+): DesktopUpdateChannel {
+  return (
+    providerProjectionForRegistryId(providers, "grok")
+      ?.configured.managedBuildChannel
+    ?? MANAGED_GROK_BUILD_CHANNEL_DEFAULT
+  );
 }
 
 export function managedGrokBuildsEnabledFromSnapshot(

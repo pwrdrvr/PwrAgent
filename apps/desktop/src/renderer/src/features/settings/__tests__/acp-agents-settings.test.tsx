@@ -94,6 +94,7 @@ describe("AcpAgentsSettings — Grok build channel", () => {
         grokEntry({
           managedBuild: {
             repository: "pwrdrvr/grok-build",
+            channel: "latest" as const,
             installedTag: "pwragent-v1.0.4-pwragent.2",
             activeTag: "pwragent-v1.0.4-pwragent.2",
             checkedAt: Date.now() - 2 * 60 * 60_000,
@@ -146,6 +147,7 @@ describe("AcpAgentsSettings — Grok build channel", () => {
           ],
           managedBuild: {
             repository: "pwrdrvr/grok-build",
+            channel: "latest" as const,
             installedTag: "pwragent-v1.0.5-pwragent.1",
             activeTag: "pwragent-v1.0.4-pwragent.2",
             checkedAt: Date.now(),
@@ -188,6 +190,7 @@ describe("AcpAgentsSettings — Grok build channel", () => {
           activeCommand: "/Users/me/.grok/bin/grok",
           managedBuild: {
             repository: "pwrdrvr/grok-build",
+            channel: "latest" as const,
             installedTag: "pwragent-v1.0.4-pwragent.2",
             checkedAt: Date.now(),
             installedAt: Date.now(),
@@ -234,6 +237,7 @@ describe("AcpAgentsSettings — Grok build channel", () => {
           ],
           managedBuild: {
             repository: "pwrdrvr/grok-build",
+            channel: "latest" as const,
             installedTag: "pwragent-v1.0.4-pwragent.2",
             activeTag: "pwragent-v1.0.4-pwragent.2",
             checkedAt: Date.now(),
@@ -1038,6 +1042,87 @@ describe("AcpAgentsSettings", () => {
         "ACP registry controls are unavailable in this build.",
       ),
     ).not.toBeInTheDocument();
+  });
+
+  it("names both build tracks and writes the one the operator picks", async () => {
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1_000,
+      entries: [
+        grokEntry({
+          managedBuild: {
+            repository: "pwrdrvr/grok-build",
+            channel: "latest" as const,
+            latestTag: "pwragent-v1.0.4-pwragent.2",
+            prereleaseTag: "pwragent-v1.0.5-pwragent.1",
+            installedTag: "pwragent-v1.0.4-pwragent.2",
+            activeTag: "pwragent-v1.0.4-pwragent.2",
+            checkedAt: 1_000,
+            installedAt: 1_000,
+          },
+        }),
+      ],
+    }));
+    const onManagedGrokBuildChannelChange = vi.fn(async () => true);
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={acpSnapshot("grok", "")}
+        onManagedGrokBuildsChange={vi.fn(async () => true)}
+        onManagedGrokBuildChannelChange={onManagedGrokBuildChannelChange}
+      />,
+    );
+
+    const track = await screen.findByRole("radiogroup", { name: "Build track" });
+    // Each track names the version it resolves to, so the operator can see
+    // what switching would actually get them before they switch.
+    expect(within(track).getByText("1.0.4-pwragent.2")).toBeInTheDocument();
+    expect(within(track).getByText("1.0.5-pwragent.1")).toBeInTheDocument();
+    expect(within(track).getByRole("radio", { name: /Latest/ }))
+      .toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
+    await waitFor(() => {
+      expect(onManagedGrokBuildChannelChange)
+        .toHaveBeenCalledExactlyOnceWith("prerelease");
+    });
+  });
+
+  it("keeps Prerelease selectable when both tracks are the same build", async () => {
+    // Between publishing a build and promoting it the tracks agree. The
+    // control still has to be usable: this is exactly when an operator moves
+    // onto Prerelease to pick up the next test build.
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1_000,
+      entries: [
+        grokEntry({
+          managedBuild: {
+            repository: "pwrdrvr/grok-build",
+            channel: "latest" as const,
+            latestTag: "pwragent-v1.0.5-pwragent.1",
+            prereleaseTag: "pwragent-v1.0.5-pwragent.1",
+            installedTag: "pwragent-v1.0.5-pwragent.1",
+            activeTag: "pwragent-v1.0.5-pwragent.1",
+            checkedAt: 1_000,
+            installedAt: 1_000,
+          },
+        }),
+      ],
+    }));
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={acpSnapshot("grok", "")}
+        onManagedGrokBuildsChange={vi.fn(async () => true)}
+        onManagedGrokBuildChannelChange={vi.fn(async () => true)}
+      />,
+    );
+
+    const track = await screen.findByRole("radiogroup", { name: "Build track" });
+    expect(within(track).getByRole("radio", { name: /Prerelease/ }))
+      .toBeEnabled();
+    expect(within(track).getAllByText("1.0.5-pwragent.1")).toHaveLength(2);
   });
 
   it("renders Gemini CLI last even though the catalog lists it first", async () => {

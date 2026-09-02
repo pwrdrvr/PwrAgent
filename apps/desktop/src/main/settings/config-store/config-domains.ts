@@ -5,6 +5,7 @@ import type {
   DesktopOnboardingCompletedSource,
   DesktopSpendAlertPolicy,
   DesktopSettingsSecretName,
+  DesktopUpdateChannel,
   DesktopTextSize,
   DesktopToolOutputAlertPolicy,
   PrAutoDispatchBudgetConfig,
@@ -71,6 +72,7 @@ export type ProviderProjection = Readonly<{
     enabled: boolean;
     commandOverride?: string;
     managedBuilds?: boolean;
+    managedBuildChannel?: DesktopUpdateChannel;
   }>;
   lastKnownGood?: Readonly<{
     /** Configuration dependency fingerprint this observation verified. Older
@@ -179,6 +181,10 @@ export function normalizeConfigDomains(params: {
           provider === "grok"
             ? config.acpAgents?.grok?.managedBuilds
             : undefined,
+        managedBuildChannel:
+          provider === "grok"
+            ? config.acpAgents?.grok?.managedBuildChannel
+            : undefined,
         provider,
       });
       const previous = params.previousProviders?.[provider];
@@ -201,6 +207,13 @@ export function normalizeConfigDomains(params: {
           ...(provider === "grok"
             && config.acpAgents?.grok?.managedBuilds !== undefined
             ? { managedBuilds: config.acpAgents.grok.managedBuilds }
+            : {}),
+          ...(provider === "grok"
+            && config.acpAgents?.grok?.managedBuildChannel !== undefined
+            ? {
+                managedBuildChannel:
+                  config.acpAgents.grok.managedBuildChannel,
+              }
             : {}),
         },
         ...(lastKnownGood
@@ -274,6 +287,7 @@ export function providerDependencyFingerprint(params: {
   commandOverride?: string;
   enabled: boolean;
   managedBuilds?: boolean;
+  managedBuildChannel?: DesktopUpdateChannel;
   provider: ProviderId;
 }): string {
   return createHash("sha256")
@@ -282,6 +296,7 @@ export function providerDependencyFingerprint(params: {
       commandOverride: params.commandOverride ?? "",
       enabled: params.enabled,
       managedBuilds: params.managedBuilds ?? null,
+      managedBuildChannel: params.managedBuildChannel ?? null,
       platform: process.platform,
       provider: params.provider,
       schemaVersion: CONFIG_STORE_DURABLE_SCHEMA_VERSION,

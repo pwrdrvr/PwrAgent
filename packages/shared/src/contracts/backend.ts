@@ -1,5 +1,6 @@
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
+import type { DesktopUpdateChannel } from "./settings";
 
 export type BackendSourceKind = "builtin" | "acp";
 
@@ -313,6 +314,15 @@ export type AcpAgentSettingsEntry = {
 export type AcpManagedBuildStatus = {
   /** GitHub repository the channel publishes from, e.g. `pwrdrvr/grok-build`. */
   repository: string;
+  /** Track this profile follows: promoted releases only, or the newest build
+   *  whether or not it has been promoted. */
+  channel: DesktopUpdateChannel;
+  /** Newest promoted tag the last check saw. Absent until a check has run, or
+   *  when the check fell back to a source that cannot report promotion. */
+  latestTag?: string;
+  /** Newest tag overall the last check saw. Equal to `latestTag` whenever the
+   *  newest build has been promoted — the state both tracks share. */
+  prereleaseTag?: string;
   /** Newest verified build installed on this machine by the last check. */
   installedTag?: string;
   /** Release tag of the active runtime, when that runtime is a managed build.

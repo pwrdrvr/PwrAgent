@@ -4,14 +4,24 @@ import type {
   AcpManagedBuildStatus,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
+  DesktopUpdateChannel,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { managedGrokReleaseUrl } from "../../lib/grok-build-channel";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
-import { SettingsField, SettingsSection, ToggleField } from "./SettingsLayout";
+import {
+  SegmentedField,
+  SettingsField,
+  SettingsSection,
+  ToggleField,
+} from "./SettingsLayout";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
-import { acpRelativeTime, acpStatusLabel } from "./acp-agent-copy";
+import {
+  acpRelativeTime,
+  acpStatusLabel,
+  managedGrokBuildVersion,
+} from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
   displayOrderedAcpEntries,
@@ -70,6 +80,10 @@ export function AcpAgentsSettings(props: {
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
   /** Persist whether PwrAgent downloads and prefers its Grok fork build. */
   onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  /** Persist which grok-build track the managed runtime follows. */
+  onManagedGrokBuildChannelChange?: (
+    channel: DesktopUpdateChannel,
+  ) => Promise<boolean>;
 }) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -180,6 +194,9 @@ export function AcpAgentsSettings(props: {
             }
             onEnabledChange={props.onEnabledChange}
             onManagedGrokBuildsChange={props.onManagedGrokBuildsChange}
+            onManagedGrokBuildChannelChange={
+              props.onManagedGrokBuildChannelChange
+            }
             onRefresh={() => refresh(true, true)}
           />
         </Fragment>
@@ -301,9 +318,13 @@ function AcpAgentSection(props: {
   ) => Promise<AcpCliPathUpdateResult>;
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
   onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  onManagedGrokBuildChannelChange?: (
+    channel: DesktopUpdateChannel,
+  ) => Promise<boolean>;
   onRefresh: () => Promise<boolean>;
 }) {
   const { entry, enabled } = props;
+  const managedBuild = entry.managedBuild;
   const instances = entry.instances ?? [];
   const rejectedInstances = entry.rejectedInstances ?? [];
   const savedPath = props.cliPathSnapshot?.value ?? "";
@@ -464,6 +485,38 @@ function AcpAgentSection(props: {
                   return props.onRefresh();
                 }
               }) ?? Promise.resolve();
+            }}
+          />
+        ) : null}
+
+        {entry.registryId === "grok"
+          && managedBuild
+          && props.managedGrokBuilds
+          && props.onManagedGrokBuildChannelChange ? (
+          <SegmentedField
+            label="Build track"
+            sub="Latest installs promoted builds only. Prerelease installs the newest build whether or not it has been promoted — and stays selectable while both tracks name the same version, which is where a build sits between publication and promotion."
+            disabled={
+              props.saving || pathUpdating || props.refreshing || !enabled
+            }
+            options={MANAGED_BUILD_CHANNEL_OPTIONS.map((option) => ({
+              ...option,
+              meta: managedBuildTrackVersion(managedBuild, option.value),
+            }))}
+            // Same wait as the toggle: the config write, then the rescan that
+            // installs and activates the track's build.
+            pendingLabel="Saving and rescanning…"
+            value={managedBuild.channel}
+            onChange={(channel) => {
+              return (
+                props.onManagedGrokBuildChannelChange?.(channel).then(
+                  (saved) => {
+                    if (saved) {
+                      return props.onRefresh();
+                    }
+                  },
+                ) ?? Promise.resolve()
+              );
             }}
           />
         ) : null}
@@ -665,6 +718,32 @@ function AcpAgentSection(props: {
       </div>
     </SettingsSection>
   );
+}
+
+const MANAGED_BUILD_CHANNEL_OPTIONS: Array<{
+  label: string;
+  value: DesktopUpdateChannel;
+}> = [
+  { label: "Latest", value: "latest" },
+  { label: "Prerelease", value: "prerelease" },
+];
+
+/**
+ * The version a track resolves to, as of the last release check.
+ *
+ * "Unavailable" is not "there is no such build": a check that fell back to the
+ * public Atom feed can only speak for one track, and no check has run at all
+ * before the first install.
+ */
+function managedBuildTrackVersion(
+  managedBuild: AcpManagedBuildStatus,
+  channel: DesktopUpdateChannel,
+): string {
+  const tag =
+    channel === "latest"
+      ? managedBuild.latestTag
+      : managedBuild.prereleaseTag;
+  return tag ? managedGrokBuildVersion(tag) : "Unavailable";
 }
 
 /**

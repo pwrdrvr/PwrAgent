@@ -52,6 +52,7 @@ import {
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
   isDesktopUpdateTrain,
+  MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
@@ -272,6 +273,7 @@ export type DesktopSettingsConfig = {
       cliPath?: string;
       enabled?: boolean;
       managedBuilds?: boolean;
+      managedBuildChannel?: DesktopUpdateChannel;
     };
     kimi?: {
       cliPath?: string;
@@ -396,6 +398,20 @@ export function managedGrokBuildsEnabledFor(
   defaultEnabled = true,
 ): boolean {
   return config.acpAgents?.grok?.managedBuilds ?? defaultEnabled;
+}
+
+/**
+ * Which grok-build track the managed runtime follows. Latest is the default:
+ * an operator who never opens the control must not be handed a build that was
+ * published for testing.
+ */
+export function managedGrokBuildChannelFor(
+  config: DesktopSettingsConfig,
+): DesktopUpdateChannel {
+  return (
+    config.acpAgents?.grok?.managedBuildChannel
+    ?? MANAGED_GROK_BUILD_CHANNEL_DEFAULT
+  );
 }
 
 /**
@@ -1517,6 +1533,12 @@ export function desktopSettingsPatchToEdits(
       patch.acpAgents.grok.managedBuilds,
     );
   }
+  if (patch.acpAgents?.grok?.managedBuildChannel !== undefined) {
+    set(
+      ["acp_agents", "grok", "managed_build_channel"],
+      patch.acpAgents.grok.managedBuildChannel,
+    );
+  }
   if (patch.acpAgents?.kimi?.cliPath !== undefined) {
     set(["acp_agents", "kimi", "cli_path"], patch.acpAgents.kimi.cliPath);
   }
@@ -1974,6 +1996,9 @@ function normalizeDesktopConfig(
         cliPath: readString(acpAgentsGrok?.cli_path),
         enabled: readBoolean(acpAgentsGrok?.enabled),
         managedBuilds: readBoolean(acpAgentsGrok?.managed_builds),
+        managedBuildChannel: readUpdateChannel(
+          acpAgentsGrok?.managed_build_channel,
+        ),
       },
       kimi: {
         cliPath: readString(acpAgentsKimi?.cli_path),

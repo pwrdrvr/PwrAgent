@@ -65,6 +65,42 @@ cached, ordinary PATH and bundled discovery continue unchanged. Disabling Grok
 also disables release checks. Operators can turn off only the managed-build
 behavior without disabling Grok itself.
 
+## Build tracks: Latest and Prerelease
+
+The managed channel publishes on two tracks, selected in Settings → AI
+Providers → Grok → **Build track**, and stored as
+`[acp_agents.grok] managed_build_channel`:
+
+- **Latest** (default) installs only releases promoted out of testing — a
+  GitHub release whose Pre-release flag is clear.
+- **Prerelease** installs the newest release, promoted or not.
+
+Track selection follows semantic-version precedence, never the order GitHub
+returned the releases: a promotion is published against a release that already
+existed, and a repair to an older line can be published last. When the newest
+release is a promoted one, both tracks resolve to the same tag; Prerelease
+stays selectable in that state, because that is where a build sits between
+publication and promotion, and it is when an operator opts in to the next one.
+
+The publishing workflow is what makes the tracks mean anything: publish a build
+for testing, run it on the Prerelease track, then mark the release Latest once
+it holds up. Operators on Latest never see the untested build. GitHub does not
+allow a pre-release to also be the latest release, so promoting one clears its
+Pre-release flag.
+
+Switching the track forces a release check immediately rather than waiting out
+the 24-hour window, and installs that track's build even when it is a step back
+from what is running — a downgrade is the point of moving from Prerelease to
+Latest.
+
+Each check records what both tracks resolved to, so the pane can name each
+track's version without a second network round trip. One case cannot: when the
+unauthenticated GitHub API is rate-limited, PwrAgent falls back to the public
+Atom feed, which carries tags rather than release records and cannot say which
+of them are promoted. That fallback serves the Prerelease track only. The
+Latest track keeps its cached build for that cycle instead, and the pane shows
+its version as `Unavailable` — meaning "not observed", never "no such build".
+
 ## Two channels, never crossed
 
 An operator can be running either an xAI Grok CLI or a PwrAgent build. They are

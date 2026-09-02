@@ -20,6 +20,7 @@ import {
   MANAGED_GROK_RELEASES_URL,
   selectManagedGrokRelease,
   selectManagedGrokReleaseFromFeed,
+  selectManagedGrokReleaseSlots,
   setManagedGrokSignatureRejectionReporter,
 } from "../acp/grok-managed-runtime";
 
@@ -34,14 +35,14 @@ afterEach(async () => {
 });
 
 describe("managed Grok release selection", () => {
-  it("selects the newest complete PwrAgent prerelease for the platform", () => {
+  it("selects the newest complete PwrAgent build for the platform", () => {
     const selected = selectManagedGrokRelease([
       release("pwragent-v2.0.0-pwragent.2", []),
       release("pwragent-v2.0.0-pwragent.1", [
         asset("SHA256SUMS"),
         asset("pwragent-grok-2.0.0-pwragent.1-macos-universal.tar.gz"),
       ]),
-    ], "macos-universal");
+    ], "macos-universal", "latest");
 
     expect(selected).toMatchObject({
       tag: "pwragent-v2.0.0-pwragent.1",
@@ -49,6 +50,77 @@ describe("managed Grok release selection", () => {
         name: "pwragent-grok-2.0.0-pwragent.1-macos-universal.tar.gz",
       },
     });
+  });
+
+  it("keeps a build published for testing off the Latest track", () => {
+    const releases = [
+      release("pwragent-v2.1.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-grok-2.1.0-pwragent.1-macos-universal.tar.gz"),
+      ], { prerelease: true }),
+      release("pwragent-v2.0.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-grok-2.0.0-pwragent.1-macos-universal.tar.gz"),
+      ]),
+    ];
+
+    expect(selectManagedGrokReleaseSlots(releases, "macos-universal")).toMatchObject({
+      latest: { tag: "pwragent-v2.0.0-pwragent.1" },
+      prerelease: { tag: "pwragent-v2.1.0-pwragent.1" },
+    });
+  });
+
+  it("gives both tracks the same build once the newest one is promoted", () => {
+    // The state the control exists for: nothing is under test right now, so
+    // the tracks agree — and Prerelease has to stay selectable anyway, or an
+    // operator cannot be on it when the next test build lands.
+    const releases = [
+      release("pwragent-v2.1.0-pwragent.2", [
+        asset("SHA256SUMS"),
+        asset("pwragent-grok-2.1.0-pwragent.2-macos-universal.tar.gz"),
+      ]),
+      release("pwragent-v2.1.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-grok-2.1.0-pwragent.1-macos-universal.tar.gz"),
+      ], { prerelease: true }),
+    ];
+
+    const slots = selectManagedGrokReleaseSlots(releases, "macos-universal");
+    expect(slots.latest?.tag).toBe("pwragent-v2.1.0-pwragent.2");
+    expect(slots.prerelease?.tag).toBe("pwragent-v2.1.0-pwragent.2");
+  });
+
+  it("orders by precedence, not by the order GitHub returned", () => {
+    // A promotion is published against a release that already existed, so the
+    // newest entry in the response is not the newest build.
+    const releases = [
+      release("pwragent-v2.0.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-grok-2.0.0-pwragent.1-linux-x86_64.tar.gz"),
+      ]),
+      release("pwragent-v2.10.0-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-grok-2.10.0-pwragent.1-linux-x86_64.tar.gz"),
+      ]),
+    ];
+
+    expect(
+      selectManagedGrokRelease(releases, "linux-x86_64", "latest")?.tag,
+    ).toBe("pwragent-v2.10.0-pwragent.1");
+  });
+
+  it("refuses to serve the Latest track from the unlabeled Atom feed", () => {
+    // The feed carries tags, not release records, so it cannot tell a promoted
+    // build from one published for testing. Answering the Latest track from it
+    // would hand over exactly the build the operator opted out of.
+    const feed =
+      '<link href="https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.4-pwragent.2"/>';
+    expect(
+      selectManagedGrokReleaseFromFeed(feed, "linux-x86_64", "latest"),
+    ).toBeUndefined();
+    expect(
+      selectManagedGrokReleaseFromFeed(feed, "linux-x86_64", "prerelease"),
+    ).toMatchObject({ tag: "pwragent-v1.0.4-pwragent.2" });
   });
 
   it("maps every currently published desktop target", () => {
@@ -64,6 +136,7 @@ describe("managed Grok release selection", () => {
     const selected = selectManagedGrokReleaseFromFeed(
       '<link href="https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.4-pwragent.2"/>',
       "windows-x86_64",
+      "prerelease",
     );
 
     expect(selected).toMatchObject({
@@ -92,10 +165,11 @@ describe("managed Grok release selection", () => {
         asset("SHA256SUMS"),
         asset("pwragent-grok-1.0.4-pwragent.1-linux-x86_64.tar.gz"),
       ]),
-    ], "linux-x86_64")).toBeUndefined();
+    ], "linux-x86_64", "prerelease")).toBeUndefined();
     expect(selectManagedGrokReleaseFromFeed(
       '<link href="https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.4-pwragent.1"/>',
       "linux-x86_64",
+      "prerelease",
     )).toBeUndefined();
   });
 });
@@ -199,7 +273,7 @@ describe("ensureManagedGrokRuntime", () => {
     expect(runtime?.metadata.tag).toBe(tag);
   });
 
-  it("uses the public release feed when the unauthenticated API is limited", async () => {
+  it("uses the public release feed on Prerelease when the API is limited", async () => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v2.1.0-pwragent.1";
     const archiveName = "pwragent-grok-2.1.0-pwragent.1-linux-x86_64.tar.gz";
@@ -226,6 +300,7 @@ describe("ensureManagedGrokRuntime", () => {
 
     const runtime = await ensureManagedGrokRuntime({
       arch: "x64",
+      channel: "prerelease",
       checkMode: "force",
       extractArchive: async (_archivePath, targetDir) => {
         await writeFakeBundle(targetDir);
@@ -237,9 +312,50 @@ describe("ensureManagedGrokRuntime", () => {
     });
 
     expect(runtime?.metadata.tag).toBe(tag);
+    expect(runtime?.metadata.channel).toBe("prerelease");
     expect(fetchMock).toHaveBeenCalledWith(
       MANAGED_GROK_RELEASES_FEED_URL,
       expect.any(Object),
+    );
+  });
+
+  it("keeps the cached build on Latest when only the feed answers", async () => {
+    // The feed cannot say which builds are promoted, so the Latest track has
+    // no usable answer this cycle. Installing the newest tag anyway would put
+    // an untested build on the track that exists to avoid them.
+    const rootDir = await temporaryRoot();
+    const cachedTag = "pwragent-v1.0.4-pwragent.2";
+    await writeManagedCache(rootDir, {
+      asset: "pwragent-grok-1.0.4-pwragent.2-linux-x86_64.tar.gz",
+      tag: cachedTag,
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === MANAGED_GROK_RELEASES_URL) {
+        return new Response("limited", { status: 403 });
+      }
+      if (url === MANAGED_GROK_RELEASES_FEED_URL) {
+        return new Response(
+          '<link href="https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v2.1.0-pwragent.1"/>',
+        );
+      }
+      return new Response("missing", { status: 404 });
+    });
+
+    const runtime = await ensureManagedGrokRuntime({
+      arch: "x64",
+      channel: "latest",
+      checkMode: "force",
+      fetch: fetchMock as typeof globalThis.fetch,
+      platform: "linux",
+      probeVersion: async () => "grok 1.0.4-pwragent.2",
+      rootDir,
+    });
+
+    expect(runtime?.metadata.tag).toBe(cachedTag);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("pwragent-v2.1.0-pwragent.1"),
+      expect.anything(),
     );
   });
 
@@ -476,11 +592,15 @@ describe("ensureManagedGrokRuntime", () => {
   });
 });
 
-function release(tag: string, assets: ReturnType<typeof asset>[]) {
+function release(
+  tag: string,
+  assets: ReturnType<typeof asset>[],
+  options: { prerelease?: boolean } = {},
+) {
   return {
     assets,
     draft: false,
-    prerelease: true,
+    prerelease: options.prerelease === true,
     published_at: "2026-08-15T00:00:00Z",
     tag_name: tag,
   };

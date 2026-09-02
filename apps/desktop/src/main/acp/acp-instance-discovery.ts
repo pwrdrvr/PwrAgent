@@ -26,6 +26,7 @@ import type {
   AcpAgentPreference,
   AcpBackendId,
   AcpRejectedAgentInstance,
+  DesktopUpdateChannel,
 } from "@pwragent/shared";
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
@@ -105,6 +106,7 @@ export type DiscoverAcpAgentInstancesOptions = {
    * Grok itself and the managed-build preference are both enabled.
    */
   managedGrok?: {
+    channel?: DesktopUpdateChannel;
     checkMode?: ManagedGrokCheckMode;
     enabled: boolean;
     requirePlatformSignature?: boolean;
@@ -623,6 +625,9 @@ async function resolveManagedGrokCommand(
     );
   }
   return (await ensureManagedGrokRuntime({
+    ...(options.managedGrok.channel
+      ? { channel: options.managedGrok.channel }
+      : {}),
     checkMode,
     requirePlatformSignature:
       options.managedGrok.requirePlatformSignature === true,

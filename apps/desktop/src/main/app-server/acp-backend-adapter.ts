@@ -58,6 +58,7 @@ import {
 import {
   acpProviderCommandOverrideFromSnapshot,
   acpProviderEnabledFromSnapshot,
+  managedGrokBuildChannelFromSnapshot,
   managedGrokBuildsEnabledFromSnapshot,
   providerProjectionForRegistryId,
 } from "../settings/config-store/provider-runtime-config";
@@ -205,6 +206,7 @@ export function createLocalAcpAgentDiscovery(params: {
     const records = await discoverLocalAcpAgentRecords({
       enabledRegistryIds,
       managedGrok: {
+        channel: managedGrokBuildChannelFromSnapshot(providers),
         enabled:
           managedGrokBuildsEnabledFromSnapshot(
             providers,
