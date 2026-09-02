@@ -223,7 +223,7 @@ describe("Git discovery", () => {
         ) => void,
       ) => {
         if (
-          command === "git"
+          (command === "git" || command === "/custom/bin/git")
           && args[0] === "--version"
           && options.env?.PATH === hydratedEnv.PATH
           && options.env?.ELECTRON_RENDERER_URL === undefined
@@ -242,6 +242,55 @@ describe("Git discovery", () => {
 
     await expect(resolveGitExecutable(hydratedEnv)).resolves.toBe(
       "/custom/bin/git",
+    );
+  });
+
+  it.skipIf(process.platform === "win32")("skips an executable PATH directory named git", async () => {
+    const directoryError = new Error("permission denied") as NodeJS.ErrnoException;
+    directoryError.code = "EACCES";
+    const missingError = new Error("missing") as NodeJS.ErrnoException;
+    missingError.code = "ENOENT";
+    const env = { PATH: "/bad/bin:/good/bin" } as NodeJS.ProcessEnv;
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        _options: { env?: NodeJS.ProcessEnv },
+        callback: (
+          error: Error | null,
+          result?: { stdout: string; stderr?: string },
+        ) => void,
+      ) => {
+        if (command === "git" && args[0] === "--version") {
+          // PATH lookup skips the directory and reaches the real Git.
+          callback(null, { stdout: "git version 2.49.0\n" });
+          return;
+        }
+        if (command === "/bad/bin/git") {
+          callback(directoryError);
+          return;
+        }
+        if (command === "/good/bin/git") {
+          callback(null, { stdout: "git version 2.49.0\n" });
+          return;
+        }
+        callback(missingError);
+      },
+    );
+    const { resolveGitExecutable } = await import("../app-server/git-executable");
+
+    await expect(resolveGitExecutable(env)).resolves.toBe("/good/bin/git");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "/bad/bin/git",
+      ["--version"],
+      expect.any(Object),
+      expect.any(Function),
+    );
+    expect(execFileMock).toHaveBeenCalledWith(
+      "/good/bin/git",
+      ["--version"],
+      expect.any(Object),
+      expect.any(Function),
     );
   });
 

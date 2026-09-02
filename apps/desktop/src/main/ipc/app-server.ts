@@ -1554,11 +1554,6 @@ class DesktopAppServerService {
   >();
   private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
-  private readonly pendingWorktreeWorkingStateRefreshes = new Map<
-    string,
-    Promise<void>
-  >();
-  private readonly pendingWorktreeWorkingStateKeys = new Set<string>();
   // Maps a thread identity (`backend:threadId`) to its working directory so
   // a turn/command-completion event can refresh the right worktree's chips
   // without re-reading the navigation snapshot. Populated on every snapshot.
@@ -3310,54 +3305,32 @@ class DesktopAppServerService {
   }
 
   /**
-   * Schedule a background per-worktree working-state probe. Mirrors
-   * `startDirectoryGitStatusRefresh`: concurrent same-key requests coalesce
-   * through `pendingWorktreeWorkingStateKeys`, each automatic refresh obeys a
-   * bounded batch size + cache freshness, and `force` (event-driven
-   * invalidation) bypasses freshness. Returns the number of worktrees scheduled.
+   * Schedule focused, user-triggered, and event-triggered probes through the
+   * registry's shared per-worktree owner. Automatic and focused probes cannot
+   * race, and one fresh focused follow-up queues behind an older fleet probe.
    */
   private startWorktreeWorkingStateRefresh(params: {
     worktreePaths: string[];
     force?: boolean;
   }): number {
-    // In-flight paths are excluded during selection, not after it: dropping
-    // them afterwards let a full batch of already-probing worktrees consume
-    // the cap and schedule nothing, leaving the stale ones behind them for a
-    // later round.
     const worktreePaths =
       this.selectWorktreeWorkingStateRefreshCandidates(params);
     if (worktreePaths.length === 0) {
       return 0;
     }
 
-    const refreshKey = JSON.stringify({
-      worktreePaths,
-      force: params.force === true,
-    });
-    if (this.pendingWorktreeWorkingStateRefreshes.has(refreshKey)) {
-      return 0;
-    }
-
+    const registry = getDesktopBackendRegistry();
+    let scheduled = 0;
     for (const worktreePath of worktreePaths) {
-      this.pendingWorktreeWorkingStateKeys.add(worktreePath);
+      if (registry.scheduleWorktreeGitWorkingStateRefresh({
+        worktreePath,
+        acceptedPushedCommitShas:
+          this.getMergedPrCommitShasForWorktree(worktreePath),
+      })) {
+        scheduled += 1;
+      }
     }
-
-    const promise = this.refreshWorktreeWorkingStates(worktreePaths)
-      .catch((error) => {
-        logDebug("worktreeWorkingStateRefresh:failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => {
-        for (const worktreePath of worktreePaths) {
-          this.pendingWorktreeWorkingStateKeys.delete(worktreePath);
-        }
-        if (this.pendingWorktreeWorkingStateRefreshes.get(refreshKey) === promise) {
-          this.pendingWorktreeWorkingStateRefreshes.delete(refreshKey);
-        }
-      });
-    this.pendingWorktreeWorkingStateRefreshes.set(refreshKey, promise);
-    return worktreePaths.length;
+    return scheduled;
   }
 
   async refreshThreadGitWorkingState(
@@ -3392,42 +3365,9 @@ class DesktopAppServerService {
   }): string[] {
     return selectStaleWorktreeWorkingStatePaths({
       cache: getDesktopBackendRegistry().getThreadGitWorkingStateCache(),
-      exclude: this.pendingWorktreeWorkingStateKeys,
       ...(params.force ? { force: true } : {}),
       worktreePaths: params.worktreePaths,
     });
-  }
-
-  private async refreshWorktreeWorkingStates(
-    worktreePaths: string[],
-  ): Promise<void> {
-    const refreshable = worktreePaths.map((p) => p.trim()).filter(Boolean);
-    if (refreshable.length === 0) {
-      return;
-    }
-
-    for await (const entry of getDesktopBackendRegistry().readWorktreeWorkingStateEntries(
-      refreshable,
-      {
-        acceptedPushedCommitShasByWorktreePath: Object.fromEntries(
-          refreshable.map((worktreePath) => [
-            worktreePath,
-            this.getMergedPrCommitShasForWorktree(worktreePath),
-          ]),
-        ),
-      },
-    )) {
-      // The registry owns the monotonic stamp, the durable write, and the
-      // `navigation/threadGitWorkingState/updated` publish, so a probe from
-      // either lane reaches open surfaces the same way.
-      await getDesktopBackendRegistry().rememberThreadGitWorkingStateCacheEntry({
-        worktreePath: entry.worktreePath,
-        fetchedAt: Date.now(),
-        ...(entry.gitWorkingState
-          ? { gitWorkingState: entry.gitWorkingState }
-          : {}),
-      });
-    }
   }
 
   /**
@@ -7390,8 +7330,6 @@ class DesktopAppServerService {
     this.directoryGitStatusCacheLoaded = false;
     this.automaticDirectoryGitStatusRefreshesStarted = 0;
     this.lastDirectoriesByKey.clear();
-    this.pendingWorktreeWorkingStateRefreshes.clear();
-    this.pendingWorktreeWorkingStateKeys.clear();
     this.worktreePathByThreadKey.clear();
     this.prRefreshContextByThreadKey.clear();
     await disposeDesktopBackendRegistry();

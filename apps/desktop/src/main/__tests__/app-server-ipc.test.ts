@@ -610,6 +610,36 @@ const refreshThreadGitWorkingStates = vi.fn(
     return { scheduledCount: worktreePaths.length };
   },
 );
+const pendingFocusedWorkingStatePaths = new Set<string>();
+const scheduleWorktreeGitWorkingStateRefresh = vi.fn((params: {
+  acceptedPushedCommitShas?: string[];
+  worktreePath: string;
+}): boolean => {
+  if (pendingFocusedWorkingStatePaths.has(params.worktreePath)) {
+    return false;
+  }
+  pendingFocusedWorkingStatePaths.add(params.worktreePath);
+  void (async () => {
+    try {
+      for await (const entry of readWorktreeWorkingStateEntries(
+        [params.worktreePath],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            [params.worktreePath]: params.acceptedPushedCommitShas,
+          },
+        },
+      )) {
+        await rememberThreadGitWorkingStateCacheEntry({
+          ...entry,
+          fetchedAt: Date.now(),
+        });
+      }
+    } finally {
+      pendingFocusedWorkingStatePaths.delete(params.worktreePath);
+    }
+  })();
+  return true;
+});
 // Hold the result until the test releases it, so two concurrent IPC requests
 // overlap and exercise the in-flight dedup.
 let releaseEditCommitResolve: (() => void) | undefined;
@@ -1057,6 +1087,7 @@ vi.mock("../app-server/backend-registry", () => {
     readWorktreeWorkingStateEntries,
     hydrateThreadGitWorkingStates,
     refreshThreadGitWorkingStates,
+    scheduleWorktreeGitWorkingStateRefresh,
     getThreadGitWorkingStateCache,
     loadThreadGitWorkingStateCache,
     rememberThreadGitWorkingStateCacheEntry,
@@ -1198,6 +1229,8 @@ describe("app server ipc", () => {
     );
     refreshThreadGitWorkingStates.mockClear();
     threadGitWorkingStateRefreshRound = undefined;
+    scheduleWorktreeGitWorkingStateRefresh.mockClear();
+    pendingFocusedWorkingStatePaths.clear();
     threadGitWorkingStateCache.clear();
     threadGitWorkingStateCacheLoaded = false;
     getThreadGitWorkingStateCache.mockClear();

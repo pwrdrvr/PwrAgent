@@ -3459,6 +3459,97 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("queues one focused refresh behind an automatic probe for the same worktree", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    const firstAcceptedPushedCommitSha = "a".repeat(40);
+    const latestAcceptedPushedCommitSha = "b".repeat(40);
+    const automaticState = { ...sampleGitWorkingState, dirtyFiles: 1 };
+    const focusedState = { ...sampleGitWorkingState, dirtyFiles: 2 };
+    let releaseAutomaticProbe: (() => void) | undefined;
+    const automaticProbeReleased = new Promise<void>((resolve) => {
+      releaseAutomaticProbe = resolve;
+    });
+    let activeProbes = 0;
+    let maxActiveProbes = 0;
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        const call = readWorkingStateEntries.mock.calls.length;
+        activeProbes += 1;
+        maxActiveProbes = Math.max(maxActiveProbes, activeProbes);
+        try {
+          if (call === 1) {
+            await automaticProbeReleased;
+          }
+          yield {
+            worktreePath: paths[0]!,
+            gitWorkingState: call === 1 ? automaticState : focusedState,
+          };
+        } finally {
+          activeProbes -= 1;
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates([
+          multiProjectThread({ worktreePath }),
+        ]),
+      ).resolves.toEqual({ scheduledCount: 1 });
+      await expectEventually(
+        async () => readWorkingStateEntries.mock.calls.length,
+        1,
+      );
+
+      expect(registry.scheduleWorktreeGitWorkingStateRefresh({
+        worktreePath,
+        acceptedPushedCommitShas: [firstAcceptedPushedCommitSha],
+      })).toBe(true);
+      expect(registry.scheduleWorktreeGitWorkingStateRefresh({
+        worktreePath,
+        acceptedPushedCommitShas: [latestAcceptedPushedCommitSha],
+      })).toBe(false);
+      expect(readWorkingStateEntries).toHaveBeenCalledTimes(1);
+
+      releaseAutomaticProbe?.();
+      await expectEventually(
+        async () => readWorkingStateEntries.mock.calls.length,
+        2,
+      );
+      await expectEventually(
+        async () => overlayStore.writeThreadGitWorkingStateCacheEntry.mock.calls.length,
+        2,
+      );
+
+      expect(maxActiveProbes).toBe(1);
+      expect(readWorkingStateEntries.mock.calls[1]).toEqual([
+        [worktreePath],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            [worktreePath]: [latestAcceptedPushedCommitSha],
+          },
+        },
+      ]);
+      expect(registry.getThreadGitWorkingStateCache().get(worktreePath))
+        .toMatchObject({ gitWorkingState: focusedState });
+    } finally {
+      releaseAutomaticProbe?.();
+      await registry.close();
+    }
+  });
+
   it("caps a background working-state round and rotates the oldest probe forward", async () => {
     // Navigation hands over a stable thread order. Without rotation the same
     // prefix would win every round and the tail would never converge.
