@@ -105,7 +105,11 @@ describe("AcpAgentsSettings", () => {
 
     await waitFor(() => {
       expect(onManagedGrokBuildsChange).toHaveBeenCalledWith(false);
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true, force: true });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        refresh: true,
+        force: true,
+      });
     });
   });
 
@@ -197,7 +201,10 @@ describe("AcpAgentsSettings", () => {
 
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        refresh: true,
+      });
     });
     // The agent's section shows its discovered install with the "Using" badge
     // and stays visible while the registry refresh is in flight.
@@ -262,6 +269,7 @@ describe("AcpAgentsSettings", () => {
     expect(onCliPathChange).toHaveBeenCalledWith("qwen", "/opt/homebrew/bin/qwen");
     await waitFor(() => {
       expect(desktopApi.listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
         refresh: true,
         force: true,
       });
@@ -367,7 +375,11 @@ describe("AcpAgentsSettings", () => {
     screen.getByRole("button", { name: "Save" }).click();
 
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true, force: true });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        refresh: true,
+        force: true,
+      });
     });
     expect(await screen.findByText("active override")).toBeInTheDocument();
     expect(screen.getByText("override")).toBeInTheDocument();
@@ -828,7 +840,10 @@ describe("AcpAgentsSettings", () => {
     rerender(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        refresh: true,
+      });
     });
     expect(
       screen.queryByText(

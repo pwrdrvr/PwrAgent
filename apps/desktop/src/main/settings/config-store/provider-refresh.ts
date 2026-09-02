@@ -3,12 +3,9 @@ import type {
   ProviderCandidateSummary,
   ProviderProjection,
 } from "./config-domains";
+import type { ProviderDiscoveryIntent } from "../provider-discovery-permit";
 
-export type ProviderRefreshReason =
-  | "startup"
-  | "config-change"
-  | "explicit"
-  | "runtime-missing";
+export type ProviderRefreshReason = ProviderDiscoveryIntent;
 
 export type ProviderDiscoveryResult = Readonly<{
   selectedCommand?: string;

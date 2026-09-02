@@ -154,6 +154,10 @@ import {
   getDesktopSettingsService,
 } from "./settings/desktop-settings-singleton";
 import {
+  issueProviderDiscoveryPermit,
+  type ProviderDiscoveryPermit,
+} from "./settings/provider-discovery-permit";
+import {
   disposeAppState,
   initializeAppState,
   isAppStateInitialized,
@@ -397,7 +401,7 @@ function logBootDecision(decision: ProfileBootDecision): void {
   }
 }
 
-function prewarmInitialThreadList(): void {
+function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   if (!getDesktopConfigStore().read("onboarding").completed) {
     mainLog.info("startup thread list prewarm deferred until onboarding completes");
     recordStartupProfileEvent({
@@ -406,6 +410,13 @@ function prewarmInitialThreadList(): void {
     return;
   }
   const startedAt = Date.now();
+  void getDesktopSettingsService()
+    .refreshStartupDiscovery(permit)
+    .catch((error) => {
+      mainLog.warn("startup settings discovery failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   void getDesktopBackendRegistry()
     .listThreads({
       callerReason: "startup-prewarm",
@@ -414,6 +425,7 @@ function prewarmInitialThreadList(): void {
       skipArchivedMetadataRefresh: true,
     })
     .then((threads) => {
+      void getDesktopBackendRegistry().refreshProvidersAtStartup(permit);
       recordStartupProfileEvent({
         type: "startup-thread-list-prewarm:completed",
         detail: {
@@ -1441,7 +1453,7 @@ export function bootstrapApp(): void {
     quitAppOnMainWindowClose(mainWindow);
     recordStartupProfileEvent({ type: "main-window-create:end" });
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
-    prewarmInitialThreadList();
+    prewarmInitialThreadList(issueProviderDiscoveryPermit("startup"));
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:scheduled" });
 
     // Wire up auto-update *after* the window is created so a slow update

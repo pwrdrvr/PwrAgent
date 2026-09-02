@@ -29,6 +29,8 @@ import type {
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   ReadDesktopConfigBootstrapResponse,
+  ReadDesktopFullAccessPolicyResponse,
+  ReadDesktopMessagingSettingsResponse,
   PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
@@ -64,6 +66,8 @@ import {
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_READ_BOOTSTRAP_CHANNEL,
+  SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL,
+  SETTINGS_READ_MESSAGING_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
@@ -82,9 +86,13 @@ import {
   managedGrokBuildsEnabledFromSnapshot,
 } from "../settings/config-store/provider-runtime-config";
 import {
-  disposeDesktopBackendRegistry,
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
+import {
+  assertProviderDiscoveryPermit,
+  issueProviderDiscoveryPermit,
+  type ProviderDiscoveryPermit,
+} from "../settings/provider-discovery-permit";
 import { CredentialTester } from "../credential-tester/credential-tester";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
@@ -143,26 +151,16 @@ function getService(service?: DesktopSettingsService): DesktopSettingsService {
   return service ?? getDesktopSettingsService();
 }
 
-async function refreshModelBackendsIfNeeded(params: {
-  patch?: WriteDesktopSettingsConfigRequest["patch"];
-  secret?: ReplaceDesktopSettingsSecretRequest["secret"];
-}): Promise<void> {
-  const acpCliPathChanged = Object.values(
-    params.patch?.acpAgents ?? {},
-  ).some((agent) => agent?.cliPath !== undefined);
-  if (params.patch?.acpAgents !== undefined) {
+function invalidateAcpRefreshCacheAfterWrite(
+  patch: WriteDesktopSettingsConfigRequest["patch"],
+): void {
+  if (patch.acpAgents !== undefined) {
     recentAcpRefreshes.clear();
   }
-  if (
-    params.patch?.models?.codex?.path !== undefined
-    || acpCliPathChanged
-  ) {
-    await disposeDesktopBackendRegistry();
-    return;
-  }
-  if (params.patch?.acpAgents !== undefined) {
-    getDesktopBackendRegistry().invalidateAcpBackendDiscovery();
-  }
+  // A config write only invalidates normalized provider state. It is never
+  // authority to launch discovery or rebuild a provider harness; the Settings
+  // or setup action that initiated the write requests a permitted probe
+  // explicitly when it needs verification.
 }
 
 // Coalesces concurrent ACP refreshes. A refresh runs cheap local discovery and
@@ -230,12 +228,27 @@ function invalidateRecentAcpRefreshes(
   }
 }
 
+function permitAcpDiscoveryRequest(
+  request: ListAcpAgentSettingsRequest,
+): ProviderDiscoveryPermit | undefined {
+  if (request.refresh !== true) {
+    return undefined;
+  }
+  if (!request.discoveryIntent) {
+    throw new Error(
+      "ACP discovery requires a Settings or setup user-action intent.",
+    );
+  }
+  return issueProviderDiscoveryPermit(request.discoveryIntent);
+}
+
 async function listAcpAgentSettings(
   request: ListAcpAgentSettingsRequest = {},
   service?: DesktopSettingsService,
 ): Promise<ListAcpAgentSettingsResponse> {
+  const permit = permitAcpDiscoveryRequest(request);
   if (request.refresh === false) {
-    return await listAcpAgentSettingsImpl(request, service);
+    return await listAcpAgentSettingsImpl(request, service, permit);
   }
   const probeCapabilities = request.probeCapabilities !== false;
   const registryIds = acpRefreshRegistryIds(request);
@@ -283,6 +296,7 @@ async function listAcpAgentSettings(
       return await listAcpAgentSettingsImpl(
         { ...request, refresh: false },
         service,
+        permit,
       );
     }
     const nextRequest =
@@ -290,7 +304,7 @@ async function listAcpAgentSettings(
         ? { ...request, registryIds: remainingRegistryIds }
         : request;
     invalidateRecentAcpRefreshes(acpRefreshRegistryIds(nextRequest));
-    return await listAcpAgentSettingsImpl(nextRequest, service);
+    return await listAcpAgentSettingsImpl(nextRequest, service, permit);
   })();
   const active: InFlightAcpRefresh = {
     probeCapabilities,
@@ -314,6 +328,7 @@ async function listAcpAgentSettings(
 async function listAcpAgentSettingsImpl(
   request: ListAcpAgentSettingsRequest = {},
   service?: DesktopSettingsService,
+  permit?: ProviderDiscoveryPermit,
 ): Promise<ListAcpAgentSettingsResponse> {
   const store = new AcpAgentStore(getAppStateDb());
   const settingsService = getService(service);
@@ -333,6 +348,10 @@ async function listAcpAgentSettingsImpl(
   snapshot ??= store.readRegistrySnapshot();
   let discoveryEnv: NodeJS.ProcessEnv | undefined;
   if (request.refresh === true) {
+    assertProviderDiscoveryPermit(permit, [
+      "settings-user-action",
+      "setup-user-action",
+    ]);
     try {
       // Electron and package managers can prepend transient Node bin
       // directories to the app process PATH. Discover ACP CLIs from the same
@@ -346,6 +365,7 @@ async function listAcpAgentSettingsImpl(
     }
   }
   const installed = await listInstalledAndLocalAcpAgents(store, {
+    ...(permit ? { permit } : {}),
     providers: settingsService.readProvidersConfig(),
     refreshLocal: request.refresh === true,
     ...(request.force === true ? { force: true } : {}),
@@ -355,13 +375,6 @@ async function listAcpAgentSettingsImpl(
     ...(request.registryIds ? { registryIds: request.registryIds } : {}),
     ...(discoveryEnv ? { env: discoveryEnv } : {}),
   });
-  if (request.refresh === true) {
-    // The settings discovery path updates the durable ACP capability cache.
-    // Drop the backend adapter's in-memory discovery result so the next
-    // backend summary immediately reflects newly added models and reasoning
-    // options.
-    getDesktopBackendRegistry().invalidateAcpBackendDiscovery();
-  }
   const entries = snapshot
     ? registryService
         .applyAllowlist(snapshot)
@@ -466,6 +479,7 @@ function placeholderAcpAgentSettingsEntry(
 async function listInstalledAndLocalAcpAgents(
   store: AcpAgentStore,
   options?: {
+    permit?: ProviderDiscoveryPermit;
     providers?: ReturnType<DesktopSettingsService["readProvidersConfig"]>;
     refreshLocal?: boolean;
     force?: boolean;
@@ -477,6 +491,10 @@ async function listInstalledAndLocalAcpAgents(
   const installed = store.listInstalledAgents();
   let discovered: AcpInstalledAgentRecord[] = [];
   if (options?.refreshLocal) {
+    assertProviderDiscoveryPermit(options.permit, [
+      "settings-user-action",
+      "setup-user-action",
+    ]);
     try {
       const providers = options.providers
         ?? getDesktopSettingsService().readProvidersConfig();
@@ -784,11 +802,7 @@ function selectAcpDistribution(
 async function resolveCodexCommandForProfileWorkflow(
   service: DesktopSettingsService,
 ): Promise<string> {
-  const snapshot = await service.readSettings();
-  const command = snapshot.models.codex.discovery.selectedCommand;
-  if (!command) {
-    throw new Error("No Codex command is configured or discoverable.");
-  }
+  const command = (await service.resolveCodexCommand()).command;
   // Codex login and auth-status spawn this command the same way the transport
   // and the credential tester do, so they need the same Windows shim redirect.
   // Without it a `.ps1` reaching us from a stale cache launches threads fine
@@ -1198,31 +1212,8 @@ export function registerSettingsIpcHandlers(
         type: "ipc-main:readSettings",
         operation: async () => {
           const snapshot = applyRuntimeMessagingSnapshot(
-            await getService(service).readSettings(),
+            await getService(service).readSettingsProjection(),
           );
-          const discovery = snapshot.models.codex.discovery;
-          const selected = discovery.candidates.find((candidate) =>
-            candidate.selected,
-          );
-          getDesktopConfigStore().recordProviderDiscovery("codex", {
-            candidates: discovery.candidates.map((candidate) => ({
-              command: candidate.command,
-              source: candidate.source,
-              ...(candidate.version ? { version: candidate.version } : {}),
-              ...(candidate.failureReason || candidate.versionFailureReason
-                ? {
-                    failureReason:
-                      candidate.failureReason
-                      ?? candidate.versionFailureReason,
-                  }
-                : {}),
-            })),
-            ...(discovery.error ? { error: discovery.error } : {}),
-            ...(discovery.selectedCommand
-              ? { selectedCommand: discovery.selectedCommand }
-              : {}),
-            ...(selected?.version ? { selectedVersion: selected.version } : {}),
-          });
           return { snapshot };
         },
       }),
@@ -1248,6 +1239,23 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_READ_MESSAGING_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_READ_MESSAGING_CHANNEL,
+    async (): Promise<ReadDesktopMessagingSettingsResponse> => ({
+      snapshot: await getService(service).readMessagingProjection(),
+    }),
+  );
+
+  ipcMain.removeHandler(SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL,
+    (): ReadDesktopFullAccessPolicyResponse => ({
+      fullAccessRiskWarningDismissed:
+        getService(service).readFullAccessRiskWarningDismissed(),
+    }),
+  );
+
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.handle(
     SETTINGS_WRITE_CONFIG_CHANNEL,
@@ -1256,9 +1264,16 @@ export function registerSettingsIpcHandlers(
       request: WriteDesktopSettingsConfigRequest,
     ): Promise<DesktopSettingsWriteResponse> => {
       const activeService = getService(service);
-      const update = await activeService.writeConfigPatchTargeted(request.patch);
+      const discoveryPermit = request.patch.experimental?.tokenMiserEnabled
+        === true
+        ? issueProviderDiscoveryPermit("settings-user-action")
+        : undefined;
+      const update = await activeService.writeConfigPatchTargeted(
+        request.patch,
+        discoveryPermit,
+      );
       await options?.onConfigPatchWritten?.(request.patch);
-      await refreshModelBackendsIfNeeded({ patch: request.patch });
+      invalidateAcpRefreshCacheAfterWrite(request.patch);
       if (service && messagingPatchTouchesRuntime(request.patch)) {
         await applyLatestMessagingRuntimeConfig(activeService);
       }
@@ -1278,7 +1293,6 @@ export function registerSettingsIpcHandlers(
         request.secret,
         request.value,
       );
-      await refreshModelBackendsIfNeeded({ secret: request.secret });
       if (messagingSecretTouchesRuntime(request.secret)) {
         await applyLatestMessagingRuntimeConfig(activeService);
       }
@@ -1295,7 +1309,6 @@ export function registerSettingsIpcHandlers(
     ): Promise<DesktopSettingsSecretWriteResponse> => {
       const activeService = getService(service);
       const state = await activeService.clearSecret(request.secret);
-      await refreshModelBackendsIfNeeded({ secret: request.secret });
       if (messagingSecretTouchesRuntime(request.secret)) {
         await applyLatestMessagingRuntimeConfig(activeService);
       }
@@ -1308,12 +1321,21 @@ export function registerSettingsIpcHandlers(
     SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
     async (
       _event,
-      _request?: RefreshDesktopCodexDiscoveryRequest,
-    ): Promise<ReadDesktopSettingsResponse> => ({
-      snapshot: applyRuntimeMessagingSnapshot(
-        await getService(service).refreshCodexDiscovery(),
-      ),
-    }),
+      request: RefreshDesktopCodexDiscoveryRequest,
+    ): Promise<ReadDesktopSettingsResponse> => {
+      if (!request?.discoveryIntent) {
+        throw new Error(
+          "Codex discovery requires a Settings or setup user-action intent.",
+        );
+      }
+      return {
+        snapshot: applyRuntimeMessagingSnapshot(
+          await getService(service).refreshCodexDiscovery(
+            issueProviderDiscoveryPermit(request.discoveryIntent),
+          ),
+        ),
+      };
+    },
   );
 
   ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
@@ -1566,12 +1588,13 @@ export function registerSettingsIpcHandlers(
       // Persist the wizard signal idempotently. The patch writer
       // skips the file write entirely when both values already match
       // what's on disk.
-      const snapshot = await activeService.writeConfigPatch({
+      await activeService.writeConfigPatchTargeted({
         onboarding: {
           completed: true,
           completedSource: "wizard",
         },
       });
+      const snapshot = await activeService.readSettingsProjection();
       await options?.onConfigPatchWritten?.(
         {
           onboarding: { completed: true, completedSource: "wizard" },
@@ -1580,10 +1603,19 @@ export function registerSettingsIpcHandlers(
 
       const shouldConnect = request?.connect !== false;
       if (shouldConnect) {
-        // Same prefetch the startup path would have done. Fire-and-forget;
-        // errors are logged by the registry's own diagnostic plumbing.
-        void getDesktopBackendRegistry()
+        // Same one-time discovery the startup path would have done. This is
+        // an explicit setup action, so it may initialize Codex after the
+        // bootstrap profile has graduated. Keep it off the wizard response.
+        const registry = getDesktopBackendRegistry();
+        const permit = issueProviderDiscoveryPermit("setup-user-action");
+        void registry
           .listThreads({ callerReason: "onboarding-bootstrap" })
+          .then(async () => {
+            await registry.listBackends(
+              { includeUnavailable: true, refreshModels: true },
+              permit,
+            );
+          })
           .catch((error) => {
             settingsIpcLog.warn(
               "onboarding bootstrap thread-list prefetch failed",
@@ -1609,6 +1641,8 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_BOOTSTRAP_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_READ_MESSAGING_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CLEAR_SECRET_CHANNEL);

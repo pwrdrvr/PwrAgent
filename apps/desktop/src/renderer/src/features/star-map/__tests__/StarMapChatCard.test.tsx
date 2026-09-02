@@ -2349,7 +2349,7 @@ describe("StarMapChatCard settings menu", () => {
   /** Settings reads resolve a tick after mount; the gate reads false until then. */
   async function settleDismissedRead(desktopApi: DesktopApi): Promise<void> {
     await waitFor(() => {
-      expect(desktopApi.readSettings).toHaveBeenCalled();
+      expect(desktopApi.readFullAccessPolicy).toHaveBeenCalled();
     });
     await act(async () => {
       await Promise.resolve();
@@ -2361,14 +2361,8 @@ describe("StarMapChatCard settings menu", () => {
     overrides: Partial<DesktopApi> = {},
   ): DesktopApi {
     return settingsApi({
-      readSettings: vi.fn(async () => ({
-        snapshot: {
-          experimental: {
-            fullAccessRiskWarningDismissed: {
-              value: fullAccessRiskWarningDismissed,
-            },
-          },
-        },
+      readFullAccessPolicy: vi.fn(async () => ({
+        fullAccessRiskWarningDismissed,
       })),
       ...overrides,
     } as unknown as Partial<DesktopApi>);

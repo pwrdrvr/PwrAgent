@@ -698,12 +698,16 @@ describe("SettingsScreen", () => {
       .not.toBeInTheDocument();
     await waitFor(() => {
       expect(listBackends).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
         includeUnavailable: true,
         refreshModels: true,
       });
     });
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        refresh: true,
+      });
     });
     fireEvent.click(
       await screen.findByRole("button", { name: "Open Grok settings" }),

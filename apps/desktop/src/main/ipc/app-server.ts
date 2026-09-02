@@ -74,7 +74,6 @@ import {
   type RecordRecentFileReferencesRequest,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
-  type DesktopSettingsSnapshot,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
   type RefreshThreadGitWorkingStateRequest,

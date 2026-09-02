@@ -7,6 +7,7 @@ import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-teleg
 import type {
   DesktopAuthorizedContact,
   DesktopMessagingFullAccessWarningGlobalPolicy,
+  DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
   MessagingToolUpdateMode,
@@ -97,8 +98,6 @@ import {
   readEnvMessagingImageProfile,
   readEnvMessagingPdfProfile,
 } from "../settings/desktop-settings-env";
-import { resolveMessagingSettingsDomain } from "./messaging-settings-domain";
-
 export {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_GUILDS_ENV,
@@ -350,8 +349,9 @@ export type DesktopMessagingChannelConfigUpdate =
 
 export type DesktopMessagingSettingsSource = Pick<
   DesktopSettingsService,
-  | "readSettings"
-  | "writeConfigPatch"
+  | "readGeneralConfig"
+  | "readMessagingSettings"
+  | "writeConfigPatchTargeted"
   | "resolveDiscordBotTokenSync"
   | "resolveTelegramBotTokenSync"
   | "resolveMattermostBotTokenSync"
@@ -365,14 +365,6 @@ export type DesktopMessagingSettingsSource = Pick<
   | "resolveFeishuVerificationTokenSync"
   | "resolveLineChannelAccessTokenSync"
   | "resolveLineChannelSecretSync"
-> & Partial<
-  Pick<
-    DesktopSettingsService,
-    | "readGeneralConfig"
-    | "readMessagingConfig"
-    | "readMessagingSettings"
-    | "writeConfigPatchTargeted"
-  >
 >;
 
 export type DesktopMessagingConfigLoadOptions = {
@@ -734,17 +726,15 @@ export async function loadDesktopMessagingConfigFromSettings(
 ): Promise<DesktopMessagingConfig> {
   const log = getMainLogger("pwragent:messaging");
   const envConfig = loadDesktopMessagingConfig(env);
-  const snapshot = settings.readGeneralConfig && settings.readMessagingSettings
-    ? {
-        general: {
-          pdfAnalysisEnabled: {
-            value: settings.readGeneralConfig().pdfAnalysisEnabled ?? true,
-            source: "config" as const,
-          },
-        },
-        messaging: settings.readMessagingSettings(),
-      }
-    : await settings.readSettings();
+  const snapshot = {
+    general: {
+      pdfAnalysisEnabled: {
+        value: settings.readGeneralConfig().pdfAnalysisEnabled ?? true,
+        source: "config" as const,
+      },
+    },
+    messaging: settings.readMessagingSettings(),
+  };
   const telegramBotToken =
     envConfig.telegram?.botToken ?? settings.resolveTelegramBotTokenSync();
   const discordBotToken =
@@ -1469,20 +1459,14 @@ function contactsForFullAccessWarningChannel(
 async function readMessagingSettingsProjection(
   settings: DesktopMessagingSettingsSource,
 ): Promise<DesktopSettingsSnapshot["messaging"]> {
-  return settings.readMessagingSettings
-    ? settings.readMessagingSettings()
-    : (await settings.readSettings()).messaging;
+  return settings.readMessagingSettings();
 }
 
 async function writeMessagingConfigPatch(
   settings: DesktopMessagingSettingsSource,
-  patch: Parameters<DesktopSettingsService["writeConfigPatch"]>[0],
+  patch: DesktopSettingsConfigPatch,
 ): Promise<void> {
-  if (settings.writeConfigPatchTargeted) {
-    await settings.writeConfigPatchTargeted(patch);
-    return;
-  }
-  await settings.writeConfigPatch(patch);
+  await settings.writeConfigPatchTargeted(patch);
 }
 
 function readInputDebounceMsFromEnv(env: NodeJS.ProcessEnv): number | undefined {

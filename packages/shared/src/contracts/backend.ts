@@ -241,6 +241,8 @@ export type ListBackendsRequest = {
    * refreshes one provider; `true` refreshes every provider.
    */
   refreshModels?: true | AppServerBackendKind;
+  /** Required when `refreshModels` can launch provider model discovery. */
+  discoveryIntent?: ProviderDiscoveryUserIntent;
   federationTarget?: FederationTarget;
 };
 
@@ -345,8 +347,14 @@ export type AcpAgentPreference = {
   selectedPath?: string;
 };
 
+export type ProviderDiscoveryUserIntent =
+  | "settings-user-action"
+  | "setup-user-action";
+
 export type ListAcpAgentSettingsRequest = {
   refresh?: boolean;
+  /** Required when `refresh` can launch local provider discovery. */
+  discoveryIntent?: ProviderDiscoveryUserIntent;
   /**
    * Restrict local discovery and capability probing to these provider ids.
    * Omit for every configured provider. Used by explicit onboarding login

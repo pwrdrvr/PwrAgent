@@ -1367,6 +1367,22 @@ export type ReadDesktopConfigBootstrapResponse = {
   snapshot: DesktopConfigBootstrapSnapshot;
 };
 
+/** Credential-free messaging projection for runtime renderer surfaces. */
+export type DesktopMessagingSettingsProjection = {
+  fetchedAt: number;
+  messaging: DesktopSettingsSnapshot["messaging"];
+  runtime: DesktopSettingsSnapshot["runtime"]["messaging"];
+};
+
+export type ReadDesktopMessagingSettingsResponse = {
+  snapshot: DesktopMessagingSettingsProjection;
+};
+
+/** Single-key policy projection used by every Full Access confirmation. */
+export type ReadDesktopFullAccessPolicyResponse = {
+  fullAccessRiskWarningDismissed: boolean;
+};
+
 export type WriteDesktopSettingsConfigRequest = {
   patch: DesktopSettingsConfigPatch;
 };
@@ -1380,7 +1396,9 @@ export type ClearDesktopSettingsSecretRequest = {
   secret: DesktopSettingsSecretName;
 };
 
-export type RefreshDesktopCodexDiscoveryRequest = Record<string, never>;
+export type RefreshDesktopCodexDiscoveryRequest = {
+  discoveryIntent: "settings-user-action" | "setup-user-action";
+};
 
 export type CreateDesktopCodexAuthProfileRequest = {
   profile: string;

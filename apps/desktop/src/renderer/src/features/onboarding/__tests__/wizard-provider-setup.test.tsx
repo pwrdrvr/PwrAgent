@@ -227,6 +227,7 @@ describe("AI provider onboarding", () => {
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({ refresh: false });
       expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "setup-user-action",
         refresh: true,
         probeCapabilities: false,
       });
@@ -252,6 +253,7 @@ describe("AI provider onboarding", () => {
     );
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "setup-user-action",
         refresh: true,
         force: true,
         registryIds: ["gemini"],
@@ -368,6 +370,7 @@ describe("AI provider onboarding", () => {
     await waitFor(() => {
       expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
       expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "setup-user-action",
         refresh: true,
         probeCapabilities: false,
       });

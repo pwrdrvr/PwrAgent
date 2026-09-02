@@ -26,8 +26,11 @@ import {
   ProviderRefreshCoordinator,
   type ProviderDiscoveryResult,
   type ProviderDiscoverer,
-  type ProviderRefreshReason,
 } from "./provider-refresh";
+import {
+  assertProviderDiscoveryPermit,
+  type ProviderDiscoveryPermit,
+} from "../provider-discovery-permit";
 import type { DesktopSettingsConfig } from "../desktop-config";
 import {
   parseRawConfigText,
@@ -74,7 +77,7 @@ type Subscription = Readonly<{
 
 export class DesktopConfigStore {
   private snapshot: ConfigStoreSnapshot;
-  private readonly durable: DurableConfigSnapshotStore;
+  private readonly durable?: DurableConfigSnapshotStore;
   private readonly now: () => number;
   private readonly subscriptions = new Set<Subscription>();
   private diagnosticEventCount = 0;
@@ -96,7 +99,7 @@ export class DesktopConfigStore {
   constructor(private readonly options: {
     configPath: string;
     createFileWatcher?: ConfigFileWatcherFactory;
-    stateDb: StateDb;
+    stateDb?: StateDb;
     discoverProvider?: ProviderDiscoverer;
     now?: () => number;
     onDiagnostic?: (event: ConfigStoreDiagnosticEvent) => void;
@@ -105,12 +108,14 @@ export class DesktopConfigStore {
     >;
   }) {
     this.now = options.now ?? Date.now;
-    this.durable = new DurableConfigSnapshotStore(options.stateDb);
+    this.durable = options.stateDb
+      ? new DurableConfigSnapshotStore(options.stateDb)
+      : undefined;
 
     const durableStartedAt = this.now();
-    const durableConfig = this.durable.readConfig();
+    const durableConfig = this.durable?.readConfig();
     this.durableConfigRevision = durableConfig?.configRevision;
-    const durableProviders = this.durable.readProviders();
+    const durableProviders = this.durable?.readProviders() ?? {};
     for (const provider of PROVIDER_IDS) {
       const projection = durableProviders[provider];
       if (projection) {
@@ -237,7 +242,10 @@ export class DesktopConfigStore {
             configRevision: observation.contentHash,
             domains,
           });
-    if (next.configRevision !== this.durableConfigRevision) {
+    if (
+      this.durable
+      && next.configRevision !== this.durableConfigRevision
+    ) {
       const durableStartedAt = this.now();
       this.durable.writeConfig({
         configRevision: next.configRevision,
@@ -258,14 +266,6 @@ export class DesktopConfigStore {
       previous.domains,
       next.domains,
     );
-    const scheduledProviderRefreshes = PROVIDER_IDS.filter((provider) =>
-      next.domains.providers[provider].configured.enabled
-      && next.domains.providers[provider].dependencyFingerprint
-        !== previous.domains.providers[provider].dependencyFingerprint,
-    );
-    for (const provider of scheduledProviderRefreshes) {
-      void this.refreshProvider(provider, "config-change");
-    }
     const values = Object.fromEntries(
       returnDomains.map((domain) => [domain, next.domains[domain]]),
     ) as Pick<ConfigDomainMap, K>;
@@ -275,7 +275,10 @@ export class DesktopConfigStore {
       changedDomains,
       normalizedPatch: normalizedConfigPatch(observation.config, patch),
       values,
-      scheduledProviderRefreshes,
+      // Provider changes invalidate their normalized projections above, but a
+      // config write is never authority to launch discovery. Settings/setup
+      // code must request a permitted refresh explicitly.
+      scheduledProviderRefreshes: [],
     });
   }
 
@@ -318,7 +321,10 @@ export class DesktopConfigStore {
         configRevision: observation.contentHash,
         domains,
       });
-      if (next.configRevision !== this.durableConfigRevision) {
+      if (
+        this.durable
+        && next.configRevision !== this.durableConfigRevision
+      ) {
         const durableStartedAt = this.now();
         this.durable.writeConfig({
           configRevision: next.configRevision,
@@ -341,17 +347,6 @@ export class DesktopConfigStore {
         outcome: "success",
         detail: { reason },
       });
-      if (reason !== "startup") {
-        for (const provider of PROVIDER_IDS) {
-          if (
-            domains.providers[provider].configured.enabled
-            && domains.providers[provider].dependencyFingerprint
-              !== previousProviders[provider].dependencyFingerprint
-          ) {
-            void this.refreshProvider(provider, "config-change");
-          }
-        }
-      }
       return;
     }
 
@@ -419,12 +414,13 @@ export class DesktopConfigStore {
 
   async refreshProvider(
     provider: ProviderId,
-    reason: ProviderRefreshReason,
+    permit: ProviderDiscoveryPermit,
   ): Promise<ProviderProjection> {
+    assertProviderDiscoveryPermit(permit);
     if (!this.providerRefresh) {
       return this.snapshot.domains.providers[provider];
     }
-    return await this.providerRefresh.refresh(provider, reason);
+    return await this.providerRefresh.refresh(provider, permit.intent);
   }
 
   recordSecretPresence(
@@ -536,7 +532,11 @@ export class DesktopConfigStore {
         providers,
       }),
     });
-    if (projection.validation.state === "valid" && projection.lastKnownGood) {
+    if (
+      this.durable
+      && projection.validation.state === "valid"
+      && projection.lastKnownGood
+    ) {
       const durableIdentity = providerDurableIdentity(projection);
       if (
         this.durableProviderIdentities.get(projection.provider)

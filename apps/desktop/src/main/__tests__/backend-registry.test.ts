@@ -90,6 +90,8 @@ import type {
   CodexServerCapabilities,
 } from "../codex-app-server/client";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
+import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
 import {
   CodexEnvironmentCommandError,
@@ -1723,6 +1725,7 @@ class MockBackendClient {
   };
   listThreadsCallCount = 0;
   listNativeSubAgentThreadsCallCount = 0;
+  initializeCallCount = 0;
   listModelsCallCount = 0;
   readServerCapabilitiesCallCount = 0;
   steerTurnCallCount = 0;
@@ -1824,6 +1827,7 @@ class MockBackendClient {
   }
 
   async getInitializeResult() {
+    this.initializeCallCount += 1;
     if (this.options.initializeError) {
       throw this.options.initializeError;
     }
@@ -2764,6 +2768,15 @@ async function emitStartedTurn(
       },
     },
   });
+}
+
+async function discoverCodexBackendForTest(
+  registry: DesktopBackendRegistry,
+): Promise<void> {
+  await registry.listBackends(
+    { includeUnavailable: true, refreshModels: "codex" },
+    issueProviderDiscoveryPermit("settings-user-action"),
+  );
 }
 
 function rememberCollapsedDirectoryWithPinnedThread(params: {
@@ -3958,6 +3971,7 @@ describe("DesktopBackendRegistry", () => {
         },
       }),
     });
+    await discoverCodexBackendForTest(registry);
 
     const result = await registry.generateStructuredObject({
       backend: "codex",
@@ -6009,6 +6023,9 @@ describe("DesktopBackendRegistry", () => {
       overlayStore,
     });
 
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
     const response = await registry.listBackends({ includeUnavailable: true });
 
     expect(codexClient.listModelsCallCount).toBe(1);
@@ -6388,6 +6405,9 @@ describe("DesktopBackendRegistry", () => {
       ],
     });
 
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
     const response = await registry.listBackends({ includeUnavailable: true });
 
     expect(response.backends).toEqual(
@@ -6410,7 +6430,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("invalidates ACP discovery without closing shared backend clients", async () => {
+  it("never reaches ACP discovery from ordinary backend summaries", async () => {
     const codexClient = new MockBackendClient({});
     const closeSpy = vi.spyOn(codexClient, "close");
     const discoverLocalAcpAgents = vi.fn(async () => []);
@@ -6423,13 +6443,15 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.listBackends({ includeUnavailable: true });
     await registry.listBackends({ includeUnavailable: true });
-    expect(discoverLocalAcpAgents).toHaveBeenCalledTimes(1);
-
-    registry.invalidateAcpBackendDiscovery();
+    expect(discoverLocalAcpAgents).not.toHaveBeenCalled();
 
     expect(closeSpy).not.toHaveBeenCalled();
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    expect(discoverLocalAcpAgents).toHaveBeenCalledTimes(1);
     await registry.listBackends({ includeUnavailable: true });
-    expect(discoverLocalAcpAgents).toHaveBeenCalledTimes(2);
+    expect(discoverLocalAcpAgents).toHaveBeenCalledTimes(1);
     expect(closeSpy).not.toHaveBeenCalled();
 
     await registry.close();
@@ -6459,20 +6481,29 @@ describe("DesktopBackendRegistry", () => {
 
   it("reaches machine ACP discovery when the caller opts in", async () => {
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockClear();
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-backend-registry-"),
+    );
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
+      configStore: new DesktopConfigStore({
+        configPath: path.join(tempRoot, "config.toml"),
+      }),
       useMachineAcpDiscovery: true,
     });
 
-    await registry.listBackends({ includeUnavailable: true });
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
 
     expect(
       localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
     ).toHaveBeenCalled();
 
     await registry.close();
+    await rm(tempRoot, { recursive: true, force: true });
   });
 
   it("filters disabled ACP agents before default backend discovery", async () => {
@@ -6500,6 +6531,9 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
+      configStore: new DesktopConfigStore({
+        configPath: path.join(profileDir, "config.toml"),
+      }),
       // This case asserts on what machine discovery is asked for, so it opts in
       // deliberately. `../acp/acp-instance-discovery` is mocked file-wide, so
       // opting in here stays inside the process.
@@ -6507,7 +6541,9 @@ describe("DesktopBackendRegistry", () => {
     });
 
     try {
-      await registry.listBackends({ includeUnavailable: true });
+      await registry.refreshProvidersAtStartup(
+        issueProviderDiscoveryPermit("startup"),
+      );
 
       expect(
         localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
@@ -6578,6 +6614,9 @@ describe("DesktopBackendRegistry", () => {
           status: "idle",
         },
       ]),
+      configStore: new DesktopConfigStore({
+        configPath: path.join(profileDir, "config.toml"),
+      }),
       discoverLocalAcpAgents: async () => [],
     });
 
@@ -6721,12 +6760,16 @@ describe("DesktopBackendRegistry", () => {
         title: "Durable provider thread",
       }),
     ]);
+    const startupRefresh = registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
     await vi.waitFor(() => {
       expect(codexClient.listThreadsCallCount).toBe(1);
     });
     expect(replace).not.toHaveBeenCalled();
 
     providerRefresh.resolve();
+    await startupRefresh;
     await vi.waitFor(() => {
       expect(replace).toHaveBeenCalledWith({
         backend: "codex",
@@ -6772,6 +6815,9 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.listThreads({
       callerReason: "startup-prewarm",
     })).resolves.toEqual([]);
+    const startupRefresh = registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
     expect(registry.getStartupProviderRefreshStatus()).toEqual({
       state: "checking",
     });
@@ -6780,6 +6826,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     providerRefresh.resolve();
+    await startupRefresh;
     await vi.waitFor(() => {
       expect(replace).toHaveBeenCalledWith({
         backend: "codex",
@@ -6830,6 +6877,9 @@ describe("DesktopBackendRegistry", () => {
     })).resolves.toEqual([
       expect.objectContaining({ id: "last-good-thread" }),
     ]);
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
     await vi.waitFor(() => {
       expect(codexClient.listThreadsCallCount).toBe(1);
     });
@@ -11425,7 +11475,10 @@ script = "echo setup"
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 
-    const firstResponse = await registry.listBackends({ includeUnavailable: true });
+    const firstResponse = await registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     const secondResponse = await registry.listBackends({ includeUnavailable: true });
     await registry.startThread({ backend: "codex" });
 
@@ -11493,7 +11546,10 @@ script = "echo setup"
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 
-    const response = await registry.listBackends({ includeUnavailable: true });
+    const response = await registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     await registry.startThread({ backend: "codex" });
 
     expect(response.backends[0]?.launchpadOptions?.models).toMatchObject([
@@ -11540,7 +11596,10 @@ script = "echo setup"
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 
-    const response = await registry.listBackends({ includeUnavailable: true });
+    const response = await registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     await registry.startThread({ backend: "codex" });
 
     const models = response.backends[0]?.launchpadOptions?.models ?? [];
@@ -14510,7 +14569,10 @@ script = "echo setup"
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 
-    const response = await registry.listBackends({ includeUnavailable: true });
+    const response = await registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     await registry.startThread({ backend: "codex" });
 
     expect(codexClient.listModelsCallCount).toBe(2);
@@ -14523,7 +14585,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("refreshes a selected provider model catalog on request", async () => {
+  it("refreshes a selected provider model catalog only with a permit", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -14543,13 +14605,31 @@ script = "echo setup"
 
     await registry.listBackends({ includeUnavailable: true });
     await registry.listBackends({ includeUnavailable: true });
+    expect(codexClient.initializeCallCount).toBe(0);
+    expect(codexClient.listModelsCallCount).toBe(0);
+
+    await expect(
+      registry.listBackends({
+        includeUnavailable: true,
+        refreshModels: "codex",
+      }),
+    ).rejects.toThrow("explicit discovery permit");
+    expect(codexClient.initializeCallCount).toBe(0);
+    expect(codexClient.listModelsCallCount).toBe(0);
+
+    await registry.listBackends(
+      {
+        includeUnavailable: true,
+        refreshModels: "codex",
+      },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    expect(codexClient.initializeCallCount).toBe(1);
     expect(codexClient.listModelsCallCount).toBe(1);
 
-    await registry.listBackends({
-      includeUnavailable: true,
-      refreshModels: "codex",
-    });
-    expect(codexClient.listModelsCallCount).toBe(2);
+    await registry.listBackends({ includeUnavailable: true });
+    expect(codexClient.initializeCallCount).toBe(1);
+    expect(codexClient.listModelsCallCount).toBe(1);
 
     await registry.close();
   });
@@ -14564,7 +14644,10 @@ script = "echo setup"
       overlayStore: createOverlayStoreMock(),
     });
 
-    const response = await registry.listBackends({ includeUnavailable: true });
+    const response = await registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
 
     expect(response.backends[0]).toMatchObject({
       kind: "codex",
@@ -14748,6 +14831,7 @@ script = "echo setup"
         },
       }),
     });
+    await discoverCodexBackendForTest(registry);
 
     const opened = await registry.ensureDirectoryLaunchpad({
       directoryKey: "directory:/repo-a",
@@ -34194,6 +34278,7 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    await discoverCodexBackendForTest(registry);
     for (const [threadId, turnId] of [
       ["target-thread", "target-turn"],
       ["parent-thread", "parent-turn"],
@@ -34433,6 +34518,7 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    await discoverCodexBackendForTest(registry);
     for (const [threadId, turnId] of [
       ["live-thread", "turn-new"],
       ["parent-thread", "parent-turn"],
@@ -34555,6 +34641,7 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    await discoverCodexBackendForTest(registry);
     for (const [threadId, turnId] of [
       ["target-thread", "target-turn"],
       ["parent-thread", "parent-turn"],
@@ -34658,6 +34745,7 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    await discoverCodexBackendForTest(registry);
     for (const [threadId, turnId] of [
       ["target-thread", "target-turn"],
       ["parent-thread", "parent-turn"],
@@ -35383,6 +35471,7 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    await discoverCodexBackendForTest(registry);
     const federatedControl = vi.fn(async (controlRequest) => ({
       backend: controlRequest.backend,
       threadId: controlRequest.threadId,

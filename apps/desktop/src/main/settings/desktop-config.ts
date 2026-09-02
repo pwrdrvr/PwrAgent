@@ -346,68 +346,12 @@ export function readDesktopSettingsConfig(
   return parseDesktopSettingsToml(fs.readFileSync(configPath, "utf8"), configPath);
 }
 
-/**
- * Resolve the active override path for the Grok CLI executable, used by the
- * ACP local-discovery probe. Order: env var > on-disk config > undefined.
- * Reads synchronously from disk; safe to call from discovery hot paths since
- * discovery itself is on-demand (refresh button / startup).
- */
-export function resolveGrokCliPathOverride(
-  options?: { env?: NodeJS.ProcessEnv },
-): string | undefined {
-  const env = options?.env ?? process.env;
-  const envOverride = env[ACP_AGENTS_GROK_CLI_PATH_ENV]?.trim() || undefined;
-  if (envOverride) {
-    return envOverride;
-  }
-  try {
-    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
-    return config.acpAgents?.grok?.cliPath?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Resolve the active override path for the Qwen Code executable, used by the
- * ACP local-discovery probe. Order: env var > on-disk config > undefined.
- */
-export function resolveQwenCliPathOverride(
-  options?: { env?: NodeJS.ProcessEnv },
-): string | undefined {
-  const env = options?.env ?? process.env;
-  const envOverride = env[ACP_AGENTS_QWEN_CLI_PATH_ENV]?.trim() || undefined;
-  if (envOverride) {
-    return envOverride;
-  }
-  try {
-    const config = readDesktopSettingsConfig(resolveDesktopConfigPath());
-    return config.acpAgents?.qwen?.cliPath?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 const ACP_CLI_PATH_ENV_BY_ID: Record<string, string> = {
   gemini: ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   grok: ACP_AGENTS_GROK_CLI_PATH_ENV,
   kimi: ACP_AGENTS_KIMI_CLI_PATH_ENV,
   qwen: ACP_AGENTS_QWEN_CLI_PATH_ENV,
 };
-
-/**
- * Read + normalize the on-disk config, swallowing read/parse errors to an
- * empty config so callers fall back to defaults. Use this when resolving
- * several agent settings at once (e.g. all four ACP agents during discovery)
- * to read + parse the TOML **once** instead of per lookup.
- */
-export function readDesktopSettingsConfigSafe(): DesktopSettingsConfig {
-  try {
-    return readDesktopSettingsConfig(resolveDesktopConfigPath());
-  } catch {
-    return {};
-  }
-}
 
 /**
  * Resolve an ACP agent's CLI-path override from an already-loaded config.
@@ -474,34 +418,6 @@ export function managedGrokBuildsEnabledForRuntime(
     return false;
   }
   return managedGrokBuildsEnabledFor(config, !options.isPackaged);
-}
-
-/**
- * Resolve the active override path for any ACP agent's CLI executable
- * (`registryId` = gemini | grok | kimi | qwen), used by the ACP discovery
- * probe. Order: env var > on-disk config (`acpAgents.<id>.cliPath`) >
- * undefined. Single-shot convenience over {@link acpCliPathOverrideFor}.
- */
-export function resolveAcpCliPathOverride(
-  registryId: string,
-  options?: { env?: NodeJS.ProcessEnv },
-): string | undefined {
-  return acpCliPathOverrideFor(
-    readDesktopSettingsConfigSafe(),
-    registryId,
-    options?.env ?? process.env,
-  );
-}
-
-/**
- * Whether an ACP agent is enabled as a chat backend (registryId = gemini |
- * grok | kimi | qwen). Defaults to **true** — agents are usable unless the user
- * explicitly disabled them via Settings → AI Providers. Read directly from the
- * on-disk config so the chat-launch path and Settings agree without a snapshot.
- * Single-shot convenience over {@link acpAgentEnabledFor}.
- */
-export function resolveAcpAgentEnabled(registryId: string): boolean {
-  return acpAgentEnabledFor(readDesktopSettingsConfigSafe(), registryId);
 }
 
 /**

@@ -1959,8 +1959,11 @@ export function BackendRequirementsStep(props: {
     setError(undefined);
     try {
       const results = await Promise.allSettled([
-        props.desktopApi?.refreshCodexDiscovery?.({}),
+        props.desktopApi?.refreshCodexDiscovery?.({
+          discoveryIntent: "setup-user-action",
+        }),
         props.desktopApi?.listAcpAgents?.({
+          discoveryIntent: "setup-user-action",
           refresh: true,
           probeCapabilities: false,
         }),
@@ -1998,6 +2001,7 @@ export function BackendRequirementsStep(props: {
       .then((response) => {
         updateAcpEntries(response.entries);
         return props.desktopApi?.listAcpAgents?.({
+          discoveryIntent: "setup-user-action",
           refresh: true,
           probeCapabilities: false,
         });
@@ -2067,6 +2071,7 @@ export function BackendRequirementsStep(props: {
     setGeminiLoginState("running");
     try {
       const response = await props.desktopApi.listAcpAgents({
+        discoveryIntent: "setup-user-action",
         refresh: true,
         force: true,
         registryIds: ["gemini"],

@@ -90,6 +90,9 @@ export function AcpAgentsSettings(props: {
     }
     try {
       const response = await props.desktopApi.listAcpAgents({
+        ...(refreshRegistry
+          ? { discoveryIntent: "settings-user-action" as const }
+          : {}),
         refresh: refreshRegistry,
         ...(force ? { force: true } : {}),
       });

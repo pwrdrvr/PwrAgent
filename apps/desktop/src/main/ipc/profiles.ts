@@ -46,11 +46,11 @@ import {
   resolveProfileDir,
   setDefaultProfileName,
 } from "../profile";
+import { resolveDesktopConfigPath } from "../settings/desktop-config";
 import {
-  applyDesktopSettingsPatch,
-  readDesktopSettingsConfig,
-  resolveDesktopConfigPath,
-} from "../settings/desktop-config";
+  readProfileConfigFile,
+  writeProfileConfigPatch,
+} from "../settings/config-store/profile-config-file";
 import { discoverCodexAuthProfiles } from "@pwrdrvr/codex-discovery";
 import { getAppStateMode } from "../state/app-state";
 import { isSecretStorageDisabledByEnv } from "../settings/desktop-secret-store";
@@ -113,7 +113,7 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
 function readPwrAgentProfileCodexProfile(profileName: string) {
   let configuredProfile: string | undefined;
   try {
-    const config = readDesktopSettingsConfig(
+    const config = readProfileConfigFile(
       resolveDesktopConfigPath({ cliProfile: profileName }),
     );
     configuredProfile = config.models?.codex?.profile;
@@ -213,7 +213,7 @@ export function createDesktopPwrAgentProfile(
   // `false` (per #500) still applies to profiles created from any
   // other surface (Settings → Profiles, `PWRAGENT_PROFILE=<new>`, etc.).
   if (request.seedOnboardingCompleted) {
-    applyDesktopSettingsPatch(
+    writeProfileConfigPatch(
       resolveDesktopConfigPath({ cliProfile: profile }),
       {
         onboarding: { completed: true, completedSource: "wizard" },
@@ -333,11 +333,11 @@ export function graduateDesktopBootstrapConfigToProfile(
 
   // Strip the onboarding section — the target profile already has
   // the right marker seeded by createPwrAgentProfile(seedOnboardingCompleted).
-  const bootstrapConfig = readDesktopSettingsConfig(bootstrapConfigPath);
+  const bootstrapConfig = readProfileConfigFile(bootstrapConfigPath);
   const { onboarding: _drop, ...patch } = bootstrapConfig;
   void _drop;
 
-  applyDesktopSettingsPatch(
+  writeProfileConfigPatch(
     resolveDesktopConfigPath({ cliProfile: targetProfile }),
     patch,
   );
@@ -458,7 +458,7 @@ export async function setDesktopPwrAgentProfileCodexProfile(
       [PWRAGENT_PROFILE_ENV]: profile,
     },
   });
-  applyDesktopSettingsPatch(resolveDesktopConfigPath({ cliProfile: profile }), {
+  writeProfileConfigPatch(resolveDesktopConfigPath({ cliProfile: profile }), {
     models: { codex: { profile: codexProfile } },
   });
 

@@ -197,6 +197,7 @@ const isCodexBootstrapDeferredMock = vi.fn(() => false);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
   isCodexBootstrapDeferred: isCodexBootstrapDeferredMock,
+  refreshStartupDiscovery: vi.fn(async () => undefined),
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
 const resolveActiveProfileNameMock = vi.fn(() => "default");

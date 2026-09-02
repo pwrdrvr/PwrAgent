@@ -15,10 +15,6 @@ import {
   applySecretUpdateToSettingsSnapshot,
 } from "../../lib/settings-snapshot-updates";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
-import {
-  readDesktopSettingsCoalesced,
-  rememberDesktopSettingsSnapshot,
-} from "../../lib/settings-read-coordinator";
 
 export type DesktopSettingsState = {
   composerImplementation: DesktopChatReplyComposer;
@@ -44,7 +40,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
 
-  const read = useCallback(async (force = false): Promise<void> => {
+  const read = useCallback(async (): Promise<void> => {
     if (!desktopApi?.readSettings) {
       return;
     }
@@ -52,7 +48,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     setLoading(true);
     setError(undefined);
     try {
-      const response = await readDesktopSettingsCoalesced(desktopApi, { force });
+      const response = await desktopApi.readSettings({});
       setSnapshot(response.snapshot);
     } catch (readError) {
       setError(readError instanceof Error ? readError.message : String(readError));
@@ -62,7 +58,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   }, [desktopApi]);
 
   const refresh = useCallback(async (): Promise<void> => {
-    await read(true);
+    await read();
   }, [read]);
 
   useEffect(() => {
@@ -71,7 +67,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
 
   useEffect(() => {
     return desktopApi?.onSettingsRuntimeChanged?.(() => {
-      void read(true);
+      void read();
     });
   }, [desktopApi, read]);
 
@@ -89,12 +85,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const response = await desktopApi.writeSettingsConfig(request);
         setSnapshot((current) => {
           if (!current) return current;
-          const next = applyConfigUpdateToSettingsSnapshot(
+          return applyConfigUpdateToSettingsSnapshot(
             current,
             response.update.normalizedPatch,
           );
-          rememberDesktopSettingsSnapshot(desktopApi, { snapshot: next });
-          return next;
         });
         if (
           patch.models?.codex?.path !== undefined
@@ -127,13 +121,11 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const response = await desktopApi.replaceSettingsSecret(request);
         setSnapshot((current) => {
           if (!current) return current;
-          const next = applySecretUpdateToSettingsSnapshot(
+          return applySecretUpdateToSettingsSnapshot(
             current,
             response.secret,
             response.state,
           );
-          rememberDesktopSettingsSnapshot(desktopApi, { snapshot: next });
-          return next;
         });
         return true;
       } catch (writeError) {
@@ -160,13 +152,11 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const response = await desktopApi.clearSettingsSecret(request);
         setSnapshot((current) => {
           if (!current) return current;
-          const next = applySecretUpdateToSettingsSnapshot(
+          return applySecretUpdateToSettingsSnapshot(
             current,
             response.secret,
             response.state,
           );
-          rememberDesktopSettingsSnapshot(desktopApi, { snapshot: next });
-          return next;
         });
         return true;
       } catch (writeError) {
@@ -182,9 +172,8 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   const applySnapshot = useCallback(
     (nextSnapshot: DesktopSettingsSnapshot): void => {
       setSnapshot(nextSnapshot);
-      rememberDesktopSettingsSnapshot(desktopApi, { snapshot: nextSnapshot });
     },
-    [desktopApi],
+    [],
   );
 
   return useMemo(

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import {
   resolvePrAutomationConfig,
   resolveSpendAlertPolicy,
@@ -143,8 +144,14 @@ theme = "dark"
     );
     const store = fixture.createStore({ discoverProvider });
 
-    const first = store.refreshProvider("codex", "startup");
-    const second = store.refreshProvider("codex", "explicit");
+    const first = store.refreshProvider(
+      "codex",
+      issueProviderDiscoveryPermit("startup"),
+    );
+    const second = store.refreshProvider(
+      "codex",
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     expect(discoverProvider).toHaveBeenCalledOnce();
     resolveDiscovery?.({
       candidates: [],
@@ -165,7 +172,18 @@ theme = "dark"
     expect(persisted.payload).not.toContain("secret-value");
   });
 
-  it("invalidates and refreshes only the provider whose config changed", async () => {
+  it("rejects provider refresh without an issued discovery permit", async () => {
+    const fixture = createFixture("");
+    const discoverProvider = vi.fn(async () => ({ candidates: [] }));
+    const store = fixture.createStore({ discoverProvider });
+
+    await expect(
+      store.refreshProvider("codex", undefined as never),
+    ).rejects.toThrow("requires an explicit discovery permit");
+    expect(discoverProvider).not.toHaveBeenCalled();
+  });
+
+  it("invalidates an externally changed provider without refreshing it", async () => {
     const fixture = createFixture(`
 [acp_agents.qwen]
 cli_path = "/opt/qwen-one"
@@ -176,7 +194,10 @@ cli_path = "/opt/qwen-one"
       selectedVersion: "1.0.0",
     }));
     const store = fixture.createStore({ discoverProvider });
-    await store.refreshProvider("qwen", "explicit");
+    await store.refreshProvider(
+      "qwen",
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     const codexFingerprint = store.read("providers").codex.dependencyFingerprint;
     fs.writeFileSync(
       fixture.configPath,
@@ -186,15 +207,14 @@ cli_path = "/opt/qwen-one"
 
     store.reloadFromDisk("self-write");
 
-    await vi.waitFor(() => {
-      expect(discoverProvider).toHaveBeenCalledTimes(2);
-    });
+    expect(discoverProvider).toHaveBeenCalledOnce();
     expect(
       discoverProvider.mock.calls.map(([call]) => call.provider),
-    ).toEqual(["qwen", "qwen"]);
+    ).toEqual(["qwen"]);
     expect(store.read("providers").qwen.lastKnownGood?.selectedCommand).toBe(
-      "/opt/qwen-two",
+      "/opt/qwen-one",
     );
+    expect(store.read("providers").qwen.validation.state).toBe("stale");
     expect(store.read("providers").codex.dependencyFingerprint).toBe(
       codexFingerprint,
     );
@@ -225,13 +245,20 @@ cli_path = "/opt/qwen-one"
     );
     const store = fixture.createStore({ discoverProvider });
 
-    const staleRefresh = store.refreshProvider("qwen", "explicit");
+    const staleRefresh = store.refreshProvider(
+      "qwen",
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     fs.writeFileSync(
       fixture.configPath,
       "[acp_agents.qwen]\ncli_path = \"/opt/qwen-two\"\n",
       "utf8",
     );
     store.reloadFromDisk("self-write");
+    const currentRefresh = store.refreshProvider(
+      "qwen",
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
     await vi.waitFor(() => {
       expect(pending).toHaveLength(2);
     });
@@ -245,6 +272,7 @@ cli_path = "/opt/qwen-one"
       candidates: [],
       selectedCommand: currentDiscovery.command,
     });
+    await currentRefresh;
     await vi.waitFor(() => {
       expect(store.read("providers").qwen.lastKnownGood?.selectedCommand).toBe(
         "/opt/qwen-two",
@@ -336,7 +364,7 @@ enabled = false
     expect(configReads).toHaveLength(1);
   });
 
-  it("schedules discovery only for the provider changed by a store write", async () => {
+  it("invalidates a changed provider without launching discovery", async () => {
     const fixture = createFixture(`
 [acp_agents.qwen]
 cli_path = "/opt/qwen-one"
@@ -357,16 +385,9 @@ cli_path = "/opt/qwen-one"
     expect(result.normalizedPatch).toEqual({
       acpAgents: { qwen: { cliPath: "/opt/qwen-two" } },
     });
-    expect(result.scheduledProviderRefreshes).toEqual(["qwen"]);
-    await vi.waitFor(() => {
-      expect(discoverProvider).toHaveBeenCalledOnce();
-    });
-    expect(discoverProvider.mock.calls[0]?.[0].provider).toBe("qwen");
-    await vi.waitFor(() => {
-      expect(store.read("providers").qwen.lastKnownGood?.selectedCommand).toBe(
-        "/opt/qwen-two",
-      );
-    });
+    expect(result.scheduledProviderRefreshes).toEqual([]);
+    expect(discoverProvider).not.toHaveBeenCalled();
+    expect(store.read("providers").qwen.validation.state).toBe("unknown");
   });
 
   it("repairs an invalid external edit without discarding the last good state", () => {
@@ -436,7 +457,10 @@ cli_path = "/opt/qwen-one"
       });
     });
     const store = fixture.createStore({ discoverProvider });
-    const refresh = store.refreshProvider("codex", "startup");
+    const refresh = store.refreshProvider(
+      "codex",
+      issueProviderDiscoveryPermit("startup"),
+    );
 
     store.dispose();
     await refresh;
@@ -511,7 +535,10 @@ describe("DesktopConfigStore write cost", () => {
     try {
       resetSqliteWriteMetrics();
       const { writes } = await measureSqliteWrites(async () => {
-        await store.refreshProvider("codex", "startup");
+        await store.refreshProvider(
+          "codex",
+          issueProviderDiscoveryPermit("startup"),
+        );
       });
       expectSqliteWriteBudget({
         note:
@@ -522,7 +549,10 @@ describe("DesktopConfigStore write cost", () => {
       });
       resetSqliteWriteMetrics();
       const repeated = await measureSqliteWrites(async () => {
-        await store.refreshProvider("codex", "explicit");
+        await store.refreshProvider(
+          "codex",
+          issueProviderDiscoveryPermit("settings-user-action"),
+        );
       });
       expect(repeated.writes.commits).toBe(0);
       expect(repeated.writes.statements).toBe(0);

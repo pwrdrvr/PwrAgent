@@ -731,7 +731,7 @@ describe("desktop messaging config", () => {
       channel: "telegram",
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
       {
         id: "111111111",
@@ -777,7 +777,7 @@ describe("desktop messaging config", () => {
       channel: "telegram",
     });
 
-    const snapshot = await service.readSettings();
+    const snapshot = await service.readSettingsProjection();
     expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
       {
         id: "111111111",

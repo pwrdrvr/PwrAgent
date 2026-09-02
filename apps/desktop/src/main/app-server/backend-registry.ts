@@ -549,6 +549,10 @@ import {
 } from "../settings/desktop-settings-singleton";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
+  assertProviderDiscoveryPermit,
+  type ProviderDiscoveryPermit,
+} from "../settings/provider-discovery-permit";
+import {
   resolveSpendAlertPolicy,
   resolveToolOutputAlertPolicy,
 } from "../settings/config-store/config-domains";
@@ -5466,13 +5470,6 @@ function buildLaunchpadOptions(
   };
 }
 
-async function readClientModels(client: BackendClient): Promise<BackendModelOption[]> {
-  if (!client.listModels) {
-    return [];
-  }
-  return await client.listModels();
-}
-
 async function readClientAccount(
   client: BackendClient
 ): Promise<BackendAccountSummary | undefined> {
@@ -7622,6 +7619,11 @@ function buildCodexInvalidIdRecoveryCooldownMessage(
 
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
+  private readonly configStore?: Pick<
+    DesktopConfigStore,
+    "read" | "subscribe"
+  >;
+  private codexBackendSummary?: BackendSummary;
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkingStateService: GitWorkingStateService;
@@ -8006,6 +8008,7 @@ export class DesktopBackendRegistry {
   private readonly threadInfoStore = new ThreadInfoStore();
   private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike;
   private durableStartupThreadHydrationAttempted = false;
+  private startupProviderRefreshAttempted = false;
   private startupProviderRefreshPromise?: Promise<void>;
   private startupProviderRefreshStatus?: Readonly<{
     state: "checking" | "degraded" | "ready";
@@ -8326,6 +8329,7 @@ export class DesktopBackendRegistry {
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
     const processRuntimeIdentity = getProcessRuntimeIdentity();
+    this.configStore = options?.configStore;
     this.runtimeInstanceId =
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
@@ -8616,15 +8620,9 @@ export class DesktopBackendRegistry {
           this.resolveTokenMiserEnabledFn()
             ? tokenMiserActivationNonce
             : undefined,
-        // Fire the gate at the client level too, not just the
-        // listThreads layer. Without this, `describeCodexBackend`
-        // (called by `listBackends` on app startup) would call
-        // `ensureInitialized` → spawn the Codex CLI subprocess —
-        // even on a fresh PwrAgent profile mid-wizard, and on
-        // machines where the operator doesn't have Codex installed
-        // yet. The client throws `CodexBootstrapDeferredError` which
-        // `describeCodexBackend` catches via `Promise.allSettled` and
-        // surfaces as `available: false` with a clean reason.
+        // Fire the bootstrap gate at the client level too, not just the
+        // listThreads layer. Startup and explicit Settings/setup discovery
+        // may initialize this client; ordinary backend summaries are passive.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
     const watchManagedCodexRuntime =
@@ -8845,9 +8843,7 @@ export class DesktopBackendRegistry {
         ?? (options?.useMachineAcpDiscovery
           ? createLocalAcpAgentDiscovery(
               {
-                ...(options?.configStore
-                  ? { configStore: options.configStore }
-                  : {}),
+                configStore: options?.configStore ?? getDesktopConfigStore(),
                 ...(settingsService
                   ? {
                       resolveEnv: async () =>
@@ -9641,17 +9637,25 @@ export class DesktopBackendRegistry {
   }
 
   async listBackends(
-    request: ListBackendsRequest = {}
+    request: ListBackendsRequest = {},
+    discoveryPermit?: ProviderDiscoveryPermit,
   ): Promise<ListBackendsResponse> {
+    if (request.refreshModels !== undefined) {
+      assertProviderDiscoveryPermit(discoveryPermit, [
+        "settings-user-action",
+        "setup-user-action",
+      ]);
+    }
     if (request.refreshModels === true) {
       this.modelCatalog.invalidate();
-      this.invalidateAcpBackendDiscovery();
     } else if (request.refreshModels === "codex") {
       this.modelCatalog.invalidate("codex");
-    } else if (request.refreshModels && isAcpBackendId(request.refreshModels)) {
-      this.invalidateAcpBackendDiscovery();
     }
-    const summaries = [await this.describeCodexBackend()];
+    const codexSummary =
+      request.refreshModels === true || request.refreshModels === "codex"
+        ? await this.discoverCodexBackend(discoveryPermit!)
+        : this.readCodexBackendSummary();
+    const summaries = [codexSummary];
     const acpSummaries = await this.acpBackend.describeInstalledBackends();
 
     return {
@@ -9660,10 +9664,6 @@ export class DesktopBackendRegistry {
         ? [...summaries, ...acpSummaries]
         : [...summaries, ...acpSummaries].filter((backend) => backend.available),
     };
-  }
-
-  invalidateAcpBackendDiscovery(): void {
-    this.acpBackend.invalidateLocalAgentDiscovery();
   }
 
   /**
@@ -10085,7 +10085,6 @@ export class DesktopBackendRegistry {
       params.enrichDirectories,
       false,
     );
-    this.scheduleStartupProviderRefresh();
     backendRegistryLog.info("startup thread list hydrated from durable providers", {
       providerCount: snapshots.length,
       threadCount: threads.length,
@@ -10093,20 +10092,20 @@ export class DesktopBackendRegistry {
     return threads;
   }
 
-  private scheduleStartupProviderRefresh(): void {
+  refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
+    assertProviderDiscoveryPermit(permit, ["startup"]);
     if (this.startupProviderRefreshPromise) {
-      return;
+      return this.startupProviderRefreshPromise;
     }
+    if (this.startupProviderRefreshAttempted) {
+      return Promise.resolve();
+    }
+    this.startupProviderRefreshAttempted = true;
     this.startupProviderRefreshPromise = Promise.resolve().then(async () => {
       const startedAt = Date.now();
       const results = await Promise.allSettled([
-        this.listThreads({
-          backend: "codex",
-          callerReason: "startup-provider-refresh",
-          enrichDirectories: false,
-          forceRefresh: true,
-        }),
-        this.refreshAcpProviderThreadsAtStartup(),
+        this.refreshCodexProviderAtStartup(permit),
+        this.refreshAcpProviderThreadsAtStartup(permit),
       ]);
       if (this.closed) {
         return;
@@ -10147,10 +10146,25 @@ export class DesktopBackendRegistry {
     }).finally(() => {
       this.startupProviderRefreshPromise = undefined;
     });
+    return this.startupProviderRefreshPromise;
   }
 
-  private async refreshAcpProviderThreadsAtStartup(): Promise<void> {
-    const agents = await this.acpBackend.listAvailableAgents();
+  private async refreshCodexProviderAtStartup(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<void> {
+    await this.listThreads({
+      backend: "codex",
+      callerReason: "startup-provider-refresh",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    await this.discoverCodexBackend(permit);
+  }
+
+  private async refreshAcpProviderThreadsAtStartup(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<void> {
+    const agents = await this.acpBackend.discoverAvailableAgents(permit);
     await Promise.all(
       agents.map(async (agent) => {
         await this.listThreads({
@@ -23431,7 +23445,55 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async describeCodexBackend(): Promise<BackendSummary> {
+  private readCodexBackendSummary(): BackendSummary {
+    if (this.codexBackendSummary) {
+      return this.codexBackendSummary;
+    }
+    const provider = this.configStore?.read("providers").codex;
+    const lastKnownGood = provider?.lastKnownGood;
+    const available = Boolean(lastKnownGood?.selectedCommand);
+    const methods: string[] = [];
+    const capabilities = buildCapabilities(methods, "codex");
+    if (
+      this.resolveManagedReviewEnabledFn()
+      && capabilities.createThread
+      && capabilities.startTurn
+    ) {
+      capabilities.startReview = true;
+    }
+    const unavailableReason = provider?.validation.error
+      ?? "Codex discovery has not completed yet.";
+    return {
+      kind: "codex",
+      label: BACKEND_LABELS.codex,
+      available,
+      serverVersion: lastKnownGood?.selectedVersion,
+      methods,
+      capabilities,
+      launchpadOptions: buildLaunchpadOptions("codex", []),
+      executionModes: [
+        {
+          mode: "default",
+          label: EXECUTION_MODE_SUMMARIES.default.label,
+          available,
+          isDefault: true,
+          ...(available ? {} : { unavailableReason }),
+        },
+        {
+          mode: "full-access",
+          label: EXECUTION_MODE_SUMMARIES["full-access"].label,
+          available,
+          ...(available ? {} : { unavailableReason }),
+        },
+      ],
+      ...(available ? {} : { unavailableReason }),
+    };
+  }
+
+  private async discoverCodexBackend(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<BackendSummary> {
+    assertProviderDiscoveryPermit(permit);
     const [
       initializeResult,
       defaultModelsResult,
@@ -23465,7 +23527,7 @@ export class DesktopBackendRegistry {
       capabilities.startReview = true;
     }
 
-    return {
+    const summary: BackendSummary = {
       kind: "codex",
       label: BACKEND_LABELS.codex,
       available,
@@ -23510,6 +23572,8 @@ export class DesktopBackendRegistry {
       ],
       unavailableReason: available ? undefined : unavailableReason || "Codex unavailable",
     };
+    this.codexBackendSummary = summary;
+    return summary;
   }
 
   private async recordTaskMonitorUsage(event: AgentEvent): Promise<void> {
@@ -26245,56 +26309,6 @@ export class DesktopBackendRegistry {
         : invocation,
     );
     this.scheduleStreamedToolInvocationFlush();
-  }
-
-  private async describeSingleBackend(
-    kind: AppServerBackendKind,
-    client: BackendClient
-  ): Promise<BackendSummary> {
-    try {
-      const initialize = await client.getInitializeResult();
-      const models = await readClientModels(client).catch(() => []);
-      const methods = Array.isArray(initialize.methods)
-        ? initialize.methods.filter((method): method is string => typeof method === "string")
-        : [];
-
-      return {
-        kind,
-        label: BACKEND_LABELS[kind],
-        available: true,
-        serverName: initialize.serverInfo?.name,
-        serverVersion: initialize.serverInfo?.version,
-        methods,
-        capabilities: buildCapabilities(methods, kind),
-        launchpadOptions: buildLaunchpadOptions(kind, models),
-        executionModes: [
-          {
-            mode: "default",
-            label: EXECUTION_MODE_SUMMARIES.default.label,
-            available: true,
-            isDefault: true,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        kind,
-        label: BACKEND_LABELS[kind],
-        available: false,
-        methods: [],
-        capabilities: buildCapabilities([], kind),
-        executionModes: [
-          {
-            mode: "default",
-            label: EXECUTION_MODE_SUMMARIES.default.label,
-            available: false,
-            isDefault: true,
-            unavailableReason: error instanceof Error ? error.message : String(error),
-          },
-        ],
-        unavailableReason: error instanceof Error ? error.message : String(error),
-      };
-    }
   }
 
   private async withCodexThreadClient<T>(

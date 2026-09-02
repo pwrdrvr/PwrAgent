@@ -50,13 +50,11 @@ import type {
   AgentToolMcpServerLike,
 } from "../agent-tools/agent-tool-mcp-server.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
-import {
-  acpAgentEnabledFor,
-  acpCliPathOverrideFor,
-  managedGrokBuildsEnabledForRuntime,
-  readDesktopSettingsConfigSafe,
-} from "../settings/desktop-config";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
+import {
+  assertProviderDiscoveryPermit,
+  type ProviderDiscoveryPermit,
+} from "../settings/provider-discovery-permit";
 import {
   acpProviderCommandOverrideFromSnapshot,
   acpProviderEnabledFromSnapshot,
@@ -176,8 +174,8 @@ export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
  * and a plain `pnpm test` would download a Grok runtime into `~/.pwragent`
  * and then spend 5-16s per lookup probing it. Tests inject their own.
  */
-export function createLocalAcpAgentDiscovery(params?: {
-  configStore?: Pick<DesktopConfigStore, "read">;
+export function createLocalAcpAgentDiscovery(params: {
+  configStore: Pick<DesktopConfigStore, "read">;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
 }): LocalAcpDiscovery {
   return async () => {
@@ -187,41 +185,30 @@ export function createLocalAcpAgentDiscovery(params?: {
     // cliPath override is honored — consistent with what Settings shows.
     // Read + parse the config once for all four agents (override + enabled),
     // not once per lookup.
-    const providers = params?.configStore?.read("providers");
-    const config = providers ? undefined : readDesktopSettingsConfigSafe();
+    const providers = params.configStore.read("providers");
     const preferences: Record<string, AcpAgentPreference> = {};
     const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
-      (registryId) => providers
-        ? acpProviderEnabledFromSnapshot(providers, registryId)
-        : acpAgentEnabledFor(config ?? {}, registryId),
+      (registryId) => acpProviderEnabledFromSnapshot(providers, registryId),
     );
     for (const registryId of enabledRegistryIds) {
-      const override = providers
-        ? acpProviderCommandOverrideFromSnapshot(providers, registryId)
-        : acpCliPathOverrideFor(config ?? {}, registryId);
+      const override = acpProviderCommandOverrideFromSnapshot(
+        providers,
+        registryId,
+      );
       if (override) {
         preferences[registryId] = { overridePath: override };
       }
     }
-    const env = await params?.resolveEnv?.();
+    const env = await params.resolveEnv?.();
     const records = await discoverLocalAcpAgentRecords({
       enabledRegistryIds,
       managedGrok: {
         enabled:
-          providers
-            ? managedGrokBuildsEnabledFromSnapshot(
-                providers,
-                env ?? process.env,
-                app?.isPackaged === true,
-              )
-            : acpAgentEnabledFor(config ?? {}, "grok")
-              && managedGrokBuildsEnabledForRuntime(
-                config ?? {},
-                {
-                  env: env ?? process.env,
-                  isPackaged: app?.isPackaged === true,
-                },
-              ),
+          managedGrokBuildsEnabledFromSnapshot(
+            providers,
+            env ?? process.env,
+            app?.isPackaged === true,
+          ),
         checkMode: app?.isPackaged === true ? "ttl" : "once-per-process",
         requirePlatformSignature: app?.isPackaged === true,
       },
@@ -1117,6 +1104,7 @@ export class AcpBackendAdapter {
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
   private localAcpAgentsRevision = 0;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
+  private localAgentSnapshot: AcpInstalledAgentRecord[] = [];
 
   constructor(options: AcpBackendAdapterOptions) {
     this.captureStores = options.captureStores;
@@ -1159,22 +1147,18 @@ export class AcpBackendAdapter {
   }
 
   async describeInstalledBackends(): Promise<BackendSummary[]> {
-    const config = this.isAcpAgentEnabled
-      ? undefined
-      : readDesktopSettingsConfigSafe();
     const installedAgents = await this.listAvailableAgents();
     const enabledAgents = installedAgents
       .filter((agent) =>
         this.isAcpAgentEnabled
           ? this.isAcpAgentEnabled(agent.registryId)
-          : acpAgentEnabledFor(config ?? {}, agent.registryId),
+          : true,
       );
     return enabledAgents.map((agent) => {
       const summary = describeInstalledAcpBackend(agent);
       if (agent.registryId !== "grok" || !summary.available) {
         return summary;
       }
-      this.refreshGrokUpdateStatusInBackground(agent);
       // Backend discovery is also used by launchpad and messaging flows.
       // Merge only cached decoration here; vendor billing must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
@@ -1973,6 +1957,28 @@ export class AcpBackendAdapter {
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
+    const durable = (this.acpAgentStore?.listInstalledAgents() ?? [])
+      .map(normalizeInstalledAcpAgent)
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
+    if (this.localAgentSnapshot.length === 0) return durable;
+    const durableByBackend = new Map(
+      durable.map((agent) => [agent.backendId, agent]),
+    );
+    const current = this.localAgentSnapshot.map((agent) => {
+      const durableAgent = durableByBackend.get(agent.backendId);
+      durableByBackend.delete(agent.backendId);
+      return durableAgent
+        && acpAgentLaunchIdentity(durableAgent) === acpAgentLaunchIdentity(agent)
+        ? durableAgent
+        : agent;
+    });
+    return [...current, ...durableByBackend.values()];
+  }
+
+  async discoverAvailableAgents(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<AcpInstalledAgentRecord[]> {
+    assertProviderDiscoveryPermit(permit);
     while (true) {
       const discovery = await this.readLocalAgentsOnce();
       if (discovery.revision !== this.localAcpAgentsRevision) {
@@ -1981,7 +1987,13 @@ export class AcpBackendAdapter {
       // Keep the revision check and all consumption synchronous. An
       // invalidation queued after discovery settles must run before this
       // point or after stale results have been fully merged and persisted.
-      return this.mergeAndPersistDiscoveredAgents(discovery.agents);
+      const agents = this.mergeAndPersistDiscoveredAgents(discovery.agents);
+      for (const agent of agents) {
+        if (agent.registryId === "grok" && agent.installStatus === "installed") {
+          this.refreshGrokUpdateStatusInBackground(agent);
+        }
+      }
+      return agents;
     }
   }
 
@@ -1995,7 +2007,9 @@ export class AcpBackendAdapter {
     // update-check writes. Read the durable cache only after discovery, then
     // merge and persist synchronously so those newer fields cannot be rolled
     // back by a snapshot captured before the probe started.
-    const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? [])
+    const installedAgents = (
+      this.acpAgentStore?.listInstalledAgents() ?? this.localAgentSnapshot
+    )
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     const installedByBackendId = new Map(
@@ -2051,12 +2065,14 @@ export class AcpBackendAdapter {
     const discoveredBackendIds = new Set(
       effectiveDiscoveredAgents.map((agent) => agent.backendId),
     );
-    return [
+    const merged = [
       ...effectiveDiscoveredAgents,
       ...installedAgents.filter(
         (agent) => !discoveredBackendIds.has(agent.backendId),
       ),
     ];
+    this.localAgentSnapshot = merged;
+    return merged;
   }
 
   async close(): Promise<void> {
@@ -2082,6 +2098,7 @@ export class AcpBackendAdapter {
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();
     this.liveTurnUsage.clear();
+    this.localAgentSnapshot = [];
     this.closePromise = this.closeResources(acpClients);
     return await this.closePromise;
   }

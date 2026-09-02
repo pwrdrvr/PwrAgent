@@ -390,6 +390,8 @@ import type {
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   ReadDesktopConfigBootstrapResponse,
+  ReadDesktopFullAccessPolicyResponse,
+  ReadDesktopMessagingSettingsResponse,
   PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
@@ -826,6 +828,8 @@ export type DesktopApi = {
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;
   readConfigBootstrap?: () => Promise<ReadDesktopConfigBootstrapResponse>;
+  readMessagingSettings?: () => Promise<ReadDesktopMessagingSettingsResponse>;
+  readFullAccessPolicy?: () => Promise<ReadDesktopFullAccessPolicyResponse>;
   writeSettingsConfig?: (
     request: WriteDesktopSettingsConfigRequest
   ) => Promise<DesktopSettingsWriteResponse>;
@@ -836,7 +840,7 @@ export type DesktopApi = {
     request: ClearDesktopSettingsSecretRequest
   ) => Promise<DesktopSettingsSecretWriteResponse>;
   refreshCodexDiscovery?: (
-    request?: RefreshDesktopCodexDiscoveryRequest
+    request: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
   createCodexAuthProfile?: (
     request: CreateDesktopCodexAuthProfileRequest,

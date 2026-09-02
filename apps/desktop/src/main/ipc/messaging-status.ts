@@ -737,20 +737,16 @@ export function registerMessagingStatusIpcHandlers(): void {
         && pairing.observedChat?.bucketId
           ? await resolveSlackWorkspaceName(service, pairing.observedChat.bucketId)
           : undefined;
-      const snapshot = typeof service.readMessagingSettings === "function"
-        ? {
-            messaging: service.readMessagingSettings(),
-          } as DesktopSettingsSnapshot
-        : await service.readSettings();
+      const snapshot = {
+        messaging: service.readMessagingSettings(),
+      } as DesktopSettingsSnapshot;
       const approval = buildPairingApprovalPatch(
         pairing,
         snapshot,
         request.target,
         { teamName },
       );
-      const next = typeof service.writeConfigPatchTargeted === "function"
-        ? await service.writeConfigPatchTargeted(approval.patch)
-        : await service.writeConfigPatch(approval.patch);
+      const next = await service.writeConfigPatchTargeted(approval.patch);
       await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
         runtime,
         (options) => loadDesktopMessagingConfigFromSettings(service, process.env, options),

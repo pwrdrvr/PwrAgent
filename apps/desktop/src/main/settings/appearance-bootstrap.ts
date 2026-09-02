@@ -24,10 +24,8 @@ import {
   DESKTOP_TEXT_SIZE_DEFAULT,
   isDesktopTextSize,
 } from "@pwragent/shared";
-import {
-  readDesktopSettingsConfig,
-  resolveDesktopConfigPath,
-} from "./desktop-config";
+import { resolveDesktopConfigPath } from "./desktop-config";
+import { readProfileConfigFile } from "./config-store/profile-config-file";
 import { getExistingDesktopConfigStore } from "./config-store/desktop-config-store-singleton";
 
 export type BootstrapAppearance = {
@@ -60,7 +58,9 @@ export function readBootstrapAppearance(
     }
   }
   try {
-    const config = readDesktopSettingsConfig(configPath ?? resolveDesktopConfigPath());
+    const config = readProfileConfigFile(
+      configPath ?? resolveDesktopConfigPath(),
+    );
     return {
       theme: config.general?.appearance?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
       density:
