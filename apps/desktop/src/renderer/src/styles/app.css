@@ -8,6 +8,24 @@
      buttons sit on the same line. Only consumed under [data-platform="win32"];
      zero contribution elsewhere. */
   --win-titlebar-h: 40px;
+  /* Height of every top-of-window chrome band: the sidebar masthead, the
+     thread header, the Activity/Settings title bars, and the Settings nav
+     masthead. All of them center their content in this box, so one
+     centerline (y=20) runs across the whole top of the app — and the macOS
+     stoplights land on it too (`MACOS_TRAFFIC_LIGHT_POSITION`).
+
+     Derived, not chosen: `.sidebar__icon-button` is 28px around a 16px
+     icon, i.e. a 6px ring. The band gives the button row the same 6px
+     ring, so 28 + 6 + 6 = 40 and the row nests concentrically.
+
+     These bands used to declare `min-height: 44px` with `padding-top:
+     10px` and no bottom padding — "10px + the 34px icon button". The
+     button was tightened to 28px and the bands were never re-derived, so
+     every one of them put all its slack above the content and drifted
+     below its own center, by different amounts (24 / 24 / 26.5 / 27
+     against `.settings-titlebar`'s balanced 19.5). Center content in this
+     band; never re-introduce one-sided padding to position it. */
+  --chrome-band-h: 40px;
   /* Width reserved at the strip's right edge for the OS caption buttons
      (min/max/close) so title-bar content never sits under them. */
   --win-caption-w: 140px;
@@ -670,15 +688,16 @@ textarea,
 
 /* With the sidebar gone, its wordmark + action buttons relocate into the
    thread header's left as a sidebar-colored cluster (see ThreadHeader).
-   Drop the header's own left/top padding so the cluster sits flush in the
-   top-left corner; the cluster reserves the macOS stoplight strip itself. */
+   Drop the header's own left padding so the cluster sits flush against the
+   window edge; the cluster reserves the macOS stoplight strip itself. The
+   header keeps `--chrome-band-h` and its centering from the base rule, so
+   the relocated wordmark lands on the same centerline as the stoplights. */
 .app-shell[data-sidebar-hidden="true"] .thread-header {
-  padding-top: 0;
   padding-left: 0;
 }
 
 .app-shell[data-sidebar-hidden="true"] .thread-header__top {
-  min-height: 44px;
+  min-height: var(--chrome-band-h);
 }
 
 .app-shell[data-sidebar-hidden="true"] .thread-header__main {
@@ -1460,7 +1479,8 @@ textarea,
 
 .sidebar__masthead {
   align-items: center;
-  padding: 10px 0 0 80px;
+  min-height: var(--chrome-band-h);
+  padding: 0 0 0 80px;
   border-bottom: none;
   /* Tighter than the shared 16px so the brand sits closer to its actions. */
   gap: 8px;
@@ -1524,14 +1544,13 @@ textarea,
 }
 
 .thread-header {
-  /* Vertically center the title row + chips + MessagingStatusBar in
-     a 44px box that matches the sidebar masthead's effective height
-     (10px top padding + 34px set by `.sidebar__icon-button`). With
-     `box-sizing: border-box`, `min-height: 44px` + `padding-top: 10px`
-     gives a 34px content area; `align-items: center` puts the
-     compact title's top at y=18.5 — exactly where the brand sits in
-     the sidebar masthead. Result: title, brand, and messaging pills
-     all share the same vertical centerline.
+  /* Vertically center the title row + chips + MessagingStatusBar in the
+     shared `--chrome-band-h` box, the same band the sidebar masthead
+     uses. `justify-content: center` on this column is what does the
+     centering — do NOT go back to `flex-start` plus a top padding, which
+     is how this row drifted below the brand it is supposed to line up
+     with. Result: title, brand, and messaging pills all share the same
+     vertical centerline as the stoplights.
      The header is a column holding exactly ONE row (breadcrumb + chips on
      the left, layout toggles + MessagingStatusBar on the right). Keeping MSG
      in that row — instead of vertically centered against a `__main` that
@@ -1542,10 +1561,10 @@ textarea,
      constant. Do not add a second row here. */
   flex-direction: column;
   align-items: stretch;
-  justify-content: flex-start;
+  justify-content: center;
   gap: 6px;
-  min-height: 44px;
-  padding-top: 10px;
+  min-height: var(--chrome-band-h);
+  padding-top: 0;
   /* Issue #240 follow-up: the thread header carries its OWN left
      inset, decoupled from the transcript / composer below it. The
      previous 28px sidebar gutter on `.app-main` provided this for
@@ -2192,7 +2211,7 @@ textarea,
    stoplight clearance on the left: the same x=96 the two nav mastheads
    reach (`.sidebar__masthead` pads 80px inside a 16px rail,
    `.settings-nav__masthead` 88px inside an 8px lane); stoplights end at
-   ~x=72, brand lands at x=96. Platforms without macOS/Windows chrome conventions override
+   x=76, brand lands at x=96. Platforms without macOS/Windows chrome conventions override
    the left padding below so auxiliary-window titles don't float
    awkwardly away from the window edge. */
 .activity-titlebar {
@@ -2200,8 +2219,8 @@ textarea,
   align-items: center;
   gap: 16px;
   flex: 0 0 auto;
-  min-height: 44px;
-  padding: 10px 14px 0 96px;
+  min-height: var(--chrome-band-h);
+  padding: 0 14px 0 96px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
   -webkit-app-region: drag;
@@ -2217,7 +2236,14 @@ textarea,
    .activity-titlebar header IS the title strip: drop the macOS stoplight
    reservation on the left, reserve the caption-button width on the right, and
    match the WCO overlay color (--bg-sidebar) so the buttons blend in. It's
-   already draggable + min-height 44px from the base rule. */
+   already draggable + on `--chrome-band-h` from the base rule.
+
+   That band is load bearing here in a way it is not on macOS: the OS draws
+   the caption buttons at `TITLE_BAR_OVERLAY_HEIGHT` (native-appearance.ts,
+   mirrored by `--win-titlebar-h`), so this strip cannot be shorter than
+   that or the buttons hang past its bottom border and out of the blend.
+   The two tokens are equal today; `macos-window-chrome.test.ts` holds the
+   floor so lowering the band fails there instead of on Windows. */
 :root[data-platform="win32"] .activity-titlebar {
   padding-left: 14px;
   padding-right: var(--win-caption-w, 140px);
@@ -3210,6 +3236,20 @@ textarea,
   margin-inline: var(--sidebar-masthead-pull);
   border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: no-drag;
+}
+
+/* The first row under the masthead does not re-pad against it. Every other
+   boundary in the rail is paid for twice — 6px from the row above and 6px
+   from the row below — but the window's top edge contributes nothing, so
+   the masthead's own 6px of air was the only thing above its buttons while
+   12px sat below them. The band already ends with its air; this row adding
+   6px more is what made the chrome read as stuck to the top edge.
+
+   Adjacency, not `:first-of-type`: the federation window swaps which
+   `.runtime-identity` renders first, and a rail with no runtime row at all
+   should leave the rule inert rather than move the next thing up. */
+.sidebar__masthead + .runtime-identity {
+  padding-top: 0;
 }
 
 .sidebar__menu--profile {
@@ -7994,9 +8034,11 @@ textarea,
   gap: 12px;
   /* No 80px stoplight gutter here — the nav masthead on the left
      handles that. The right pane's title bar starts at x=188 (past
-     the stoplight area) so it doesn't need any clearance. Match
-     `.thread-header`'s 10px top padding for visual rhythm. */
-  padding: 10px 14px;
+     the stoplight area) so it doesn't need any clearance. Shares the
+     app-wide chrome band so its breadcrumb sits on the same centerline
+     as the nav brand beside it. */
+  min-height: var(--chrome-band-h);
+  padding: 0 14px;
   border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: drag;
 }
@@ -8113,25 +8155,23 @@ textarea,
    `.sidebar__masthead` pattern:
    - Lives inside the nav's own 8px horizontal padding, so
      `padding-left: 88px` puts the brand at x≈96 from the window
-     edge (stoplights end at ~x=72 with
-     `trafficLightPosition: { x: 20, y: 18 }` from window.ts).
+     edge (stoplights end at x=76 with
+     `MACOS_TRAFFIC_LIGHT_POSITION` = `{ x: 16, y: 13 }`).
    - Main's rail is 16px and its masthead pads 80px to the same x=96.
      The nav runs its rows in a tighter lane, so the masthead carries
      the difference: every platform branch below re-inserts 8px too,
      which is why the brand lands identically on both screens.
-   - `min-height: 44px` gives the masthead the same effective
-     height that `.sidebar__masthead` has on the main screen
-     (10px top padding + 34px from the icon buttons it contains).
-     Without this, the masthead would collapse to brand-height +
-     padding, putting the brand ~8.5px higher than main's brand.
-     With it, the brand vertically centers in the same 34px content
-     area that main uses, so the two screens read identically. */
+   - `min-height: var(--chrome-band-h)` gives the masthead the same
+     band `.sidebar__masthead` has on the main screen. Without it the
+     masthead would collapse to brand height, floating the brand above
+     main's. With it, the brand centers in the same band main uses, so
+     the two screens read identically. */
 .settings-nav__masthead {
   display: flex;
   align-items: center;
   gap: 16px;
-  min-height: 44px;
-  padding: 10px 0 0 88px;
+  min-height: var(--chrome-band-h);
+  padding: 0 0 0 88px;
   -webkit-app-region: drag;
 }
 
@@ -11948,14 +11988,23 @@ textarea,
    map, deliberately, so a press can never start both a window drag and a
    canvas pan. Not rendered on Windows (painted `.activity-titlebar` above
    the map) or Linux (OS frame); hidden in fullscreen, which
-   `star-map-window.ts` forwards to `<html data-fullscreen>`. */
+   `star-map-window.ts` forwards to `<html data-fullscreen>`.
+
+   Its height is the shared chrome band, because on this window the strip
+   IS the visible title bar: the row inside it centers on `--chrome-band-h`
+   and so do the stoplights, so a strip of any other height puts unequal
+   air above and below the one row it contains. It was 52px, which centered
+   the row when the band paid for its position with a 14px top padding;
+   once the band centered itself the strip left 8.5px above the chips and
+   20.5px below. 40px is still a generous drag handle - a native macOS
+   title bar is 28. */
 .star-map-window__titlebar {
   position: absolute;
   top: 0;
   right: 0;
   left: 0;
   z-index: 2;
-  height: 52px;
+  height: var(--chrome-band-h);
   backdrop-filter: blur(12px) saturate(135%);
   -webkit-app-region: drag;
 }
@@ -13775,7 +13824,18 @@ textarea,
    that strip is the only handle this window has (see the note there). So
    the band declares no `-webkit-app-region` at all and passes its pointer
    events through; each slot punches its own hole and takes its pointer
-   events back. The gaps between the slots stay draggable sky. */
+   events back. The gaps between the slots stay draggable sky.
+
+   The band is a chrome bar like any other, so it centers its row in
+   `--chrome-band-h` instead of padding it down from the top edge. This
+   window spreads `auxiliaryWindowChromeOptions()` like every other
+   secondary window, so macOS floats its stoplights over the sky at
+   `MACOS_TRAFFIC_LIGHT_POSITION` - a position derived from that same band.
+   Center here and the wordmark, Find, View, and the filter chips land on
+   the y=20 centerline the buttons sit on; pad from the top instead and
+   they drift below it, which is what the 14px top padding did. Pinning the
+   height to the token also means a chip that grows (the Attention chip's
+   stacked turn column) can no longer move the whole band. */
 .star-map__top-band {
   display: flex;
   position: absolute;
@@ -13783,9 +13843,10 @@ textarea,
   right: 0;
   left: 0;
   z-index: 4;
-  align-items: start;
+  align-items: center;
   gap: 12px;
-  padding: 14px 16px 0;
+  min-height: var(--chrome-band-h);
+  padding: 0 16px;
   pointer-events: none;
 }
 

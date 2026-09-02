@@ -1459,12 +1459,16 @@ describe("Tangerine Terminal theme contract", () => {
     const sidebarMasthead = extractRuleBody(css, ".sidebar__masthead");
     const settingsMasthead = extractRuleBody(css, ".settings-nav__masthead");
 
-    expect(activityTitlebar).toContain("padding: 10px 14px 0 96px;");
-    expect(sidebarMasthead).toContain("padding: 10px 0 0 80px;");
+    // Only the horizontal gutters are this test's subject. The top value is
+    // 0 on all three because they centre their content in `--chrome-band-h`
+    // instead of padding it down; see macos-window-chrome.test.ts.
+
+    expect(activityTitlebar).toContain("padding: 0 14px 0 96px;");
+    expect(sidebarMasthead).toContain("padding: 0 0 0 80px;");
     // The Settings nav runs its rows in the narrower 8px lane rather than the
     // sidebar's 16px rail, so its masthead pads 88px to put the brand at the
     // same x≈96. Both numbers must move together or the two brands drift.
-    expect(settingsMasthead).toContain("padding: 10px 0 0 88px;");
+    expect(settingsMasthead).toContain("padding: 0 0 0 88px;");
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.activity-titlebar\s*\{[\s\S]*?padding-left:\s*14px;[\s\S]*?\}/,
     );

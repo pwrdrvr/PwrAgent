@@ -159,6 +159,13 @@ async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> 
   // checks above both stayed green through it, because wrapped chips
   // overlap nothing. Measure the band against its tallest slot: equal
   // means the slots sit side by side, taller means something wrapped.
+  //
+  // The band also reserves `--chrome-band-h`, so its row centres on the
+  // same line the window's stoplights sit on. That floor is the OTHER
+  // legitimate reason for the band to exceed its tallest slot, so read it
+  // off the element rather than pinning a number here — the check is still
+  // exact, and a stacked second row clears the floor on its own (two 25px
+  // slots plus the 12px gap is 62 against a 40px reservation).
   const rowHeight = await mapWindow.evaluate(() => {
     const band = document.querySelector(".star-map__top-band");
     if (!band) return undefined;
@@ -168,14 +175,16 @@ async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> 
     return {
       band: Math.round(band.getBoundingClientRect().height - padding),
       tallestSlot: Math.round(Math.max(...slots)),
+      reserved: Math.round((parseFloat(style.minHeight) || 0) - padding),
     };
   });
   expect(
     rowHeight,
     `top band is taller than one row ${at}: ${JSON.stringify(rowHeight)}`,
   ).toEqual({
-    band: rowHeight?.tallestSlot,
+    band: Math.max(rowHeight?.tallestSlot ?? 0, rowHeight?.reserved ?? 0),
     tallestSlot: rowHeight?.tallestSlot,
+    reserved: rowHeight?.reserved,
   });
 
   // Which of the two filter renderings shows is a property of the data —

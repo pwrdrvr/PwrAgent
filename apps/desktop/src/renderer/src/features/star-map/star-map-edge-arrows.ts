@@ -35,11 +35,13 @@ export type StarMapEdgeInset = {
  *
  * The top is deeper than the rest because the top of the map is not sky.
  * The top band (wordmark, Find, View, the filter chips) owns the first
- * ~40px, and on macOS the window's glass drag strip covers 52px: an arrow
- * drawn under either is an arrow nobody can click. The other three sides
- * only clear the window edge by enough to read as "at the edge" rather
- * than "cut off by it"; the bottom matches the key hint's own inset so the
- * two line up when they share the row.
+ * `--chrome-band-h` — 40px — and on macOS the window's glass drag strip
+ * covers exactly the same band; an arrow drawn under either is an arrow
+ * nobody can click. So the top is that band plus the 16px the left and
+ * right sides clear the window edge by. The other three sides only clear
+ * the edge by enough to read as "at the edge" rather than "cut off by
+ * it"; the bottom matches the key hint's own inset so the two line up
+ * when they share the row.
  */
 export const STAR_MAP_EDGE_INSET: StarMapEdgeInset = {
   top: 56,
