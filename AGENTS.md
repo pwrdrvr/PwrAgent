@@ -69,19 +69,14 @@
 - Run desktop E2E from the repository root with `pnpm test:desktop-e2e`.
 - The package command `pnpm --filter @pwragent/desktop test:e2e` is also safe.
 - Both commands build `apps/desktop/out/` before Playwright starts.
-- Before headed desktop E2E, ask the operator whether an off-desktop lab is available.
-- If a lab is available, ask for its repository or skill.
 - For PwrSuiteLab macOS Tart, runner, or headed E2E work, follow
-  `.agents/skills/macos-vm-e2e-lab/SKILL.md`. It routes to PwrSuiteLab.
-  Do not provision a product-local Tart lab from this repository.
+  `.agents/skills/macos-vm-e2e-lab/SKILL.md`. It discovers an existing
+  PwrSuiteLab checkout and routes all lab access through that checkout's
+  current instructions and controllers. Do not provision a product-local
+  Tart lab or improvise direct Tart or SSH access from this repository.
 - For PwrSuiteLab Windows probes or headed E2E, read
   `.agents/skills/use-windows-vm-lab/SKILL.md` in the attached lab checkout.
   Do not use the macOS VM skill for Windows work.
-- Use the attached primary PwrSuiteLab checkout for its controllers. Check an
-  expected ignored config with an exact filesystem test. `rg --files`,
-  `git ls-files`, and other worktrees do not prove that config is absent.
-- Do not read or print lab configuration. If the exact default is absent, ask
-  the operator for an existing config path only.
 - Review the current ownership and readiness constraints before you change:
   - Windows Git or Bash process launch and shutdown.
   - Vitest process isolation.
