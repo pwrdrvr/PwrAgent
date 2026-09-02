@@ -75,6 +75,20 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     configStore.subscribe(["general"], ({ values }) => {
       broadcastAppearanceChange(values.general.appearance);
     });
+    configStore.subscribeUpdates(
+      ({ version, configRevision, changedDomains }) => {
+        const payload = {
+          version,
+          configRevision,
+          changedDomains,
+        };
+        for (const webContents of subscribersForChannel(
+          SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
+        )) {
+          webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL, payload);
+        }
+      },
+    );
   }
   return desktopSettingsService;
 }

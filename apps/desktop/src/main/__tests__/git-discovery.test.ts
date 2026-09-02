@@ -138,6 +138,12 @@ describe("Git discovery", () => {
       PATH: "/nix/profile/bin:/usr/bin",
       ELECTRON_RENDERER_URL: "http://localhost:5175",
     } as NodeJS.ProcessEnv;
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === "/nix/profile/bin/git") {
+        return undefined;
+      }
+      throw missingError;
+    });
     execFileMock.mockImplementation(
       (
         command: string,
@@ -149,7 +155,7 @@ describe("Git discovery", () => {
         ) => void,
       ) => {
         if (
-          command === "git"
+          (command === "git" || command === "/nix/profile/bin/git")
           && options.env?.PATH === hydratedEnv.PATH
           && options.env?.ELECTRON_RENDERER_URL === undefined
         ) {
@@ -178,7 +184,7 @@ describe("Git discovery", () => {
       expect.any(Function),
     );
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      "/nix/profile/bin/git",
       ["-C", "/repo", "status", "--short"],
       expect.objectContaining({
         env: expect.objectContaining({ PATH: hydratedEnv.PATH }),
@@ -200,6 +206,12 @@ describe("Git discovery", () => {
       PATH: "/custom/bin:/usr/bin:/bin",
       ELECTRON_RENDERER_URL: "http://localhost:5175",
     } as NodeJS.ProcessEnv;
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === "/custom/bin/git") {
+        return undefined;
+      }
+      throw missingError;
+    });
     execFileMock.mockImplementation(
       (
         command: string,
@@ -211,7 +223,7 @@ describe("Git discovery", () => {
         ) => void,
       ) => {
         if (
-          command === "git"
+          (command === "git" || command === "/custom/bin/git")
           && args[0] === "--version"
           && options.env?.PATH === hydratedEnv.PATH
           && options.env?.ELECTRON_RENDERER_URL === undefined
@@ -228,7 +240,58 @@ describe("Git discovery", () => {
       "Git executable unavailable",
     );
 
-    await expect(resolveGitExecutable(hydratedEnv)).resolves.toBe("git");
+    await expect(resolveGitExecutable(hydratedEnv)).resolves.toBe(
+      "/custom/bin/git",
+    );
+  });
+
+  it.skipIf(process.platform === "win32")("skips an executable PATH directory named git", async () => {
+    const directoryError = new Error("permission denied") as NodeJS.ErrnoException;
+    directoryError.code = "EACCES";
+    const missingError = new Error("missing") as NodeJS.ErrnoException;
+    missingError.code = "ENOENT";
+    const env = { PATH: "/bad/bin:/good/bin" } as NodeJS.ProcessEnv;
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        _options: { env?: NodeJS.ProcessEnv },
+        callback: (
+          error: Error | null,
+          result?: { stdout: string; stderr?: string },
+        ) => void,
+      ) => {
+        if (command === "git" && args[0] === "--version") {
+          // PATH lookup skips the directory and reaches the real Git.
+          callback(null, { stdout: "git version 2.49.0\n" });
+          return;
+        }
+        if (command === "/bad/bin/git") {
+          callback(directoryError);
+          return;
+        }
+        if (command === "/good/bin/git") {
+          callback(null, { stdout: "git version 2.49.0\n" });
+          return;
+        }
+        callback(missingError);
+      },
+    );
+    const { resolveGitExecutable } = await import("../app-server/git-executable");
+
+    await expect(resolveGitExecutable(env)).resolves.toBe("/good/bin/git");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "/bad/bin/git",
+      ["--version"],
+      expect.any(Object),
+      expect.any(Function),
+    );
+    expect(execFileMock).toHaveBeenCalledWith(
+      "/good/bin/git",
+      ["--version"],
+      expect.any(Object),
+      expect.any(Function),
+    );
   });
 
   it.skipIf(process.platform === "win32")("retries app-server git resolution after an initial failure", async () => {

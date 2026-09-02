@@ -191,6 +191,7 @@ class MockTransport implements JsonRpcTransport {
     dailyUsageBuckets: [],
   };
   static unfilteredThreadListResult: unknown[] | undefined;
+  static threadListNextCursor: string | undefined;
   static threadListResultBySearchTerm = new Map<string, unknown[]>();
   static turnInterruptResponseMode: "success" | "timeout" = "success";
   static threadResumeError:
@@ -270,6 +271,7 @@ class MockTransport implements JsonRpcTransport {
             id: payload.id,
             result: {
               data: params.params?.archived ? [] : threadListOverride,
+              nextCursor: MockTransport.threadListNextCursor,
             },
           }),
         );
@@ -1374,6 +1376,7 @@ describe("CodexAppServerClient", () => {
       dailyUsageBuckets: [],
     };
     MockTransport.unfilteredThreadListResult = undefined;
+    MockTransport.threadListNextCursor = undefined;
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
@@ -1876,6 +1879,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps spawned agents out of navigation and exposes them for parent disclosure", async () => {
+    MockTransport.threadListNextCursor = "older-native-subagents";
     MockTransport.threadListResultBySearchTerm.set("native-subagent-source", [
       {
         id: "thread-parent",
@@ -1930,6 +1934,7 @@ describe("CodexAppServerClient", () => {
     const threads = await client.listThreads({ filter: "native-subagent-source" });
     const nativeSubAgentThreads = await client.listNativeSubAgentThreads({
       filter: "native-subagent-source",
+      limit: 1_000,
     });
 
     expect(threads.map((thread) => thread.id)).toEqual(["thread-parent"]);
@@ -1949,18 +1954,29 @@ describe("CodexAppServerClient", () => {
     const threadListRequests = transport!.sentMessages
       .map((message) => JSON.parse(message) as {
         method?: string;
-        params?: { sourceKinds?: string[] };
+        params?: {
+          limit?: number;
+          sortKey?: string;
+          sourceKinds?: string[];
+          useStateDbOnly?: boolean;
+        };
       })
       .filter((message) => message.method === "thread/list");
     expect(threadListRequests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           params: expect.objectContaining({
+            limit: 100,
+            sortKey: "updated_at",
             sourceKinds: ["subAgentThreadSpawn"],
+            useStateDbOnly: true,
           }),
         }),
       ]),
     );
+    expect(threadListRequests.filter(
+      (request) => request.params?.sourceKinds?.includes("subAgentThreadSpawn"),
+    )).toHaveLength(1);
 
     await client.close();
   });

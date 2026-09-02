@@ -10,6 +10,7 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadReviewEntry,
   NavigationThreadSummary,
+  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +52,36 @@ function transcriptLabels(entries: AppServerThreadEntry[]): string[] {
         ? `activity:${entry.summary}`
         : entry.type
   );
+}
+
+function authoritativeTurnUsageLine(): ThreadUsageLineRecord {
+  return {
+    backend: "codex",
+    cachedInputCostMicros: 9_818_317,
+    cachedInputTokens: 24_545_792,
+    completedAt: 4_000,
+    createdAt: 1_000,
+    currency: "USD",
+    inputTokens: 25_139_426,
+    model: "gpt-5.6-sol",
+    outputCostMicros: 1_812_620,
+    outputTokens: 66_567,
+    priceStatus: "priced",
+    provider: "openai",
+    reasoningOutputTokens: 24_064,
+    scope: "turn",
+    serviceTier: "standard",
+    source: "live",
+    status: "pending",
+    threadId: "thread-1",
+    totalCostMicros: 14_005_473,
+    totalTokens: 25_205_993,
+    turnId: "turn-1",
+    turnUsageAttributed: true,
+    uncachedInputCostMicros: 2_374_536,
+    uncachedInputTokens: 593_634,
+    usageLineId: "codex:thread-1:turn-1:live-token-usage",
+  };
 }
 
 function messageEntry(params: {
@@ -1929,7 +1960,6 @@ describe("useThreadSessionState", () => {
         },
       });
     });
-
     expect(transcriptLabels(result.current.entries)).toEqual([
       "message:Older history",
       "message:Earlier prompt",
@@ -8965,6 +8995,406 @@ describe("useThreadSessionState", () => {
     expect(result.current.runningTurnUsageText).toBeUndefined();
   });
 
+  it("consolidates trailing request usage into one authoritative turn-end row", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        pricing: {
+          lines: [],
+          summaries: [],
+        },
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          model: "gpt-5.6-sol",
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 25_027_409,
+                cached_input_tokens: 24_434_560,
+                output_tokens: 66_248,
+                reasoning_output_tokens: 23_974,
+                total_tokens: 25_117_631,
+              },
+              total_token_usage: {
+                input_tokens: 25_027_409,
+                cached_input_tokens: 24_434_560,
+                output_tokens: 66_248,
+                reasoning_output_tokens: 23_974,
+                total_tokens: 25_117_631,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              startedAt: 1_000,
+              completedAt: 1_800_000_004_000,
+              output: [{ type: "text", text: "Done." }],
+            },
+          },
+        },
+      });
+    });
+    act(() => {
+      result.current.upsertLiveTranscriptEntry({
+        type: "activity",
+        id: "late-final-checks",
+        createdAt: 3_500,
+        summary: "Ran final checks",
+        status: "completed",
+        details: [],
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          startedAt: 1_000,
+          completedAt: 1_800_000_004_000,
+        },
+      });
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 112_017,
+                cached_input_tokens: 111_232,
+                output_tokens: 319,
+                reasoning_output_tokens: 90,
+                total_tokens: 112_426,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 112_017,
+                cached_input_tokens: 111_232,
+                output_tokens: 319,
+                reasoning_output_tokens: 90,
+                total_tokens: 112_426,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Ran final checks",
+      "message:Done.",
+      "activity:Turn usage: 593,634 uncached in · 24,545,792 cached · 66,567 out (24,064 reasoning) · $14.01 list price",
+    ]);
+    expect(result.current.entries.at(-1)).toMatchObject({
+      id: "live-turn-usage-turn-1",
+      createdAt: 1_800_000_004_000,
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        completedAt: 1_800_000_004_000,
+      },
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/pricing/updated",
+          params: {
+            threadId: "thread-1",
+            pricing: {
+              lines: [{
+                ...authoritativeTurnUsageLine(),
+                completedAt: 1_800_000_004_000,
+              }],
+              summaries: [],
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Ran final checks",
+      "message:Done.",
+      "activity:Turn usage: 593,634 uncached in · 24,545,792 cached · 66,567 out (24,064 reasoning) · $14.01 list price",
+    ]);
+    expect(result.current.entries.at(-1)).toMatchObject({
+      id: "live-turn-usage-turn-1",
+      createdAt: 1_800_000_004_000,
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        completedAt: 1_800_000_004_000,
+      },
+      usageLine: {
+        usageLineId: "codex:thread-1:turn-1:live-token-usage",
+        totalCostMicros: 14_005_473,
+      },
+    });
+    const usageEntry = result.current.entries.at(-1);
+    expect(usageEntry?.type === "activity" ? usageEntry.details : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label:
+            "Input: 25,139,426 tokens (593,634 uncached, 24,545,792 cached)",
+        }),
+        expect.objectContaining({
+          label: "Output: 66,567 tokens, including 24,064 reasoning",
+        }),
+        expect.objectContaining({
+          label: expect.stringContaining("Cost: $14.01 list price"),
+        }),
+      ]),
+    );
+  });
+
+  it("reconciles hydrated usage snapshots at the completed turn boundary", async () => {
+    const turn = {
+      id: "turn-1",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 4_000,
+    };
+    const response = readThreadResponse({
+      entries: [
+        {
+          type: "activity",
+          id: "live-token-usage-turn-1",
+          createdAt: 1_000,
+          summary:
+            "Latest request usage: 785 uncached in · 111,232 cached · 319 out (90 reasoning) · $0.056 list price",
+          status: "completed",
+          details: [],
+          turn,
+        },
+        {
+          type: "activity",
+          id: "late-final-checks",
+          createdAt: 3_500,
+          summary: "Ran final checks",
+          status: "completed",
+          details: [],
+          turn,
+        },
+        {
+          type: "message",
+          id: "assistant-turn-1",
+          role: "assistant",
+          phase: "final",
+          text: "Done.",
+          createdAt: 4_000,
+          turn,
+        },
+        {
+          type: "activity",
+          id: "live-turn-usage-turn-1",
+          createdAt: 3_900,
+          summary:
+            "Turn usage: 592,849 uncached in · 24,434,560 cached · 66,248 out (23,974 reasoning) · $13.95 list price",
+          status: "completed",
+          details: [],
+          turn,
+        },
+      ],
+      hasPreviousPage: false,
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: async () => ({
+        ...response,
+        pricing: {
+          lines: [authoritativeTurnUsageLine()],
+          summaries: [],
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Ran final checks",
+      "message:Done.",
+      "activity:Turn usage: 593,634 uncached in · 24,545,792 cached · 66,567 out (24,064 reasoning) · $14.01 list price",
+    ]);
+    expect(result.current.entries.at(-1)).toMatchObject({
+      id: "live-turn-usage-turn-1",
+      createdAt: 4_000,
+      usageLine: {
+        usageLineId: "codex:thread-1:turn-1:live-token-usage",
+      },
+    });
+  });
+
+  it("reconciles completed usage inside an older history page", async () => {
+    const turn = {
+      id: "turn-1",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 4_000,
+    };
+    const initialTail = readThreadResponse({
+      entries: [messageEntry({
+        id: "newer-message",
+        role: "user",
+        text: "Next prompt",
+        createdAt: 5_000,
+      })],
+      hasPreviousPage: true,
+      previousCursor: "newer-message",
+    });
+    const olderPage = {
+      ...readThreadResponse({
+        entries: [
+          {
+            type: "activity" as const,
+            id: "late-final-checks",
+            createdAt: 3_500,
+            summary: "Ran final checks",
+            status: "completed" as const,
+            details: [],
+            turn,
+          },
+          {
+            type: "message" as const,
+            id: "assistant-turn-1",
+            role: "assistant" as const,
+            phase: "final" as const,
+            text: "Done.",
+            createdAt: 4_000,
+            turn,
+          },
+          {
+            type: "activity" as const,
+            id: "live-turn-usage-turn-1",
+            createdAt: 3_900,
+            summary:
+              "Turn usage: 592,849 uncached in · 24,434,560 cached · 66,248 out (23,974 reasoning) · $13.95 list price",
+            status: "completed" as const,
+            details: [],
+            turn,
+          },
+          {
+            type: "activity" as const,
+            id: "live-token-usage-turn-1",
+            createdAt: 3_950,
+            summary:
+              "Latest request usage: 785 uncached in · 111,232 cached · 319 out (90 reasoning) · $0.056 list price",
+            status: "completed" as const,
+            details: [],
+            turn,
+          },
+        ],
+        hasPreviousPage: false,
+      }),
+      pricing: {
+        lines: [authoritativeTurnUsageLine()],
+        summaries: [],
+      },
+    };
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Ran final checks",
+      "message:Done.",
+      "activity:Turn usage: 593,634 uncached in · 24,545,792 cached · 66,567 out (24,064 reasoning) · $14.01 list price",
+      "message:Next prompt",
+    ]);
+    expect(result.current.entries[2]).toMatchObject({
+      id: "live-turn-usage-turn-1",
+      createdAt: 4_000,
+    });
+  });
+
   it("prices finalized active-turn usage from the token usage notification model", async () => {
     let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
     const desktopApi: DesktopApi = {
@@ -11942,9 +12372,99 @@ describe("useThreadSessionState", () => {
         projectLabel: "PwrAgent",
         gitBranch: "fix/dock-icon",
         baseBranch: "origin/main",
-        pullRequest: { number: 1918, baseRefName: "main" },
+        pullRequest: {
+          number: 1918,
+          baseRefName: "main",
+        },
       },
       reviewer: { backend: "codex", model: "gpt-5.6-sol" },
+    });
+  });
+
+  it.each([
+    ["semantic review match", "review-start-live"],
+    ["exact item-ID replacement", "review-start"],
+  ])("does not drop replay provenance during a %s", async (_case, liveItemId) => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const context = {
+      workspacePath: "/Users/dev/pwrdrvr/PwrAgent",
+      projectLabel: "PwrAgent",
+      gitBranch: "fix/dock-icon",
+      baseBranch: "origin/main",
+      pullRequest: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1918,
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1918",
+      },
+    };
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "review",
+              id: "review-start",
+              review: "Review changes against origin/main",
+              displayText: "Review changes against origin/main",
+              context,
+              turn: {
+                id: "turn-review",
+                status: "in_progress",
+              },
+            },
+          ],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: liveItemId,
+              type: "enteredReviewMode",
+              review: "Review changes against origin/main",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+      expect(result.current.entries[0]).toMatchObject({
+        type: "review",
+        context,
+      });
     });
   });
 

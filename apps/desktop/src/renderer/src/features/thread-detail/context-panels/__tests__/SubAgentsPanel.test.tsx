@@ -48,7 +48,185 @@ const thread: NavigationThreadSummary = {
   ],
 };
 
+const mixedSubAgents = [
+  {
+    monitorId: "system:token-miser:gate-1",
+    task: "Gate noisy output",
+    status: "success" as const,
+    createdAt: 1_800_000_000_200,
+    updatedAt: 1_800_000_000_300,
+  },
+  {
+    monitorId: "codex-native:child-1",
+    task: "Inspect native worker",
+    status: "running" as const,
+    createdAt: 1_800_000_000_100,
+    updatedAt: 1_800_000_000_100,
+  },
+  ...thread.subAgents!,
+];
+
 describe("SubAgentsPanel", () => {
+  it("separates harness, Token Miser, and PwrAgent sub-agents", () => {
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: mixedSubAgents,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "Harness 1" }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Inspect native worker")).toBeInTheDocument();
+    expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
+    expect(screen.queryByText("Watch the deployment")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Token Miser 1" }));
+    expect(screen.getByText("Gate noisy output")).toBeInTheDocument();
+    expect(screen.queryByText("Inspect native worker")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "PwrAgent 2" }));
+    expect(screen.getByText("Watch the deployment")).toBeInTheDocument();
+    expect(screen.getByText("Finished work")).toBeInTheDocument();
+    expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
+  });
+
+  it("uses roving focus and horizontal tablist keyboard navigation", () => {
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: mixedSubAgents,
+        }}
+      />,
+    );
+
+    const tablist = screen.getByRole("tablist", {
+      name: "Sub-agent ownership",
+    });
+    const harness = screen.getByRole("tab", { name: "Harness 1" });
+    const tokenMiser = screen.getByRole("tab", { name: "Token Miser 1" });
+    const pwrAgent = screen.getByRole("tab", { name: "PwrAgent 2" });
+
+    expect(tablist).toHaveAttribute("aria-orientation", "horizontal");
+    expect(harness).toHaveAttribute("tabindex", "0");
+    expect(tokenMiser).toHaveAttribute("tabindex", "-1");
+    expect(pwrAgent).toHaveAttribute("tabindex", "-1");
+
+    harness.focus();
+    fireEvent.keyDown(harness, { key: "ArrowRight" });
+    expect(tokenMiser).toHaveFocus();
+    expect(harness).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(tokenMiser, { key: "End" });
+    expect(pwrAgent).toHaveFocus();
+    fireEvent.keyDown(pwrAgent, { key: "ArrowRight" });
+    expect(harness).toHaveFocus();
+    fireEvent.keyDown(harness, { key: "ArrowLeft" });
+    expect(pwrAgent).toHaveFocus();
+    fireEvent.keyDown(pwrAgent, { key: "Home" });
+    expect(harness).toHaveFocus();
+  });
+
+  it("uses unique tab relationships for each mounted panel", () => {
+    render(
+      <>
+        <SubAgentsPanel
+          thread={{ ...thread, subAgents: mixedSubAgents }}
+        />
+        <SubAgentsPanel
+          thread={{ ...thread, id: "second-thread", subAgents: mixedSubAgents }}
+        />
+      </>,
+    );
+
+    const tablists = screen.getAllByRole("tablist", {
+      name: "Sub-agent ownership",
+    });
+    const firstHarness = within(tablists[0]!).getByRole("tab", {
+      name: "Harness 1",
+    });
+    const secondHarness = within(tablists[1]!).getByRole("tab", {
+      name: "Harness 1",
+    });
+    const panels = screen.getAllByRole("tabpanel");
+
+    expect(firstHarness.id).not.toBe(secondHarness.id);
+    expect(panels[0]!.id).not.toBe(panels[1]!.id);
+    expect(firstHarness).toHaveAttribute("aria-controls", panels[0]!.id);
+    expect(secondHarness).toHaveAttribute("aria-controls", panels[1]!.id);
+    expect(panels[0]).toHaveAttribute("aria-labelledby", firstHarness.id);
+    expect(panels[1]).toHaveAttribute("aria-labelledby", secondHarness.id);
+  });
+
+  it("prefers PwrAgent when a thread has no harness-managed sub-agents", () => {
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: [
+            {
+              monitorId: "system:token-miser:gate-1",
+              task: "Gate noisy output",
+              status: "success",
+              createdAt: 1_800_000_000_200,
+              updatedAt: 1_800_000_000_300,
+            },
+            ...thread.subAgents!,
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "PwrAgent 2" }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Watch the deployment")).toBeInTheDocument();
+    expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
+  });
+
+  it("limits completed native workers while preserving current and managed monitors", () => {
+    const now = Date.now();
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: [
+            {
+              monitorId: "codex-native:stale-worker",
+              task: "Stale native worker",
+              status: "success",
+              createdAt: now - (2 * 24 * 60 * 60 * 1000),
+              updatedAt: now - (2 * 24 * 60 * 60 * 1000),
+              completedAt: now - (2 * 24 * 60 * 60 * 1000),
+            },
+            {
+              monitorId: "codex-native:active-worker",
+              task: "Active native worker",
+              status: "running",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+            {
+              monitorId: "monitor:managed-history",
+              task: "Managed monitor history",
+              status: "success",
+              createdAt: 1,
+              updatedAt: 1,
+              completedAt: 1,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.queryByText("Stale native worker")).not.toBeInTheDocument();
+    expect(screen.getByText("Active native worker")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "PwrAgent 1" }));
+    expect(screen.getByText("Managed monitor history")).toBeInTheDocument();
+  });
+
   it("shows Token Miser's per-gate cost equation", () => {
     render(
       <SubAgentsPanel

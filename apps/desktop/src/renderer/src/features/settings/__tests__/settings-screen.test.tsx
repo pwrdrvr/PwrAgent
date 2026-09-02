@@ -22,6 +22,7 @@ import type {
   MessagingPairingEntry,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { SettingsScreen } from "../SettingsScreen";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
@@ -613,7 +614,7 @@ function createArchivedSnapshot(
 }
 
 describe("SettingsScreen", () => {
-  it("renders cached provider models and locks ACP paths while refreshing the catalog", async () => {
+  it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
     const cachedBackends: BackendSummary[] = [
       {
         kind: "codex",
@@ -647,10 +648,10 @@ describe("SettingsScreen", () => {
         },
       },
     ];
-    const listBackends = vi.fn(
+    const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
       async () => await new Promise<never>(() => undefined),
     );
-    const listAcpAgents = vi.fn(async () => ({
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(async () => ({
       fetchedAt: 1000,
       entries: [
         {
@@ -698,17 +699,20 @@ describe("SettingsScreen", () => {
       .not.toBeInTheDocument();
     await waitFor(() => {
       expect(listBackends).toHaveBeenCalledWith({
-        discoveryIntent: "settings-user-action",
         includeUnavailable: true,
-        refreshModels: true,
       });
     });
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({
-        discoveryIntent: "settings-user-action",
-        refresh: true,
-      });
+      expect(listAcpAgents).toHaveBeenCalled();
     });
+    expect(
+      listAcpAgents.mock.calls.every(([request]) => request?.refresh === false),
+    ).toBe(true);
+    expect(
+      listBackends.mock.calls.every(
+        ([request]) => request?.refreshModels === undefined,
+      ),
+    ).toBe(true);
     fireEvent.click(
       await screen.findByRole("button", { name: "Open Grok settings" }),
     );
@@ -739,9 +743,87 @@ describe("SettingsScreen", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Refresh models" }))
+      expect(screen.getByRole("button", { name: "Refresh all providers" }))
         .toBeDisabled();
     });
+  });
+
+  it("keeps the Models hub refresh explicitly all-provider", async () => {
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: 1000,
+      backends: [],
+    }));
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listAcpAgents, listBackends }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const refresh = await screen.findByRole("button", {
+      name: "Refresh all providers",
+    });
+    await waitFor(() => expect(listBackends).toHaveBeenCalled());
+    listBackends.mockClear();
+    listAcpAgents.mockClear();
+    fireEvent.click(refresh);
+
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        force: true,
+        refresh: true,
+      });
+      expect(listBackends).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        includeUnavailable: true,
+        refreshModels: true,
+      });
+    });
+  });
+
+  it("refreshes only Codex from the focused Codex screen", async () => {
+    const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
+      async () => ({ fetchedAt: 1000, backends: [] }),
+    );
+    const listAcpAgents = vi.fn<NonNullable<DesktopApi["listAcpAgents"]>>(
+      async () => ({ fetchedAt: 1000, entries: [] }),
+    );
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listAcpAgents, listBackends }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
+    const refresh = await screen.findByRole("button", {
+      name: "Refresh Codex",
+    });
+    await waitFor(() => expect(listBackends).toHaveBeenCalled());
+    listBackends.mockClear();
+    listAcpAgents.mockClear();
+    fireEvent.click(refresh);
+
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledExactlyOnceWith({
+        discoveryIntent: "settings-user-action",
+        includeUnavailable: true,
+        refreshModels: "codex",
+      });
+    });
+    expect(listAcpAgents).not.toHaveBeenCalled();
   });
 
   it("names the active PwrAgent Codex path environment override", () => {

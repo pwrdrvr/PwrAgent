@@ -1,5 +1,7 @@
 import type { ThreadSubAgentSummary } from "@pwragent/shared";
 
+export type SubAgentLens = "harness" | "token-miser" | "pwragent";
+
 export function isCodexNativeSubAgent(subAgent: ThreadSubAgentSummary): boolean {
   return subAgent.monitorId.startsWith("codex-native:");
 }
@@ -14,6 +16,21 @@ export function isTokenMiserSubAgent(
   subAgent: ThreadSubAgentSummary,
 ): boolean {
   return subAgent.monitorId.startsWith("system:token-miser:");
+}
+
+/**
+ * Groups sub-agents by the system that owns their lifecycle. The harness lens
+ * is intentionally provider-neutral even though Codex is the only harness
+ * that projects native workers today.
+ */
+export function subAgentLens(subAgent: ThreadSubAgentSummary): SubAgentLens {
+  if (isTokenMiserSubAgent(subAgent)) {
+    return "token-miser";
+  }
+  if (isCodexNativeSubAgent(subAgent)) {
+    return "harness";
+  }
+  return "pwragent";
 }
 
 export function subAgentOriginLabel(

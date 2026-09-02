@@ -218,6 +218,7 @@ import {
   assertProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
 } from "./provider-discovery-permit";
+import { providerLastKnownGoodMatchesConfig } from "./config-store/config-domains";
 import type {
   ManagedCodexCheckMode,
   ManagedCodexRuntime,
@@ -328,7 +329,10 @@ function providerConfigSection(provider: ProviderProjection): {
 function codexDiscoveryFromProvider(
   provider: ProviderProjection,
 ): DesktopCodexDiscoverySnapshot {
-  const selectedCommand = provider.lastKnownGood?.selectedCommand;
+  const lastKnownGood = providerLastKnownGoodMatchesConfig(provider)
+    ? provider.lastKnownGood
+    : undefined;
+  const selectedCommand = lastKnownGood?.selectedCommand;
   const sourceIsValid = (
     source: string,
   ): source is DesktopCodexCandidateSource =>
@@ -336,7 +340,7 @@ function codexDiscoveryFromProvider(
     || source === "config"
     || source === "path"
     || source === "application";
-  const candidates = (provider.lastKnownGood?.candidates ?? [])
+  const candidates = (lastKnownGood?.candidates ?? [])
     .filter((candidate) => sourceIsValid(candidate.source))
     .map((candidate) => ({
       command: candidate.command,
@@ -3332,6 +3336,19 @@ export class DesktopSettingsService {
     envKey: string | undefined,
     storageAvailable: boolean,
   ): Promise<DesktopSettingsSecretState> {
+    // The profile database is shared by processes. Sample presence for every
+    // projection so a secret created outside Settings cannot stay cached as
+    // absent; secret values themselves are never read here.
+    const state = await this.loadSecretState(secret, envKey, storageAvailable);
+    this.configStore.recordSecretPresence(secret, state);
+    return state;
+  }
+
+  private async loadSecretState(
+    secret: DesktopSettingsSecretName,
+    envKey: string | undefined,
+    storageAvailable: boolean,
+  ): Promise<DesktopSettingsSecretState> {
     if (envKey && readEnvString(this.env, envKey)) {
       return {
         configured: true,
@@ -3373,13 +3390,11 @@ export class DesktopSettingsService {
   private async readAndPublishSecretState(
     secret: DesktopSettingsSecretName,
   ): Promise<DesktopSettingsSecretState> {
-    const state = await this.readSecretState(
+    return await this.readSecretState(
       secret,
       secretEnvironmentKey(secret),
       this.options.secretStore.describe().available,
     );
-    this.configStore.recordSecretPresence(secret, state);
-    return state;
   }
 
   private resolveSecretSync(

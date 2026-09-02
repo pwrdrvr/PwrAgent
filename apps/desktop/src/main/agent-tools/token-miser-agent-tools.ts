@@ -18,7 +18,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "search_token_miser_output",
       description:
-        "Search one preserved tool result by literal text. Code Mode receives a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
+        "Search one preserved tool result by literal text. The returned matches remain subject to the 10k-token parent-result cap. Code Mode receives a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -58,7 +58,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_token_miser_output",
       description:
-        "Read an inclusive line range from one preserved tool result. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
+        "Read an inclusive line range from one preserved tool result. The returned range remains subject to the 10k-token parent-result cap, including one very long line. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,

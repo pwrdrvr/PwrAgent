@@ -2,6 +2,7 @@ import {
   estimateTokenUsageCost,
   formatSearchCommandActionLabel,
   formatTokenUsagePriceFactor,
+  formatTokenUsageMicrosAsUsd,
   formatTokenUsageStandardRateSuffix,
   formatTokenUsageUsd,
   formatTokenUsageUsdPerMillion,
@@ -14,6 +15,7 @@ import {
   type AppServerThreadImagePart,
   type AppServerThreadSubAgentCallDetail,
   type AppServerThreadTurnMetadata,
+  type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
   formatDynamicToolOutput,
@@ -377,9 +379,11 @@ type NormalizedTokenUsage = {
 };
 
 export function buildTokenUsageActivityEntry(params: {
+  createdAt?: number;
   fastMode?: boolean;
   id: string;
   model?: string;
+  pricingAt?: number;
   serviceTier?: string;
   summaryPrefix?: string;
   tokenUsage: unknown;
@@ -397,6 +401,7 @@ export function buildTokenUsageActivityEntry(params: {
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
   const cost = estimateTokenUsageCost({
+    at: params.pricingAt,
     cachedInputTokens,
     fastMode: params.fastMode,
     model: params.model,
@@ -503,11 +508,103 @@ export function buildTokenUsageActivityEntry(params: {
   return {
     type: "activity",
     id: params.id,
-    createdAt: Date.now(),
+    createdAt: params.createdAt ?? Date.now(),
     summary: `${summaryPrefix}: ${summaryParts.join(" · ")}`,
     status: "completed",
     details,
     ...(params.turn ? { turn: params.turn } : {}),
+  };
+}
+
+export function buildTurnUsageActivityEntryFromLine(params: {
+  line: ThreadUsageLineRecord;
+  turn: AppServerThreadTurnMetadata;
+}): AppServerThreadActivityEntry | undefined {
+  const { line, turn } = params;
+  if (!line.turnId) {
+    return undefined;
+  }
+
+  const id = `live-turn-usage-${line.turnId}`;
+  const entry = buildTokenUsageActivityEntry({
+    createdAt: line.completedAt ?? turn.completedAt ?? line.createdAt,
+    fastMode: line.fastMode,
+    id,
+    model: line.model,
+    pricingAt: line.createdAt,
+    serviceTier: line.serviceTier,
+    summaryPrefix: "Turn usage",
+    tokenUsage: {
+      total: {
+        cachedInputTokens: line.cachedInputTokens,
+        inputTokens: line.inputTokens,
+        outputTokens: line.outputTokens,
+        reasoningOutputTokens: line.reasoningOutputTokens,
+        totalTokens: line.totalTokens,
+      },
+    },
+    turn,
+  });
+  if (!entry) {
+    return undefined;
+  }
+
+  const summaryParts = [
+    `${formatTokenCount(line.uncachedInputTokens)} uncached in`,
+    `${formatTokenCount(line.cachedInputTokens)} cached`,
+    line.reasoningOutputTokens > 0
+      ? `${formatTokenCount(line.outputTokens)} out (${formatTokenCount(
+          line.reasoningOutputTokens,
+        )} reasoning)`
+      : `${formatTokenCount(line.outputTokens)} out`,
+    line.priceStatus === "priced"
+      ? `${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} list price`
+      : undefined,
+  ].filter((part): part is string => Boolean(part));
+  const exactCostsByDetailId = new Map([
+    [`${id}-uncached-input-cost`, line.uncachedInputCostMicros],
+    [`${id}-cached-input-cost`, line.cachedInputCostMicros],
+    [`${id}-output-cost`, line.outputCostMicros],
+  ]);
+  const details = entry.details.map((detail) => {
+    const exactCostMicros = exactCostsByDetailId.get(detail.id);
+    if (exactCostMicros !== undefined && detail.label.includes(" = ")) {
+      return {
+        ...detail,
+        label: detail.label.replace(
+          / = [^=]+$/,
+          ` = ${formatTokenUsageMicrosAsUsd(exactCostMicros)}`,
+        ),
+      };
+    }
+    if (detail.id === `${id}-cost`) {
+      return {
+        ...detail,
+        label: detail.label.replace(
+          /^Cost: .*? list price/,
+          `Cost: ${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} list price`,
+        ),
+      };
+    }
+    return detail;
+  });
+  if (
+    line.priceStatus === "priced"
+    && !details.some((detail) => detail.id === `${id}-cost`)
+  ) {
+    details.push({
+      id: `${id}-cost`,
+      kind: "read",
+      label: `Cost: ${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} list price`,
+      status: "completed",
+    });
+  }
+
+  return {
+    ...entry,
+    details,
+    summary: `Turn usage: ${summaryParts.join(" · ")}`,
+    usageLine: line,
   };
 }
 

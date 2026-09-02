@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import {
   TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
   TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS,
-  TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+  TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+  TOKEN_MISER_HELPER_INPUT_CAP_BYTES,
+  TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   serializeToolResponse,
+  takeUtf8Prefix,
+  utf8ByteLength,
   type TokenMiserCodeModeOutputPayload,
   type TokenMiserCodeModeReductionOutput,
   type TokenMiserGroupMemberSummary,
@@ -258,6 +262,7 @@ export class TokenMiserService {
     }
     if (isDirectTokenMiserRetrievalInvocation(payload)) {
       await this.options.store.confirmModelVisibleRetrievals({
+        maxVisibleBytes: TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
         output: serializeToolResponse(
           payload.token_miser_exact_tool_response,
         ),
@@ -362,7 +367,13 @@ export class TokenMiserService {
       ).length,
     });
     if (retrieval) {
+      // The reducer observes exact Code Mode output before Codex applies its
+      // model-visible ceiling. Confirm only the prefix eligible to cross that
+      // boundary; otherwise one minified line can become an unbounded debit.
       await this.options.store.confirmModelVisibleRetrievals({
+        maxVisibleBytes:
+          payload.max_output_tokens
+          * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
         output,
         threadId: payload.thread_id,
       });
@@ -442,11 +453,11 @@ export class TokenMiserService {
       prompt: buildCodeModeSummaryPrompt(payload, output),
       signal: options.signal,
       baselineParentTokenCap: payload.max_output_tokens,
-      replacementCharacters: (text) => Math.min(
-        text.length,
+      maxReplacementBytes:
         payload.max_output_tokens
-        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-      ) + payload.model_visible_overhead_characters
+        * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+      replacementCharacters: (text) =>
+        utf8ByteLength(text) + payload.model_visible_overhead_characters
         + this.codeModeActionableStateCharacters(payload),
     });
     if (!prepared) {
@@ -501,10 +512,10 @@ export class TokenMiserService {
     if (!payload.actionable_state) {
       return 0;
     }
-    return (
-      `<${CODE_MODE_ACTIONABLE_STATE_TAG}>`.length
-      + JSON.stringify(payload.actionable_state).length
-      + `</${CODE_MODE_ACTIONABLE_STATE_TAG}>`.length
+    return utf8ByteLength(
+      `<${CODE_MODE_ACTIONABLE_STATE_TAG}>`
+      + JSON.stringify(payload.actionable_state)
+      + `</${CODE_MODE_ACTIONABLE_STATE_TAG}>`,
     );
   }
 
@@ -552,17 +563,16 @@ export class TokenMiserService {
       toolName: member.toolName,
       summary: parsed.members.get(member.toolCallId) ?? "Completed tool result.",
     }));
-    const replacement = JSON.stringify({
-      kind: "tool_output_group_summary",
+    const replacement = buildCappedGroupReplacement({
       groupId: payload.cell_id,
+      groupMembers,
+      maxBytes:
+        payload.max_output_tokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
       summary: parsed.summary.summary,
-      members: groupMembers.map((member) => ({
-        objectId: member.objectId,
-        toolName: member.toolName,
-        summary: member.summary,
-      })),
-      sourceMaterial: "Available by group and member reference when required.",
-    }, null, 2);
+    });
+    if (!replacement) {
+      return undefined;
+    }
     const storedOutput: TokenMiserGroupStoredOutput = {
       version: 1,
       groupId: payload.cell_id,
@@ -585,13 +595,10 @@ export class TokenMiserService {
       toolUseId: payload.call_id,
       toolName: "Code Mode",
       output: JSON.stringify(storedOutput),
-      baselineCharacters: outerOutput.length,
+      baselineCharacters: utf8ByteLength(outerOutput),
       baselineParentTokenCap: payload.max_output_tokens,
-      replacementCharacters: Math.min(
-        replacement.length,
-        payload.max_output_tokens
-        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-      ) + payload.model_visible_overhead_characters
+      replacementCharacters:
+        utf8ByteLength(replacement) + payload.model_visible_overhead_characters
         + this.codeModeActionableStateCharacters(payload),
       summary: parsed.summary,
       disposition: "summarized",
@@ -683,6 +690,7 @@ export class TokenMiserService {
     prompt: string;
     signal?: AbortSignal;
     baselineParentTokenCap?: number;
+    maxReplacementBytes?: number;
     replacementCharacters?: (replacement: string) => number;
   }): Promise<{
     disposition: "summarized";
@@ -726,10 +734,15 @@ export class TokenMiserService {
     }
 
     const objectId = randomUUID();
-    const replacement = buildReplacement({
+    const replacement = buildCappedReplacement({
+      maxBytes:
+        params.maxReplacementBytes ?? TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
       objectId,
       summary: decision.summary,
     });
+    if (!replacement) {
+      return undefined;
+    }
     const parentModel = await this.options.resolveParentModel?.(
       params.threadId,
     ).catch(() => undefined);
@@ -744,7 +757,7 @@ export class TokenMiserService {
       toolName: params.toolName,
       output: params.output,
       replacementCharacters:
-        params.replacementCharacters?.(replacement) ?? replacement.length,
+        params.replacementCharacters?.(replacement) ?? utf8ByteLength(replacement),
       summary: decision.summary,
       disposition: "summarized",
       helperUsage: {
@@ -788,9 +801,9 @@ export class TokenMiserService {
       params.threadId,
     ).catch(() => undefined);
     const visibleCharacters = Math.min(
-      params.output.length,
+      utf8ByteLength(params.output),
       (params.baselineParentTokenCap ?? 10_000)
-      * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+      * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
     );
     const staged = await this.options.store.stage({
       threadId: params.threadId,
@@ -801,7 +814,7 @@ export class TokenMiserService {
       // beside its accounting record so retrieval can never expose a second
       // copy of content the parent already received.
       output: "",
-      baselineCharacters: params.output.length,
+      baselineCharacters: utf8ByteLength(params.output),
       ...(params.baselineParentTokenCap !== undefined
         ? { baselineParentTokenCap: params.baselineParentTokenCap }
         : {}),
@@ -895,23 +908,25 @@ function buildSummaryPrompt(
   payload: TokenMiserPostToolUsePayload,
   output: string,
 ): string {
-  return [
+  const metadata = [
     `Tool: ${payload.tool_name}`,
     `Visible parent intent before the call: ${payload.parent_intent ?? "Not available"}`,
     `Tool input: ${serializeToolResponse(payload.tool_input)}`,
     "Ordinary model-visible output cap: 10000 estimated tokens",
     `Output characters: ${output.length}`,
-    "",
-    "Tool output:",
-    output,
   ].join("\n");
+  return buildHelperPromptWithReservedOutput({
+    metadata,
+    output,
+    outputLabel: "Tool output:",
+  });
 }
 
 function buildCodeModeSummaryPrompt(
   payload: TokenMiserCodeModeOutputPayload,
   output: string,
 ): string {
-  return [
+  const metadata = [
     "Tool: Code Mode",
     `Call ID: ${payload.call_id}`,
     `Cell ID: ${payload.cell_id}`,
@@ -920,54 +935,273 @@ function buildCodeModeSummaryPrompt(
     `Script: ${payload.script ?? "Not available"}`,
     `Model-visible output budget: ${payload.max_output_tokens} tokens`,
     `Output characters: ${output.length}`,
-    "",
-    "Script output:",
-    output,
   ].join("\n");
+  return buildHelperPromptWithReservedOutput({
+    metadata,
+    output,
+    outputLabel: "Script output:",
+  });
 }
 
 function buildGroupedCodeModeSummaryPrompt(
   payload: TokenMiserCodeModeOutputPayload,
   members: CapturedGroupMember[],
 ): string {
-  return [
+  const header = [
     "Summarize this completed parallel Code Mode cell as one group.",
     `Group ID: ${payload.cell_id}`,
-    `Visible parent intent before the cell: ${payload.parent_intent ?? "Not available"}`,
     `Script status: ${payload.script_status}`,
-    `Script: ${payload.script ?? "Not available"}`,
     `Model-visible output budget: ${payload.max_output_tokens} tokens`,
     "Return one factual group summary and one factual summary for every toolCallId.",
     "Broad parallel probes are expected. Do not recommend serial follow-up operations.",
-    ...members.flatMap((member, index) => [
-      "",
-      `Member ${index + 1}`,
+    `Member IDs: ${members.map((member) => member.toolCallId).join(", ")}`,
+  ].join("\n");
+  const contextMetadata = [
+    `Visible parent intent before the cell: ${payload.parent_intent ?? "Not available"}`,
+    `Script: ${payload.script ?? "Not available"}`,
+    ...members.map((member) => [
       `toolCallId: ${member.toolCallId}`,
-      `toolName: ${member.toolName}`,
       `toolInput: ${member.toolInput}`,
-      `outputCharacters: ${member.output.length}`,
-      "output:",
-      member.output,
+    ].join("\n")),
+  ].join("\n");
+  const memberHeaders = members.map((member, index) => [
+    `Member ${index + 1}`,
+    `toolCallId: ${member.toolCallId}`,
+    `toolName: ${member.toolName}`,
+    `outputCharacters: ${member.output.length}`,
+    "output:",
+  ].join("\n"));
+  const assemblePrompt = (metadata: string, outputs: readonly string[]) => [
+    header,
+    "",
+    "Context metadata:",
+    metadata,
+    ...memberHeaders.flatMap((memberHeader, index) => [
+      "",
+      memberHeader,
+      outputs[index] ?? "",
     ]),
   ].join("\n");
+  const promptBudget = helperPromptBudget();
+  const emptyPrompt = assemblePrompt("", members.map(() => ""));
+  const reservedOutputBytes = Math.min(
+    TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+    members.reduce(
+      (total, member) => total + utf8ByteLength(member.output),
+      0,
+    ),
+  );
+  const metadataBudget = Math.max(
+    0,
+    promptBudget
+    - reservedOutputBytes
+    - utf8ByteLength(emptyPrompt),
+  );
+  const boundedMetadata = capTextToUtf8Bytes(
+    contextMetadata,
+    metadataBudget,
+    "\n… context metadata truncated",
+  );
+  const fixedPrompt = assemblePrompt(boundedMetadata, members.map(() => ""));
+  const outputBudget = Math.max(
+    0,
+    promptBudget - utf8ByteLength(fixedPrompt),
+  );
+  const memberBudgets = distributeFairByteBudget(
+    members.map((member) => utf8ByteLength(member.output)),
+    outputBudget,
+  );
+  const boundedOutputs = members.map(
+    (member, index) => capTextToUtf8Bytes(
+      member.output,
+      memberBudgets[index]!,
+      "\n… member output truncated",
+    ),
+  );
+  return assemblePrompt(boundedMetadata, boundedOutputs);
+}
+
+function buildHelperPromptWithReservedOutput(params: {
+  metadata: string;
+  output: string;
+  outputLabel: string;
+}): string {
+  const separator = `\n\n${params.outputLabel}\n`;
+  const promptBudget = helperPromptBudget();
+  const reservedOutputBytes = Math.min(
+    TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+    utf8ByteLength(params.output),
+  );
+  const metadataBudget = Math.max(
+    0,
+    promptBudget
+    - reservedOutputBytes
+    - utf8ByteLength(separator),
+  );
+  const metadata = capTextToUtf8Bytes(
+    params.metadata,
+    metadataBudget,
+    "\n… metadata truncated",
+  );
+  const outputBudget = Math.max(
+    0,
+    promptBudget - utf8ByteLength(metadata) - utf8ByteLength(separator),
+  );
+  const output = capTextToUtf8Bytes(
+    params.output,
+    outputBudget,
+    "\n… source truncated at the projected 20k-token Luna input cap",
+  );
+  return `${metadata}${separator}${output}`;
+}
+
+function helperPromptBudget(): number {
+  return Math.max(
+    0,
+    TOKEN_MISER_HELPER_INPUT_CAP_BYTES
+    - utf8ByteLength(TOKEN_MISER_SYSTEM_PROMPT),
+  );
+}
+
+function distributeFairByteBudget(
+  lengths: readonly number[],
+  totalBudget: number,
+): number[] {
+  const budgets = lengths.map(() => 0);
+  let remainingBudget = totalBudget;
+  let remaining = lengths.map((_, index) => index);
+  while (remaining.length > 0 && remainingBudget > 0) {
+    const share = Math.floor(remainingBudget / remaining.length);
+    const completed = remaining.filter((index) => lengths[index]! <= share);
+    if (completed.length > 0) {
+      for (const index of completed) {
+        budgets[index] = lengths[index]!;
+        remainingBudget -= lengths[index]!;
+      }
+      const completedSet = new Set(completed);
+      remaining = remaining.filter((index) => !completedSet.has(index));
+      continue;
+    }
+    for (const index of remaining) {
+      budgets[index] = share;
+      remainingBudget -= share;
+    }
+    for (const index of remaining) {
+      if (remainingBudget <= 0) break;
+      budgets[index] = budgets[index]! + 1;
+      remainingBudget -= 1;
+    }
+    break;
+  }
+  return budgets;
+}
+
+function capTextToUtf8Bytes(
+  text: string,
+  maxBytes: number,
+  marker: string,
+): string {
+  if (utf8ByteLength(text) <= maxBytes) {
+    return text;
+  }
+  const markerBytes = utf8ByteLength(marker);
+  if (maxBytes <= markerBytes) {
+    return takeUtf8Prefix(text, maxBytes);
+  }
+  return `${takeUtf8Prefix(text, maxBytes - markerBytes)}${marker}`;
+}
+
+function buildCappedReplacement(params: {
+  maxBytes: number;
+  objectId: string;
+  summary: TokenMiserSummary;
+}): string | undefined {
+  const full = buildReplacement(params);
+  if (utf8ByteLength(full) <= params.maxBytes) {
+    return full;
+  }
+  const reference = `Output reference: ${params.objectId}`;
+  if (utf8ByteLength(reference) > params.maxBytes) {
+    return undefined;
+  }
+  const separator = "\n\n";
+  const bodyBudget = Math.max(
+    0,
+    params.maxBytes - utf8ByteLength(reference) - utf8ByteLength(separator),
+  );
+  const body = capTextToUtf8Bytes(
+    buildReplacementBody(params.summary),
+    bodyBudget,
+    "… summary truncated",
+  );
+  return body ? `${body}${separator}${reference}` : reference;
 }
 
 function buildReplacement(params: {
   objectId: string;
   summary: TokenMiserSummary;
 }): string {
-  const details = params.summary.usefulDetails.length > 0
-    ? params.summary.usefulDetails.map((detail) => `- ${detail}`).join("\n")
-    : "- No additional facts were retained.";
   return [
-    `Summary: ${params.summary.summary}`,
-    "",
-    "Facts:",
-    details,
+    buildReplacementBody(params.summary),
     "",
     `Output reference: ${params.objectId}`,
     "Exact source material is available when required.",
   ].join("\n");
+}
+
+function buildReplacementBody(summary: TokenMiserSummary): string {
+  const details = summary.usefulDetails.length > 0
+    ? summary.usefulDetails.map((detail) => `- ${detail}`).join("\n")
+    : "- No additional facts were retained.";
+  return [
+    `Summary: ${summary.summary}`,
+    "",
+    "Facts:",
+    details,
+  ].join("\n");
+}
+
+function buildCappedGroupReplacement(params: {
+  groupId: string;
+  groupMembers: TokenMiserGroupMemberSummary[];
+  maxBytes: number;
+  summary: string;
+}): string | undefined {
+  const full = JSON.stringify({
+    kind: "tool_output_group_summary",
+    groupId: params.groupId,
+    summary: params.summary,
+    members: params.groupMembers.map((member) => ({
+      objectId: member.objectId,
+      toolName: member.toolName,
+      summary: member.summary,
+    })),
+    sourceMaterial: "Available by group and member reference when required.",
+  }, null, 2);
+  if (utf8ByteLength(full) <= params.maxBytes) {
+    return full;
+  }
+  const compact = JSON.stringify({
+    kind: "tool_output_group_summary",
+    groupId: params.groupId,
+    summary: "Summary truncated to retain recovery references.",
+    members: params.groupMembers.map((member) => ({
+      objectId: member.objectId,
+      toolName: member.toolName,
+    })),
+    sourceMaterial: "Retrieve source material by group or member reference.",
+  });
+  if (utf8ByteLength(compact) <= params.maxBytes) {
+    return compact;
+  }
+  const referencesOnly = JSON.stringify({
+    kind: "tool_output_group_reference",
+    groupId: params.groupId,
+    members: params.groupMembers.map((member) => member.objectId),
+  });
+  return utf8ByteLength(referencesOnly) <= params.maxBytes
+    ? referencesOnly
+    : undefined;
 }
 
 function parseSummary(value: unknown): TokenMiserSummary | undefined {

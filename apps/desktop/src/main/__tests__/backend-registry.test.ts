@@ -21,6 +21,7 @@ import {
   buildFederatedThreadRef,
   buildNavigationSnapshot,
   buildThreadIdentityKey,
+  CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
   MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
@@ -32,6 +33,7 @@ import type {
   AppServerNotification,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
+  AppServerReviewContext,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadActivityEntry,
@@ -98,6 +100,7 @@ import {
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
 import { GitDirectoryService } from "../app-server/git-directory-service";
+import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -1895,7 +1898,6 @@ class MockBackendClient {
   async listNativeSubAgentThreads(params?: {
     filter?: string;
     limit?: number;
-    maxPages?: number;
   }): Promise<AppServerThreadSummary[]> {
     this.listNativeSubAgentThreadsCallCount += 1;
     this.lastListNativeSubAgentThreadsParams = params;
@@ -3458,6 +3460,97 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("queues one focused refresh behind an automatic probe for the same worktree", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    const firstAcceptedPushedCommitSha = "a".repeat(40);
+    const latestAcceptedPushedCommitSha = "b".repeat(40);
+    const automaticState = { ...sampleGitWorkingState, dirtyFiles: 1 };
+    const focusedState = { ...sampleGitWorkingState, dirtyFiles: 2 };
+    let releaseAutomaticProbe: (() => void) | undefined;
+    const automaticProbeReleased = new Promise<void>((resolve) => {
+      releaseAutomaticProbe = resolve;
+    });
+    let activeProbes = 0;
+    let maxActiveProbes = 0;
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        const call = readWorkingStateEntries.mock.calls.length;
+        activeProbes += 1;
+        maxActiveProbes = Math.max(maxActiveProbes, activeProbes);
+        try {
+          if (call === 1) {
+            await automaticProbeReleased;
+          }
+          yield {
+            worktreePath: paths[0]!,
+            gitWorkingState: call === 1 ? automaticState : focusedState,
+          };
+        } finally {
+          activeProbes -= 1;
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates([
+          multiProjectThread({ worktreePath }),
+        ]),
+      ).resolves.toEqual({ scheduledCount: 1 });
+      await expectEventually(
+        async () => readWorkingStateEntries.mock.calls.length,
+        1,
+      );
+
+      expect(registry.scheduleWorktreeGitWorkingStateRefresh({
+        worktreePath,
+        acceptedPushedCommitShas: [firstAcceptedPushedCommitSha],
+      })).toBe(true);
+      expect(registry.scheduleWorktreeGitWorkingStateRefresh({
+        worktreePath,
+        acceptedPushedCommitShas: [latestAcceptedPushedCommitSha],
+      })).toBe(false);
+      expect(readWorkingStateEntries).toHaveBeenCalledTimes(1);
+
+      releaseAutomaticProbe?.();
+      await expectEventually(
+        async () => readWorkingStateEntries.mock.calls.length,
+        2,
+      );
+      await expectEventually(
+        async () => overlayStore.writeThreadGitWorkingStateCacheEntry.mock.calls.length,
+        2,
+      );
+
+      expect(maxActiveProbes).toBe(1);
+      expect(readWorkingStateEntries.mock.calls[1]).toEqual([
+        [worktreePath],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            [worktreePath]: [latestAcceptedPushedCommitSha],
+          },
+        },
+      ]);
+      expect(registry.getThreadGitWorkingStateCache().get(worktreePath))
+        .toMatchObject({ gitWorkingState: focusedState });
+    } finally {
+      releaseAutomaticProbe?.();
+      await registry.close();
+    }
+  });
+
   it("caps a background working-state round and rotates the oldest probe forward", async () => {
     // Navigation hands over a stable thread order. Without rotation the same
     // prefix would win every round and the tail would never converge.
@@ -3565,7 +3658,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("coalesces a background working-state probe already in flight", async () => {
+  it("keeps repeated navigation inside the automatic fleet-round budget", async () => {
     const worktreePath = "/worktrees/PwrAgnt";
     let releaseProbe: (() => void) | undefined;
     const probeReleased = new Promise<void>((resolve) => {
@@ -3591,29 +3684,40 @@ describe("DesktopBackendRegistry", () => {
       } as unknown as GitWorkingStateService,
       overlayStore,
     });
-    const threads = [
-      multiProjectThread({ worktreePath }),
-      multiProjectThread({ worktreePath: `${worktreePath}-2` }),
-    ];
+    const worktreePaths = Array.from(
+      { length: gitSubprocessBudgets.automaticFleet.worktreeCount },
+      (_unused, index) => `${worktreePath}-${index}`,
+    );
+    const threads = worktreePaths.map((path) =>
+      multiProjectThread({ worktreePath: path }),
+    );
+    expect(Math.ceil(
+      worktreePaths.length / BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+    )).toBe(gitSubprocessBudgets.automaticFleet.baselineRoundsStarted);
 
     try {
       await expect(
-        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
-      ).resolves.toEqual({ scheduledCount: 1 });
-      // The first worktree is in flight, so a capped round has to reach past
-      // it rather than re-selecting it and scheduling nothing.
-      await expect(
-        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
-      ).resolves.toEqual({ scheduledCount: 1 });
-      await expect(
-        registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
-      ).resolves.toEqual({ scheduledCount: 0 });
+        registry.refreshThreadGitWorkingStates(threads),
+      ).resolves.toEqual({
+        scheduledCount: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+      });
+      for (
+        let request = 1;
+        request < gitSubprocessBudgets.automaticFleet.navigationRequestsWhileInFlight;
+        request += 1
+      ) {
+        await expect(
+          registry.refreshThreadGitWorkingStates(threads),
+        ).resolves.toEqual({ scheduledCount: 0 });
+      }
       await expectEventually(
         async () => readWorkingStateEntries.mock.calls.length,
-        2,
+        gitSubprocessBudgets.automaticFleet.maxRoundsStarted,
       );
       expect(readWorkingStateEntries.mock.calls.map(([paths]) => paths))
-        .toEqual([[worktreePath], [`${worktreePath}-2`]]);
+        .toEqual([
+          worktreePaths.slice(0, BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE),
+        ]);
     } finally {
       releaseProbe?.();
       await registry.close();
@@ -6583,6 +6687,50 @@ describe("DesktopBackendRegistry", () => {
       } else {
         process.env.PWRAGENT_HOME = previousHome;
       }
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("invalidates only the provider changed by an external config reload", async () => {
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-backend-registry-"),
+    );
+    const configPath = path.join(tempRoot, "config.toml");
+    await writeFile(
+      configPath,
+      "[acp_agents.gemini]\ncli_path = \"/path/gemini-one\"\n",
+    );
+    const configStore = new DesktopConfigStore({ configPath });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      configStore,
+      discoverLocalAcpAgents: async () => [],
+    });
+    const invalidate = vi
+      .spyOn(registry, "invalidateProviderRuntimeSelections")
+      .mockResolvedValue();
+
+    try {
+      await writeFile(
+        configPath,
+        "[acp_agents.gemini]\ncli_path = \"/path/gemini-two\"\n",
+      );
+      configStore.reloadFromDisk("watch");
+
+      await vi.waitFor(() => {
+        expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+          acp: true,
+          acpRegistryIds: ["gemini"],
+          codex: false,
+        });
+      });
+      await registry.synchronizeProviderRuntimeSelections();
+      expect(invalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      await registry.close();
+      configStore.dispose();
       await rm(tempRoot, { recursive: true, force: true });
     }
   });
@@ -13049,7 +13197,6 @@ script = "echo setup"
     });
     expect(codexClient.lastListNativeSubAgentThreadsParams).toEqual({
       limit: 50,
-      maxPages: 1,
     });
     expect(codexClient.readThreadCalls).toEqual([]);
 
@@ -14610,6 +14757,51 @@ script = "echo setup"
       label: "GPT-5.6-Sol",
     });
     expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.4");
+
+    await registry.close();
+  });
+
+  it("keeps a working Codex catalog after an explicit refresh fails", async () => {
+    const modelListErrors: Error[] = [];
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      modelListErrors,
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          label: "GPT-5.6-Sol",
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const permit = issueProviderDiscoveryPermit("settings-user-action");
+
+    const first = await registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      permit,
+    );
+    modelListErrors.push(new Error("temporary model refresh failure"));
+
+    await expect(
+      registry.listBackends(
+        { includeUnavailable: true, refreshModels: "codex" },
+        permit,
+      ),
+    ).rejects.toThrow("temporary model refresh failure");
+    const cached = await registry.listBackends({ includeUnavailable: true });
+
+    expect(cached.backends[0]).toEqual(first.backends[0]);
+    expect(cached.backends[0]?.available).toBe(true);
+    expect(cached.backends[0]?.launchpadOptions?.models).toEqual([
+      expect.objectContaining({ id: "gpt-5.6-sol" }),
+    ]);
 
     await registry.close();
   });
@@ -25429,6 +25621,99 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("attributes turnless usage emitted after completion to the completed turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.5",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          last: {
+            inputTokens: 1_000,
+            cachedInputTokens: 100,
+            outputTokens: 20,
+            reasoningOutputTokens: 5,
+            totalTokens: 1_025,
+          },
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 100,
+            outputTokens: 20,
+            reasoningOutputTokens: 5,
+            totalTokens: 1_025,
+          },
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          completedAt: 1_800_000_004_000,
+          output: [],
+        },
+      },
+    });
+    const lateUsageNotification: AppServerNotification = {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        tokenUsage: {
+          last: {
+            inputTokens: 2_000,
+            cachedInputTokens: 1_800,
+            outputTokens: 30,
+            reasoningOutputTokens: 10,
+            totalTokens: 2_040,
+          },
+        },
+      },
+    };
+    await codexClient.emit(lateUsageNotification);
+    await codexClient.emit(lateUsageNotification);
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      cachedInputTokens: 1_900,
+      completedAt: 1_800_000_004_000,
+      inputTokens: 3_000,
+      outputTokens: 50,
+      reasoningOutputTokens: 15,
+      totalTokens: 3_065,
+      turnId: "turn-1",
+      turnUsageAttributed: true,
+      uncachedInputTokens: 1_100,
+      usageLineId: "codex:thread-1:turn-1:live-token-usage",
+    });
+
+    await registry.close();
+  });
+
   it("folds final and peak protocol context observations into the existing usage row", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
@@ -26178,6 +26463,146 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("persists native review provenance on the existing sub-agent write", async () => {
+    const context: AppServerReviewContext = {
+      workspacePath: "/repo",
+      projectLabel: "PwrAgent",
+      gitBranch: "fix/review-provenance",
+      baseBranch: "origin/main",
+      pullRequest: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1939,
+        headRefName: "fix/review-provenance",
+        baseRefName: "main",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1939",
+      },
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      startReviewResult: {
+        threadId: "thread-1",
+        reviewThreadId: "thread-1",
+        turnId: "turn-review-1",
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    vi.spyOn(
+      registry as unknown as {
+        resolveReviewContext(): Promise<AppServerReviewContext | undefined>;
+      },
+      "resolveReviewContext",
+    ).mockResolvedValue(context);
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId: "review:turn-review-1",
+          reviewContext: context,
+        }),
+      ],
+    });
+
+    await registry.close();
+  });
+
+  it("reattaches persisted provenance to native review replay", async () => {
+    const context: AppServerReviewContext = {
+      workspacePath: "/repo",
+      projectLabel: "PwrAgent",
+      gitBranch: "fix/review-provenance",
+      baseBranch: "origin/main",
+      pullRequest: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1939,
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1939",
+      },
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [
+            {
+              monitorId: "review:turn-review-1",
+              task: "Review changes against origin/main",
+              status: "success",
+              createdAt: 1_000,
+              updatedAt: 2_000,
+              backend: "codex",
+              preferredModel: "gpt-5.6-sol",
+              preferredReasoningEffort: "high",
+              monitorThreadId: "thread-1",
+              monitorTurnId: "turn-review-1",
+              reviewContext: context,
+            },
+          ],
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "review",
+            id: "review-start",
+            review: "changes against 'origin/main'",
+            displayText: "Review changes against origin/main",
+            turn: {
+              id: "turn-review-1",
+              status: "completed",
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response.replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "review-start",
+        context,
+        reviewer: {
+          backend: "codex",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+        },
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("persists Codex reviews as sub-agent summaries on the parent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
@@ -26871,6 +27296,74 @@ command = "pnpm dev"
     });
     expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(3);
+
+    await registry.close();
+  });
+
+  it("does not project a grouped handoff as a Codex native sub-agent", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadParent({
+      backend: "codex",
+      threadId: "handoff-child",
+      parentThreadId: "handoff-parent",
+    });
+    await overlayStore.setThreadHandoffOrigin({
+      backend: "codex",
+      threadId: "handoff-child",
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "handoff-parent",
+        sourceTurnId: "turn-handoff-parent",
+        seedMode: "clean",
+        groupingMode: "subthread",
+        createdAt: 1_800_000_000_000,
+        workspace: {
+          mode: "new_worktree",
+          cwd: "/tmp/pwragent-handoff-child",
+          git: {
+            kind: "git_worktree",
+            worktreeCreationAvailable: true,
+          },
+        },
+      },
+    });
+    const upsertThreadSubAgent = vi.spyOn(
+      overlayStore,
+      "upsertThreadSubAgent",
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "watcher-thread",
+        turnId: "turn-watcher",
+        item: {
+          id: "collab-wait-handoff",
+          type: "collabAgentToolCall",
+          tool: "wait",
+          status: "completed",
+          receiverThreadIds: ["handoff-child"],
+          agentsStates: {
+            "handoff-child": { status: "completed" },
+          },
+        },
+      },
+    } as AppServerNotification);
+
+    expect(upsertThreadSubAgent).not.toHaveBeenCalled();
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "watcher-thread",
+      }),
+    ).resolves.toBeUndefined();
 
     await registry.close();
   });
@@ -42051,6 +42544,7 @@ script = "printf setup"
   });
 
   it("groups native Codex workers below their ordinary parent without making rows", async () => {
+    const now = Date.now();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -42070,8 +42564,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 30,
-          updatedAt: 30,
+          createdAt: now - CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS - 2,
+          updatedAt: now - CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS - 1,
           threadStatus: "idle",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",
@@ -42086,8 +42580,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 20,
-          updatedAt: 20,
+          createdAt: now - (2 * CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS),
+          updatedAt: now - (2 * CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS),
           threadStatus: "active",
           codexNativeSubAgent: {
             parentThreadId: "thread-worker-a",
@@ -42102,8 +42596,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 10,
-          updatedAt: 10,
+          createdAt: now - 20,
+          updatedAt: now - 10,
           threadStatus: "idle",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",
@@ -42127,8 +42621,8 @@ script = "printf setup"
       {
         threadId: "thread-worker-a",
         title: "Draft release notes",
-        createdAt: 10,
-        updatedAt: 10,
+        createdAt: now - 20,
+        updatedAt: now - 10,
         threadStatus: "idle",
         depth: 1,
         agentNickname: "release-writer",
@@ -42137,22 +42631,12 @@ script = "printf setup"
       {
         threadId: "thread-worker-a-child",
         title: "Check release links",
-        createdAt: 20,
-        updatedAt: 20,
+        createdAt: now - (2 * CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS),
+        updatedAt: now - (2 * CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS),
         threadStatus: "active",
         depth: 2,
         agentNickname: "link-checker",
         agentRole: "researcher",
-      },
-      {
-        threadId: "thread-worker-b",
-        title: "Review release notes",
-        createdAt: 30,
-        updatedAt: 30,
-        threadStatus: "idle",
-        depth: 1,
-        agentNickname: "release-reviewer",
-        agentRole: "reviewer",
       },
     ]);
     expect(codexClient.listNativeSubAgentThreadsCallCount).toBe(1);
@@ -42166,9 +42650,9 @@ script = "printf setup"
       )?.subAgents,
     ).toEqual([
       expect.objectContaining({
-        monitorId: "codex-native:thread-worker-b",
-        monitorThreadId: "thread-worker-b",
-        agentName: "release-reviewer",
+        monitorId: "codex-native:thread-worker-a",
+        monitorThreadId: "thread-worker-a",
+        agentName: "release-writer",
         status: "success",
       }),
       expect.objectContaining({
@@ -42177,19 +42661,87 @@ script = "printf setup"
         agentName: "link-checker",
         status: "running",
       }),
-      expect.objectContaining({
-        monitorId: "codex-native:thread-worker-a",
-        monitorThreadId: "thread-worker-a",
-        agentName: "release-writer",
-        status: "success",
-      }),
     ]);
+
+    await registry.close();
+  });
+
+  it("does not reconcile a grouped handoff discovered as a native Codex worker", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "handoff-parent",
+          title: "Parent investigation",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 100,
+        },
+      ],
+      nativeSubAgentThreads: [
+        {
+          id: "handoff-child",
+          title: "Repair the child issue",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          createdAt: 20,
+          updatedAt: 40,
+          threadStatus: "idle",
+          codexNativeSubAgent: {
+            parentThreadId: "handoff-parent",
+            depth: 1,
+          },
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadHandoffOrigin({
+      backend: "codex",
+      threadId: "handoff-child",
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "handoff-parent",
+        sourceTurnId: "turn-handoff-parent",
+        seedMode: "clean",
+        groupingMode: "subthread",
+        createdAt: 1_800_000_000_000,
+        workspace: {
+          mode: "new_worktree",
+          cwd: "/tmp/pwragent-handoff-child",
+          git: {
+            kind: "git_worktree",
+            worktreeCreationAvailable: true,
+          },
+        },
+      },
+    });
+    const upsertThreadSubAgent = vi.spyOn(
+      overlayStore,
+      "upsertThreadSubAgent",
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await registry.listThreads({ backend: "codex" });
+
+    expect(upsertThreadSubAgent).not.toHaveBeenCalled();
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "handoff-parent",
+      }),
+    ).resolves.toBeUndefined();
 
     await registry.close();
   });
 
   it("backfills native Codex cards and pricing from durable child turn usage", async () => {
     const nativeThreadId = "thread-epicurus";
+    const now = Date.now();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -42209,8 +42761,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 20,
-          updatedAt: 40,
+          createdAt: now - 40,
+          updatedAt: now - 20,
           threadStatus: "idle",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",
@@ -42342,6 +42894,7 @@ script = "printf setup"
   it("repairs missing native Codex pricing from an existing card usage snapshot", async () => {
     const nativeThreadId = "thread-epicurus";
     const monitorId = `codex-native:${nativeThreadId}`;
+    const now = Date.now();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -42361,8 +42914,8 @@ script = "printf setup"
           titleSource: "explicit",
           linkedDirectories: [],
           source: "codex",
-          createdAt: 20,
-          updatedAt: 40,
+          createdAt: now - 40,
+          updatedAt: now - 20,
           threadStatus: "idle",
           codexNativeSubAgent: {
             parentThreadId: "thread-parent",

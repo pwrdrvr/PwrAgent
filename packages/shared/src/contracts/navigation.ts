@@ -6,6 +6,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadImagePart,
+  AppServerReviewContext,
   AppServerThreadReviewEntry,
   AppServerThreadStatus,
   AppServerThreadSummary,
@@ -340,6 +341,12 @@ export type ThreadSubAgentSummary = {
   preferredFastMode?: boolean;
   monitorThreadId?: ThreadIdentifier;
   monitorTurnId?: ThreadIdentifier;
+  /**
+   * Frozen workspace, branch, and pull-request context for a code review.
+   * Present only on `review:` summaries. The provider transcript does not
+   * retain this metadata, so thread replay reattaches it by `monitorTurnId`.
+   */
+  reviewContext?: AppServerReviewContext;
   /**
    * The parent turn this sub-agent ran inside. Set for Token Miser gates so
    * the Pricing rail can nest a gate under the turn it happened in — the gate's

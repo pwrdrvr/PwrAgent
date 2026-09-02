@@ -20,6 +20,10 @@ import type {
   SetThreadParentRequest,
   ThreadGitWorkingState,
 } from "@pwragent/shared";
+import {
+  BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+  selectStaleWorktreeWorkingStatePaths,
+} from "../app-server/thread-working-state-refresh-policy";
 import { resolvePwragentRoot } from "../profile";
 
 // `resolveScratchProjectsRoots` anchors the first two workspace roots at the
@@ -531,6 +535,111 @@ const readWorktreeWorkingStateEntries = vi.fn(
     })(),
 );
 const invalidateWorktreeWorkingState = vi.fn((_worktreePath?: string) => undefined);
+let threadGitWorkingStateRefreshRound: Promise<void> | undefined;
+function resolveWorkingStatePath(
+  thread: AppServerThreadSummary,
+): string | undefined {
+  const projectKey = thread.projectKey?.trim();
+  if (projectKey) {
+    return projectKey;
+  }
+  for (const directory of thread.linkedDirectories) {
+    const worktreePath = directory.worktreePath?.trim();
+    if (worktreePath) {
+      return worktreePath;
+    }
+  }
+  return thread.linkedDirectories.find(
+    (directory) => directory.kind === "local" && directory.path.trim(),
+  )?.path.trim();
+}
+
+const refreshThreadGitWorkingStates = vi.fn(
+  async (threads: AppServerThreadSummary[]): Promise<{ scheduledCount: number }> => {
+    await loadThreadGitWorkingStateCache();
+    if (threadGitWorkingStateRefreshRound) {
+      return { scheduledCount: 0 };
+    }
+    const worktreePaths = selectStaleWorktreeWorkingStatePaths({
+      cache: threadGitWorkingStateCache,
+      limit: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+      worktreePaths: threads.flatMap((thread) => {
+        const worktreePath = resolveWorkingStatePath(thread);
+        return worktreePath ? [worktreePath] : [];
+      }),
+    });
+    if (worktreePaths.length === 0) {
+      return { scheduledCount: 0 };
+    }
+
+    const overlayStates = await getThreadOverlayStates() as Record<
+      string,
+      { detachedPrs?: PrSummary[] }
+    >;
+    const acceptedPushedCommitShasByWorktreePath = Object.fromEntries(
+      worktreePaths.map((worktreePath) => {
+        const commitShas = threads
+          .filter((thread) => resolveWorkingStatePath(thread) === worktreePath)
+          .flatMap((thread) => [
+            ...((thread as AppServerThreadSummary & { prs?: PrSummary[] }).prs ?? []),
+            ...(overlayStates[thread.id]?.detachedPrs ?? []),
+          ])
+          .filter((pr) => pr.lifecycleState === "merged" || pr.state === "merged")
+          .flatMap((pr) => pr.commitShas ?? [])
+          .map((sha) => sha.trim().toLowerCase())
+          .filter((sha) => /^[0-9a-f]{40}$/.test(sha));
+        return [worktreePath, [...new Set(commitShas)].sort()];
+      }),
+    );
+    const round = (async () => {
+      for await (const entry of readWorktreeWorkingStateEntries(worktreePaths, {
+        acceptedPushedCommitShasByWorktreePath,
+      })) {
+        await rememberThreadGitWorkingStateCacheEntry({
+          ...entry,
+          fetchedAt: Date.now(),
+        });
+      }
+    })();
+    threadGitWorkingStateRefreshRound = round;
+    void round.finally(() => {
+      if (threadGitWorkingStateRefreshRound === round) {
+        threadGitWorkingStateRefreshRound = undefined;
+      }
+    });
+    return { scheduledCount: worktreePaths.length };
+  },
+);
+const pendingFocusedWorkingStatePaths = new Set<string>();
+const scheduleWorktreeGitWorkingStateRefresh = vi.fn((params: {
+  acceptedPushedCommitShas?: string[];
+  worktreePath: string;
+}): boolean => {
+  if (pendingFocusedWorkingStatePaths.has(params.worktreePath)) {
+    return false;
+  }
+  pendingFocusedWorkingStatePaths.add(params.worktreePath);
+  void (async () => {
+    try {
+      for await (const entry of readWorktreeWorkingStateEntries(
+        [params.worktreePath],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            [params.worktreePath]: params.acceptedPushedCommitShas,
+          },
+        },
+      )) {
+        await rememberThreadGitWorkingStateCacheEntry({
+          ...entry,
+          fetchedAt: Date.now(),
+        });
+      }
+    } finally {
+      pendingFocusedWorkingStatePaths.delete(params.worktreePath);
+    }
+  })();
+  return true;
+});
 // Hold the result until the test releases it, so two concurrent IPC requests
 // overlap and exercise the in-flight dedup.
 let releaseEditCommitResolve: (() => void) | undefined;
@@ -977,6 +1086,8 @@ vi.mock("../app-server/backend-registry", () => {
     invalidateDirectoryStatus,
     readWorktreeWorkingStateEntries,
     hydrateThreadGitWorkingStates,
+    refreshThreadGitWorkingStates,
+    scheduleWorktreeGitWorkingStateRefresh,
     getThreadGitWorkingStateCache,
     loadThreadGitWorkingStateCache,
     rememberThreadGitWorkingStateCacheEntry,
@@ -1116,6 +1227,10 @@ describe("app server ipc", () => {
     hydrateThreadGitWorkingStates.mockImplementation(
       async (threads: AppServerThreadSummary[]) => threads,
     );
+    refreshThreadGitWorkingStates.mockClear();
+    threadGitWorkingStateRefreshRound = undefined;
+    scheduleWorktreeGitWorkingStateRefresh.mockClear();
+    pendingFocusedWorkingStatePaths.clear();
     threadGitWorkingStateCache.clear();
     threadGitWorkingStateCacheLoaded = false;
     getThreadGitWorkingStateCache.mockClear();
@@ -7280,11 +7395,7 @@ describe("app server ipc", () => {
     }
   });
 
-  it("reaches past a batch that is still in flight", async () => {
-    // In-flight worktrees are excluded before the cap, not after. Dropping
-    // them afterwards let a full batch of already-probing paths consume the
-    // cap and schedule nothing, so the stale one behind them waited for a
-    // round that had no reason to come.
+  it("coalesces navigation while a registry fleet batch is still in flight", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const threads = Array.from({ length: 9 }, (_unused, index) => ({
       id: `thread-${index}`,
@@ -7320,20 +7431,28 @@ describe("app server ipc", () => {
         threads.slice(0, 8).map((thread) => thread.projectKey),
       );
 
-      // Nothing has been written yet, so every worktree is still stale and a
-      // naive selection would pick the same first eight again.
+      // Nothing has been written yet, but serving-path frequency must not
+      // rotate into another fleet batch while the global round is active.
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
+
+      releaseFirstProbe?.();
+      await vi.waitFor(() => {
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(8);
+      });
+
+      // A later snapshot starts the next bounded batch, so the tail still
+      // converges without overlapping automatic rounds.
       await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
       await vi.waitFor(() => {
         expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(9);
       });
       expect(readWorktreeWorkingStateEntries.mock.calls[1]?.[0]).toEqual([
         threads[8]!.projectKey,
       ]);
     } finally {
       releaseFirstProbe?.();
-      await vi.waitFor(() => {
-        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(9);
-      });
     }
   });
 

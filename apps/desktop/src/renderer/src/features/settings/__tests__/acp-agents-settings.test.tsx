@@ -128,6 +128,7 @@ describe("AcpAgentsSettings", () => {
 
     render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
 
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh" }));
     await waitFor(() => {
       expect(onBackendSummariesRefresh).toHaveBeenCalledTimes(1);
     });
@@ -137,7 +138,7 @@ describe("AcpAgentsSettings", () => {
     );
   });
 
-  it("keeps cached ACP agents visible while background discovery refreshes", async () => {
+  it("keeps cached ACP agents visible while explicit discovery refreshes", async () => {
     const dispatchEvent = vi.spyOn(window, "dispatchEvent");
     let resolveRefresh:
       | ((value: { fetchedAt: number; entries: AcpAgentSettingsEntry[] }) => void)
@@ -200,9 +201,11 @@ describe("AcpAgentsSettings", () => {
     render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
 
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({
         discoveryIntent: "settings-user-action",
+        force: true,
         refresh: true,
       });
     });
@@ -618,6 +621,17 @@ describe("AcpAgentsSettings", () => {
 
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
     expect(screen.queryByText("Grok")).not.toBeInTheDocument();
+    expect(listAcpAgents).toHaveBeenCalledExactlyOnceWith({ refresh: false });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenLastCalledWith({
+        discoveryIntent: "settings-user-action",
+        force: true,
+        refresh: true,
+        registryIds: ["gemini"],
+      });
+    });
   });
 
   it("says the provider is unavailable when the focused agent is missing", async () => {
@@ -791,7 +805,7 @@ describe("AcpAgentsSettings", () => {
     );
   });
 
-  it("loads exactly once under StrictMode's double-invoked mount effect", async () => {
+  it("performs one cache-only read under StrictMode's double-invoked mount effect", async () => {
     const listAcpAgents = vi.fn(
       async (_request?: { refresh?: boolean; force?: boolean }) => ({
         fetchedAt: 1000,
@@ -807,12 +821,9 @@ describe("AcpAgentsSettings", () => {
 
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
     // StrictMode runs the mount effect twice in dev; the did-initial-load ref
-    // must collapse that into a single gated registry refresh (one
-    // refresh: true), not two parallel discovery passes that storm the agents.
+    // collapses it into one cache read and must never turn mount into discovery.
     await waitFor(() => {
-      expect(
-        listAcpAgents.mock.calls.filter((call) => call[0]?.refresh === true),
-      ).toHaveLength(1);
+      expect(listAcpAgents).toHaveBeenCalledExactlyOnceWith({ refresh: false });
     });
   });
 
@@ -840,10 +851,7 @@ describe("AcpAgentsSettings", () => {
     rerender(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({
-        discoveryIntent: "settings-user-action",
-        refresh: true,
-      });
+      expect(listAcpAgents).toHaveBeenCalledExactlyOnceWith({ refresh: false });
     });
     expect(
       screen.queryByText(

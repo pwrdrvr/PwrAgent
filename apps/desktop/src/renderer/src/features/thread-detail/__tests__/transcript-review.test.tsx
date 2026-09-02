@@ -1,10 +1,13 @@
 import type {
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
+  NavigationThreadSummary,
+  PrSummary,
 } from "@pwragent/shared";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { TranscriptReview } from "../TranscriptReview";
 
 afterEach(() => {
@@ -172,6 +175,32 @@ describe("TranscriptReview", () => {
 });
 
 describe("TranscriptReview provenance", () => {
+  const pullRequest: PrSummary = {
+    provider: "github.com",
+    org: "pwrdrvr",
+    repo: "PwrAgent",
+    number: 1918,
+    state: "passing",
+    checkState: "passing",
+    lifecycleState: "open",
+    reviewState: "ready_for_review",
+    mergeState: "mergeable",
+    headRefName: "fix/macos-dock-icon-safe-area",
+    baseRefName: "main",
+    title: "Keep the dock icon inside its safe area",
+    url: "https://github.com/pwrdrvr/PwrAgent/pull/1918",
+  };
+  const thread: NavigationThreadSummary = {
+    id: "thread-review-provenance",
+    title: "Review provenance",
+    titleSource: "explicit",
+    summary: "Review provenance",
+    source: "codex",
+    linkedDirectories: [],
+    inbox: { inInbox: false },
+    prs: [pullRequest],
+    updatedAt: 1,
+  };
   const context = {
     workspacePath: "/Users/dev/.codex/worktrees/mti5p133/PwrAgent",
     projectLabel: "PwrAgent",
@@ -183,6 +212,8 @@ describe("TranscriptReview provenance", () => {
       org: "pwrdrvr",
       repo: "PwrAgent",
       number: 1918,
+      headRefName: "fix/macos-dock-icon-safe-area",
+      title: "Keep the dock icon inside its safe area",
       // GitHub reports the bare branch name. Writing `origin/main` here was
       // what let the raw string comparison in `formatBranchLabel` pass.
       baseRefName: "main",
@@ -194,15 +225,17 @@ describe("TranscriptReview provenance", () => {
     entry: Partial<AppServerThreadReviewEntry> = {},
   ): void {
     render(
-      <TranscriptReview
-        entry={{
-          type: "review",
-          id: "review-provenance",
-          review: "",
-          displayText: "Review changes against origin/main",
-          ...entry,
-        }}
-      />
+      <PullRequestLinkProvider activeThread={thread} threads={[thread]}>
+        <TranscriptReview
+          entry={{
+            type: "review",
+            id: "review-provenance",
+            review: "",
+            displayText: "Review changes against origin/main",
+            ...entry,
+          }}
+        />
+      </PullRequestLinkProvider>
     );
   }
 
@@ -214,8 +247,10 @@ describe("TranscriptReview provenance", () => {
     expect(row).toHaveTextContent("fix/macos-dock-icon-safe-area");
     expect(row).toHaveTextContent("pwrdrvr/PwrAgent#1918");
     expect(
-      screen.getByRole("link", { name: /pwrdrvr\/PwrAgent#1918/ })
-    ).toHaveAttribute("href", "https://github.com/pwrdrvr/PwrAgent/pull/1918");
+      screen.getByRole("button", {
+        name: /Open pwrdrvr\/PwrAgent#1918 .* in browser/,
+      })
+    ).toBeInTheDocument();
   });
 
   it("offers the full workspace path to copy", () => {
@@ -224,6 +259,28 @@ describe("TranscriptReview provenance", () => {
     expect(
       screen.getByLabelText("Copy workspace path for PwrAgent")
     ).toBeInTheDocument();
+  });
+
+  it("uses the shared copyable branch and pull-request status chips", () => {
+    renderReview({ context });
+
+    expect(
+      screen.getByRole("button", {
+        name: "Copy branch fix/macos-dock-icon-safe-area",
+      })
+    ).toHaveClass("path-copy-target");
+
+    const pullRequest = screen.getByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#1918 .* in browser/,
+    });
+    expect(pullRequest).toHaveAttribute("data-pr-chip");
+    fireEvent.focus(pullRequest);
+
+    expect(screen.getByText("Pull request")).toBeInTheDocument();
+    expect(
+      screen.getByText("Keep the dock icon inside its safe area")
+    ).toBeInTheDocument();
+    expect(screen.getByText("ready for review · checks passing")).toBeInTheDocument();
   });
 
   it("treats a remote-qualified target as the pull request's own base", () => {
@@ -266,7 +323,9 @@ describe("TranscriptReview provenance", () => {
     renderReview({ context: unchecked });
 
     expect(screen.queryByText("no PR at review time")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Open .* in browser/ })
+    ).not.toBeInTheDocument();
   });
 
   it("renders no row for a review that predates the capture", () => {

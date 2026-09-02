@@ -20773,6 +20773,20 @@ a.transcript-message__messaging-origin:focus-visible {
   margin-top: 8px;
 }
 
+/* The shared PR chip has to shrink inside the review copy column just like the
+   path chips below. Keep this constraint local: sidebar PR identities should
+   retain their existing intrinsic width. */
+.transcript-review__provenance > .pr-chip {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.transcript-review__provenance .pr-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .review-chip {
   display: inline-flex;
   align-items: center;
@@ -20819,13 +20833,6 @@ a.transcript-message__messaging-origin:focus-visible {
 .review-chip--project:focus-visible {
   border-color: var(--accent-border-soft);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
-  outline: none;
-}
-
-.review-chip--pull-request:hover,
-.review-chip--pull-request:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--bg-panel-hover);
   outline: none;
 }
 
@@ -22573,6 +22580,63 @@ a.transcript-message__messaging-origin:focus-visible {
 .context-panel__section--status {
   margin-top: auto;
   border-top: 1px solid var(--border-subtle);
+}
+
+.subagent-lens-switch {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 2px;
+  margin: 10px 0 0;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.subagent-lens-switch__button {
+  display: inline-flex;
+  min-width: 0;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.subagent-lens-switch__button:hover {
+  color: var(--text-primary);
+}
+
+.subagent-lens-switch__button[aria-selected="true"] {
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px var(--shadow-tint-soft);
+}
+
+.subagent-lens-switch__button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.subagent-lens-switch__button > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-lens-switch__count {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Edits panel fills the tab as a flex column: a fixed `.edits-panel__header`

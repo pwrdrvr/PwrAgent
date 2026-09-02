@@ -1476,6 +1476,15 @@ export type DesktopSettingsConfigUpdate = {
   scheduledProviderRefreshes: readonly string[];
 };
 
+/** Main-to-renderer notification that the normalized in-memory config store
+ * advanced. The renderer re-reads the cache-backed Settings projection; the
+ * notification itself carries no secrets and grants no discovery authority. */
+export type DesktopSettingsRuntimeChangedEvent = {
+  version: number;
+  configRevision: string;
+  changedDomains: readonly DesktopConfigDomainKey[];
+};
+
 export type DesktopSettingsWriteResponse = {
   update: DesktopSettingsConfigUpdate;
   snapshot: DesktopSettingsSnapshot;

@@ -193,7 +193,6 @@ import {
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
 import {
-  BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
@@ -1555,11 +1554,6 @@ class DesktopAppServerService {
   >();
   private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
-  private readonly pendingWorktreeWorkingStateRefreshes = new Map<
-    string,
-    Promise<void>
-  >();
-  private readonly pendingWorktreeWorkingStateKeys = new Set<string>();
   // Maps a thread identity (`backend:threadId`) to its working directory so
   // a turn/command-completion event can refresh the right worktree's chips
   // without re-reading the navigation snapshot. Populated on every snapshot.
@@ -2310,10 +2304,16 @@ class DesktopAppServerService {
           this.applyCachedWorktreeWorkingState(thread),
         ),
       );
-    this.startWorktreeWorkingStateRefresh({
-      automatic: true,
-      worktreePaths: this.collectThreadWorktreePaths(canonicalSnapshot.threads),
-    });
+    // The registry owns the one automatic fleet round shared by renderer,
+    // messaging, and federated navigation. Focused, user, and event-driven
+    // refreshes still use this window's single-worktree lane below.
+    void getDesktopBackendRegistry()
+      .refreshThreadGitWorkingStates(canonicalSnapshot.threads)
+      .catch((error) => {
+        logDebug("worktreeWorkingStateRefresh:failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
 
     const remotePins = await this.mergePinnedRemoteThreads();
 
@@ -2616,19 +2616,6 @@ class DesktopAppServerService {
         maxBytes: request.maxBytes,
       },
     );
-  }
-
-  private collectThreadWorktreePaths(
-    threads: NavigationSnapshot["threads"],
-  ): string[] {
-    const paths = new Set<string>();
-    for (const thread of threads) {
-      const worktreePath = this.resolveThreadWorkingStatePath(thread);
-      if (worktreePath) {
-        paths.add(worktreePath);
-      }
-    }
-    return [...paths];
   }
 
   private rememberThreadWorktreePaths(
@@ -3318,55 +3305,32 @@ class DesktopAppServerService {
   }
 
   /**
-   * Schedule a background per-worktree working-state probe. Mirrors
-   * `startDirectoryGitStatusRefresh`: concurrent same-key requests coalesce
-   * through `pendingWorktreeWorkingStateKeys`, each automatic refresh obeys a
-   * bounded batch size + cache freshness, and `force` (event-driven
-   * invalidation) bypasses freshness. Returns the number of worktrees scheduled.
+   * Schedule focused, user-triggered, and event-triggered probes through the
+   * registry's shared per-worktree owner. Automatic and focused probes cannot
+   * race, and one fresh focused follow-up queues behind an older fleet probe.
    */
   private startWorktreeWorkingStateRefresh(params: {
-    automatic: boolean;
     worktreePaths: string[];
     force?: boolean;
   }): number {
-    // In-flight paths are excluded during selection, not after it: dropping
-    // them afterwards let a full batch of already-probing worktrees consume
-    // the cap and schedule nothing, leaving the stale ones behind them for a
-    // later round.
     const worktreePaths =
       this.selectWorktreeWorkingStateRefreshCandidates(params);
     if (worktreePaths.length === 0) {
       return 0;
     }
 
-    const refreshKey = JSON.stringify({
-      worktreePaths,
-      force: params.force === true,
-    });
-    if (this.pendingWorktreeWorkingStateRefreshes.has(refreshKey)) {
-      return 0;
-    }
-
+    const registry = getDesktopBackendRegistry();
+    let scheduled = 0;
     for (const worktreePath of worktreePaths) {
-      this.pendingWorktreeWorkingStateKeys.add(worktreePath);
+      if (registry.scheduleWorktreeGitWorkingStateRefresh({
+        worktreePath,
+        acceptedPushedCommitShas:
+          this.getMergedPrCommitShasForWorktree(worktreePath),
+      })) {
+        scheduled += 1;
+      }
     }
-
-    const promise = this.refreshWorktreeWorkingStates(worktreePaths)
-      .catch((error) => {
-        logDebug("worktreeWorkingStateRefresh:failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => {
-        for (const worktreePath of worktreePaths) {
-          this.pendingWorktreeWorkingStateKeys.delete(worktreePath);
-        }
-        if (this.pendingWorktreeWorkingStateRefreshes.get(refreshKey) === promise) {
-          this.pendingWorktreeWorkingStateRefreshes.delete(refreshKey);
-        }
-      });
-    this.pendingWorktreeWorkingStateRefreshes.set(refreshKey, promise);
-    return worktreePaths.length;
+    return scheduled;
   }
 
   async refreshThreadGitWorkingState(
@@ -3385,7 +3349,6 @@ class DesktopAppServerService {
     }
     return {
       scheduled: this.startWorktreeWorkingStateRefresh({
-        automatic: false,
         worktreePaths: [worktreePath],
         force,
       }) > 0,
@@ -3393,58 +3356,18 @@ class DesktopAppServerService {
   }
 
   /**
-   * Everything lane-specific about picking a batch: the automatic navigation
-   * lane sees the whole fleet and takes a capped, rotating slice, while the
-   * focused and user-triggered lanes name one worktree and want it now.
-   * Freshness and the rotation order are shared policy — see
-   * `app-server/thread-working-state-refresh-policy.ts`.
+   * Focused and user-triggered lanes name one worktree and want it now. The
+   * registry owns automatic fleet selection and coalescing.
    */
   private selectWorktreeWorkingStateRefreshCandidates(params: {
-    automatic: boolean;
     worktreePaths: string[];
     force?: boolean;
   }): string[] {
     return selectStaleWorktreeWorkingStatePaths({
       cache: getDesktopBackendRegistry().getThreadGitWorkingStateCache(),
-      exclude: this.pendingWorktreeWorkingStateKeys,
       ...(params.force ? { force: true } : {}),
-      ...(params.automatic
-        ? { limit: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE }
-        : {}),
       worktreePaths: params.worktreePaths,
     });
-  }
-
-  private async refreshWorktreeWorkingStates(
-    worktreePaths: string[],
-  ): Promise<void> {
-    const refreshable = worktreePaths.map((p) => p.trim()).filter(Boolean);
-    if (refreshable.length === 0) {
-      return;
-    }
-
-    for await (const entry of getDesktopBackendRegistry().readWorktreeWorkingStateEntries(
-      refreshable,
-      {
-        acceptedPushedCommitShasByWorktreePath: Object.fromEntries(
-          refreshable.map((worktreePath) => [
-            worktreePath,
-            this.getMergedPrCommitShasForWorktree(worktreePath),
-          ]),
-        ),
-      },
-    )) {
-      // The registry owns the monotonic stamp, the durable write, and the
-      // `navigation/threadGitWorkingState/updated` publish, so a probe from
-      // either lane reaches open surfaces the same way.
-      await getDesktopBackendRegistry().rememberThreadGitWorkingStateCacheEntry({
-        worktreePath: entry.worktreePath,
-        fetchedAt: Date.now(),
-        ...(entry.gitWorkingState
-          ? { gitWorkingState: entry.gitWorkingState }
-          : {}),
-      });
-    }
   }
 
   /**
@@ -3504,7 +3427,6 @@ class DesktopAppServerService {
       getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
       void this.loadThreadGitWorkingStateCache().then(() => {
         this.startWorktreeWorkingStateRefresh({
-          automatic: false,
           worktreePaths: [worktreePath],
           force: true,
         });
@@ -5126,7 +5048,6 @@ class DesktopAppServerService {
       getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
       void this.loadThreadGitWorkingStateCache().then(() => {
         this.startWorktreeWorkingStateRefresh({
-          automatic: false,
           worktreePaths: [worktreePath],
           force: true,
         });
@@ -7409,8 +7330,6 @@ class DesktopAppServerService {
     this.directoryGitStatusCacheLoaded = false;
     this.automaticDirectoryGitStatusRefreshesStarted = 0;
     this.lastDirectoriesByKey.clear();
-    this.pendingWorktreeWorkingStateRefreshes.clear();
-    this.pendingWorktreeWorkingStateKeys.clear();
     this.worktreePathByThreadKey.clear();
     this.prRefreshContextByThreadKey.clear();
     await disposeDesktopBackendRegistry();

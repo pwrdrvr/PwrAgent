@@ -59,6 +59,7 @@ import {
   acpProviderCommandOverrideFromSnapshot,
   acpProviderEnabledFromSnapshot,
   managedGrokBuildsEnabledFromSnapshot,
+  providerProjectionForRegistryId,
 } from "../settings/config-store/provider-runtime-config";
 import {
   AcpLiveToolUpdateResolver,
@@ -216,7 +217,18 @@ export function createLocalAcpAgentDiscovery(params: {
       ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
       ...(env ? { env } : {}),
     });
-    return records;
+    return records.map((record) => {
+      const configDependencyFingerprint = providerProjectionForRegistryId(
+        providers,
+        record.registryId,
+      )?.dependencyFingerprint;
+      return {
+        ...record,
+        ...(configDependencyFingerprint
+          ? { configDependencyFingerprint }
+          : {}),
+      };
+    });
   };
 }
 
@@ -269,6 +281,9 @@ export type AcpBackendAdapterOptions = {
    */
   discoverLocalAcpAgents: LocalAcpDiscovery;
   isAcpAgentEnabled?: (registryId: string) => boolean;
+  resolveProviderDependencyFingerprint?: (
+    registryId: string,
+  ) => string | undefined;
   checkGrokCliUpdate?: typeof checkGrokCliUpdate | null;
   resolveMcpConnectionServers?: (context: {
     backendId: AcpBackendId;
@@ -1074,6 +1089,9 @@ export class AcpBackendAdapter {
   private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
   private readonly isAcpAgentEnabled?: (registryId: string) => boolean;
+  private readonly resolveProviderDependencyFingerprint?: (
+    registryId: string,
+  ) => string | undefined;
   private readonly resolveMcpConnectionServers?: AcpBackendAdapterOptions["resolveMcpConnectionServers"];
   private readonly emit: (event: AgentEvent) => Promise<void>;
   private readonly handleServerRequest: (
@@ -1106,6 +1124,7 @@ export class AcpBackendAdapter {
   private localAcpAgentsRevision = 0;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
   private localAgentSnapshot: AcpInstalledAgentRecord[] = [];
+  private readonly invalidatedProviderRegistryIds = new Set<string>();
 
   constructor(options: AcpBackendAdapterOptions) {
     this.captureStores = options.captureStores;
@@ -1145,6 +1164,8 @@ export class AcpBackendAdapter {
             : undefined);
     this.discoverLocalAcpAgents = options.discoverLocalAcpAgents;
     this.isAcpAgentEnabled = options.isAcpAgentEnabled;
+    this.resolveProviderDependencyFingerprint =
+      options.resolveProviderDependencyFingerprint;
     this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =
       options.createAcpClient ?? ((agent) => this.createDefaultClient(agent));
@@ -1315,6 +1336,13 @@ export class AcpBackendAdapter {
   invalidateLocalAgentDiscovery(): void {
     this.localAcpAgentsRevision += 1;
     this.localAcpAgentsPromise = undefined;
+  }
+
+  invalidateRuntimeSelections(registryIds: readonly string[]): void {
+    this.invalidateLocalAgentDiscovery();
+    for (const registryId of registryIds) {
+      this.invalidatedProviderRegistryIds.add(registryId);
+    }
   }
 
   listSessions(
@@ -1940,6 +1968,19 @@ export class AcpBackendAdapter {
     );
     if (!agent) {
       throw new Error(`ACP backend is not installed: ${backend}`);
+    }
+    if (this.invalidatedProviderRegistryIds.has(agent.registryId)) {
+      const currentFingerprint =
+        this.resolveProviderDependencyFingerprint?.(agent.registryId);
+      if (
+        !currentFingerprint
+        || agent.configDependencyFingerprint !== currentFingerprint
+      ) {
+        throw new Error(
+          `ACP provider configuration changed for ${backend}. Refresh this provider in Settings before starting new work.`,
+        );
+      }
+      this.invalidatedProviderRegistryIds.delete(agent.registryId);
     }
     if (agent.installStatus !== "installed") {
       throw new Error(`ACP backend is not installed: ${backend}`);

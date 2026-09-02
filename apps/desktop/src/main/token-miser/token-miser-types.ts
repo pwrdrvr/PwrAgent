@@ -1,10 +1,17 @@
 export const TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS = 5_000;
-export const TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN = 4;
+// Keep this aligned with codex_utils_string::APPROX_BYTES_PER_TOKEN. Codex
+// budgets model-visible tool output in UTF-8 bytes, not JavaScript UTF-16 code
+// units, so non-ASCII output must use the same accounting basis.
+export const TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN = 4;
 export const TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS = 10_000;
+export const TOKEN_MISER_HELPER_INPUT_CAP_TOKENS = 20_000;
 export const TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES = 64 * 1024;
-export const TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS =
+export const TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES =
   TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
-  * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN;
+  * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN;
+export const TOKEN_MISER_HELPER_INPUT_CAP_BYTES =
+  TOKEN_MISER_HELPER_INPUT_CAP_TOKENS
+  * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN;
 const TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS = new Set([
   "version",
   "thread_id",
@@ -117,9 +124,12 @@ export type TokenMiserObjectMetadata = {
   toolUseId: string;
   toolName: string;
   createdAt: number;
+  /** Legacy field name; new records store UTF-8 bytes for Codex token estimates. */
   originalCharacters: number;
   baselineParentTokens: number;
+  /** Legacy field name; new records store UTF-8 bytes for Codex token estimates. */
   replacementCharacters: number;
+  /** Legacy field name; new records store UTF-8 bytes for Codex token estimates. */
   retrievedCharacters: number;
   /** Versioned opt-in so pre-replay-accounting objects are not tracked forever. */
   replayTrackingVersion?: 2;
@@ -263,10 +273,28 @@ export type TokenMiserPostToolUseAcceptancePayload = {
   tool_use_id: string;
 };
 
-export function estimateTokenCount(characters: number): number {
+export function estimateTokenCount(bytes: number): number {
   return Math.ceil(
-    Math.max(0, characters) / TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    Math.max(0, bytes) / TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
   );
+}
+
+export function utf8ByteLength(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
+export function takeUtf8Prefix(text: string, maxBytes: number): string {
+  let bytes = 0;
+  let end = 0;
+  for (const character of text) {
+    const characterBytes = utf8ByteLength(character);
+    if (bytes + characterBytes > maxBytes) {
+      break;
+    }
+    bytes += characterBytes;
+    end += character.length;
+  }
+  return text.slice(0, end);
 }
 
 export function serializeToolResponse(value: unknown): string {
