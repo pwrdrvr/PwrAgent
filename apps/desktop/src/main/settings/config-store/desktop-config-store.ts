@@ -479,6 +479,7 @@ export class DesktopConfigStore {
           ...current,
           lastKnownGood: {
             candidates: observation.candidates,
+            dependencyFingerprint: current.dependencyFingerprint,
             ...(observation.executableIdentity
               ? { executableIdentity: observation.executableIdentity }
               : {}),

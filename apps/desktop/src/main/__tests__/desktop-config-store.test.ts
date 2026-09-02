@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import {
+  providerLastKnownGoodMatchesConfig,
   resolvePrAutomationConfig,
   resolveSpendAlertPolicy,
   resolveToolOutputAlertPolicy,
@@ -165,6 +166,10 @@ theme = "dark"
     expect(firstResult.lastKnownGood?.selectedCommand).toBe(
       "/opt/pwragent/codex",
     );
+    expect(firstResult.lastKnownGood?.dependencyFingerprint).toBe(
+      firstResult.dependencyFingerprint,
+    );
+    expect(providerLastKnownGoodMatchesConfig(firstResult)).toBe(true);
 
     const persisted = fixture.db.raw
       .prepare("SELECT payload FROM provider_discovery_snapshots WHERE provider_id = ?")
@@ -247,6 +252,9 @@ cli_path = "/opt/qwen-one"
       "/opt/qwen-one",
     );
     expect(store.read("providers").qwen.validation.state).toBe("stale");
+    expect(
+      providerLastKnownGoodMatchesConfig(store.read("providers").qwen),
+    ).toBe(false);
     expect(store.read("providers").codex.dependencyFingerprint).toBe(
       codexFingerprint,
     );

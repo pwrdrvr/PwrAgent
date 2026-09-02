@@ -553,10 +553,17 @@ import {
   type ProviderDiscoveryPermit,
 } from "../settings/provider-discovery-permit";
 import {
+  PROVIDER_IDS,
+  providerLastKnownGoodMatchesConfig,
   resolveSpendAlertPolicy,
   resolveToolOutputAlertPolicy,
+  type ConfigDomainMap,
+  type ProviderId,
 } from "../settings/config-store/config-domains";
-import { acpProviderEnabledFromSnapshot } from "../settings/config-store/provider-runtime-config";
+import {
+  acpProviderEnabledFromSnapshot,
+  providerProjectionForRegistryId,
+} from "../settings/config-store/provider-runtime-config";
 import {
   ONBOARDING_CODEX_GATE_ENABLED,
   type ManagedCodexSelectionChange,
@@ -7622,6 +7629,17 @@ function buildCodexInvalidIdRecoveryCooldownMessage(
   );
 }
 
+function readProviderRuntimeFingerprints(
+  providers: ConfigDomainMap["providers"],
+): Readonly<Record<ProviderId, string>> {
+  return Object.fromEntries(
+    PROVIDER_IDS.map((provider) => [
+      provider,
+      providers[provider].dependencyFingerprint,
+    ]),
+  ) as Record<ProviderId, string>;
+}
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<
@@ -7629,6 +7647,8 @@ export class DesktopBackendRegistry {
     "read" | "subscribe"
   >;
   private codexBackendSummary?: BackendSummary;
+  private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
+  private providerRuntimeInvalidationPromise?: Promise<void>;
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkingStateService: GitWorkingStateService;
@@ -8870,6 +8890,13 @@ export class DesktopBackendRegistry {
                 : true;
             }
           : undefined),
+      resolveProviderDependencyFingerprint: options?.configStore
+        ? (registryId) =>
+            providerProjectionForRegistryId(
+              options.configStore!.read("providers"),
+              registryId,
+            )?.dependencyFingerprint
+        : undefined,
       emit: async (event) => {
         this.rememberAcpAvailableCommands(event);
         await this.emit(event);
@@ -8891,6 +8918,23 @@ export class DesktopBackendRegistry {
         options?.automationInspectionMcpCommand ??
         resolveAutomationInspectionMcpCommand(),
     });
+    if (this.configStore) {
+      this.providerRuntimeFingerprints = readProviderRuntimeFingerprints(
+        this.configStore.read("providers"),
+      );
+      this.unsubscribers.push(
+        this.configStore.subscribe(["providers"], () => {
+          void this.synchronizeProviderRuntimeSelections().catch((error) => {
+            backendRegistryLog.warn(
+              "provider runtime config invalidation failed",
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+          });
+        }),
+      );
+    }
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.appManagementHandler = options?.appManagementHandler ?? undefined;
@@ -9675,10 +9719,14 @@ export class DesktopBackendRegistry {
 
   async invalidateProviderRuntimeSelections(params: {
     acp: boolean;
+    acpRegistryIds?: readonly string[];
     codex: boolean;
   }): Promise<void> {
     if (params.acp) {
-      this.acpBackend.invalidateLocalAgentDiscovery();
+      this.acpBackend.invalidateRuntimeSelections(
+        params.acpRegistryIds
+        ?? PROVIDER_IDS.filter((provider) => provider !== "codex"),
+      );
     }
     if (!params.codex) return;
     // A settings write is authority to stop using the obsolete executable,
@@ -9689,6 +9737,42 @@ export class DesktopBackendRegistry {
     this.modelCatalog.invalidate("codex");
     this.codexRuntimeRestartPending = true;
     await this.maybeRestartCodexForManagedRuntimeChange();
+  }
+
+  async synchronizeProviderRuntimeSelections(): Promise<void> {
+    const providers = this.configStore?.read("providers");
+    if (!providers) return;
+    const previous = this.providerRuntimeFingerprints;
+    const next = readProviderRuntimeFingerprints(providers);
+    this.providerRuntimeFingerprints = next;
+    if (!previous) return;
+
+    const changed = PROVIDER_IDS.filter(
+      (provider) => previous[provider] !== next[provider],
+    );
+    if (changed.length === 0) {
+      await this.providerRuntimeInvalidationPromise;
+      return;
+    }
+    const acpRegistryIds = changed.filter((provider) => provider !== "codex");
+    const prior = this.providerRuntimeInvalidationPromise;
+    const attempt = Promise.resolve(prior).catch(() => undefined).then(
+      async () => {
+        await this.invalidateProviderRuntimeSelections({
+          acp: acpRegistryIds.length > 0,
+          acpRegistryIds,
+          codex: changed.includes("codex"),
+        });
+      },
+    );
+    this.providerRuntimeInvalidationPromise = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (this.providerRuntimeInvalidationPromise === attempt) {
+        this.providerRuntimeInvalidationPromise = undefined;
+      }
+    }
   }
 
   /**
@@ -23493,7 +23577,10 @@ export class DesktopBackendRegistry {
       return this.codexBackendSummary;
     }
     const provider = this.configStore?.read("providers").codex;
-    const lastKnownGood = provider?.lastKnownGood;
+    const lastKnownGood = provider
+      && providerLastKnownGoodMatchesConfig(provider)
+      ? provider.lastKnownGood
+      : undefined;
     const available = Boolean(lastKnownGood?.selectedCommand);
     const methods: string[] = [];
     const capabilities = buildCapabilities(methods, "codex");
@@ -23537,6 +23624,7 @@ export class DesktopBackendRegistry {
     permit: ProviderDiscoveryPermit,
   ): Promise<BackendSummary> {
     assertProviderDiscoveryPermit(permit);
+    const previousSummary = this.readCodexBackendSummary();
     const [
       initializeResult,
       defaultModelsResult,
@@ -23561,6 +23649,21 @@ export class DesktopBackendRegistry {
           ? initializeResult.reason.message
           : String(initializeResult.reason)
         : "";
+    const modelRefreshError =
+      defaultModelsResult.status === "rejected"
+        ? defaultModelsResult.reason instanceof Error
+          ? defaultModelsResult.reason.message
+          : String(defaultModelsResult.reason)
+        : "";
+    if (previousSummary.available && (!available || modelRefreshError)) {
+      // A force refresh can fail because a healthy binary was temporarily
+      // unavailable or model listing failed. Keep the current/durable summary
+      // and reject so Settings surfaces the attempt without caching a sticky
+      // unavailable backend or empty model catalog.
+      throw new Error(
+        unavailableReason || modelRefreshError || "Codex unavailable",
+      );
+    }
     const capabilities = buildCapabilities(methods, "codex");
     if (
       this.resolveManagedReviewEnabledFn()

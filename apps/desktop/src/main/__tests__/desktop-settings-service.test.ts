@@ -2786,7 +2786,7 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveGhCommandPreference()).toBe("/custom/bin/gh");
   });
 
-  it("reads secret metadata without decrypting stored values", async () => {
+  it("caches secret metadata without decrypting stored values", async () => {
     const getSecret = vi.fn(async () => {
       throw new Error("secret values should not be decrypted for settings snapshots");
     });
@@ -2813,13 +2813,19 @@ describe("DesktopSettingsService", () => {
     });
 
     const snapshot = await service.readSettingsProjection();
+    const secretMetadataReads = hasSecret.mock.calls.length;
+    const repeatedSnapshot = await service.readSettingsProjection();
 
     expect(snapshot.messaging.telegram.botToken).toMatchObject({
       configured: true,
       source: "keychain",
       writable: true,
     });
+    expect(repeatedSnapshot.messaging.telegram.botToken).toEqual(
+      snapshot.messaging.telegram.botToken,
+    );
     expect(hasSecret).toHaveBeenCalledWith("telegramBotToken");
+    expect(hasSecret).toHaveBeenCalledTimes(secretMetadataReads);
     expect(getSecret).not.toHaveBeenCalled();
     expect(getSecretSync).not.toHaveBeenCalled();
   });

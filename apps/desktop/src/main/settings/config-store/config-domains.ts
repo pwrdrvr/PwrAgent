@@ -73,6 +73,9 @@ export type ProviderProjection = Readonly<{
     managedBuilds?: boolean;
   }>;
   lastKnownGood?: Readonly<{
+    /** Configuration dependency fingerprint this observation verified. Older
+     * durable rows omit it and are normalized from their enclosing row. */
+    dependencyFingerprint?: string;
     selectedCommand?: string;
     selectedVersion?: string;
     candidates: readonly ProviderCandidateSummary[];
@@ -191,7 +194,14 @@ export function normalizeConfigDomains(params: {
             : {}),
         },
         ...(previous?.lastKnownGood
-          ? { lastKnownGood: previous.lastKnownGood }
+          ? {
+              lastKnownGood: {
+                ...previous.lastKnownGood,
+                dependencyFingerprint:
+                  previous.lastKnownGood.dependencyFingerprint
+                  ?? previous.dependencyFingerprint,
+              },
+            }
           : {}),
         validation:
           previous?.dependencyFingerprint === dependencyFingerprint
@@ -240,6 +250,17 @@ export function normalizeConfigDomains(params: {
     integratedTerminal: config.integratedTerminal ?? {},
     imageUploads: config.imageUploads ?? {},
   });
+}
+
+export function providerLastKnownGoodMatchesConfig(
+  provider: ProviderProjection,
+): boolean {
+  const lastKnownGood = provider.lastKnownGood;
+  if (!lastKnownGood) return false;
+  return (
+    lastKnownGood.dependencyFingerprint ?? provider.dependencyFingerprint
+  ) === provider.dependencyFingerprint
+    && provider.validation.state !== "stale";
 }
 
 export function providerDependencyFingerprint(params: {

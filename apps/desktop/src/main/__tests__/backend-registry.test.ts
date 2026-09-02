@@ -6587,6 +6587,50 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("invalidates only the provider changed by an external config reload", async () => {
+    const tempRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-backend-registry-"),
+    );
+    const configPath = path.join(tempRoot, "config.toml");
+    await writeFile(
+      configPath,
+      "[acp_agents.gemini]\ncli_path = \"/path/gemini-one\"\n",
+    );
+    const configStore = new DesktopConfigStore({ configPath });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      configStore,
+      discoverLocalAcpAgents: async () => [],
+    });
+    const invalidate = vi
+      .spyOn(registry, "invalidateProviderRuntimeSelections")
+      .mockResolvedValue();
+
+    try {
+      await writeFile(
+        configPath,
+        "[acp_agents.gemini]\ncli_path = \"/path/gemini-two\"\n",
+      );
+      configStore.reloadFromDisk("watch");
+
+      await vi.waitFor(() => {
+        expect(invalidate).toHaveBeenCalledExactlyOnceWith({
+          acp: true,
+          acpRegistryIds: ["gemini"],
+          codex: false,
+        });
+      });
+      await registry.synchronizeProviderRuntimeSelections();
+      expect(invalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("omits disabled persisted ACP agents from backend pickers", async () => {
     const tempRoot = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-backend-registry-"),
@@ -14610,6 +14654,51 @@ script = "echo setup"
       label: "GPT-5.6-Sol",
     });
     expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.4");
+
+    await registry.close();
+  });
+
+  it("keeps a working Codex catalog after an explicit refresh fails", async () => {
+    const modelListErrors: Error[] = [];
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      modelListErrors,
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          label: "GPT-5.6-Sol",
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const permit = issueProviderDiscoveryPermit("settings-user-action");
+
+    const first = await registry.listBackends(
+      { includeUnavailable: true, refreshModels: "codex" },
+      permit,
+    );
+    modelListErrors.push(new Error("temporary model refresh failure"));
+
+    await expect(
+      registry.listBackends(
+        { includeUnavailable: true, refreshModels: "codex" },
+        permit,
+      ),
+    ).rejects.toThrow("temporary model refresh failure");
+    const cached = await registry.listBackends({ includeUnavailable: true });
+
+    expect(cached.backends[0]).toEqual(first.backends[0]);
+    expect(cached.backends[0]?.available).toBe(true);
+    expect(cached.backends[0]?.launchpadOptions?.models).toEqual([
+      expect.objectContaining({ id: "gpt-5.6-sol" }),
+    ]);
 
     await registry.close();
   });

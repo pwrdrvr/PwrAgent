@@ -1322,14 +1322,11 @@ export function bootstrapApp(): void {
     registerQuitBlockerIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
-        const codexRuntimeChanged = patch.models?.codex?.path !== undefined;
-        const acpRuntimeChanged = patch.acpAgents !== undefined;
-        if (codexRuntimeChanged || acpRuntimeChanged) {
-          await getDesktopBackendRegistry().invalidateProviderRuntimeSelections({
-            acp: acpRuntimeChanged,
-            codex: codexRuntimeChanged,
-          });
-        }
+        // The registry observes the normalized provider domain, including
+        // external file replacements. Await the same deduplicated invalidation
+        // here so a direct Settings write cannot return ahead of its runtime
+        // ownership boundary.
+        await getDesktopBackendRegistry().synchronizeProviderRuntimeSelections();
         if (patch.federation !== undefined) {
           // Store subscriptions also cover external config-file edits. Keep
           // direct settings writes awaiting the same single-flight restart so

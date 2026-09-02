@@ -3489,6 +3489,89 @@ describe("AcpBackendAdapter", () => {
     expect(secondDispose).toHaveBeenCalledOnce();
   });
 
+  it("blocks new ACP launches after config invalidation without stranding an existing session", async () => {
+    const backendId = "acp:gemini" as AcpBackendId;
+    let currentFingerprint = "gemini-one";
+    const firstAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      configDependencyFingerprint: currentFingerprint,
+      activeCommand: "/path/gemini-one",
+      launchDescriptor: {
+        backendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: "/path/gemini-one",
+        args: ["--acp", "--skip-trust"],
+        env: {},
+      },
+    };
+    const replacementAgent: AcpInstalledAgentRecord = {
+      ...firstAgent,
+      configDependencyFingerprint: "gemini-two",
+      activeCommand: "/path/gemini-two",
+      launchDescriptor: {
+        ...firstAgent.launchDescriptor!,
+        command: "/path/gemini-two",
+      },
+    };
+    let discovered = firstAgent;
+    const firstClient = {
+      dispose: vi.fn(async () => undefined),
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      hasRetainableSessions: () => true,
+      initialize: vi.fn(async () => undefined),
+      ownsSession: (sessionId: string) => sessionId === "session-1",
+      supportsSessionLoad: () => false,
+    };
+    const secondClient = {
+      dispose: vi.fn(async () => undefined),
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      hasRetainableSessions: () => false,
+      initialize: vi.fn(async () => undefined),
+      ownsSession: () => false,
+      supportsSessionLoad: () => false,
+    };
+    const createAcpClient = vi
+      .fn()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient);
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: null,
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [discovered],
+      resolveProviderDependencyFingerprint: () => currentFingerprint,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+    currentFingerprint = "gemini-two";
+    adapter.invalidateRuntimeSelections(["gemini"]);
+
+    await expect(adapter.getClient(backendId)).rejects.toThrow(
+      "Refresh this provider in Settings before starting new work",
+    );
+    await expect(
+      adapter.getClientForSession(backendId, "session-1"),
+    ).resolves.toBe(firstClient);
+    expect(firstClient.dispose).not.toHaveBeenCalled();
+
+    discovered = replacementAgent;
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    await expect(adapter.getClient(backendId)).resolves.toBe(secondClient);
+    expect(createAcpClient).toHaveBeenNthCalledWith(2, replacementAgent);
+
+    await adapter.close();
+  });
+
   it("adopts a newer durable launch identity over stale local discovery", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const firstAgent: AcpInstalledAgentRecord = {
