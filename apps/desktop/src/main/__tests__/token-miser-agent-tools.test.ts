@@ -6,6 +6,10 @@ import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
+import {
+  TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+  utf8ByteLength,
+} from "../token-miser/token-miser-types";
 
 const temporaryDirectories: string[] = [];
 
@@ -18,6 +22,50 @@ afterEach(async () => {
 });
 
 describe("Token Miser agent tools", () => {
+  it("keeps complete reads backward compatible for minified output", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolUseId: "tool-1",
+      toolName: "Code Mode",
+      output: `short line\nconst payload = "${"中".repeat(30_000)}";\nlast line`,
+      replacementCharacters: 100,
+      summary: {
+        summary: "A minified source line was preserved.",
+        usefulDetails: [],
+      },
+    });
+    const router = new AgentToolRouter(buildTokenMiserToolDefinitions(store));
+
+    const response = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        callId: "call-read",
+        namespace: "pwragent",
+        tool: "read_token_miser_output",
+        arguments: {
+          objectId: metadata.objectId,
+          startLine: 2,
+          endLine: 2,
+        },
+      },
+    });
+
+    const content = response.contentItems?.[0];
+    expect(content?.type).toBe("inputText");
+    if (content?.type !== "inputText") {
+      throw new Error("Expected a text dynamic-tool response.");
+    }
+    expect(utf8ByteLength(content.text)).toBeGreaterThan(
+      TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
+    );
+    expect(content.text.match(/中/g)).toHaveLength(30_000);
+    expect(content.text).not.toContain("retrieval truncated");
+  });
+
   it("describes source access without priming the parent about filtering costs", async () => {
     const store = await createStore();
     const descriptions = buildTokenMiserToolDefinitions(store)
