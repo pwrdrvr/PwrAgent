@@ -48,29 +48,31 @@ const thread: NavigationThreadSummary = {
   ],
 };
 
+const mixedSubAgents = [
+  {
+    monitorId: "system:token-miser:gate-1",
+    task: "Gate noisy output",
+    status: "success" as const,
+    createdAt: 1_800_000_000_200,
+    updatedAt: 1_800_000_000_300,
+  },
+  {
+    monitorId: "codex-native:child-1",
+    task: "Inspect native worker",
+    status: "running" as const,
+    createdAt: 1_800_000_000_100,
+    updatedAt: 1_800_000_000_100,
+  },
+  ...thread.subAgents!,
+];
+
 describe("SubAgentsPanel", () => {
   it("separates harness, Token Miser, and PwrAgent sub-agents", () => {
     render(
       <SubAgentsPanel
         thread={{
           ...thread,
-          subAgents: [
-            {
-              monitorId: "system:token-miser:gate-1",
-              task: "Gate noisy output",
-              status: "success",
-              createdAt: 1_800_000_000_200,
-              updatedAt: 1_800_000_000_300,
-            },
-            {
-              monitorId: "codex-native:child-1",
-              task: "Inspect native worker",
-              status: "running",
-              createdAt: 1_800_000_000_100,
-              updatedAt: 1_800_000_000_100,
-            },
-            ...thread.subAgents!,
-          ],
+          subAgents: mixedSubAgents,
         }}
       />,
     );
@@ -89,6 +91,74 @@ describe("SubAgentsPanel", () => {
     expect(screen.getByText("Watch the deployment")).toBeInTheDocument();
     expect(screen.getByText("Finished work")).toBeInTheDocument();
     expect(screen.queryByText("Gate noisy output")).not.toBeInTheDocument();
+  });
+
+  it("uses roving focus and horizontal tablist keyboard navigation", () => {
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: mixedSubAgents,
+        }}
+      />,
+    );
+
+    const tablist = screen.getByRole("tablist", {
+      name: "Sub-agent ownership",
+    });
+    const harness = screen.getByRole("tab", { name: "Harness 1" });
+    const tokenMiser = screen.getByRole("tab", { name: "Token Miser 1" });
+    const pwrAgent = screen.getByRole("tab", { name: "PwrAgent 2" });
+
+    expect(tablist).toHaveAttribute("aria-orientation", "horizontal");
+    expect(harness).toHaveAttribute("tabindex", "0");
+    expect(tokenMiser).toHaveAttribute("tabindex", "-1");
+    expect(pwrAgent).toHaveAttribute("tabindex", "-1");
+
+    harness.focus();
+    fireEvent.keyDown(harness, { key: "ArrowRight" });
+    expect(tokenMiser).toHaveFocus();
+    expect(harness).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(tokenMiser, { key: "End" });
+    expect(pwrAgent).toHaveFocus();
+    fireEvent.keyDown(pwrAgent, { key: "ArrowRight" });
+    expect(harness).toHaveFocus();
+    fireEvent.keyDown(harness, { key: "ArrowLeft" });
+    expect(pwrAgent).toHaveFocus();
+    fireEvent.keyDown(pwrAgent, { key: "Home" });
+    expect(harness).toHaveFocus();
+  });
+
+  it("uses unique tab relationships for each mounted panel", () => {
+    render(
+      <>
+        <SubAgentsPanel
+          thread={{ ...thread, subAgents: mixedSubAgents }}
+        />
+        <SubAgentsPanel
+          thread={{ ...thread, id: "second-thread", subAgents: mixedSubAgents }}
+        />
+      </>,
+    );
+
+    const tablists = screen.getAllByRole("tablist", {
+      name: "Sub-agent ownership",
+    });
+    const firstHarness = within(tablists[0]!).getByRole("tab", {
+      name: "Harness 1",
+    });
+    const secondHarness = within(tablists[1]!).getByRole("tab", {
+      name: "Harness 1",
+    });
+    const panels = screen.getAllByRole("tabpanel");
+
+    expect(firstHarness.id).not.toBe(secondHarness.id);
+    expect(panels[0]!.id).not.toBe(panels[1]!.id);
+    expect(firstHarness).toHaveAttribute("aria-controls", panels[0]!.id);
+    expect(secondHarness).toHaveAttribute("aria-controls", panels[1]!.id);
+    expect(panels[0]).toHaveAttribute("aria-labelledby", firstHarness.id);
+    expect(panels[1]).toHaveAttribute("aria-labelledby", secondHarness.id);
   });
 
   it("prefers PwrAgent when a thread has no harness-managed sub-agents", () => {

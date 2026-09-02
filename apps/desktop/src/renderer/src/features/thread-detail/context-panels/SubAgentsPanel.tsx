@@ -1,4 +1,9 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import type {
   NavigationThreadSummary,
   ThreadSubAgentSummary,
@@ -47,6 +52,10 @@ const SUB_AGENT_LENSES: Array<{
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
   const { onDetailsModalOpenChange } = props;
+  const lensControlId = useId();
+  const lensPanelId = `${lensControlId}-panel`;
+  const lensTabId = (lens: SubAgentLens): string =>
+    `${lensControlId}-${lens}`;
   const [requestedLens, setRequestedLens] = useState<SubAgentLens>("harness");
   const lensCounts = SUB_AGENT_LENSES.reduce<Record<SubAgentLens, number>>(
     (counts, lens) => ({
@@ -114,6 +123,46 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
     onDetailsModalOpenChange?.(false);
   };
 
+  // Horizontal tablist roving focus (WAI-ARIA tabs pattern). Keep activation
+  // manual so arrowing through ownership choices does not replace the card
+  // list until the operator presses Enter or Space.
+  const handleLensKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (
+      event.key !== "ArrowRight"
+      && event.key !== "ArrowLeft"
+      && event.key !== "Home"
+      && event.key !== "End"
+    ) {
+      return;
+    }
+    const tabs = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'),
+    );
+    if (tabs.length === 0) {
+      return;
+    }
+    const current = tabs.indexOf(document.activeElement as HTMLElement);
+    let next: number;
+    switch (event.key) {
+      case "ArrowRight":
+        next = current < 0 ? 0 : (current + 1) % tabs.length;
+        break;
+      case "ArrowLeft":
+        next = current < 0
+          ? tabs.length - 1
+          : (current - 1 + tabs.length) % tabs.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      default:
+        next = tabs.length - 1;
+        break;
+    }
+    event.preventDefault();
+    tabs[next]?.focus();
+  };
+
   const stopSubAgent = async (subAgent: ThreadSubAgentSummary): Promise<void> => {
     if (!props.desktopApi?.stopSubAgent) {
       return;
@@ -159,18 +208,21 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
           {availableLenses.length > 1 ? (
             <div
               aria-label="Sub-agent ownership"
+              aria-orientation="horizontal"
               className="subagent-lens-switch"
               role="tablist"
+              onKeyDown={handleLensKeyDown}
             >
               {availableLenses.map((lens) => (
                 <button
                   aria-label={`${lens.label} ${lensCounts[lens.id]}`}
-                  aria-controls="subagent-lens-panel"
+                  aria-controls={lensPanelId}
                   aria-selected={activeLens === lens.id}
                   className="subagent-lens-switch__button"
-                  id={`subagent-lens-${lens.id}`}
+                  id={lensTabId(lens.id)}
                   key={lens.id}
                   role="tab"
+                  tabIndex={activeLens === lens.id ? 0 : -1}
                   type="button"
                   onClick={() => setRequestedLens(lens.id)}
                 >
@@ -185,11 +237,11 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
           <ul
             aria-labelledby={
               availableLenses.length > 1
-                ? `subagent-lens-${activeLens}`
+                ? lensTabId(activeLens)
                 : undefined
             }
             className="context-list context-list--cards"
-            id="subagent-lens-panel"
+            id={lensPanelId}
             role={availableLenses.length > 1 ? "tabpanel" : undefined}
           >
           {visibleSubAgents.map((subAgent) => {
