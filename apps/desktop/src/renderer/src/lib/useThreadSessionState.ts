@@ -21,6 +21,7 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
   NavigationThreadSummary,
+  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { isAppServerBackendKind, isCelestialIconId } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -49,6 +50,7 @@ import {
   buildMcpProgressDetail,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
+  buildTurnUsageActivityEntryFromLine,
   formatChangedFileSummary,
   getNotificationItem,
   mergeActivityDetails,
@@ -171,6 +173,7 @@ type ThreadSessionEntry = {
   // keeps only its observable revision/count so one append stays O(1).
   retainedLiveEntryCount: number;
   retainedLiveEntryVersion: number;
+  recentlyCompletedTurnUsage?: AppServerThreadTurnMetadata;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
@@ -365,6 +368,206 @@ function tokenUsageActivityScope(
     return "latest-request";
   }
   return undefined;
+}
+
+function isTerminalTurnMetadata(
+  turn: AppServerThreadTurnMetadata | undefined,
+): boolean {
+  return Boolean(
+    turn
+    && (
+      turn.status === "completed"
+      || turn.status === "failed"
+      || turn.status === "cancelled"
+      || turn.status === "interrupted"
+      || typeof turn.completedAt === "number"
+    )
+  );
+}
+
+function preferTurnUsageLine(
+  current: ThreadUsageLineRecord | undefined,
+  candidate: ThreadUsageLineRecord,
+): ThreadUsageLineRecord {
+  if (!current) {
+    return candidate;
+  }
+  if (candidate.source === "live" && current.source !== "live") {
+    return candidate;
+  }
+  if (candidate.turnUsageAttributed === true && current.turnUsageAttributed !== true) {
+    return candidate;
+  }
+  const currentAt = current.completedAt ?? current.createdAt;
+  const candidateAt = candidate.completedAt ?? candidate.createdAt;
+  return candidateAt >= currentAt ? candidate : current;
+}
+
+/**
+ * Treat completed turn usage as one terminal transcript projection.
+ *
+ * The renderer can briefly own three views of the same accounting: a live
+ * per-request row, the turn-total placeholder frozen by turn/completed, and
+ * the main-process pricing line after its last async usage observation. Keep
+ * the pricing line authoritative, remove the narrower rows it supersedes, and
+ * anchor the result after every loaded entry from that turn. This stays
+ * linear in the loaded transcript and does not disturb incremental collection.
+ */
+function reconcileCompletedTurnUsageEntries(params: {
+  activeTurnId?: string;
+  entries: AppServerThreadEntry[];
+  lines?: ThreadUsageLineRecord[];
+}): AppServerThreadEntry[] {
+  const contentTurnById = new Map<string, AppServerThreadTurnMetadata>();
+  const existingTurnUsageByTurnId = new Map<
+    string,
+    AppServerThreadActivityEntry
+  >();
+
+  for (const entry of params.entries) {
+    const turnId =
+      entry.turn?.id
+      ?? (entry.type === "activity" ? entry.usageLine?.turnId : undefined);
+    if (!turnId || turnId === params.activeTurnId) {
+      continue;
+    }
+    if (
+      entry.type === "activity"
+      && tokenUsageActivityScope(entry) === "turn"
+    ) {
+      existingTurnUsageByTurnId.set(turnId, entry);
+      continue;
+    }
+    if (
+      entry.type === "activity"
+      && tokenUsageActivityScope(entry) !== undefined
+    ) {
+      continue;
+    }
+    if (entry.turn) {
+      contentTurnById.set(turnId, entry.turn);
+    }
+  }
+
+  const authoritativeLineByTurnId = new Map<string, ThreadUsageLineRecord>();
+  for (const line of params.lines ?? []) {
+    if (
+      !line.turnId
+      || line.turnId === params.activeTurnId
+      || line.scope !== "turn"
+      || line.status === "superseded"
+      || line.turnUsageAttributed === false
+      || !contentTurnById.has(line.turnId)
+    ) {
+      continue;
+    }
+    authoritativeLineByTurnId.set(
+      line.turnId,
+      preferTurnUsageLine(authoritativeLineByTurnId.get(line.turnId), line),
+    );
+  }
+
+  const replacementByTurnId = new Map<string, AppServerThreadActivityEntry>();
+  for (const [turnId, contentTurn] of contentTurnById) {
+    const existingUsage = existingTurnUsageByTurnId.get(turnId);
+    const line = authoritativeLineByTurnId.get(turnId);
+    const completedAt =
+      line?.completedAt
+      ?? contentTurn.completedAt
+      ?? existingUsage?.turn?.completedAt;
+    const terminal = typeof completedAt === "number"
+      || isTerminalTurnMetadata(contentTurn)
+      || isTerminalTurnMetadata(existingUsage?.turn);
+    if (!terminal) {
+      continue;
+    }
+
+    const startedAt =
+      contentTurn.startedAt
+      ?? line?.startedAt
+      ?? existingUsage?.turn?.startedAt;
+    const interruptedStatus =
+      contentTurn.status === "failed"
+      || contentTurn.status === "cancelled"
+      || contentTurn.status === "interrupted"
+        ? contentTurn.status
+        : existingUsage?.turn?.status === "failed"
+          || existingUsage?.turn?.status === "cancelled"
+          || existingUsage?.turn?.status === "interrupted"
+          ? existingUsage.turn.status
+          : undefined;
+    const turn: AppServerThreadTurnMetadata = {
+      ...contentTurn,
+      id: turnId,
+      status: interruptedStatus ?? "completed",
+      ...(typeof startedAt === "number" ? { startedAt } : {}),
+      ...(typeof completedAt === "number" ? { completedAt } : {}),
+      ...(typeof (contentTurn.durationMs ?? existingUsage?.turn?.durationMs) === "number"
+        ? {
+            durationMs:
+              contentTurn.durationMs ?? existingUsage?.turn?.durationMs,
+          }
+        : typeof startedAt === "number" && typeof completedAt === "number"
+          ? { durationMs: Math.max(0, completedAt - startedAt) }
+          : {}),
+    };
+    const authoritativeEntry = line
+      ? buildTurnUsageActivityEntryFromLine({ line, turn })
+      : undefined;
+    if (authoritativeEntry) {
+      replacementByTurnId.set(turnId, authoritativeEntry);
+      continue;
+    }
+    if (existingUsage) {
+      replacementByTurnId.set(
+        turnId,
+        typeof completedAt === "number"
+          ? { ...existingUsage, createdAt: completedAt, turn }
+          : { ...existingUsage, turn },
+      );
+    }
+  }
+
+  if (replacementByTurnId.size === 0) {
+    return params.entries;
+  }
+
+  const filteredEntries: AppServerThreadEntry[] = [];
+  const lastEntryIndexByTurnId = new Map<string, number>();
+  for (const entry of params.entries) {
+    const usageTurnId = entry.type === "activity"
+      ? entry.turn?.id ?? entry.usageLine?.turnId
+      : undefined;
+    const scope = entry.type === "activity"
+      ? tokenUsageActivityScope(entry)
+      : undefined;
+    if (
+      usageTurnId
+      && replacementByTurnId.has(usageTurnId)
+      && (scope === "latest-request" || scope === "total" || scope === "turn")
+    ) {
+      continue;
+    }
+
+    const index = filteredEntries.length;
+    filteredEntries.push(entry);
+    if (entry.turn?.id && replacementByTurnId.has(entry.turn.id)) {
+      lastEntryIndexByTurnId.set(entry.turn.id, index);
+    }
+  }
+
+  const replacementAfterIndex = new Map<number, AppServerThreadActivityEntry>();
+  for (const [turnId, replacement] of replacementByTurnId) {
+    const anchorIndex = lastEntryIndexByTurnId.get(turnId);
+    if (anchorIndex !== undefined) {
+      replacementAfterIndex.set(anchorIndex, replacement);
+    }
+  }
+
+  return filteredEntries.flatMap((entry, index) => {
+    const replacement = replacementAfterIndex.get(index);
+    return replacement ? [entry, replacement] : [entry];
+  });
 }
 
 function hasTurnUsageForEntry(
@@ -5831,6 +6034,10 @@ export function useThreadSessionState(params: {
               pendingTurnUsage: completedTurnMatchesActive
                 ? undefined
                 : current.pendingTurnUsage,
+              recentlyCompletedTurnUsage:
+                completedTurnMatchesActive && completedTurn
+                  ? completedTurn
+                  : current.recentlyCompletedTurnUsage,
               pendingUserInput: completedTurnMatchesActive
                 ? undefined
                 : current.pendingUserInput,
@@ -6063,6 +6270,10 @@ export function useThreadSessionState(params: {
             pendingTurnUsage: completedTurnMatchesActive
               ? undefined
               : current.pendingTurnUsage,
+            recentlyCompletedTurnUsage:
+              completedTurnMatchesActive && completedTurn
+                ? completedTurn
+                : current.recentlyCompletedTurnUsage,
             pendingUserInput: completedTurnMatchesActive
               ? undefined
               : current.pendingUserInput,
@@ -6112,6 +6323,7 @@ export function useThreadSessionState(params: {
             pendingRequest: undefined,
             pendingUsageActivityEntry: undefined,
             pendingTurnUsage: undefined,
+            recentlyCompletedTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
@@ -6147,6 +6359,7 @@ export function useThreadSessionState(params: {
             pendingRequest: undefined,
             pendingUsageActivityEntry: undefined,
             pendingTurnUsage: undefined,
+            recentlyCompletedTurnUsage: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
@@ -6248,21 +6461,31 @@ export function useThreadSessionState(params: {
             typeof event.notification.params.turnId === "string"
               ? event.notification.params.turnId
               : undefined;
-          const knownTurnUsage = findKnownTurnUsageMetadata(current, notificationTurnId);
+          const recentlyCompletedTurnUsage =
+            !notificationTurnId && !current.activeTurnId
+              ? current.recentlyCompletedTurnUsage
+              : undefined;
+          const resolvedTurnId =
+            notificationTurnId
+            ?? current.activeTurnId
+            ?? recentlyCompletedTurnUsage?.id;
+          const knownTurnUsage = findKnownTurnUsageMetadata(current, resolvedTurnId);
           const usageBelongsToActiveTurn = Boolean(
             current.activeTurnId &&
               (!notificationTurnId || notificationTurnId === current.activeTurnId)
           );
           const turn = buildTurnMetadata({
-            fallbackId: notificationTurnId ?? current.activeTurnId,
+            fallbackId: resolvedTurnId,
             fallbackStartedAt:
-              notificationTurnId && notificationTurnId !== current.activeTurnId
+              resolvedTurnId && resolvedTurnId !== current.activeTurnId
                 ? knownTurnUsage.turn?.startedAt
+                  ?? recentlyCompletedTurnUsage?.startedAt
                 : current.activeTurnStartedAt,
             fallbackStatus:
               knownTurnUsage.turn?.status ??
+              recentlyCompletedTurnUsage?.status ??
               (usageBelongsToActiveTurn ? "in_progress" : "completed"),
-            turn: knownTurnUsage.turn,
+            turn: knownTurnUsage.turn ?? recentlyCompletedTurnUsage,
           });
           const model = resolveTokenUsageModel({
             backend: event.backend,
@@ -6283,10 +6506,12 @@ export function useThreadSessionState(params: {
             threadId: notificationThreadId,
           });
           const knownCompletedTurnUsage = Boolean(
-            notificationTurnId &&
-              notificationTurnId !== current.activeTurnId &&
-              knownTurnUsage.isTurnUsage &&
-              knownTurnUsage.turn?.status === "completed"
+            resolvedTurnId &&
+              resolvedTurnId !== current.activeTurnId &&
+              (knownTurnUsage.isTurnUsage || recentlyCompletedTurnUsage) &&
+              isTerminalTurnMetadata(
+                knownTurnUsage.turn ?? recentlyCompletedTurnUsage,
+              )
           );
           const usageEntryId = knownCompletedTurnUsage
             ? `live-turn-usage-${turn?.id ?? notificationThreadId}`
@@ -6646,6 +6871,7 @@ export function useThreadSessionState(params: {
         interacted: Boolean(turnId) || current.interacted,
         lastTouchedAt: Date.now(),
         pendingTurnUsage: undefined,
+        recentlyCompletedTurnUsage: undefined,
       }));
     },
     [threadKey, updateSession]
@@ -6897,6 +7123,18 @@ export function useThreadSessionState(params: {
     ),
     [selectedSession?.response?.replay.entries, visibleOptimisticEntries],
   );
+  const reconciledTailEntries = useMemo(
+    () => reconcileCompletedTurnUsageEntries({
+      activeTurnId: selectedSession?.activeTurnId,
+      entries: mergedTailEntries,
+      lines: selectedSession?.response?.pricing?.lines,
+    }),
+    [
+      mergedTailEntries,
+      selectedSession?.activeTurnId,
+      selectedSession?.response?.pricing?.lines,
+    ],
+  );
   const mergedTailMessages = useMemo(
     () => mergeTranscriptMessages(
       selectedSession?.response?.replay.messages ?? [],
@@ -6910,12 +7148,12 @@ export function useThreadSessionState(params: {
     () => createTranscriptReviewPresentation({
       history: selectedSession?.loadedHistory,
       index: selectedHistoryIndex,
-      tailEntries: mergedTailEntries,
+      tailEntries: reconciledTailEntries,
       tailMessages: mergedTailMessages,
     }),
     [
-      mergedTailEntries,
       mergedTailMessages,
+      reconciledTailEntries,
       selectedHistoryIndex,
       selectedSession?.loadedHistory,
     ],
