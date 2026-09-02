@@ -103,11 +103,12 @@ export function useFederationPeerConnectivity(params: {
   return useMemo(() => {
     const targetState = state.instanceId === instanceId ? state : undefined;
     const healthReadable = Boolean(desktopApi?.readFederationHealth);
-    const ready = !instanceId || !healthReadable || targetState?.ready === true;
+    const targetReady = targetState?.ready === true;
+    const ready = !instanceId || !healthReadable || targetReady;
     return {
       connected:
         !instanceId
-        || !healthReadable
+        || (!healthReadable && !targetReady)
         || !ready
         || targetState?.status === "connected",
       ready,
