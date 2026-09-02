@@ -416,6 +416,28 @@ function hasOptimisticTurnUsageForEntry(
   return Boolean(entry.turn?.id && optimisticTurnUsageIds.has(entry.turn.id));
 }
 
+function preserveReviewMetadata(
+  existingEntry: AppServerThreadEntry | undefined,
+  replacementEntry: AppServerThreadEntry,
+): AppServerThreadEntry {
+  if (
+    existingEntry?.type !== "review"
+    || replacementEntry.type !== "review"
+  ) {
+    return replacementEntry;
+  }
+
+  return {
+    ...replacementEntry,
+    ...(replacementEntry.context ?? existingEntry.context
+      ? { context: replacementEntry.context ?? existingEntry.context }
+      : {}),
+    ...(replacementEntry.reviewer ?? existingEntry.reviewer
+      ? { reviewer: replacementEntry.reviewer ?? existingEntry.reviewer }
+      : {}),
+  };
+}
+
 function mergeTranscriptEntries(
   responseEntries: AppServerThreadEntry[],
   optimisticEntries: AppServerThreadEntry[]
@@ -517,7 +539,10 @@ function mergeTranscriptEntries(
   for (const optimisticEntry of optimisticEntries) {
     const existingIndex = mergedEntryIndexById.get(optimisticEntry.id) ?? -1;
     if (existingIndex !== -1) {
-      merged[existingIndex] = optimisticEntry;
+      merged[existingIndex] = preserveReviewMetadata(
+        merged[existingIndex],
+        optimisticEntry,
+      );
       if (typeof optimisticEntry.createdAt === "number") {
         greatestCreatedAt = Math.max(
           greatestCreatedAt ?? optimisticEntry.createdAt,
@@ -561,7 +586,10 @@ function mergeTranscriptEntries(
           && reviewEntriesMatch(entry, optimisticEntry)
       );
       if (matchingReviewIndex !== -1) {
-        merged[matchingReviewIndex] = optimisticEntry;
+        merged[matchingReviewIndex] = preserveReviewMetadata(
+          merged[matchingReviewIndex],
+          optimisticEntry,
+        );
         rebuildAppendIndexes();
         continue;
       }
