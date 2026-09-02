@@ -54,11 +54,11 @@ describe("resolveReviewRunMode", () => {
       controlDisabled: false,
       explicitRunModeSupported: true,
       runMode: "inline",
-      separateThreadDisabled: false,
+      subagentDisabled: false,
     });
   });
 
-  it("honors an optional separate-thread choice", () => {
+  it("honors an optional subagent choice", () => {
     expect(resolveReviewRunMode({
       ownerSummary: reviewer("codex", true),
       requestedRunMode: "managed-child",
@@ -111,10 +111,10 @@ describe("resolveReviewRunMode", () => {
     });
 
     expect(decision.runMode).toBe("managed-child");
-    expect(decision.helpText).toMatch(/Grok runs reviews as managed child threads/);
+    expect(decision.helpText).toMatch(/Grok runs reviews in a managed subagent/);
   });
 
-  it("disables separate thread when the reviewer cannot run a managed child", () => {
+  it("disables the subagent when the reviewer cannot run one", () => {
     const decision = resolveReviewRunMode({
       ownerSummary: reviewer("codex", false),
       reviewerBackend: "codex",
@@ -123,9 +123,9 @@ describe("resolveReviewRunMode", () => {
     });
 
     expect(decision.runMode).toBe("inline");
-    expect(decision.separateThreadDisabled).toBe(true);
+    expect(decision.subagentDisabled).toBe(true);
     expect(decision.helpText).toBe(
-      "Codex cannot run a managed review in a separate thread.",
+      "Codex cannot run this review in a subagent.",
     );
   });
 

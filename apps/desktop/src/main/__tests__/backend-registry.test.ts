@@ -24387,7 +24387,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartThreadParams).toMatchObject({
       approvalPolicy: "never",
       cwd: "/repo/worktree",
-      ephemeral: false,
+      ephemeral: true,
       fastMode: true,
       model: "gpt-5.5",
       reasoningEffort: "high",
@@ -24796,7 +24796,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/repo/selected",
-      ephemeral: false,
+      ephemeral: true,
     });
     expect(
       codexClient.lastStartThreadParams?.codexEnvironmentRuntime,
@@ -24868,7 +24868,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/remote/selected",
       codexEnvironmentRuntime: remoteRuntime,
-      ephemeral: false,
+      ephemeral: true,
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "remote-project-review",
@@ -25559,7 +25559,7 @@ command = "pnpm dev"
     });
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      ephemeral: false,
+      ephemeral: true,
       threadSource: "subagent",
     });
 
@@ -34069,7 +34069,7 @@ script = "printf setup"
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/repo/pwragent",
-      ephemeral: false,
+      ephemeral: true,
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",

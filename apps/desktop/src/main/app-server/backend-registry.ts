@@ -2148,9 +2148,9 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     startReview: supported.has("turn/start") || assumeCodexAppServerSurface,
     reviewRunMode: supported.has("turn/start") || assumeCodexAppServerSurface,
     startDetachedReview: nativeReview || reviewRunner,
-    // A managed review child is a durable PwrAgent subagent thread plus one
-    // turn, so Codex can review for another provider's thread even on builds
-    // whose native review/start is absent.
+    // A managed review child is a disposable PwrAgent subagent plus one turn,
+    // so Codex can review for another provider's thread even on builds whose
+    // native review/start is absent.
     reviewRunner,
     interruptTurn: supported.has("turn/interrupt"),
     steerTurn: backend === "codex" || supported.has("turn/steer"),
@@ -16214,12 +16214,10 @@ export class DesktopBackendRegistry {
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
-      // Keep review children durable so their inspection-only transcript can
-      // use thread/read with includeTurns, and mark them as subagents so
-      // PwrAgent excludes them from ordinary navigation. This classification
-      // does not claim Codex-native ThreadSpawn parentage, which Codex reserves
-      // for workers created by spawn_agent.
-      ephemeral: false,
+      // The original managed-review experiment used a disposable subagent.
+      // PwrAgent mirrors its live activity and persists the review artifact on
+      // the parent, so the child itself must not become a durable thread.
+      ephemeral: true,
       threadSource: "subagent" as CodexThreadSource,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,

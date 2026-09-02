@@ -12,7 +12,7 @@ export type ReviewRunModeDecision = {
   explicitRunModeSupported: boolean;
   helpText?: string;
   runMode: ReviewRunMode;
-  separateThreadDisabled: boolean;
+  subagentDisabled: boolean;
 };
 
 function normalizeWorkspacePath(value?: string): string | undefined {
@@ -58,24 +58,24 @@ export function resolveReviewRunMode(params: {
   const reviewerLabel = backendLabel(reviewerBackend, params.reviewerSummary);
   const explicitRunModeSupported =
     params.ownerSummary?.capabilities.reviewRunMode === true;
-  const managedChildSupported =
+  const subagentSupported =
     params.reviewerSummary?.capabilities.reviewRunner === true;
   const differentProvider = reviewerBackend !== params.thread.source;
 
   let forcedReason: string | undefined;
   if (differentProvider) {
     forcedReason =
-      `Separate thread is required because the selected reviewer uses ${reviewerLabel}, a different provider from this thread.`;
+      `A review subagent is required because the selected reviewer uses ${reviewerLabel}, a different provider from this thread.`;
   } else if (usesSecondaryWorkspace(params.thread, params.workspaceCwd)) {
     forcedReason =
-      "Separate thread is required because the selected project is not this thread's primary workspace.";
+      "A review subagent is required because the selected project is not this thread's primary workspace.";
   } else if (params.thread.source.startsWith("acp:")) {
     forcedReason =
-      `Separate thread is required because ${reviewerLabel} runs reviews as managed child threads.`;
+      `A review subagent is required because ${reviewerLabel} runs reviews in a managed subagent.`;
   }
 
-  const unavailableReason = params.reviewerSummary && !managedChildSupported
-    ? `${reviewerLabel} cannot run a managed review in a separate thread.`
+  const unavailableReason = params.reviewerSummary && !subagentSupported
+    ? `${reviewerLabel} cannot run this review in a subagent.`
     : undefined;
   const unsupportedOwnerReason = explicitRunModeSupported || forcedReason
     ? undefined
@@ -97,6 +97,6 @@ export function resolveReviewRunMode(params: {
     explicitRunModeSupported,
     helpText,
     runMode,
-    separateThreadDisabled: !managedChildSupported,
+    subagentDisabled: !subagentSupported,
   };
 }

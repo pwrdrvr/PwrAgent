@@ -126,7 +126,7 @@ test("managed review failure leaves one start marker and clears Stop state", asy
       .getByRole("button", { name: "Review location" })
       .press("Enter");
     await fixture.app.window
-      .getByRole("option", { name: "Separate thread" })
+      .getByRole("option", { name: "Subagent" })
       .click();
     await fixture.app.window
       .getByRole("button", { name: "Start review" })

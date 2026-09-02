@@ -5927,7 +5927,7 @@ export function Composer(props: ComposerProps) {
     if (reviewSubmissionUnavailable) {
       setSendError(
         reviewRunModeDecision.helpText
-        ?? "A separate review thread is unavailable for this reviewer.",
+        ?? "A review subagent is unavailable for this reviewer.",
       );
       return;
     }
@@ -9072,11 +9072,11 @@ export function Composer(props: ComposerProps) {
         controlDisabled: false,
         explicitRunModeSupported: false,
         runMode: "inline" as const,
-        separateThreadDisabled: true,
+        subagentDisabled: true,
       };
   const reviewSubmissionUnavailable =
     reviewRunModeDecision.runMode === "managed-child"
-    && reviewRunModeDecision.separateThreadDisabled;
+    && reviewRunModeDecision.subagentDisabled;
   // A remembered combination is only offered while it still resolves against
   // the owner's current catalog. Recents are disposable, so a dead row is
   // noise rather than a preference worth preserving.

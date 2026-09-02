@@ -298,7 +298,7 @@ export type StartReviewRequest = {
   delivery?: AppServerReviewDelivery;
   /**
    * Where PwrAgent runs the review. `inline` uses a turn on the reviewed
-   * thread; `managed-child` creates a first-class PwrAgent review child.
+   * thread; `managed-child` uses a disposable PwrAgent review subagent.
    * Optional for wire compatibility with clients that predate this choice;
    * owners treat an omitted value as inline unless a provider or workspace
    * constraint requires a managed child.

@@ -7,7 +7,7 @@ const REVIEW_LOCATION_OPTIONS: Array<{
   value: ReviewRunMode;
 }> = [
   { label: "This thread", value: "inline" },
-  { label: "Separate thread", value: "managed-child" },
+  { label: "Subagent", value: "managed-child" },
 ];
 
 export function ReviewLocationDropdown(props: {
@@ -15,7 +15,7 @@ export function ReviewLocationDropdown(props: {
   onChange: (runMode: ReviewRunMode) => void;
 }) {
   const selectedLabel = props.decision.runMode === "managed-child"
-    ? "Separate thread"
+    ? "Subagent"
     : props.decision.explicitRunModeSupported
       ? "This thread"
       : "Owner default";
@@ -46,7 +46,7 @@ export function ReviewLocationDropdown(props: {
               : option.label,
           disabled:
             option.value === "managed-child"
-            && props.decision.separateThreadDisabled,
+            && props.decision.subagentDisabled,
         }))}
         value={props.decision.runMode}
       />

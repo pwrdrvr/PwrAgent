@@ -251,7 +251,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     && !submitting
     && (
       reviewRunModeDecision.runMode === "inline"
-      || !reviewRunModeDecision.separateThreadDisabled
+      || !reviewRunModeDecision.subagentDisabled
     )
   );
 
@@ -322,7 +322,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         || submitting
         || (
           reviewRunModeDecision.runMode === "managed-child"
-          && reviewRunModeDecision.separateThreadDisabled
+          && reviewRunModeDecision.subagentDisabled
         )
       ) {
         return;
@@ -345,7 +345,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     onSubmit,
     request,
     reviewRunModeDecision.runMode,
-    reviewRunModeDecision.separateThreadDisabled,
+    reviewRunModeDecision.subagentDisabled,
     submitting,
     workspaceCwd,
     workspaceSelectionRequired,

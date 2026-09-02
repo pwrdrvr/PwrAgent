@@ -9897,7 +9897,7 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
-  it("lets the review card choose a managed child for this review", async () => {
+  it("lets the review card choose a subagent for this review", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -9937,7 +9937,7 @@ describe("Composer", () => {
     const location = screen.getByRole("button", { name: "Review location" });
     expect(location).toHaveAttribute("data-value", "inline");
     fireEvent.click(location);
-    fireEvent.click(screen.getByRole("option", { name: "Separate thread" }));
+    fireEvent.click(screen.getByRole("option", { name: "Subagent" }));
     expect(location).toHaveAttribute("data-value", "managed-child");
 
     await clickButton("Start review");
@@ -10044,7 +10044,7 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("disables Separate thread with accessible help when no review child can run", () => {
+  it("disables Subagent with accessible help when no review subagent can run", () => {
     const codexBackend = backendSummary("codex");
     codexBackend.label = "Codex";
     codexBackend.capabilities.startReview = true;
@@ -10078,11 +10078,11 @@ describe("Composer", () => {
 
     const location = screen.getByRole("button", { name: "Review location" });
     fireEvent.click(location);
-    const separate = screen.getByRole("option", { name: "Separate thread" });
-    expect(separate).toBeDisabled();
+    const subagent = screen.getByRole("option", { name: "Subagent" });
+    expect(subagent).toBeDisabled();
     expect(location.closest(".composer__review-location-chip")).toHaveAttribute(
       "data-tooltip",
-      "Codex cannot run a managed review in a separate thread.",
+      "Codex cannot run this review in a subagent.",
     );
   });
 
