@@ -499,6 +499,7 @@ type ActiveAgentMessagingOrigin = {
   event: MessagingInboundEvent;
   privateReplyContinuationBindingId?: string;
   privateResponseRequested?: boolean;
+  reportedStartFailureText?: string;
 };
 
 type AgentMessagingOriginResolution =
@@ -1030,6 +1031,10 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
+  private readonly pendingTurnFailureHandlersByThreadKey = new Map<
+    string,
+    Set<Promise<void>>
+  >();
   private readonly privateReplyCompletionTurnKeys = new Set<string>();
   private readonly terminalPrivateResponseTurnKeys = new Set<string>();
   private readonly privateResponseFallbackTurnKeys = new Set<string>();
@@ -1435,7 +1440,30 @@ export class MessagingController {
     };
   }
 
-  async handleBackendEvent(event: AgentEvent): Promise<void> {
+  handleBackendEvent(event: AgentEvent): Promise<void> {
+    const handling = this.handleBackendEventNow(event);
+    const threadId = threadIdForBackendEvent(event);
+    if (!threadId || event.notification.method !== "turn/failed") {
+      return handling;
+    }
+    const threadKey = threadKeyForBackendEvent(event, threadId);
+    let pending = this.pendingTurnFailureHandlersByThreadKey.get(threadKey);
+    if (!pending) {
+      pending = new Set();
+      this.pendingTurnFailureHandlersByThreadKey.set(threadKey, pending);
+    }
+    pending.add(handling);
+    const removePending = (): void => {
+      pending.delete(handling);
+      if (pending.size === 0) {
+        this.pendingTurnFailureHandlersByThreadKey.delete(threadKey);
+      }
+    };
+    void handling.then(removePending, removePending);
+    return handling;
+  }
+
+  private async handleBackendEventNow(event: AgentEvent): Promise<void> {
     const threadId = threadIdForBackendEvent(event);
     if (!threadId && event.notification.method === "account/updated") {
       await this.refreshStatusSurfacesForBackend(
@@ -4979,12 +5007,19 @@ export class MessagingController {
       if (isMissingTurnTargetStartError(error, params.binding)) {
         await this.revokeDefaultAgentRouteForFailedStart(params.binding);
       }
+      await this.waitForPendingTurnFailureHandlers(params.binding);
+      const errorMessage = parseCodexTurnErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+      if (startingOrigin?.reportedStartFailureText === errorMessage) {
+        return "failed";
+      }
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("turn-start-failed"),
           createdAt: this.now(),
           title: "Turn could not start",
-          body: error instanceof Error ? error.message : String(error),
+          body: errorMessage,
           recoverable: true,
         }),
         params.binding,
@@ -5027,6 +5062,17 @@ export class MessagingController {
       admissionState.activeTurn
       || admissionState.threadStatus === "active",
     );
+  }
+
+  private async waitForPendingTurnFailureHandlers(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    const pending = this.pendingTurnFailureHandlersByThreadKey.get(
+      this.threadKeyForBinding(binding),
+    );
+    if (pending?.size) {
+      await Promise.allSettled([...pending]);
+    }
   }
 
   private async adoptStartedTurn(params: {
@@ -7550,6 +7596,17 @@ export class MessagingController {
     if (!this.markAssistantMessageDelivered(event, binding, `turn-failed:${text}`)) {
       return;
     }
+    const startingOrigin = this.startingAgentMessagingOriginsByThreadKey.get(
+      agentMessagingThreadKey(event.backend, binding.threadId),
+    );
+    const startingDeliveryBinding = startingOrigin?.deliveryBinding
+      ?? startingOrigin?.binding;
+    if (startingOrigin && startingDeliveryBinding?.id === binding.id) {
+      // Some backends publish a synthetic failed-turn lifecycle before their
+      // startTurn promise rejects. Correlate that report to the in-flight
+      // messaging origin so the rejection handler does not post it again.
+      startingOrigin.reportedStartFailureText = text;
+    }
     this.logger.debug?.(
       `messaging turn-failure deliver thread=${binding.threadId} binding=${binding.id} preview="${compactLogPreview(text)}"`,
     );
@@ -7722,6 +7779,7 @@ export class MessagingController {
     this.completedTaskMonitorTurns.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
     this.startingAgentMessagingOriginsByThreadKey.clear();
+    this.pendingTurnFailureHandlersByThreadKey.clear();
     this.privateReplyCompletionTurnKeys.clear();
     this.terminalPrivateResponseTurnKeys.clear();
     this.privateResponseFallbackTurnKeys.clear();
@@ -21029,6 +21087,21 @@ function agentMessagingThreadKey(
   threadId: ThreadIdentifier,
 ): string {
   return buildThreadIdentityKey(backend, threadId);
+}
+
+function threadKeyForBackendEvent(
+  event: AgentEvent,
+  threadId: ThreadIdentifier,
+): string {
+  return event.federationTarget?.scope === "remote"
+    ? federatedThreadIdentityKey(
+        buildFederatedThreadRef({
+          backend: event.backend,
+          instanceId: event.federationTarget.instanceId,
+          threadId,
+        }),
+      )
+    : buildThreadIdentityKey(event.backend, threadId);
 }
 
 function agentMessagingQueueKey(
