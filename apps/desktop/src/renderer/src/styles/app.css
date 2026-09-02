@@ -10961,27 +10961,70 @@ textarea,
   flex: 0 0 auto;
 }
 
-.settings-plugin-profile {
+/* Which Codex profile these MCP servers belong to is the sentence that
+   explains every surprise on this pane, so it gets a banner rather than the
+   11px grey footnote it used to be. */
+.settings-mcp-scope {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: baseline;
-  gap: 8px;
+  gap: 4px 12px;
   margin-bottom: 12px;
-  color: var(--text-muted);
-  font-size: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-row-active);
 }
 
-.settings-plugin-profile strong {
-  color: var(--text-secondary);
+.settings-mcp-scope__key {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.settings-mcp-scope__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-mcp-scope__value strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
-.settings-plugin-profile code {
+.settings-mcp-scope__value code {
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-mcp-scope__note {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-mcp-scope__note strong {
+  color: var(--text-primary);
+}
+
+.settings-mcp-scope__note code {
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .settings-plugin-notice {
@@ -11022,62 +11065,171 @@ textarea,
   gap: 8px;
 }
 
-.settings-mcp-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+.settings-mcp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.settings-mcp-filter {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.settings-mcp-filter::placeholder {
+  color: var(--text-muted);
+}
+
+.settings-mcp-toolbar__counts {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-mcp-row {
+  padding: 8px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
 }
 
-.settings-mcp-row__body {
+.settings-mcp-row[data-health="failed"] {
+  border-color: var(--danger-border);
+}
+
+.settings-mcp-row__main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The row is a disclosure: the whole name/count run opens the tool drawer,
+   so the count stops being the only thing the pane says about a server. */
+.settings-mcp-row__toggle {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 9px;
   min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.settings-mcp-row__body strong,
-.settings-mcp-row__body > span {
-  display: block;
+.settings-mcp-row__health {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--text-subtle);
 }
 
-.settings-mcp-row__body strong {
+.settings-mcp-row[data-health="ready"] .settings-mcp-row__health {
+  background: var(--status-ok);
+}
+
+.settings-mcp-row[data-health="needsSignIn"] .settings-mcp-row__health {
+  background: var(--status-warning);
+}
+
+.settings-mcp-row[data-health="failed"] .settings-mcp-row__health {
+  background: var(--status-error);
+}
+
+/* Standard inline disclosure chevron (see .transcript-activity__chevron): an
+   unfilled border "V", right when collapsed, down when expanded. The filled
+   caret is the sidebar navigation-tree vocabulary and does not belong here. */
+.settings-mcp-row__chevron {
+  display: inline-block;
+  flex: 0 0 auto;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.settings-mcp-row__toggle[aria-expanded="true"] .settings-mcp-row__chevron {
+  transform: rotate(45deg);
+}
+
+.settings-mcp-row__name {
   overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 13px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.settings-mcp-row__body > span {
-  margin-top: 3px;
+.settings-mcp-row__meta {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 11.5px;
+  white-space: nowrap;
 }
 
 .settings-mcp-row__error {
-  margin: 6px 0 0;
+  margin: 4px 0 0 26px;
   color: var(--danger-text);
   font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
+.settings-mcp-row[data-health="needsSignIn"] .settings-mcp-row__error {
+  color: var(--text-muted);
+}
+
 .settings-mcp-row__chips,
 .settings-mcp-row__actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
 }
 
-.settings-mcp-row__remove {
-  color: var(--danger-text);
+/* Remove lives behind this menu rather than on every row: it was the most
+   consistently available control on the pane, and it is the destructive one. */
+.settings-mcp-row__more {
+  min-width: 28px;
+  padding: 0 6px;
+  color: var(--text-muted);
+  line-height: 1;
 }
 
-.settings-mcp-row__remove:hover:not([disabled]) {
-  background: var(--danger-soft);
+.settings-mcp-row__drawer {
+  margin: 8px 0 2px 26px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-mcp-row__tools {
+  display: grid;
+  gap: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-mcp-row__chevron {
+    transition: none;
+  }
 }
 
 .settings-archive-empty,

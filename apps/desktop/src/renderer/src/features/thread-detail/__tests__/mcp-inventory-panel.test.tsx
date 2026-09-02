@@ -55,7 +55,9 @@ describe("McpInventoryPanel", () => {
     expect(screen.getByText("Reading MCP inventory…")).toBeInTheDocument();
     expect(await screen.findByText("atlassian-rovo")).toBeInTheDocument();
     expect(screen.getByText("fetch, search")).toBeInTheDocument();
-    expect(screen.getByText("OAuth")).toBeInTheDocument();
+    // Shared vocabulary (`formatMcpAuthStatus`): the chip names the state the
+    // operator is in, not the protocol that produced it.
+    expect(screen.getByText("Signed in")).toBeInTheDocument();
     expect(listThreadMcpServers).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -87,7 +89,7 @@ describe("McpInventoryPanel", () => {
     );
 
     expect(await screen.findByText("offline-local-server")).toBeInTheDocument();
-    expect(screen.getByText("Authentication unknown")).toBeInTheDocument();
+    expect(screen.getByText("Sign-in state unknown")).toBeInTheDocument();
   });
 
   it("holds confirmed reload feedback and explains the next-turn boundary", async () => {

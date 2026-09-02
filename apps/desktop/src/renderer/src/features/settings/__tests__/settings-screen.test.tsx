@@ -6173,12 +6173,21 @@ describe("SettingsScreen", () => {
       .closest<HTMLElement>(".settings-mcp-row");
     expect(datadogRow).not.toBeNull();
     expect(atlassianRow).not.toBeNull();
-    fireEvent.click(within(datadogRow!).getByRole("button", { name: "Relogin" }));
+
+    // Both servers hold OAuth credentials, so neither row carries a bare
+    // "Sign in" button — that is promoted only for `notLoggedIn`. Signing in
+    // again, and removing, live in the row's overflow menu so the destructive
+    // verb is not the pane's most available control.
+    fireEvent.click(
+      within(datadogRow!).getByRole("button", { name: "More actions for datadog" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Sign in to datadog again" }),
+    );
     expect(
-      within(atlassianRow!).getByRole("button", { name: "Relogin" }),
-    ).toBeDisabled();
-    expect(
-      within(atlassianRow!).getByRole("button", { name: "Remove" }),
+      within(atlassianRow!).getByRole("button", {
+        name: "More actions for atlassian",
+      }),
     ).toBeDisabled();
     await waitFor(() => {
       expect(startCodexMcpServerLogin).toHaveBeenCalledWith({
@@ -6202,7 +6211,9 @@ describe("SettingsScreen", () => {
       });
     });
     expect(
-      within(atlassianRow!).getByRole("button", { name: "Relogin" }),
+      within(atlassianRow!).getByRole("button", {
+        name: "More actions for atlassian",
+      }),
     ).toBeDisabled();
     await act(async () => {
       agentEventListener?.({
@@ -6214,11 +6225,14 @@ describe("SettingsScreen", () => {
       });
     });
     expect(await screen.findByText(
-      "datadog login completed and its row was refreshed.",
+      "datadog signed in and its row was refreshed.",
     )).toBeInTheDocument();
     expect(reloadCodexMcpServers).toHaveBeenCalledWith({ codexHome });
 
-    fireEvent.click(within(datadogRow!).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      within(datadogRow!).getByRole("button", { name: "More actions for datadog" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove datadog" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove server" }));
     await waitFor(() => {
       expect(removeCodexMcpServer).toHaveBeenCalledWith({
@@ -6231,16 +6245,21 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(
-      within(atlassianRow!).getByRole("button", { name: "Relogin" }),
+      within(atlassianRow!).getByRole("button", {
+        name: "More actions for atlassian",
+      }),
     );
-    expect(await screen.findByRole("button", { name: "Cancel login" }))
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Sign in to atlassian again" }),
+    );
+    expect(await screen.findByRole("button", { name: "Cancel sign-in" }))
       .toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel login" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
     expect(await screen.findByText(
-      "Stopped waiting for login. You can try again.",
+      "Stopped waiting for sign-in. You can try again.",
     )).toBeInTheDocument();
     expect(
-      within(datadogRow!).getByRole("button", { name: "Relogin" }),
+      within(datadogRow!).getByRole("button", { name: "More actions for datadog" }),
     ).toBeEnabled();
   });
 
@@ -6291,9 +6310,12 @@ describe("SettingsScreen", () => {
       "Codex profile selection changed to work. Restart PwrAgent before managing MCP servers for that profile.",
     )).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reload config" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Relogin" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
-    expect(screen.getByText("/home/example/.codex")).toBeInTheDocument();
+    // Every mutation is behind the row overflow now, so disabling that button
+    // is what closes off Sign in and Remove together.
+    expect(
+      screen.getByRole("button", { name: "More actions for atlassian" }),
+    ).toBeDisabled();
+    expect(screen.getByText("~/.codex")).toBeInTheDocument();
   });
 
   it("shows when messaging is disabled by a runtime override", () => {

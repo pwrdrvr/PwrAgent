@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
-  CodexMcpAuthStatus,
   CodexMcpInventoryDetail,
   CodexMcpServerSummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import { describeMcpAuthStatus } from "@pwragent/shared";
+import { McpInventoryLine } from "../../components/McpInventoryLine";
 import { CheckIcon, CloseIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -241,25 +242,28 @@ function McpServerRow(props: {
     <li className="mcp-inventory-panel__server">
       <div className="mcp-inventory-panel__server-header">
         <span className="mcp-inventory-panel__server-name">{props.server.name}</span>
-        <span className="mcp-inventory-panel__auth">
-          {formatAuthStatus(props.server.authStatus)}
+        <span
+          className="mcp-inventory-panel__auth"
+          title={describeMcpAuthStatus(props.server.authStatus).description}
+        >
+          {describeMcpAuthStatus(props.server.authStatus).label}
         </span>
       </div>
-      <InventoryLine
+      <McpInventoryLine
         label="Tools"
         previewLimit={TOOL_PREVIEW_LIMIT}
         values={props.server.tools}
       />
       {props.detail === "full" ? (
         <>
-          <InventoryLine
+          <McpInventoryLine
             label="Resources"
             previewLimit={CATALOG_PREVIEW_LIMIT}
             values={(props.server.resources ?? []).map((resource) =>
               `${resource.title ?? resource.name} (${resource.uri})`
             )}
           />
-          <InventoryLine
+          <McpInventoryLine
             label="Templates"
             previewLimit={CATALOG_PREVIEW_LIMIT}
             values={(props.server.resourceTemplates ?? []).map((template) =>
@@ -270,63 +274,4 @@ function McpServerRow(props: {
       ) : null}
     </li>
   );
-}
-
-function InventoryLine(props: {
-  label: string;
-  previewLimit: number;
-  values: string[];
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const hasOverflow = props.values.length > props.previewLimit;
-  const visibleValues = expanded || !hasOverflow
-    ? props.values
-    : props.values.slice(0, props.previewLimit);
-  const hiddenCount = props.values.length - visibleValues.length;
-
-  return (
-    <div className="mcp-inventory-panel__line">
-      <span className="mcp-inventory-panel__line-label">
-        {props.label}
-        <span className="mcp-inventory-panel__line-count">
-          {` · ${props.values.length}`}
-        </span>
-      </span>
-      <div className="mcp-inventory-panel__line-value">
-        <span className="mcp-inventory-panel__line-items">
-          {visibleValues.length > 0 ? visibleValues.join(", ") : "None"}
-        </span>
-        {hasOverflow ? (
-          <button
-            type="button"
-            className="mcp-inventory-panel__line-toggle"
-            aria-expanded={expanded}
-            aria-label={
-              expanded
-                ? `Show fewer ${props.label}`
-                : `Show ${hiddenCount} more ${props.label}`
-            }
-            onClick={() => setExpanded((current) => !current)}
-          >
-            {expanded ? "Show less" : `Show ${hiddenCount} more`}
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function formatAuthStatus(status: CodexMcpAuthStatus): string {
-  switch (status) {
-    case "unknown":
-      return "Authentication unknown";
-    case "notLoggedIn":
-      return "Sign-in required";
-    case "bearerToken":
-      return "Bearer token";
-    case "oAuth":
-      return "OAuth";
-    case "unsupported":
-      return "No authentication";
-  }
 }

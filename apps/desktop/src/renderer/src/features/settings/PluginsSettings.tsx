@@ -1,15 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
-  CodexMcpAuthStatus,
   CodexMcpServerSummary,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
+import { describeMcpAuthStatus } from "@pwragent/shared";
+import { McpInventoryLine } from "../../components/McpInventoryLine";
+import {
+  ChipContextMenu,
+  type ChipContextMenuPosition,
+} from "../chrome/ChipContextMenu";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
+import {
+  countMcpServerHealth,
+  describeMcpServerTools,
+  readMcpServerHealth,
+} from "./mcp-server-health";
 
 type ActionNotice = {
   kind: "error" | "info" | "success" | "working";
@@ -28,6 +38,7 @@ type StartupResult = {
 
 const LOGIN_STARTUP_WAIT_MS = 5_000;
 const OAUTH_LOGIN_WAIT_MS = 120_000;
+const TOOL_PREVIEW_LIMIT = 12;
 
 function normalizeCodexHome(value: string): string {
   return value
@@ -37,6 +48,40 @@ function normalizeCodexHome(value: string): string {
     .replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
 }
 
+/**
+ * `~/.codex/profiles/work` is the form operators recognise. Only the
+ * conventional `.codex` root is abbreviated; a `CODEX_HOME` pointed somewhere
+ * else is shown in full rather than given a misleading `~`.
+ */
+function shortenCodexHome(value: string): string {
+  const normalized = value.replaceAll("\\", "/").replace(/\/$/, "");
+  const match = /^.*?(\/\.codex(?:\/.*)?)$/.exec(normalized);
+  return match ? `~${match[1]}` : normalized;
+}
+
+function readStartupStatus(
+  value: unknown,
+): NonNullable<CodexMcpServerSummary["startupStatus"]> | undefined {
+  return value === "starting"
+    || value === "ready"
+    || value === "failed"
+    || value === "cancelled"
+    ? value
+    : undefined;
+}
+
+function matchesMcpFilter(
+  server: CodexMcpServerSummary,
+  filter: string,
+): boolean {
+  const needle = filter.trim().toLowerCase();
+  if (!needle) return true;
+  return (
+    server.name.toLowerCase().includes(needle)
+    || server.tools.some((tool) => tool.toLowerCase().includes(needle))
+  );
+}
+
 export function PluginsSettings(props: {
   desktopApi?: DesktopApi;
   snapshot: DesktopSettingsSnapshot;
@@ -44,6 +89,10 @@ export function PluginsSettings(props: {
   const [servers, setServers] = useState<CodexMcpServerSummary[]>([]);
   const [activeCodexHome, setActiveCodexHome] = useState<string>();
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("");
+  const [expandedServers, setExpandedServers] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [pendingAction, setPendingActionState] = useState<PendingAction>();
   const pendingActionRef = useRef<PendingAction | undefined>(undefined);
   const startupWaiterRef = useRef<{
@@ -55,6 +104,7 @@ export function PluginsSettings(props: {
   const [removeCandidate, setRemoveCandidate] =
     useState<CodexMcpServerSummary>();
   const [notice, setNotice] = useState<ActionNotice>();
+  const filterId = useId();
   const selectedProfile = props.snapshot.models.codex.profiles.profiles.find(
     (profile) => profile.selected,
   );
@@ -70,6 +120,17 @@ export function PluginsSettings(props: {
     activeCodexHome
     && normalizeCodexHome(activeCodexHome)
       !== normalizeCodexHome(selectedCodexHome),
+  );
+  // The System-default profile *is* `~/.codex`, so PwrAgent and a bare `codex`
+  // share one store and there is no separation to warn about. Every named
+  // profile resolves to `<codex home>/profiles/<name>` and is fully isolated.
+  const usesNamedProfile = Boolean(activeProfile?.name);
+  const managedCodex = props.snapshot.runtime.tokenMiser?.managedCodex;
+
+  const health = useMemo(() => countMcpServerHealth(servers), [servers]);
+  const visibleServers = useMemo(
+    () => servers.filter((server) => matchesMcpFilter(server, filter)),
+    [filter, servers],
   );
 
   const setPendingAction = useCallback((action?: PendingAction) => {
@@ -89,7 +150,7 @@ export function PluginsSettings(props: {
     setPendingAction(undefined);
     setNotice({
       kind: "info",
-      text: message ?? "Stopped waiting for login. You can try again.",
+      text: message ?? "Stopped waiting for sign-in. You can try again.",
     });
   }, [clearOAuthWaitTimer, setPendingAction]);
 
@@ -100,7 +161,7 @@ export function PluginsSettings(props: {
         pendingActionRef.current?.kind === "login"
         && pendingActionRef.current.name === name
       ) {
-        cancelLoginWait(`${name} login timed out. You can try again.`);
+        cancelLoginWait(`${name} sign-in timed out. You can try again.`);
       }
     }, OAUTH_LOGIN_WAIT_MS);
   }, [cancelLoginWait, clearOAuthWaitTimer]);
@@ -185,7 +246,7 @@ export function PluginsSettings(props: {
     setPendingAction({ kind: "reload", name });
     setNotice({
       kind: "working",
-      text: `${name} login completed. Reloading its MCP connection...`,
+      text: `${name} sign-in completed. Reloading its MCP connection...`,
     });
     const startup = waitForGlobalStartup(name);
     try {
@@ -197,18 +258,18 @@ export function PluginsSettings(props: {
         setNotice({
           kind: "error",
           text: startupResult.error
-            ? `${name} login completed, but startup failed: ${startupResult.error}`
-            : `${name} login completed, but its MCP connection failed to start.`,
+            ? `${name} signed in, but startup failed: ${startupResult.error}`
+            : `${name} signed in, but its MCP connection failed to start.`,
         });
       } else if (startupResult?.status === "cancelled") {
         setNotice({
           kind: "error",
-          text: `${name} login completed, but its MCP connection startup was cancelled.`,
+          text: `${name} signed in, but its MCP connection startup was cancelled.`,
         });
       } else {
         setNotice({
           kind: "success",
-          text: `${name} login completed and its row was refreshed.`,
+          text: `${name} signed in and its row was refreshed.`,
         });
       }
     } catch (error) {
@@ -238,22 +299,41 @@ export function PluginsSettings(props: {
         : typeof params.serverName === "string"
           ? params.serverName
           : undefined;
+      const status = readStartupStatus(params.status);
+      const isGlobalStatus = typeof params.threadId !== "string" && Boolean(status);
+      // Keep every row's health current, not just the one an action is
+      // waiting on. Without this the pane only ever learns a startup status
+      // while a sign-in is in flight, so a server that died on launch is
+      // indistinguishable from one that publishes no tools.
+      if (name && status && isGlobalStatus) {
+        const error = typeof params.error === "string" ? params.error : undefined;
+        setServers((current) => {
+          let changed = false;
+          const next = current.map((server) => {
+            if (server.name !== name) return server;
+            if (server.startupStatus === status && server.startupError === error) {
+              return server;
+            }
+            changed = true;
+            const { startupError: _dropped, ...rest } = server;
+            return {
+              ...rest,
+              startupStatus: status,
+              ...(error ? { startupError: error } : {}),
+            };
+          });
+          return changed ? next : current;
+        });
+      }
       const waiter = startupWaiterRef.current;
-      if (
-        !waiter
-        || !name
-        || name !== waiter.name
-        || typeof params.threadId === "string"
-        || (params.status !== "ready"
-          && params.status !== "failed"
-          && params.status !== "cancelled")
-      ) {
+      if (!waiter || !name || !status || name !== waiter.name || !isGlobalStatus) {
         return;
       }
       window.clearTimeout(waiter.timer);
       startupWaiterRef.current = undefined;
+      if (status === "starting") return;
       waiter.resolve({
-        status: params.status,
+        status,
         ...(typeof params.error === "string" ? { error: params.error } : {}),
       });
       return;
@@ -281,7 +361,7 @@ export function PluginsSettings(props: {
       kind: "error",
       text: typeof params.error === "string"
         ? params.error
-        : `${name} login did not complete.`,
+        : `${name} sign-in did not complete.`,
     });
   }), [
     clearOAuthWaitTimer,
@@ -319,7 +399,7 @@ export function PluginsSettings(props: {
     }
   };
 
-  const relogin = async (server: CodexMcpServerSummary) => {
+  const signIn = async (server: CodexMcpServerSummary) => {
     if (
       !props.desktopApi?.startCodexMcpServerLogin
       || pendingActionRef.current
@@ -329,7 +409,7 @@ export function PluginsSettings(props: {
     setPendingAction({ kind: "login", name: server.name });
     setNotice({
       kind: "working",
-      text: `Waiting for ${server.name} login to complete...`,
+      text: `Waiting for ${server.name} sign-in to complete...`,
     });
     scheduleLoginTimeout(server.name);
     try {
@@ -389,21 +469,43 @@ export function PluginsSettings(props: {
       setPendingAction(undefined);
     }
   };
+
+  const toggleServer = (name: string) => {
+    setExpandedServers((current) => {
+      const next = new Set(current);
+      if (!next.delete(name)) next.add(name);
+      return next;
+    });
+  };
+
   const actionsDisabled = Boolean(pendingAction)
     || profileChanged
     || !activeCodexHome;
+  // `Reload config` also goes dim while a load is in flight or the pane is
+  // scoped to a stale profile. A dim button with no stated reason reads as a
+  // defect, so the reason travels with it.
+  const reloadDisabledReason = profileChanged
+    ? "Restart PwrAgent before managing MCP servers for the newly selected Codex profile."
+    : !activeCodexHome
+      ? "The active Codex profile is still loading."
+      : pendingAction
+        ? `Waiting for ${pendingAction.name}.`
+        : undefined;
 
   return (
     <SettingsSectionStack paneId="plugins" aria-label="Plugin settings">
       <SettingsPanelHead
         eyebrow="Plugins"
-        title="Plugin connections"
-        help="Inspect and repair the MCP servers configured for this PwrAgent profile's selected Codex profile."
+        title="Codex MCP servers"
+        help="MCP servers give Codex threads extra tools. They are configured per Codex profile — PwrAgent inspects and repairs the profile it is running."
         action={
           <button
             className="button button--secondary"
             disabled={loading || actionsDisabled}
-            title="Re-read installed MCP configuration and expose it to loaded Codex threads on their next turn."
+            title={
+              reloadDisabledReason
+              ?? "Re-read installed MCP configuration and expose it to loaded Codex threads on their next turn."
+            }
             type="button"
             onClick={() => void reloadConfig()}
           >
@@ -416,17 +518,54 @@ export function PluginsSettings(props: {
         eyebrow="Plugins"
         title="MCP servers"
         sectionId="mcp-servers"
-        description="Relogin replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
-        chip={`${servers.length} configured`}
+        description="Sign-in replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
+        chip={
+          loading
+            ? "Loading..."
+            : `${health.total} ${health.total === 1 ? "server" : "servers"} · ${health.tools} tools`
+        }
+        chipKind={
+          health.needsSignIn > 0 ? "warn" : health.failed > 0 ? "err" : "default"
+        }
       >
-        <div className="settings-plugin-profile">
-          <span>Active Codex profile</span>
-          <strong>{activeProfile?.displayName ?? "Default"}</strong>
-          <code>{activeCodexHome ?? "Loading..."}</code>
+        <div className="settings-mcp-scope">
+          <span className="settings-mcp-scope__key">Profile</span>
+          <span className="settings-mcp-scope__value">
+            <strong>{activeProfile?.displayName ?? "System default"}</strong>
+            <code>
+              {activeCodexHome ? shortenCodexHome(activeCodexHome) : "Loading..."}
+            </code>
+          </span>
+          <span className="settings-mcp-scope__key">Codex</span>
+          <span className="settings-mcp-scope__value">
+            <strong>
+              {managedCodex?.state === "unavailable"
+                ? "System Codex"
+                : "PwrAgent managed"}
+            </strong>
+            {managedCodex?.version ? <code>{managedCodex.version}</code> : null}
+            {managedCodex?.state === "ready" ? (
+              <span className="settings-pathrow__chip settings-pathrow__chip--ok">
+                Token Miser ready
+              </span>
+            ) : managedCodex?.state === "pending-switch" ? (
+              <span className="settings-pathrow__chip">
+                Token Miser pending restart
+              </span>
+            ) : null}
+          </span>
+          {usesNamedProfile ? (
+            <p className="settings-mcp-scope__note">
+              These servers and their sign-ins live in <strong>this profile only</strong>.
+              PwrAgent's own terminals use it too; a <code>codex</code> you run outside
+              PwrAgent falls back to <code>~/.codex</code> and has its own separate
+              sign-ins.
+            </p>
+          ) : null}
         </div>
         {profileChanged ? (
           <p className="settings-plugin-notice settings-plugin-notice--error" role="alert">
-            Codex profile selection changed to {selectedProfile?.displayName ?? "Default"}.
+            Codex profile selection changed to {selectedProfile?.displayName ?? "System default"}.
             Restart PwrAgent before managing MCP servers for that profile.
           </p>
         ) : null}
@@ -442,7 +581,7 @@ export function PluginsSettings(props: {
                 type="button"
                 onClick={() => cancelLoginWait()}
               >
-                Cancel login
+                Cancel sign-in
               </button>
             ) : null}
           </div>
@@ -450,18 +589,60 @@ export function PluginsSettings(props: {
         {loading ? (
           <p className="settings-empty">Loading MCP servers...</p>
         ) : servers.length ? (
-          <div className="settings-mcp-list">
-            {servers.map((server) => (
-              <McpServerRow
-                key={server.name}
-                busy={pendingAction?.name === server.name}
-                disabled={actionsDisabled}
-                server={server}
-                onRelogin={() => void relogin(server)}
-                onRemove={() => setRemoveCandidate(server)}
+          <>
+            <div className="settings-mcp-toolbar">
+              <input
+                className="settings-mcp-filter"
+                id={filterId}
+                aria-label="Filter MCP servers and tools"
+                placeholder="Filter servers and tools..."
+                type="search"
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
               />
-            ))}
-          </div>
+              <div className="settings-mcp-toolbar__counts">
+                <span className="settings-pathrow__chip settings-pathrow__chip--ok">
+                  {health.ready} ready
+                </span>
+                {health.needsSignIn > 0 ? (
+                  <span className="settings-pathrow__chip settings-pathrow__chip--warn">
+                    {health.needsSignIn} need sign-in
+                  </span>
+                ) : null}
+                {health.failed > 0 ? (
+                  <span className="settings-pathrow__chip settings-pathrow__chip--err">
+                    {health.failed} failed
+                  </span>
+                ) : null}
+                {health.unknown > 0 ? (
+                  <span className="settings-pathrow__chip">
+                    {health.unknown} not reported
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            {visibleServers.length ? (
+              <div className="settings-mcp-list">
+                {visibleServers.map((server) => (
+                  <McpServerRow
+                    key={server.name}
+                    busy={pendingAction?.name === server.name}
+                    disabled={actionsDisabled}
+                    expanded={expandedServers.has(server.name)}
+                    filter={filter}
+                    server={server}
+                    onSignIn={() => void signIn(server)}
+                    onRemove={() => setRemoveCandidate(server)}
+                    onToggle={() => toggleServer(server.name)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="settings-empty">
+                No MCP server or tool matches “{filter.trim()}”.
+              </p>
+            )}
+          </>
         ) : (
           <p className="settings-empty">No MCP servers are configured.</p>
         )}
@@ -509,68 +690,123 @@ export function PluginsSettings(props: {
 function McpServerRow(props: {
   busy: boolean;
   disabled: boolean;
+  expanded: boolean;
+  filter: string;
   server: CodexMcpServerSummary;
-  onRelogin: () => void;
   onRemove: () => void;
+  onSignIn: () => void;
+  onToggle: () => void;
 }) {
   const server = props.server;
-  const canRelogin = server.authStatus === "oAuth"
-    || server.authStatus === "notLoggedIn";
+  const drawerId = useId();
+  const [menuPosition, setMenuPosition] = useState<ChipContextMenuPosition>();
+  const menuInvokerRef = useRef<HTMLButtonElement | null>(null);
+  const health = readMcpServerHealth(server);
+  const auth = describeMcpAuthStatus(server.authStatus);
+  const canSignIn = auth.canSignIn;
+  const openMenu = (event: { currentTarget: HTMLButtonElement }) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    menuInvokerRef.current = event.currentTarget;
+    setMenuPosition({ x: rect.left, y: rect.bottom + 4, anchorTop: rect.top });
+  };
+
   return (
-    <article className="settings-mcp-row">
-      <div className="settings-mcp-row__body">
-        <strong>{server.name}</strong>
-        <span>{server.tools.length} tools</span>
-        {server.startupError ? (
-          <p className="settings-mcp-row__error">{server.startupError}</p>
-        ) : null}
-      </div>
-      <div className="settings-mcp-row__chips">
-        <span className="settings-pathrow__chip">
-          {formatAuthStatus(server.authStatus)}
-        </span>
-        {server.startupStatus ? (
+    <article className="settings-mcp-row" data-health={health}>
+      <div className="settings-mcp-row__main">
+        <button
+          aria-controls={drawerId}
+          aria-expanded={props.expanded}
+          className="settings-mcp-row__toggle"
+          type="button"
+          onClick={props.onToggle}
+        >
+          <span
+            aria-hidden="true"
+            className="settings-mcp-row__health"
+          />
+          <span aria-hidden="true" className="settings-mcp-row__chevron" />
+          <span className="settings-mcp-row__name">{server.name}</span>
+          <span className="settings-mcp-row__meta">
+            {describeMcpServerTools(server, health)}
+          </span>
+        </button>
+        <div className="settings-mcp-row__chips">
           <span
             className={`settings-pathrow__chip${
-              server.startupStatus === "failed"
-                ? " settings-pathrow__chip--err"
-                : server.startupStatus === "ready"
-                  ? " settings-pathrow__chip--ok"
+              auth.tone === "ok"
+                ? " settings-pathrow__chip--ok"
+                : auth.tone === "warn"
+                  ? " settings-pathrow__chip--warn"
                   : ""
             }`}
+            title={auth.description}
           >
-            {server.startupStatus}
+            {auth.label}
           </span>
-        ) : null}
-      </div>
-      <div className="settings-mcp-row__actions">
-        {canRelogin ? (
+        </div>
+        <div className="settings-mcp-row__actions">
+          {health === "needsSignIn" ? (
+            <button
+              className="button button--secondary"
+              disabled={props.disabled}
+              type="button"
+              onClick={props.onSignIn}
+            >
+              {props.busy ? "Waiting..." : "Sign in"}
+            </button>
+          ) : null}
           <button
-            className="button button--secondary"
+            aria-haspopup="menu"
+            aria-label={`More actions for ${server.name}`}
+            className="button button--ghost settings-mcp-row__more"
             disabled={props.disabled}
+            title={`More actions for ${server.name}`}
             type="button"
-            onClick={props.onRelogin}
+            onClick={openMenu}
           >
-            {props.busy ? "Waiting..." : "Relogin"}
+            <span aria-hidden="true">···</span>
           </button>
-        ) : null}
-        <button
-          className="button button--ghost settings-mcp-row__remove"
-          disabled={props.disabled}
-          type="button"
-          onClick={props.onRemove}
-        >
-          Remove
-        </button>
+        </div>
       </div>
+      {server.startupError ? (
+        <p className="settings-mcp-row__error">{server.startupError}</p>
+      ) : health === "needsSignIn" ? (
+        <p className="settings-mcp-row__error">
+          Sign in to load this server's tools.
+        </p>
+      ) : null}
+      {props.expanded ? (
+        <div className="settings-mcp-row__drawer" id={drawerId}>
+          <McpInventoryLine
+            className="settings-mcp-row__tools"
+            label="Tools"
+            previewLimit={TOOL_PREVIEW_LIMIT}
+            values={server.tools}
+          />
+        </div>
+      ) : null}
+      {menuPosition && menuInvokerRef.current ? (
+        <ChipContextMenu
+          items={[
+            ...(canSignIn
+              ? [{
+                  label: health === "needsSignIn"
+                    ? `Sign in to ${server.name}`
+                    : `Sign in to ${server.name} again`,
+                  action: props.onSignIn,
+                }]
+              : []),
+            {
+              label: `Remove ${server.name}`,
+              action: props.onRemove,
+              separated: canSignIn,
+            },
+          ]}
+          position={menuPosition}
+          returnFocusTo={menuInvokerRef.current}
+          onClose={() => setMenuPosition(undefined)}
+        />
+      ) : null}
     </article>
   );
-}
-
-function formatAuthStatus(status: CodexMcpAuthStatus): string {
-  if (status === "oAuth") return "OAuth";
-  if (status === "bearerToken") return "Bearer token";
-  if (status === "notLoggedIn") return "Login required";
-  if (status === "unknown") return "Authentication unknown";
-  return "No login";
 }
