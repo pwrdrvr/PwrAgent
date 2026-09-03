@@ -3,6 +3,7 @@ import type {
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type { FederationInstanceId } from "./federation";
+import type { StarMapWorkspaceLayout } from "./star-map";
 
 /**
  * The Star Map's on-screen state, exposed to Agent turns.
@@ -36,7 +37,14 @@ export type PwrAgentStarMapErrorCode =
   (typeof PWRAGENT_STAR_MAP_ERROR_CODES)[number];
 
 /** Mirrors the renderer's `StarMapLayoutMode`; the publisher assigns across. */
-export type StarMapViewLayout = "lanes" | "orbit" | "projects";
+/** Mirrors `StarMapWorkspaceLayout`; kept as a value so the guard can check it. */
+export const STAR_MAP_VIEW_LAYOUTS = [
+  "lanes",
+  "orbit",
+  "projects",
+] as const satisfies readonly StarMapWorkspaceLayout[];
+
+export type StarMapViewLayout = (typeof STAR_MAP_VIEW_LAYOUTS)[number];
 
 /** Which surface published the snapshot, since both can be open at once. */
 export type StarMapViewSurface = "window" | "in-app";
@@ -92,8 +100,14 @@ export type StarMapViewCloud = {
   visibleCount: number;
   /** Folded behind the cloud's `+N more` chip. */
   hiddenCount: number;
-  /** Every member in the cloud's own order, drawn and folded alike. */
+  /**
+   * Members in the cloud's own order, drawn and folded alike. Capped by the
+   * call's `maxThreads` so the result stays bounded; `threadCount` is always
+   * whole, and `omittedThreadKeyCount` says how many keys the cap withheld.
+   */
   threadKeys: string[];
+  /** Set when `maxThreads` shortened `threadKeys`. */
+  omittedThreadKeyCount?: number;
 };
 
 export type StarMapViewThread = {
@@ -212,6 +226,31 @@ export type PwrAgentStarMapResponse<
       };
     };
 
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value)
+    && value.every((entry) => typeof entry === "string")
+  );
+}
+
+function isObjectArray(value: unknown): boolean {
+  return (
+    Array.isArray(value)
+    && value.every((entry) => typeof entry === "object" && entry !== null)
+  );
+}
+
+/**
+ * Gate on the IPC boundary: this lands in an Agent tool result described to
+ * the model as the operator's screen, so every field the reader goes on to
+ * touch is checked here rather than trusted.
+ *
+ * That includes the two key arrays and the element-is-an-object checks. The
+ * reader filters `selectedThreadKeys` and dereferences `threads[].instanceId`
+ * without a guard of its own, and the router does not wrap `dispatch`, so a
+ * missing field became a TypeError escaping into the app-server request
+ * handler rather than a tool error.
+ */
 export function isStarMapViewSnapshot(
   value: unknown,
 ): value is StarMapViewSnapshot {
@@ -221,9 +260,16 @@ export function isStarMapViewSnapshot(
     typeof candidate.capturedAt === "number"
     && Number.isFinite(candidate.capturedAt)
     && (candidate.surface === "window" || candidate.surface === "in-app")
-    && typeof candidate.layout === "string"
-    && Array.isArray(candidate.instances)
-    && Array.isArray(candidate.clouds)
-    && Array.isArray(candidate.threads)
+    && STAR_MAP_VIEW_LAYOUTS.includes(candidate.layout as StarMapViewLayout)
+    && isObjectArray(candidate.instances)
+    && isObjectArray(candidate.clouds)
+    && isObjectArray(candidate.threads)
+    && isStringArray(candidate.selectedThreadKeys)
+    && isStringArray(candidate.openChatCardThreadKeys)
+    && Array.isArray(candidate.filters)
+    && typeof candidate.matchedThreadCount === "number"
+    && Number.isFinite(candidate.matchedThreadCount)
+    && typeof candidate.hiddenInstanceCount === "number"
+    && Number.isFinite(candidate.hiddenInstanceCount)
   );
 }
