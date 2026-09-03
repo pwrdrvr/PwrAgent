@@ -50,8 +50,8 @@ import {
   isDesktopIntegratedTerminalWindowsShell,
   isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
-  isDesktopUpdateChannel,
   isDesktopUpdateTrain,
+  parseDesktopUpdateChannel,
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
@@ -272,6 +272,7 @@ export type DesktopSettingsConfig = {
       cliPath?: string;
       enabled?: boolean;
       managedBuilds?: boolean;
+      managedBuildChannel?: DesktopUpdateChannel;
     };
     kimi?: {
       cliPath?: string;
@@ -1520,6 +1521,12 @@ export function desktopSettingsPatchToEdits(
       patch.acpAgents.grok.managedBuilds,
     );
   }
+  if (patch.acpAgents?.grok?.managedBuildChannel !== undefined) {
+    set(
+      ["acp_agents", "grok", "managed_build_channel"],
+      patch.acpAgents.grok.managedBuildChannel,
+    );
+  }
   if (patch.acpAgents?.kimi?.cliPath !== undefined) {
     set(["acp_agents", "kimi", "cli_path"], patch.acpAgents.kimi.cliPath);
   }
@@ -1981,6 +1988,9 @@ function normalizeDesktopConfig(
         cliPath: readString(acpAgentsGrok?.cli_path),
         enabled: readBoolean(acpAgentsGrok?.enabled),
         managedBuilds: readBoolean(acpAgentsGrok?.managed_builds),
+        managedBuildChannel: readUpdateChannel(
+          acpAgentsGrok?.managed_build_channel,
+        ),
       },
       kimi: {
         cliPath: readString(acpAgentsKimi?.cli_path),
@@ -2373,9 +2383,7 @@ function readToolUpdateMode(
 function readUpdateChannel(
   value: TomlScalar | undefined,
 ): DesktopUpdateChannel | undefined {
-  return typeof value === "string" && isDesktopUpdateChannel(value)
-    ? value
-    : undefined;
+  return parseDesktopUpdateChannel(value);
 }
 
 function readUpdateTrain(

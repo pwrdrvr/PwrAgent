@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { AcpAgentUpdateStatus } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
+import { isPwrAgentSuppliedGrokCommand } from "./grok-build-channel.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 
 const execFile = promisify(execFileCallback);
@@ -27,16 +28,30 @@ export type GrokCliUpdateProbe = (
 
 /**
  * Whether this record's active runtime is a PwrAgent-supplied Grok build
- * (managed download or app bundle). Discovery stamps `GROK_INSTALLER=pwragent`
- * on the launch descriptor when the resolved active command is one of those,
- * and that stamp is the single marker every update-status path keys on: the
- * vendor updater follows a different channel, so its result must never run
- * against, decorate, or survive on a PwrAgent-owned runtime.
+ * (managed download or app bundle). The vendor updater follows a different
+ * channel, so its result must never run against, decorate, or survive on a
+ * PwrAgent-owned runtime.
+ *
+ * Two sources, and the second is load-bearing. Discovery stamps
+ * `GROK_INSTALLER=pwragent` on the launch descriptor, which also reaches the
+ * spawned process; but that stamp used to be the *only* marker, and discovery
+ * sets it by comparing the active command against the command this run's
+ * release check resolved. Any moment where those disagree — a manual path
+ * pinning an older managed version, a failed check with nothing cached, the
+ * managed toggle off while an override still points into `versions/` — silently
+ * moved a PwrAgent build onto the vendor channel, and the operator was shown an
+ * xAI version against a `-pwragent` build. Provenance does not depend on which
+ * release is newest, so read it from the path too.
  */
 export function isPwrAgentOwnedGrokRuntime(
-  record: Pick<AcpInstalledAgentRecord, "launchDescriptor">,
+  record: Pick<AcpInstalledAgentRecord, "launchDescriptor" | "activeCommand">,
 ): boolean {
-  return record.launchDescriptor?.env?.GROK_INSTALLER === "pwragent";
+  if (record.launchDescriptor?.env?.GROK_INSTALLER === "pwragent") {
+    return true;
+  }
+  return isPwrAgentSuppliedGrokCommand(
+    record.activeCommand ?? record.launchDescriptor?.command,
+  );
 }
 
 /**

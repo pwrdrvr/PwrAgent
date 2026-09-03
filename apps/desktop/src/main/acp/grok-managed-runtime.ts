@@ -1,3 +1,8 @@
+import type { DesktopUpdateChannel } from "@pwragent/shared";
+import {
+  MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
+  parseDesktopUpdateChannel,
+} from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import {
   createReadStream,
@@ -23,7 +28,7 @@ import { pipeline } from "node:stream/promises";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { ManagedGrokSignatureRejectedEvent } from "../../shared/managed-grok-signature.js";
-import { resolvePwragentRoot } from "../profile.js";
+import { managedGrokRoot } from "./grok-build-channel.js";
 import { getMainLogger } from "../log.js";
 import { verifyMatchingPlatformSignature } from "../managed-runtime-signature.js";
 
@@ -145,8 +150,14 @@ type ManagedGrokRelease = {
 
 type ManagedGrokMetadata = {
   asset: string;
+  /** Track the check that installed this bundle was following. */
+  channel?: DesktopUpdateChannel;
   checkedAt: number;
   installedAt: number;
+  /** Newest promoted tag the last check saw, whichever track it served. */
+  latestTag?: string;
+  /** Newest tag overall the last check saw, promoted or not. */
+  prereleaseTag?: string;
   repository: string;
   schemaVersion: number;
   sha256: string;
@@ -161,6 +172,7 @@ export type ManagedGrokRuntime = {
 type ManagedGrokRuntimeOptions = {
   applicationCommand?: string;
   arch?: NodeJS.Architecture;
+  channel?: DesktopUpdateChannel;
   checkMode?: ManagedGrokCheckMode;
   extractArchive?: (archivePath: string, targetDir: string) => Promise<void>;
   fetch?: typeof globalThis.fetch;
@@ -198,14 +210,93 @@ const processChecks = new Set<string>();
 const activeChecks = new Map<string, Promise<ManagedGrokRuntime | undefined>>();
 const markedRuntimeCommands = new Map<string, string>();
 
+/** What the last managed release check decided, as recorded on disk. */
+export type ManagedGrokInstallSummary = {
+  tag: string;
+  checkedAt: number;
+  installedAt: number;
+  channel?: DesktopUpdateChannel;
+  latestTag?: string;
+  prereleaseTag?: string;
+};
+
+/**
+ * Read `managed-release.json` and nothing else.
+ *
+ * Deliberately weaker than `readCachedRuntime`: it does not validate the
+ * bundle, probe a version, or verify a signature, so it must never be used to
+ * choose a runtime. It answers one reporting question — which tag the last
+ * check installed, and when — for a settings pane that would otherwise have to
+ * start a download to say anything at all.
+ */
+export async function readManagedGrokInstallSummary(options?: {
+  rootDir?: string;
+}): Promise<ManagedGrokInstallSummary | undefined> {
+  const metadata = await readManagedGrokMetadata(
+    options?.rootDir ?? managedGrokRoot(),
+  );
+  return metadata
+    ? {
+        tag: metadata.tag,
+        checkedAt: metadata.checkedAt,
+        installedAt: metadata.installedAt,
+        ...(metadata.channel ? { channel: metadata.channel } : {}),
+        ...(metadata.latestTag ? { latestTag: metadata.latestTag } : {}),
+        ...(metadata.prereleaseTag
+          ? { prereleaseTag: metadata.prereleaseTag }
+          : {}),
+      }
+    : undefined;
+}
+
+/**
+ * Parse and validate `managed-release.json`. One validator for one on-disk
+ * format: both the runtime path and the reporting path read this file, and a
+ * second copy of these checks would let the pane name a tag the runtime path
+ * rejects. Platform-asset agreement is deliberately NOT checked here — that
+ * asks whether the cache is usable on this machine, which is the runtime
+ * path's question, not "what did the last check install".
+ */
+async function readManagedGrokMetadata(
+  rootDir: string,
+): Promise<ManagedGrokMetadata | undefined> {
+  let metadata: Partial<ManagedGrokMetadata>;
+  try {
+    metadata = JSON.parse(
+      await readFile(path.join(rootDir, "managed-release.json"), "utf8"),
+    ) as Partial<ManagedGrokMetadata>;
+  } catch {
+    // No install yet, or unreadable metadata. Both mean "nothing to report".
+    return undefined;
+  }
+  if (
+    metadata.schemaVersion !== MANAGED_GROK_METADATA_VERSION
+    || metadata.repository !== MANAGED_GROK_REPOSITORY
+    || typeof metadata.tag !== "string"
+    || !isManagedGrokTagEligible(metadata.tag)
+    || typeof metadata.asset !== "string"
+    || typeof metadata.sha256 !== "string"
+    || typeof metadata.checkedAt !== "number"
+    || typeof metadata.installedAt !== "number"
+  ) {
+    return undefined;
+  }
+  // The track fields arrived after the first shipped format, so a bundle
+  // installed by an older build carries none of them. They are reporting
+  // detail, never a reason to reject an otherwise valid install: drop a field
+  // that does not parse and keep the record.
+  return {
+    ...(metadata as ManagedGrokMetadata),
+    channel: parseDesktopUpdateChannel(metadata.channel),
+    latestTag: readMetadataTag(metadata.latestTag),
+    prereleaseTag: readMetadataTag(metadata.prereleaseTag),
+  };
+}
+
 export async function ensureManagedGrokRuntime(
   options: ManagedGrokRuntimeOptions = {},
 ): Promise<ManagedGrokRuntime | undefined> {
-  const rootDir = options.rootDir ?? path.join(
-    resolvePwragentRoot(),
-    "agents",
-    "grok",
-  );
+  const rootDir = options.rootDir ?? managedGrokRoot();
   const existing = activeChecks.get(rootDir);
   if (existing) {
     return await existing;
@@ -227,12 +318,25 @@ async function ensureManagedGrokRuntimeInner(
   const now = options.now?.() ?? Date.now();
   const cached = await readCachedRuntime(rootDir, options);
   const checkMode = options.checkMode ?? "ttl";
+  const channel = options.channel ?? MANAGED_GROK_BUILD_CHANNEL_DEFAULT;
+  // A cache installed for the other track is not this track's answer. The
+  // managed root is machine-wide, so a profile following Prerelease rewrites
+  // the record a profile following Latest reads next; without this the fresh
+  // `checkedAt` alone would hand Latest the build it exists to avoid. A record
+  // written before tracks existed names no channel and is left alone, so an
+  // offline machine does not re-check on every launch forever.
+  const cachedOtherTrack =
+    cached?.metadata.channel !== undefined
+    && cached.metadata.channel !== channel;
   if (
-    (checkMode === "once-per-process" && processChecks.has(rootDir))
-    || (
-      checkMode === "ttl"
-      && cached
-      && now - cached.metadata.checkedAt < MANAGED_GROK_CHECK_TTL_MS
+    !cachedOtherTrack
+    && (
+      (checkMode === "once-per-process" && processChecks.has(rootDir))
+      || (
+        checkMode === "ttl"
+        && cached
+        && now - cached.metadata.checkedAt < MANAGED_GROK_CHECK_TTL_MS
+      )
     )
   ) {
     return cached
@@ -242,12 +346,28 @@ async function ensureManagedGrokRuntimeInner(
 
   processChecks.add(rootDir);
   try {
-    const release = await fetchLatestCompatibleRelease(options);
+    const slots = await fetchCompatibleReleaseSlots(options, channel);
+    const release = slots[channel];
     if (!release) {
-      throw new Error("No compatible complete PwrAgent Grok release was found");
+      throw new Error(
+        `No compatible complete PwrAgent Grok release was found on the ${channel} track`,
+      );
     }
+    // What each track resolved to, recorded on every check so the settings
+    // pane can name both versions without a second network round trip. A check
+    // that answered from the Atom feed saw one track only; carry the other
+    // track's last known tag rather than blanking a version this machine
+    // already learned, whichever branch below writes the record.
+    const latestTag = slots.latest?.tag ?? cached?.metadata.latestTag;
+    const prereleaseTag =
+      slots.prerelease?.tag ?? cached?.metadata.prereleaseTag;
+    const observed = {
+      channel,
+      ...(latestTag ? { latestTag } : {}),
+      ...(prereleaseTag ? { prereleaseTag } : {}),
+    };
     if (cached?.metadata.tag === release.tag) {
-      const metadata = { ...cached.metadata, checkedAt: now };
+      const metadata = { ...cached.metadata, ...observed, checkedAt: now };
       await writeMetadata(rootDir, metadata);
       return await activateRuntime(
         rootDir,
@@ -255,7 +375,13 @@ async function ensureManagedGrokRuntimeInner(
         options,
       );
     }
-    const runtime = await installRelease(rootDir, release, now, options);
+    const runtime = await installRelease(
+      rootDir,
+      release,
+      now,
+      options,
+      observed,
+    );
     managedGrokLog.info("managed_grok_runtime_installed", {
       asset: runtime.metadata.asset,
       command: runtime.command,
@@ -269,6 +395,7 @@ async function ensureManagedGrokRuntimeInner(
       reportSignatureRejection(error, "download", true);
     }
     managedGrokLog.warn("managed_grok_runtime_update_failed", {
+      channel,
       error: error instanceof Error ? error.message : String(error),
       usingCachedTag: cached?.metadata.tag,
     });
@@ -278,15 +405,16 @@ async function ensureManagedGrokRuntimeInner(
   }
 }
 
-async function fetchLatestCompatibleRelease(
+async function fetchCompatibleReleaseSlots(
   options: ManagedGrokRuntimeOptions,
-): Promise<ManagedGrokRelease | undefined> {
+  channel: DesktopUpdateChannel,
+): Promise<ManagedGrokReleaseSlots> {
   const assetPlatform = managedGrokAssetPlatform(
     options.platform ?? process.platform,
     options.arch ?? process.arch,
   );
   if (!assetPlatform) {
-    return undefined;
+    return {};
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const response = await fetchImpl(MANAGED_GROK_RELEASES_URL, {
@@ -302,7 +430,7 @@ async function fetchLatestCompatibleRelease(
     if (!Array.isArray(releases)) {
       throw new Error("GitHub release check returned an invalid response");
     }
-    return selectManagedGrokRelease(releases, assetPlatform);
+    return selectManagedGrokReleaseSlots(releases, assetPlatform);
   }
   if (response.status !== 403 && response.status !== 429) {
     throw new Error(`GitHub release check failed with HTTP ${response.status}`);
@@ -320,23 +448,47 @@ async function fetchLatestCompatibleRelease(
       `GitHub release feed failed with HTTP ${feedResponse.status} after API HTTP ${response.status}`,
     );
   }
-  return selectManagedGrokReleaseFromFeed(
+  const fromFeed = selectManagedGrokReleaseFromFeed(
     await feedResponse.text(),
     assetPlatform,
+    channel,
   );
+  // The feed answers one track. Reporting the other track's slot from it
+  // would be a guess, and the pane would print that guess as a version.
+  return fromFeed ? { [channel]: fromFeed } : {};
 }
 
-export function selectManagedGrokRelease(
+/**
+ * The newest complete release on each track.
+ *
+ * `latest` holds the newest release GitHub reports as promoted; `prerelease`
+ * holds the newest release overall. When the newest release is a promoted one
+ * both slots hold it, which is the point: the tracks agree until a build is
+ * published for testing, and the control stays meaningful in between.
+ */
+export type ManagedGrokReleaseSlots = {
+  latest?: ManagedGrokRelease;
+  prerelease?: ManagedGrokRelease;
+};
+
+export function selectManagedGrokReleaseSlots(
   releases: GithubRelease[],
   assetPlatform: string,
-): ManagedGrokRelease | undefined {
+): ManagedGrokReleaseSlots {
+  const candidates: Array<{
+    prerelease: boolean;
+    release: ManagedGrokRelease;
+    version: ParsedSemver;
+  }> = [];
   for (const release of releases) {
     const tag = typeof release.tag_name === "string"
       ? release.tag_name.trim()
       : "";
+    const version = parseManagedGrokSemver(tag);
     if (
       release.draft === true
       || !isManagedGrokTagEligible(tag)
+      || version === undefined
       || !Array.isArray(release.assets)
     ) {
       continue;
@@ -354,48 +506,87 @@ export function selectManagedGrokRelease(
     if (!checksum || !archive) {
       continue;
     }
-    return {
-      archive,
-      checksum,
-      ...(typeof release.published_at === "string"
-        ? { publishedAt: release.published_at }
-        : {}),
-      tag,
-    };
+    candidates.push({
+      prerelease: release.prerelease === true,
+      release: {
+        archive,
+        checksum,
+        ...(typeof release.published_at === "string"
+          ? { publishedAt: release.published_at }
+          : {}),
+        tag,
+      },
+      version,
+    });
   }
-  return undefined;
+  // Precedence, not publish order. A promotion lands on a release published
+  // weeks ago, and a repair to an older line is published last; either one
+  // makes the newest entry in the response the wrong answer.
+  candidates.sort(
+    (left, right) => compareParsedSemver(right.version, left.version),
+  );
+  const latest = candidates.find((candidate) => !candidate.prerelease)?.release;
+  const newest = candidates[0]?.release;
+  return {
+    ...(latest ? { latest } : {}),
+    ...(newest ? { prerelease: newest } : {}),
+  };
+}
+
+export function selectManagedGrokRelease(
+  releases: GithubRelease[],
+  assetPlatform: string,
+  channel: DesktopUpdateChannel,
+): ManagedGrokRelease | undefined {
+  return selectManagedGrokReleaseSlots(releases, assetPlatform)[channel];
 }
 
 export function selectManagedGrokReleaseFromFeed(
   feed: string,
   assetPlatform: string,
+  channel: DesktopUpdateChannel,
 ): ManagedGrokRelease | undefined {
+  if (channel === "latest") {
+    // The Atom feed carries tags, not release records: it cannot tell a
+    // promoted release from one published for testing, and it lists tags that
+    // have no release at all. Serving it to the Latest track would hand an
+    // operator exactly the build they opted out of, so the track goes without
+    // an update this cycle and keeps the cached runtime.
+    return undefined;
+  }
   const linkPattern = new RegExp(
     `https://github\\.com/${MANAGED_GROK_REPOSITORY}/releases/tag/`
       + "(pwragent-v[0-9A-Za-z][0-9A-Za-z.+-]*)",
     "gu",
   );
+  const candidates: Array<{ tag: string; version: ParsedSemver }> = [];
   for (const match of feed.matchAll(linkPattern)) {
-    const tag = match[1];
-    if (!isManagedGrokTagEligible(tag)) {
-      continue;
+    const version = parseManagedGrokSemver(match[1]);
+    if (isManagedGrokTagEligible(match[1]) && version !== undefined) {
+      candidates.push({ tag: match[1], version });
     }
-    const assetName = managedGrokArchiveName(tag, assetPlatform);
-    const releaseBase =
-      `https://github.com/${MANAGED_GROK_REPOSITORY}/releases/download/${tag}`;
-    return {
-      archive: {
-        name: assetName,
-        url: `${releaseBase}/${assetName}`,
-      },
-      checksum: {
-        name: "SHA256SUMS",
-        url: `${releaseBase}/SHA256SUMS`,
-      },
-      tag,
-    };
   }
-  return undefined;
+  candidates.sort(
+    (left, right) => compareParsedSemver(right.version, left.version),
+  );
+  const tag = candidates[0]?.tag;
+  if (tag === undefined) {
+    return undefined;
+  }
+  const assetName = managedGrokArchiveName(tag, assetPlatform);
+  const releaseBase =
+    `https://github.com/${MANAGED_GROK_REPOSITORY}/releases/download/${tag}`;
+  return {
+    archive: {
+      name: assetName,
+      url: `${releaseBase}/${assetName}`,
+    },
+    checksum: {
+      name: "SHA256SUMS",
+      url: `${releaseBase}/SHA256SUMS`,
+    },
+    tag,
+  };
 }
 
 export function isManagedGrokTagEligible(tag: string): boolean {
@@ -409,6 +600,15 @@ export function isManagedGrokTagEligible(tag: string): boolean {
     && minimum
     && compareParsedSemver(candidate, minimum) >= 0,
   );
+}
+
+function readMetadataTag(value: unknown): string | undefined {
+  // The same bar the record's own tag is held to. A tag below the first signed
+  // release can never be installed, so reporting one as a track's version
+  // would offer the operator a build that selecting the track cannot produce.
+  return typeof value === "string" && isManagedGrokTagEligible(value)
+    ? value
+    : undefined;
 }
 
 function isManagedGrokTag(tag: string): boolean {
@@ -518,6 +718,10 @@ async function installRelease(
   release: ManagedGrokRelease,
   now: number,
   options: ManagedGrokRuntimeOptions,
+  observed: Pick<
+    ManagedGrokMetadata,
+    "channel" | "latestTag" | "prereleaseTag"
+  >,
 ): Promise<ManagedGrokRuntime> {
   await mkdir(rootDir, { recursive: true });
   const stagingRoot = await mkdtemp(path.join(rootDir, ".install-"));
@@ -563,6 +767,7 @@ async function installRelease(
       validationOptions,
     );
     const metadata: ManagedGrokMetadata = {
+      ...observed,
       asset: release.archive.name,
       checkedAt: now,
       installedAt: now,
@@ -775,19 +980,8 @@ async function readCachedRuntime(
   options: ManagedGrokRuntimeOptions,
 ): Promise<ManagedGrokRuntime | undefined> {
   try {
-    const metadata = JSON.parse(
-      await readFile(path.join(rootDir, "managed-release.json"), "utf8"),
-    ) as Partial<ManagedGrokMetadata>;
-    if (
-      metadata.schemaVersion !== MANAGED_GROK_METADATA_VERSION
-      || metadata.repository !== MANAGED_GROK_REPOSITORY
-      || typeof metadata.tag !== "string"
-      || !isManagedGrokTagEligible(metadata.tag)
-      || typeof metadata.asset !== "string"
-      || typeof metadata.sha256 !== "string"
-      || typeof metadata.checkedAt !== "number"
-      || typeof metadata.installedAt !== "number"
-    ) {
+    const metadata = await readManagedGrokMetadata(rootDir);
+    if (!metadata) {
       return undefined;
     }
     const assetPlatform = managedGrokAssetPlatform(
@@ -805,7 +999,7 @@ async function readCachedRuntime(
       ...bundleValidationOptions(options),
       tag: metadata.tag,
     });
-    return { command, metadata: metadata as ManagedGrokMetadata };
+    return { command, metadata };
   } catch (error) {
     // Every other failure here is ordinary (no install yet, a partially
     // written directory, unreadable metadata) and resolves by reinstalling.

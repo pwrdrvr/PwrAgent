@@ -1194,6 +1194,11 @@ function SettingsSectionBody(props: {
           acpAgents: { grok: { managedBuilds } },
         });
       }}
+      onManagedGrokBuildChannelChange={async (managedBuildChannel) => {
+        return await props.settings.writeConfig({
+          acpAgents: { grok: { managedBuildChannel } },
+        });
+      }}
     />
   );
 }

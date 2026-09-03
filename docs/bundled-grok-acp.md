@@ -58,11 +58,91 @@ Development runs enable managed builds by default and check once per Electron
 process, which makes a fresh `pnpm dev` pick up a newly published downstream
 build. Packaged apps keep the setting off by default, require the PwrDrvr Apple
 or Windows signing identity when it is turned on, and check at most once per 24
-hours. The provider's Refresh button forces a check.
+hours. **Check for updates** on the provider's PwrAgent build row forces one,
+as does the provider's Refresh button.
 Offline and failed checks retain the last verified managed build; if none is
 cached, ordinary PATH and bundled discovery continue unchanged. Disabling Grok
 also disables release checks. Operators can turn off only the managed-build
 behavior without disabling Grok itself.
+
+## Build tracks: Latest and Prerelease
+
+The managed channel publishes on two tracks, selected in Settings → AI
+Providers → Grok → **Build track**, and stored as
+`[acp_agents.grok] managed_build_channel`:
+
+- **Latest** (default) installs only releases promoted out of testing — a
+  GitHub release whose Pre-release flag is clear.
+- **Prerelease** installs the newest release, promoted or not.
+
+Track selection follows semantic-version precedence, never the order GitHub
+returned the releases: a promotion is published against a release that already
+existed, and a repair to an older line can be published last. When the newest
+release is a promoted one, both tracks resolve to the same tag; Prerelease
+stays selectable in that state, because that is where a build sits between
+publication and promotion, and it is when an operator opts in to the next one.
+
+The publishing workflow is what makes the tracks mean anything: publish a build
+for testing, run it on the Prerelease track, then mark the release Latest once
+it holds up. Operators on Latest never see the untested build. GitHub does not
+allow a pre-release to also be the latest release, so promoting one clears its
+Pre-release flag.
+
+Switching the track forces a release check immediately rather than waiting out
+the 24-hour window, and installs that track's build even when it is a step back
+from what is running — a downgrade is the point of moving from Prerelease to
+Latest.
+
+The verified download is machine-wide, and it holds one build. A check that
+finds the cached build was installed for the other track ignores its TTL and
+re-checks, so a profile on Latest is never handed a build a profile on
+Prerelease installed. Two profiles on the same machine following different
+tracks therefore reinstall in turn rather than sharing, which costs a download
+each time the tracks disagree.
+
+Each check records what both tracks resolved to, so the pane can name each
+track's version without a second network round trip. One case cannot: when the
+unauthenticated GitHub API is rate-limited, PwrAgent falls back to the public
+Atom feed, which carries tags rather than release records and cannot say which
+of them are promoted. That fallback serves the Prerelease track only. The
+Latest track keeps its cached build for that cycle instead, and the pane shows
+its version as `Unavailable` — meaning "not observed", never "no such build".
+
+## Two channels, never crossed
+
+An operator can be running either an xAI Grok CLI or a PwrAgent build. They are
+different products from different publishers, with different version strings
+(`1.0.5` against `1.0.4-pwragent.2`), different release pages, and different
+updaters — so no surface may describe one in the other's terms:
+
+- Settings → AI Providers → Grok labels every detected binary with the channel
+  that publishes it, and the PwrAgent build row reports the installed tag, when
+  the last release check ran, and whether the newest verified build is the one
+  running.
+- The xAI update notice names that channel, cites only xAI versions, and links
+  x.ai/build. It never renders for a PwrAgent build.
+- The PwrAgent-build notice names that channel and links the release page for
+  its own tag under `pwrdrvr/grok-build`. It fires only when a manual path pins
+  an older managed version, because that is the one state PwrAgent cannot
+  resolve on its own — otherwise the newest verified build installs itself.
+
+Which channel a runtime belongs to is decided by **provenance**, not by whether
+it is the newest build: any command under `~/.pwragent/agents/grok/versions/`
+(or inside the packaged app) is a PwrAgent build, even after the channel has
+published a newer tag. `GROK_INSTALLER=pwragent` still reaches the spawned
+process, but it is no longer the only marker — discovery sets that stamp by
+comparing against the command the current release check resolved, and a pinned
+older version, or any build present while a check failed, would otherwise change
+channel and collect an xAI update notice.
+
+## Pinning a build with a manual path
+
+A manual path is an explicit pin and always wins. Pointing one at a version
+directory under `~/.pwragent/agents/grok/versions/` freezes that build: newer
+verified builds keep downloading and never run. The Manual path row says so
+whenever it is doing that, and **Use newest build** clears it. With managed
+builds on, discovery already ranks the newest managed build ahead of every PATH
+install, so no override is needed to prefer one.
 
 ## Updating the pin
 

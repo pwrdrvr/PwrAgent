@@ -1,15 +1,27 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import type {
   AcpAgentSettingsEntry,
+  AcpManagedBuildStatus,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
+  DesktopUpdateChannel,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { managedGrokReleaseUrl } from "../../lib/grok-build-channel";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
-import { SettingsField, SettingsSection, ToggleField } from "./SettingsLayout";
+import {
+  SegmentedField,
+  SettingsField,
+  SettingsSection,
+  ToggleField,
+} from "./SettingsLayout";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
-import { acpStatusLabel } from "./acp-agent-copy";
+import {
+  acpRelativeTime,
+  acpStatusLabel,
+  managedGrokBuildVersion,
+} from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
   displayOrderedAcpEntries,
@@ -47,6 +59,19 @@ function managedGrokBuildsSnapshot(
 }
 
 /**
+ * The track the config holds, not the one the last discovery reported.
+ *
+ * The two differ for as long as a switch takes to rescan — a forced release
+ * check that can download a build — and permanently if that rescan fails. The
+ * control has to follow the write it made, the way the sibling toggle does.
+ */
+function managedGrokBuildChannelSnapshot(
+  snapshot: DesktopSettingsSnapshot | undefined,
+): DesktopUpdateChannel | undefined {
+  return snapshot?.acpAgents.grok?.managedBuildChannel;
+}
+
+/**
  * Renders each discovered ACP agent (Gemini / Grok / Kimi / Qwen) as its own
  * `SettingsSection`, styled identically to the Codex section (SettingsField
  * rows + the shared SettingsPathRow install list). Returns a FRAGMENT — no
@@ -68,6 +93,10 @@ export function AcpAgentsSettings(props: {
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
   /** Persist whether PwrAgent downloads and prefers its Grok fork build. */
   onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  /** Persist which grok-build track the managed runtime follows. */
+  onManagedGrokBuildChannelChange?: (
+    channel: DesktopUpdateChannel,
+  ) => Promise<boolean>;
 }) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -152,6 +181,9 @@ export function AcpAgentsSettings(props: {
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
             enabled={acpAgentEnabledInSnapshot(props.snapshot, entry.registryId)}
             managedGrokBuilds={managedGrokBuildsSnapshot(props.snapshot)}
+            managedGrokBuildChannel={
+              managedGrokBuildChannelSnapshot(props.snapshot)
+            }
             saving={props.saving}
             refreshing={refreshing || loading || props.catalogRefreshing}
             onCliPathChange={
@@ -178,6 +210,9 @@ export function AcpAgentsSettings(props: {
             }
             onEnabledChange={props.onEnabledChange}
             onManagedGrokBuildsChange={props.onManagedGrokBuildsChange}
+            onManagedGrokBuildChannelChange={
+              props.onManagedGrokBuildChannelChange
+            }
             onRefresh={() => refresh(true, true)}
           />
         </Fragment>
@@ -291,6 +326,8 @@ function AcpAgentSection(props: {
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
   enabled: boolean;
   managedGrokBuilds: boolean;
+  /** Track the config holds, which the control follows. */
+  managedGrokBuildChannel?: DesktopUpdateChannel;
   saving?: boolean;
   refreshing?: boolean;
   onCliPathChange?: (
@@ -299,9 +336,13 @@ function AcpAgentSection(props: {
   ) => Promise<AcpCliPathUpdateResult>;
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
   onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  onManagedGrokBuildChannelChange?: (
+    channel: DesktopUpdateChannel,
+  ) => Promise<boolean>;
   onRefresh: () => Promise<boolean>;
 }) {
   const { entry, enabled } = props;
+  const managedBuild = entry.managedBuild;
   const instances = entry.instances ?? [];
   const rejectedInstances = entry.rejectedInstances ?? [];
   const savedPath = props.cliPathSnapshot?.value ?? "";
@@ -335,6 +376,16 @@ function AcpAgentSection(props: {
             ? ` · v${activeOverrideInstance.version}`
             : ""}.`
           : undefined;
+  // A manual path that resolves to a PwrAgent-managed version directory turns
+  // an auto-updating channel into a permanent pin: newer verified builds keep
+  // downloading and never run. Nothing else on the pane says so, and clicking
+  // "Use" on a managed row is enough to end up here.
+  const pinnedManagedBuild =
+    entry.registryId === "grok"
+    && overrideActive
+    && entry.managedBuild?.pinnedBehind === true
+      ? entry.managedBuild
+      : undefined;
   const inactiveOverrideError =
     enabled
     && normalizedSavedPath !== ""
@@ -418,7 +469,32 @@ function AcpAgentSection(props: {
             // rescan chained below, so "Saving…" would name only the first
             // and shortest part of the wait.
             pendingLabel="Saving and rescanning…"
-            sub="Download verified releases from pwrdrvr/grok-build and prefer the newest one for new threads. Packaged macOS and Windows apps require platform signing; manual paths still win."
+            source={entry.managedBuild?.repository}
+            sub="PwrAgent downloads, verifies and installs Grok builds from pwrdrvr/grok-build. New threads use the newest verified build. Packaged macOS and Windows apps require platform signing; manual paths still win."
+            actions={
+              props.managedGrokBuilds && entry.managedBuild ? (
+                <ManagedBuildStatus
+                  managedBuild={entry.managedBuild}
+                  // Deliberately not `pathControlsDisabled`: that folds in
+                  // `envForced`, which says the CLI *path* comes from the
+                  // environment. A release check has nothing to do with which
+                  // path is in effect, so an env override must not disable it.
+                  busy={props.saving === true || pathUpdating}
+                  refreshing={props.refreshing === true}
+                  onCheckForUpdates={() => void refreshPathStatus()}
+                  onUseNewestBuild={
+                    // Clearing the config override cannot dislodge an
+                    // environment one, so the button is absent rather than
+                    // disabled when it could not do what it says.
+                    props.onCliPathChange && !envForced
+                      ? () => {
+                          void commitPath("");
+                        }
+                      : undefined
+                  }
+                />
+              ) : null
+            }
             onChange={(next) => {
               // The refresh is awaited rather than floated, so the row stays
               // pending until the agent list actually reflects the change.
@@ -427,6 +503,38 @@ function AcpAgentSection(props: {
                   return props.onRefresh();
                 }
               }) ?? Promise.resolve();
+            }}
+          />
+        ) : null}
+
+        {entry.registryId === "grok"
+          && managedBuild
+          && props.managedGrokBuilds
+          && props.onManagedGrokBuildChannelChange ? (
+          <SegmentedField
+            label="Build track"
+            sub="Latest installs promoted builds only. Prerelease installs the newest build whether or not it has been promoted — and stays selectable while both tracks name the same version, which is where a build sits between publication and promotion."
+            disabled={
+              props.saving || pathUpdating || props.refreshing || !enabled
+            }
+            options={MANAGED_BUILD_CHANNEL_OPTIONS.map((option) => ({
+              ...option,
+              meta: managedBuildTrackVersion(managedBuild, option.value),
+            }))}
+            // Same wait as the toggle: the config write, then the rescan that
+            // installs and activates the track's build.
+            pendingLabel="Saving and rescanning…"
+            value={props.managedGrokBuildChannel ?? managedBuild.channel}
+            onChange={(channel) => {
+              return (
+                props.onManagedGrokBuildChannelChange?.(channel).then(
+                  (saved) => {
+                    if (saved) {
+                      return props.onRefresh();
+                    }
+                  },
+                ) ?? Promise.resolve()
+              );
             }}
           />
         ) : null}
@@ -449,20 +557,50 @@ function AcpAgentSection(props: {
                   {instances.map((instance) => {
                     const active =
                       enabled && instance.command === entry.activeCommand;
-                    const chips: SettingsPathRowChip[] = [
+                    const newestManagedBuild =
+                      instance.pwrAgentBuildTag !== undefined
+                      && instance.pwrAgentBuildTag
+                        === entry.managedBuild?.installedTag;
+                    // Explicit keys: this array is spliced between renders
+                    // (the channel chip appears once discovery labels the
+                    // instance), and SettingsPathRow's `tone-index` fallback
+                    // only holds for a stable array.
+                    const chips: SettingsPathRowChip[] = [];
+                    // Which product this binary is, before which version it
+                    // is: "v1.0.5" next to "v1.0.4-pwragent.2" reads as one
+                    // release behind until you know they are different builds
+                    // from different publishers.
+                    if (entry.registryId === "grok") {
+                      chips.push(
+                        instance.pwrAgentBuild
+                          ? {
+                              key: "channel",
+                              label: "PwrAgent build",
+                              tone: newestManagedBuild ? "ok" : "muted",
+                            }
+                          : { key: "channel", label: "xAI build", tone: "muted" },
+                      );
+                    }
+                    chips.push(
                       {
+                        key: "source",
                         label: instance.source === "override" ? "override" : "path",
                         tone: "muted",
                       },
                       {
+                        key: "version",
                         label: instance.version
                           ? `v${instance.version}`
                           : "version unknown",
                         tone: "muted",
                       },
-                    ];
+                    );
                     if (!active) {
-                      chips.push({ label: "available", tone: "muted" });
+                      chips.push({
+                        key: "availability",
+                        label: "available",
+                        tone: "muted",
+                      });
                     }
                     return (
                       <SettingsPathRow
@@ -525,13 +663,19 @@ function AcpAgentSection(props: {
             source={
               envForced
                 ? "env override"
-                : overrideActive
-                  ? "active override"
-                  : normalizedSavedPath
-                    ? "saved override"
-                    : undefined
+                : pinnedManagedBuild
+                  ? "pinning a PwrAgent build"
+                  : overrideActive
+                    ? "active override"
+                    : normalizedSavedPath
+                      ? "saved override"
+                      : undefined
             }
-            help={overrideHelp}
+            help={
+              pinnedManagedBuild
+                ? `This path pins one PwrAgent build. ${pinnedManagedBuild.installedTag} is already downloaded and verified but will never run. Clear it to follow the newest build again.`
+                : overrideHelp
+            }
             error={pathActionError ?? inactiveOverrideError}
             control={
               <div className="settings-secret">
@@ -571,7 +715,11 @@ function AcpAgentSection(props: {
 
         <SettingsField
           label="Re-probe"
-          sub="Re-run discovery for enabled agents (versions, installs, capabilities)."
+          sub={
+            entry.registryId === "grok" && entry.managedBuild
+              ? "Re-run discovery for enabled agents (versions, installs, capabilities). Release checks have their own control above."
+              : "Re-run discovery for enabled agents (versions, installs, capabilities)."
+          }
           control={
             <div className="settings-inline-actions">
               <button
@@ -587,6 +735,126 @@ function AcpAgentSection(props: {
         />
       </div>
     </SettingsSection>
+  );
+}
+
+const MANAGED_BUILD_CHANNEL_OPTIONS: Array<{
+  label: string;
+  value: DesktopUpdateChannel;
+}> = [
+  { label: "Latest", value: "latest" },
+  { label: "Prerelease", value: "prerelease" },
+];
+
+/**
+ * The version a track resolves to, as of the last release check.
+ *
+ * "Unavailable" is not "there is no such build": a check that fell back to the
+ * public Atom feed can only speak for one track, and no check has run at all
+ * before the first install.
+ */
+function managedBuildTrackVersion(
+  managedBuild: AcpManagedBuildStatus,
+  channel: DesktopUpdateChannel,
+): string {
+  const tag =
+    channel === "latest"
+      ? managedBuild.latestTag
+      : managedBuild.prereleaseTag;
+  return tag ? managedGrokBuildVersion(tag) : "Unavailable";
+}
+
+/**
+ * The PwrAgent build channel, reported as a channel rather than as a switch.
+ *
+ * Four facts in the order an operator asks for them: which tag is installed,
+ * whether it is the one running, when PwrAgent last checked, and what to press.
+ * There is deliberately no "install" verb in the common case — on this channel
+ * PwrAgent has already downloaded, verified and installed the newest build, so
+ * asking the operator to install it would be asking for work already done. The
+ * one state that needs a person is a manual path pinning an older build, which
+ * never resolves on its own.
+ */
+function ManagedBuildStatus(props: {
+  busy: boolean;
+  managedBuild: AcpManagedBuildStatus;
+  refreshing: boolean;
+  onCheckForUpdates: () => void;
+  onUseNewestBuild?: () => void;
+}) {
+  const { managedBuild } = props;
+  const pinned = managedBuild.pinnedBehind === true;
+  const checkedAt = managedBuild.checkedAt;
+  // Three states, because "installed" and "running" are different facts. An
+  // operator whose manual path points at a vendor install has the newest
+  // verified build on disk and is not running any of it; saying only
+  // "installed · newest verified build" would read as "this is what my threads
+  // use".
+  const inUse = managedBuild.activeTag !== undefined;
+  return (
+    <div className="acp-build">
+      <p className="acp-build__line">
+        {managedBuild.installedTag ? (
+          <>
+            <span
+              className={`status-dot${inUse && !pinned ? " status-dot--ok" : " status-dot--warning"}`}
+              aria-hidden="true"
+            />
+            <span className="acp-build__tag">{managedBuild.installedTag}</span>
+            <span className="acp-build__state">
+              {pinned
+                ? `installed and verified · not in use, a manual path pins ${managedBuild.activeTag}`
+                : inUse
+                  ? "installed · newest verified build"
+                  : "installed and verified · not in use, another Grok install is active"}
+              {checkedAt !== undefined
+                ? ` · checked ${acpRelativeTime(checkedAt)}`
+                : ""}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="status-dot" aria-hidden="true" />
+            <span className="acp-build__state">
+              No verified build downloaded yet.
+            </span>
+          </>
+        )}
+      </p>
+      <div className="settings-inline-actions">
+        {pinned && props.onUseNewestBuild ? (
+          <button
+            className="button button--primary"
+            disabled={props.busy}
+            type="button"
+            onClick={props.onUseNewestBuild}
+          >
+            Use newest build
+          </button>
+        ) : null}
+        <button
+          className="button button--secondary"
+          disabled={props.busy}
+          type="button"
+          onClick={props.onCheckForUpdates}
+        >
+          {props.refreshing ? "Checking…" : "Check for updates"}
+        </button>
+        {managedBuild.installedTag ? (
+          <a
+            className="button button--ghost"
+            href={managedGrokReleaseUrl(
+              managedBuild.repository,
+              managedBuild.installedTag,
+            )}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Release notes
+          </a>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

@@ -58,6 +58,14 @@ export type DesktopUpdateChannel = (typeof DESKTOP_UPDATE_CHANNELS)[number];
 
 export const DESKTOP_UPDATE_CHANNEL_DEFAULT: DesktopUpdateChannel = "latest";
 
+/**
+ * The managed Grok build follows the same two tracks as the application, and
+ * defaults to Latest for the same reason: a build published for testing is
+ * something an operator opts into, never something they inherit.
+ */
+export const MANAGED_GROK_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
+  "latest";
+
 export const DESKTOP_UPDATE_TRAINS = ["stable", "beta"] as const;
 
 export type DesktopUpdateTrain = (typeof DESKTOP_UPDATE_TRAINS)[number];
@@ -1044,6 +1052,8 @@ export type DesktopSettingsSnapshot = {
       enabled: boolean;
       /** Download and prefer PwrAgent's verified Grok fork build. */
       managedBuilds?: boolean;
+      /** Which grok-build track the managed runtime follows. */
+      managedBuildChannel?: DesktopUpdateChannel;
     };
     kimi: {
       /**
@@ -1283,6 +1293,7 @@ export type DesktopSettingsConfigPatch = {
       cliPath?: string;
       enabled?: boolean;
       managedBuilds?: boolean;
+      managedBuildChannel?: DesktopUpdateChannel;
     };
     kimi?: {
       cliPath?: string;
@@ -1879,6 +1890,19 @@ export function isDesktopUpdateChannel(
   value: string,
 ): value is DesktopUpdateChannel {
   return DESKTOP_UPDATE_CHANNELS.includes(value as DesktopUpdateChannel);
+}
+
+/**
+ * Read a persisted update channel from an unvalidated source — a TOML scalar,
+ * a JSON field on disk. One parser for both, so a channel that stops being
+ * accepted stops being accepted everywhere at once.
+ */
+export function parseDesktopUpdateChannel(
+  value: unknown,
+): DesktopUpdateChannel | undefined {
+  return typeof value === "string" && isDesktopUpdateChannel(value)
+    ? value
+    : undefined;
 }
 
 export function isDesktopUpdateTrain(
