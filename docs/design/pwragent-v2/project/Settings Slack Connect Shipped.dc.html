@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+        <style>
+          :root {
+            --bg-app: #000000;
+            --bg-panel: #0a0a0a;
+            --bg-panel-elevated: #101010;
+            --bg-row-active: #120800;
+            --bg-input: #080808;
+            --border-subtle: rgba(247, 243, 235, 0.1);
+            --text-primary: #f7f3eb;
+            --text-secondary: #b8b0a5;
+            --text-muted: #8c857a;
+            --accent: #ff8a1f;
+            --accent-bright: #ffb35c;
+            --accent-border: rgba(255, 138, 31, 0.42);
+            --success-text: #9ce5b3;
+            --success-soft: rgba(74, 148, 92, 0.18);
+            --success-border: rgba(74, 148, 92, 0.32);
+            --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", system-ui, sans-serif;
+            --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+          }
+          body {
+            margin: 0;
+            background: var(--bg-app);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            -webkit-font-smoothing: antialiased;
+          }
+          a { color: var(--accent-bright); text-decoration: none; }
+          a:hover { color: var(--accent); text-decoration: underline; }
+          .page { max-width: 1000px; margin: 0 auto; padding: 56px 40px 120px; }
+          .eyebrow {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin: 0 0 10px;
+          }
+          h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 14px; line-height: 1.1; }
+          h2 { font-size: 18px; font-weight: 650; margin: 0 0 12px; }
+          .lede { font-size: 15px; line-height: 1.6; color: var(--text-secondary); max-width: 78ch; margin: 0; text-wrap: pretty; }
+          .body { font-size: 13px; line-height: 1.65; color: var(--text-secondary); max-width: 82ch; text-wrap: pretty; }
+          code { font-family: var(--font-mono); font-size: 12px; color: var(--accent-bright); background: var(--bg-panel-elevated); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 1px 5px; }
+          .rule { height: 1px; background: var(--border-subtle); border: 0; margin: 44px 0; }
+          .commit { display: inline-flex; align-items: center; gap: 8px; margin-top: 20px; padding: 9px 13px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+          .commit b { color: var(--accent-bright); font-weight: 500; }
+          .tbl { width: 100%; border-collapse: collapse; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+          .tbl th { text-align: left; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); font-weight: 500; padding: 11px 14px; background: var(--bg-panel-elevated); border-bottom: 1px solid var(--border-subtle); }
+          .tbl td { padding: 11px 14px; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+          .tbl tr:last-child td { border-bottom: 0; }
+          .tbl td:first-child { white-space: nowrap; font-family: var(--font-mono); font-size: 11px; }
+          .pill { display: inline-block; padding: 2px 7px; border-radius: 999px; font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.06em; }
+          .pill-done { border: 1px solid var(--success-border); background: var(--success-soft); color: var(--success-text); }
+          .pill-open { border: 1px solid var(--border-subtle); background: var(--bg-panel-elevated); color: var(--text-muted); }
+          .pill-next { border: 1px solid var(--accent-border); background: var(--bg-row-active); color: var(--accent-bright); }
+          .note { border: 1px solid var(--border-subtle); border-left: 2px solid var(--accent); border-radius: 0 8px 8px 0; background: var(--bg-panel); padding: 15px 19px; margin-top: 22px; }
+          .note p { margin: 0; font-size: 13px; line-height: 1.65; color: var(--text-secondary); max-width: 82ch; }
+          .note p + p { margin-top: 9px; }
+          .checks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+          .check { font-family: var(--font-mono); font-size: 11px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--success-border); background: var(--success-soft); color: var(--success-text); }
+        </style>
+      </helmet>
+
+      <div class="page" data-screen-label="Shipped">
+        <p class="eyebrow">Follow-up &middot; Connect Slack review</p>
+        <h1>Direction A shipped</h1>
+        <p class="lede">The copy row landed on <code>codex/slack-agent-sessions</code>. Both blocking findings are closed, along with five others. This page records what changed and what is deliberately still open.</p>
+        <div class="commit">
+          <b>ffdfcf39a</b> fix(desktop): make the Slack manifest copy visible and repeatable
+        </div>
+
+        <hr class="rule" />
+
+        <h2>Findings status</h2>
+        <table class="tbl">
+          <thead>
+            <tr><th>ID</th><th>Finding</th><th>State</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>B1</td>
+              <td>Clipboard write had no acknowledgement at the point of action. <code>Copy manifest</code> now swaps to <code>Copied</code> for 1500ms, matching <code>SettingsCopyValue</code>, and feedback renders beside the control that produced it.</td>
+              <td><span class="pill pill-done">fixed</span></td>
+            </tr>
+            <tr>
+              <td>B2</td>
+              <td>Manifest could not be copied again without a duplicate browser tab. Copy and navigate are now separate controls; the copy is idempotent and never opens a browser.</td>
+              <td><span class="pill pill-done">fixed</span></td>
+            </tr>
+            <tr>
+              <td>B3</td>
+              <td>Pending label appeared on the wrong button. <code>busy</code> became a per-action <code>pending</code>.</td>
+              <td><span class="pill pill-done">fixed</span></td>
+            </tr>
+            <tr>
+              <td>S1</td>
+              <td>No primary among three identical buttons. The create action takes <code>button--primary</code>.</td>
+              <td><span class="pill pill-done">fixed</span></td>
+            </tr>
+            <tr>
+              <td>S2 &middot; S3 &middot; S4</td>
+              <td>Create and update shared a row; the create checklist stayed on screen and wrong after an update; the update procedure was prose. Existing-app work now has its own labelled block with its own numbered steps.</td>
+              <td><span class="pill pill-done">fixed</span></td>
+            </tr>
+            <tr>
+              <td>P1 &middot; P2</td>
+              <td>Duplicated sentence and unscannable labels. The field subtitle drops the eleven repeated words; <i>Copy Create Slack app link</i> becomes <i>Copy link for an admin</i>.</td>
+              <td><span class="pill pill-done">fixed</span></td>
+            </tr>
+            <tr>
+              <td>S5</td>
+              <td>Nothing tells an operator their app needs updating. Needs stored manifest versioning &mdash; that is direction B, and a separate change.</td>
+              <td><span class="pill pill-next">open</span></td>
+            </tr>
+            <tr>
+              <td>P3</td>
+              <td><code>.button</code> carries no font-size and inherits 16px. Settings-wide, not a Slack change.</td>
+              <td><span class="pill pill-open">open</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="checks">
+          <span class="check">3,574 renderer tests pass</span>
+          <span class="check">typecheck clean</span>
+          <span class="check">eslint 0 errors</span>
+          <span class="check">lint:colors + lint:boundaries clean</span>
+          <span class="check">axe 0 violations, both themes</span>
+          <span class="check">reflows at 900px</span>
+        </div>
+
+        <div class="note">
+          <p><b>Two things deliberately left alone.</b></p>
+          <p><b>Onboarding keeps the create-only card.</b> Its oversized-URL fallback still copies the manifest with no way to re-copy it &mdash; the same shape as B2. It stays because the real manifest measures 2,979 bytes against an 8,000-character URL budget, so that branch does not fire in practice; a manifest that grew past the budget would make it reachable and worth revisiting.</p>
+          <p><b>The Settings-wide save indicator is its own task.</b> A setting can take seconds to write and reload while the only feedback is the control greying out. There is exactly one spinner in the whole renderer (<code>.composer__action-button-spinner</code>), and the shared <code>saving</code> flag is consumed only to set <code>disabled</code> &mdash; 77 times in the messaging panel alone. Promoting a shared pending primitive is tracked separately.</p>
+        </div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() {
+          return {};
+        }
+      }
+    </script>
+  </body>
+</html>

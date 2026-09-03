@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <style>
+          @import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+          :root {
+            --bg-app: #000000;
+            --bg-sidebar: #050505;
+            --bg-panel: #0a0a0a;
+            --bg-panel-elevated: #101010;
+            --text-primary: #f7f3eb;
+            --text-secondary: #b8b0a5;
+            --text-muted: #8c857a;
+            --accent: #ff8a1f;
+            --accent-bright: #ffb35c;
+            --border-subtle: rgba(247, 243, 235, 0.1);
+            --border-strong: rgba(247, 243, 235, 0.2);
+            --status-ok: #5fa969;
+            --status-error: #c45a3a;
+            --font-sans: "Geist", "SF Pro Text", system-ui, sans-serif;
+            --font-mono: "IBM Plex Mono", "SF Mono", Consolas, monospace;
+          }
+
+          * { box-sizing: border-box; }
+          a { color: var(--accent); text-decoration: none; }
+          a:hover { color: var(--accent-bright); }
+
+          .frame {
+            position: absolute;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            font-family: var(--font-sans);
+            color: var(--text-primary);
+            overflow: hidden;
+          }
+          .fhead {
+            padding: 16px 20px 14px;
+            border-bottom: 1px solid var(--border-subtle);
+            background: var(--bg-panel-elevated);
+          }
+          .eyebrow {
+            font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+            letter-spacing: 1px; text-transform: uppercase; color: var(--accent);
+            margin: 0 0 6px;
+          }
+          .ftitle { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; margin: 0; }
+          .fsub { font-size: 12px; color: var(--text-muted); margin: 5px 0 0; max-width: 64ch; text-wrap: pretty; }
+          .fbody { padding: 18px 20px 22px; }
+
+          .spec { display: flex; flex-direction: column; gap: 2px; }
+          .specrow { display: flex; align-items: stretch; gap: 14px; }
+          .speclab { width: 128px; padding-top: 12px; flex: 0 0 auto; }
+          .specname { font-size: 12px; font-weight: 600; line-height: 1.25; }
+          .specmeta { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+          .corner {
+            position: relative; width: 300px; height: 108px; flex: 0 0 auto;
+            background: var(--bg-sidebar);
+            border-top: 1px solid var(--border-strong);
+            border-left: 1px solid var(--border-strong);
+            border-top-left-radius: 30px; overflow: hidden;
+          }
+          .corner--flag { background: #140b02; }
+          .corner--ok { background: #061006; }
+          .light { position: absolute; width: 42px; height: 42px; border-radius: 50%; }
+          .l1 { background: #ff5f57; }
+          .l2 { background: #febc2e; }
+          .l3 { background: #28c840; }
+          .measure {
+            position: absolute; font-family: var(--font-mono); font-size: 10px;
+            color: var(--accent-bright); white-space: nowrap;
+          }
+          .tick { position: absolute; background: var(--accent); opacity: 0.55; }
+
+          .strip {
+            position: relative; width: 660px; height: 168px;
+            background: var(--bg-sidebar);
+            border-top: 1px solid var(--border-strong);
+            border-left: 1px solid var(--border-strong);
+            border-top-left-radius: 30px; overflow: hidden;
+          }
+          .band { position: absolute; left: 0; right: 0; top: 0; background: rgba(255, 138, 31, 0.06); }
+          .bandline { position: absolute; left: 0; right: 0; height: 1px; background: rgba(255, 138, 31, 0.45); }
+          .centreline { position: absolute; left: 0; right: 0; height: 1px; background: rgba(95, 169, 105, 0.9); }
+          .raill { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(95, 169, 105, 0.75); }
+          .wordmark {
+            position: absolute; font-family: var(--font-sans); font-weight: 700;
+            font-size: 51px; line-height: 1; letter-spacing: -0.51px; color: var(--text-primary);
+          }
+          .wordmark em { font-style: normal; color: var(--accent); }
+          .stripcap {
+            font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
+            margin-top: 7px; display: flex; gap: 20px; flex-wrap: wrap;
+          }
+          .stripcap .ok { color: var(--status-ok); }
+          .stripcap .bad { color: var(--status-error); }
+
+          table.t { width: 100%; border-collapse: collapse; font-size: 12px; }
+          table.t th {
+            text-align: left; font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
+            letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted);
+            border-bottom: 1px solid var(--border-subtle); padding: 0 10px 6px 0;
+          }
+          table.t td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); }
+          table.t td.k { color: var(--text-primary); font-weight: 600; white-space: nowrap; }
+          table.t td.n { font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); }
+          table.t tr.flag td { background: rgba(196, 90, 58, 0.09); }
+          table.t tr.flag td.k { color: var(--status-error); }
+          table.t tr.good td { background: rgba(95, 169, 105, 0.08); }
+          table.t tr.good td.k { color: var(--status-ok); }
+
+          .note {
+            border: 1px solid var(--border-subtle); border-left: 2px solid var(--accent);
+            background: var(--bg-panel-elevated); border-radius: 0 8px 8px 0; padding: 13px 15px;
+          }
+          .note h4 {
+            margin: 0 0 6px; font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
+            letter-spacing: 0.9px; text-transform: uppercase; color: var(--accent);
+          }
+          .note p { margin: 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.55; text-wrap: pretty; }
+          .note p + p { margin-top: 8px; }
+          .note--ok { border-left-color: var(--status-ok); }
+          .note--ok h4 { color: var(--status-ok); }
+
+          code { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-bright); }
+          .verdict { font-size: 14px; line-height: 1.6; color: var(--text-secondary); margin: 0; text-wrap: pretty; }
+          .verdict strong { color: var(--text-primary); }
+          .diff {
+            background: #000; border: 1px solid var(--border-subtle); border-radius: 8px;
+            padding: 12px 14px; overflow-x: auto;
+          }
+          .diff div {
+            font-family: var(--font-mono); font-size: 12px; line-height: 1.75;
+            color: var(--text-secondary); white-space: nowrap;
+          }
+          .diff .path { color: var(--text-muted); }
+          .diff .del { color: var(--status-error); }
+          .diff .add { color: var(--status-ok); }
+        </style>
+      </helmet>
+
+      <div class="frame" style="left:60px;top:70px;width:540px" data-screen-label="Measured insets">
+        <div class="fhead" data-drags-parent="1">
+          <p class="eyebrow">A · evidence · measured 2026-09-01</p>
+          <h2 class="ftitle">Every stoplight inset on this Mac</h2>
+          <p class="fsub">Pixel-measured from a live screen capture, not read from source. Shown at 3×, all corners aligned to a common window origin. Distance is to the 14&thinsp;pt button frame.</p>
+        </div>
+        <div class="fbody">
+          <div class="spec">
+            <div class="specrow">
+              <div class="speclab"><div class="specname">macOS standard</div><div class="specmeta">Terminal · Ghostty</div></div>
+              <div class="corner">
+                <div class="light l1" style="left:27px;top:27px"></div>
+                <div class="light l2" style="left:96px;top:27px"></div>
+                <div class="light l3" style="left:165px;top:27px"></div>
+                <div class="measure" style="left:222px;top:41px">9 / 9</div>
+              </div>
+            </div>
+            <div class="specrow">
+              <div class="speclab"><div class="specname">PwrGit</div><div class="specmeta">32 pt bar</div></div>
+              <div class="corner">
+                <div class="light l1" style="left:36px;top:30px"></div>
+                <div class="light l2" style="left:105px;top:30px"></div>
+                <div class="light l3" style="left:174px;top:30px"></div>
+                <div class="measure" style="left:231px;top:44px">12 / 10</div>
+              </div>
+            </div>
+            <div class="specrow">
+              <div class="speclab"><div class="specname">Microsoft Edge</div><div class="specmeta">third party</div></div>
+              <div class="corner">
+                <div class="light l1" style="left:39px;top:39px"></div>
+                <div class="light l2" style="left:108px;top:39px"></div>
+                <div class="light l3" style="left:177px;top:39px"></div>
+                <div class="measure" style="left:234px;top:53px">13 / 13</div>
+              </div>
+            </div>
+            <div class="specrow">
+              <div class="speclab"><div class="specname">Claude Desktop</div><div class="specmeta">third party</div></div>
+              <div class="corner">
+                <div class="light l1" style="left:51px;top:51px"></div>
+                <div class="light l2" style="left:120px;top:51px"></div>
+                <div class="light l3" style="left:189px;top:51px"></div>
+                <div class="measure" style="left:246px;top:65px">17 / 17</div>
+              </div>
+            </div>
+            <div class="specrow">
+              <div class="speclab"><div class="specname">PwrSnap</div><div class="specmeta">52 pt bar</div></div>
+              <div class="corner">
+                <div class="light l1" style="left:60px;top:54px"></div>
+                <div class="light l2" style="left:129px;top:54px"></div>
+                <div class="light l3" style="left:198px;top:54px"></div>
+                <div class="measure" style="left:255px;top:68px">20 / 18</div>
+              </div>
+            </div>
+            <div class="specrow">
+              <div class="speclab"><div class="specname" style="color:var(--status-error)">PwrAgent</div><div class="specmeta">38 pt band · was</div></div>
+              <div class="corner corner--flag">
+                <div class="light l1" style="left:60px;top:54px"></div>
+                <div class="light l2" style="left:129px;top:54px"></div>
+                <div class="light l3" style="left:198px;top:54px"></div>
+                <div class="measure" style="left:255px;top:68px">20 / 18</div>
+              </div>
+            </div>
+            <div class="specrow">
+              <div class="speclab"><div class="specname" style="color:var(--status-ok)">PwrAgent</div><div class="specmeta">40 pt band · now</div></div>
+              <div class="corner corner--ok">
+                <div class="light l1" style="left:48px;top:39px"></div>
+                <div class="light l2" style="left:117px;top:39px"></div>
+                <div class="light l3" style="left:186px;top:39px"></div>
+                <div class="measure" style="left:243px;top:53px">16 / 13</div>
+              </div>
+            </div>
+          </div>
+
+          <table class="t" style="margin-top:20px">
+            <tr><th>Window</th><th>Band</th><th>Left</th><th>Top</th><th>Below</th><th>Centred&nbsp;at</th></tr>
+            <tr><td class="k">macOS standard</td><td class="n">28</td><td class="n">9</td><td class="n">9</td><td class="n">5</td><td class="n">7</td></tr>
+            <tr><td class="k">PwrGit</td><td class="n">32</td><td class="n">12</td><td class="n">10</td><td class="n">8</td><td class="n">9</td></tr>
+            <tr><td class="k">PwrSnap</td><td class="n">52</td><td class="n">20</td><td class="n">18</td><td class="n">20</td><td class="n">19</td></tr>
+            <tr class="flag"><td class="k">PwrAgent was</td><td class="n">38</td><td class="n">20</td><td class="n">18</td><td class="n">6</td><td class="n">12</td></tr>
+            <tr class="good"><td class="k">PwrAgent now</td><td class="n">40</td><td class="n">16</td><td class="n">13</td><td class="n">13</td><td class="n">13</td></tr>
+          </table>
+
+          <div class="note" style="margin-top:16px">
+            <h4>Correction</h4>
+            <p>An earlier version of this page put PwrAgent's masthead band at 44&thinsp;pt, taken from the comments in app.css. Measured in a render harness it was <strong>38</strong>: those comments describe a 34&thinsp;pt icon button that is now 28. At 38, a stoplight at y=18 sat with 18&thinsp;pt above it and 6 below — 6&thinsp;pt low, not 3.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="left:640px;top:70px;width:740px" data-screen-label="The band">
+        <div class="fhead" data-drags-parent="1">
+          <p class="eyebrow">B · the real defect · sidebar masthead at 3×</p>
+          <h2 class="ftitle">The stoplights were the symptom. The band was the bug.</h2>
+          <p class="fsub">Orange = the chrome band. Green = its centreline, and the 16&thinsp;pt sidebar rail. Every bar in the app padded its content down from the top instead of centring it in the band.</p>
+        </div>
+        <div class="fbody">
+
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--status-error);margin:0 0 8px">WAS — 38 pt band, 10 above the row and 0 below, stoplights 20 / 18</div>
+          <div class="strip">
+            <div class="band" style="height:114px"></div>
+            <div class="bandline" style="top:113px"></div>
+            <div class="raill" style="left:48px"></div>
+            <div class="centreline" style="top:72px"></div>
+            <div class="light l1" style="left:60px;top:54px"></div>
+            <div class="light l2" style="left:129px;top:54px"></div>
+            <div class="light l3" style="left:198px;top:54px"></div>
+            <div class="wordmark" style="left:288px;top:46px">Pwr<em>Agent</em></div>
+            <div class="tick" style="left:0;top:54px;width:60px;height:1px"></div>
+            <div class="measure" style="left:6px;top:32px">20</div>
+            <div class="tick" style="left:60px;top:0;width:1px;height:54px"></div>
+            <div class="measure" style="left:66px;top:16px">18 above</div>
+            <div class="tick" style="left:60px;top:96px;width:1px;height:18px"></div>
+            <div class="measure" style="left:66px;top:98px">6 below</div>
+          </div>
+          <div class="stripcap">
+            <span><b class="bad">—</b> content centre 24</span>
+            <span>band centre 19</span>
+            <span>left inset 20 vs rail 16</span>
+          </div>
+
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--status-ok);margin:22px 0 8px">NOW — 40 pt band, content centred, stoplights 16 / 13</div>
+          <div class="strip">
+            <div class="band" style="height:120px"></div>
+            <div class="bandline" style="top:119px"></div>
+            <div class="raill" style="left:48px"></div>
+            <div class="centreline" style="top:60px"></div>
+            <div class="light l1" style="left:48px;top:39px"></div>
+            <div class="light l2" style="left:117px;top:39px"></div>
+            <div class="light l3" style="left:186px;top:39px"></div>
+            <div class="wordmark" style="left:288px;top:34px">Pwr<em>Agent</em></div>
+            <div class="tick" style="left:0;top:39px;width:48px;height:1px"></div>
+            <div class="measure" style="left:6px;top:18px">16</div>
+            <div class="tick" style="left:48px;top:0;width:1px;height:39px"></div>
+            <div class="measure" style="left:54px;top:10px">13 above</div>
+            <div class="tick" style="left:48px;top:81px;width:1px;height:39px"></div>
+            <div class="measure" style="left:54px;top:96px">13 below</div>
+          </div>
+          <div class="stripcap">
+            <span><b class="ok">—</b> content centre 20 = band centre 20</span>
+            <span>left inset 16 = rail 16</span>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:20px">
+            <div class="note">
+              <h4>Root cause</h4>
+              <p>Four bars declared <code>min-height: 44px</code> with <code>padding-top: 10px</code> and no bottom padding, all commented “10px + the 34px icon button.” <code>.sidebar__icon-button</code> was later tightened from 34 to 28 and nothing was re-derived. The bands kept their old height, the content kept all its slack above, and each bar drifted below its own centre by a different amount.</p>
+            </div>
+            <div class="note note--ok">
+              <h4>The band</h4>
+              <p><code>--chrome-band-h: 40px</code>. The 28&thinsp;pt button already puts a 6&thinsp;pt ring around a 16&thinsp;pt icon; the band gives the button row the same 6&thinsp;pt ring, so 28&nbsp;+&nbsp;6&nbsp;+&nbsp;6&nbsp;=&nbsp;40 and the row nests concentrically. Everything centres in it — including the stoplights, at (40&nbsp;−&nbsp;14)/2&nbsp;=&nbsp;13.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="left:640px;top:1010px;width:740px" data-screen-label="Band audit">
+        <div class="fhead" data-drags-parent="1">
+          <p class="eyebrow">C · audit · measured in a render harness</p>
+          <h2 class="ftitle">Five bars, five different centrelines</h2>
+          <p class="fsub">Distance from the window's top edge to the vertical centre of each bar's content, measured off the real app.css with real markup. The one bar that padded symmetrically was already at 20 — which is where the other four now join it.</p>
+        </div>
+        <div class="fbody">
+          <table class="t">
+            <tr><th>Bar</th><th>Surface</th><th>Band was</th><th>Centre was</th><th>Now</th><th>Lift</th></tr>
+            <tr class="flag"><td class="k">.sidebar__masthead</td><td>wordmark</td><td class="n">38</td><td class="n">24</td><td class="n">20</td><td class="n">4</td></tr>
+            <tr class="flag"><td class="k">.thread-header</td><td>thread title, breadcrumb</td><td class="n">44</td><td class="n">24</td><td class="n">20</td><td class="n">4</td></tr>
+            <tr class="flag"><td class="k">.activity-titlebar</td><td>aux window breadcrumb</td><td class="n">44</td><td class="n">26.5</td><td class="n">20</td><td class="n">6.5</td></tr>
+            <tr class="flag"><td class="k">.settings-nav__masthead</td><td>Settings wordmark</td><td class="n">44</td><td class="n">27</td><td class="n">20</td><td class="n">7</td></tr>
+            <tr class="good"><td class="k">.settings-titlebar</td><td>Settings breadcrumb</td><td class="n">40</td><td class="n">19.5</td><td class="n">20</td><td class="n">0</td></tr>
+          </table>
+          <div class="note" style="margin-top:16px">
+            <h4>What this was doing to the Settings window</h4>
+            <p>Its left nav brand sat at 27 and its right-pane breadcrumb at 19.5 — 7.5&thinsp;pt apart, on one screen, side by side. That is the same root cause showing up as a visible misalignment rather than as a general sense of things sitting low.</p>
+          </div>
+          <div class="note note--ok" style="margin-top:12px">
+            <h4>Guard</h4>
+            <p><code>macos-window-chrome.test.ts</code> now walks all five selectors and fails if any one drops <code>min-height: var(--chrome-band-h)</code> or re-introduces a non-zero top padding — the two moves that let a bar off the centreline. It also pins the stoplight y to half the band, so the buttons can never drift away from the content again.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="left:60px;top:1390px;width:540px" data-screen-label="Change">
+        <div class="fhead" data-drags-parent="1">
+          <p class="eyebrow">D · the change</p>
+          <h2 class="ftitle">One token, five bars, one constant</h2>
+        </div>
+        <div class="fbody">
+          <div class="diff">
+            <div class="path">app.css · :root</div>
+            <div class="add">+ --chrome-band-h: 40px;</div>
+            <div class="path">app.css · each of the five bars</div>
+            <div class="del">- min-height: 44px; padding-top: 10px;</div>
+            <div class="add">+ min-height: var(--chrome-band-h); padding-top: 0;</div>
+            <div class="path">macos-window-chrome.ts</div>
+            <div class="del">- trafficLightPosition: { x: 20, y: 18 },</div>
+            <div class="add">+ trafficLightPosition: { x: 16, y: 13 },</div>
+          </div>
+          <p class="verdict" style="margin-top:16px">The stoplight y follows the band rather than leading it: 16 is the sidebar rail, 13 is half of (40&nbsp;−&nbsp;14). Both numbers are now readable off the CSS, and a test says so.</p>
+          <div class="note" style="margin-top:16px">
+            <h4>Not changing</h4>
+            <p>The wordmark stays at x&nbsp;=&nbsp;96 and the 80&thinsp;pt stoplight reservations stay as they are — the button group ends at 76, so they still clear it. PwrGit's 12&nbsp;/&nbsp;10 is correct for its 32&thinsp;pt bar. PwrSnap's y=18 is correct for its 52&thinsp;pt bar; only its x is off, and that is a separate repo.</p>
+          </div>
+        </div>
+      </div>
+
+    </x-dc>
+    <script
+      type="text/x-dc"
+      data-dc-script
+      data-props='{
+  "$preview": { "width": 1440, "height": 1980 }
+}'
+    >
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="stylesheet" href="./asbuilt.css" />
+      </helmet>
+      <div class="wrap" data-screen-label="As-built index">
+        <p class="eyebrow">As built · 2026-09-01</p>
+        <h1>PwrAgent, as it ships today</h1>
+        <p class="lede">
+          A record of what the application actually renders, captured from the
+          running renderer on 2026-09-01. It supersedes the v2 / v3 / v4
+          explorations as the starting point for design work. Those pages are
+          forward-looking proposals; these are measurements.
+        </p>
+
+        <div class="pagenav">
+          <a href="./As%20Built%202026-09-01%20-%20Main%20Window.dc.html">Main window</a>
+          <a href="./As%20Built%202026-09-01%20-%20Settings.dc.html">Settings</a>
+          <a href="./As%20Built%202026-09-01%20-%20Tool%20Cost.dc.html">Tool cost &amp; Token Miser</a>
+          <a href="./As%20Built%202026-09-01%20-%20Log%20Viewer.dc.html">Log viewer</a>
+          <a href="./As%20Built%202026-09-01%20-%20Star%20Map%20and%20Activity.dc.html">Star Map &amp; Activity</a>
+        </div>
+
+        <div class="note note--warn">
+          <h4>Do not design against uploads/</h4>
+          <p>
+            The <span class="mono">uploads/</span> codebase snapshot in this
+            project is a stale import. Verified absent from it on 2026-09-01:
+            the entire <span class="mono">apps/desktop/src/renderer/src/features/messaging/</span>
+            directory, <span class="mono">SlackConnectCard.tsx</span>,
+            <span class="mono">slack-connect-copy.ts</span>, and
+            <span class="mono">SettingsCopyValue.tsx</span>. Anything designed
+            against it is designed against a tree that no longer exists.
+          </p>
+          <p class="muted">
+            Re-running the codebase Import is a Claude Design UI action.
+          </p>
+        </div>
+
+        <h2>How this was captured</h2>
+        <p>
+          A throwaway Vite server mounted the real renderer components against
+          the real <span class="mono">apps/desktop/src/renderer/src/styles/app.css</span>,
+          driven by fixtures lifted from the vitest suites. Every number on
+          these pages was read from the running DOM with
+          <span class="mono">getComputedStyle</span> — not from reading the
+          stylesheet.
+        </p>
+        <p>
+          That distinction matters. Several containers
+          (<span class="mono">.lens-switch</span>,
+          <span class="mono">.settings-field</span>,
+          <span class="mono">.thread-row</span>) declare no
+          <span class="mono">font-size</span> and inherit the 16px user-agent
+          default, which is invisible in the stylesheet and visible in the
+          measurement.
+        </p>
+
+        <dl class="kv">
+          <dt>captured</dt><dd>2026-09-01</dd>
+          <dt>surfaces</dt><dd>10 states across 6 screens, each in both themes</dd>
+          <dt>console errors</dt><dd>0 across all 20 captures</dd>
+          <dt>theme axes</dt><dd><span class="mono">data-theme</span>, <span class="mono">data-density</span>, <span class="mono">data-platform</span>, <span class="mono">data-sidebar-text</span>, <span class="mono">data-transcript-text</span></dd>
+          <dt>a11y pass</dt><dd>axe-core, tags <span class="mono">wcag2a wcag2aa wcag21a wcag21aa wcag22aa</span></dd>
+        </dl>
+
+        <div class="note">
+          <h4>Artboards are redrawn, measurements are captured</h4>
+          <p>
+            The frames on these pages are rebuilt in HTML from the measured
+            values so they stay editable here. They are not screenshots. The
+            ground-truth PNGs from the same run sit outside this project; the
+            spec tables are the authority when the two ever disagree.
+          </p>
+        </div>
+
+        <h2>Token foundation</h2>
+        <p>
+          107 custom properties resolve on <span class="mono">:root</span>.
+          94 of them change between themes — light is a full re-declaration,
+          not a filter.
+        </p>
+
+        <table class="spec">
+          <caption>Core tokens, resolved. Dark is the bare <span class="mono">:root</span>; light is <span class="mono">:root[data-theme="light"]</span>.</caption>
+          <thead>
+            <tr><th>Token</th><th>Dark</th><th>Light</th><th>Carries</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>--accent</td><td><code>#ff8a1f</code></td><td><code>#b74c00</code></td><td>Focus, selection, brand, CTA</td></tr>
+            <tr><td>--accent-bright</td><td><code>#ffb35c</code></td><td><code>#994c00</code></td><td>Selected text on row-active fill</td></tr>
+            <tr><td>--bg-app</td><td><code>#000000</code></td><td><code>#ffffff</code></td><td>Full-bleed window ground</td></tr>
+            <tr><td>--bg-sidebar</td><td><code>#050505</code></td><td><code>#f7f4ef</code></td><td>Sidebar, nav rails</td></tr>
+            <tr><td>--bg-panel</td><td><code>#0a0a0a</code></td><td><code>#fdfcfa</code></td><td>Cards, transcript, composer</td></tr>
+            <tr><td>--bg-panel-elevated</td><td><code>#101010</code></td><td><code>#ffffff</code></td><td>Popovers, chips</td></tr>
+            <tr><td>--bg-panel-hover</td><td><code>#14110d</code></td><td><code>#f4f0e8</code></td><td>Hover — warm-tinted, not lighter grey</td></tr>
+            <tr><td>--bg-row-active</td><td><code>#120800</code></td><td><code>#fff5e9</code></td><td>Selected rows</td></tr>
+            <tr><td>--text-primary</td><td><code>#f7f3eb</code></td><td><code>#1a1612</code></td><td>Titles, values</td></tr>
+            <tr><td>--text-secondary</td><td><code>#b8b0a5</code></td><td><code>#524a40</code></td><td>Body, help text</td></tr>
+            <tr><td>--text-muted</td><td><code>#8c857a</code></td><td><code>#736c64</code></td><td>Timestamps, captions, separators</td></tr>
+            <tr><td>--border-subtle</td><td><code>rgba(247,243,235,.1)</code></td><td><code>rgba(0,0,0,.08)</code></td><td>Default 1px hairline</td></tr>
+            <tr><td>--border-strong</td><td><code>rgba(247,243,235,.2)</code></td><td><code>rgba(0,0,0,.18)</code></td><td>Emphasis hairline, dashed chips</td></tr>
+            <tr><td>--status-ok</td><td><code>#5fa969</code></td><td><code>#2e7d3c</code></td><td>Healthy pills, peer dots</td></tr>
+            <tr><td>--status-warning</td><td><code>#d99a3d</code></td><td><code>#a86b00</code></td><td>Degraded pills</td></tr>
+            <tr><td>--status-error</td><td><code>#c45a3a</code></td><td><code>#a8472a</code></td><td>Failed pills</td></tr>
+          </tbody>
+        </table>
+
+        <div class="swatches">
+          <div class="sw"><div class="sw__chip" style="background:#ff8a1f"></div><div class="sw__meta"><div class="sw__name">--accent</div><div class="sw__val">#ff8a1f</div></div></div>
+          <div class="sw"><div class="sw__chip" style="background:#ffb35c"></div><div class="sw__meta"><div class="sw__name">--accent-bright</div><div class="sw__val">#ffb35c</div></div></div>
+          <div class="sw"><div class="sw__chip" style="background:#120800"></div><div class="sw__meta"><div class="sw__name">--bg-row-active</div><div class="sw__val">#120800</div></div></div>
+          <div class="sw"><div class="sw__chip" style="background:#14110d"></div><div class="sw__meta"><div class="sw__name">--bg-panel-hover</div><div class="sw__val">#14110d</div></div></div>
+          <div class="sw"><div class="sw__chip" style="background:#f7f3eb"></div><div class="sw__meta"><div class="sw__name">--text-primary</div><div class="sw__val">#f7f3eb</div></div></div>
+          <div class="sw"><div class="sw__chip" style="background:#8c857a"></div><div class="sw__meta"><div class="sw__name">--text-muted</div><div class="sw__val">#8c857a</div></div></div>
+        </div>
+
+        <h2>Type scale, as measured</h2>
+        <p>
+          Two families. <span class="mono">Geist</span> for prose and labels,
+          <span class="mono">IBM Plex Mono</span> for anything code-shaped —
+          chips, branch names, identifiers, log lines, counts.
+        </p>
+
+        <table class="spec">
+          <caption>Every row read from a running component. Weights are computed values, not declared keywords.</caption>
+          <thead>
+            <tr><th>Role</th><th>Size / line</th><th>Weight</th><th>Family</th><th>Seen on</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Brand</td><td>17 / 17</td><td>700</td><td>Geist</td><td><code>.sidebar__brand</code>, <code>-0.17px</code> tracking</td></tr>
+            <tr><td>Panel title</td><td>22 / 24.2</td><td>700</td><td>Geist</td><td><code>.settings-head__title</code></td></tr>
+            <tr><td>Body / help</td><td>13 / 19.5</td><td>400</td><td>Geist</td><td><code>.settings-head__help</code></td></tr>
+            <tr><td>Field label</td><td>13 / 16.9</td><td>650</td><td>Geist</td><td><code>.settings-field__label</code></td></tr>
+            <tr><td>Thread title</td><td>13 / 16.25</td><td>600</td><td>Geist</td><td><code>.thread-row__title</code></td></tr>
+            <tr><td>Field sub</td><td>12 / 17.4</td><td>400</td><td>Geist</td><td><code>.settings-field__sub</code></td></tr>
+            <tr><td>Timestamp</td><td>12</td><td>500</td><td>Geist</td><td><code>.thread-row__time</code></td></tr>
+            <tr><td>Field help</td><td>11.5 / 16.675</td><td>400</td><td>Geist</td><td><code>.settings-field__help</code></td></tr>
+            <tr><td>Chip label</td><td>11</td><td>600</td><td>Geist</td><td><code>.thread-row__chip--backend</code></td></tr>
+            <tr><td>Chip, mono</td><td>11</td><td>500</td><td>IBM Plex Mono</td><td><code>.thread-row__chip--mono</code> — branch names</td></tr>
+            <tr><td>Eyebrow</td><td>10 / 10</td><td>650</td><td>Geist</td><td><code>.eyebrow</code>, <code>0.8px</code>, uppercase</td></tr>
+            <tr><td>Count / cookie</td><td>10 / 10</td><td>600</td><td>IBM Plex Mono</td><td><code>.signal-count</code></td></tr>
+            <tr><td>Runtime identity</td><td>10.5 / 10.5</td><td>400</td><td>IBM Plex Mono</td><td><code>.runtime-identity__button</code></td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Two size tokens are user-adjustable</h4>
+          <p>
+            <span class="mono">--sidebar-title-size</span> (13px) and
+            <span class="mono">--transcript-text-size</span> (14px) are driven
+            by the <span class="mono">data-sidebar-text</span> /
+            <span class="mono">data-transcript-text</span> notches. They do not
+            change between themes. Any layout that assumes a fixed thread-title
+            height has to survive every notch.
+          </p>
+        </div>
+
+        <h2>Geometry constants</h2>
+        <table class="spec">
+          <thead><tr><th>Property</th><th>Value</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td>Radius, panels</td><td>8px</td><td>Cards, inputs, popovers, thread rows</td></tr>
+            <tr><td>Radius, controls</td><td>6px</td><td>Buttons, chips, lens tabs, nav rows</td></tr>
+            <tr><td>Radius, pills</td><td>999px</td><td>Status chips, cookies, scanner beam</td></tr>
+            <tr><td>Borders</td><td>1px</td><td>Always. No 2px anywhere measured.</td></tr>
+            <tr><td>Sidebar default</td><td>408px</td><td>Resizable; <code>role="separator"</code> handle</td></tr>
+            <tr><td>Right rail default</td><td>380px</td><td>Pinnable context panel</td></tr>
+            <tr><td>--chat-column-max</td><td>940px</td><td>Transcript measure</td></tr>
+            <tr><td>--win-titlebar-h</td><td>40px</td><td>Windows caption reserve is <code>--win-caption-w: 140px</code></td></tr>
+          </tbody>
+        </table>
+
+        <h2>What the capture turned up</h2>
+        <p>
+          Three findings worth knowing before the next change. Each is
+          reproducible from the run described above.
+        </p>
+
+        <div class="note note--alert">
+          <h4>Directories lens has orphaned listitem semantics</h4>
+          <p>
+            Thread rows render <span class="mono">role="listitem"</span>. In
+            Inbox and Recents their container
+            <span class="mono">.sidebar-list--dense</span> carries
+            <span class="mono">role="list"</span>. In Directories,
+            <span class="mono">.directory-row__threads</span> carries no role
+            and neither does any ancestor, so axe reports
+            <span class="mono">aria-required-parent</span> (critical, 3 nodes).
+            The E2E a11y gate never switches to that lens, and its
+            <span class="mono">KNOWN_VIOLATIONS</span> list is empty — this is
+            unaudited, not waived.
+          </p>
+        </div>
+
+        <div class="note note--alert">
+          <h4>Log viewer misses AA contrast in both themes</h4>
+          <p>
+            Line numbers measure 3.72:1 on dark
+            (<span class="mono">#6b6966</span> on
+            <span class="mono">#050505</span>) and 2.65:1 on light
+            (<span class="mono">#9a9792</span> on
+            <span class="mono">#f7f4ef</span>) at 12px. The light theme's
+            debug-collection note measures 4.4:1
+            (<span class="mono">#a86b00</span> on white) at 11px. AA wants
+            4.5:1.
+          </p>
+        </div>
+
+        <div class="note note--warn">
+          <h4>The lens tabs are not named what the docs call them</h4>
+          <p>
+            The five lenses ship with accessible names
+            <span class="mono">Attention</span>,
+            <span class="mono">Drafts</span>,
+            <span class="mono">Updated</span>,
+            <span class="mono">Created</span>,
+            <span class="mono">Directories</span>. The internal browse-mode
+            values are still <span class="mono">inbox</span> and
+            <span class="mono">recents</span>, and the contributor docs still
+            say "Inbox" and "Recents". Copy written against the docs will not
+            match the product.
+          </p>
+        </div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props="{}">
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

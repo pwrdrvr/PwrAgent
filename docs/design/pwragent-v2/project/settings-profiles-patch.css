@@ -1,0 +1,46 @@
+/* Loaded after settings-profiles.css. Corrections found by screenshotting
+   the page and checking the recreation's arithmetic against the numbers
+   measured off the real component. */
+
+/* `transform: scale()` left the frame reserving the pre-scale height, so
+   every frame had ~120px of dead space under it. `zoom` participates in
+   layout, so the frame collapses to the painted height.
+
+   Width arithmetic: the app's settings pane is 1440 - 188 nav = 1252px.
+   The page frame gives 1178px of paintable width, so zoom = 1178/1252. */
+.pane {
+  width: 1252px;
+  transform: none;
+  zoom: 0.9409;
+}
+.narrow .pane { width: 718px; zoom: 1; }
+
+/* The app clips at `.settings-section__body-clip`, which is the full card
+   width (1202px inside the 1204px content column) — NOT inside the card
+   body's 18px padding. Clipping on the card reproduces the real cut of
+   77px; clipping on `.card__body` would cut 18px more than the app does.
+   The `!important` beats the inline `overflow: hidden` on `.card__body`
+   in the page markup. */
+.frame .card { overflow: hidden; }
+.frame .card__body[style] { overflow: visible !important; }
+
+/* Middle truncation, pure CSS: split the path at its last separator, let
+   the head ellipsize and pin the identifying tail. This is what ships. */
+.pc__path,
+.pc__codex-home {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.pc__path { flex: 0 1 auto; }
+.pc__path-head,
+.pc__codex-home-head {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc__path-tail,
+.pc__codex-home-tail { flex: 0 0 auto; }

@@ -1,0 +1,148 @@
+/* As-built record — shared shell.
+   Palette and type are the app's own resolved tokens, captured 2026-09-01
+   from the running renderer. Do not hand-tune these values; re-capture. */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+:root {
+  --bg-app: #000000;
+  --bg-sidebar: #050505;
+  --bg-panel: #0a0a0a;
+  --bg-panel-elevated: #101010;
+  --bg-panel-hover: #14110d;
+  --bg-row-active: #120800;
+  --bg-input: #080808;
+  --text-primary: #f7f3eb;
+  --text-secondary: #b8b0a5;
+  --text-muted: #8c857a;
+  --accent: #ff8a1f;
+  --accent-bright: #ffb35c;
+  --accent-strong: #ffa33d;
+  --accent-on: #160a00;
+  --accent-border: color-mix(in srgb, #ff8a1f 42%, transparent);
+  --accent-soft: color-mix(in srgb, #ff8a1f 12%, transparent);
+  --accent-bg-medium: color-mix(in srgb, #ff8a1f 16%, transparent);
+  --border-subtle: rgba(247, 243, 235, 0.1);
+  --border-strong: rgba(247, 243, 235, 0.2);
+  --status-ok: #5fa969;
+  --status-warning: #d99a3d;
+  --status-error: #c45a3a;
+  --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, #ff8a1f 55%, transparent); }
+a:hover { color: var(--accent-bright); border-bottom-color: var(--accent-bright); }
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 56px 32px 96px; }
+
+.eyebrow {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 10px;
+}
+
+h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.34px; margin: 0 0 12px; }
+h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.22px; margin: 56px 0 6px; }
+h3 { font-size: 15px; font-weight: 650; margin: 28px 0 8px; }
+p { margin: 0 0 12px; color: var(--text-secondary); max-width: 68ch; text-wrap: pretty; }
+.lede { font-size: 15px; color: var(--text-secondary); }
+.muted { color: var(--text-muted); }
+
+.rule { height: 1px; background: var(--border-subtle); border: 0; margin: 40px 0 0; }
+
+/* ---- spec tables ---------------------------------------------------- */
+.spec { width: 100%; border-collapse: collapse; margin: 14px 0 0; font-size: 12px; }
+.spec caption {
+  caption-side: top; text-align: left; color: var(--text-muted);
+  font-size: 11px; padding: 0 0 8px;
+}
+.spec th {
+  text-align: left; font-size: 10px; font-weight: 700; letter-spacing: 0.8px;
+  text-transform: uppercase; color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle); padding: 0 12px 6px 0;
+}
+.spec td {
+  padding: 7px 12px 7px 0; border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top; color: var(--text-secondary);
+}
+.spec td:first-child { color: var(--text-primary); font-weight: 600; white-space: nowrap; }
+.spec code, .mono { font-family: var(--font-mono); font-size: 11px; }
+.spec code { color: var(--accent-bright); }
+
+/* ---- swatches ------------------------------------------------------- */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 10px; margin: 16px 0 0; }
+.sw { border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; background: var(--bg-panel); }
+.sw__chip { height: 46px; border-bottom: 1px solid var(--border-subtle); }
+.sw__meta { padding: 8px 10px 10px; }
+.sw__name { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-primary); }
+.sw__val { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+
+/* ---- notes ---------------------------------------------------------- */
+.note {
+  border: 1px solid var(--border-subtle); border-left: 2px solid var(--accent);
+  background: var(--bg-panel); border-radius: 0 8px 8px 0;
+  padding: 14px 16px; margin: 18px 0 0;
+}
+.note--warn { border-left-color: var(--status-warning); }
+.note--alert { border-left-color: var(--status-error); }
+.note h4 {
+  margin: 0 0 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.8px;
+  text-transform: uppercase; color: var(--accent);
+}
+.note--warn h4 { color: var(--status-warning); }
+.note--alert h4 { color: var(--status-error); }
+.note p { margin: 0 0 8px; font-size: 13px; }
+.note p:last-child { margin: 0; }
+
+/* ---- artboard frames ------------------------------------------------ */
+.boards { display: flex; flex-wrap: wrap; gap: 20px; margin: 20px 0 0; align-items: flex-start; }
+.board { border: 1px solid var(--border-subtle); border-radius: 10px; overflow: hidden; background: var(--bg-app); }
+.board__cap {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
+  padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-panel);
+}
+.board__body { padding: 0; }
+
+/* Light-theme frame: the app's own light tokens, so a paired board is a
+   real theme comparison rather than an inverted screenshot. */
+.t-light {
+  --bg-app: #ffffff; --bg-sidebar: #f7f4ef; --bg-panel: #fdfcfa;
+  --bg-panel-elevated: #ffffff; --bg-panel-hover: #f4f0e8; --bg-row-active: #fff5e9;
+  --bg-input: #ffffff; --text-primary: #1a1612; --text-secondary: #524a40;
+  --text-muted: #736c64; --accent: #b74c00; --accent-bright: #994c00;
+  --accent-strong: #b34a00; --accent-on: #ffffff;
+  --accent-border: color-mix(in srgb, #b74c00 42%, transparent);
+  --accent-soft: color-mix(in srgb, #b74c00 12%, transparent);
+  --accent-bg-medium: color-mix(in srgb, #b74c00 16%, transparent);
+  --border-subtle: rgba(0, 0, 0, 0.08); --border-strong: rgba(0, 0, 0, 0.18);
+  --status-ok: #2e7d3c; --status-warning: #a86b00; --status-error: #a8472a;
+  background: var(--bg-app); color: var(--text-primary);
+}
+
+/* ---- page nav ------------------------------------------------------- */
+.pagenav { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 0; }
+.pagenav a {
+  border: 1px solid var(--border-subtle); border-bottom-color: var(--border-subtle);
+  border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600;
+  color: var(--text-secondary); background: var(--bg-panel);
+}
+.pagenav a:hover { border-color: var(--accent-border); color: var(--accent-bright); background: var(--bg-panel-hover); }
+
+.kv { display: grid; grid-template-columns: 172px 1fr; gap: 4px 16px; margin: 14px 0 0; font-size: 12.5px; }
+.kv dt { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; padding-top: 2px; }
+.kv dd { margin: 0; color: var(--text-secondary); }

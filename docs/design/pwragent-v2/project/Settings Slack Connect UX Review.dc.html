@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+        <style>
+          :root {
+            --bg-app: #000000;
+            --bg-panel: #0a0a0a;
+            --bg-panel-elevated: #101010;
+            --bg-row-active: #120800;
+            --bg-input: #080808;
+            --border-subtle: rgba(247, 243, 235, 0.1);
+            --border-strong: rgba(247, 243, 235, 0.2);
+            --text-primary: #f7f3eb;
+            --text-secondary: #b8b0a5;
+            --text-muted: #8c857a;
+            --accent: #ff8a1f;
+            --accent-bright: #ffb35c;
+            --accent-border: rgba(255, 138, 31, 0.42);
+            --accent-soft: rgba(255, 138, 31, 0.12);
+            --success-text: #9ce5b3;
+            --success-soft: rgba(74, 148, 92, 0.18);
+            --success-border: rgba(74, 148, 92, 0.32);
+            --danger-text: #ffb0a1;
+            --danger-soft: rgba(185, 66, 50, 0.24);
+            --danger-border: rgba(185, 66, 50, 0.45);
+            --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", system-ui, sans-serif;
+            --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+          }
+          body {
+            margin: 0;
+            background: var(--bg-app);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            -webkit-font-smoothing: antialiased;
+          }
+          a { color: var(--accent-bright); text-decoration: none; }
+          a:hover { color: var(--accent); text-decoration: underline; }
+          .page { max-width: 1180px; margin: 0 auto; padding: 56px 40px 120px; }
+          .eyebrow {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin: 0 0 10px;
+          }
+          h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 14px; line-height: 1.1; }
+          h2 { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 8px; }
+          h3 { font-size: 14px; font-weight: 650; margin: 0 0 6px; }
+          .lede { font-size: 15px; line-height: 1.6; color: var(--text-secondary); max-width: 78ch; margin: 0 0 8px; text-wrap: pretty; }
+          .body { font-size: 13px; line-height: 1.65; color: var(--text-secondary); max-width: 82ch; text-wrap: pretty; }
+          .body-dim { color: var(--text-muted); }
+          code { font-family: var(--font-mono); font-size: 12px; color: var(--accent-bright); background: var(--bg-panel-elevated); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 1px 5px; }
+          .rule { height: 1px; background: var(--border-subtle); border: 0; margin: 56px 0; }
+          .meta { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); margin: 28px 0 0; overflow: hidden; }
+          .meta > div { flex: 1 1 200px; padding: 14px 16px; border-right: 1px solid var(--border-subtle); }
+          .meta > div:last-child { border-right: 0; }
+          .meta dt { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin: 0 0 5px; }
+          .meta dd { margin: 0; font-size: 12.5px; color: var(--text-primary); line-height: 1.45; }
+          .sec-head { margin-bottom: 24px; }
+          .finding { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); padding: 18px 20px; margin-bottom: 12px; }
+          .finding-blocking { border-color: var(--danger-border); }
+          .f-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+          .f-id { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 4px; background: var(--bg-panel-elevated); border: 1px solid var(--border-subtle); color: var(--text-muted); }
+          .f-id-block { background: var(--danger-soft); border-color: var(--danger-border); color: var(--danger-text); }
+          .f-title { font-size: 14.5px; font-weight: 650; color: var(--text-primary); }
+          .f-body { font-size: 13px; line-height: 1.65; color: var(--text-secondary); max-width: 88ch; text-wrap: pretty; }
+          .f-ev { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--text-muted); }
+          .f-ev b { color: var(--text-secondary); font-weight: 500; }
+          .f-fix { margin-top: 10px; font-size: 13px; line-height: 1.6; color: var(--text-primary); }
+          .f-fix strong { color: var(--accent-bright); font-weight: 600; }
+          .grouphead { display: flex; align-items: center; gap: 12px; margin: 32px 0 14px; }
+          .grouphead span { font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; }
+          .grouphead hr { flex: 1; height: 1px; background: var(--border-subtle); border: 0; margin: 0; }
+          .g-block span { color: var(--danger-text); }
+          .g-should span { color: var(--accent); }
+          .g-polish span { color: var(--text-muted); }
+          .g-clean span { color: var(--success-text); }
+
+          /* ---- token-accurate PwrAgent settings recreation ---- */
+          .pa { background: var(--bg-panel); border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+          .pa-grouplabel { font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); padding: 16px 18px 10px; margin: 0; }
+          .pa-field { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; padding: 16px 18px 18px; border-top: 1px solid var(--border-subtle); }
+          .pa-flabel { font-size: 13px; font-weight: 650; color: var(--text-primary); line-height: 1.3; }
+          .pa-fsub { display: block; margin-top: 5px; font-size: 12px; font-weight: 400; line-height: 1.45; color: var(--text-muted); }
+          .pa-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+          .pa-p { margin: 0; font-size: 12px; font-weight: 400; line-height: 1.45; color: var(--text-muted); }
+          .pa-p-sec { color: var(--text-secondary); }
+          .pa-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+          .pa-ol { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+          .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 12px; border: 1px solid var(--border-subtle); border-radius: 6px; font-family: var(--font-sans); font-size: 16px; font-weight: 400; color: var(--text-primary); background: transparent; cursor: default; }
+          .btn-secondary { background: var(--bg-panel-elevated); }
+          .btn-primary { border-color: var(--accent-border); background: var(--bg-row-active); color: var(--accent-bright); }
+          .btn-sm { font-size: 13px; font-weight: 600; min-height: 30px; padding: 0 11px; }
+          .btn-done { border-color: var(--success-border); background: var(--success-soft); color: var(--success-text); }
+
+          /* pins that mark the annotated blocks inside the recreation */
+          .pin { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 18px; height: 18px; border-radius: 999px; border: 1px solid var(--danger-border); background: var(--danger-soft); color: var(--danger-text); font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; }
+          .pinned { display: flex; align-items: flex-start; gap: 9px; }
+          .pinned > .pin { margin-top: 1px; }
+          .pinned > :not(.pin) { flex: 1; min-width: 0; }
+
+          .pa-copyrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+          .pa-codepill { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-secondary); background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 8px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+          .pa-step { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; padding: 11px 0; border-top: 1px solid var(--border-subtle); }
+          .pa-step:first-child { border-top: 0; padding-top: 2px; }
+          .pa-stepnum { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-muted); line-height: 22px; text-align: center; border: 1px solid var(--border-subtle); border-radius: 999px; height: 22px; }
+          .pa-stepnum-done { color: var(--success-text); border-color: var(--success-border); background: var(--success-soft); }
+          .pa-steptitle { font-size: 12.5px; font-weight: 600; color: var(--text-primary); margin: 3px 0 0; }
+          .pa-stepbody { font-size: 12px; line-height: 1.45; color: var(--text-muted); margin: 5px 0 0; }
+          .pa-stepact { margin-top: 9px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+          .chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.04em; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border-subtle); color: var(--text-muted); background: var(--bg-panel-elevated); }
+          .chip-warn { border-color: var(--accent-border); color: var(--accent-bright); background: var(--bg-row-active); }
+
+          .callout { border: 1px solid var(--border-subtle); border-left: 2px solid var(--accent); border-radius: 0 8px 8px 0; background: var(--bg-panel); padding: 16px 20px; margin: 20px 0 0; }
+          .callout p { margin: 0; font-size: 13.5px; line-height: 1.65; color: var(--text-secondary); max-width: 82ch; }
+          .callout p + p { margin-top: 10px; }
+          .quote { font-size: 14px; line-height: 1.6; color: var(--text-primary); }
+
+          .opts { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
+          .opt { flex: 1 1 340px; min-width: 340px; display: flex; flex-direction: column; gap: 10px; }
+          .opt-head { display: flex; align-items: baseline; gap: 9px; }
+          .opt-id { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; padding: 3px 7px; border-radius: 4px; background: var(--accent-soft); border: 1px solid var(--accent-border); color: var(--accent-bright); }
+          .opt-name { font-size: 13.5px; font-weight: 650; color: var(--text-primary); }
+          .opt-note { font-size: 12px; line-height: 1.55; color: var(--text-muted); margin: 0; }
+          .opt-frame { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); padding: 16px 18px; }
+          .opt-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+
+          .tbl { width: 100%; border-collapse: collapse; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+          .tbl th { text-align: left; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); font-weight: 500; padding: 11px 14px; background: var(--bg-panel-elevated); border-bottom: 1px solid var(--border-subtle); }
+          .tbl td { padding: 12px 14px; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+          .tbl tr:last-child td { border-bottom: 0; }
+          .tbl td:first-child { color: var(--text-primary); font-weight: 600; white-space: nowrap; }
+          .tbl code { font-size: 11.5px; }
+
+          .anno { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; }
+          .anno-pin { flex: none; font-family: var(--font-mono); font-size: 10px; font-weight: 600; width: 20px; height: 20px; line-height: 19px; text-align: center; border-radius: 999px; border: 1px solid var(--danger-border); background: var(--danger-soft); color: var(--danger-text); }
+          .anno-text { font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); }
+          .anno-text b { color: var(--text-primary); font-weight: 600; }
+        </style>
+      </helmet>
+
+      <div class="page">
+        <header data-screen-label="Cover">
+          <p class="eyebrow">UX design review &middot; PwrAgent Settings</p>
+          <h1>Connect Slack</h1>
+          <p class="lede">The Slack connect flow on <code>codex/slack-agent-sessions</code>, and the Settings shell patterns it inherits. The branch adds one control &mdash; <b>Update existing Slack app</b> &mdash; to a card that was already carrying two.</p>
+          <div class="meta">
+            <div>
+              <dt>Surface</dt>
+              <dd>Settings &rarr; Messaging &rarr; Slack<br />Connection group</dd>
+            </div>
+            <div>
+              <dt>Under review</dt>
+              <dd><code>SlackConnectCard.tsx</code><br /><code>MessagingSettings.tsx</code> (Slack panel)</dd>
+            </div>
+            <div>
+              <dt>Method</dt>
+              <dd>Real components rendered off branch HEAD against the app's own <code>app.css</code>; geometry, computed styles and axe measured in headless Chromium at 1280&times;860 and 900&times;760.</dd>
+            </div>
+            <div>
+              <dt>Result</dt>
+              <dd>3 blocking &middot; 5 should-fix &middot; 3 polish<br />0 accessibility violations</dd>
+            </div>
+          </div>
+        </header>
+
+        <hr class="rule" />
+
+        <section data-screen-label="The core problem">
+          <div class="sec-head">
+            <p class="eyebrow">01 &mdash; The core problem</p>
+            <h2>The most important thing the button does is the one thing it never shows you</h2>
+          </div>
+          <p class="body">Pressing <b>Update existing Slack app</b> does two things: it opens <code>api.slack.com/apps</code> in the browser, and it writes the whole PwrAgent app manifest to the clipboard. The manifest <i>is</i> the task &mdash; everything after this point is paste-and-save. It is also the half of the action with no visible consequence.</p>
+          <p class="body" style="margin-top:12px">The browser jumping to the foreground is unmissable. The clipboard write produces nothing at the point of action: no label change, no icon, no colour, no motion, no sound. The only evidence is a sentence in 12px muted text that renders <i>below</i> a three-item numbered list and a paragraph about workspace admins &mdash; a measured 119&thinsp;px and five lines of unrelated copy beneath the button that caused it, and often below the fold of the settings pane.</p>
+
+          <div class="callout">
+            <p class="quote">&ldquo;It's not really clear that we copied the manifest to the clipboard, and I don't think we give the user a button to copy it again. Clicking &lsquo;update app&rsquo; just does copy it &mdash; but it's so confusing, you have to read the paragraph below to know that it put something on the clipboard.&rdquo;</p>
+            <p class="body-dim" style="font-size:12px">&mdash; review brief</p>
+          </div>
+
+          <h3 style="margin-top:36px">As built &mdash; after pressing Update existing Slack app</h3>
+          <p class="body" style="margin-bottom:14px">Token-accurate recreation of the rendered card. Every colour, size and weight below is the measured computed value from the running component.</p>
+
+          <div class="pa">
+            <p class="pa-grouplabel">Connection</p>
+            <div class="pa-field">
+              <div>
+                <span class="pa-flabel">Connect Slack<span class="pa-fsub">Create a customer-owned Slack app from PwrAgent's official manifest, then paste the two tokens.</span></span>
+              </div>
+              <div class="pa-card">
+                <p class="pa-p">Create a customer-owned Slack app from PwrAgent's official manifest. Socket Mode stays on your computer &mdash; no PwrAgent Slack app, and no client secret in this desktop build.</p>
+                <div class="pinned">
+                  <span class="pin">1</span>
+                  <div class="pa-actions">
+                    <button type="button" class="btn btn-secondary">Create Slack app</button>
+                    <button type="button" class="btn">Copy Create Slack app link</button>
+                    <button type="button" class="btn">Update existing Slack app</button>
+                  </div>
+                </div>
+                <div class="pinned">
+                  <span class="pin">2</span>
+                  <ol class="pa-ol">
+                    <li>In the new app, click Install to Workspace and Allow.</li>
+                    <li>Copy the Bot User OAuth Token (it starts with xoxb-) and paste it below.</li>
+                    <li>Under Basic Information &rarr; App-Level Tokens, generate a token with connections:write and paste the xapp- token below.</li>
+                  </ol>
+                </div>
+                <p class="pa-p">This workspace only allows owners to install unpublished apps. Send them the Create Slack app link, or ask them to approve your request. PwrAgent never needs their Slack password.</p>
+                <div class="pinned">
+                  <span class="pin">3</span>
+                  <p class="pa-p pa-p-sec">Copied the current PwrAgent manifest and opened Slack Apps. Choose your existing PwrAgent app, open App Manifest, replace the manifest, and save changes.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:18px">
+            <div class="anno">
+              <span class="anno-pin">1</span>
+              <span class="anno-text"><b>Nothing here changed.</b> The button that wrote to the clipboard looks exactly as it did before the press &mdash; and so do the two beside it.</span>
+            </div>
+            <div class="anno">
+              <span class="anno-pin">2</span>
+              <span class="anno-text"><b>The numbered list is now wrong.</b> It describes the create path &mdash; &ldquo;In the <i>new</i> app&hellip;&rdquo; &mdash; and stays on screen unchanged while the correct four steps arrive as one sentence beneath it.</span>
+            </div>
+            <div class="anno">
+              <span class="anno-pin">3</span>
+              <span class="anno-text"><b>The acknowledgement lands 119&thinsp;px away</b>, in the same muted 12px style as the marketing copy above it &mdash; and it hides a four-step procedure (choose the app, open App Manifest, replace it, save) in prose, delivered after focus has already left for the browser.</span>
+            </div>
+            <div class="anno">
+              <span class="anno-pin">4</span>
+              <span class="anno-text"><b>There is no second chance</b> &mdash; and nothing to pin it to on screen. The manifest exists only on the clipboard. The next steps happen in a browser, where copying an app name or a token is routine; the moment the user copies anything else, the only way back is to press this button again and open a duplicate tab.</span>
+            </div>
+          </div>
+        </section>
+
+        <hr class="rule" />
+
+        <section data-screen-label="Findings">
+          <div class="sec-head">
+            <p class="eyebrow">02 &mdash; Findings</p>
+            <h2>Eleven findings, ranked</h2>
+            <p class="body" style="margin-top:10px">Each finding names the evidence it rests on. References are against branch HEAD.</p>
+          </div>
+
+          <div class="grouphead g-block"><span>Blocking</span><hr /></div>
+
+          <div class="finding finding-blocking">
+            <div class="f-head"><span class="f-id f-id-block">B1</span><span class="f-title">The clipboard write has no acknowledgement at the point of action</span></div>
+            <p class="f-body">All three actions write to the clipboard on some path &mdash; the manifest on update, the manifest on an oversized create URL, the create link on copy &mdash; and all three report it the same way: by replacing a paragraph at the bottom of the card. The button itself never changes. A clipboard write is invisible by nature, so the acknowledgement has to be attached to the control that caused it; a sentence rendered after two intervening blocks is not attached to anything.</p>
+            <p class="f-fix"><strong>Fix:</strong> acknowledge at the control. Swap the label to <code>Copied</code> for ~1.5&thinsp;s, the way the pairing row four fields down this same panel already does.</p>
+            <p class="f-ev"><b>Evidence</b> &mdash; <code>SlackConnectCard.tsx</code>: <code>copyText(result.manifestJson, &hellip;)</code> followed only by <code>setStatus(&hellip;)</code>. Rendered status sits after <code>.slack-connect__checklist</code> and <code>.slack-connect__admin</code>; measured 12px / <code>#b8b0a5</code>, no border, no fill, no icon, 119&thinsp;px below the pressed button.</p>
+          </div>
+
+          <div class="finding finding-blocking">
+            <div class="f-head"><span class="f-id f-id-block">B2</span><span class="f-title">The manifest cannot be copied again without re-opening the browser</span></div>
+            <p class="f-body">The update handler hard-codes <code>{ mode: "update", open: true }</code>, so copying the manifest and launching a browser tab are one indivisible action. The manifest is never rendered, never stored on screen, and has no copy control of its own &mdash; the clipboard is the only place it exists. Every remaining step of the task happens in a browser, where the user will plausibly copy something else. Recovery costs a duplicate tab, and nothing on the card tells them that pressing the button again is the recovery.</p>
+            <p class="f-fix"><strong>Fix:</strong> separate <em>copy the manifest</em> from <em>open Slack</em>. A persistent, idempotent <code>Copy manifest</code> that never navigates is the single highest-value change on this card.</p>
+            <p class="f-ev"><b>Evidence</b> &mdash; <code>SlackConnectCard.tsx</code>, <code>updateExisting()</code>. No render path displays <code>result.manifestJson</code>.</p>
+          </div>
+
+          <div class="finding finding-blocking">
+            <div class="f-head"><span class="f-id f-id-block">B3</span><span class="f-title">The progress state appears on a button the user did not press</span></div>
+            <p class="f-body">One <code>busy</code> flag is shared by all three actions, and only the first button renders it: <code>{busy ? "Opening&hellip;" : "Create Slack app"}</code>. Press <b>Update existing Slack app</b> and the <b>Create Slack app</b> button changes to &ldquo;Opening&hellip;&rdquo; while the pressed button simply greys out. The feedback lands on the wrong control &mdash; and on a slow clipboard or a slow shell open, it reads as though the app started creating a new Slack app.</p>
+            <p class="f-fix"><strong>Fix:</strong> track which action is in flight, not whether any action is; render the pending label on the pressed button.</p>
+            <p class="f-ev"><b>Evidence</b> &mdash; measured in the harness with a 2.5&thinsp;s stubbed <code>openSlackCreateApp</code>: after clicking <i>Update existing Slack app</i>, <code>buttons[0].innerText === "Opening&hellip;"</code>.</p>
+          </div>
+
+          <div class="grouphead g-should"><span>Should fix</span><hr /></div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">S1</span><span class="f-title">Three buttons, no hierarchy</span></div>
+            <p class="f-body">The three controls are visually interchangeable. Measured: identical <code>color</code> (<code>#f7f3eb</code>), identical border (<code>rgba(247,243,235,0.1)</code>), identical weight (400) and size (16px). Only the background differs &mdash; <code>#101010</code> against <code>transparent</code>, on a <code>#0a0a0a</code> card, a step small enough to disappear under glare. In the light theme they are effectively identical. The design system ships <code>.button--primary</code> (amber border, <code>--bg-row-active</code> fill, <code>--accent-bright</code> text) and this card, the entry point to the whole Slack integration, does not use it.</p>
+            <p class="f-fix"><strong>Fix:</strong> one primary. <code>.button--primary</code> on the action that fits the card's current state.</p>
+            <p class="f-ev"><b>Evidence</b> &mdash; <code>getComputedStyle</code> on all three buttons, dark and light.</p>
+          </div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">S2</span><span class="f-title">Two different jobs share one row</span></div>
+            <p class="f-body"><i>Create Slack app</i> and <i>Copy Create Slack app link</i> are one job with two delivery modes &mdash; stand up a new app yourself, or hand the link to an admin who can. <i>Update existing Slack app</i> is a different job for a different person at a different time: someone already connected, returning because PwrAgent shipped a new manifest. Sharing a row at equal weight taxes both audiences &mdash; the first-run user reads and discards a third option, and the returning user hunts for maintenance inside a card titled &ldquo;Connect Slack&rdquo; whose instructions open with &ldquo;In the new app&hellip;&rdquo;.</p>
+            <p class="f-fix"><strong>Fix:</strong> give the update path its own block, its own label and its own steps.</p>
+          </div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">S3</span><span class="f-title">The checklist contradicts the update path once it runs</span></div>
+            <p class="f-body">The <code>&lt;ol&gt;</code> is create-only and static. After an update it still reads &ldquo;In the new app, click Install to Workspace and Allow&rdquo; &mdash; there is no new app, and re-installing is not part of a manifest update. Two sets of instructions for two different tasks are on screen at once, and the wrong one is the one with numbers.</p>
+            <p class="f-fix"><strong>Fix:</strong> make the step list belong to the path in play.</p>
+          </div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">S4</span><span class="f-title">The update procedure is prose where the create procedure is a list</span></div>
+            <p class="f-body">&ldquo;Choose your existing PwrAgent app, open App Manifest, replace the manifest, and save changes&rdquo; is four sequential UI actions in one sentence, in muted 12px, delivered after the browser has taken focus. The create path gets a numbered list for the same kind of content. The user returning from Slack has to re-parse a sentence to find their place.</p>
+            <p class="f-fix"><strong>Fix:</strong> same treatment as create &mdash; discrete, checkable steps.</p>
+          </div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">S5</span><span class="f-title">Nothing tells an operator their Slack app needs updating</span></div>
+            <p class="f-body">This control exists because the manifest changed &mdash; Agent Sessions events and the v2 Agent View. An operator running a working v1 app gets no signal: no stored manifest version, no comparison, no chip, no notice. The button only helps someone who already knows they need it, which is close to nobody. The section header already renders a chip (<code>Not configured</code>) and could carry this.</p>
+            <p class="f-fix"><strong>Fix:</strong> record the manifest version applied and surface drift on the section header, so the button appears when it is the answer to a question the user actually has.</p>
+          </div>
+
+          <div class="grouphead g-polish"><span>Polish</span><hr /></div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">P1</span><span class="f-title">The intro duplicates the field label's own subtitle</span></div>
+            <p class="f-body">The field <code>sub</code> reads &ldquo;Create a customer-owned Slack app from PwrAgent's official manifest, then paste the two tokens.&rdquo; The card intro, 24&thinsp;px to its right, opens &ldquo;Create a customer-owned Slack app from PwrAgent's official manifest.&rdquo; Eleven identical words, side by side. The second sentence &mdash; the Socket Mode / no-client-secret claim &mdash; is the only part carrying information.</p>
+          </div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">P2</span><span class="f-title">Three labels sharing &ldquo;Slack app&rdquo; cannot be scanned</span></div>
+            <p class="f-body"><i>Create Slack app</i> / <i>Copy Create Slack app link</i> / <i>Update existing Slack app</i>. The distinguishing word is first in one, third in another, first in the third, and every label must be read to its end. &ldquo;Copy Create&rdquo; also reads as two verbs in a row.</p>
+          </div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">P3</span><span class="f-title">The shared <code>.button</code> primitive carries no font-size, so these are the loudest text on the panel</span></div>
+            <p class="f-body">A survey of every button rendered in the Slack panel found six type scales. <code>.button</code> declares <code>min-height</code> and <code>padding</code> but no <code>font-size</code>, so it inherits the 16px UA default &mdash; while the panel's own chrome buttons (<i>Collapse all</i>, <i>Expand all</i>) set 11px/600, segmented options set 12px/650, and every body string in the card is 12px. The result: the three Slack buttons are the largest text in the panel body, six pixels off the panel's <code>&lt;h1&gt;</code>, carrying no hierarchy among themselves. This is a shell-level gap, not something the branch introduced &mdash; but the card is where it shows.</p>
+            <p class="f-ev"><b>Evidence</b> &mdash; scales found: 16/400 (<code>.button</code>), 13/650, 12/650, 12/600, 12/500, 11/600, 11/500.</p>
+          </div>
+
+          <div class="grouphead g-clean"><span>Holds up</span><hr /></div>
+
+          <div class="finding">
+            <div class="f-head"><span class="f-id">&check;</span><span class="f-title">Accessibility, semantics and reflow</span></div>
+            <p class="f-body">axe-core reports <b>zero violations</b> across WCAG 2.0/2.1/2.2 A and AA, in both themes, at 1280&thinsp;px. The controls are real <code>&lt;button&gt;</code> elements; status uses <code>role="status"</code> and errors <code>role="alert"</code>, so the acknowledgement B1 describes <i>is</i> announced to a screen reader &mdash; the gap is visual only. <code>.slack-connect__actions</code> wraps cleanly at 900&thinsp;px with no overlap or clipping.</p>
+          </div>
+        </section>
+
+        <hr class="rule" />
+
+        <section data-screen-label="Directions">
+          <div class="sec-head">
+            <p class="eyebrow">03 &mdash; Directions</p>
+            <h2>Three ways out, smallest first</h2>
+            <p class="body" style="margin-top:10px">All three fix B1 and B2. They differ in how much of the card they rearrange.</p>
+          </div>
+
+          <div class="opts">
+            <div class="opt" id="a">
+              <div class="opt-head"><span class="opt-id">A</span><span class="opt-name">Copy row</span></div>
+              <p class="opt-note">Adopt the pattern the app already has. The manifest becomes a mono pill with a <code>Copy</code> button that swaps to <code>Copied</code> &mdash; identical to the pairing row further down this panel, and to <code>SettingsCopyValue</code>. Update moves out of the create row.</p>
+              <div class="opt-frame">
+                <div class="pa-card">
+                  <p class="pa-p">Socket Mode stays on your computer &mdash; no PwrAgent Slack app, and no client secret in this desktop build.</p>
+                  <div class="pa-actions">
+                    <button type="button" class="btn btn-primary btn-sm">Create Slack app</button>
+                    <button type="button" class="btn btn-sm">Copy link for an admin</button>
+                  </div>
+                  <ol class="pa-ol">
+                    <li>In the new app, click Install to Workspace and Allow.</li>
+                    <li>Copy the Bot User OAuth Token (xoxb-) and paste it below.</li>
+                    <li>Under Basic Information &rarr; App-Level Tokens, generate a token with connections:write and paste the xapp- token below.</li>
+                  </ol>
+                </div>
+                <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border-subtle)">
+                  <p class="pa-grouplabel" style="padding:0 0 8px">Already have a PwrAgent app</p>
+                  <div class="pa-copyrow">
+                    <span class="pa-codepill">app manifest &middot; v2</span>
+                    <button type="button" class="btn btn-sm btn-done">Copied</button>
+                  </div>
+                  <div class="pa-actions" style="margin-top:8px">
+                    <button type="button" class="btn btn-sm">Open Slack Apps</button>
+                  </div>
+                  <p class="pa-p" style="margin-top:9px">Open your PwrAgent app &rarr; App Manifest, replace the manifest, save changes.</p>
+                </div>
+              </div>
+              <div class="opt-meta">
+                <span class="chip">fixes B1 B2 B3 S1 S2 P1 P2</span>
+                <span class="chip">smallest diff</span>
+              </div>
+            </div>
+
+            <div class="opt" id="b">
+              <div class="opt-head"><span class="opt-id">B</span><span class="opt-name">Two fields</span></div>
+              <p class="opt-note">Split the settings field in two, because the jobs are two. &ldquo;Connect Slack&rdquo; keeps first-run. A sibling field owns the manifest, appears with a drift chip, and states the version it will apply.</p>
+              <div class="opt-frame" style="padding:0">
+                <div style="padding:14px 16px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px">
+                    <span class="pa-flabel">Slack app manifest</span>
+                    <span class="chip chip-warn">v1 &rarr; v2 available</span>
+                  </div>
+                  <p class="pa-p" style="margin-bottom:11px">v2 adds Agent Sessions status, native stop, and the Agent View. Your workspace app is on v1 until you apply it.</p>
+                  <div class="pa-copyrow">
+                    <span class="pa-codepill">{ "display_information"&hellip;</span>
+                    <button type="button" class="btn btn-sm btn-primary">Copy manifest</button>
+                  </div>
+                  <div class="pa-actions" style="margin-top:8px">
+                    <button type="button" class="btn btn-sm">Open Slack Apps</button>
+                    <button type="button" class="btn btn-sm">View manifest</button>
+                  </div>
+                </div>
+                <div style="border-top:1px solid var(--border-subtle);padding:12px 16px">
+                  <p class="pa-p pa-p-sec" style="font-family:var(--font-mono);font-size:11px">Then: your app &rarr; App Manifest &rarr; paste &rarr; Save Changes.</p>
+                </div>
+              </div>
+              <div class="opt-meta">
+                <span class="chip">fixes B1 B2 B3 S1 S2 S3 S4 S5</span>
+                <span class="chip">needs manifest versioning</span>
+              </div>
+            </div>
+
+            <div class="opt" id="c">
+              <div class="opt-head"><span class="opt-id">C</span><span class="opt-name">Guided steps</span></div>
+              <p class="opt-note">Every step owns its action and its own acknowledgement, so no feedback is ever more than one line from the control that produced it. Steps tick as their precondition is met.</p>
+              <div class="opt-frame">
+                <div class="pa-step">
+                  <span class="pa-stepnum pa-stepnum-done">&check;</span>
+                  <div>
+                    <p class="pa-steptitle">Copy the v2 manifest</p>
+                    <div class="pa-stepact">
+                      <button type="button" class="btn btn-sm btn-done">Copied</button>
+                      <span class="pa-p" style="font-family:var(--font-mono);font-size:11px">14.2 KB on your clipboard</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="pa-step">
+                  <span class="pa-stepnum">2</span>
+                  <div>
+                    <p class="pa-steptitle">Open your app in Slack</p>
+                    <p class="pa-stepbody">api.slack.com/apps &rarr; PwrAgent &rarr; App Manifest</p>
+                    <div class="pa-stepact">
+                      <button type="button" class="btn btn-sm btn-primary">Open Slack Apps</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="pa-step">
+                  <span class="pa-stepnum">3</span>
+                  <div>
+                    <p class="pa-steptitle">Replace the manifest and save</p>
+                    <p class="pa-stepbody">Select all, paste, then Save Changes. Slack will ask you to reinstall if scopes changed.</p>
+                    <div class="pa-stepact">
+                      <button type="button" class="btn btn-sm">Copy manifest again</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="opt-meta">
+                <span class="chip">fixes B1 B2 B3 S1 S2 S3 S4</span>
+                <span class="chip">largest diff</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <hr class="rule" />
+
+        <section data-screen-label="Recommendation">
+          <div class="sec-head">
+            <p class="eyebrow">04 &mdash; Recommendation</p>
+            <h2>Ship A now; B is where it wants to end up</h2>
+          </div>
+          <p class="body" style="margin-bottom:24px">Direction <b>A</b> clears both blocking findings and four others without inventing a single new pattern &mdash; it reuses the copy row that already exists twice in this codebase. It is the change that should land with this branch. <b>B</b> needs the app to remember which manifest version a workspace is on, which is real work and a separate change; it is worth doing, because until something detects drift the update button answers a question nobody knew to ask (S5). <b>C</b> is the ceiling if this flow ever becomes a first-run wizard surface.</p>
+
+          <table class="tbl">
+            <thead>
+              <tr><th>Change</th><th>Where</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Split copy from navigate</td>
+                <td><code>SlackConnectCard.tsx</code> &mdash; <code>updateExisting()</code></td>
+                <td>Drop the hard-coded <code>open: true</code>. One control copies and never navigates; a second opens Slack Apps. Kills B2.</td>
+              </tr>
+              <tr>
+                <td>Acknowledge on the control</td>
+                <td>same file, new local <code>copied</code> state</td>
+                <td><code>Copy manifest</code> &rarr; <code>Copied</code> for ~1.5&thinsp;s. Mirror <code>SettingsCopyValue</code> exactly &mdash; same 1500&thinsp;ms, same timer cleanup on unmount. Kills B1.</td>
+              </tr>
+              <tr>
+                <td>Show the payload</td>
+                <td>new <code>.slack-connect__manifest</code> row</td>
+                <td>A mono pill beside the copy button, so the clipboard is not the only place the manifest exists.</td>
+              </tr>
+              <tr>
+                <td>Per-action pending state</td>
+                <td><code>busy</code> &rarr; <code>pending: "create" | "link" | "update"</code></td>
+                <td>Render the pending label on the pressed button; keep the others disabled. Kills B3.</td>
+              </tr>
+              <tr>
+                <td>One primary</td>
+                <td><code>button--secondary</code> &rarr; <code>button--primary</code></td>
+                <td>The card's main action takes the amber treatment the system already ships. Addresses S1.</td>
+              </tr>
+              <tr>
+                <td>Move update out of the create row</td>
+                <td>card markup</td>
+                <td>Its own labelled block with its own steps. Addresses S2, S3, S4.</td>
+              </tr>
+              <tr>
+                <td>Cut the duplicated sentence</td>
+                <td><code>slack-connect-copy.ts</code> intro</td>
+                <td>Keep the Socket Mode claim; drop the eleven words the field <code>sub</code> already said. Addresses P1.</td>
+              </tr>
+              <tr>
+                <td>Give <code>.button</code> a font-size</td>
+                <td><code>app.css</code> &mdash; shell-level, separate change</td>
+                <td>The primitive inherits 16px today. Sizing it deliberately is a Settings-wide fix, not a Slack one. Addresses P3.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="callout" style="margin-top:28px">
+            <p><b>One thing worth deciding before any of it.</b> Every other clipboard write in this card is silent too &mdash; the create link, and the oversized-URL fallback that quietly copies the whole manifest instead of opening a browser. Whatever acknowledgement pattern lands, apply it to all three paths, or the card will teach the user that a press sometimes copies and sometimes does not.</p>
+          </div>
+        </section>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() {
+          return {};
+        }
+      }
+    </script>
+  </body>
+</html>

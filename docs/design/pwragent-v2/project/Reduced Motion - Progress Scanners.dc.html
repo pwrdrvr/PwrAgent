@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas">
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+        <style>
+          :root {
+            --bg-app: #000000;
+            --bg-panel: #0a0a0a;
+            --bg-panel-elevated: #101010;
+            --bg-panel-hover: #14110d;
+            --bg-row-active: #120800;
+            --border-subtle: rgba(247, 243, 235, 0.1);
+            --border-strong: rgba(247, 243, 235, 0.2);
+            --text-primary: #f7f3eb;
+            --text-secondary: #b8b0a5;
+            --text-muted: #8c857a;
+            --accent: #ff8a1f;
+            --accent-bright: #ffb35c;
+            --accent-soft: rgba(255, 138, 31, 0.12);
+            --accent-border: rgba(255, 138, 31, 0.42);
+            --accent-bg-medium: rgba(255, 138, 31, 0.16);
+            --danger-text: #ff6b5c;
+            --status-ok: #4ec27f;
+            --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", system-ui, sans-serif;
+            --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+          }
+
+          /* The shipped light theme's values for the same tokens, applied to
+             any subtree marked `.lt`. Both themes ship, so both are drawn. */
+          .lt {
+            --bg-panel: #fbf8f2;
+            --bg-panel-elevated: #f7f3ea;
+            --bg-panel-hover: #f4f0e8;
+            --bg-row-active: #f7ece0;
+            --border-subtle: rgba(0, 0, 0, 0.08);
+            --border-strong: rgba(0, 0, 0, 0.18);
+            --text-primary: #1c1917;
+            --text-secondary: #524a40;
+            --text-muted: #736c64;
+            --accent: #b74c00;
+            --accent-bright: #994c00;
+            --accent-soft: rgba(183, 76, 0, 0.1);
+            --accent-border: rgba(183, 76, 0, 0.38);
+            --accent-bg-medium: rgba(183, 76, 0, 0.16);
+          }
+
+          body {
+            margin: 0;
+            background: var(--bg-app);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            -webkit-font-smoothing: antialiased;
+          }
+          code {
+            font-family: var(--font-mono);
+            font-size: 0.92em;
+            color: var(--text-secondary);
+          }
+
+          /* ---- canvas frame chrome ---- */
+          .frame { position: absolute; }
+          .flabel {
+            display: flex; align-items: baseline; gap: 10px;
+            margin: 0 0 12px; cursor: grab;
+            font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+            letter-spacing: 0.13em; text-transform: uppercase; color: var(--accent);
+          }
+          .flabel span {
+            letter-spacing: 0; text-transform: none;
+            color: var(--text-muted); font-size: 11px;
+          }
+          .card {
+            border: 1px solid var(--border-subtle); border-radius: 8px;
+            background: var(--bg-panel); overflow: hidden;
+          }
+          .cardhead {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 16px; border-bottom: 1px solid var(--border-subtle);
+            background: var(--bg-panel-elevated);
+          }
+          .cardhead b { font-size: 13px; font-weight: 650; }
+          .chip {
+            font-family: var(--font-mono); font-size: 10px; padding: 2px 7px;
+            border-radius: 999px; border: 1px solid var(--border-subtle);
+            background: var(--bg-panel); color: var(--text-muted);
+          }
+          .chip.bad { color: var(--danger-text); border-color: var(--danger-text); }
+          .chip.good { color: var(--status-ok); border-color: var(--status-ok); }
+          .note {
+            max-width: 62ch; color: var(--text-secondary);
+            font-size: 12px; line-height: 1.6;
+          }
+          .note p { margin: 0 0 9px; }
+          .note p:last-child { margin-bottom: 0; }
+          .note b { color: var(--text-primary); font-weight: 600; }
+
+          /* ============================================================
+             THE PRIMITIVE UNDER REVIEW
+             Geometry copied verbatim from `.thinking-scanner` in
+             apps/desktop/src/renderer/src/styles/app.css. Travel is
+             exactly width minus beam width in both sizes, which is the
+             fact the whole proposal rests on.
+             ============================================================ */
+          .scn {
+            position: relative;
+            --tint: var(--accent);
+            --tint-bright: var(--accent-bright);
+            --track: var(--accent-bg-medium);
+            --beam-w: 18px;
+            --travel: 44px;
+            width: 62px; height: 6px;
+            flex: 0 0 auto;
+            overflow: hidden; border-radius: 999px;
+            background: var(--track);
+            box-shadow: inset 0 0 0 1px
+              color-mix(in srgb, var(--tint) 18%, transparent);
+          }
+          .scn.mini { --beam-w: 6px; --travel: 10px; width: 16px; height: 6px; }
+          /* The neutral retint every peer-driven beam already carries. */
+          .scn.remote {
+            --tint: var(--text-muted);
+            --tint-bright: var(--text-secondary);
+            --track: var(--bg-panel-hover);
+          }
+          .beam {
+            position: absolute; top: 0; left: 0;
+            width: var(--beam-w); height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(
+              90deg,
+              color-mix(in srgb, var(--tint) 18%, transparent) 0%,
+              color-mix(in srgb, var(--tint-bright) 95%, transparent) 48%,
+              color-mix(in srgb, var(--tint) 18%, transparent) 100%
+            );
+            box-shadow:
+              0 0 10px color-mix(in srgb, var(--tint) 42%, transparent),
+              0 0 18px color-mix(in srgb, var(--tint) 22%, transparent);
+            opacity: 0.76;
+            transform: translateX(0);
+          }
+          .scn.mini .beam {
+            box-shadow:
+              0 0 8px color-mix(in srgb, var(--tint) 42%, transparent),
+              0 0 14px color-mix(in srgb, var(--tint) 22%, transparent);
+          }
+          /* State A: shipping today. */
+          .sweep .beam { animation: sweep 1800ms ease-in-out infinite; }
+          @keyframes sweep {
+            0%, 100% { opacity: 0.76; transform: translateX(0); }
+            50% { opacity: 1; transform: translateX(var(--travel)); }
+          }
+          /* State B: the proposal. Frame 50% of the same keyframes, held. */
+          .parked .beam {
+            animation: none;
+            opacity: 1;
+            transform: translateX(calc(var(--travel) / 2));
+          }
+          /* State C: what a bare `animation: none` produces. */
+          .stalled .beam { animation: none; }
+          /* The idle stand-in that already ships beside a zero count. */
+          .dormant {
+            display: block; flex: 0 0 auto;
+            width: 16px; height: 6px; border-radius: 999px;
+            background: var(--bg-panel-hover);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+          }
+          .dormant.full { width: 62px; }
+
+          /* ---- sidebar fragment ---- */
+          .side {
+            width: 300px; padding: 10px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-subtle); border-radius: 10px;
+          }
+          .lens {
+            display: flex; align-items: center; gap: 1px;
+            padding: 2px; margin-bottom: 10px;
+            border: 1px solid var(--border-subtle); border-radius: 8px;
+            background: var(--bg-panel-elevated);
+          }
+          .tab {
+            display: flex; align-items: center; justify-content: center;
+            gap: 5px; height: 26px; padding: 0 7px; border-radius: 6px;
+            color: var(--text-muted);
+          }
+          .tab.on { background: var(--bg-row-active); }
+          .stack {
+            display: flex; flex-direction: column;
+            align-items: flex-start; justify-content: center; gap: 2px;
+          }
+          .sig {
+            display: inline-flex; align-items: center; gap: 3px;
+            font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+            font-variant-numeric: tabular-nums; line-height: 1;
+          }
+          .sig.act { color: var(--accent-bright); }
+          .sig.rem { color: var(--text-muted); }
+          .sig.idl { color: var(--text-secondary); }
+          .cookie {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--accent); border: 1px solid var(--accent-border);
+            box-shadow: 0 0 6px var(--accent-soft);
+            flex: 0 0 auto;
+          }
+          .glyph {
+            width: 16px; height: 16px; flex: 0 0 auto;
+            display: inline-flex; align-items: center; justify-content: center;
+          }
+          .glyph svg { width: 15px; height: 15px; }
+
+          .grp {
+            display: flex; align-items: center; gap: 6px;
+            padding: 5px 6px 5px 2px; color: var(--text-secondary);
+            font-size: 11px; font-weight: 600;
+          }
+          .grp .spacer { flex: 1; }
+          .row {
+            display: flex; align-items: center; gap: 7px;
+            padding: 6px 8px; border-radius: 7px;
+            font-size: 12px; color: var(--text-primary);
+          }
+          .row.sel {
+            background: var(--bg-row-active);
+            box-shadow: inset 2px 0 0 var(--accent);
+          }
+          .row .t {
+            flex: 1; min-width: 0; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+          }
+          .row .age {
+            font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
+          }
+
+          /* ---- transcript pending fragment ---- */
+          .pend {
+            display: flex; align-items: center; gap: 9px;
+            padding: 9px 12px; border-radius: 8px;
+            border: 1px solid var(--border-subtle);
+            background: var(--bg-panel-elevated);
+            color: var(--text-secondary); font-size: 12px;
+          }
+
+          /* ---- spec / comparison tables ---- */
+          .tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+          .tbl th {
+            text-align: left; padding: 8px 14px;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-muted); font-family: var(--font-mono);
+            font-size: 10px; font-weight: 500;
+            letter-spacing: 0.1em; text-transform: uppercase;
+          }
+          .tbl td {
+            padding: 11px 14px; vertical-align: middle;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-secondary); line-height: 1.5;
+          }
+          .tbl tr:last-child td { border-bottom: 0; }
+          .tbl td b { color: var(--text-primary); font-weight: 600; }
+          .cell { display: flex; align-items: center; gap: 8px; }
+          .cap { font-size: 11px; color: var(--text-muted); }
+
+          .pre {
+            margin: 0; padding: 14px 16px;
+            font-family: var(--font-mono); font-size: 11.5px; line-height: 1.65;
+            color: var(--text-secondary); white-space: pre; overflow-x: auto;
+          }
+          .pre .k { color: var(--accent-bright); }
+          .pre .c { color: var(--text-muted); }
+
+          .swatch {
+            display: flex; align-items: center; gap: 14px;
+            padding: 14px 16px;
+          }
+          .swatch + .swatch { border-top: 1px solid var(--border-subtle); }
+          .swatch .lab {
+            width: 96px; flex: 0 0 auto;
+            font-family: var(--font-mono); font-size: 10px;
+            color: var(--text-muted);
+          }
+          .pair { display: flex; align-items: center; gap: 10px; }
+
+          /* Geometry diagram. */
+          .diag { position: relative; padding: 40px 16px 46px; }
+          .ruler { position: relative; width: 62px; margin-left: 46px; }
+          .ruler .tickline {
+            position: absolute; top: -14px; left: 0; width: 60px; height: 8px;
+            border-left: 1px solid var(--accent-border);
+            border-right: 1px solid var(--accent-border);
+            border-top: 1px solid var(--accent-border);
+          }
+          .ruler .tickcap {
+            position: absolute; top: -32px; left: 0;
+            font-family: var(--font-mono); font-size: 9px; color: var(--accent);
+            white-space: nowrap;
+          }
+          .ruler .mid {
+            position: absolute; top: -6px; bottom: -18px; left: 31px;
+            border-left: 1px dashed var(--border-strong);
+          }
+          .ruler .midcap {
+            position: absolute; bottom: -36px; left: 31px;
+            transform: translateX(-50%);
+            font-family: var(--font-mono); font-size: 9px; color: var(--text-muted);
+            white-space: nowrap;
+          }
+        </style>
+      </helmet>
+
+      <!-- ==================================================================
+           1. TODAY -- the bug
+           ================================================================== -->
+      <div class="frame" style="left:0px;top:0px;width:340px">
+        <p class="flabel" data-drags-parent="1">Today <span>&mdash; Reduce Motion on, nothing stops</span></p>
+        <div class="side" data-screen-label="Today">
+          <div class="lens">
+            <div class="tab on">
+              <span class="stack">
+                <span class="sig act"><span class="scn mini sweep"><span class="beam"></span></span>5</span>
+                <span class="sig rem"><span class="scn mini remote sweep"><span class="beam"></span></span>2</span>
+              </span>
+              <span class="sig idl"><span class="cookie"></span>8</span>
+            </div>
+            <div class="tab"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span></div>
+            <div class="tab"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span></div>
+            <div class="tab"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></span></div>
+            <div class="tab"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></span></div>
+          </div>
+
+          <div class="grp">
+            <span>PwrAgnt</span>
+            <span class="spacer"></span>
+            <span class="sig act"><span class="scn mini sweep"><span class="beam"></span></span>5</span>
+            <span class="sig idl"><span class="cookie"></span>2</span>
+          </div>
+
+          <div class="row"><span class="scn mini sweep"><span class="beam"></span></span><span class="t">Child thread handoff failure</span><span class="age">now</span></div>
+          <div class="row"><span class="scn mini sweep"><span class="beam"></span></span><span class="t">PR branch info disappears</span><span class="age">now</span></div>
+          <div class="row sel"><span class="scn mini sweep"><span class="beam"></span></span><span class="t">Fix Sky Computer Use Path Detection</span><span class="age">now</span></div>
+          <div class="row"><span class="scn mini sweep"><span class="beam"></span></span><span class="t">Token Miser accounting bug</span><span class="age">now</span></div>
+          <div class="row"><span class="scn mini remote sweep"><span class="beam"></span></span><span class="t">Sub Agents tab visibility</span><span class="age">now</span></div>
+
+          <div class="pend" style="margin-top:10px">
+            <span class="scn sweep"><span class="beam"></span></span>
+            <span>Thinking</span>
+          </div>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p>Eight beams sweeping at once, on a 1800&nbsp;ms loop, in the operator's peripheral vision for the whole length of a turn. <code>prefers-reduced-motion: reduce</code> currently has <b>no rule at all</b> for <code>.thinking-scanner__beam</code>, so toggling macOS <b>Reduce Motion</b> changes nothing.</p>
+          <p>Every one of these is the same component. Fix it once and all eight stop &mdash; sidebar rows, the directory header count, the Attention tab, the Star Map's Attention chip, the sub-agents strip, the automations strip, and the transcript's pending line.</p>
+        </div>
+      </div>
+
+      <!-- ==================================================================
+           2. PROPOSED
+           ================================================================== -->
+      <div class="frame" style="left:400px;top:0px;width:340px">
+        <p class="flabel" data-drags-parent="1">Proposed <span>&mdash; the beam parks at mid-travel</span></p>
+        <div class="side" data-screen-label="Proposed">
+          <div class="lens">
+            <div class="tab on">
+              <span class="stack">
+                <span class="sig act"><span class="scn mini parked"><span class="beam"></span></span>5</span>
+                <span class="sig rem"><span class="scn mini remote parked"><span class="beam"></span></span>2</span>
+              </span>
+              <span class="sig idl"><span class="cookie"></span>8</span>
+            </div>
+            <div class="tab"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span></div>
+            <div class="tab"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span></div>
+            <div class="tab"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg></span></div>
+            <div class="tab"><span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></span></div>
+          </div>
+
+          <div class="grp">
+            <span>PwrAgnt</span>
+            <span class="spacer"></span>
+            <span class="sig act"><span class="scn mini parked"><span class="beam"></span></span>5</span>
+            <span class="sig idl"><span class="cookie"></span>2</span>
+          </div>
+
+          <div class="row"><span class="scn mini parked"><span class="beam"></span></span><span class="t">Child thread handoff failure</span><span class="age">now</span></div>
+          <div class="row"><span class="scn mini parked"><span class="beam"></span></span><span class="t">PR branch info disappears</span><span class="age">now</span></div>
+          <div class="row sel"><span class="scn mini parked"><span class="beam"></span></span><span class="t">Fix Sky Computer Use Path Detection</span><span class="age">now</span></div>
+          <div class="row"><span class="scn mini parked"><span class="beam"></span></span><span class="t">Token Miser accounting bug</span><span class="age">now</span></div>
+          <div class="row"><span class="scn mini remote parked"><span class="beam"></span></span><span class="t">Sub Agents tab visibility</span><span class="age">now</span></div>
+
+          <div class="pend" style="margin-top:10px">
+            <span class="scn parked"><span class="beam"></span></span>
+            <span>Thinking</span>
+          </div>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p>Nothing moves. Every mark still says exactly what it said: <b>this thread has a turn running</b>, in accent for here and neutral for a peer.</p>
+          <p>The parked position is not a new pose &mdash; it is <b>frame 50%</b> of the sweep the beam already plays: centred, at full opacity, with its glow. The operator who turns Reduce Motion on sees the animation they knew, held still.</p>
+        </div>
+      </div>
+
+      <!-- ==================================================================
+           3. THE TWO STATES AT REST
+           ================================================================== -->
+      <div class="frame" style="left:800px;top:0px;width:560px">
+        <p class="flabel" data-drags-parent="1">At rest <span>&mdash; running vs. not running, with no motion to tell them apart</span></p>
+        <div class="card" data-screen-label="At rest">
+          <div class="cardhead"><b>Dark</b><span class="chip">shipping theme</span></div>
+          <div class="swatch">
+            <span class="lab">mini / here</span>
+            <span class="pair"><span class="scn mini parked"><span class="beam"></span></span><span class="cap">turn running</span></span>
+            <span class="pair"><span class="dormant"></span><span class="cap">nothing running</span></span>
+          </div>
+          <div class="swatch">
+            <span class="lab">mini / peer</span>
+            <span class="pair"><span class="scn mini remote parked"><span class="beam"></span></span><span class="cap">running elsewhere</span></span>
+            <span class="pair"><span class="dormant"></span><span class="cap">nothing running</span></span>
+          </div>
+          <div class="swatch">
+            <span class="lab">full / here</span>
+            <span class="pair"><span class="scn parked"><span class="beam"></span></span><span class="cap">turn running</span></span>
+            <span class="pair"><span class="dormant full"></span><span class="cap">idle</span></span>
+          </div>
+        </div>
+
+        <div class="card lt" style="margin-top:16px" data-screen-label="At rest (light)">
+          <div class="cardhead"><b>Light</b><span class="chip">shipping theme</span></div>
+          <div class="swatch">
+            <span class="lab">mini / here</span>
+            <span class="pair"><span class="scn mini parked"><span class="beam"></span></span><span class="cap">turn running</span></span>
+            <span class="pair"><span class="dormant"></span><span class="cap">nothing running</span></span>
+          </div>
+          <div class="swatch">
+            <span class="lab">mini / peer</span>
+            <span class="pair"><span class="scn mini remote parked"><span class="beam"></span></span><span class="cap">running elsewhere</span></span>
+            <span class="pair"><span class="dormant"></span><span class="cap">nothing running</span></span>
+          </div>
+          <div class="swatch">
+            <span class="lab">full / here</span>
+            <span class="pair"><span class="scn parked"><span class="beam"></span></span><span class="cap">turn running</span></span>
+            <span class="pair"><span class="dormant full"></span><span class="cap">idle</span></span>
+          </div>
+        </div>
+
+        <div class="note" style="margin-top:14px">
+          <p>This is the load-bearing comparison. Without motion, the <b>only</b> thing separating "running" from "not running" is the parked beam against an empty track &mdash; a saturated tint with a glow, sitting in the middle of a flat one. It has to survive at 16&times;6&nbsp;px in both themes.</p>
+          <p>The empty track is <b>not new work</b>: <code>.signal-count__dormant-scanner</code> already ships as the zero-count stand-in, and the strips already draw it beside a non-zero count when nothing is working. Reduced motion simply makes that existing pair carry the whole distinction.</p>
+        </div>
+      </div>
+
+      <!-- ==================================================================
+           4. WHY THE MIDPOINT
+           ================================================================== -->
+      <div class="frame" style="left:0px;top:700px;width:560px">
+        <p class="flabel" data-drags-parent="1">Why mid-travel <span>&mdash; the one position that needs no new number</span></p>
+        <div class="card" data-screen-label="Why mid-travel">
+          <div class="cardhead"><b>Geometry</b><span class="chip good">no new tokens</span></div>
+          <div class="diag">
+            <div class="ruler">
+              <div class="tickcap">width 62 &minus; beam 18 = travel 44</div>
+              <div class="tickline"></div>
+              <span class="scn parked" style="display:block"><span class="beam"></span></span>
+              <div class="mid"></div>
+              <div class="midcap">translateX(travel / 2) = 22px</div>
+            </div>
+          </div>
+          <table class="tbl">
+            <tr><th>Variant</th><th>Track</th><th>Beam</th><th>Travel</th><th>Parked at</th></tr>
+            <tr>
+              <td><b>full</b></td><td>62px</td><td>18px</td><td>44px</td>
+              <td>22px &mdash; centred</td>
+            </tr>
+            <tr>
+              <td><b>mini</b></td><td>16px</td><td>6px</td><td>10px</td>
+              <td>5px &mdash; centred</td>
+            </tr>
+          </table>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p>Travel is <b>exactly</b> track width minus beam width in both variants &mdash; that is why the sweep ends flush at the right edge. So <code>translateX(calc(var(--thinking-scanner-travel) / 2))</code> centres the beam in <b>both</b> sizes, and in any variant added later, without measuring anything or introducing a third custom property.</p>
+          <p>The opacity comes along for free: the sweep's 50% frame is <code>opacity: 1</code>, its brightest. Parking there gives the strongest possible static read, which is precisely what a still mark needs.</p>
+        </div>
+      </div>
+
+      <!-- ==================================================================
+           5. REJECTED
+           ================================================================== -->
+      <div class="frame" style="left:620px;top:700px;width:740px">
+        <p class="flabel" data-drags-parent="1">Rejected <span>&mdash; and why each one breaks the readout</span></p>
+        <div class="card" data-screen-label="Rejected">
+          <table class="tbl">
+            <tr><th style="width:140px">Option</th><th style="width:150px">At rest</th><th>Why not</th></tr>
+            <tr>
+              <td><b>Bare<br /><code>animation: none</code></b></td>
+              <td>
+                <div class="cell"><span class="scn mini stalled"><span class="beam"></span></span><span class="cap">running</span></div>
+                <div class="cell" style="margin-top:7px"><span class="dormant"></span><span class="cap">idle</span></div>
+              </td>
+              <td>The beam falls back to frame 0% &mdash; hard against the left edge at <b>0.76 opacity</b>. That is the pose of a progress bar that has not started, on a turn that is running, and it is the dimmest frame of the loop rather than the brightest. Two marks pinned to the same left edge is also the worst case for telling them apart.</td>
+            </tr>
+            <tr>
+              <td><b>Hide the beam</b></td>
+              <td>
+                <div class="cell"><span class="dormant"></span><span class="cap">running</span></div>
+                <div class="cell" style="margin-top:7px"><span class="dormant"></span><span class="cap">idle</span></div>
+              </td>
+              <td>"A turn is running here" and "nothing is running" become the <b>same pixels</b>. The Attention tab exists to answer <i>can I quit now?</i> &mdash; an operator with Reduce Motion on would lose the answer entirely. Non-negotiable.</td>
+            </tr>
+            <tr>
+              <td><b>Fill the track</b></td>
+              <td>
+                <div class="cell"><span class="scn mini parked" style="--beam-w:16px;--travel:0px"><span class="beam"></span></span><span class="cap">running</span></div>
+                <div class="cell" style="margin-top:7px"><span class="dormant"></span><span class="cap">idle</span></div>
+              </td>
+              <td>Reads as a <b>completed</b> progress bar, which is the opposite of what a live turn means, and it throws away the beam shape that ties the reduced-motion state back to the animation everyone else sees.</td>
+            </tr>
+            <tr>
+              <td><b>Keep sweeping</b></td>
+              <td>
+                <div class="cell"><span class="scn mini sweep"><span class="beam"></span></span><span class="cap">running</span></div>
+                <div class="cell" style="margin-top:7px"><span class="dormant"></span><span class="cap">idle</span></div>
+              </td>
+              <td>The house rule does exempt motion that is the <b>sole</b> signal of progress &mdash; the composer's Run-button ring keeps spinning for exactly that reason. But that exemption is for a mark with no still alternative. This one has one, so the exemption does not apply, and eight simultaneous loops are the case the preference exists for.</td>
+            </tr>
+            <tr>
+              <td><b>An in-app<br />Reduce Motion setting</b></td>
+              <td><span class="cap">&mdash;</span></td>
+              <td>The operator already expressed the preference to the OS. A second switch in Settings makes them say it twice and drift out of sync. <code>prefers-reduced-motion</code> is live in Chromium &mdash; the OS toggle takes effect without a relaunch.</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+
+      <!-- ==================================================================
+           6. SPEC
+           ================================================================== -->
+      <div class="frame" style="left:0px;top:1360px;width:740px">
+        <p class="flabel" data-drags-parent="1">Spec <span>&mdash; one rule, no component change</span></p>
+        <div class="card" data-screen-label="Spec">
+          <div class="cardhead"><b>app.css</b><span class="chip">beside @keyframes pwragent-thinking-scanner-sweep</span></div>
+          <pre class="pre"><span class="c">/* The sweep is the app's most-repeated motion: one beam per running
+   turn, so a busy fleet paints eight or more 1800ms loops at once in
+   peripheral vision. Under the preference the beam holds frame 50% of
+   its own keyframes -- centred, full opacity, glow intact -- rather
+   than stopping where it started.
+
+   Held, not hidden. This mark is the ONLY thing on a thread row that
+   says a turn is running, and its idle counterpart
+   (.signal-count__dormant-scanner) is an empty track of the same
+   size, so removing the beam would make "running" and "idle"
+   identical. `translateX(travel / 2)` centres it in both variants
+   because travel is defined as width - beam-width in each. */</span>
+<span class="k">@media</span> (prefers-reduced-motion: reduce) {
+  .thinking-scanner__beam {
+    animation: none;
+    opacity: 1;
+    transform: translateX(calc(var(--thinking-scanner-travel) / 2));
+  }
+}</pre>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p><b>No React change.</b> <code>ThinkingScanner</code>'s mount-time <code>startTime = 0</code> pin exists so every beam shares one epoch; a media query that never starts or restarts an animation under a live element leaves that invariant alone. Nothing branches on the preference in JS, so nothing re-renders when the OS setting flips.</p>
+          <p><b>The zero state is untouched.</b> <code>AttentionTurnScanner</code> still swaps element types between the dormant span and a fresh <code>ThinkingScanner</code>, which is what keeps the epoch pin honest.</p>
+        </div>
+      </div>
+
+      <!-- ==================================================================
+           7. SURFACES COVERED
+           ================================================================== -->
+      <div class="frame" style="left:800px;top:1360px;width:560px">
+        <p class="flabel" data-drags-parent="1">Coverage <span>&mdash; every surface the one rule reaches</span></p>
+        <div class="card" data-screen-label="Coverage">
+          <table class="tbl">
+            <tr><th>Surface</th><th style="width:74px">Variant</th></tr>
+            <tr><td><b>Sidebar thread row</b> &mdash; the running mark<br /><span class="cap">accent here, neutral for a peer's turn</span></td><td>mini</td></tr>
+            <tr><td><b>Attention lens tab</b> &mdash; turns-here readout<br /><span class="cap">plus the stacked neutral peer readout under it</span></td><td>mini</td></tr>
+            <tr><td><b>Directory header count</b><br /><span class="cap">turns running inside that directory</span></td><td>mini</td></tr>
+            <tr><td><b>Star Map Attention chip</b><br /><span class="cap">same component as the tab &mdash; and its hover-card rows</span></td><td>mini</td></tr>
+            <tr><td><b>Star Map thread card</b> &mdash; the running mark</td><td>mini</td></tr>
+            <tr><td><b>Active sub-agents strip</b></td><td>mini</td></tr>
+            <tr><td><b>Running automations strip</b></td><td>mini</td></tr>
+            <tr><td><b>Transcript pending line</b> &mdash; "Thinking"</td><td>full</td></tr>
+          </table>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p>Already covered elsewhere in <code>app.css</code> and left alone: the <code>status-blink</code> dot pulse (rail chips, PR check dots), the Star Map sky parallax, the intake pulse, the card rise, and the settings save ring. The scanner was the one animated indicator with <b>no</b> reduced-motion rule.</p>
+        </div>
+      </div>
+    </x-dc>
+  </body>
+</html>

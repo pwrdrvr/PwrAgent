@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./settings-profiles.css" />
+        <link rel="stylesheet" href="./settings-profiles-patch.css" />
+      </helmet>
+
+      <div class="page">
+        <p class="eyebrow">PwrAgent · Settings → Profiles</p>
+        <h1>Profiles pane — UX review</h1>
+        <p class="lede">
+          The docs screenshot recapture caught the <code>Delete</code> button running off the
+          right edge of the pane. That clip is a symptom: the profile row is
+          <strong>1261&nbsp;px wide at every window size</strong>, and each row is
+          <strong>219&nbsp;px tall</strong> for four facts. This page measures the pane as built,
+          then proposes a three-line card.
+        </p>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">01</span>
+          <h2>What the recapture caught</h2>
+          <p class="body">
+            Numbers below are measured in headless Chromium against the real
+            <code>app.css</code> with the real <code>ProfilesSettings</code> component mounted,
+            at the docs capture size (1440&nbsp;×&nbsp;900).
+          </p>
+        </div>
+
+        <table class="tbl">
+          <thead>
+            <tr><th>Defect</th><th>Measured</th><th>Cause</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Actions clipped</td>
+              <td class="num-cell">Delete&nbsp;69&nbsp;px wide<br />5&nbsp;px inside the clip</td>
+              <td><code>.settings-section__body-clip</code> is <code>display:grid; overflow:hidden</code> with no
+                  <code>grid-template-columns</code>. Its implicit <code>auto</code> track floors at the row's
+                  min-content width, so the row is <strong>1261&nbsp;px at 1440, 1200, 1000 and 880&nbsp;px
+                  windows alike</strong> — and the clip cuts whatever hangs past 1202&nbsp;px.</td>
+            </tr>
+            <tr>
+              <td>Buttons oversized</td>
+              <td class="num-cell">16&nbsp;px text<br />in a 12&nbsp;px pane</td>
+              <td><code>button { font: inherit }</code> plus no root <code>font-size</code> means every
+                  <code>.button</code> lands at the 16&nbsp;px UA default. Sibling settings buttons all set one
+                  (<code>.settings-section-controls__button</code> is 11&nbsp;px);
+                  <code>.settings-profile-row__button</code> never did.</td>
+            </tr>
+            <tr>
+              <td>Rows are tall</td>
+              <td class="num-cell">219&nbsp;px per row<br />698&nbsp;px for 3</td>
+              <td>Each row stacks name, path, timestamp, a section label, a full-width select, a
+                  nested detail card, and a helper sentence — eight stacked blocks for what is
+                  really four facts.</td>
+            </tr>
+            <tr>
+              <td>Card inside a card</td>
+              <td class="num-cell">52&nbsp;px detail box</td>
+              <td>The Codex detail box repeats the name already shown in the select above it, on
+                  the same elevation as its parent — so the nesting reads flat and the repetition
+                  reads like two different things.</td>
+            </tr>
+            <tr>
+              <td>Control out of scale</td>
+              <td class="num-cell">778&nbsp;px select</td>
+              <td>The auth select stretches the full body width for a 24-character value, which
+                  makes it the loudest element in a row about something else.</td>
+            </tr>
+            <tr>
+              <td>Repeated boilerplate</td>
+              <td class="num-cell">×&nbsp;1 per profile</td>
+              <td>"Applies the next time this PwrAgent profile launches." is a property of the
+                  feature, not of a profile, but it is rendered once per row.</td>
+            </tr>
+            <tr>
+              <td>Status far from subject</td>
+              <td class="num-cell">≈&nbsp;700&nbsp;px apart</td>
+              <td><span class="chip chip--ok">Active</span> and
+                  <span class="chip chip--warn">Startup&nbsp;default</span> sit at the far right of the
+                  row, separated from the profile name they qualify by the whole body column.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h3>The eye has nothing to follow</h3>
+          <p>
+            Name, path, timestamp, label, control, nested card and helper are all
+            left-aligned at the same x, in three type sizes that differ by 1.5&nbsp;px. There is no
+            scan edge and no rhythm, so finding "which profile am I looking at" means reading
+            every line. That is the "unreadable" complaint, and it is a hierarchy problem rather
+            than a spacing one.
+          </p>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">02</span>
+          <h2>As built</h2>
+          <p class="body">
+            A measured recreation at the docs capture width. The row is drawn at its real
+            1261&nbsp;px and the card body clips at 1202&nbsp;px, exactly as
+            <code>overflow: hidden</code> does in the app — so the cut you see here is the cut the
+            recapture caught.
+          </p>
+        </div>
+
+        <div class="frame">
+          <div class="frame__cap">
+            <b>Today</b> · 1440 × 900 · dark
+            <span class="tag tag--bad">row 1261 px · clip at 1202 px · Delete 5/69 px visible</span>
+          </div>
+          <div class="pane-wrap">
+            <div class="pane">
+              <div class="pane__titlebar">
+                <span class="pane__eyebrow">Settings</span>
+                <span class="pane__sep">›</span>
+                <span class="pane__current">Profiles</span>
+              </div>
+              <div class="pane__content">
+                <div class="pane__head">
+                  <div class="pane__head-text">
+                    <p class="pane__head-eyebrow">Profiles</p>
+                    <h3 class="pane__head-title">PwrAgent profiles</h3>
+                    <p class="pane__head-help">Profiles isolate PwrAgent settings, state, worktrees, and encrypted secrets. Launches with --profile or PWRAGENT_PROFILE still override the startup default.</p>
+                  </div>
+                  <div class="pane__head-action">
+                    <button class="btn btn--ghost btn--sm">Collapse all</button>
+                    <button class="btn btn--secondary btn--lg">Add profile</button>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card__header">
+                    <div class="card__header-text">
+                      <p class="card__eyebrow">Profiles</p>
+                      <h3 class="card__title">Profile list</h3>
+                      <p class="card__desc">Choose which profile opens when no environment profile is set, or open another profile in a new app instance.</p>
+                    </div>
+                    <span class="card__chip">active:default</span>
+                  </div>
+                  <div class="card__body" style="overflow: hidden;">
+
+                    <div class="old-row is-active">
+                      <div class="old-body">
+                        <span class="old-name">default</span>
+                        <span class="old-path">/var/folders/07/183kkj1d7l59l67s4tq0dmyr0000gn/T/pwragent-desktop-e2e-home-zbwwXe/.pwragent/profiles/default</span>
+                        <span class="old-meta">Last used Sep 1, 2026, 3:19 PM</span>
+                        <div class="old-codex">
+                          <span class="old-label">Codex auth profile</span>
+                          <div class="old-select">System default (no auth)</div>
+                          <div class="old-details">
+                            <div class="old-details__body">
+                              <span class="old-name">System default</span>
+                              <span class="old-path">/var/folders/07/183kkj1d7l59l67s4tq0dmyr0000gn/T/pwragent-desktop-e2e-home-zb…</span>
+                            </div>
+                            <div class="old-chips">
+                              <span class="chip">default</span>
+                              <span class="chip">no auth</span>
+                              <span class="chip chip--err">missing</span>
+                            </div>
+                          </div>
+                          <span class="old-meta">Applies the next time this PwrAgent profile launches.</span>
+                        </div>
+                      </div>
+                      <div class="old-chips">
+                        <span class="chip chip--ok">Active</span>
+                        <span class="chip chip--warn">Startup default</span>
+                      </div>
+                      <div class="old-actions">
+                        <button class="btn btn--secondary btn--lg">Use on startup</button>
+                        <button class="btn btn--secondary btn--lg">Open</button>
+                        <button class="btn btn--danger btn--lg">Delete</button>
+                      </div>
+                    </div>
+
+                    <div class="old-row">
+                      <div class="old-body">
+                        <span class="old-name">work</span>
+                        <span class="old-path">/Users/operator/.pwragent/profiles/work</span>
+                        <span class="old-meta">Last used Aug 30, 2026, 5:02 AM</span>
+                        <div class="old-codex">
+                          <span class="old-label">Codex auth profile</span>
+                          <div class="old-select">work</div>
+                          <div class="old-details">
+                            <div class="old-details__body">
+                              <span class="old-name">work</span>
+                              <span class="old-path">/Users/operator/.codex/profiles/work</span>
+                            </div>
+                            <div class="old-chips">
+                              <span class="chip">profile</span>
+                              <span class="chip">auth</span>
+                              <span class="chip">config</span>
+                            </div>
+                          </div>
+                          <span class="old-meta">Applies the next time this PwrAgent profile launches.</span>
+                        </div>
+                      </div>
+                      <div class="old-chips"></div>
+                      <div class="old-actions">
+                        <button class="btn btn--secondary btn--lg">Use on startup</button>
+                        <button class="btn btn--secondary btn--lg">Open</button>
+                        <button class="btn btn--danger btn--lg">Delete</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">03</span>
+          <h2>Proposed — a three-line profile card</h2>
+          <p class="body">
+            One card, three lines, in the order an operator asks the questions:
+            <strong>which profile</strong> (name + state + what I can do to it),
+            <strong>where and when</strong> (path + last used),
+            <strong>which Codex identity it runs as</strong>. The nested detail box is gone; its
+            path and chips fold into the Codex line beside the control they describe. The repeated
+            helper sentence moves up into the section description, where it belongs once.
+          </p>
+        </div>
+
+        <div class="frame">
+          <div class="frame__cap">
+            <b>Proposed</b> · 1440 × 900 · dark
+            <span class="tag tag--good">row ≈ 108 px · nothing clipped</span>
+          </div>
+          <div class="pane-wrap">
+            <div class="pane">
+              <div class="pane__titlebar">
+                <span class="pane__eyebrow">Settings</span>
+                <span class="pane__sep">›</span>
+                <span class="pane__current">Profiles</span>
+              </div>
+              <div class="pane__content">
+                <div class="pane__head">
+                  <div class="pane__head-text">
+                    <p class="pane__head-eyebrow">Profiles</p>
+                    <h3 class="pane__head-title">PwrAgent profiles</h3>
+                    <p class="pane__head-help">Profiles isolate PwrAgent settings, state, worktrees, and encrypted secrets. Launches with --profile or PWRAGENT_PROFILE still override the startup default.</p>
+                  </div>
+                  <div class="pane__head-action">
+                    <button class="btn btn--ghost btn--sm">Collapse all</button>
+                    <button class="btn btn--secondary btn--sm">Add profile</button>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card__header">
+                    <div class="card__header-text">
+                      <p class="card__eyebrow">Profiles</p>
+                      <h3 class="card__title">Profile list</h3>
+                      <p class="card__desc">Choose which profile opens when no environment profile is set, or open another profile in a new app instance. A Codex auth change applies the next time that profile launches.</p>
+                    </div>
+                    <span class="card__chip">active:default</span>
+                  </div>
+                  <div class="card__body">
+
+                    <div class="pc is-active">
+                      <div class="pc__head">
+                        <div class="pc__ident">
+                          <span class="pc__name">default</span>
+                          <span class="pc__badges">
+                            <span class="chip chip--ok">Active</span>
+                            <span class="chip chip--warn">Startup default</span>
+                          </span>
+                        </div>
+                        <div class="pc__actions">
+                          <button class="btn btn--secondary btn--row" disabled style="opacity:.45">Use on startup</button>
+                          <button class="btn btn--secondary btn--row" disabled style="opacity:.45">Open</button>
+                          <span class="spacer"></span>
+                          <button class="btn btn--danger btn--row" disabled style="opacity:.45">Delete</button>
+                        </div>
+                      </div>
+                      <div class="pc__where">
+                        <span class="pc__path"><span class="pc__path-head">/var/folders/07/183kkj1d7l59l67s4tq0dmyr0000gn/T/pwragent-desktop-e2e-home-zbwwXe/.pwragent/profiles</span><span class="pc__path-tail">/default</span></span>
+                        <span class="pc__dot">·</span>
+                        <span class="pc__when">Last used Sep 1, 2026, 3:19 PM</span>
+                      </div>
+                      <div class="pc__codex">
+                        <span class="pc__codex-label">Codex auth</span>
+                        <div class="pc__select"><span>System default</span></div>
+                        <span class="pc__codex-home"><span class="pc__codex-home-head">/var/folders/07/183kkj1d7l59l67s4tq0dmyr0000gn/T/pwragent-desktop-e2e-home-zbwwXe</span><span class="pc__codex-home-tail">/.codex</span></span>
+                        <span class="pc__codex-chips">
+                          <span class="chip">default</span>
+                          <span class="chip chip--err">no auth</span>
+                          <span class="chip chip--err">missing</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="pc">
+                      <div class="pc__head">
+                        <div class="pc__ident">
+                          <span class="pc__name">work</span>
+                          <span class="pc__badges"></span>
+                        </div>
+                        <div class="pc__actions">
+                          <button class="btn btn--secondary btn--row">Use on startup</button>
+                          <button class="btn btn--secondary btn--row">Open</button>
+                          <span class="spacer"></span>
+                          <button class="btn btn--danger btn--row">Delete</button>
+                        </div>
+                      </div>
+                      <div class="pc__where">
+                        <span class="pc__path"><span class="pc__path-head">~/.pwragent/profiles</span><span class="pc__path-tail">/work</span></span>
+                        <span class="pc__dot">·</span>
+                        <span class="pc__when">Last used Aug 30, 2026, 5:02 AM</span>
+                      </div>
+                      <div class="pc__codex">
+                        <span class="pc__codex-label">Codex auth</span>
+                        <div class="pc__select"><span>work</span></div>
+                        <span class="pc__codex-home"><span class="pc__codex-home-head">~/.codex/profiles</span><span class="pc__codex-home-tail">/work</span></span>
+                        <span class="pc__codex-chips">
+                          <span class="chip">profile</span>
+                          <span class="chip">auth</span>
+                          <span class="chip">config</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="pc">
+                      <div class="pc__head">
+                        <div class="pc__ident">
+                          <span class="pc__name">client-acme-longer-name</span>
+                          <span class="pc__badges"></span>
+                        </div>
+                        <div class="pc__actions">
+                          <button class="btn btn--secondary btn--row">Use on startup</button>
+                          <button class="btn btn--secondary btn--row">Open</button>
+                          <span class="spacer"></span>
+                          <button class="btn btn--danger btn--row">Delete</button>
+                        </div>
+                      </div>
+                      <div class="pc__where">
+                        <span class="pc__path"><span class="pc__path-head">~/.pwragent/profiles</span><span class="pc__path-tail">/client-acme-longer-name</span></span>
+                        <span class="pc__dot">·</span>
+                        <span class="pc__when">Not launched yet</span>
+                      </div>
+                      <div class="pc__codex">
+                        <span class="pc__codex-label">Codex auth</span>
+                        <div class="pc__select"><span>System default</span></div>
+                        <span class="pc__codex-home"><span class="pc__codex-home-head">~</span><span class="pc__codex-home-tail">/.codex</span></span>
+                        <span class="pc__codex-chips">
+                          <span class="chip">default</span>
+                          <span class="chip chip--err">no auth</span>
+                        </span>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <ul class="plain">
+          <li><strong>Name and state travel together.</strong> The two chips move next to the name, so
+              "which one is live" is answered in the first 200&nbsp;px of the card.</li>
+          <li><strong>Actions shrink to the pane's scale.</strong> 28&nbsp;px tall, 12&nbsp;px label —
+              the same weight as everything else in Settings instead of the 16&nbsp;px UA default.
+              <code>Delete</code> keeps its danger colour and gains a gap so it is not a
+              neighbour of <code>Open</code>.</li>
+          <li><strong>Paths get tildified, and truncate in the middle.</strong> <code>tildifyPath()</code>
+              already ships in <code>lib/tildify-path.ts</code>. Splitting at the last separator and
+              pinning the tail keeps the identifying segment — <code>/default</code>,
+              <code>/.codex</code> — on screen, which a plain <code>text-overflow: ellipsis</code>
+              is guaranteed to eat first. The full value stays on the <code>title</code>.</li>
+          <li><strong>The Codex line is one line.</strong> Label, a 260&nbsp;px control, the codex home, and
+              the status chips. The chips right-align, so <code>no auth</code> and <code>missing</code>
+              form a status column the eye can run down instead of hunting each nested box.</li>
+          <li><strong>Everything can shrink.</strong> Fixing the grid track and giving each flex
+              child <code>min-width: 0</code> is what makes the row track the window instead of its
+              own content.</li>
+        </ul>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">04</span>
+          <h2>Narrow window</h2>
+          <p class="body">
+            At 720&nbsp;px of pane the head wraps the action group under the name, and the Codex line
+            wraps its chips. Nothing is clipped and nothing needs a horizontal scrollbar — which is
+            what the current <code>@media (max-width: 760px)</code> block was reaching for and could not
+            deliver while the track floored at min-content.
+          </p>
+        </div>
+
+        <div class="frame narrow">
+          <div class="frame__cap">
+            <b>Proposed</b> · 720 px pane
+            <span class="tag tag--good">wraps, no clip</span>
+          </div>
+          <div class="pane-wrap">
+            <div class="pane">
+              <div class="pane__content" style="padding: 14px 16px;">
+                <div class="pc is-active">
+                  <div class="pc__head">
+                    <div class="pc__ident">
+                      <span class="pc__name">default</span>
+                      <span class="pc__badges">
+                        <span class="chip chip--ok">Active</span>
+                        <span class="chip chip--warn">Startup default</span>
+                      </span>
+                    </div>
+                    <div class="pc__actions">
+                      <button class="btn btn--secondary btn--row" disabled style="opacity:.45">Use on startup</button>
+                      <button class="btn btn--secondary btn--row" disabled style="opacity:.45">Open</button>
+                      <span class="spacer"></span>
+                      <button class="btn btn--danger btn--row" disabled style="opacity:.45">Delete</button>
+                    </div>
+                  </div>
+                  <div class="pc__where">
+                    <span class="pc__path"><span class="pc__path-head">/var/folders/07/183kkj1d7l59l67s4tq0dmyr0000gn/T/pwragent-desktop-e2e-home-zbwwXe/.pwragent/profiles</span><span class="pc__path-tail">/default</span></span>
+                    <span class="pc__dot">·</span>
+                    <span class="pc__when">Last used Sep 1, 2026</span>
+                  </div>
+                  <div class="pc__codex">
+                    <span class="pc__codex-label">Codex auth</span>
+                    <div class="pc__select"><span>System default</span></div>
+                    <span class="pc__codex-home"><span class="pc__codex-home-head">~</span><span class="pc__codex-home-tail">/.codex</span></span>
+                    <span class="pc__codex-chips">
+                      <span class="chip">default</span>
+                      <span class="chip chip--err">no auth</span>
+                      <span class="chip chip--err">missing</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">05</span>
+          <h2>The one open call</h2>
+          <p class="body">
+            Everything above is settled by the measurements. This one is a taste call, so it is
+            worth a look before it ships.
+          </p>
+        </div>
+
+        <div class="grid2">
+          <div class="opt opt--pick">
+            <h3>A · Three buttons, Delete set apart <span class="chip chip--warn">recommended</span></h3>
+            <p>
+              Keep all three actions visible; give <code>Delete</code> danger colour and an extra
+              6&nbsp;px gap so it is not adjacent to <code>Open</code>. The confirm dialog stays.
+            </p>
+            <ul>
+              <li>No new component, no new keyboard model.</li>
+              <li>Every action is one click and is reachable by Tab in reading order.</li>
+              <li>Costs ~215&nbsp;px of the head row; wraps below the name under ~640&nbsp;px.</li>
+            </ul>
+          </div>
+          <div class="opt">
+            <h3>B · Two buttons + a <code>⋯</code> menu</h3>
+            <p>
+              <code>Use on startup</code> and <code>Open</code> stay; <code>Delete</code> moves into a
+              per-card overflow menu.
+            </p>
+            <ul>
+              <li>The only irreversible action on the pane stops being a misclick neighbour.</li>
+              <li>Head row drops to ~180&nbsp;px, so it wraps later.</li>
+              <li>Adds a menu + focus trap per card, and hides a discoverable action behind a glyph.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="note">
+          <h3>Not in scope</h3>
+          <p>
+            The delete confirm dialog, the create-profile dialog, and the Codex profile creation flow
+            are unchanged. The grid-track fix lands on
+            <code>.settings-section__body-clip</code>, which every settings pane shares — it can only
+            make an over-wide panel shrink to fit where it previously overflowed into
+            <code>overflow: hidden</code>, so it is a strict improvement everywhere.
+          </p>
+        </div>
+      </div>
+    </x-dc>
+  </body>
+</html>
