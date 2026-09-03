@@ -13,7 +13,7 @@ import type {
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { PluginsSettings } from "../PluginsSettings";
+import { PluginsSettings as PluginsSettingsComponent } from "../PluginsSettings";
 
 afterEach(() => {
   cleanup();
@@ -21,6 +21,19 @@ afterEach(() => {
 
 const CODEX_HOME = "/Users/operator/.codex/profiles/work";
 const DEFAULT_CODEX_HOME = "/Users/operator/.codex";
+const onMcpGatewayEnabledChange = vi.fn(async () => undefined);
+
+function PluginsSettings(props: {
+  desktopApi?: DesktopApi;
+  snapshot: DesktopSettingsSnapshot;
+}) {
+  return (
+    <PluginsSettingsComponent
+      {...props}
+      onMcpGatewayEnabledChange={onMcpGatewayEnabledChange}
+    />
+  );
+}
 
 /**
  * The pane reads three things off the snapshot. Building the whole
@@ -36,6 +49,9 @@ function createSnapshot(options: {
   const profileName = options.profileName ?? "work";
   const codexHome = options.codexHome ?? CODEX_HOME;
   return {
+    general: {
+      mcpGatewayEnabled: true,
+    },
     runtime: {
       messaging: { disabled: false },
       tokenMiser: {
