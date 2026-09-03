@@ -10,6 +10,8 @@ minimumReleaseAgeExclude:
   - '@slack/web-api@8.1.0'
   - '@pwrdrvr/codex-app-server-protocol@0.133.0'
   - '@modelcontextprotocol/sdk@1.30.0'
+  # Security fix; published inside the normal seven-day maturity window.
+  - 'qs@6.16.0'
   - '@pwrdrvr/agent-core'
   - '@pwrdrvr/agent-transport'
   - '@pwrdrvr/codex-discovery'
