@@ -61,12 +61,27 @@ function baseInput(overrides: Partial<Parameters<typeof buildStarMapViewSnapshot
     localInstanceId: "local",
     threadsByInstance: new Map(),
     instanceLabels: new Map([["local", "This instance"]]),
-    visibleCardKeys: new Set<string>(),
     selection: new Set<string>(),
     openChatCardThreadKeys: new Set<string>(),
     now: NOW,
     ...overrides,
   };
+}
+
+/**
+ * The cards the layout placed. A card's rect is what makes it drawn, so a
+ * test that wants a card on screen gives it geometry.
+ */
+function drawn(...cardKeys: string[]): Map<
+  string,
+  { x: number; y: number; width: number; height: number }
+> {
+  return new Map(
+    cardKeys.map((cardKey, index) => [
+      cardKey,
+      { x: index * 240, y: 0, width: 220, height: 112 },
+    ]),
+  );
 }
 
 describe("buildStarMapViewSnapshot", () => {
@@ -80,11 +95,11 @@ describe("buildStarMapViewSnapshot", () => {
       baseInput({
         threadsByInstance: new Map([["local", threads]]),
         clouds: new Map([["local", cloudFor(threads)]]),
-        visibleCardKeys: new Set([
+        cardRects: drawn(
           "local::codex:a1",
           "local::codex:a2",
           "local::codex:b1",
-        ]),
+        ),
         matchedThreadCount: 3,
       }),
     );
@@ -110,7 +125,7 @@ describe("buildStarMapViewSnapshot", () => {
         threadsByInstance: new Map([["local", threads]]),
         clouds: new Map([["local", cloudFor(threads)]]),
         // Only the first card is on screen.
-        visibleCardKeys: new Set(["local::codex:a1"]),
+        cardRects: drawn("local::codex:a1"),
       }),
     );
     expect(
@@ -129,7 +144,7 @@ describe("buildStarMapViewSnapshot", () => {
       baseInput({
         threadsByInstance: new Map([["local", threads]]),
         clouds: new Map([["local", cloudFor(threads)]]),
-        visibleCardKeys: new Set(["local::codex:a1"]),
+        cardRects: drawn("local::codex:a1"),
         selection: new Set(["local::codex:a1"]),
       }),
     );
@@ -157,7 +172,7 @@ describe("buildStarMapViewSnapshot", () => {
         threadsByInstance: new Map([["peer-7", threads]]),
         instanceLabels: new Map([["peer-7", "Studio"]]),
         clouds: new Map([["peer-7", cloudFor(threads)]]),
-        visibleCardKeys: new Set(["peer-7::codex:p1"]),
+        cardRects: drawn("peer-7::codex:p1"),
       }),
     );
     expect(snapshot.threads[0]).toMatchObject({
@@ -189,7 +204,6 @@ describe("buildStarMapViewSnapshot", () => {
       baseInput({
         threadsByInstance: new Map([["local", threads]]),
         clouds: new Map([["local", cloudFor(threads)]]),
-        visibleCardKeys: new Set(["local::codex:a1"]),
         cardRects: new Map([
           ["local::codex:a1", { x: 10, y: 20, width: 220, height: 112 }],
         ]),
@@ -226,7 +240,7 @@ describe("buildStarMapViewSnapshot", () => {
             lastActivityAt: NOW,
           },
         ],
-        visibleCardKeys: new Set(["local::codex:a1"]),
+        cardRects: drawn("local::codex:a1"),
       }),
     );
     const alpha = snapshot.clouds[0];

@@ -40,18 +40,25 @@ export type StarMapViewSnapshotInput = {
   localInstanceId?: string;
   threadsByInstance: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
   instanceLabels: ReadonlyMap<string, string>;
-  instanceIcons?: ReadonlyMap<string, string | undefined>;
+  /**
+   * Resolved lazily rather than passed as a built map: this input is
+   * assembled on every render of a surface that re-renders per pan frame,
+   * while the builder runs at most once per publish window.
+   */
+  iconFor?: (instanceId: string) => string | undefined;
   /** Cloud layout, in the lenses that draw clouds around each instance. */
   clouds?: ReadonlyMap<string, StarMapClusterCloud>;
   /** Project pools, in the projects lens. */
   projects?: readonly StarMapProject[];
-  /** Card keys the surface is actually drawing right now. */
-  visibleCardKeys: ReadonlySet<string>;
   /** Card keys the operator has gathered. */
   selection: ReadonlySet<string>;
   /** Thread keys with a floating chat card open over the map. */
   openChatCardThreadKeys: ReadonlySet<string>;
-  /** Map-space geometry by card key, for the cards being drawn. */
+  /**
+   * Map-space geometry by card key, for the cards being drawn. Its key set
+   * is also what "drawn" means here: a card the layout is not placing has no
+   * rect, so the geometry and the visibility can never disagree.
+   */
   cardRects?: ReadonlyMap<
     string,
     { x: number; y: number; width: number; height: number }
@@ -137,7 +144,7 @@ export function buildStarMapViewSnapshot(
       for (const instanceId of instancesByThreadKey.get(threadKey) ?? []) {
         const cardKey = cardKeyOf(instanceId, threadKey);
         cloudKeyByCard.set(cardKey, project.key);
-        if (input.visibleCardKeys.has(cardKey)) drawn = true;
+        if (input.cardRects?.has(cardKey)) drawn = true;
       }
       if (drawn) visibleCount += 1;
     }
@@ -162,7 +169,7 @@ export function buildStarMapViewSnapshot(
     for (const thread of instanceThreads) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       const cardKey = cardKeyOf(instanceId, threadKey);
-      const visible = input.visibleCardKeys.has(cardKey);
+      const visible = input.cardRects?.has(cardKey) ?? false;
       if (visible) visibleThreadCount += 1;
       const rect = input.cardRects?.get(cardKey);
       threads.push({
@@ -194,7 +201,7 @@ export function buildStarMapViewSnapshot(
       instanceId,
       label: instanceLabel,
       isLocal: instanceId === input.localInstanceId,
-      icon: input.instanceIcons?.get(instanceId),
+      icon: input.iconFor?.(instanceId),
       threadCount: instanceThreads.length,
       visibleThreadCount,
     });
