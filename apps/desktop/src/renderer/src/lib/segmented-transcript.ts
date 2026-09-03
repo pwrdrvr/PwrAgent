@@ -35,9 +35,22 @@ type TranscriptHistoryTurnPage = {
   page: TranscriptHistoryPage;
 };
 
+type TranscriptHistoryInsertionPoint = {
+  entryIndex: number;
+  page: TranscriptHistoryPage;
+};
+
+type CachedRetainedEntryPlacement = {
+  entryTime: number | undefined;
+  insertionPoint: TranscriptHistoryInsertionPoint;
+  turnId: string;
+  turnPageCount: number;
+};
+
 export type TranscriptHistoryIndex = {
   entryIds: Set<string>;
   messageIds: Set<string>;
+  retainedEntryPlacements: Map<string, CachedRetainedEntryPlacement>;
   review: TranscriptReviewHistoryIndex;
   turnPages: Map<string, TranscriptHistoryTurnPage[]>;
 };
@@ -46,6 +59,7 @@ export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
   return {
     entryIds: new Set(),
     messageIds: new Set(),
+    retainedEntryPlacements: new Map(),
     review: createTranscriptReviewHistoryIndex(),
     turnPages: new Map(),
   };
@@ -170,6 +184,7 @@ function historyOverlapIds<T extends { id: string }>(
 
 type SegmentedArraySource<T> = {
   excludedHistoryIds: ReadonlySet<string>;
+  excludedTailIds?: ReadonlySet<string>;
   historyCount: number;
   historyNewestPage: TranscriptHistoryPage | undefined;
   historyPage: TranscriptHistoryPage | undefined;
@@ -190,14 +205,21 @@ function* iterateSegmentedArray<T extends { id: string }>(
     }
     page = page.newerPage;
   }
-  yield* source.tail;
+  for (const item of source.tail) {
+    if (!source.excludedTailIds?.has(item.id)) {
+      yield item;
+    }
+  }
 }
 
 function* iterateSegmentedArrayReverse<T extends { id: string }>(
   source: SegmentedArraySource<T>,
 ): Generator<T> {
   for (let index = source.tail.length - 1; index >= 0; index -= 1) {
-    yield source.tail[index]!;
+    const item = source.tail[index]!;
+    if (!source.excludedTailIds?.has(item.id)) {
+      yield item;
+    }
   }
 
   let remainingHistoryItems =
@@ -322,7 +344,11 @@ function isArrayIndex(property: PropertyKey): property is string {
 function createSegmentedArray<T extends { id: string }>(
   source: SegmentedArraySource<T>,
 ): T[] {
-  const length = source.historyCount - source.excludedHistoryIds.size + source.tail.length;
+  const length =
+    source.historyCount
+    - source.excludedHistoryIds.size
+    + source.tail.length
+    - (source.excludedTailIds?.size ?? 0);
   const target = new Array<T>(length);
   let materialized: T[] | undefined;
   const materialize = (): T[] => {
@@ -457,6 +483,7 @@ export function combineTranscriptEntries(
     TranscriptReviewPresentation,
     "excludedHistoryEntryIds" | "historyEntryOverrides"
   >,
+  retainedEntries: readonly AppServerThreadEntry[] = [],
 ): AppServerThreadEntry[] {
   if (!history?.oldestPage || !index) {
     return tailEntries;
@@ -465,21 +492,19 @@ export function combineTranscriptEntries(
   for (const id of presentation?.excludedHistoryEntryIds ?? []) {
     excludedHistoryIds.add(id);
   }
-  const historyInsertions = placeMisorderedCompletedActivityInHistory(
-    tailEntries,
+  const historyInsertions = placeRetainedArtifactsInHistory(
+    retainedEntries,
     index,
   );
-  const insertedEntries = new Set(
+  const insertedEntryIds = new Set(
     [...historyInsertions.values()].flatMap((insertionsByIndex) =>
-      [...insertionsByIndex.values()].flat()
+      [...insertionsByIndex.values()].flat().map((entry) => entry.id)
     )
   );
-  const projectedTailEntries = insertedEntries.size > 0
-    ? tailEntries.filter((entry) => !insertedEntries.has(entry))
-    : tailEntries;
   return createSegmentedArray({
     excludedHistoryIds,
-    historyCount: history.entryCount + insertedEntries.size,
+    excludedTailIds: insertedEntryIds,
+    historyCount: history.entryCount + insertedEntryIds.size,
     historyNewestPage: history.newestPage,
     historyPage: history.oldestPage,
     itemOverrides: presentation?.historyEntryOverrides,
@@ -487,7 +512,7 @@ export function combineTranscriptEntries(
       page,
       historyInsertions.get(page),
     ),
-    tail: projectedTailEntries,
+    tail: tailEntries,
   });
 }
 
@@ -496,12 +521,12 @@ type HistoryEntryInsertions = Map<
   Map<number, AppServerThreadEntry[]>
 >;
 
-function isCompletedActivityEntry(
+function isTerminalRetainedArtifactEntry(
   entry: AppServerThreadEntry,
 ): boolean {
   const status = entry.turn?.status;
   return (
-    entry.type === "activity"
+    (entry.type === "activity" || entry.type === "plan")
     && Boolean(entry.turn)
     && (
       status === "completed"
@@ -521,7 +546,7 @@ function transcriptEntryTime(entry: AppServerThreadEntry): number | undefined {
 function findHistoryInsertionPoint(
   entry: AppServerThreadEntry,
   turnPages: TranscriptHistoryTurnPage[],
-): { entryIndex: number; page: TranscriptHistoryPage } | undefined {
+): TranscriptHistoryInsertionPoint | undefined {
   const entryTime = transcriptEntryTime(entry);
   let lastTurnEntry:
     | { entryIndex: number; page: TranscriptHistoryPage }
@@ -554,30 +579,59 @@ function findHistoryInsertionPoint(
     : undefined;
 }
 
-function placeMisorderedCompletedActivityInHistory(
-  tailEntries: AppServerThreadEntry[],
+function retainedEntryInsertionPoint(
+  entry: AppServerThreadEntry,
+  index: TranscriptHistoryIndex,
+  turnId: string,
+  turnPages: TranscriptHistoryTurnPage[],
+): TranscriptHistoryInsertionPoint | undefined {
+  const entryTime = transcriptEntryTime(entry);
+  const cached = index.retainedEntryPlacements.get(entry.id);
+  if (
+    cached
+    && cached.entryTime === entryTime
+    && cached.turnId === turnId
+    && cached.turnPageCount === turnPages.length
+  ) {
+    return cached.insertionPoint;
+  }
+
+  const insertionPoint = findHistoryInsertionPoint(entry, turnPages);
+  if (insertionPoint) {
+    index.retainedEntryPlacements.set(entry.id, {
+      entryTime,
+      insertionPoint,
+      turnId,
+      turnPageCount: turnPages.length,
+    });
+  }
+  return insertionPoint;
+}
+
+function placeRetainedArtifactsInHistory(
+  retainedEntries: readonly AppServerThreadEntry[],
   index: TranscriptHistoryIndex,
 ): HistoryEntryInsertions {
   const insertions: HistoryEntryInsertions = new Map();
-  let greatestSeenTime: number | undefined;
 
-  for (const entry of tailEntries) {
-    const entryTime = transcriptEntryTime(entry);
+  for (const entry of retainedEntries) {
     const turnId = entry.turn?.id;
     const turnPages = turnId ? index.turnPages.get(turnId) : undefined;
-    // A turn can legitimately span the history/tail boundary. Move only a
-    // completed activity that has already fallen behind a newer tail item.
-    // The owning-turn index then restores its position without walking pages
-    // from unrelated turns on each streamed update.
-    const belongsBeforeTail =
-      isCompletedActivityEntry(entry)
-      && typeof entryTime === "number"
-      && typeof greatestSeenTime === "number"
-      && entryTime < greatestSeenTime
+    // ThreadView supplies only the small set of live artifacts retained at a
+    // terminal turn boundary. The owning-turn index avoids any transcript
+    // history scan, and the cached insertion point avoids rescanning even
+    // that turn while a newer message streams character updates.
+    const belongsInHistory =
+      isTerminalRetainedArtifactEntry(entry)
       && Boolean(turnPages?.length)
       && !index.entryIds.has(entry.id);
-    if (belongsBeforeTail && turnPages) {
-      const insertionPoint = findHistoryInsertionPoint(entry, turnPages);
+    if (belongsInHistory && turnId && turnPages) {
+      const insertionPoint = retainedEntryInsertionPoint(
+        entry,
+        index,
+        turnId,
+        turnPages,
+      );
       if (insertionPoint) {
         const insertionsByIndex = insertions.get(insertionPoint.page) ?? new Map();
         const entries = insertionsByIndex.get(insertionPoint.entryIndex) ?? [];
@@ -586,10 +640,6 @@ function placeMisorderedCompletedActivityInHistory(
         insertions.set(insertionPoint.page, insertionsByIndex);
         continue;
       }
-    }
-
-    if (typeof entryTime === "number") {
-      greatestSeenTime = Math.max(greatestSeenTime ?? entryTime, entryTime);
     }
   }
 

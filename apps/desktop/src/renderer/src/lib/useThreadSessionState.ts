@@ -7474,11 +7474,13 @@ export function useThreadSessionState(params: {
         selectedHistoryIndex,
         reviewPresentation.tailEntries,
         reviewPresentation,
+        selectedRetainedLiveEntries,
       ),
     [
       reviewPresentation,
       selectedHistoryIndex,
       selectedSession?.loadedHistory,
+      selectedRetainedLiveEntries,
     ]
   );
 
