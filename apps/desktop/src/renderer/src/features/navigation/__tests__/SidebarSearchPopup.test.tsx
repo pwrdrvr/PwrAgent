@@ -3,15 +3,18 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildFederatedThreadRef,
+  type FederationJumpSearchProgress,
+  type FederationJumpSearchRequest,
   type NavigationThreadSummary,
   type PrSummary,
 } from "@pwragent/shared";
 import { SidebarSearchPopup } from "../SidebarSearchPopup";
 
 const jumpSearchRemoteThreads = vi.fn(
-  async (): Promise<{ results: NavigationThreadSummary[] }> => ({
-    results: [],
-  }),
+  async (
+    _request: FederationJumpSearchRequest,
+    _onProgress?: (progress: FederationJumpSearchProgress) => void,
+  ): Promise<{ results: NavigationThreadSummary[] }> => ({ results: [] }),
 );
 const readRendererFederationTarget = vi.fn<
   () => { scope: "remote"; instanceId: string } | undefined
@@ -154,13 +157,79 @@ describe("SidebarSearchPopup", () => {
 
     await settleRemoteSearch();
 
-    expect(jumpSearchRemoteThreads).toHaveBeenCalledWith({
-      query: "fix",
-      limit: 8,
-    });
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledWith(
+      {
+        query: "fix",
+        limit: 8,
+      },
+      expect.any(Function),
+    );
     expect(screen.getByText("Other instances")).toBeInTheDocument();
     expect(screen.getByText("Remote fix")).toBeInTheDocument();
     expect(screen.getByLabelText("Runs on Laptop")).toBeInTheDocument();
+  });
+
+  it("renders a fast peer result while a slower peer is still pending", async () => {
+    let resolveSearch:
+      | ((value: { results: NavigationThreadSummary[] }) => void)
+      | undefined;
+    let publishProgress:
+      | ((progress: FederationJumpSearchProgress) => void)
+      | undefined;
+    const fast = remoteThread({ threadId: "r1", title: "Fast peer fix" });
+    jumpSearchRemoteThreads.mockImplementationOnce(
+      (_request, onProgress) => {
+        publishProgress = onProgress;
+        return new Promise((resolve) => {
+          resolveSearch = resolve;
+        });
+      },
+    );
+
+    render(
+      <SidebarSearchPopup
+        threads={[]}
+        onJumpToThread={vi.fn()}
+        onJumpToRemoteThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      target: { value: "fix" },
+    });
+    await settleRemoteSearch();
+
+    await act(async () => {
+      publishProgress?.({
+        results: [fast],
+        completedPeerCount: 1,
+        totalPeerCount: 2,
+        complete: false,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Fast peer fix")).toBeInTheDocument();
+    expect(
+      screen.getByText("Searching other instances… 1/2"),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      publishProgress?.({
+        results: [fast],
+        completedPeerCount: 2,
+        totalPeerCount: 2,
+        complete: true,
+      });
+      resolveSearch?.({ results: [fast] });
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.queryByText(/Searching other instances/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("1 result")).toBeInTheDocument();
   });
 
   it("prioritizes exact PRs and describes numeric substring matches", async () => {
@@ -394,12 +463,17 @@ describe("SidebarSearchPopup", () => {
     let resolveFirst:
       | ((value: { results: NavigationThreadSummary[] }) => void)
       | undefined;
+    let publishFirst:
+      | ((progress: FederationJumpSearchProgress) => void)
+      | undefined;
     jumpSearchRemoteThreads
       .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
+        (_request, onProgress) => {
+          publishFirst = onProgress;
+          return new Promise((resolve) => {
             resolveFirst = resolve;
-          }),
+          });
+        },
       )
       .mockResolvedValueOnce({
         results: [remoteThread({ threadId: "r2", title: "Second query hit" })],
@@ -421,12 +495,19 @@ describe("SidebarSearchPopup", () => {
     await settleRemoteSearch();
 
     await act(async () => {
+      publishFirst?.({
+        results: [remoteThread({ threadId: "r1", title: "Stale progress" })],
+        completedPeerCount: 1,
+        totalPeerCount: 2,
+        complete: false,
+      });
       resolveFirst?.({
         results: [remoteThread({ threadId: "r1", title: "Stale hit" })],
       });
       await Promise.resolve();
     });
 
+    expect(screen.queryByText("Stale progress")).not.toBeInTheDocument();
     expect(screen.queryByText("Stale hit")).not.toBeInTheDocument();
     expect(screen.getByText("Second query hit")).toBeInTheDocument();
   });

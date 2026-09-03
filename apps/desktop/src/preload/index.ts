@@ -135,6 +135,7 @@ import type {
   AddRemoteThreadPinRequest,
   AddRemoteThreadPinResponse,
   FederationJumpSearchRequest,
+  FederationJumpSearchProgress,
   FederationJumpSearchResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
@@ -671,6 +672,7 @@ import {
   NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
+  FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
@@ -865,6 +867,8 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
     };
   },
 );
+
+let federationJumpSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
   ping: () => "pong",
@@ -1838,8 +1842,32 @@ const desktopApi = Object.freeze({
     ),
   jumpSearchRemoteThreads: async (
     request: FederationJumpSearchRequest,
-  ): Promise<FederationJumpSearchResponse> =>
-    await ipcRenderer.invoke(FEDERATION_JUMP_SEARCH_CHANNEL, request),
+    onProgress?: (progress: FederationJumpSearchProgress) => void,
+  ): Promise<FederationJumpSearchResponse> => {
+    federationJumpSearchRequestSequence += 1;
+    const requestId = federationJumpSearchRequestSequence;
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: {
+        requestId: number;
+        progress: FederationJumpSearchProgress;
+      },
+    ): void => {
+      if (payload.requestId === requestId) {
+        onProgress?.(payload.progress);
+      }
+    };
+    ipcRenderer.on(FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL, listener);
+    try {
+      return await ipcRenderer.invoke(
+        FEDERATION_JUMP_SEARCH_CHANNEL,
+        requestId,
+        request,
+      );
+    } finally {
+      ipcRenderer.off(FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL, listener);
+    }
+  },
   setThreadParent: async (
     request: SetThreadParentRequest,
   ): Promise<SetThreadParentResponse> =>

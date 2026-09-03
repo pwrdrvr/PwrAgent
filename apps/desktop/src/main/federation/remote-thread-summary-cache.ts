@@ -1,6 +1,7 @@
 import type {
   CelestialIconId,
   FederationCapability,
+  FederationJumpSearchProgress,
   FederationJumpSearchRequest,
   FederationJumpSearchResponse,
   FederationPeerSummary,
@@ -12,8 +13,10 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   rankThreadJumpMatches,
 } from "@pwragent/shared";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { ThreadInfoStore } from "../app-server/thread-info-store";
 
 export type RemoteThreadSummaryPeer = {
@@ -62,6 +65,7 @@ const REMOTE_SNAPSHOT_TTL_MS = 15_000;
 const REMOTE_SNAPSHOT_PEER_TIMEOUT_MS = 10_000;
 const DEFAULT_JUMP_SEARCH_LIMIT = 8;
 const MAX_JUMP_SEARCH_LIMIT = 50;
+const JUMP_SEARCH_PEER_CONCURRENCY = 8;
 
 function threadSelection(
   refs: ReadonlyArray<Pick<RemoteThreadPin["ref"], "backend" | "threadId">>,
@@ -258,6 +262,7 @@ export class RemoteThreadSummaryCache {
 
   async searchForJump(
     request: FederationJumpSearchRequest,
+    onProgress?: (progress: FederationJumpSearchProgress) => void,
   ): Promise<FederationJumpSearchResponse> {
     const query = request.query.trim();
     if (!query) {
@@ -267,19 +272,62 @@ export class RemoteThreadSummaryCache {
       1,
       Math.min(request.limit ?? DEFAULT_JUMP_SEARCH_LIMIT, MAX_JUMP_SEARCH_LIMIT),
     );
-    const groups = await Promise.all(
-      this.navigationPeers().map(async (peer) => {
+    const peers = this.navigationPeers();
+    const groups = new Map<string, NavigationThreadSummary[]>();
+    let completedPeerCount = 0;
+
+    const publishProgress = (): FederationJumpSearchResponse => {
+      const response = {
+        results: rankUniqueThreadJumpMatches(
+          [...groups.values()].flat(),
+          query,
+          limit,
+        ),
+      };
+      onProgress?.({
+        ...response,
+        completedPeerCount,
+        totalPeerCount: peers.length,
+        complete: completedPeerCount === peers.length,
+      });
+      return response;
+    };
+
+    if (peers.length === 0) {
+      return publishProgress();
+    }
+
+    const concurrency = Math.min(JUMP_SEARCH_PEER_CONCURRENCY, peers.length);
+    const searches = new IterableMapper(
+      peers,
+      async (peer) => {
         try {
-          return await this.searchPeerForJump(peer.target, { query, limit });
+          return {
+            instanceId: peer.target.instanceId,
+            results: await this.searchPeerForJump(peer.target, { query, limit }),
+          };
         } catch {
           // ⌘K is a jump surface, not a diagnostics surface: a slow or
           // failing peer contributes nothing rather than an error row.
-          return [];
+          return {
+            instanceId: peer.target.instanceId,
+            results: [],
+          };
         }
-      }),
+      },
+      {
+        concurrency,
+        maxUnread: concurrency,
+      },
     );
-    const results = rankThreadJumpMatches(groups.flat(), query).slice(0, limit);
-    return { results };
+
+    let response: FederationJumpSearchResponse = { results: [] };
+    for await (const group of searches) {
+      groups.set(group.instanceId, group.results);
+      completedPeerCount += 1;
+      response = publishProgress();
+    }
+    return response;
   }
 
   /**
@@ -1038,4 +1086,24 @@ function hasFederationErrorCode(error: unknown, code: string): boolean {
     && "code" in error
     && error.code === code
   );
+}
+
+function rankUniqueThreadJumpMatches(
+  threads: readonly NavigationThreadSummary[],
+  query: string,
+  limit: number,
+): NavigationThreadSummary[] {
+  const seen = new Set<string>();
+  return rankThreadJumpMatches(threads, query)
+    .filter((thread) => {
+      const key = thread.federation?.ref
+        ? federatedThreadIdentityKey(thread.federation.ref)
+        : buildThreadIdentityKey(thread.source, thread.id);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
 }
