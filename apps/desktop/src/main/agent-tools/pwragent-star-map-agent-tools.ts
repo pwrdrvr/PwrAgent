@@ -87,6 +87,10 @@ function descriptionForOperation(
         "Reports which cards are drawn and which are folded behind a chip.",
         "Also reports the card selection, open chat cards, camera and filters.",
         "Call this to resolve on-screen references to a thread or a cloud.",
+        "Each drawn card reports where it sits, so position resolves too.",
+        "Use screenRect for that: viewport pixels, with x rising to the right.",
+        "So the leftmost card is the drawn one with the smallest screenRect x.",
+        "onScreen is false for a card the operator has panned out of view.",
         "Each thread carries the backend, threadId and instanceId tools need.",
         "Fails when no Star Map surface is open.",
       ].join(" ");
