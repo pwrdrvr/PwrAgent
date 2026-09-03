@@ -20,7 +20,9 @@ import {
  * behaviour instead of a second implementation drifting away from this one.
  */
 export type TranscriptWindow<Entry> = {
-  /** The newest `limit` entries: what the transcript should mount. */
+  /** First entry in the contiguous tail, excluding any pinned prompt. */
+  contiguousStartEntry?: Entry;
+  /** The newest `limit` entries plus at most one pinned user prompt. */
   visibleEntries: Entry[];
   /**
    * Pagination as the transcript should see it. When entries are being held
@@ -89,7 +91,7 @@ export function useTranscriptWindow<Entry>(params: {
       ?? DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT
     : DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
 
-  const visibleEntries = useMemo(() => {
+  const entryWindow = useMemo(() => {
     const windowStart = Math.max(0, entries.length - limit);
     const newestEntries = entries.slice(windowStart);
     const userMessage = newestUserMessageBeforeWindow(entries, windowStart);
@@ -99,10 +101,19 @@ export function useTranscriptWindow<Entry>(params: {
     // appears without the prompt that caused it. Choosing the newest hidden
     // user row also avoids pinning both an optimistic launchpad placeholder
     // and the authoritative item that replaced it.
-    return userMessage
-      ? [userMessage, ...newestEntries]
-      : newestEntries;
+    return {
+      contiguousStartEntry: newestEntries[0],
+      pinnedEntryCount: userMessage ? 1 : 0,
+      visibleEntries: userMessage
+        ? [userMessage, ...newestEntries]
+        : newestEntries,
+    };
   }, [entries, limit]);
+  const {
+    contiguousStartEntry,
+    pinnedEntryCount,
+    visibleEntries,
+  } = entryWindow;
   const entryCount = entries.length;
   const hiddenCount = entryCount - visibleEntries.length;
   const canLoadFromServer = Boolean(
@@ -154,7 +165,9 @@ export function useTranscriptWindow<Entry>(params: {
       // Reserve renderer capacity before the response prepends its page.
       // Otherwise the newly loaded entries would remain hidden behind the
       // existing tail window until a second upward scroll.
-      expandLimit(limit + THREAD_HISTORY_PAGE_LIMIT);
+      expandLimit(
+        limit + THREAD_HISTORY_PAGE_LIMIT + pinnedEntryCount,
+      );
     }
     await onLoadOlder();
   }, [
@@ -164,10 +177,12 @@ export function useTranscriptWindow<Entry>(params: {
     hiddenCount,
     limit,
     onLoadOlder,
+    pinnedEntryCount,
   ]);
 
   return {
     canLoadFromServer,
+    contiguousStartEntry,
     expandLimit,
     hasMoreHistory,
     hiddenCount,

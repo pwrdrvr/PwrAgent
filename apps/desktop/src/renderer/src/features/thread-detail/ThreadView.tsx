@@ -3588,6 +3588,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
               pendingRemoteWork={transcriptRemoteWork}
+              prependAnchorId={transcriptWindow.contiguousStartEntry?.id}
               runningTurnUsageText={props.runningTurnUsageText}
               expandedActivityIds={props.expandedTranscriptActivityIds}
               expandedWorkPhaseGroupIds={
