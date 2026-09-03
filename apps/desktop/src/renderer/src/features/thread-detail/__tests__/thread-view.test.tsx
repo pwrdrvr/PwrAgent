@@ -2081,6 +2081,17 @@ describe("ThreadView", () => {
     expect(within(header as HTMLElement).queryByText("Full Access")).toBeNull();
     expect(document.querySelector(".launchpad-panel")).toBeNull();
     expect(screen.getByLabelText("New thread context")).toBeInTheDocument();
+    // On Windows the rail runs the full column height and the header reserves
+    // its width, and that reserve is a CSS `:has(> .thread-view__layout >
+    // .context-rail)` on `.thread-view` (see app.css / theme-contract). A
+    // LAUNCHPAD mounts a rail too, which is why the reserve has to be keyed
+    // off the rail rather than off a flag the thread view sets — but `:has()`
+    // walks a fixed depth, so assert the depth. Wrapping the rail or hoisting
+    // it out of the layout silently drops the reserve and slides this header
+    // under the pinned panel.
+    const launchpadRail = screen.getByLabelText("New thread context");
+    expect(launchpadRail.parentElement).toHaveClass("thread-view__layout");
+    expect(launchpadRail.parentElement?.parentElement).toHaveClass("thread-view");
     expect(screen.getByRole("tab", { name: "AI provider info" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Edits" })).not.toBeInTheDocument();
     await waitFor(() => {
@@ -2796,6 +2807,11 @@ describe("ThreadView", () => {
     expect(
       unlinkedWorkspaceWarning.closest(".thread-view__primary"),
     ).not.toBeNull();
+    // Same fixed depth the Windows header reserve's `:has()` walks — see the
+    // launchpad test above, which covers the other variant that mounts a rail.
+    const threadRail = screen.getByLabelText("Thread context");
+    expect(threadRail.parentElement).toHaveClass("thread-view__layout");
+    expect(threadRail.parentElement?.parentElement).toHaveClass("thread-view");
 
     expect(screen.getByText("Recorded working directory is not linked to a project.")).toBeInTheDocument();
     expect(screen.getByText("catalog-portal")).toBeInTheDocument();

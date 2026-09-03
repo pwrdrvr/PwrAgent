@@ -66,9 +66,12 @@ type ThreadHeaderProps = {
   layout?: ThreadHeaderLayoutControls;
   /**
    * Star Map mission-control toggle, rendered left of the MSG chip on
-   * macOS/Linux (Windows renders it in the AppTitleBar instead). Absent in
-   * federation remote windows — the map is a whole-federation surface owned
-   * by the primary window.
+   * macOS/Linux; on Windows the AppTitleBar owns it, so this is skipped
+   * there — the same guard the panel toggles carry, and for the same
+   * reason. Both strips mount at once, so an unguarded control here is a
+   * SECOND button on screen, which is exactly what Windows shipped.
+   * Absent in federation remote windows — the map is a whole-federation
+   * surface owned by the primary window.
    */
   starMap?: StarMapToggleControls;
   /**
@@ -102,9 +105,12 @@ type ThreadHeaderProps = {
  */
 export function ThreadHeader(props: ThreadHeaderProps) {
   const projectLabel = props.projectLabel?.trim();
-  // On Windows the AppTitleBar strip owns the layout toggles + masthead
-  // actions; rendering them here too would duplicate the control and the
-  // ⌘B/⌘⌥B listener.
+  // On Windows the AppTitleBar strip owns everything window-scoped — the
+  // layout toggles, the Star Map, the MSG chip (hidden by app.css), and the
+  // masthead actions. This header keeps only what is scoped to the THREAD:
+  // history, breadcrumb, chips, and the terminal toggle, whose state
+  // (running dot, per-thread disabled reason) is thread-scoped and would
+  // drag thread state up into a global strip.
   const isWindows = getDesktopApi()?.platform === "win32";
   // When the sidebar is hidden, its wordmark + action buttons relocate
   // here (macOS/Linux only — Windows keeps them in the title bar).
@@ -333,7 +339,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             </button>
           ) : null}
           {terminalTooltip.tooltipNode}
-          {props.starMap ? (
+          {props.starMap && !isWindows ? (
             <button
               type="button"
               className="thread-header__star-map-toggle"

@@ -1045,6 +1045,64 @@ textarea,
   display: flex;
 }
 
+/* Windows runs a real full-width title strip, so that strip is the window's
+   chrome row: wordmark, menu, app actions, panel toggles, Star Map, MSG,
+   caption buttons. What is left in the thread header is the thread's own
+   caption — history, breadcrumb, chips, terminal — and it should read as a
+   caption over the transcript, not as a second chrome bar spanning the
+   window. So the context rail runs the FULL column height here, up to the
+   underside of the strip, and the header sits between the sidebar and the
+   rail.
+
+   Re-anchoring, not offsetting: `.context-rail` is `position: absolute` with
+   `inset: 0 0 0 auto`, so moving the positioning context from the layout to
+   `.thread-view` lifts its top by exactly the header's height, whatever that
+   turns out to be. A hard-coded `top: -40px` would encode the header height
+   as a constant, which the note on `.context-rail` warns against for good
+   reason — nothing else has to stay in sync for this to keep working. */
+:root[data-platform="win32"] .thread-view {
+  position: relative;
+}
+
+:root[data-platform="win32"] .thread-view__layout {
+  position: static;
+}
+
+/* Reserve the rail on the header, so the thread caption is bounded by the
+   sidebar on one side and the rail on the other. Same two numbers
+   `.thread-view__layout` reserves, read from the same custom property, so
+   the header's right edge and the chat column's right edge cannot drift
+   apart. Unpinned that is the 48px spine; pinned it is the panel too.
+
+   Keyed off the RAIL'S OWN classes through `:has()`, not off a flag mirrored
+   onto `.thread-view` in JSX. Six places render a `.thread-view` — the thread,
+   two launchpads, empty, pending, and search — and only some mount a rail. A
+   mirrored flag has to be threaded through every one of them: the launchpads
+   DO mount a rail and would have under-reserved (their header sliding under
+   the pinned panel), while search and the placeholders would have reserved
+   48px for a rail that isn't there. `.context-rail` already carries
+   `is-pinned` / `is-resizing`, so asking for it directly is right for every
+   variant with nothing to keep in sync. The child combinators pin the real
+   structure and keep the match off any unrelated nested rail. */
+:root[data-platform="win32"]
+  .thread-view:has(> .thread-view__layout > .context-rail)
+  .thread-header {
+  padding-right: 48px;
+  transition: padding-right 160ms ease;
+}
+
+:root[data-platform="win32"]
+  .thread-view:has(> .thread-view__layout > .context-rail.is-pinned)
+  .thread-header {
+  padding-right: calc(var(--context-rail-effective, 380px) + 48px);
+}
+
+:root[data-platform="win32"]
+  .thread-view:has(> .thread-view__layout > .context-rail.is-resizing)
+  .thread-header {
+  transition: none;
+}
+
 .app-shell--fatal-settings {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -7552,8 +7610,10 @@ a.button {
      `.context-panel` renders at exactly this, and `.thread-view__layout`
      reserves exactly this (+ spine) — computed ONCE so the panel and its
      gutter can never disagree (which is what slid the panel over the chat
-     + MSG cluster). The header no longer reserves a gutter at all: the rail
-     is anchored below it (see `.context-rail`).
+     + MSG cluster). On macOS/Linux the header reserves no gutter at all: the
+     rail is anchored below it (see `.context-rail`). On Windows the rail runs
+     past the header, so the header reserves this same value there — same
+     expression, so the two still cannot disagree.
 
      The width is the user's chosen `--context-rail-width`, but never wider
      than what leaves the chat column ~400px after the sidebar + spine. A
@@ -16026,6 +16086,39 @@ a.button {
   gap: 8px;
   max-width: 100%;
   min-width: 0;
+  /* The chips below do not shrink, so the ROW has to clip — see the note on
+     them. `clip` rather than `hidden`, and on x only, because `overflow:
+     hidden` would also cut the 4px focus ring on `.thread-header__title-button`
+     off at the row's top and bottom; `visible` on the cross axis is legal
+     only when the other axis is `clip`. The 4px clip margin is that same ring,
+     so a focused title flush against either end still shows its outline while
+     an overflowing chip (which overflows by tens of pixels) still gets cut. */
+  overflow-x: clip;
+  overflow-y: visible;
+  overflow-clip-margin: 4px;
+}
+
+/* The chips never shrink; the breadcrumb does. `.thread-row__chip` already
+   held that line below (`flex: 0 0 auto` + a 26ch/28% cap); this is the same
+   rule for `.chip`, which had nothing. `.chip` sets
+   `text-overflow: ellipsis`, but it is an `inline-flex` box, and
+   `text-overflow` does not apply to flex items — so a squeezed chip does not
+   ellipsize, it CLIPS, and "OpenAI" renders as "OpenA". The thread title next
+   to it is a block whose ellipsis genuinely works, and it is the long,
+   variable one, so it is the right thing to give up room. This mattered
+   little while the header spanned the whole window; on Windows the header is
+   now bounded by the context rail, so the squeeze arrives at ordinary widths.
+   Fixing `.chip`'s own ellipsis needs a text span at every call site.
+
+   Not shrinking means the row can RUN OUT of room: backend + agent +
+   automation + approval is ~510px of chips, and once the title is squeezed to
+   nothing the chips keep going past the header's right edge — which on Windows
+   is the context rail (measured at 1280 with the rail pinned: the approval
+   chip reached x=890 against a rail edge at 852, painting over the panel).
+   The row's `overflow-x: clip` above is what contains that, cutting the last
+   chip at the boundary while the ones that fit still render whole. */
+.thread-header__eyebrow-row > .chip {
+  flex: 0 0 auto;
 }
 
 .thread-header__breadcrumb {
@@ -22985,6 +23078,11 @@ a.transcript-message__messaging-origin:focus-visible {
   display: flex;
   /* Anchored to `.thread-view__layout` (position: relative), NOT the window,
      so the rail starts BELOW the thread header and spans only the chat area.
+     WINDOWS IS THE EXCEPTION: there the title strip is the window's chrome
+     row, so `.thread-view` takes the positioning context instead (search
+     app.css for `data-platform="win32"] .thread-view`) and this rail runs the
+     full column height up to the strip, with the header reserving its width.
+     Everything below describes the macOS/Linux anchor.
      The header then keeps its full width and never has to reserve a gutter
      or squash its toggles/MSG to clear a rail that overlaps the title line.
      `right: 0` lands on the layout's padding edge = the window's right edge;

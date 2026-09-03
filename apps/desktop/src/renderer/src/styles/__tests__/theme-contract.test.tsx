@@ -776,9 +776,19 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(
       /@media[^{]*\{[\s\S]*?\.context-rail[^{]*\{[^}]*position:\s*static/
     );
-    expect(css).not.toMatch(
-      /\.thread-header[^{]*\{[^}]*padding-right:\s*calc\(var\(--context-rail-effective/
-    );
+    // A rail-width gutter on the header is forbidden everywhere the rail is
+    // anchored below the header — which is macOS and Linux. Windows is the one
+    // exception, and it is allowed only because it ALSO moves the rail (see
+    // the Windows test below): there the rail runs the full column height, so
+    // the header has to stop at it. Assert the exception is exactly one rule
+    // and that it is platform-scoped, rather than dropping the guard.
+    const headerRailGutters = [
+      ...css.matchAll(
+        /([^{}]*\.thread-header[^{}]*)\{([^}]*padding-right:\s*calc\(var\(--context-rail-effective[^}]*)\}/g,
+      ),
+    ];
+    expect(headerRailGutters).toHaveLength(1);
+    expect(headerRailGutters[0][1]).toContain('[data-platform="win32"]');
     // Single source of truth for the chat-side gutter: `--context-rail-effective`
     // is computed once on `.thread-view`, sidebar-aware (not a bare `vw`) so a
     // wide rail can't starve the chat on a narrow window. The panel renders at
@@ -802,6 +812,82 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.app-shell\[data-sidebar-hidden="true"\][^{]*\{[^}]*--sidebar-reserve:\s*0px;/
     );
+  });
+
+  it("runs the Windows rail the full column height and bounds the header with it", () => {
+    // Windows draws its own full-width title strip, and that strip carries the
+    // window chrome (panel toggles, Star Map, MSG). What is left in the thread
+    // header is the thread's caption, so the header reads as a caption over
+    // the chat column rather than a second chrome bar spanning the window:
+    // the rail runs up to the underside of the strip, and the header stops at
+    // the rail.
+    //
+    // The lift is done by MOVING THE POSITIONING CONTEXT, not by offsetting
+    // the rail. `.context-rail` is `position: absolute; top: 0`, so making
+    // `.thread-view` the containing block raises its top by exactly the
+    // header's height, whatever that is. A `top: -40px` would hard-code the
+    // header height, which the note on `.context-rail` warns against — these
+    // two rules are what keep that promise, so changing either without the
+    // other silently reintroduces the constant.
+    expect(css).toMatch(
+      /:root\[data-platform="win32"\] \.thread-view \{[^}]*position:\s*relative;/
+    );
+    expect(css).toMatch(
+      /:root\[data-platform="win32"\] \.thread-view__layout \{[^}]*position:\s*static;/
+    );
+    // Unpinned the header clears the 48px spine; pinned it clears the panel
+    // too, read from the SAME `--context-rail-effective` the chat column
+    // reserves, so the header's right edge and the chat's cannot drift apart.
+    //
+    // Both reserves are keyed off the RAIL'S OWN classes through `:has()`, not
+    // off a flag mirrored onto `.thread-view` in JSX. Six places render a
+    // `.thread-view` — the thread, two launchpads, empty, pending, and search
+    // — and only some mount a rail. A mirrored flag has to be threaded through
+    // every one of them or the reserve is wrong: the launchpads DO mount a
+    // rail, so a header that never got the flag slides under the pinned panel,
+    // while search and the placeholders reserve 48px for a rail that is not
+    // there. Asking for the rail directly is right for all six with nothing to
+    // keep in sync, so assert the selectors name `.context-rail` and that no
+    // mirrored flag comes back.
+    expect(css).toContain(
+      '.thread-view:has(> .thread-view__layout > .context-rail)\n  .thread-header {',
+    );
+    expect(css).toMatch(
+      /\.thread-view:has\(> \.thread-view__layout > \.context-rail\)\s*\.thread-header \{[^}]*padding-right:\s*48px;/
+    );
+    expect(css).toMatch(
+      /\.thread-view:has\(> \.thread-view__layout > \.context-rail\.is-pinned\)\s*\.thread-header \{[^}]*padding-right:\s*calc\(var\(--context-rail-effective, 380px\) \+ 48px\);/
+    );
+    expect(css).not.toContain("has-pinned-context-rail .thread-header");
+  });
+
+  it("keeps header chips from clipping when the row is squeezed", () => {
+    // `.chip` sets `text-overflow: ellipsis`, but it is an `inline-flex` box
+    // and `text-overflow` does not apply to flex items — a squeezed chip
+    // CLIPS ("OpenAI" renders as "OpenA") instead of ellipsizing. The thread
+    // title beside it is a block whose ellipsis works, and it is the long,
+    // variable one, so the chips hold their size and the title yields.
+    // `.thread-row__chip` already carried `flex: 0 0 auto` (with a 26ch/28%
+    // cap) further down; `.chip` is the one that had nothing. Assert both, so
+    // neither half can quietly go back to shrinking.
+    expect(css).toMatch(
+      /\.thread-header__eyebrow-row > \.chip \{[^}]*flex:\s*0 0 auto;/
+    );
+    expect(css).toMatch(
+      /\.thread-header__eyebrow-row > \.thread-row__chip \{[^}]*flex:\s*0 0 auto;/
+    );
+    // Because they do not shrink, the ROW has to clip. A thread wearing
+    // backend + agent + automation + approval chips runs past the header's
+    // right edge once the title is squeezed to nothing, and on Windows the
+    // header's right edge is the context rail — measured at 1280 with the rail
+    // pinned, the last chip reached x=890 against a rail edge at 852 and
+    // painted over the panel. Clipping keeps the spill inside the header.
+    // `clip` on x only, not `overflow: hidden` — hidden would also cut the 4px
+    // focus ring on the title button off at the row's top and bottom.
+    const eyebrowRow = extractRuleBody(css, ".thread-header__eyebrow-row");
+    expect(eyebrowRow).toContain("overflow-x: clip;");
+    expect(eyebrowRow).toContain("overflow-y: visible;");
+    expect(eyebrowRow).not.toContain("overflow: hidden;");
   });
 
   it("keeps the live work rail inset to match the chat column", () => {
