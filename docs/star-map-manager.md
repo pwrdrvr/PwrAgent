@@ -7,9 +7,9 @@ working on".
 
 Nothing about the manager is a privileged execution path. It is an ordinary
 thread with the ordinary PwrAgent tool catalog — `mutate_thread`, the
-orchestration tools, the federation tools — plus two new tools that let *any*
-thread see what is on the map. The feature is really those two tools; the
-manager is the affordance that makes them worth having.
+orchestration tools, the federation tools — plus one new tool that lets *any*
+thread see what is on the map. The feature is really that tool; the manager is
+the affordance that makes it worth having.
 
 ## Why a view snapshot exists at all
 
@@ -22,9 +22,13 @@ That is exactly what a request like "the others in its cloud" depends on. So
 `StarMapScreen` publishes a `StarMapViewSnapshot` to the main process, and
 `read_star_map_view` serves it.
 
-**Push, not pull.** The main process cannot ask a renderer a question. The
-alternative — reimplementing `star-map-clusters.ts` in main — would drift from
-what is actually drawn, and the renderer boundary forbids importing it anyway.
+**Push, not pull.** Not because main cannot ask a renderer a question — it can,
+and `executeJavaScript` does exactly that elsewhere in the app. A pull at
+tool-call time would answer from whichever renderer replied and block the turn
+on it; and the other alternative, reimplementing `star-map-clusters.ts` in main,
+would drift from what is actually drawn (the renderer boundary forbids importing
+it anyway). The cost of pushing is that the view is never newer than the last
+publish, which is why every result carries `ageMs`.
 
 **Memory only.** The snapshot turns over as fast as a card drags. Persisting it
 would be precisely the per-frame write pattern the repository's SQLite write

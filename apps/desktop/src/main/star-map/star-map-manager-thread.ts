@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
+  AppServerBackendKind,
   NavigationThreadSummary,
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
@@ -15,7 +16,6 @@ import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
-import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 
 const log = getMainLogger("pwragent:star-map-manager");
 
@@ -23,12 +23,18 @@ const log = getMainLogger("pwragent:star-map-manager");
 const MANAGER_WORKSPACE_DIR = "star-map-manager";
 
 /**
- * The manager's standing instructions reach the model through an AGENTS.md
- * in its own workspace, not through the thread's `agent` metadata: that
+ * The manager's standing instructions reach the model through an instruction
+ * file in its own workspace, not through the thread's `agent` metadata: that
  * metadata marks a thread as a persona thread for search and the Agents
- * browser, but nothing injects it into a turn. Every backend PwrAgent
- * supports reads AGENTS.md from its cwd, so this is the one mechanism that
- * works for all of them — and it stays visible and editable to the operator.
+ * browser, but nothing injects it into a turn.
+ *
+ * Written under every name the supported backends read, because there is no
+ * single one. Codex and Claude take AGENTS.md and CLAUDE.md — the repository
+ * pairs those two everywhere for the same reason — while the gemini-family
+ * ACP backends (gemini, qwen) read their own. A manager whose backend does
+ * not find this file starts with no persona at all: it would not know to
+ * call read_star_map_view before acting, which is the multi-thread rename
+ * these instructions exist to prevent.
  */
 const MANAGER_AGENTS_MD = [
   `# ${STAR_MAP_MANAGER_AGENT_NAME}`,
@@ -48,7 +54,7 @@ const MANAGER_AGENTS_MD = [
 export type StarMapManagerDeps = {
   registry?: Pick<
     ReturnType<typeof getDesktopBackendRegistry>,
-    "startThread" | "renameThread"
+    "startThread" | "renameThread" | "listThreads"
   >;
   overlayStore?: Pick<
     ReturnType<typeof getDesktopOverlayStore>,
@@ -63,7 +69,7 @@ export type StarMapManagerDeps = {
  *
  * The manager is an ordinary thread: it gets the same tool catalog every
  * thread gets, so `mutate_thread` and the orchestration tools are already
- * in reach, and the two star-map tools let it see what is on screen. What
+ * in reach, and `read_star_map_view` lets it see what is on screen. What
  * this function owns is only identity — which thread the map's Manager
  * button reopens — and the workspace its instructions live in.
  */
@@ -71,9 +77,12 @@ export async function openStarMapManagerThread(
   request: OpenStarMapManagerRequest = {},
   deps: StarMapManagerDeps = {},
 ): Promise<OpenStarMapManagerResponse> {
-  const overlayStore = deps.overlayStore ?? getDesktopOverlayStore();
-  const registry = deps.registry ?? getDesktopBackendRegistry();
   try {
+    // Inside the try, and the registry only on the path that needs it: both
+    // getters throw when app state is not initialized, and outside they
+    // would reject the IPC invoke instead of returning the `failed` status
+    // the caller's error path is written against.
+    const overlayStore = deps.overlayStore ?? getDesktopOverlayStore();
     if (!request.reset) {
       const remembered = overlayStore.getStarMapManagerThread();
       if (remembered && (await threadStillExists(remembered, deps))) {
@@ -90,6 +99,7 @@ export async function openStarMapManagerThread(
       }
     }
     // The create path genuinely needs the directory: it is the thread's cwd.
+    const registry = deps.registry ?? getDesktopBackendRegistry();
     const workspace = await ensureManagerWorkspace(deps.workspaceDir);
     const defaults = await overlayStore.getLaunchpadDefaults();
     const started = await registry.startThread({
@@ -146,15 +156,27 @@ async function refreshManagerWorkspace(
   }
 }
 
+/**
+ * Instruction filenames the backends PwrAgent supports look for in a cwd.
+ * Plain copies rather than symlinks: a symlink needs elevated privileges on
+ * Windows, and these are generated files with one author.
+ */
+const MANAGER_INSTRUCTION_FILES = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  "QWEN.md",
+] as const;
+
 async function ensureManagerWorkspace(
   workspaceDir?: () => string,
 ): Promise<string> {
   const directory = workspaceDir?.() ?? resolveActiveProfilePath(MANAGER_WORKSPACE_DIR);
   await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(
-    path.join(directory, "AGENTS.md"),
-    MANAGER_AGENTS_MD,
-    "utf8",
+  await Promise.all(
+    MANAGER_INSTRUCTION_FILES.map(async (name) =>
+      await fs.writeFile(path.join(directory, name), MANAGER_AGENTS_MD, "utf8"),
+    ),
   );
   return directory;
 }
@@ -173,7 +195,7 @@ async function threadStillExists(
     const keys =
       deps.listThreadKeys
         ? await deps.listThreadKeys()
-        : await localThreadKeys();
+        : await localThreadKeys(thread.backend, deps);
     return keys.has(
       buildThreadIdentityKey(
         thread.backend as NavigationThreadSummary["source"],
@@ -190,17 +212,36 @@ async function threadStillExists(
   }
 }
 
-async function localThreadKeys(): Promise<Set<string>> {
-  const snapshot = await new DesktopMessagingBackendBridge().getNavigationSnapshot(
-    {},
-  );
+/**
+ * Thread keys for one backend, straight from the registry.
+ *
+ * Deliberately not the navigation snapshot: that builds messaging bindings,
+ * reconciles against SQLite and kicks off a Git working-state refresh across
+ * every backend — a lot of work to answer one membership question while the
+ * Manager button sits on "Opening…". The registry listing already overlays
+ * threads it has started but the backend has not listed yet.
+ */
+async function localThreadKeys(
+  backend: string,
+  deps: StarMapManagerDeps,
+): Promise<Set<string>> {
+  const registry = deps.registry ?? getDesktopBackendRegistry();
+  const threads = await registry.listThreads({
+    backend: backend as AppServerBackendKind,
+    callerReason: "star-map-manager-thread",
+  });
   return new Set(
-    snapshot.threads
-      // Archived threads stay in the navigation snapshot — the map's own ⌘K
-      // palette filters them out for the same reason. Counting one as still
-      // present would reopen the manager card onto an archived thread rather
-      // than starting the fresh one the operator is asking for.
+    threads
+      // Archived threads stay in the listing — the map's own ⌘K palette
+      // filters them out for the same reason. Counting one as still present
+      // would reopen the manager card onto an archived thread rather than
+      // starting the fresh one the operator is asking for.
       .filter((thread) => thread.archivedAt === undefined)
-      .map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+      .map((thread) =>
+        buildThreadIdentityKey(
+          backend as NavigationThreadSummary["source"],
+          thread.id,
+        ),
+      ),
   );
 }
