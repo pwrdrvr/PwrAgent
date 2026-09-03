@@ -374,9 +374,6 @@ describe("action → permission lookup tables", () => {
     expect(
       permissionForDynamicTool("star_map", "read_star_map_view"),
     ).toBe("tools.thread_inspection");
-    expect(
-      permissionForDynamicTool("star_map", "capture_star_map"),
-    ).toBe("tools.instance_management");
   });
 
   it("gates mutate_thread per field, at parity with the status buttons", () => {

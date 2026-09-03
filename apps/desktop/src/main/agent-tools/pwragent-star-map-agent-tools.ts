@@ -1,20 +1,16 @@
 import type {
-  CaptureStarMapToolArgs,
   PwrAgentStarMapOperationName,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
   ReadStarMapViewToolArgs,
 } from "@pwragent/shared";
 import {
-  DEFAULT_STAR_MAP_CAPTURE_MAX_WIDTH,
   DEFAULT_STAR_MAP_VIEW_MAX_THREADS,
-  MAX_STAR_MAP_CAPTURE_MAX_WIDTH,
   MAX_STAR_MAP_VIEW_MAX_THREADS,
   PWRAGENT_STAR_MAP_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
-  AgentToolCallContext,
   AgentToolDefinition,
   AgentToolDispatchResult,
 } from "./agent-tool-definition.js";
@@ -56,17 +52,14 @@ export function buildPwrAgentStarMapToolDefinitions(
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,
-    dispatch: async (
-      args,
-      context: AgentToolCallContext,
-    ): Promise<AgentToolDispatchResult> => {
+    dispatch: async (args): Promise<AgentToolDispatchResult> => {
       if (!handler) {
         return agentToolFailure({
           code: "internal_error",
           message: PWRAGENT_STAR_MAP_UNAVAILABLE_MESSAGE,
         });
       }
-      const parsed = parseArgs(operation, args);
+      const parsed = parseArgs(args);
       if ("error" in parsed) {
         return agentToolFailure({
           code: "invalid_arguments",
@@ -78,7 +71,7 @@ export function buildPwrAgentStarMapToolDefinitions(
         context: {},
         args: parsed.args,
       } as PwrAgentStarMapRequest);
-      return starMapResponseToAgentToolResult(response, context);
+      return starMapResponseToAgentToolResult(response);
     },
   }));
 }
@@ -96,13 +89,6 @@ function descriptionForOperation(
         "Call this to resolve on-screen references to a thread or a cloud.",
         "Each thread carries the backend, threadId and instanceId tools need.",
         "Fails when no Star Map surface is open.",
-      ].join(" ");
-    case "capture_star_map":
-      return [
-        "Take a screenshot of the Star Map surface the operator is looking at.",
-        "Prefer read_star_map_view, which is cheaper and carries identifiers.",
-        "Reach for a capture only for spatial questions it cannot answer.",
-        "An example is where one card sits relative to another.",
       ].join(" ");
   }
 }
@@ -134,72 +120,42 @@ function inputSchemaForOperation(
           },
         },
       };
-    case "capture_star_map":
-      return {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          maxWidth: {
-            type: "integer",
-            minimum: 320,
-            maximum: MAX_STAR_MAP_CAPTURE_MAX_WIDTH,
-            description: `Downscale the capture to this pixel width. Defaults to ${DEFAULT_STAR_MAP_CAPTURE_MAX_WIDTH}.`,
-          },
-        },
-      };
   }
 }
 
-type ParsedArgs =
-  | { args: ReadStarMapViewToolArgs | CaptureStarMapToolArgs }
-  | { error: string };
+type ParsedArgs = { args: ReadStarMapViewToolArgs } | { error: string };
 
-function parseArgs(
-  operation: PwrAgentStarMapOperationName,
-  args: Record<string, unknown>,
-): ParsedArgs {
-  if (operation === "read_star_map_view") {
-    const maxThreads = optionalPositiveInteger(
-      args.maxThreads,
-      MAX_STAR_MAP_VIEW_MAX_THREADS,
-    );
-    if (maxThreads === "invalid") {
-      return {
-        error: `read_star_map_view maxThreads must be an integer between 1 and ${MAX_STAR_MAP_VIEW_MAX_THREADS}.`,
-      };
-    }
-    if (
-      args.instanceId !== undefined
-      && (typeof args.instanceId !== "string" || args.instanceId.length === 0)
-    ) {
-      return {
-        error: "read_star_map_view instanceId must be a non-empty string.",
-      };
-    }
-    if (
-      args.includeHidden !== undefined
-      && typeof args.includeHidden !== "boolean"
-    ) {
-      return { error: "read_star_map_view includeHidden must be a boolean." };
-    }
-    return {
-      args: {
-        maxThreads,
-        instanceId: args.instanceId as string | undefined,
-        includeHidden: args.includeHidden as boolean | undefined,
-      },
-    };
-  }
-  const maxWidth = optionalPositiveInteger(
-    args.maxWidth,
-    MAX_STAR_MAP_CAPTURE_MAX_WIDTH,
+function parseArgs(args: Record<string, unknown>): ParsedArgs {
+  const maxThreads = optionalPositiveInteger(
+    args.maxThreads,
+    MAX_STAR_MAP_VIEW_MAX_THREADS,
   );
-  if (maxWidth === "invalid" || (maxWidth !== undefined && maxWidth < 320)) {
+  if (maxThreads === "invalid") {
     return {
-      error: `capture_star_map maxWidth must be an integer between 320 and ${MAX_STAR_MAP_CAPTURE_MAX_WIDTH}.`,
+      error: `read_star_map_view maxThreads must be an integer between 1 and ${MAX_STAR_MAP_VIEW_MAX_THREADS}.`,
     };
   }
-  return { args: { maxWidth } };
+  if (
+    args.instanceId !== undefined
+    && (typeof args.instanceId !== "string" || args.instanceId.length === 0)
+  ) {
+    return {
+      error: "read_star_map_view instanceId must be a non-empty string.",
+    };
+  }
+  if (
+    args.includeHidden !== undefined
+    && typeof args.includeHidden !== "boolean"
+  ) {
+    return { error: "read_star_map_view includeHidden must be a boolean." };
+  }
+  return {
+    args: {
+      maxThreads,
+      instanceId: args.instanceId as string | undefined,
+      includeHidden: args.includeHidden as boolean | undefined,
+    },
+  };
 }
 
 function optionalPositiveInteger(
@@ -220,7 +176,6 @@ function optionalPositiveInteger(
 
 function starMapResponseToAgentToolResult(
   response: PwrAgentStarMapResponse,
-  context: AgentToolCallContext,
 ): AgentToolDispatchResult {
   if (!response.ok) {
     return agentToolFailure({
@@ -228,26 +183,5 @@ function starMapResponseToAgentToolResult(
       message: response.error.message,
     });
   }
-  if (!response.imageBase64) {
-    return agentToolSuccess(response.data);
-  }
-  // Only the MCP transport carries image content back to the model. Over
-  // Codex dynamic tools the capture still succeeds and the data block says
-  // so, rather than the model being handed a silently text-only "image".
-  if (context.transport !== "mcp") {
-    return agentToolSuccess({
-      ...response.data,
-      imageUnavailableReason:
-        "This thread reaches PwrAgent tools over Codex dynamic tools, which carry text only. Screenshots are returned to threads using the PwrAgent MCP server; read_star_map_view has the same information in structured form.",
-    });
-  }
-  return agentToolSuccess(response.data, {
-    mcpContentItems: [
-      {
-        type: "image",
-        data: response.imageBase64,
-        mimeType: response.imageMimeType ?? "image/png",
-      },
-    ],
-  });
+  return agentToolSuccess(response.data);
 }

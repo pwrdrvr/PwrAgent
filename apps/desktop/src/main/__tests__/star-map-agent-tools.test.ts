@@ -1,16 +1,14 @@
-// The two Star Map Agent tools: what an Agent turn is told about the map
-// the operator is looking at, and what it is told when there is no map.
+// The Star Map Agent tool: what an Agent turn is told about the map the
+// operator is looking at, and what it is told when there is no map.
 //
 // The assertions worth keeping are the honesty ones. A truncated thread
-// list has to say it truncated, a cloud's counts must not shrink just
-// because the list did, and a capture over a text-only transport must not
-// report an image the model never received.
-import { describe, expect, it, vi } from "vitest";
+// list has to say it truncated, and a cloud's counts must not shrink just
+// because the list did.
+import { describe, expect, it } from "vitest";
 import type {
   PwrAgentStarMapResponse,
   StarMapViewSnapshot,
 } from "@pwragent/shared";
-import { MAX_STAR_MAP_CAPTURE_BYTES } from "@pwragent/shared";
 import { createStarMapAgentToolsHandler } from "../star-map/star-map-agent-tools-service";
 import { buildPwrAgentStarMapToolDefinitions } from "../agent-tools/pwragent-star-map-agent-tools";
 import type {
@@ -85,7 +83,7 @@ function snapshot(
   };
 }
 
-function expectOk<TOperation extends "read_star_map_view" | "capture_star_map">(
+function expectOk<TOperation extends "read_star_map_view">(
   response: PwrAgentStarMapResponse<TOperation>,
 ): Extract<PwrAgentStarMapResponse<TOperation>, { ok: true }> {
   if (!response.ok) {
@@ -321,112 +319,6 @@ describe("read_star_map_view", () => {
   });
 });
 
-describe("capture_star_map", () => {
-  it("returns the PNG alongside its measurements", async () => {
-    const handler = createStarMapAgentToolsHandler({
-      readView: () => snapshot(),
-      capture: async () => ({
-        surface: "window" as const,
-        png: Buffer.from("fake-png"),
-        width: 1_600,
-        height: 900,
-      }),
-    });
-    const response = expectOk(
-      (await handler({
-        operation: "capture_star_map",
-        context: {},
-        args: {},
-      })) as PwrAgentStarMapResponse<"capture_star_map">,
-    );
-    expect(response.data.width).toBe(1_600);
-    expect(response.data.byteLength).toBe(8);
-    expect(response.imageBase64).toBe(Buffer.from("fake-png").toString("base64"));
-  });
-
-  it("passes the caller's downscale through to the capture", async () => {
-    const capture = vi.fn(async () => ({
-      surface: "window" as const,
-      png: Buffer.from("x"),
-      width: 640,
-      height: 400,
-    }));
-    const handler = createStarMapAgentToolsHandler({
-      readView: () => snapshot(),
-      capture,
-    });
-    await handler({
-      operation: "capture_star_map",
-      context: {},
-      args: { maxWidth: 640 },
-    });
-    expect(capture).toHaveBeenCalledWith({ maxWidth: 640 });
-  });
-
-  it("re-captures smaller when the encoded image is over the tool-result limit", async () => {
-    const capture = vi.fn(async (options: { maxWidth?: number }) => ({
-      surface: "window" as const,
-      png: Buffer.alloc(
-        (options.maxWidth ?? 0) > 800
-          ? MAX_STAR_MAP_CAPTURE_BYTES + 1
-          : 1_024,
-      ),
-      width: options.maxWidth ?? 0,
-      height: 900,
-    }));
-    const handler = createStarMapAgentToolsHandler({
-      readView: () => snapshot(),
-      capture,
-    });
-    const response = expectOk(
-      (await handler({
-        operation: "capture_star_map",
-        context: {},
-        args: { maxWidth: 1_600 },
-      })) as PwrAgentStarMapResponse<"capture_star_map">,
-    );
-    expect(capture).toHaveBeenCalledTimes(2);
-    expect(capture.mock.calls[1][0]).toEqual({ maxWidth: 800 });
-    expect(response.data.byteLength).toBe(1_024);
-  });
-
-  it("refuses an image that is still oversized after the retry", async () => {
-    const handler = createStarMapAgentToolsHandler({
-      readView: () => snapshot(),
-      capture: async (options) => ({
-        surface: "window" as const,
-        png: Buffer.alloc(MAX_STAR_MAP_CAPTURE_BYTES + 1),
-        width: options.maxWidth ?? 0,
-        height: 900,
-      }),
-    });
-    const response = await handler({
-      operation: "capture_star_map",
-      context: {},
-      args: {},
-    });
-    expect(response.ok).toBe(false);
-    if (response.ok) return;
-    expect(response.error.code).toBe("capture_failed");
-    expect(response.error.message).toMatch(/smaller maxWidth/i);
-  });
-
-  it("fails rather than returning an empty image when the surface has gone", async () => {
-    const handler = createStarMapAgentToolsHandler({
-      readView: () => snapshot(),
-      capture: async () => undefined,
-    });
-    const response = await handler({
-      operation: "capture_star_map",
-      context: {},
-      args: {},
-    });
-    expect(response.ok).toBe(false);
-    if (response.ok) return;
-    expect(response.error.code).toBe("capture_failed");
-  });
-});
-
 describe("star map tool definitions", () => {
   const context = (
     transport: AgentToolCallContext["transport"],
@@ -440,12 +332,6 @@ describe("star map tool definitions", () => {
     const definition = buildPwrAgentStarMapToolDefinitions(
       createStarMapAgentToolsHandler({
         readView: () => snapshot(),
-        capture: async () => ({
-          surface: "window" as const,
-          png: Buffer.from("fake-png"),
-          width: 100,
-          height: 100,
-        }),
         now: () => 1_000,
       }),
     ).find((entry) => entry.name === name);
@@ -458,32 +344,13 @@ describe("star map tool definitions", () => {
     return result;
   }
 
-  it("carries the capture as an image item over MCP", async () => {
+  it("serves the published view through the tool definition", async () => {
     const result = expectDispatchOk(
-      await definitionFor("capture_star_map").dispatch({}, context("mcp")),
+      await definitionFor("read_star_map_view").dispatch({}, context("mcp")),
     );
-    expect(result.mcpContentItems).toEqual([
-      {
-        type: "image",
-        data: Buffer.from("fake-png").toString("base64"),
-        mimeType: "image/png",
-      },
-    ]);
-  });
-
-  it("says the image did not come through on a text-only transport", async () => {
-    const result = expectDispatchOk(
-      await definitionFor("capture_star_map").dispatch(
-        {},
-        context("codex_dynamic_tool"),
-      ),
-    );
-    // Silently returning measurements with no image would leave the model
-    // believing it had seen the map.
-    expect(result.mcpContentItems).toBeUndefined();
     expect(
-      (result.data as { imageUnavailableReason?: string }).imageUnavailableReason,
-    ).toMatch(/text only/i);
+      (result.data as { snapshot: StarMapViewSnapshot }).snapshot.layout,
+    ).toBe("orbit");
   });
 
   it("rejects out-of-range arguments instead of clamping them", async () => {
