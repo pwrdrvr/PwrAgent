@@ -556,7 +556,12 @@ export class DesktopSettingsService {
   private managedCodexRuntimeSwitchAttempt?: Promise<void>;
   private startupDiscoveryAttempted = false;
   private startupDiscoveryPromise?: Promise<void>;
-  private codexDiscoveryAttempted = false;
+  // The Codex leg of discovery, tracked apart from `startupDiscoveryPromise`
+  // (which also bundles gh, git, and the desktop-application scan). Codex
+  // callers must never wait on those, and the pending signal must not stay
+  // set while only they are outstanding.
+  private codexDiscoveryPromise?: Promise<void>;
+  private codexDiscoverySettled = false;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -2193,14 +2198,17 @@ export class DesktopSettingsService {
     permit: ProviderDiscoveryPermit,
   ): Promise<void> {
     assertProviderDiscoveryPermit(permit);
-    try {
-      await this.runCodexDiscoveryAttempt(permit);
-    } finally {
-      // Marks the attempt, not its outcome. A discovery that ran and found
-      // nothing is a real answer that surfaces must be free to act on; only a
-      // discovery that has not run yet leaves them without one.
-      this.codexDiscoveryAttempted = true;
-    }
+    const attempt = this.runCodexDiscoveryAttempt(permit).finally(() => {
+      // Settled marks the attempt, not its outcome. A discovery that ran and
+      // found nothing is a real answer that surfaces must be free to act on;
+      // only a discovery that has not run yet leaves them without one.
+      this.codexDiscoverySettled = true;
+      if (this.codexDiscoveryPromise === attempt) {
+        this.codexDiscoveryPromise = undefined;
+      }
+    });
+    this.codexDiscoveryPromise = attempt;
+    await attempt;
   }
 
   private async runCodexDiscoveryAttempt(
@@ -2275,18 +2283,29 @@ export class DesktopSettingsService {
     if (resolved) {
       return resolved;
     }
-    // The one permitted startup discovery is the authority for this profile's
-    // selection, and it is already running. Waiting for the answer that is in
-    // flight is not a retry: the durable last-known-good read above is an
-    // optimization that is legitimately empty on a cold profile, after a
-    // provider fingerprint change, and for the whole window between process
-    // start and the first published discovery. Background callers that land
-    // inside that window — archived binding cleanup is the routine one — were
-    // otherwise told to "Refresh Codex in Settings" about a Codex that was
-    // seconds from resolving normally.
-    const startupDiscovery = this.startupDiscoveryPromise;
-    if (startupDiscovery) {
-      await startupDiscovery;
+    // A Codex discovery is already running and is the authority for this
+    // profile's selection. Waiting for the answer in flight is not a retry:
+    // the durable last-known-good read above is an optimization that is
+    // legitimately empty on a cold profile, after a provider fingerprint
+    // change, and for the whole window between process start and the first
+    // published discovery. Background callers that land inside that window —
+    // archived binding cleanup is the routine one — were otherwise told to
+    // "Refresh Codex in Settings" about a Codex that was seconds from
+    // resolving normally.
+    //
+    // This waits on the Codex leg alone, never on `startupDiscoveryPromise`,
+    // which also bundles gh, git, and the desktop-application scan: a Codex
+    // spawn must not block on probes it does not use.
+    //
+    // Re-entrancy: `publishManagedCodexSelectionChange` can reach this method
+    // from inside the discovery it would await. That is safe only because
+    // `readSelectedCodexCommand()` above returns the managed runtime, which
+    // `runCodexDiscoveryAttempt` assigns before publishing. Any future caller
+    // reached earlier in that function would await its own discovery — resolve
+    // it from state, not by awaiting here.
+    const codexDiscovery = this.codexDiscoveryPromise;
+    if (codexDiscovery) {
+      await codexDiscovery;
       const discovered = this.readSelectedCodexCommand();
       if (discovered) {
         return discovered;
@@ -2327,21 +2346,39 @@ export class DesktopSettingsService {
   }
 
   /**
-   * Whether this profile is still owed a Codex selection. True until some
-   * discovery has published one or has run and found none. The desktop uses
-   * it to keep a startup surface pending rather than reporting a configured
-   * profile as having no provider.
+   * Whether a Codex discovery still owes this profile an answer. The desktop
+   * uses it to keep a startup surface pending rather than reporting a
+   * configured profile as having no provider.
+   *
+   * Deliberately keyed on discovery state alone, never on
+   * `readSelectedCodexCommand()`. That resolver answers from the managed
+   * runtime and the coordinator cache, which `runCodexDiscoveryAttempt`
+   * populates seconds before it publishes `lastKnownGood` — and
+   * `lastKnownGood` is what `readCodexBackendSummary` derives `available`
+   * from. Consulting the resolver here made the two disagree for the length
+   * of a version probe, dropping the pending flag while the summary was still
+   * unavailable: exactly the window this flag exists to cover.
    */
   isCodexDiscoveryPending(): boolean {
-    if (this.readSelectedCodexCommand()) {
-      return false;
+    return this.codexDiscoveryPromise !== undefined
+      || !this.codexDiscoverySettled;
+  }
+
+  /**
+   * Record that no startup Codex discovery is coming in this process, so
+   * surfaces stop waiting for one.
+   *
+   * A bootstrap or onboarding-incomplete boot never requests startup
+   * discovery, and nothing re-requests it when the wizard completes in the
+   * same process. Without this, `isCodexDiscoveryPending()` would stay true
+   * for the life of that process and every consumer would wait forever for an
+   * answer that was never scheduled.
+   */
+  markStartupCodexDiscoverySkipped(): void {
+    if (this.codexDiscoveryPromise) {
+      return;
     }
-    if (this.startupDiscoveryPromise) {
-      return true;
-    }
-    // No discovery has run in this process, so the empty durable projection
-    // above is the absence of an answer rather than an answer of "none".
-    return !this.codexDiscoveryAttempted;
+    this.codexDiscoverySettled = true;
   }
 
   /**

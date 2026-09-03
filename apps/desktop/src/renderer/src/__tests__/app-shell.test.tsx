@@ -3522,7 +3522,6 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
-
   it("routes the new-thread menu push into the existing launchpad flow", async () => {
     let openNewThreadListener: (() => void) | undefined;
     const ensureDirectoryLaunchpad = vi.fn(async () => ({

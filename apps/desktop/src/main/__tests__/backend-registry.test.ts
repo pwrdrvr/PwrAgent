@@ -48,6 +48,7 @@ import type {
   BackendAcpRuntimeCapabilities,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
+  BackendSummary,
   BackendModelOption,
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
@@ -6486,6 +6487,44 @@ describe("DesktopBackendRegistry", () => {
       available: false,
       discoveryPending: true,
     });
+
+    await registry.close();
+  });
+
+  it("keeps a cached Codex summary pending while discovery is outstanding", async () => {
+    let pending = true;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      resolveCodexDiscoveryPending: () => pending,
+    });
+    const internals = registry as unknown as {
+      codexBackendSummary?: BackendSummary;
+    };
+
+    // What a Settings "Re-check" or `completeOnboardingCodexBootstrap` caches
+    // when it lands mid-discovery. `discoverCodexBackend` writes no pending
+    // flag, and a failing summary is invalidated only by a provider
+    // fingerprint change, so returning it verbatim made the renderer read a
+    // mid-discovery cache as a settled "no provider" for the whole process.
+    const {
+      discoveryPending: _unflagged,
+      ...cachedSummary
+    } = (await registry.listBackends({ includeUnavailable: true })).backends
+      .find((backend) => backend.kind === "codex") as BackendSummary;
+    internals.codexBackendSummary = cachedSummary;
+
+    const whilePending = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(whilePending).toMatchObject({ discoveryPending: true });
+
+    pending = false;
+    const afterAnswer = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(afterAnswer).not.toHaveProperty("discoveryPending");
 
     await registry.close();
   });

@@ -2035,14 +2035,24 @@ function DesktopAppShell(props: {
         startupLandingStateRef.current = "notice-shown";
         showAppNotice(
           buildNoStartupBackendNotice({
-            codex: backendSummaries.backends.find(
-              (backend) => backend.kind === "codex",
-            ),
-            onOpenCodexSettings: () => {
+            backends: backendSummaries.backends,
+            // Every exit from the notice returns the landing decision to
+            // "pending". Without that, closing the toast — or opening setup
+            // and cancelling it — left a provider-less window with nothing on
+            // screen and no way to get the notice back, which the modal wizard
+            // this replaced could not do. A notice-supplied `onDismiss`
+            // replaces the stack's own removal, so it has to dismiss too.
+            onDismiss: () => {
+              startupLandingStateRef.current = "pending";
               dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
-              openSettingsSection("models", "codex");
+            },
+            onOpenProviderSettings: (registryId) => {
+              startupLandingStateRef.current = "pending";
+              dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
+              openSettingsSection("models", registryId);
             },
             onRunSetup: () => {
+              startupLandingStateRef.current = "pending";
               dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
               setOnboardingOpen("replay");
             },
@@ -2053,14 +2063,15 @@ function DesktopAppShell(props: {
     }
 
     // A provider that showed up late clears the notice it caused.
-    if (startupLandingStateRef.current === "notice-shown") {
-      dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
-    }
+    dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
     startupLandingStateRef.current = "complete";
-    if (navigation.selectedThreadKey) {
+    // Landing is for a window that is still sitting on the startup view. The
+    // notice sends operators into Settings to fix exactly this, so a provider
+    // appearing while they are mid-edit there must not navigate away from the
+    // pane that repaired it.
+    if (navigation.selectedThreadKey || mainView !== "thread") {
       return;
     }
-    setMainView("thread");
     void openWorkspaceLaunchpad(startupBackend.kind);
   }, [
     backendSummaries.backends,
@@ -2068,6 +2079,7 @@ function DesktopAppShell(props: {
     backendSummaries.loaded,
     desktopApi,
     dismissAppNotice,
+    mainView,
     navigation.loaded,
     navigation.selectedThreadKey,
     onboardingOpen,

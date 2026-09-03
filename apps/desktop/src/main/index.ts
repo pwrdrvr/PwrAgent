@@ -404,6 +404,11 @@ function logBootDecision(decision: ProfileBootDecision): void {
 function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   if (!getDesktopConfigStore().read("onboarding").completed) {
     mainLog.info("startup thread list prewarm deferred until onboarding completes");
+    // Nothing re-enters this function when the wizard completes in the same
+    // process, so no startup Codex discovery is coming. Say so, or every
+    // surface that waits on `isCodexDiscoveryPending()` waits for the life of
+    // the process — the startup landing included.
+    getDesktopSettingsService().markStartupCodexDiscoverySkipped();
     recordStartupProfileEvent({
       type: "startup-thread-list-prewarm:deferred",
     });
@@ -417,12 +422,38 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
         error: error instanceof Error ? error.message : String(error),
       });
     });
-  // Same dependency as the provider refresh below: reading Token Miser's
-  // server capabilities opens the app-server, which cannot resolve an
-  // executable until startup discovery has published this profile's
-  // selection. Running it from the registry constructor raced that and left
-  // Token Miser recorded as unavailable for the whole session.
-  void startupSettingsDiscovery
+  // The durable thread snapshot painted below is allowed to appear
+  // immediately. A cold profile has no executable selection yet, though, so
+  // this live provider refresh must wait for the one permitted startup
+  // discovery to publish that selection. Keeping the dependency in the
+  // background preserves fast startup without racing the Codex transport.
+  //
+  // It must NOT hang off the prewarm `listThreads` result. This chain owns the
+  // only `navigation/providerThreads/refreshed` emit, which is the renderer's
+  // sole automatic trigger to re-read backend summaries; a rejected prewarm —
+  // a broken Codex being exactly when that happens — would otherwise leave the
+  // renderer holding a stale `discoveryPending` summary with nothing left to
+  // clear it.
+  const startupProviderRefresh = startupSettingsDiscovery
+    .then(async () =>
+      await getDesktopBackendRegistry().refreshProvidersAtStartup(permit),
+    )
+    .catch((error) => {
+      mainLog.warn("startup provider refresh failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  // Token Miser preparation carries the same dependency — reading its server
+  // capabilities opens the app-server, which cannot resolve an executable
+  // until startup discovery has published a selection. Running it from the
+  // registry constructor raced that and left Token Miser recorded as
+  // unavailable for the whole session.
+  //
+  // It queues behind the provider refresh rather than beside it: preparation
+  // spawns `codex plugin marketplace` subprocesses and a full retention prune,
+  // and the refresh above owns the event that releases the renderer's startup
+  // hold. Contending with it would delay first paint to no purpose.
+  void startupProviderRefresh
     .then(async () =>
       await getDesktopBackendRegistry().prepareTokenMiserRuntimeAtStartup(),
     )
@@ -439,18 +470,6 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       skipArchivedMetadataRefresh: true,
     })
     .then((threads) => {
-      // The durable thread snapshot above is allowed to paint immediately.
-      // A cold profile has no executable selection yet, though, so its live
-      // provider refresh must wait for the one permitted startup discovery to
-      // publish that selection. Keeping this dependency in the background
-      // preserves fast startup without racing the Codex transport.
-      void startupSettingsDiscovery.then(() =>
-        getDesktopBackendRegistry().refreshProvidersAtStartup(permit),
-      ).catch((error) => {
-        mainLog.warn("startup provider refresh failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
       recordStartupProfileEvent({
         type: "startup-thread-list-prewarm:completed",
         detail: {

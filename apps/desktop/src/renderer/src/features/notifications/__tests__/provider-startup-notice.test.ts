@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BackendSummary } from "@pwragent/shared";
+import type { AppServerBackendKind, BackendSummary } from "@pwragent/shared";
 import {
   buildNoStartupBackendNotice,
   NO_STARTUP_BACKEND_NOTICE_ID,
 } from "../provider-startup-notice";
 
-function codexSummary(unavailableReason?: string): BackendSummary {
+function summary(params: {
+  kind: AppServerBackendKind;
+  label: string;
+  unavailableReason?: string;
+}): BackendSummary {
   return {
-    kind: "codex",
-    source: "builtin",
-    label: "Codex",
+    kind: params.kind,
+    source: params.kind.startsWith("acp:") ? "acp" : "builtin",
+    label: params.label,
     available: false,
     methods: [],
     capabilities: {
@@ -27,18 +31,27 @@ function codexSummary(unavailableReason?: string): BackendSummary {
       multiDirectoryThreads: false,
     },
     executionModes: [],
-    ...(unavailableReason ? { unavailableReason } : {}),
+    ...(params.unavailableReason
+      ? { unavailableReason: params.unavailableReason }
+      : {}),
   };
 }
 
 describe("buildNoStartupBackendNotice", () => {
   it("leads with provider settings and keeps setup as the secondary answer", () => {
-    const onOpenCodexSettings = vi.fn();
+    const onOpenProviderSettings = vi.fn();
     const onRunSetup = vi.fn();
 
     const notice = buildNoStartupBackendNotice({
-      codex: codexSummary("Codex CLI 0.1.0 is older than the minimum."),
-      onOpenCodexSettings,
+      backends: [
+        summary({
+          kind: "codex",
+          label: "Codex",
+          unavailableReason: "Codex CLI 0.1.0 is older than the minimum.",
+        }),
+      ],
+      onDismiss: vi.fn(),
+      onOpenProviderSettings,
       onRunSetup,
     });
 
@@ -60,18 +73,60 @@ describe("buildNoStartupBackendNotice", () => {
 
     notice.actions?.[0]?.onClick();
     notice.actions?.[1]?.onClick();
-    expect(onOpenCodexSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenProviderSettings).toHaveBeenCalledWith("codex");
     expect(onRunSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the provider that reported a reason, not whichever came first", () => {
+    const onOpenProviderSettings = vi.fn();
+
+    const notice = buildNoStartupBackendNotice({
+      backends: [
+        summary({ kind: "codex", label: "Codex" }),
+        summary({
+          kind: "acp:gemini",
+          label: "Gemini",
+          unavailableReason: "gemini CLI is not installed.",
+        }),
+      ],
+      onDismiss: vi.fn(),
+      onOpenProviderSettings,
+      onRunSetup: vi.fn(),
+    });
+
+    // `!startupBackend` means "nothing is selectable", not "Codex is broken".
+    // Hardcoding Codex sent operators on an ACP-only profile to a provider
+    // they never configured while the missing one went unnamed.
+    expect(notice.detail).toBe("Gemini: gemini CLI is not installed.");
+    notice.actions?.[0]?.onClick();
+    expect(onOpenProviderSettings).toHaveBeenCalledWith("gemini");
   });
 
   it("omits the detail line when no provider reported a reason", () => {
     const notice = buildNoStartupBackendNotice({
-      codex: codexSummary(),
-      onOpenCodexSettings: vi.fn(),
+      backends: [summary({ kind: "codex", label: "Codex" })],
+      onDismiss: vi.fn(),
+      onOpenProviderSettings: vi.fn(),
       onRunSetup: vi.fn(),
     });
 
     expect(notice).not.toHaveProperty("detail");
     expect(notice).not.toHaveProperty("copyText");
+  });
+
+  it("dismisses through the caller so the landing decision can reset", () => {
+    const onDismiss = vi.fn();
+
+    const notice = buildNoStartupBackendNotice({
+      backends: [],
+      onDismiss,
+      onOpenProviderSettings: vi.fn(),
+      onRunSetup: vi.fn(),
+    });
+
+    // A notice-supplied `onDismiss` replaces the stack's own removal, so the
+    // caller owns both resetting the ref and dropping the notice.
+    notice.onDismiss?.();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

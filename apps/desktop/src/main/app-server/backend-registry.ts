@@ -10302,7 +10302,13 @@ export class DesktopBackendRegistry {
    * managed runtime happened to change.
    */
   async prepareTokenMiserRuntimeAtStartup(): Promise<void> {
-    if (!this.tokenMiserStore || !this.resolveTokenMiserEnabledFn()) {
+    // Deferring this behind startup discovery means a quit can land first —
+    // a managed-runtime download holds discovery open for many seconds.
+    // Preparation opens the app-server, so without this guard a shutdown
+    // could be followed by a fresh Codex child process and writes to a store
+    // `close()` already finalized. `maybeRestartCodexForManagedRuntimeChange`
+    // guards on `closed` for the same reason.
+    if (this.closed || !this.resolveTokenMiserEnabledFn()) {
       return;
     }
     await this.prepareTokenMiserRuntime({ prune: true });
@@ -23796,7 +23802,12 @@ export class DesktopBackendRegistry {
 
   private readCodexBackendSummary(): BackendSummary {
     if (this.codexBackendSummary) {
-      return this.codexBackendSummary;
+      // A summary cached by `discoverCodexBackend` carries no pending flag, and
+      // a failing one is invalidated only by a provider fingerprint change —
+      // which a later successful discovery does not produce. Re-deriving the
+      // flag here keeps a summary cached mid-discovery from reading as a
+      // settled "no provider" for the rest of the process.
+      return this.withCodexDiscoveryPending(this.codexBackendSummary);
     }
     const provider = this.configStore?.read("providers").codex;
     const lastKnownGood = provider
@@ -23804,12 +23815,6 @@ export class DesktopBackendRegistry {
       ? provider.lastKnownGood
       : undefined;
     const available = Boolean(lastKnownGood?.selectedCommand);
-    // "Not selected yet" and "not configured" read identically in this
-    // projection, and a durable last-known-good is legitimately absent for the
-    // whole window between process start and the first published discovery.
-    // Startup surfaces must be able to tell those apart before concluding a
-    // configured profile has no provider.
-    const discoveryPending = !available && this.resolveCodexDiscoveryPendingFn();
     const methods: string[] = [];
     const capabilities = buildCapabilities(methods, "codex");
     if (
@@ -23819,13 +23824,19 @@ export class DesktopBackendRegistry {
     ) {
       capabilities.startReview = true;
     }
+    // Only claim discovery is outstanding when it actually is. A discovery
+    // that ran and selected nothing records no `validation.error`, so this
+    // default used to describe a completed discovery as incomplete — and the
+    // no-backend notice renders this string as its operator-facing detail and
+    // copy text.
     const unavailableReason = provider?.validation.error
-      ?? "Codex discovery has not completed yet.";
-    return {
+      ?? (this.resolveCodexDiscoveryPendingFn()
+        ? "Codex discovery has not completed yet."
+        : "No Codex executable was found on this machine.");
+    return this.withCodexDiscoveryPending({
       kind: "codex",
       label: BACKEND_LABELS.codex,
       available,
-      ...(discoveryPending ? { discoveryPending } : {}),
       serverVersion: lastKnownGood?.selectedVersion,
       methods,
       capabilities,
@@ -23846,7 +23857,27 @@ export class DesktopBackendRegistry {
         },
       ],
       ...(available ? {} : { unavailableReason }),
-    };
+    });
+  }
+
+  /**
+   * Stamp `discoveryPending` onto a Codex summary that is unavailable only
+   * because discovery has not answered yet.
+   *
+   * Applied at every return of `readCodexBackendSummary`, including the cached
+   * one, so "not selected yet" and "not configured" never read alike to a
+   * startup surface deciding whether the profile has a provider at all.
+   */
+  private withCodexDiscoveryPending(summary: BackendSummary): BackendSummary {
+    const pending = !summary.available && this.resolveCodexDiscoveryPendingFn();
+    if (pending === Boolean(summary.discoveryPending)) {
+      return summary;
+    }
+    if (pending) {
+      return { ...summary, discoveryPending: true };
+    }
+    const { discoveryPending: _settled, ...settledSummary } = summary;
+    return settledSummary;
   }
 
   private async discoverCodexBackend(

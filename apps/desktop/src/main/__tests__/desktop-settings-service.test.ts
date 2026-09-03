@@ -1212,6 +1212,99 @@ describe("DesktopSettingsService", () => {
     expect(service.isCodexDiscoveryPending()).toBe(false);
   });
 
+  it("keeps Codex discovery pending until the selection is published", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[experimental]",
+      "token_miser_enabled = true",
+      "",
+    ].join("\n"));
+    let releaseDiscovery: (() => void) | undefined;
+    const discoveryGate = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async (configuredCommand?: string) => {
+          await discoveryGate;
+          const command = configuredCommand ?? "/managed/codex";
+          return {
+            candidates: [{
+              command,
+              executable: true,
+              selected: true,
+              source: "config" as const,
+            }],
+            selectedCommand: command,
+            selectedSource: "config" as const,
+          };
+        }),
+        invalidate: vi.fn(),
+        resolve: vi.fn(),
+      },
+      configPath,
+      ensureManagedCodexRuntime: vi.fn(async () => ({
+        appServerCommand: "/managed/codex-app-server",
+        codeModeHostCommand: "/managed/codex-code-mode-host",
+        command: "/managed/codex",
+        metadata: {
+          asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
+          checkedAt: 1,
+          installedAt: 1,
+          repository: "pwrdrvr/codex",
+          schemaVersion: 1,
+          sha256: "a".repeat(64),
+          tag: "pwragent-v0.200.0-pwragent.1",
+          version: "0.200.0-pwragent.1",
+        },
+      })),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const startupDiscovery = service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    // Yield past `resolveManagedCodexRuntime`, which assigns the managed
+    // runtime long before `recordProviderDiscovery` publishes lastKnownGood.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The backend summary derives `available` from the published
+    // lastKnownGood, so a pending signal that answered from the managed
+    // runtime instead dropped mid-discovery and left the summary reading as a
+    // settled "no provider" — the exact window this flag exists to cover.
+    expect(service.isCodexDiscoveryPending()).toBe(true);
+
+    releaseDiscovery?.();
+    await startupDiscovery;
+    expect(service.isCodexDiscoveryPending()).toBe(false);
+  });
+
+  it("stops reporting Codex discovery pending when startup will never run one", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, "");
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(),
+        invalidate: vi.fn(),
+        resolve: vi.fn(),
+      },
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect(service.isCodexDiscoveryPending()).toBe(true);
+    // A bootstrap or onboarding-incomplete boot never requests startup
+    // discovery and nothing re-requests it when the wizard finishes in the
+    // same process, so without this the flag would never clear and every
+    // consumer would wait for an answer that was never scheduled.
+    service.markStartupCodexDiscoverySkipped();
+    expect(service.isCodexDiscoveryPending()).toBe(false);
+  });
+
   it("stops reporting Codex discovery pending once an attempt found nothing", async () => {
     const configPath = path.join(createTempRoot(), "config.toml");
     fs.writeFileSync(configPath, "");
@@ -1240,7 +1333,6 @@ describe("DesktopSettingsService", () => {
       "Refresh Codex in Settings",
     );
   });
-
 
   it("returns to ordinary Codex discovery without checking managed releases when disabled", async () => {
     const root = createTempRoot();
