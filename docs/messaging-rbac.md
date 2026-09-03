@@ -53,7 +53,7 @@ code side).
 | `approval.respond.escalation` | interactive (danger: med) | Approve or deny network / exec / filesystem escalation requests. |
 | `tools.thread_inspection` | tools (danger: med) | Let the agent search and read OTHER threads on the actor's behalf (`search_threads`, `read_thread`, thread status, PR inspection, `read_star_map_view`). |
 | `tools.thread_orchestration` | tools (danger: med) | Let the agent inject messages into other threads, hand off tasks, attach directories, and attach PRs. |
-| `tools.instance_management` | tools (danger: med) | Let the agent manage PwrAgent itself, inspect automations (`manage_pwragent`), and screenshot the operator's Star Map (`capture_star_map`). |
+| `tools.instance_management` | tools (danger: med) | Let the agent manage PwrAgent itself and inspect automations (`manage_pwragent`). |
 | `thread.execution.full_access` | danger (danger: high) | Select or resume into full-access execution — near-complete control of the host. |
 | `federation.remote_control` | danger (danger: high) | Browse and drive threads that live on federated peers, not just this machine. Required *in addition to* the action's own permission — see "Federation scope" below. |
 
