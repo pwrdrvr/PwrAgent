@@ -112,6 +112,8 @@ type TranscriptListProps = {
    * `isThreadRemoteWorkHere`).
    */
   pendingRemoteWork?: boolean;
+  /** First entry in the contiguous window when an earlier prompt is pinned. */
+  prependAnchorId?: string;
   runningTurnUsageText?: string;
   pagination?: AppServerThreadReplayPagination;
   parentThreadId?: string;
@@ -1055,7 +1057,8 @@ export function TranscriptList(props: TranscriptListProps) {
       return undefined;
     }
 
-    const firstMessageId = transcriptEntries[0]?.id;
+    const firstMessageId =
+      props.prependAnchorId ?? transcriptEntries[0]?.id;
     const lastMessageId = transcriptEntries[transcriptEntries.length - 1]?.id;
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
@@ -1076,6 +1079,7 @@ export function TranscriptList(props: TranscriptListProps) {
     };
   }, [
     props.pendingStatusText,
+    props.prependAnchorId,
     props.runningTurnUsageText,
     props.threadId,
     transcriptEntries,
@@ -1279,7 +1283,8 @@ export function TranscriptList(props: TranscriptListProps) {
     const restoredViewport =
       props.restoredViewport ??
       (props.threadId ? savedViewportsRef.current.get(props.threadId) : undefined);
-    const firstMessageId = transcriptEntries[0]?.id;
+    const firstMessageId =
+      props.prependAnchorId ?? transcriptEntries[0]?.id;
     const lastMessageId = transcriptEntries[transcriptEntries.length - 1]?.id;
     const hasPrependedMessages = Boolean(
       previousSnapshot &&
@@ -1363,6 +1368,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingMcpInteraction,
     props.pendingUserInput,
     props.pendingStatusText,
+    props.prependAnchorId,
     props.runningTurnUsageText,
     props.restoredViewport,
     props.threadId,

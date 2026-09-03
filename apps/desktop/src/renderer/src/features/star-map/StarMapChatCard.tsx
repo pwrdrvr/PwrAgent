@@ -1497,6 +1497,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             pendingStatusText={session.pendingStatusText}
             pendingRemoteWork={isThreadRemoteWorkHere(thread)}
             pendingUserInput={session.pendingUserInput}
+            prependAnchorId={transcriptWindow.contiguousStartEntry?.id}
             runningTurnUsageText={session.runningTurnUsageText}
             threadId={thread.id}
             transientMessages={session.transientMessages}
