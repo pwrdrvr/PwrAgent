@@ -37,28 +37,39 @@ builds the snapshot *inside* the throttle — the builder walks every cloud and
 thread, and the hook sits on the drag path. Callers pass a memoized input, not
 a finished snapshot.
 
-## The two tools
+## The tool
 
 | Tool | Serves | Messaging RBAC |
 |---|---|---|
 | `read_star_map_view` | Instances, clouds and their full membership, drawn vs folded cards, selection, open chat cards, camera, filters. Each thread carries `backend` / `threadId` / `instanceId`. | `tools.thread_inspection` |
-| `capture_star_map` | A PNG of the surface that published the current view. | `tools.instance_management` |
 
-Both are gated for messaging-originated turns. The screenshot deliberately
-costs the higher permission: a picture of the operator's screen is more than a
-read of thread metadata, and a messaging-driven turn can relay whatever it sees
-back to its channel.
+It is gated for messaging-originated turns at the same permission as any other
+read of thread metadata.
 
-Two honesty properties are pinned by tests and worth preserving:
+The honesty property worth preserving is pinned by tests: **truncation is
+reported.** `maxThreads` shortens the thread list but never the clouds' own
+counts — a shortened list must not read as a smaller cloud, or "the others in
+this cloud" acts on the wrong set. Drawn cards survive truncation ahead of
+folded ones.
 
-- **Truncation is reported.** `maxThreads` shortens the thread list but never
-  the clouds' own counts — a shortened list must not read as a smaller cloud,
-  or "the others in this cloud" acts on the wrong set. Drawn cards survive
-  truncation ahead of folded ones.
-- **A text-only transport says so.** Image content reaches the model over MCP.
-  Over Codex dynamic tools the capture succeeds and the result carries
-  `imageUnavailableReason` instead, rather than handing the model measurements
-  it might read as "I saw the map".
+### Why there is no screenshot tool
+
+An earlier revision had a `capture_star_map` beside this one. It was cut before
+merge, and the reasoning is worth keeping so it is not re-added by reflex.
+
+A picture cannot do the job. Acting on "that thread" needs a `threadId`, and a
+PNG carries titles at best — an Agent would read the label off the image and
+still have no handle to call `mutate_thread` with. Everything the manager
+actually does is done from the structured view.
+
+Against that it cost real things: Codex dynamic tools carry text only, and
+Codex is the default backend, so the tool returned no image at all for most
+operators. It also wanted the higher `tools.instance_management` permission, a
+capture and PNG encode per call, and a size ceiling with a downscale-and-retry
+path.
+
+The remaining use is genuinely spatial — "do these clouds overlap?" — which is
+design and debugging work with better tools already available to it.
 
 ## How the manager gets its instructions
 

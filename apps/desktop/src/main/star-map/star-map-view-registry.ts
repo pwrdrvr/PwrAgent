@@ -1,11 +1,5 @@
-import { BrowserWindow, type NativeImage, type WebContents } from "electron";
-import type {
-  StarMapViewSnapshot,
-  StarMapViewSurface,
-} from "@pwragent/shared";
-import { getMainLogger } from "../log";
-
-const log = getMainLogger("pwragent:star-map-view");
+import type { WebContents } from "electron";
+import type { StarMapViewSnapshot } from "@pwragent/shared";
 
 /**
  * Latest published Star Map view, per publishing renderer.
@@ -17,8 +11,11 @@ const log = getMainLogger("pwragent:star-map-view");
  *
  * Keyed by `WebContents.id` because both surfaces can be open at once (the
  * dedicated Star Map window and the in-app layer in the main window). Reads
- * serve the most recently published live entry, which is the one the
- * operator is actually looking at.
+ * serve the most recently published live entry. That is a heuristic, not a
+ * fact about focus: a map the operator is reading without touching stops
+ * republishing, so a background map with a live turn in it can be the more
+ * recent one. Good enough while the map is a single window; revisit with a
+ * focus tiebreaker if the in-app layer returns.
  */
 type Entry = {
   snapshot: StarMapViewSnapshot;
@@ -72,50 +69,6 @@ function currentEntry(): Entry | undefined {
     if (!latest || entry.receivedAt > latest.receivedAt) latest = entry;
   }
   return latest;
-}
-
-export type StarMapCapture = {
-  surface: StarMapViewSurface;
-  png: Buffer;
-  width: number;
-  height: number;
-};
-
-/**
- * Capture the surface that published the current view.
- *
- * Capturing the *publisher* rather than "the star map window" is what keeps
- * the pixels and the structured snapshot describing the same thing: when the
- * operator is using the in-app layer, the dedicated window may be stale or
- * absent entirely.
- */
-export async function captureStarMapView(options: {
-  maxWidth?: number;
-} = {}): Promise<StarMapCapture | undefined> {
-  const entry = currentEntry();
-  if (!entry) return undefined;
-  const window = BrowserWindow.fromWebContents(entry.webContents);
-  if (!window || window.isDestroyed()) return undefined;
-  try {
-    let image: NativeImage = await entry.webContents.capturePage();
-    if (image.isEmpty()) return undefined;
-    const size = image.getSize();
-    if (options.maxWidth && size.width > options.maxWidth) {
-      image = image.resize({ width: options.maxWidth, quality: "good" });
-    }
-    const resized = image.getSize();
-    return {
-      surface: entry.snapshot.surface,
-      png: image.toPNG(),
-      width: resized.width,
-      height: resized.height,
-    };
-  } catch (error) {
-    log.warn("star map capture failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return undefined;
-  }
 }
 
 /** Test seam: drop every published view. */

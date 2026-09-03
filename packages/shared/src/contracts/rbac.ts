@@ -754,12 +754,6 @@ export function permissionForDynamicTool(
       }
       return undefined;
     case "star_map":
-      if (tool === "capture_star_map") {
-        // A screenshot of the operator's screen is strictly more than a
-        // read of thread metadata, and a messaging-originated turn can
-        // relay whatever it sees back to its channel.
-        return "tools.instance_management";
-      }
       return "tools.thread_inspection";
     default:
       return undefined;
