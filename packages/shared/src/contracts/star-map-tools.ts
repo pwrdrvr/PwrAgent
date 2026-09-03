@@ -20,7 +20,6 @@ import type { FederationInstanceId } from "./federation";
  */
 export const PWRAGENT_STAR_MAP_OPERATION_NAMES = [
   "read_star_map_view",
-  "capture_star_map",
 ] as const;
 
 export type PwrAgentStarMapOperationName =
@@ -29,7 +28,6 @@ export type PwrAgentStarMapOperationName =
 export const PWRAGENT_STAR_MAP_ERROR_CODES = [
   "invalid_arguments",
   "star_map_not_open",
-  "capture_failed",
   "unsupported_operation",
   "internal_error",
 ] as const;
@@ -151,15 +149,6 @@ export type StarMapViewSnapshot = {
 
 export const DEFAULT_STAR_MAP_VIEW_MAX_THREADS = 200;
 export const MAX_STAR_MAP_VIEW_MAX_THREADS = 1_000;
-/** Capture cost is quadratic in the long edge; 1600 keeps titles legible. */
-export const DEFAULT_STAR_MAP_CAPTURE_MAX_WIDTH = 1_600;
-export const MAX_STAR_MAP_CAPTURE_MAX_WIDTH = 3_000;
-/**
- * Ceiling on the encoded PNG. Base64 adds about a third on top of this
- * before the image reaches the model, so a wide capture of a dense map is
- * capable of dwarfing the turn it was meant to inform.
- */
-export const MAX_STAR_MAP_CAPTURE_BYTES = 4 * 1_024 * 1_024;
 
 export type ReadStarMapViewToolArgs = {
   /**
@@ -174,17 +163,8 @@ export type ReadStarMapViewToolArgs = {
   includeHidden?: boolean;
 };
 
-export type CaptureStarMapToolArgs = {
-  /**
-   * Downscale the capture to this width in pixels. The structured view is
-   * cheaper and more precise for anything but genuinely spatial questions.
-   */
-  maxWidth?: number;
-};
-
 export type PwrAgentStarMapToolArgsByOperation = {
   read_star_map_view: ReadStarMapViewToolArgs;
-  capture_star_map: CaptureStarMapToolArgs;
 };
 
 export type PwrAgentStarMapToolArgs<
@@ -199,19 +179,8 @@ export type ReadStarMapViewToolData = {
   snapshot: StarMapViewSnapshot;
 };
 
-export type CaptureStarMapToolData = {
-  surface: StarMapViewSurface;
-  width: number;
-  height: number;
-  /** PNG bytes; delivered as an image content item where the transport allows. */
-  byteLength: number;
-  /** Set when the transport can only carry text back to the model. */
-  imageUnavailableReason?: string;
-};
-
 export type PwrAgentStarMapDataByOperation = {
   read_star_map_view: ReadStarMapViewToolData;
-  capture_star_map: CaptureStarMapToolData;
 };
 
 export type PwrAgentStarMapContext = {
@@ -234,10 +203,6 @@ export type PwrAgentStarMapResponse<
   | {
       ok: true;
       data: PwrAgentStarMapDataByOperation[TOperation];
-      /** Base64 PNG for `capture_star_map`, kept out of `data` so a text-only
-       * transport can drop it without reshaping the payload. */
-      imageBase64?: string;
-      imageMimeType?: string;
     }
   | {
       ok: false;

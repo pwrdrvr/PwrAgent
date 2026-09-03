@@ -2,21 +2,12 @@
 //
 // The behavior that matters here is what happens when a map surface goes
 // away: a stale entry would answer an Agent's "what is on screen" with a
-// window the operator closed, and the capture would target the wrong one.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// window the operator closed.
+import { beforeEach, describe, expect, it } from "vitest";
 import type { WebContents } from "electron";
 import type { StarMapViewSnapshot } from "@pwragent/shared";
 
-const { fromWebContentsMock } = vi.hoisted(() => ({
-  fromWebContentsMock: vi.fn(),
-}));
-
-vi.mock("electron", () => ({
-  BrowserWindow: { fromWebContents: fromWebContentsMock },
-}));
-
 import {
-  captureStarMapView,
   publishStarMapView,
   readStarMapView,
   resetStarMapViewRegistry,
@@ -41,30 +32,15 @@ function snapshot(surface: "window" | "in-app" = "window"): StarMapViewSnapshot 
   };
 }
 
-type FakeWebContents = WebContents & {
-  destroy: () => void;
-  capturePageMock: ReturnType<typeof vi.fn>;
-};
+type FakeWebContents = WebContents & { destroy: () => void };
 
 function fakeWebContents(id: number): FakeWebContents {
   let destroyed = false;
   const listeners: Array<() => void> = [];
-  const capturePageMock = vi.fn(async () => ({
-    isEmpty: () => false,
-    getSize: () => ({ width: 2_000, height: 1_000 }),
-    resize: ({ width }: { width: number }) => ({
-      isEmpty: () => false,
-      getSize: () => ({ width, height: width / 2 }),
-      toPNG: () => Buffer.from("resized"),
-    }),
-    toPNG: () => Buffer.from("full"),
-  }));
   return {
     id,
     isDestroyed: () => destroyed,
     once: (_event: string, listener: () => void) => listeners.push(listener),
-    capturePage: capturePageMock,
-    capturePageMock,
     destroy: () => {
       destroyed = true;
       for (const listener of listeners) listener();
@@ -74,7 +50,6 @@ function fakeWebContents(id: number): FakeWebContents {
 
 beforeEach(() => {
   resetStarMapViewRegistry();
-  fromWebContentsMock.mockReset();
 });
 
 describe("star map view registry", () => {
@@ -118,35 +93,5 @@ describe("star map view registry", () => {
     contents.destroy();
     publishStarMapView({ snapshot: snapshot(), webContents: contents, now: 10 });
     expect(readStarMapView()).toBeUndefined();
-  });
-
-  it("captures the surface that published, and downscales it", async () => {
-    const contents = fakeWebContents(1);
-    publishStarMapView({ snapshot: snapshot(), webContents: contents, now: 10 });
-    fromWebContentsMock.mockReturnValue({ isDestroyed: () => false });
-    const capture = await captureStarMapView({ maxWidth: 800 });
-    expect(capture?.width).toBe(800);
-    expect(capture?.png.toString()).toBe("resized");
-  });
-
-  it("captures at full size when it is already under the cap", async () => {
-    const contents = fakeWebContents(1);
-    publishStarMapView({ snapshot: snapshot(), webContents: contents, now: 10 });
-    fromWebContentsMock.mockReturnValue({ isDestroyed: () => false });
-    const capture = await captureStarMapView({ maxWidth: 4_000 });
-    expect(capture?.width).toBe(2_000);
-    expect(capture?.png.toString()).toBe("full");
-  });
-
-  it("returns nothing rather than throwing when the capture fails", async () => {
-    const contents = fakeWebContents(1);
-    contents.capturePageMock.mockRejectedValueOnce(new Error("no display"));
-    publishStarMapView({ snapshot: snapshot(), webContents: contents, now: 10 });
-    fromWebContentsMock.mockReturnValue({ isDestroyed: () => false });
-    await expect(captureStarMapView()).resolves.toBeUndefined();
-  });
-
-  it("captures nothing when no map has published", async () => {
-    await expect(captureStarMapView()).resolves.toBeUndefined();
   });
 });
