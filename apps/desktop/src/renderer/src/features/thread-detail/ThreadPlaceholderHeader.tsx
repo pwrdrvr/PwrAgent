@@ -30,11 +30,11 @@ type ThreadPlaceholderHeaderProps = {
   onOpenMessagingSettings?: () => void;
   /**
    * Window panel toggles — mirrors ThreadHeader so the loading / empty
-   * states share the same chrome (no layout shift, no stoplight overlap),
-   * on every platform.
+   * states share the same chrome (no layout shift, no stoplight overlap).
    */
   layout?: ThreadPlaceholderLayoutControls;
-  /** Star Map toggle, mirroring ThreadHeader so the chrome never shifts. */
+  /** Star Map toggle, mirroring ThreadHeader — including its win32 guard,
+   * since the AppTitleBar draws the Windows copy. */
   starMap?: StarMapToggleControls;
   /**
    * Wordmark + action buttons, shown left of the title when the sidebar is
@@ -103,7 +103,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
           </div>
         </div>
         <div className="thread-header__chrome">
-          {props.layout ? (
+          {props.layout && !isWindows ? (
             <PanelToggleButtons
               sidebarOpen={props.layout.sidebarOpen}
               railOpen={props.layout.railOpen}
@@ -112,7 +112,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
               railToggleDisabled={props.layout.railToggleDisabled}
             />
           ) : null}
-          {props.starMap ? (
+          {props.starMap && !isWindows ? (
             <button
               type="button"
               className="thread-header__star-map-toggle"

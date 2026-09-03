@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { AppTitleBar } from "../AppTitleBar";
 import { ThreadHeader } from "../../thread-detail/ThreadHeader";
@@ -9,33 +9,36 @@ import { ThreadPlaceholderHeader } from "../../thread-detail/ThreadPlaceholderHe
 /**
  * The Windows title strip and the view header are mounted at the same time, so
  * a control drawn by both appears twice on screen. That is not hypothetical:
- * the strip and `ThreadHeader` each drew a Star Map button, and Windows shipped
- * with two of them side by side while the breadcrumb sat alone on the row
- * below, level with the sidebar's identity pills instead of with the chrome.
+ * both rendered a Star Map button and Windows shipped with two of them.
  *
- * The rule these tests pin: the strip carries OS chrome (wordmark, menu, app
- * actions, the one Messaging controller); the view header carries view chrome
- * (history, breadcrumb, chips, panel toggles, terminal, Star Map). Nothing is
- * in both, and the view header renders the same controls on every platform.
+ * The rule these tests pin — window chrome lives in ONE place per platform:
  *
- * Counting queries are `getAllBy*` on purpose — `getBy*` throws on a duplicate,
+ *   win32   strip:  wordmark, menu, app actions, panel toggles, Star Map, MSG
+ *           header: history, breadcrumb, chips, terminal
+ *   others  strip:  not rendered at all
+ *           header: all of it
+ *
+ * The terminal toggle is the one control in the cluster that stays in the
+ * header everywhere, because its state is per-thread (running dot, per-thread
+ * disabled reason); putting it in a global strip would drag thread state up
+ * into it.
+ *
+ * Checked against the pre-fix components, three of these fail: both Star Map
+ * counting cases and the win32 ownership case, all because the header drew an
+ * unguarded Star Map beside the strip's. The other four pass there — the panel
+ * toggles were already strip-owned on win32, and the terminal and the
+ * off-win32 behavior are unchanged by that fix. They are here to hold those
+ * halves of the rule in place, not because they caught anything.
+ *
+ * Counting queries are `getAllBy*` on purpose: `getBy*` throws on a duplicate,
  * which reads as "broken test" rather than "two buttons shipped".
- *
- * Which of these actually caught the shipped bug, checked by running the file
- * against the pre-fix components: the two placement tests below ("keeps the
- * Windows title strip free of view chrome" and the win32 row of the
- * same-cluster table) fail there. The two counting tests do NOT — the strip
- * drew its Star Map from a `starMap` prop that no longer exists, so they
- * cannot reproduce the old wiring. They stay because they count what is on
- * screen rather than what a component was handed, which is the check that
- * survives someone adding a Star Map back to the strip by some other route.
  */
 
 const noop = () => {};
 
 const thread = {
   id: "thread-1",
-  title: "Add Windows Codex Environment docs",
+  title: "Tighten the settings panel spacing",
   source: "codex",
   inbox: "inbox",
   createdAt: 0,
@@ -50,6 +53,15 @@ const threadLayout = {
   onToggleRail: noop,
   onToggleTerminal: noop,
 };
+
+const placeholderLayout = {
+  sidebarOpen: true,
+  railOpen: false,
+  onToggleSidebar: noop,
+  onToggleRail: noop,
+};
+
+const titleBarLayout = { ...placeholderLayout };
 
 const titleBarActions = {
   automationsActive: false,
@@ -67,11 +79,6 @@ function setPlatform(platform: string): void {
   });
 }
 
-beforeEach(() => {
-  // MessagingStatusBar polls on mount; a bare stub keeps it quiet.
-  vi.stubGlobal("matchMedia", window.matchMedia);
-});
-
 afterEach(() => {
   cleanup();
   Object.defineProperty(window, "pwragent", {
@@ -81,36 +88,49 @@ afterEach(() => {
 });
 
 describe("Windows chrome placement", () => {
-  it("draws exactly one Star Map button with the strip and thread header both mounted", () => {
+  // Both surfaces get every control prop, the way App wires them — the point
+  // is that the components, not the caller, decide which one draws what.
+  const bothMounted = (
+    <>
+      <AppTitleBar
+        layout={titleBarLayout}
+        starMap={{ onOpen: noop }}
+        actions={titleBarActions}
+      />
+      <ThreadHeader
+        thread={thread}
+        layout={threadLayout}
+        starMap={{ onOpen: noop }}
+      />
+    </>
+  );
+
+  it("draws exactly one Star Map with the strip and thread header both mounted", () => {
     setPlatform("win32");
-    render(
-      <>
-        <AppTitleBar
-          layout={{ sidebarOpen: true }}
-          actions={titleBarActions}
-        />
-        <ThreadHeader
-          thread={thread}
-          layout={threadLayout}
-          starMap={{ onOpen: noop }}
-        />
-      </>,
-    );
+    render(bothMounted);
 
     expect(screen.getAllByRole("button", { name: "Open Star Map" })).toHaveLength(1);
   });
 
-  it("draws exactly one Star Map button with the strip and placeholder header both mounted", () => {
+  it("draws exactly one panel-toggle group with both mounted", () => {
+    setPlatform("win32");
+    render(bothMounted);
+
+    expect(screen.getAllByRole("group", { name: "Window layout" })).toHaveLength(1);
+  });
+
+  it("draws exactly one Star Map with the strip and placeholder header both mounted", () => {
     setPlatform("win32");
     render(
       <>
         <AppTitleBar
-          layout={{ sidebarOpen: true }}
+          layout={titleBarLayout}
+          starMap={{ onOpen: noop }}
           actions={titleBarActions}
         />
         <ThreadPlaceholderHeader
           title="Loading..."
-          layout={{ sidebarOpen: true, railOpen: false, onToggleSidebar: noop, onToggleRail: noop }}
+          layout={placeholderLayout}
           starMap={{ onOpen: noop }}
         />
       </>,
@@ -119,22 +139,42 @@ describe("Windows chrome placement", () => {
     expect(screen.getAllByRole("button", { name: "Open Star Map" })).toHaveLength(1);
   });
 
-  it("keeps the Windows title strip free of view chrome", () => {
+  it("gives the Windows strip the window chrome and the header the thread chrome", () => {
     setPlatform("win32");
-    render(
-      <AppTitleBar layout={{ sidebarOpen: true }} actions={titleBarActions} />,
-    );
+    render(bothMounted);
 
-    // The strip's own controls are still there...
-    expect(screen.getByRole("button", { name: "New thread" })).toBeInTheDocument();
-    // ...and nothing that belongs to the view header is.
-    expect(screen.queryByRole("button", { name: "Open Star Map" })).toBeNull();
-    expect(screen.queryByRole("group", { name: "Window layout" })).toBeNull();
+    const strip = document.querySelector(".app-titlebar") as HTMLElement;
+    const header = document.querySelector(".thread-header") as HTMLElement;
+
+    // Window-scoped: strip only.
+    expect(strip.querySelector('[aria-label="Open Star Map"]')).not.toBeNull();
+    expect(strip.querySelector(".panel-toggle")).not.toBeNull();
+    expect(header.querySelector('[aria-label="Open Star Map"]')).toBeNull();
+    expect(header.querySelector(".panel-toggle")).toBeNull();
+
+    // Thread-scoped: header only, including the terminal.
+    expect(header.querySelector(".thread-header__terminal-toggle")).not.toBeNull();
+    expect(strip.querySelector(".thread-header__terminal-toggle")).toBeNull();
+    expect(header.querySelector(".thread-header__breadcrumb")).not.toBeNull();
   });
 
-  it.each(["win32", "darwin", "linux"])(
-    "gives the %s thread header the same view-chrome cluster",
+  it.each(["darwin", "linux"])(
+    "leaves the %s header owning the whole cluster (no strip is rendered)",
     (platform) => {
+      setPlatform(platform);
+      render(bothMounted);
+
+      expect(document.querySelector(".app-titlebar")).toBeNull();
+      expect(screen.getAllByRole("group", { name: "Window layout" })).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "Open Star Map" })).toHaveLength(1);
+      expect(
+        screen.getByRole("button", { name: "Open integrated terminal" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("keeps the terminal toggle in the header on every platform", () => {
+    for (const platform of ["win32", "darwin", "linux"]) {
       setPlatform(platform);
       render(
         <ThreadHeader
@@ -143,12 +183,10 @@ describe("Windows chrome placement", () => {
           starMap={{ onOpen: noop }}
         />,
       );
-
-      expect(screen.getByRole("group", { name: "Window layout" })).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Open integrated terminal" }),
       ).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Open Star Map" })).toBeInTheDocument();
-    },
-  );
+      cleanup();
+    }
+  });
 });

@@ -6,19 +6,20 @@ import type { FederationThreadTarget } from "./federation-thread-targets";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
 import { NewThreadButton } from "./NewThreadButton";
+import { PanelToggleButtons } from "./PanelToggleButtons";
+import { StarMapIcon } from "../../icons/StarMapIcon";
+import type { StarMapToggleControls } from "../thread-detail/ThreadHeader";
 
-/**
- * Only what the strip reads. The panel toggles themselves live in the view
- * header, so this carries no callbacks — widening it back into a full control
- * set is how the duplicate Star Map got here.
- */
 export type AppTitleBarLayoutControls = {
   sidebarOpen: boolean;
+  railOpen: boolean;
+  onToggleSidebar: () => void;
+  onToggleRail: () => void;
 };
 
 /**
- * Windows-only custom title bar (GitHub-Desktop style). Under
- * `titleBarStyle: "hidden"` the native strip is gone, so this one replaces it:
+ * Windows-only custom title bar (GitHub-Desktop style). Consolidates the chrome
+ * the native title bar would otherwise own into one frameless strip:
  *
  *   [PwrAgent] File … Help  [automations][settings][new]  …drag…  [MSG]   — ▢ ✕
  *
@@ -26,15 +27,6 @@ export type AppTitleBarLayoutControls = {
  * Overlay at the far right; this strip fills the rest of the line. On Windows
  * the sidebar masthead (wordmark + action buttons) and the per-screen MSG
  * button are hidden (app.css), so these are their single home.
- *
- * This strip carries only what the OS itself would: the wordmark, the
- * application menu, the app-level actions, and the one global Messaging
- * controller. VIEW chrome — history, breadcrumb, thread chips, panel toggles,
- * terminal, Star Map — stays in the view's own header on every platform, so
- * the cluster reads as one group instead of being split across two rows. The
- * split is why Windows briefly showed two Star Map buttons: the strip drew one
- * and the thread header drew another. Add a view-scoped control to
- * `ThreadHeader`, never here.
  *
  * Renders nothing off win32 — macOS keeps `hiddenInset`, the sidebar masthead,
  * and the per-screen MSG button unchanged. `actions`/`desktopApi` are absent in
@@ -45,6 +37,8 @@ export function AppTitleBar(props: {
   onOpenMessagingActivity?: () => void;
   onOpenMessagingSettings?: () => void;
   layout?: AppTitleBarLayoutControls;
+  /** Star Map toggle, left of the MSG chip. Absent in federation windows. */
+  starMap?: StarMapToggleControls;
   actions?: {
     addingProjectDirectory?: boolean;
     automationsActive: boolean;
@@ -123,13 +117,33 @@ export function AppTitleBar(props: {
         ) : null}
       </div>
       <div className="app-titlebar__spacer" />
-      {props.desktopApi ? (
+      {props.layout || props.desktopApi ? (
         <div className="app-titlebar__right">
-          <MessagingStatusBar
-            desktopApi={props.desktopApi}
-            onOpenActivity={props.onOpenMessagingActivity}
-            onOpenSettings={props.onOpenMessagingSettings}
-          />
+          {props.layout ? (
+            <PanelToggleButtons
+              sidebarOpen={props.layout.sidebarOpen}
+              railOpen={props.layout.railOpen}
+              onToggleSidebar={props.layout.onToggleSidebar}
+              onToggleRail={props.layout.onToggleRail}
+            />
+          ) : null}
+          {props.starMap && !isFederationWindow ? (
+            <button
+              type="button"
+              aria-label="Open Star Map"
+              className="thread-header__star-map-toggle"
+              onClick={props.starMap.onOpen}
+            >
+              <StarMapIcon size={14} />
+            </button>
+          ) : null}
+          {props.desktopApi ? (
+            <MessagingStatusBar
+              desktopApi={props.desktopApi}
+              onOpenActivity={props.onOpenMessagingActivity}
+              onOpenSettings={props.onOpenMessagingSettings}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>

@@ -776,9 +776,19 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(
       /@media[^{]*\{[\s\S]*?\.context-rail[^{]*\{[^}]*position:\s*static/
     );
-    expect(css).not.toMatch(
-      /\.thread-header[^{]*\{[^}]*padding-right:\s*calc\(var\(--context-rail-effective/
-    );
+    // A rail-width gutter on the header is forbidden everywhere the rail is
+    // anchored below the header — which is macOS and Linux. Windows is the one
+    // exception, and it is allowed only because it ALSO moves the rail (see
+    // the Windows test below): there the rail runs the full column height, so
+    // the header has to stop at it. Assert the exception is exactly one rule
+    // and that it is platform-scoped, rather than dropping the guard.
+    const headerRailGutters = [
+      ...css.matchAll(
+        /([^{}]*\.thread-header[^{}]*)\{([^}]*padding-right:\s*calc\(var\(--context-rail-effective[^}]*)\}/g,
+      ),
+    ];
+    expect(headerRailGutters).toHaveLength(1);
+    expect(headerRailGutters[0][1]).toContain('[data-platform="win32"]');
     // Single source of truth for the chat-side gutter: `--context-rail-effective`
     // is computed once on `.thread-view`, sidebar-aware (not a bare `vw`) so a
     // wide rail can't starve the chat on a narrow window. The panel renders at
@@ -801,6 +811,49 @@ describe("Tangerine Terminal theme contract", () => {
     // the freed space instead of subtracting a sidebar that isn't on screen.
     expect(css).toMatch(
       /\.app-shell\[data-sidebar-hidden="true"\][^{]*\{[^}]*--sidebar-reserve:\s*0px;/
+    );
+  });
+
+  it("runs the Windows rail the full column height and bounds the header with it", () => {
+    // Windows draws its own full-width title strip, and that strip carries the
+    // window chrome (panel toggles, Star Map, MSG). What is left in the thread
+    // header is the thread's caption, so the header reads as a caption over
+    // the chat column rather than a second chrome bar spanning the window:
+    // the rail runs up to the underside of the strip, and the header stops at
+    // the rail.
+    //
+    // The lift is done by MOVING THE POSITIONING CONTEXT, not by offsetting
+    // the rail. `.context-rail` is `position: absolute; top: 0`, so making
+    // `.thread-view` the containing block raises its top by exactly the
+    // header's height, whatever that is. A `top: -40px` would hard-code the
+    // header height, which the note on `.context-rail` warns against — these
+    // two rules are what keep that promise, so changing either without the
+    // other silently reintroduces the constant.
+    expect(css).toMatch(
+      /:root\[data-platform="win32"\] \.thread-view \{[^}]*position:\s*relative;/
+    );
+    expect(css).toMatch(
+      /:root\[data-platform="win32"\] \.thread-view__layout \{[^}]*position:\s*static;/
+    );
+    // Unpinned the header clears the 48px spine; pinned it clears the panel
+    // too, read from the SAME `--context-rail-effective` the chat column
+    // reserves, so the header's right edge and the chat's cannot drift apart.
+    expect(css).toMatch(
+      /:root\[data-platform="win32"\] \.thread-header \{[^}]*padding-right:\s*48px;/
+    );
+    expect(css).toContain(
+      ':root[data-platform="win32"] .thread-view.has-pinned-context-rail .thread-header {',
+    );
+  });
+
+  it("keeps header chips from clipping when the row is squeezed", () => {
+    // `.chip` sets `text-overflow: ellipsis`, but it is an `inline-flex` box
+    // and `text-overflow` does not apply to flex items — a squeezed chip
+    // CLIPS ("OpenAI" renders as "OpenA") instead of ellipsizing. The thread
+    // title beside it is a block whose ellipsis works, and it is the long,
+    // variable one, so the chips hold their size and the title yields.
+    expect(css).toMatch(
+      /\.thread-header__eyebrow-row > \.chip,\s*\.thread-header__eyebrow-row > \.thread-row__chip \{[^}]*flex:\s*0 0 auto;/
     );
   });
 

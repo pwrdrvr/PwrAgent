@@ -1045,6 +1045,47 @@ textarea,
   display: flex;
 }
 
+/* Windows runs a real full-width title strip, so that strip is the window's
+   chrome row: wordmark, menu, app actions, panel toggles, Star Map, MSG,
+   caption buttons. What is left in the thread header is the thread's own
+   caption — history, breadcrumb, chips, terminal — and it should read as a
+   caption over the transcript, not as a second chrome bar spanning the
+   window. So the context rail runs the FULL column height here, up to the
+   underside of the strip, and the header sits between the sidebar and the
+   rail.
+
+   Re-anchoring, not offsetting: `.context-rail` is `position: absolute` with
+   `inset: 0 0 0 auto`, so moving the positioning context from the layout to
+   `.thread-view` lifts its top by exactly the header's height, whatever that
+   turns out to be. A hard-coded `top: -40px` would encode the header height
+   as a constant, which the note on `.context-rail` warns against for good
+   reason — nothing else has to stay in sync for this to keep working. */
+:root[data-platform="win32"] .thread-view {
+  position: relative;
+}
+
+:root[data-platform="win32"] .thread-view__layout {
+  position: static;
+}
+
+/* Reserve the rail on the header, so the thread caption is bounded by the
+   sidebar on one side and the rail on the other. Same two numbers
+   `.thread-view__layout` reserves, read from the same custom property, so
+   the header's right edge and the chat column's right edge cannot drift
+   apart. Unpinned that is the 48px spine; pinned it is the panel too. */
+:root[data-platform="win32"] .thread-header {
+  padding-right: 48px;
+  transition: padding-right 160ms ease;
+}
+
+:root[data-platform="win32"] .thread-view.has-pinned-context-rail .thread-header {
+  padding-right: calc(var(--context-rail-effective, 380px) + 48px);
+}
+
+:root[data-platform="win32"] .thread-view.is-resizing-context-rail .thread-header {
+  transition: none;
+}
+
 .app-shell--fatal-settings {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -16026,6 +16067,20 @@ a.button {
   gap: 8px;
   max-width: 100%;
   min-width: 0;
+}
+
+/* The chips never shrink; the breadcrumb does. `.chip` sets
+   `text-overflow: ellipsis`, but it is an `inline-flex` box, and
+   `text-overflow` does not apply to flex items — so a squeezed chip does not
+   ellipsize, it CLIPS, and "OpenAI" renders as "OpenA". The thread title next
+   to it is a block whose ellipsis genuinely works, and it is the long,
+   variable one, so it is the right thing to give up room. This mattered
+   little while the header spanned the whole window; on Windows the header is
+   now bounded by the context rail, so the squeeze arrives at ordinary widths.
+   Fixing `.chip`'s own ellipsis needs a text span at every call site. */
+.thread-header__eyebrow-row > .chip,
+.thread-header__eyebrow-row > .thread-row__chip {
+  flex: 0 0 auto;
 }
 
 .thread-header__breadcrumb {
