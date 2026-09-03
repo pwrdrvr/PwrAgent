@@ -40,6 +40,31 @@ export type TranscriptWindow<Entry> = {
   loadOlder: () => Promise<void>;
 };
 
+function isUserMessageEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+
+  const record = entry as { role?: unknown; type?: unknown };
+  return record.type === "message" && record.role === "user";
+}
+
+function newestUserMessageBeforeWindow<Entry>(
+  entries: readonly Entry[],
+  windowStart: number,
+): Entry | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!isUserMessageEntry(entry)) {
+      continue;
+    }
+
+    return index < windowStart ? entry : undefined;
+  }
+
+  return undefined;
+}
+
 export function useTranscriptWindow<Entry>(params: {
   entries: readonly Entry[];
   /**
@@ -64,10 +89,20 @@ export function useTranscriptWindow<Entry>(params: {
       ?? DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT
     : DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
 
-  const visibleEntries = useMemo(
-    () => entries.slice(-limit),
-    [entries, limit],
-  );
+  const visibleEntries = useMemo(() => {
+    const windowStart = Math.max(0, entries.length - limit);
+    const newestEntries = entries.slice(windowStart);
+    const userMessage = newestUserMessageBeforeWindow(entries, windowStart);
+
+    // A busy first turn can cross the render cap before its first response
+    // finishes. Keep one context row outside the cap so the response never
+    // appears without the prompt that caused it. Choosing the newest hidden
+    // user row also avoids pinning both an optimistic launchpad placeholder
+    // and the authoritative item that replaced it.
+    return userMessage
+      ? [userMessage, ...newestEntries]
+      : newestEntries;
+  }, [entries, limit]);
   const entryCount = entries.length;
   const hiddenCount = entryCount - visibleEntries.length;
   const canLoadFromServer = Boolean(
