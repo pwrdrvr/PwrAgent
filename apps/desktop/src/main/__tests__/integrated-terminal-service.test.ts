@@ -271,7 +271,7 @@ describe("integrated terminal runtime PATH", () => {
     expect(env.PATH).toBe("/usr/bin");
   });
 
-  it("leaves the zsh-only prefix off a Windows terminal", () => {
+  it("pins the runtime directory on a Windows terminal", () => {
     const env = prependIntegratedTerminalRuntimePaths(
       { Path: "C:\\Windows" },
       ["C:\\managed\\codex\\codex.exe"],
@@ -279,8 +279,9 @@ describe("integrated terminal runtime PATH", () => {
     );
 
     expect(env.Path).toBe("C:\\managed\\codex;C:\\Windows");
-    expect(env).not.toHaveProperty(
-      "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+    // Read by the PowerShell command the Windows shell resolution appends.
+    expect(env.PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX).toBe(
+      "C:\\managed\\codex",
     );
   });
 
@@ -364,6 +365,58 @@ describe("resolveTerminalShell", () => {
         env: { PATH: "", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
         platform: "win32",
         windowsShell: "auto",
+      }),
+    ).toEqual({ file: "C:\\Windows\\System32\\cmd.exe", args: [] });
+  });
+
+  it("reasserts the runtime path after the PowerShell profile", () => {
+    const env = {
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX:
+        "C:\\managed\\codex;C:\\managed\\grok",
+    };
+
+    for (const windowsShell of ["pwsh", "powershell"] as const) {
+      const shell = resolveTerminalShell({
+        env,
+        platform: "win32",
+        windowsShell,
+      });
+      // PwrAgent passes -NoLogo and never -NoProfile, so $PROFILE runs and can
+      // prepend to $env:Path the way .zprofile does. -Command runs after it.
+      expect(shell.args.slice(0, 3)).toEqual(["-NoLogo", "-NoExit", "-Command"]);
+      expect(shell.args).toHaveLength(4);
+      expect(shell.args[3]).toContain(
+        "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+      );
+      expect(shell.args[3]).toContain("$env:Path = $p + ';' + $c");
+      expect(shell.args[3]).toContain("Remove-Item Env:");
+      // node-pty wraps an argument containing spaces in double quotes and
+      // backslash-escapes any inside it. Carrying none keeps the command the
+      // shell receives byte-identical to the one generated here.
+      expect(shell.args[3]).not.toContain('"');
+    }
+  });
+
+  it("leaves the PowerShell invocation alone when nothing is pinned", () => {
+    expect(
+      resolveTerminalShell({
+        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        platform: "win32",
+        windowsShell: "pwsh",
+      }),
+    ).toEqual({ file: "pwsh.exe", args: ["-NoLogo"] });
+  });
+
+  it("does not add a reassertion to cmd, which cannot cheaply test PATH", () => {
+    expect(
+      resolveTerminalShell({
+        env: {
+          ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "C:\\managed\\codex",
+        },
+        platform: "win32",
+        windowsShell: "cmd",
       }),
     ).toEqual({ file: "C:\\Windows\\System32\\cmd.exe", args: [] });
   });

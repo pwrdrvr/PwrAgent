@@ -135,6 +135,50 @@ unset ${OWNED_TERMINAL_ENV.join(" ")}`;
 
 let zshIntegrationDirectoryPromise: Promise<string> | undefined;
 
+/**
+ * The PowerShell counterpart to the zsh wrappers above. `$PROFILE` is the same
+ * hazard as `.zprofile` — conda, scoop and chocolatey initializers all prepend
+ * to `$env:Path` — and PwrAgent launches PowerShell with `-NoLogo` only, so
+ * profiles run. PowerShell has no ZDOTDIR, but it runs `-Command` *after* the
+ * profile, and `-NoExit` keeps the session interactive afterwards, so the
+ * reassertion rides on the invocation instead of on a startup file.
+ *
+ * Two deliberate constraints on the text:
+ *
+ * - Inline rather than a `.ps1`, because ExecutionPolicy gates script files
+ *   and not `-Command`. A `Restricted` machine would otherwise print a load
+ *   error into every terminal.
+ * - No `"` anywhere, so node-pty's `argsToCommandLine` quoting has nothing to
+ *   escape and PowerShell's own `-Command` requoting cannot alter it.
+ *
+ * The body runs inside `& { … }` so `$p` and `$c` do not leak into the
+ * operator's session; `$env:` assignments are process-wide regardless.
+ */
+const POWERSHELL_RUNTIME_PATH_COMMAND = [
+  "& {",
+  `$p = $env:${RUNTIME_PATH_PREFIX_ENV};`,
+  "if (-not $p) { return };",
+  "$c = $env:Path;",
+  "if (-not $c) { $env:Path = $p; return };",
+  "if ($c -eq $p -or $c.StartsWith($p + ';',"
+  + " [StringComparison]::OrdinalIgnoreCase)) { return };",
+  "$env:Path = $p + ';' + $c",
+  "};",
+  `Remove-Item Env:${RUNTIME_PATH_PREFIX_ENV} -ErrorAction SilentlyContinue`,
+].join(" ");
+
+/**
+ * `-NoExit -Command` is appended only when there is something to pin, so a
+ * terminal with no managed runtime keeps the plain invocation it always had.
+ * The exact-case lookup is safe because `prependIntegratedTerminalRuntimePaths`
+ * removes every other casing before writing this one.
+ */
+function windowsPowerShellArgs(env: NodeJS.ProcessEnv): string[] {
+  return env[RUNTIME_PATH_PREFIX_ENV]
+    ? ["-NoLogo", "-NoExit", "-Command", POWERSHELL_RUNTIME_PATH_COMMAND]
+    : ["-NoLogo"];
+}
+
 type TerminalSession = {
   sessionId: string;
   threadKey: string;
@@ -759,11 +803,10 @@ export function prependIntegratedTerminalRuntimePaths(
     return true;
   });
   env[pathKey] = entries.join(pathApi.delimiter);
-  // The prefix exists for the zsh wrapper to reassert. Windows has no wrapper,
-  // so publishing it there would export an internal variable nothing reads.
-  if (platform !== "win32") {
-    env[RUNTIME_PATH_PREFIX_ENV] = runtimeEntries.join(pathApi.delimiter);
-  }
+  // Read by the zsh startup wrappers on POSIX and by the PowerShell command
+  // `resolveWindowsTerminalShell` appends on Windows. Both consume it and
+  // remove it, so it does not survive into the operator's session.
+  env[RUNTIME_PATH_PREFIX_ENV] = runtimeEntries.join(pathApi.delimiter);
   return env;
 }
 
@@ -952,20 +995,23 @@ function resolveWindowsTerminalShell(
   args: string[];
 } {
   if (preference === "pwsh") {
-    return { file: "pwsh.exe", args: ["-NoLogo"] };
+    return { file: "pwsh.exe", args: windowsPowerShellArgs(env) };
   }
   if (preference === "powershell") {
-    return { file: "powershell.exe", args: ["-NoLogo"] };
+    return { file: "powershell.exe", args: windowsPowerShellArgs(env) };
   }
+  // cmd.exe reasserts nothing: its only startup hook is the AutoRun registry
+  // value, and batch has no cheap way to ask whether PATH already leads with
+  // the prefix. An AutoRun that rewrites PATH still wins here.
   if (preference === "cmd") {
     return { file: env.ComSpec || "cmd.exe", args: [] };
   }
 
   if (commandExistsOnPath("pwsh.exe", env, "win32")) {
-    return { file: "pwsh.exe", args: ["-NoLogo"] };
+    return { file: "pwsh.exe", args: windowsPowerShellArgs(env) };
   }
   if (commandExistsOnPath("powershell.exe", env, "win32")) {
-    return { file: "powershell.exe", args: ["-NoLogo"] };
+    return { file: "powershell.exe", args: windowsPowerShellArgs(env) };
   }
   return { file: env.ComSpec || "cmd.exe", args: [] };
 }
