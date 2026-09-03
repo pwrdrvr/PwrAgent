@@ -278,6 +278,70 @@ describe("buildStarMapViewSnapshot", () => {
     ).toBe(true);
   });
 
+  it("places each drawn card in viewport pixels, not just map space", () => {
+    const threads = [thread("a1", { path: "/repo/alpha" })];
+    const snapshot = buildStarMapViewSnapshot(
+      baseInput({
+        threadsByInstance: new Map([["local", threads]]),
+        clouds: new Map([["local", cloudFor(threads)]]),
+        camera: { x: 40, y: 10, scale: 2 },
+        viewport: { width: 1280, height: 800 },
+        cardRects: new Map([
+          ["local::codex:a1", { x: 100, y: 50, width: 220, height: 112 }],
+        ]),
+      }),
+    );
+    // translate(40,10) scale(2) applies right to left, so the card is scaled
+    // and then offset: 100*2+40, not (100+40)*2. Getting that backwards puts
+    // the card 180px from where it is and names the wrong neighbour.
+    expect(snapshot.threads[0].screenRect).toEqual({
+      x: 240,
+      y: 110,
+      width: 440,
+      height: 224,
+    });
+    expect(snapshot.threads[0].onScreen).toBe(true);
+  });
+
+  it("says when a card the layout placed has been panned off screen", () => {
+    const threads = [thread("a1", { path: "/repo/alpha" })];
+    const snapshot = buildStarMapViewSnapshot(
+      baseInput({
+        threadsByInstance: new Map([["local", threads]]),
+        clouds: new Map([["local", cloudFor(threads)]]),
+        camera: { x: -5_000, y: 0, scale: 1 },
+        viewport: { width: 1280, height: 800 },
+        cardRects: new Map([
+          ["local::codex:a1", { x: 100, y: 50, width: 220, height: 112 }],
+        ]),
+      }),
+    );
+    // Still drawn — the layout placed it and it carries geometry — but the
+    // operator cannot see it, so "the card on the left" must not be this one.
+    expect(snapshot.threads[0].visible).toBe(true);
+    expect(snapshot.threads[0].onScreen).toBe(false);
+  });
+
+  it("leaves a folded card with no geometry at all", () => {
+    const threads = [
+      thread("a1", { path: "/repo/alpha" }),
+      thread("a2", { path: "/repo/alpha" }),
+    ];
+    const snapshot = buildStarMapViewSnapshot(
+      baseInput({
+        threadsByInstance: new Map([["local", threads]]),
+        clouds: new Map([["local", cloudFor(threads)]]),
+        cardRects: drawn("local::codex:a1"),
+      }),
+    );
+    const folded = snapshot.threads.find(
+      (entry) => entry.threadKey === "codex:a2",
+    );
+    expect(folded?.rect).toBeUndefined();
+    expect(folded?.screenRect).toBeUndefined();
+    expect(folded?.onScreen).toBeUndefined();
+  });
+
   it("pools the projects lens into clouds that belong to no one instance", () => {
     const local = [thread("a1", { path: "/repo/alpha" })];
     const peer = [thread("a2", { path: "/repo/alpha" })];

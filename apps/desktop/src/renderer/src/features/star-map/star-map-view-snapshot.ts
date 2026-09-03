@@ -23,6 +23,42 @@ import type { StarMapLayoutMode } from "./star-map-preferences";
 import type { StarMapProject } from "./star-map-projects";
 import { STAR_MAP_NO_PROJECT_KEY, threadProjectLabel } from "./star-map-projects";
 
+/**
+ * Map-space rect to viewport coordinates.
+ *
+ * The canvas carries `translate(camera.x, camera.y) scale(camera.scale)`, and
+ * a CSS transform list applies right to left, so a card is scaled first and
+ * then offset: `screen = map * scale + camera`. Derived here rather than left
+ * to the tool's caller because the order is easy to invert, and a spatial
+ * reference resolved off a flipped transform names the wrong card without
+ * ever looking uncertain.
+ */
+function toScreenRect(
+  rect: { x: number; y: number; width: number; height: number },
+  camera: { x: number; y: number; scale: number },
+): { x: number; y: number; width: number; height: number } {
+  const scale = camera.scale > 0 ? camera.scale : 1;
+  return {
+    x: rect.x * scale + camera.x,
+    y: rect.y * scale + camera.y,
+    width: rect.width * scale,
+    height: rect.height * scale,
+  };
+}
+
+/** Whether a viewport-space rect overlaps the viewport at all. */
+function overlapsViewport(
+  rect: { x: number; y: number; width: number; height: number },
+  viewport: { width: number; height: number },
+): boolean {
+  return (
+    rect.x + rect.width > 0
+    && rect.y + rect.height > 0
+    && rect.x < viewport.width
+    && rect.y < viewport.height
+  );
+}
+
 /** `${instanceId}::${threadKey}` — the map's own card identity. */
 function cardKeyOf(instanceId: string, threadKey: string): string {
   return `${instanceId}::${threadKey}`;
@@ -253,6 +289,15 @@ export function buildStarMapViewSnapshot(
               height: rect.height,
             }
           : undefined,
+        ...(rect
+          ? (() => {
+              const screenRect = toScreenRect(rect, input.camera);
+              return {
+                screenRect,
+                onScreen: overlapsViewport(screenRect, input.viewport),
+              };
+            })()
+          : {}),
         pinned: isPinnedThread(thread) ? true : undefined,
         attention: threadAttentionCategories(thread, input.sessionKeys),
         projectLabel: threadProjectLabel(thread),
