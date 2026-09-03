@@ -9,6 +9,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerPendingRequestNotification,
+  BackendSummary,
   MessagingPlatformStatus,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -663,6 +664,30 @@ describe("ThreadView", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const codexBackend: BackendSummary = {
+      available: true,
+      capabilities: {
+        approvalRequests: true,
+        createThread: true,
+        interruptTurn: true,
+        listThreads: true,
+        multiDirectoryThreads: true,
+        readThread: true,
+        renameThread: true,
+        resumeThread: true,
+        reviewRunner: true,
+        reviewRunMode: true,
+        startReview: true,
+        startTurn: true,
+        steerTurn: true,
+        toolUse: true,
+        transcriptPagination: true,
+      },
+      executionModes: [],
+      kind: "codex",
+      label: "OpenAI",
+      methods: ["thread/start", "turn/start"],
+    };
     const exampleDirectory: NavigationDirectorySummary = {
       key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory",
@@ -706,7 +731,7 @@ describe("ThreadView", () => {
       <ThreadView
         addOptimisticReviewEntry={(_text) => "optimistic-review-1"}
         addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
+        backends={[codexBackend]}
         clearPendingRequest={() => undefined}
         composerDisabled={false}
         desktopApi={{
@@ -782,9 +807,11 @@ describe("ThreadView", () => {
     await waitFor(() => {
       expect(startReview).toHaveBeenCalledWith({
         backend: "codex",
+        federationTarget: undefined,
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
+        runMode: "managed-child",
         cwd:
           "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });

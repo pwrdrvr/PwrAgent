@@ -10,6 +10,7 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   ModelSettingsRecent,
+  ReviewRunMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
@@ -44,6 +45,7 @@ export type ComposerQueuedTurnSnapshot = {
   reviewCommand?: {
     cwd?: string;
     displayText: string;
+    runMode?: ReviewRunMode;
     target: AppServerReviewTarget;
     /**
      * Reviewer picked when the review was queued. Carried here because a

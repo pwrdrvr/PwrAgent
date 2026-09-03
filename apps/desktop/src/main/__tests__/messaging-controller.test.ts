@@ -787,6 +787,7 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       target: { type: "uncommittedChanges" },
       delivery: "inline",
+      runMode: "inline",
       cwd: "/repo/pwragent",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
@@ -866,6 +867,7 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "inline",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
@@ -1128,6 +1130,7 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "inline",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
@@ -1236,6 +1239,7 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "release" },
       delivery: "inline",
+      runMode: "inline",
       cwd: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
     });
 
@@ -1434,6 +1438,7 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "origin/develop" },
       delivery: "inline",
+      runMode: "inline",
       cwd: "/worktrees/infra",
     });
   });
@@ -1476,6 +1481,7 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "release" },
       delivery: "inline",
+      runMode: "inline",
       cwd: "/worktrees/app",
     });
   });
@@ -1549,6 +1555,7 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "origin/develop" },
       delivery: "inline",
+      runMode: "inline",
       cwd: "/worktrees/infra",
     });
   });

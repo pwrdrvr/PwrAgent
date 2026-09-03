@@ -473,7 +473,10 @@ describe("ScheduledThreadActionService", () => {
       origin: "desktop",
       scheduledFor: 10_000,
       displayText: "/review",
-      review: { target: { type: "uncommittedChanges" } },
+      review: {
+        runMode: "managed-child",
+        target: { type: "uncommittedChanges" },
+      },
     });
 
     expect(store.get(response.action.id)).toMatchObject({
@@ -483,6 +486,7 @@ describe("ScheduledThreadActionService", () => {
     expect(harness.submitReview).toHaveBeenCalledWith(
       expect.objectContaining({
         idempotencyKey: response.action.id,
+        runMode: "managed-child",
       }),
     );
     await Promise.all([...harness.listeners].map((listener) => listener({

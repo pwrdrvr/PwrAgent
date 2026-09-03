@@ -1776,6 +1776,7 @@ export class DesktopSettingsService {
     ).value;
   }
 
+  /** Retained for configuration compatibility; review routing no longer reads it. */
   resolveManagedReviewEnabled(): boolean {
     return this.resolveConfigBoolean(
       this.readExperimentalConfig().managedReview,

@@ -536,6 +536,7 @@ describe("agent ipc", () => {
     await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
       backend: "codex",
       federationTarget,
+      runMode: "managed-child",
       threadId: "thread-1",
       target: { type: "uncommittedChanges" },
     });
@@ -704,6 +705,7 @@ describe("agent ipc", () => {
     expect(registry.cancelQueuedTurnWithDisposition).not.toHaveBeenCalled();
     expect(federationMock.remoteBackend.startReview).toHaveBeenCalledWith({
       backend: "codex",
+      runMode: "managed-child",
       threadId: "thread-1",
       target: { type: "uncommittedChanges" },
     });
@@ -993,6 +995,7 @@ describe("agent ipc", () => {
     expect(
       await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
         backend: "acp:grok",
+        runMode: "managed-child",
         threadId: "thread-1",
         target: { type: "uncommittedChanges" },
       }),
@@ -1001,6 +1004,12 @@ describe("agent ipc", () => {
       threadId: "thread-1",
       reviewThreadId: "thread-1",
       turnId: "turn-review-1",
+    });
+    expect(registry.startReview).toHaveBeenCalledWith({
+      backend: "acp:grok",
+      runMode: "managed-child",
+      threadId: "thread-1",
+      target: { type: "uncommittedChanges" },
     });
     expect(
       await handlers.get(AGENT_INTERRUPT_TURN_CHANNEL)?.({}, {

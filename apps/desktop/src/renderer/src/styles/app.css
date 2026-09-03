@@ -29952,9 +29952,16 @@ button.pricing-token-miser__folded:focus-visible {
   resize: vertical;
 }
 
-/* Reviewer override row. Sits below the target detail, above the actions,
-   separated so it reads as "who runs this" rather than another facet of
-   "what to review". */
+.composer__review-location-chip {
+  max-width: 100%;
+}
+
+.composer__review-location-chip .composer-dropdown {
+  max-width: 100%;
+}
+
+/* Reviewer row. Sits below the target detail, above the actions, and carries
+   both who runs the review and the compact location choice. */
 .composer__review-reviewer {
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);

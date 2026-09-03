@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 /**
@@ -58,6 +58,7 @@ export function ComposerDropdown(props: {
   kind?: "branch";
   tone?: "danger";
   onChange: (value: string) => void;
+  onOpenChange?: (open: boolean) => void;
   onPointerEnter?: () => void;
   options: ComposerDropdownOption[];
   tooltip?: string;
@@ -65,9 +66,14 @@ export function ComposerDropdown(props: {
 }) {
   const [open, setOpen] = useState(false);
   const listboxId = useId();
+  const onOpenChange = props.onOpenChange;
   const selectedOption =
     props.options.find((option) => option.value === props.value) ?? props.options[0];
-  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const closeMenu = useCallback((): void => {
+    setOpen(false);
+    onOpenChange?.(false);
+  }, [onOpenChange]);
+  const ref = useDismissableMenu<HTMLDivElement>(open, closeMenu);
   const Icon = props.icon;
 
   return (
@@ -98,7 +104,11 @@ export function ComposerDropdown(props: {
         id={props.id}
         type="button"
         value={props.value}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          const nextOpen = !open;
+          setOpen(nextOpen);
+          onOpenChange?.(nextOpen);
+        }}
       >
         {Icon ? (
           <span aria-hidden="true" className="composer-dropdown__icon">
@@ -120,7 +130,7 @@ export function ComposerDropdown(props: {
               role="option"
               type="button"
               onClick={() => {
-                setOpen(false);
+                closeMenu();
                 if (option.value !== props.value) {
                   props.onChange(option.value);
                 }

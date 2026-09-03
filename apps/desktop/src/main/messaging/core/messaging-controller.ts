@@ -6089,6 +6089,7 @@ export class MessagingController {
         threadId: params.binding.threadId,
         target: params.target,
         delivery: "inline",
+        runMode: "inline",
         ...(params.cwd ? { cwd: params.cwd } : {}),
         // An explicit reviewer replaces the binding's inherited settings
         // wholesale — its model belongs to a different catalog.

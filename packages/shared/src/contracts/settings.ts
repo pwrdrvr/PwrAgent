@@ -882,8 +882,9 @@ export type DesktopSettingsSnapshot = {
      */
     codexDefaultModeRequestUserInput: DesktopSettingsValue<boolean>;
     /**
-     * Runs reviews as PwrAgent-managed Codex child turns instead of calling
-     * Codex App Server review/start. Disabled by default.
+     * Retained so settings snapshots can round-trip configurations written by
+     * the former global managed-review experiment. Review requests now choose
+     * their run mode explicitly.
      */
     managedReview?: DesktopSettingsValue<boolean>;
     /**

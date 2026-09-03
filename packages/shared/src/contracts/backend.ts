@@ -163,6 +163,12 @@ export type BackendCapabilities = {
    * silently ignore.
    */
   reviewRunner?: boolean;
+  /**
+   * This thread owner understands and honors the explicit `runMode` on a
+   * review-start request. Older federation owners omit this capability and
+   * continue to use their configured review behavior.
+   */
+  reviewRunMode?: boolean;
   interruptTurn: boolean;
   steerTurn: boolean;
   transcriptPagination: boolean;

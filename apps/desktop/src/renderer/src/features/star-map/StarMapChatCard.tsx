@@ -786,6 +786,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             threadId: thread.id,
             target: reviewCommand.target,
             delivery: "inline",
+            runMode: "inline",
           });
           return true;
         } catch (error) {
@@ -1572,6 +1573,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
         {reviewSetupOpen ? (
           <StarMapReviewSetup
+            backend={backendSummary}
             busy={session.threadBusy}
             directories={navigationSources.directories}
             error={reviewError}

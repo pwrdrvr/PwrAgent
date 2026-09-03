@@ -3828,6 +3828,7 @@ describe("App", () => {
         },
         draftText: "/review main",
         delivery: "inline",
+        runMode: "inline",
         cwd: undefined,
         model: undefined,
         reasoningEffort: undefined,

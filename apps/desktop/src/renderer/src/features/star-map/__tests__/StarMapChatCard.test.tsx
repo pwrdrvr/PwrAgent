@@ -134,8 +134,10 @@ function reviewCapabilities(startReview: boolean): BackendCapabilities {
     multiDirectoryThreads: true,
     readThread: true,
     renameThread: true,
+    reviewRunMode: startReview,
     resumeThread: true,
     startReview,
+    reviewRunner: startReview,
     startTurn: true,
     steerTurn: false,
     toolUse: true,
@@ -148,23 +150,19 @@ function reviewCapableApi(
   overrides: Partial<DesktopApi> = {},
 ): DesktopApi {
   return buildApi({
-    ...(backend.startsWith("acp:")
-      ? {
-          listBackends: vi.fn(async () => ({
-            fetchedAt: 1,
-            backends: [
-              {
-                available: true,
-                capabilities: reviewCapabilities(true),
-                executionModes: [],
-                kind: backend,
-                label: "Grok",
-                methods: [],
-              },
-            ],
-          })),
-        }
-      : {}),
+    listBackends: vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [
+        {
+          available: true,
+          capabilities: reviewCapabilities(true),
+          executionModes: [],
+          kind: backend,
+          label: backend === "codex" ? "OpenAI" : "Grok",
+          methods: [],
+        },
+      ],
+    })),
     ...overrides,
   });
 }
@@ -1032,6 +1030,7 @@ describe("StarMapChatCard slash commands", () => {
           threadId: "t-local",
           target: { type: "uncommittedChanges" },
           delivery: "inline",
+          runMode: backend === "codex" ? "inline" : "managed-child",
         });
       });
       await waitFor(() => {
@@ -1144,6 +1143,38 @@ describe("StarMapChatCard slash commands", () => {
     expect(desktopApi.startReview).not.toHaveBeenCalled();
   });
 
+  it("lets Escape close the review location chip without cancelling setup", async () => {
+    const desktopApi = reviewCapableApi("codex", { startReview: vi.fn() });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Start review for Local work",
+    });
+    const location = within(dialog).getByRole("button", {
+      name: "Review location",
+    });
+    fireEvent.click(location);
+    expect(within(dialog).getByRole("listbox")).toBeTruthy();
+
+    fireEvent.keyDown(location, { key: "Escape" });
+
+    expect(
+      screen.getByRole("dialog", { name: "Start review for Local work" }),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(within(dialog).queryByRole("listbox")).toBeNull();
+    });
+    fireEvent.keyDown(location, { key: "Escape" });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Start review for Local work" }),
+      ).toBeNull();
+    });
+    expect(desktopApi.startReview).not.toHaveBeenCalled();
+  });
+
   it("starts the selected review on Enter even if the disabled editor kept focus", async () => {
     const startReview = vi.fn(async () => ({
       backend: "codex" as const,
@@ -1166,6 +1197,7 @@ describe("StarMapChatCard slash commands", () => {
         threadId: "t-local",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
     expect(
@@ -1200,6 +1232,7 @@ describe("StarMapChatCard slash commands", () => {
         threadId: "t-local",
         target: { type: "uncommittedChanges" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
     expect(

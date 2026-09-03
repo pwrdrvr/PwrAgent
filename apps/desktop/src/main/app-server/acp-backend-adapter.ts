@@ -420,6 +420,7 @@ export function buildAcpCapabilities(
     startReview: agentCapabilities?.managedReview === true,
     startDetachedReview: agentCapabilities?.managedReview === true,
     reviewRunner: agentCapabilities?.managedReview === true,
+    reviewRunMode: agentCapabilities?.managedReview === true,
     interruptTurn: true,
     steerTurn: agentCapabilities?.steerTurn === true,
     transcriptPagination: false,

@@ -10,19 +10,25 @@ import {
   buildReviewBranchOptions,
   findPreferredReviewWorkspaceCwd,
   type AppServerReviewTarget,
+  type BackendSummary,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
+  type ReviewRunMode,
 } from "@pwragent/shared";
+import { resolveReviewRunMode } from "../../lib/review-run-mode";
+import { ReviewLocationDropdown } from "../composer/ReviewLocationDropdown";
 
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 export type StarMapReviewRequest = {
   cwd?: string;
+  runMode: ReviewRunMode;
   target: AppServerReviewTarget;
 };
 
 type StarMapReviewSetupProps = {
   busy: boolean;
+  backend?: BackendSummary;
   directories: readonly NavigationDirectorySummary[];
   error?: string;
   onCancel: () => void;
@@ -123,6 +129,7 @@ function buildReviewRequest(params: {
   branch: string;
   commit: string;
   customInstructions: string;
+  runMode: ReviewRunMode;
   target: ReviewTargetChoice;
   workspaceCwd?: string;
 }): StarMapReviewRequest | undefined {
@@ -130,6 +137,7 @@ function buildReviewRequest(params: {
   if (params.target === "uncommittedChanges") {
     return {
       ...(cwd ? { cwd } : {}),
+      runMode: params.runMode,
       target: { type: "uncommittedChanges" },
     };
   }
@@ -138,6 +146,7 @@ function buildReviewRequest(params: {
     return branch
       ? {
           ...(cwd ? { cwd } : {}),
+          runMode: params.runMode,
           target: { type: "baseBranch", branch },
         }
       : undefined;
@@ -147,6 +156,7 @@ function buildReviewRequest(params: {
     return sha
       ? {
           ...(cwd ? { cwd } : {}),
+          runMode: params.runMode,
           target: { type: "commit", sha, title: null },
         }
       : undefined;
@@ -155,6 +165,7 @@ function buildReviewRequest(params: {
   return instructions
     ? {
         ...(cwd ? { cwd } : {}),
+        runMode: params.runMode,
         target: { type: "custom", instructions },
       }
     : undefined;
@@ -184,6 +195,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
   const [branchEdited, setBranchEdited] = useState(false);
   const [commit, setCommit] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
+  const [runMode, setRunMode] = useState<ReviewRunMode>("inline");
   const targetRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const dialogRef = useRef<HTMLElement | null>(null);
   const branchListId = useId();
@@ -205,22 +217,42 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     }
   }, [branchEdited, branchOptions]);
 
+  const reviewRunModeDecision = resolveReviewRunMode({
+    ownerSummary: props.backend,
+    requestedRunMode: runMode,
+    reviewerBackend: props.thread.source,
+    reviewerSummary: props.backend,
+    thread: props.thread,
+    workspaceCwd,
+  });
   const request = useMemo(
     () => buildReviewRequest({
       branch,
       commit,
       customInstructions,
+      runMode: reviewRunModeDecision.runMode,
       target,
       workspaceCwd,
     }),
-    [branch, commit, customInstructions, target, workspaceCwd],
+    [
+      branch,
+      commit,
+      customInstructions,
+      reviewRunModeDecision.runMode,
+      target,
+      workspaceCwd,
+    ],
   );
   const workspaceSelectionRequired = workspaceOptions.length > 1;
   const canSubmit = Boolean(
     request
     && (!workspaceSelectionRequired || workspaceCwd)
     && !busy
-    && !submitting,
+    && !submitting
+    && (
+      reviewRunModeDecision.runMode === "inline"
+      || !reviewRunModeDecision.subagentDisabled
+    )
   );
 
   const submit = (event: FormEvent<HTMLFormElement>): void => {
@@ -235,8 +267,13 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
       if (!dialog || !(targetNode instanceof Node)) return;
       const ownerCard = dialog.closest(".star-map-chat-card");
       if (!ownerCard?.contains(targetNode)) return;
+      const targetElement =
+        targetNode instanceof HTMLElement ? targetNode : undefined;
 
       if (event.key === "Escape" && !submitting) {
+        if (targetElement?.closest(".composer-dropdown--open")) {
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         onCancel();
@@ -252,8 +289,6 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         return;
       }
 
-      const targetElement =
-        targetNode instanceof HTMLElement ? targetNode : undefined;
       const insideDialog = dialog.contains(targetNode);
       const insideDisabledComposer = Boolean(
         targetElement?.closest(".compact-composer"),
@@ -261,6 +296,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
       if (!insideDialog && !insideDisabledComposer) return;
       if (
         targetElement?.closest("textarea, select")
+        || targetElement?.closest(".composer-dropdown")
         || targetElement?.closest("[data-review-dismiss]")
       ) {
         return;
@@ -274,6 +310,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
             branch,
             commit,
             customInstructions,
+            runMode: reviewRunModeDecision.runMode,
             target: requestedTarget,
             workspaceCwd,
           })
@@ -283,6 +320,10 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         || (workspaceSelectionRequired && !workspaceCwd)
         || busy
         || submitting
+        || (
+          reviewRunModeDecision.runMode === "managed-child"
+          && reviewRunModeDecision.subagentDisabled
+        )
       ) {
         return;
       }
@@ -303,6 +344,8 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     onCancel,
     onSubmit,
     request,
+    reviewRunModeDecision.runMode,
+    reviewRunModeDecision.subagentDisabled,
     submitting,
     workspaceCwd,
     workspaceSelectionRequired,
@@ -432,6 +475,16 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
               />
             </label>
           ) : null}
+
+          <div className="composer__review-field composer__review-reviewer">
+            <span>Reviewer</span>
+            <div className="composer__review-reviewer-chips">
+              <ReviewLocationDropdown
+                decision={reviewRunModeDecision}
+                onChange={setRunMode}
+              />
+            </div>
+          </div>
 
           {props.busy ? (
             <p className="star-map-review-setup__message" role="status">
