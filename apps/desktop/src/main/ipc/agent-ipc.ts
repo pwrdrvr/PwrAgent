@@ -11,6 +11,8 @@ import {
   type ApplyThreadModelMigrationResponse,
   type CancelQueuedTurnRequest,
   type CancelQueuedTurnResponse,
+  type ReleaseQueuedTurnRequest,
+  type ReleaseQueuedTurnResponse,
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
   type CheckThreadBranchDriftRequest,
@@ -95,6 +97,7 @@ import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import {
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
+  AGENT_RELEASE_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -646,6 +649,28 @@ export function registerAgentIpcHandlers(): void {
       return registry.cancelQueuedTurnWithDisposition(
         request.queueEntryId,
         "Cancelled from the desktop composer.",
+      );
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_RELEASE_QUEUED_TURN_CHANNEL);
+  ipcMain.handle(
+    AGENT_RELEASE_QUEUED_TURN_CHANNEL,
+    async (
+      _event,
+      request: ReleaseQueuedTurnRequest,
+    ): Promise<ReleaseQueuedTurnResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        const { federationTarget, ...remoteRequest } = request;
+        return await getDesktopFederationRuntime()
+          .remoteBackend(federationTarget)
+          .releaseQueuedTurn(remoteRequest);
+      }
+      return await registry.releaseQueuedTurnWithDisposition(
+        request.queueEntryId,
       );
     },
   );

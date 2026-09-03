@@ -288,6 +288,24 @@ export type CancelQueuedTurnResponse = {
   turnId?: string;
 };
 
+export type ReleaseQueuedTurnRequest = {
+  federationTarget?: FederationTarget;
+  queueEntryId: string;
+};
+
+export type ReleaseQueuedTurnResponse = {
+  queueEntryId: string;
+  disposition:
+    | "started"
+    | "blocked"
+    | "busy"
+    | "not_found"
+    | "not_head"
+    | "not_held";
+  turnId?: string;
+  errorMessage?: string;
+};
+
 export type StartReviewRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
@@ -530,7 +548,10 @@ export type SteerTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId: string;
-  disposition?: "queued" | "steered" | "scheduled";
+  disposition?: "held" | "queued" | "steered" | "scheduled";
+  queueEntryId?: string;
+  queueEntryCreatedAt?: number;
+  holdReason?: string;
   scheduledAction?: ScheduledThreadAction;
 };
 

@@ -2027,6 +2027,7 @@ export type AppServerNotification =
           | "queued"
           | "started"
           | "blocked"
+          | "held"
           | "failed"
           | "cancelled"
           | "terminal";
@@ -2041,6 +2042,7 @@ export type AppServerNotification =
         automationRunId?: string;
         automationName?: string;
         errorMessage?: string;
+        manualReleaseRequired?: boolean;
         finalText?: string;
         terminalStatus?: string;
       };

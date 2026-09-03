@@ -131,6 +131,7 @@ import {
   type DesktopSpendAlertPolicy,
   type DesktopToolOutputAlertPolicy,
   type CancelQueuedTurnResponse,
+  type ReleaseQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
   type ConfigureGrokWorkflowBudgetRequest,
@@ -9703,6 +9704,11 @@ export class DesktopBackendRegistry {
                 // from the event; carry the text so they need not wait
                 // for the next navigation snapshot.
                 displayText: queuedTurnDisplayText(event.entry.input),
+                manualReleaseRequired:
+                  event.entry.manualReleaseRequired === true,
+                ...(event.entry.holdReason
+                  ? { errorMessage: event.entry.holdReason }
+                  : {}),
               }
             : event.type === "started"
               ? {
@@ -9716,23 +9722,32 @@ export class DesktopBackendRegistry {
                     status: "failed",
                     errorMessage: event.error.message,
                   }
-                : event.type === "blocked"
+                : event.type === "held"
                   ? {
                       ...baseParams,
-                      status: "blocked",
-                      errorMessage: event.error.message,
+                      status: "held",
+                      position: event.position,
+                      displayText: queuedTurnDisplayText(event.entry.input),
+                      errorMessage: event.reason,
+                      manualReleaseRequired: true,
                     }
-                : event.type === "cancelled"
-                  ? {
-                      ...baseParams,
-                      status: "cancelled",
-                    }
-                  : {
-                      ...baseParams,
-                      status: "terminal",
-                      turnId: event.turnId,
-                      terminalStatus: event.status,
-                    },
+                  : event.type === "blocked"
+                    ? {
+                        ...baseParams,
+                        status: "blocked",
+                        errorMessage: event.error.message,
+                      }
+                    : event.type === "cancelled"
+                      ? {
+                          ...baseParams,
+                          status: "cancelled",
+                        }
+                      : {
+                          ...baseParams,
+                          status: "terminal",
+                          turnId: event.turnId,
+                          terminalStatus: event.status,
+                        },
       },
     });
   }
@@ -14631,6 +14646,36 @@ export class DesktopBackendRegistry {
     });
   }
 
+  async submitHeldTurn(params: {
+    queueEntryId: string;
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    holdReason: string;
+    origin?: ThreadTurnQueueOrigin;
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    const {
+      holdReason,
+      origin = "manual",
+      queueEntryId,
+      ...entry
+    } = params;
+    return await this.threadTurnQueue.submitHeld({
+      ...entry,
+      id: queueEntryId,
+      origin,
+    }, holdReason);
+  }
+
   async submitTurnIfIdle(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -14669,6 +14714,20 @@ export class DesktopBackendRegistry {
       disposition: result.disposition,
       ...(result.disposition === "already_admitted" && result.turnId
         ? { turnId: result.turnId }
+        : {}),
+    };
+  }
+
+  async releaseQueuedTurnWithDisposition(
+    entryId: string,
+  ): Promise<ReleaseQueuedTurnResponse> {
+    const result = await this.threadTurnQueue.releaseEntryWithDisposition(entryId);
+    return {
+      queueEntryId: entryId,
+      disposition: result.disposition,
+      ...(result.disposition === "started" ? { turnId: result.turnId } : {}),
+      ...(result.disposition === "blocked"
+        ? { errorMessage: result.error.message }
         : {}),
     };
   }
@@ -14715,8 +14774,7 @@ export class DesktopBackendRegistry {
       const parsed = parseActiveTurnKey(key);
       if (
         parsed?.backend === params.backend &&
-        parsed.threadId === params.threadId &&
-        !parsed.turnId.startsWith("pending:")
+        parsed.threadId === params.threadId
       ) {
         return parsed;
       }
@@ -17905,6 +17963,10 @@ export class DesktopBackendRegistry {
         displayText: queuedTurnDisplayText(entry.input),
         createdAt: entry.createdAt,
         position: queue.length,
+        ...(entry.manualReleaseRequired
+          ? { manualReleaseRequired: true }
+          : {}),
+        ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
       });
       snapshot[threadKey] = queue;
     }
@@ -36955,6 +37017,13 @@ export class DesktopBackendRegistry {
         threadId: notification.params.threadId,
         turnId,
         status: event.notification.method,
+        ...(event.notification.method === "turn/failed"
+          ? {
+              errorMessage:
+                errorMessageFromTerminalNotification(event.notification)
+                ?? "The previous turn failed.",
+            }
+          : {}),
       });
     }
     if (

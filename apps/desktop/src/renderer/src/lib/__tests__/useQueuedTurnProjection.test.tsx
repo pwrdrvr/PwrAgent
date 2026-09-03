@@ -120,10 +120,82 @@ describe("useQueuedTurnProjection", () => {
       queued.find((entry) => entry.queueEntryId === "entry-1")?.text,
     ).toBe("queued elsewhere");
 
+    projection.rerender({
+      threads: [
+        buildThread([
+          {
+            queueEntryId: "entry-1",
+            origin: "manual",
+            displayText: "queued elsewhere",
+            createdAt: 1_000,
+            position: 0,
+            manualReleaseRequired: true,
+            holdReason: "Provider unavailable",
+          },
+        ]),
+      ],
+    });
+    expect(
+      store.getQueuedTurns(scopeKey).find(
+        (entry) => entry.queueEntryId === "entry-1",
+      ),
+    ).toMatchObject({
+      manualReleaseRequired: true,
+      holdReason: "Provider unavailable",
+    });
+
     // The FIFO dispatched the entry: the next snapshot omits it and the
     // mirror is pruned while local state stays.
     projection.rerender({ threads: [buildThread([])] });
     queued = store.getQueuedTurns(scopeKey);
     expect(queued.map((entry) => entry.id)).toEqual(["local-1", "inflight-1"]);
+  });
+
+  it("restores a newly held head ahead of previously mirrored entries", () => {
+    const { result: storeResult } = renderHook(() => useComposerDraftStore());
+    const store = storeResult.current;
+    const scopeKey = "thread:codex:thread-1";
+    store.setQueuedTurns(scopeKey, [
+      {
+        id: "backend-queued:older",
+        queueEntryId: "older",
+        queueEntryCreatedAt: 1_000,
+        text: "Older queued message",
+        imageAttachments: [],
+        fileAttachments: [],
+      },
+    ]);
+
+    renderHook(() =>
+      useQueuedTurnProjection({
+        composerDraftStore: store,
+        snapshotFetchedAt: 3_000,
+        threads: [
+          buildThread([
+            {
+              queueEntryId: "held-head",
+              origin: "manual",
+              displayText: "Interrupted steer",
+              createdAt: 2_000,
+              position: 0,
+              manualReleaseRequired: true,
+              holdReason: "Provider unavailable",
+            },
+            {
+              queueEntryId: "older",
+              origin: "manual",
+              displayText: "Older queued message",
+              createdAt: 1_000,
+              position: 1,
+              manualReleaseRequired: true,
+              holdReason: "Provider unavailable",
+            },
+          ]),
+        ],
+      }),
+    );
+
+    expect(store.getQueuedTurns(scopeKey).map((entry) => entry.queueEntryId))
+      .toEqual(["held-head", "older"]);
   });
 });

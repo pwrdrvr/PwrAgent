@@ -119,6 +119,31 @@ describe("resolveBackendErrorNotice", () => {
     });
   });
 
+  it("uses the same failed-turn notice for ACP providers", () => {
+    const notice = resolveBackendErrorNotice(
+      {
+        kind: "turn-failed",
+        backend: "acp:grok",
+        threadId: "grok-thread-1",
+        turnId: "pending:grok-thread-1:1000",
+        errorMessage: "Grok Build could not reach the provider.",
+        threadLabel: "Investigate outage",
+      },
+      undefined,
+    );
+
+    expect(notice).toMatchObject({
+      autoDismiss: false,
+      id: "turn-failed:acp:grok:grok-thread-1:pending:grok-thread-1:1000",
+      title: "Turn failed",
+      message: "Grok Build could not reach the provider.",
+      threadLink: {
+        backend: "acp:grok",
+        threadId: "grok-thread-1",
+      },
+    });
+  });
+
   it("builds a generic system-error notice when nothing is showing", () => {
     const notice = resolveBackendErrorNotice(
       {

@@ -44,6 +44,7 @@ type CreateScheduledThreadActionRecord = {
   displayText: string;
   imageAttachments?: ScheduledThreadAction["imageAttachments"];
   fileAttachments?: ScheduledThreadAction["fileAttachments"];
+  manualReleaseRequired?: boolean;
   turn?: ScheduledThreadTurnPayload;
   review?: ScheduledThreadReviewPayload;
   now: number;
@@ -66,6 +67,7 @@ type ClaimParams = {
 };
 
 const ACTIVE_STATUSES: readonly ScheduledThreadActionStatus[] = [
+  "held",
   "scheduled",
   "dispatching",
   "queued",
@@ -107,11 +109,12 @@ export class ScheduledThreadActionStore {
       threadId: input.threadId,
       kind: input.kind,
       origin: input.origin,
-      status: "scheduled",
+      status: input.manualReleaseRequired ? "held" : "scheduled",
       scheduledFor: input.scheduledFor,
       displayText: input.displayText,
       imageAttachments: input.imageAttachments,
       fileAttachments: input.fileAttachments,
+      manualReleaseRequired: input.manualReleaseRequired,
       turn: input.turn,
       review: input.review,
       createdAt: input.now,
@@ -227,13 +230,13 @@ export class ScheduledThreadActionStore {
   }
 
   cancel(id: string, now: number): ScheduledThreadAction | undefined {
-    return this.transition(id, ["scheduled"], { status: "cancelled" }, now);
+    return this.transition(id, ["held", "scheduled"], { status: "cancelled" }, now);
   }
 
   claim(id: string, params: ClaimParams): ScheduledThreadAction | undefined {
     return this.transition(
       id,
-      ["scheduled"],
+      ["held", "scheduled"],
       { status: "dispatching" },
       params.now,
       {
@@ -280,7 +283,23 @@ export class ScheduledThreadActionStore {
     return this.transition(
       id,
       ["dispatching", "queued"],
-      { status: "started", turnId },
+      { status: "started", turnId, errorMessage: undefined },
+      now,
+      { clearClaim: true, expectedOwner: ownerId },
+    );
+  }
+
+  markHeld(
+    id: string,
+    queueEntryId: string,
+    errorMessage: string,
+    now: number,
+    ownerId?: string,
+  ): ScheduledThreadAction | undefined {
+    return this.transition(
+      id,
+      ["dispatching", "queued"],
+      { status: "held", queueEntryId, errorMessage },
       now,
       { clearClaim: true, expectedOwner: ownerId },
     );
@@ -308,7 +327,7 @@ export class ScheduledThreadActionStore {
   ): ScheduledThreadAction | undefined {
     return this.transition(
       id,
-      ["dispatching", "queued"],
+      ["held", "dispatching", "queued"],
       { status: "cancelled" },
       now,
       { clearClaim: true, expectedOwner: ownerId },
@@ -354,25 +373,34 @@ export class ScheduledThreadActionStore {
           row.claim_owner
           && protectedOwnerIds.has(row.claim_owner)
         ) return [];
-        const updated = row.status === "dispatching"
+        const current = this.get(row.action_id);
+        const updated = current?.manualReleaseRequired
           ? this.transition(
               row.action_id,
-              ["dispatching"],
-              {
-                status: "failed",
-                errorMessage:
-                  "The scheduler lease expired while this action was being dispatched. Check the thread before scheduling it again.",
-              },
+              ["dispatching", "queued"],
+              { status: "held", queueEntryId: undefined },
               now,
               { clearClaim: true, requireExpiredAt: now },
             )
-          : this.transition(
-              row.action_id,
-              ["queued"],
-              { status: "scheduled", queueEntryId: undefined },
-              now,
-              { clearClaim: true, requireExpiredAt: now },
-            );
+          : row.status === "dispatching"
+            ? this.transition(
+                row.action_id,
+                ["dispatching"],
+                {
+                  status: "failed",
+                  errorMessage:
+                    "The scheduler lease expired while this action was being dispatched. Check the thread before scheduling it again.",
+                },
+                now,
+                { clearClaim: true, requireExpiredAt: now },
+              )
+            : this.transition(
+                row.action_id,
+                ["queued"],
+                { status: "scheduled", queueEntryId: undefined },
+                now,
+                { clearClaim: true, requireExpiredAt: now },
+              );
         return updated ? [updated] : [];
       });
     })();
@@ -382,7 +410,7 @@ export class ScheduledThreadActionStore {
     const rows = this.stateDb.raw.prepare(
       `SELECT action_id, payload_ref
        FROM scheduled_thread_actions
-       WHERE status NOT IN ('scheduled', 'dispatching', 'queued')
+       WHERE status NOT IN ('held', 'scheduled', 'dispatching', 'queued')
          AND updated_at < ?`,
     ).all(cutoff) as Array<{
       action_id: string;
@@ -391,7 +419,7 @@ export class ScheduledThreadActionStore {
     const remove = this.stateDb.raw.prepare(
       `DELETE FROM scheduled_thread_actions
        WHERE action_id = ? AND payload_ref = ?
-         AND status NOT IN ('scheduled', 'dispatching', 'queued')`,
+         AND status NOT IN ('held', 'scheduled', 'dispatching', 'queued')`,
     );
     for (const row of rows) {
       if (!row.payload_ref) continue;
@@ -576,6 +604,7 @@ function payloadFromAction(
     displayText: action.displayText,
     imageAttachments: action.imageAttachments,
     fileAttachments: action.fileAttachments,
+    manualReleaseRequired: action.manualReleaseRequired,
     turn: action.turn,
     review: action.review,
   };

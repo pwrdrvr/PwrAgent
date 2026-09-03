@@ -251,8 +251,17 @@ function projectionFromAction(action: ScheduledThreadAction) {
     ...(action.status === "dispatching"
       ? { backendQueuePending: true }
       : {}),
-    ...(action.status === "queued" && action.queueEntryId
+    ...((action.status === "held" || action.status === "queued")
+      && action.queueEntryId
       ? { queueEntryId: action.queueEntryId }
+      : {}),
+    ...(action.status === "held" || action.manualReleaseRequired
+      ? {
+          manualReleaseRequired: true,
+          holdReason:
+            action.errorMessage
+            ?? "The turn ended before this steering message could be delivered.",
+        }
       : {}),
     input: action.turn?.input,
     text: action.review?.draftText ?? action.displayText,
@@ -287,7 +296,7 @@ function projectionFromAction(action: ScheduledThreadAction) {
 }
 
 function isProjectableAction(action: ScheduledThreadAction): boolean {
-  return ["scheduled", "dispatching", "queued", "failed"].includes(
+  return ["held", "scheduled", "dispatching", "queued", "failed"].includes(
     action.status,
   );
 }

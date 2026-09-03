@@ -2368,8 +2368,11 @@ export class AcpBackendAdapter {
             });
           }
         }
+        const promptSettledTurnFinished =
+          updateKind === "turn_finished"
+          && replay.threadStatus !== "active";
         const completedUsage =
-          updateKind === "turn_finished" && turnId
+          promptSettledTurnFinished && turnId
             ? this.liveTurnUsage.get(
                 [agent.backendId, sessionId, turnId].join(":"),
               )
@@ -2410,7 +2413,7 @@ export class AcpBackendAdapter {
             )
           : [];
         const deferredTerminalToolNotifications =
-          updateKind === "turn_finished" && turnId && !fromSessionLoad
+          promptSettledTurnFinished && turnId && !fromSessionLoad
             ? this.liveToolUpdateResolver
                 .drainDeferredTerminalUpdates({
                   backendId: agent.backendId,
@@ -2535,7 +2538,7 @@ export class AcpBackendAdapter {
             notification: usageNotification,
           });
         }
-        if (updateKind === "turn_finished" && turnId) {
+        if (promptSettledTurnFinished && turnId) {
           this.liveTurnUsage.delete(
             [agent.backendId, sessionId, turnId].join(":"),
           );
@@ -2604,6 +2607,16 @@ export class AcpBackendAdapter {
                   message: error instanceof Error ? error.message : String(error),
                 },
               },
+            },
+          },
+        });
+        await this.emit({
+          backend: agent.backendId,
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: sessionId,
+              status: { type: "idle" },
             },
           },
         });

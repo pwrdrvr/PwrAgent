@@ -58,6 +58,40 @@ describe("ScheduledThreadActionStore", () => {
     expect(store.nextScheduledAt()).toBe(20_000);
   });
 
+  it("persists manual-release actions without automatically claiming them", () => {
+    const action = store.create({
+      id: "held-1",
+      backend: "acp:grok",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 1_000,
+      manualReleaseRequired: true,
+      displayText: "Try again",
+      turn: { input: [{ type: "text", text: "Try again" }] },
+      now: 1_000,
+    });
+
+    expect(action).toMatchObject({
+      status: "held",
+      manualReleaseRequired: true,
+    });
+    expect(store.claimNextDue(claim(2_000))).toBeUndefined();
+    expect(store.nextScheduledAt()).toBeUndefined();
+    expect(store.claim("held-1", claim(2_000))).toMatchObject({
+      status: "dispatching",
+    });
+    store.markQueued("held-1", "queue-1", 2_001, "instance-1");
+    expect(store.recoverExpiredClaims(40_000)).toEqual([
+      expect.objectContaining({
+        id: "held-1",
+        queueEntryId: undefined,
+        status: "held",
+      }),
+    ]);
+    expect(store.claimNextDue(claim(40_000))).toBeUndefined();
+  });
+
   it("lists retained failures without hydrating unrelated terminal history", () => {
     for (const [id, scheduledFor] of [
       ["active", 10_000],

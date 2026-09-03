@@ -47,6 +47,9 @@ export function useQueuedTurnProjection(params: {
       const snapshotIds = new Set(
         snapshotEntries.map((entry) => entry.queueEntryId),
       );
+      const snapshotsById = new Map(
+        snapshotEntries.map((entry) => [entry.queueEntryId, entry]),
+      );
       const current = composerDraftStore.getQueuedTurns(scopeKey);
       const knownIds = new Set(
         current
@@ -54,36 +57,79 @@ export function useQueuedTurnProjection(params: {
           .filter((id): id is string => Boolean(id)),
       );
 
-      const kept = current.filter(
-        (entry) =>
-          // Local-only entries (no backend id yet) and in-flight
-          // submissions are this window's own state — never prune from
-          // a snapshot that may predate them.
-          !entry.queueEntryId
-          || entry.backendQueuePending
-          || snapshotIds.has(entry.queueEntryId)
-          || typeof entry.queueEntryCreatedAt !== "number"
-          || typeof threadSnapshotFetchedAt !== "number"
-          // Millisecond equality is ambiguous: the snapshot may have read the
-          // FIFO just before creation within the same clock tick.
-          || threadSnapshotFetchedAt <= entry.queueEntryCreatedAt,
-      );
+      const kept = current
+        .filter(
+          (entry) =>
+            // Local-only entries (no backend id yet) and in-flight
+            // submissions are this window's own state — never prune from
+            // a snapshot that may predate them.
+            !entry.queueEntryId
+            || entry.backendQueuePending
+            || snapshotIds.has(entry.queueEntryId)
+            || typeof entry.queueEntryCreatedAt !== "number"
+            || typeof threadSnapshotFetchedAt !== "number"
+            // Millisecond equality is ambiguous: the snapshot may have read the
+            // FIFO just before creation within the same clock tick.
+            || threadSnapshotFetchedAt <= entry.queueEntryCreatedAt,
+        )
+        .map((entry) => {
+          const snapshot = entry.queueEntryId
+            ? snapshotsById.get(entry.queueEntryId)
+            : undefined;
+          return snapshot
+            ? {
+                ...entry,
+                manualReleaseRequired: snapshot.manualReleaseRequired,
+                holdReason: snapshot.holdReason,
+              }
+            : entry;
+        });
       const additions: ComposerQueuedTurnSnapshot[] = snapshotEntries
         .filter((entry) => !knownIds.has(entry.queueEntryId))
         .map((entry) => ({
           id: `backend-queued:${entry.queueEntryId}`,
           queueEntryId: entry.queueEntryId,
           queueEntryCreatedAt: entry.createdAt,
+          manualReleaseRequired: entry.manualReleaseRequired,
+          holdReason: entry.holdReason,
           text: entry.displayText,
           imageAttachments: [],
           fileAttachments: [],
         }));
+      const firstMirroredIndex = kept.findIndex(
+        (entry) => entry.queueEntryId && snapshotIds.has(entry.queueEntryId),
+      );
+      const next = firstMirroredIndex < 0
+        ? [...kept, ...additions]
+        : (() => {
+            const mirroredById = new Map(
+              [...kept, ...additions]
+                .filter((entry) => entry.queueEntryId)
+                .map((entry) => [entry.queueEntryId, entry]),
+            );
+            const orderedMirrors = snapshotEntries
+              .map((entry) => mirroredById.get(entry.queueEntryId))
+              .filter((entry): entry is ComposerQueuedTurnSnapshot => Boolean(entry));
+            const withoutMirrors = kept.filter(
+              (entry) => !entry.queueEntryId || !snapshotIds.has(entry.queueEntryId),
+            );
+            return [
+              ...withoutMirrors.slice(0, firstMirroredIndex),
+              ...orderedMirrors,
+              ...withoutMirrors.slice(firstMirroredIndex),
+            ];
+          })();
+      const queueStateChanged = next.some((entry, index) =>
+        entry.id !== current[index]?.id
+        || entry.manualReleaseRequired !== current[index]?.manualReleaseRequired
+        || entry.holdReason !== current[index]?.holdReason
+      );
 
       if (
-        additions.length > 0
-        || kept.length !== current.length
+        next.length !== current.length
+        || queueStateChanged
       ) {
-        composerDraftStore.setQueuedTurns(scopeKey, [...kept, ...additions]);
+        composerDraftStore.setQueuedTurns(scopeKey, next);
       }
     }
   }, [

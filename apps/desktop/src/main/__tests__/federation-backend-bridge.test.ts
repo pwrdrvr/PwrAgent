@@ -988,6 +988,11 @@ describe("federation backend bridge", () => {
         queueEntryId,
         cancelled: true,
       })),
+      releaseQueuedTurn: vi.fn(async ({ queueEntryId }) => ({
+        queueEntryId,
+        disposition: "started" as const,
+        turnId: "turn-released-1",
+      })),
     } as unknown as FederationBackendOperations;
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -1062,6 +1067,19 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "client_one",
       envelope: {
+        id: "request-4",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.releaseQueuedTurn,
+        params: { queueEntryId: "held-queue-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 1_300,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: {
         id: "request-2",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.archiveThread,
@@ -1093,6 +1111,9 @@ describe("federation backend bridge", () => {
     });
     expect(backend.cancelQueuedTurn).toHaveBeenCalledWith({
       queueEntryId: "queue-1",
+    });
+    expect(backend.releaseQueuedTurn).toHaveBeenCalledWith({
+      queueEntryId: "held-queue-1",
     });
     expect(backend.createScheduledThreadAction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1131,6 +1152,15 @@ describe("federation backend bridge", () => {
             id: "scheduled-1",
             status: "scheduled",
           },
+        },
+      },
+      {
+        kind: "response",
+        requestId: "request-4",
+        result: {
+          queueEntryId: "held-queue-1",
+          disposition: "started",
+          turnId: "turn-released-1",
         },
       },
       {
@@ -2438,6 +2468,35 @@ describe("federation backend bridge", () => {
       disposition: "already_admitted",
       turnId: "turn-1",
     });
+
+    const releasePending = client.releaseQueuedTurn({
+      queueEntryId: "held-queue-1",
+    });
+    const releaseRequest = sent.at(-1)!;
+    expect(releaseRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.releaseQueuedTurn,
+      params: { queueEntryId: "held-queue-1" },
+    });
+    rpc.receiveEnvelope({
+      id: "response-release",
+      kind: "response",
+      requestId: releaseRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_500,
+      result: {
+        queueEntryId: "held-queue-1",
+        disposition: "started",
+        turnId: "turn-released-1",
+      },
+    });
+    await expect(releasePending).resolves.toEqual({
+      queueEntryId: "held-queue-1",
+      disposition: "started",
+      turnId: "turn-released-1",
+    });
   });
 
   it("routes transcript images back to their owning instance", async () => {
@@ -3122,6 +3181,7 @@ describe("federation backend bridge", () => {
       forkThread: vi.fn(),
       startTurn: vi.fn(),
       cancelQueuedTurn: vi.fn(),
+      releaseQueuedTurn: vi.fn(),
       startReview: vi.fn(),
       listScheduledThreadActions: vi.fn(),
       createScheduledThreadAction: vi.fn(),
@@ -3509,6 +3569,7 @@ describe("federation backend bridge", () => {
         forkThread: vi.fn(),
         startTurn: vi.fn(),
         cancelQueuedTurn: vi.fn(),
+        releaseQueuedTurn: vi.fn(),
         startReview: vi.fn(),
         listScheduledThreadActions: vi.fn(),
         createScheduledThreadAction: vi.fn(),

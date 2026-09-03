@@ -49,6 +49,8 @@ import type {
   ArchiveThreadResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
+  ReleaseQueuedTurnRequest,
+  ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
@@ -728,6 +730,9 @@ export type DesktopApi = {
   cancelQueuedTurn?: (
     request: CancelQueuedTurnRequest,
   ) => Promise<CancelQueuedTurnResponse>;
+  releaseQueuedTurn?: (
+    request: ReleaseQueuedTurnRequest,
+  ) => Promise<ReleaseQueuedTurnResponse>;
   listScheduledThreadActions?: (
     request?: ListScheduledThreadActionsRequest,
   ) => Promise<ListScheduledThreadActionsResponse>;

@@ -6,6 +6,9 @@ import type {
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import type { ScheduledThreadActionService } from "./scheduled-thread-action-service.js";
 
+const STALE_STEER_HOLD_REASON =
+  "The active turn ended before this steering message could be delivered. Review the turn result, then retry this queued message.";
+
 export async function admitSteerTurn(
   registry: Pick<DesktopBackendRegistry, "steerTurn">,
   scheduler: Pick<ScheduledThreadActionService, "create">,
@@ -18,13 +21,14 @@ export async function admitSteerTurn(
       : { ...response, disposition: "steered" };
   } catch (error) {
     if (!request.fallback || !isStaleSteerError(error)) throw error;
-    const scheduled = await scheduler.create(
+    const held = await scheduler.create(
       {
         backend: request.backend,
         threadId: request.threadId,
         kind: "turn",
         origin: "desktop",
         scheduledFor: Date.now(),
+        manualReleaseRequired: true,
         ...request.fallback,
       },
       { id: fallbackActionId(request) },
@@ -33,8 +37,9 @@ export async function admitSteerTurn(
       backend: request.backend,
       threadId: request.threadId,
       turnId: request.expectedTurnId,
-      disposition: "scheduled",
-      scheduledAction: scheduled.action,
+      disposition: "held",
+      holdReason: STALE_STEER_HOLD_REASON,
+      scheduledAction: held.action,
     };
   }
 }

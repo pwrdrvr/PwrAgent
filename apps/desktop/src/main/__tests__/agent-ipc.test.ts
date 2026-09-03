@@ -3,6 +3,7 @@ import type {
   AgentEvent,
   ApplyThreadModelMigrationRequest,
   CancelQueuedTurnRequest,
+  ReleaseQueuedTurnRequest,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadPrAutoDispatchRequest,
   CheckThreadBranchDriftRequest,
@@ -93,6 +94,7 @@ const registry = {
       turnId: "turn-1",
     }),
   ),
+  submitHeldTurn: vi.fn(),
   startReview: vi.fn(async (request: StartReviewRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -115,6 +117,11 @@ const registry = {
     queueEntryId,
     cancelled: true,
     disposition: "cancelled" as const,
+  })),
+  releaseQueuedTurnWithDisposition: vi.fn(async (queueEntryId: string) => ({
+    queueEntryId,
+    disposition: "started" as const,
+    turnId: "turn-released-1",
   })),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
@@ -193,6 +200,11 @@ const federationMock = vi.hoisted(() => {
     cancelQueuedTurn: vi.fn(async (request: CancelQueuedTurnRequest) => ({
       queueEntryId: request.queueEntryId,
       cancelled: true,
+    })),
+    releaseQueuedTurn: vi.fn(async (request: ReleaseQueuedTurnRequest) => ({
+      queueEntryId: request.queueEntryId,
+      disposition: "started" as const,
+      turnId: "remote-turn-released-1",
     })),
     startReview: vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -438,11 +450,13 @@ describe("agent ipc", () => {
     registry.startThread.mockClear();
     registry.startTurn.mockClear();
     registry.submitTurn.mockClear();
+    registry.submitHeldTurn.mockClear();
     registry.startReview.mockClear();
     registry.listThreadMcpServers.mockClear();
     registry.reloadCodexMcpConfig.mockClear();
     registry.cancelQueuedTurn.mockClear();
     registry.cancelQueuedTurnWithDisposition.mockClear();
+    registry.releaseQueuedTurnWithDisposition.mockClear();
     registry.interruptTurn.mockClear();
     registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
@@ -472,6 +486,7 @@ describe("agent ipc", () => {
     );
     const {
       AGENT_CANCEL_QUEUED_TURN_CHANNEL,
+      AGENT_RELEASE_QUEUED_TURN_CHANNEL,
       AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
       AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
       AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
@@ -532,6 +547,10 @@ describe("agent ipc", () => {
     await handlers.get(AGENT_CANCEL_QUEUED_TURN_CHANNEL)?.({}, {
       federationTarget,
       queueEntryId: "queue-1",
+    });
+    await handlers.get(AGENT_RELEASE_QUEUED_TURN_CHANNEL)?.({}, {
+      federationTarget,
+      queueEntryId: "held-queue-1",
     });
     await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
       backend: "codex",
@@ -700,8 +719,12 @@ describe("agent ipc", () => {
     expect(federationMock.remoteBackend.cancelQueuedTurn).toHaveBeenCalledWith({
       queueEntryId: "queue-1",
     });
+    expect(federationMock.remoteBackend.releaseQueuedTurn).toHaveBeenCalledWith({
+      queueEntryId: "held-queue-1",
+    });
     expect(registry.cancelQueuedTurn).not.toHaveBeenCalled();
     expect(registry.cancelQueuedTurnWithDisposition).not.toHaveBeenCalled();
+    expect(registry.releaseQueuedTurnWithDisposition).not.toHaveBeenCalled();
     expect(federationMock.remoteBackend.startReview).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -912,6 +935,7 @@ describe("agent ipc", () => {
     const {
       AGENT_EVENT_CHANNEL,
       AGENT_CANCEL_QUEUED_TURN_CHANNEL,
+      AGENT_RELEASE_QUEUED_TURN_CHANNEL,
       AGENT_INTERRUPT_TURN_CHANNEL,
       AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
       AGENT_START_THREAD_CHANNEL,
@@ -989,6 +1013,18 @@ describe("agent ipc", () => {
     expect(registry.cancelQueuedTurnWithDisposition).toHaveBeenCalledWith(
       "queue-2",
       "Cancelled from the desktop composer.",
+    );
+    expect(
+      await handlers.get(AGENT_RELEASE_QUEUED_TURN_CHANNEL)?.({}, {
+        queueEntryId: "held-queue-2",
+      }),
+    ).toEqual({
+      queueEntryId: "held-queue-2",
+      disposition: "started",
+      turnId: "turn-released-1",
+    });
+    expect(registry.releaseQueuedTurnWithDisposition).toHaveBeenCalledWith(
+      "held-queue-2",
     );
     expect(
       await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {

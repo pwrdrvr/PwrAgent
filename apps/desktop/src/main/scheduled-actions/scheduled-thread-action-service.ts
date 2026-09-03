@@ -200,7 +200,16 @@ export class ScheduledThreadActionService {
   ): Promise<ScheduledThreadActionMutationResponse> {
     const current = this.requireAction(request.id);
     let cancelled: ScheduledThreadAction | undefined;
-    if (current.status === "scheduled") {
+    if (current.status === "held" && current.queueEntryId) {
+      const cancelledInRegistry = this.options.registry.cancelQueuedTurn(
+        current.queueEntryId,
+        "Scheduled action cancelled.",
+      );
+      if (!cancelledInRegistry) {
+        throw new Error("The scheduled action is no longer waiting.");
+      }
+      cancelled = this.options.store.markCancelled(current.id, this.now());
+    } else if (current.status === "held" || current.status === "scheduled") {
       cancelled = this.options.store.cancel(current.id, this.now());
     } else if (current.status === "queued" && current.queueEntryId) {
       const cancelledInRegistry = current.kind === "review"
@@ -303,6 +312,54 @@ export class ScheduledThreadActionService {
         throw new Error("Scheduled turn payload is missing.");
       }
       const queueEntryId = queueEntryIdForAction(action.id);
+      if (action.manualReleaseRequired) {
+        const held = await this.options.registry.submitHeldTurn({
+          ...action.turn,
+          backend: action.backend,
+          threadId: action.threadId,
+          queueEntryId,
+          holdReason:
+            "This steering message was held after its target turn ended. Retry it when the provider is ready.",
+          origin: "scheduled",
+        });
+        const queued = this.options.store.markQueued(
+          action.id,
+          held.entry.id,
+          this.now(),
+          this.ownerId,
+        );
+        if (queued) await this.publish(queued);
+        const released = await this.options.registry
+          .releaseQueuedTurnWithDisposition(held.entry.id);
+        if (released.disposition === "started") {
+          const started = this.options.store.markStarted(
+            action.id,
+            released.turnId,
+            this.now(),
+            this.ownerId,
+          );
+          if (started) {
+            await this.clearScheduledStartIfBorn(started);
+            await this.publish(started);
+          }
+        } else if (released.disposition !== "not_held") {
+          const reason = released.errorMessage
+            ?? (released.disposition === "busy"
+              ? "Wait for the active turn to finish before retrying this message."
+              : released.disposition === "not_head"
+                ? "Retry the first held message before this one."
+                : "This steering message remains held for retry.");
+          const stillHeld = this.options.store.markHeld(
+            action.id,
+            held.entry.id,
+            reason,
+            this.now(),
+            this.ownerId,
+          );
+          if (stillHeld) await this.publish(stillHeld);
+        }
+        return;
+      }
       const response = await this.options.registry.submitTurn({
         ...action.turn,
         backend: action.backend,
@@ -627,6 +684,7 @@ function matchesCreateRequest(
     && action.threadId === request.threadId
     && action.kind === request.kind
     && action.origin === (request.origin ?? "desktop")
+    && action.manualReleaseRequired === request.manualReleaseRequired
     && action.displayText === request.displayText
     && JSON.stringify(action.imageAttachments)
       === JSON.stringify(request.imageAttachments)
