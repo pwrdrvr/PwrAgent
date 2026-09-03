@@ -3658,12 +3658,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * Reads `flightRects` rather than `cardRects` for the same reason the
    * camera does: it is the geometry of whichever lens is drawing, so the
    * projects lens reports its cards instead of reporting none.
+   *
+   * This input is assembled on every render, and a pan re-renders per
+   * frame, so it stays a plain object over structures the render path
+   * already holds. The collections the snapshot needs are derived inside
+   * the builder, which runs at most once per publish window.
    */
-  const visibleCardKeys = useMemo(
-    () => new Set(flightRects.keys()),
-    [flightRects],
-  );
-
   const openChatCardThreadKeys = useMemo(
     () =>
       new Set(
@@ -3687,15 +3687,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       localInstanceId,
       threadsByInstance: attentionByInstance,
       instanceLabels: displayLabelById,
-      instanceIcons: new Map(
-        [...attentionByInstance.keys()].map((instanceId) => [
-          instanceId,
-          celestialIcons.iconFor(instanceId) as string | undefined,
-        ]),
-      ),
+      iconFor: celestialIcons.iconFor,
       clouds: clusterClouds,
       projects: projectsMode ? projects : undefined,
-      visibleCardKeys,
       selection,
       openChatCardThreadKeys,
       cardRects: flightRects,
@@ -3721,7 +3715,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
       selection,
       view,
       viewportSize,
-      visibleCardKeys,
     ],
   );
   useStarMapViewPublisher({
