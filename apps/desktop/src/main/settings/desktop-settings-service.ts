@@ -686,8 +686,7 @@ export class DesktopSettingsService {
     );
     const managedCodexRuntime = this.managedCodexRuntime;
     const managedCodexError = this.managedCodexError;
-    const codexDiscoveryCommand = managedCodexRuntime?.command
-      ?? this.resolveCodexCommandPreferenceFromConfig(config);
+    const codexDiscoveryCommand = this.resolveActiveCodexCommand(config);
     const codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
       codexDiscoveryCommand,
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
@@ -2222,8 +2221,7 @@ export class DesktopSettingsService {
         runtime: this.managedCodexRuntime,
       });
     }
-    const configuredCommand = this.managedCodexRuntime?.command
-      ?? this.resolveCodexCommandPreferenceFromConfig(config);
+    const configuredCommand = this.resolveActiveCodexCommand(config);
     const discovery = await this.codexDiscoveryCoordinator.discover(
       configuredCommand,
       {
@@ -2291,28 +2289,26 @@ export class DesktopSettingsService {
    * launches for threads.
    */
   resolveIntegratedTerminalCommands(): string[] {
-    const config = this.readConfig().config;
-    const grokEnabled = config.acpAgents?.grok?.enabled !== false;
+    // Reads the two sections it needs rather than `readConfig()`, which
+    // `structuredClone`s every section — this runs on each terminal open.
+    const grok = providerConfigSection(this.configStore.read("providers").grok);
+    const grokEnabled = grok.enabled !== false;
     const grokOverride = grokEnabled
-      ? readEnvString(this.env, ACP_AGENTS_GROK_CLI_PATH_ENV)
-        || config.acpAgents?.grok?.cliPath?.trim()
-        || undefined
+      ? this.resolveString(grok.cliPath, ACP_AGENTS_GROK_CLI_PATH_ENV)
+        .value
+        .trim() || undefined
       : undefined;
     const shouldResolveManagedGrok =
       grokEnabled
       && !grokOverride
       && (
-        config.acpAgents?.grok?.managedBuilds
+        grok.managedBuilds
         ?? this.options.defaultManagedGrokBuilds
         ?? true
       );
-    const managedCodexEnabled = this.resolveConfigBoolean(
-      config.experimental?.tokenMiserEnabled,
-      false,
-    ).value;
-    const codexCommand = managedCodexEnabled
-      ? this.managedCodexRuntime?.command
-      : this.resolveCodexCommandPreferenceFromConfig(config);
+    const codexCommand = this.resolveActiveCodexCommand({
+      models: this.configStore.read("models"),
+    });
     const grokCommand = grokOverride
       ?? (shouldResolveManagedGrok
         ? this.options.resolveActiveManagedGrokCommand?.()
@@ -2545,8 +2541,21 @@ export class DesktopSettingsService {
     return this.codexSpawnEnv;
   }
 
+  /**
+   * The Codex command PwrAgent launches right now. Gating this on
+   * `experimental.tokenMiserEnabled` instead would answer `undefined` while
+   * the managed runtime is still installing or after it failed, even though a
+   * thread started at that moment falls back to the configured command.
+   */
+  private resolveActiveCodexCommand(
+    config: Pick<DesktopSettingsConfig, "models">,
+  ): string | undefined {
+    return this.managedCodexRuntime?.command
+      ?? this.resolveCodexCommandPreferenceFromConfig(config);
+  }
+
   private resolveCodexCommandPreferenceFromConfig(
-    config: DesktopSettingsConfig,
+    config: Pick<DesktopSettingsConfig, "models">,
   ): string | undefined {
     return (
       readEnvString(this.env, CODEX_COMMAND_ENV)

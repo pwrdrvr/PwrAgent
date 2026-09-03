@@ -2711,6 +2711,38 @@ describe("DesktopSettingsService", () => {
     expect(resolveActiveManagedGrokCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to the configured Codex path when Token Miser has no runtime yet", () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[experimental]",
+        "token_miser_enabled = true",
+        "",
+        "[acp_agents.grok]",
+        "enabled = false",
+        "",
+        "[models.codex]",
+        'path = "/custom/codex/bin/codex"',
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      defaultManagedGrokBuilds: true,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    // Token Miser is on but no managed runtime is active: still installing, or
+    // the download failed. Threads fall back to the configured command here,
+    // so a terminal that pinned nothing would send `codex` somewhere else.
+    expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      "/custom/codex/bin/codex",
+    ]);
+  });
+
   it("uses configured Codex and Grok overrides without managed runtime work", () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

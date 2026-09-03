@@ -42,17 +42,40 @@ const ORIGINAL_ZDOTDIR_UNSET_ENV =
 const INTEGRATION_ZDOTDIR_ENV =
   "PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR";
 
+// Every variable this module exports into a terminal. PwrAgent launched from
+// a PwrAgent terminal inherits them through `process.env`, so each spawn
+// clears them before deciding what this terminal needs. Without that, a stale
+// prefix from the previous instance is reapplied to PATH.
+const OWNED_TERMINAL_ENV = [
+  RUNTIME_PATH_PREFIX_ENV,
+  ORIGINAL_ZDOTDIR_ENV,
+  ORIGINAL_ZDOTDIR_UNSET_ENV,
+  INTEGRATION_ZDOTDIR_ENV,
+] as const;
+
 // Supplying PATH to `zsh -l` is insufficient: common `.zprofile` setup such
 // as `brew shellenv` prepends another bin directory during startup. ZDOTDIR is
 // zsh's supported user-startup-file root, so these wrappers source the user's
 // real files in order and reassert the selected runtime path afterward.
 const ZSH_INTEGRATION_FILES: Readonly<Record<string, string>> = {
-  ".zshenv": zshStartupFileWrapper(".zshenv"),
-  ".zprofile": zshStartupFileWrapper(".zprofile"),
-  ".zshrc": zshStartupFileWrapper(".zshrc", { prependRuntimePath: true }),
+  // Each wrapper hands off to the next startup file zsh will read, and the
+  // last one restores. `restoreWhen` names the case where there is no next
+  // file: without it a `zsh -c` spawned from a user startup file reads only
+  // `.zshenv`, never restores, and leaks ZDOTDIR to all of its descendants.
+  ".zshenv": zshStartupFileWrapper(".zshenv", {
+    restoreWhen: '[[ ! -o RCS ]] || [[ ! -o LOGIN && ! -o INTERACTIVE ]]',
+  }),
+  // `.zprofile` runs only for a login shell, which always reaches `.zlogin`.
+  ".zprofile": zshStartupFileWrapper(".zprofile", {
+    restoreWhen: "[[ ! -o RCS ]]",
+  }),
+  ".zshrc": zshStartupFileWrapper(".zshrc", {
+    prependRuntimePath: true,
+    restoreWhen: "[[ ! -o RCS ]] || [[ ! -o LOGIN ]]",
+  }),
   ".zlogin": zshStartupFileWrapper(".zlogin", {
     prependRuntimePath: true,
-    restoreZdotdir: true,
+    restoreWhen: "always",
   }),
 };
 
@@ -60,12 +83,15 @@ function zshStartupFileWrapper(
   fileName: string,
   options: {
     prependRuntimePath?: boolean;
-    restoreZdotdir?: boolean;
-  } = {},
+    restoreWhen: string | "always";
+  },
 ): string {
+  // Prepend only when the prefix is not already leading. `.zshrc` and
+  // `.zlogin` both run this on a PATH that already starts with the prefix
+  // Node put there, and an unconditional prepend duplicates it every time.
   const prependRuntimePath = options.prependRuntimePath
     ? `
-if [[ -n "$${RUNTIME_PATH_PREFIX_ENV}" ]]; then
+if [[ -n "$${RUNTIME_PATH_PREFIX_ENV}" && "$PATH" != "$${RUNTIME_PATH_PREFIX_ENV}" && "$PATH" != "$${RUNTIME_PATH_PREFIX_ENV}:"* ]]; then
   export PATH="$${RUNTIME_PATH_PREFIX_ENV}${"${PATH:+:$PATH}"}"
 fi
 `
@@ -88,10 +114,10 @@ else
   export ${ORIGINAL_ZDOTDIR_UNSET_ENV}="1"
 fi
 ZDOTDIR="$${INTEGRATION_ZDOTDIR_ENV}"
-${prependRuntimePath}${options.restoreZdotdir
+${prependRuntimePath}${options.restoreWhen === "always"
     ? restoreZdotdir
     : `
-if [[ ! -o RCS ]]; then
+if ${options.restoreWhen}; then
 ${restoreZdotdir}
 fi
 `}
@@ -104,7 +130,7 @@ function zshRestoreOriginalZdotdir(): string {
 else
   ZDOTDIR="$${ORIGINAL_ZDOTDIR_ENV}"
 fi
-unset ${ORIGINAL_ZDOTDIR_ENV} ${ORIGINAL_ZDOTDIR_UNSET_ENV} ${INTEGRATION_ZDOTDIR_ENV}`;
+unset ${OWNED_TERMINAL_ENV.join(" ")}`;
 }
 
 let zshIntegrationDirectoryPromise: Promise<string> | undefined;
@@ -693,6 +719,9 @@ export function prependIntegratedTerminalRuntimePaths(
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env = buildPwrAgentChildProcessEnv(baseEnv);
+  for (const key of OWNED_TERMINAL_ENV) {
+    delete env[key];
+  }
   const pathApi = platform === "win32" ? path.win32 : path.posix;
   const runtimeDirectories = commands
     .map((command) => command.trim())
@@ -724,17 +753,27 @@ export function prependIntegratedTerminalRuntimePaths(
     return true;
   });
   env[pathKey] = entries.join(pathApi.delimiter);
-  env[RUNTIME_PATH_PREFIX_ENV] = runtimeEntries.join(pathApi.delimiter);
+  // The prefix exists for the zsh wrapper to reassert. Windows has no wrapper,
+  // so publishing it there would export an internal variable nothing reads.
+  if (platform !== "win32") {
+    env[RUNTIME_PATH_PREFIX_ENV] = runtimeEntries.join(pathApi.delimiter);
+  }
   return env;
 }
 
+/**
+ * Mutates and returns `options.env`. Pass the object
+ * `prependIntegratedTerminalRuntimePaths` returned, which is already a private
+ * copy — copying it a second time would rebuild the whole environment on a
+ * path that runs for every terminal.
+ */
 export async function prepareIntegratedTerminalShellEnvironment(options: {
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
   shell: string;
   resolveZshIntegrationDirectory?: () => Promise<string>;
 }): Promise<NodeJS.ProcessEnv> {
-  const env = buildPwrAgentChildProcessEnv(options.env);
+  const env = options.env;
   if (
     options.platform === "win32"
     || path.basename(options.shell) !== "zsh"
@@ -742,16 +781,18 @@ export async function prepareIntegratedTerminalShellEnvironment(options: {
   ) {
     return env;
   }
-  const originalZdotdir = env.ZDOTDIR?.trim();
-  env[ORIGINAL_ZDOTDIR_ENV] = originalZdotdir || env.HOME || homedir();
-  if (!originalZdotdir) {
-    env[ORIGINAL_ZDOTDIR_UNSET_ENV] = "1";
-  }
   try {
     const integrationZdotdir = await (
       options.resolveZshIntegrationDirectory
       ?? ensureZshIntegrationDirectory
     )();
+    // Written only once the directory exists: a failure must not leave the
+    // shell describing an integration that was never wired.
+    const originalZdotdir = env.ZDOTDIR?.trim();
+    env[ORIGINAL_ZDOTDIR_ENV] = originalZdotdir || env.HOME || homedir();
+    if (!originalZdotdir) {
+      env[ORIGINAL_ZDOTDIR_UNSET_ENV] = "1";
+    }
     env[INTEGRATION_ZDOTDIR_ENV] = integrationZdotdir;
     env.ZDOTDIR = integrationZdotdir;
   } catch (error) {
@@ -764,7 +805,14 @@ export async function prepareIntegratedTerminalShellEnvironment(options: {
 }
 
 async function ensureZshIntegrationDirectory(): Promise<string> {
-  zshIntegrationDirectoryPromise ??= writeZshIntegrationDirectory();
+  // Caching a rejection would turn one transient write failure into a
+  // permanently disabled integration for the life of the process.
+  zshIntegrationDirectoryPromise ??= writeZshIntegrationDirectory().catch(
+    (error: unknown) => {
+      zshIntegrationDirectoryPromise = undefined;
+      throw error;
+    },
+  );
   return await zshIntegrationDirectoryPromise;
 }
 

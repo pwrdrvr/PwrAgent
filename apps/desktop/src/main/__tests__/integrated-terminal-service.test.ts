@@ -1,8 +1,9 @@
 import {
   chmodSync,
   existsSync,
-  mkdtempSync,
   mkdirSync,
+  mkdtempSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -10,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WebContents } from "electron";
 import type { IPty } from "node-pty";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IntegratedTerminalService,
   prependIntegratedTerminalRuntimePaths,
@@ -39,7 +40,21 @@ beforeEach(() => {
   });
 });
 
-describe("resolveTerminalShell", () => {
+describe("integrated terminal runtime PATH", () => {
+  const temporaryRoots: string[] = [];
+  const createTemporaryRoot = (prefix: string): string => {
+    const root = mkdtempSync(path.join(os.tmpdir(), prefix));
+    temporaryRoots.push(root);
+    return root;
+  };
+
+  afterAll(() => {
+    for (const root of temporaryRoots) {
+      rmSync(root, { force: true, recursive: true });
+    }
+    temporaryRoots.length = 0;
+  });
+
   it("puts selected Codex and Grok runtime directories first without duplicates", () => {
     expect(
       prependIntegratedTerminalRuntimePaths(
@@ -97,7 +112,7 @@ describe("resolveTerminalShell", () => {
   it.skipIf(process.platform !== "darwin")(
     "reasserts the selected runtime after zsh login files rewrite PATH",
     async () => {
-      const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-zsh-path-"));
+      const root = createTemporaryRoot("pwragent-zsh-path-");
       const integrationDir = path.join(root, "integration");
       const originalZdotdir = path.join(root, "original");
       const managedBin = path.join(root, "managed");
@@ -148,7 +163,7 @@ describe("resolveTerminalShell", () => {
   it.skipIf(process.platform !== "darwin")(
     "preserves a ZDOTDIR selected by the user zsh startup files",
     async () => {
-      const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-zsh-zdotdir-"));
+      const root = createTemporaryRoot("pwragent-zsh-zdotdir-");
       const integrationDir = path.join(root, "integration");
       const originalZdotdir = path.join(root, "original");
       const selectedZdotdir = path.join(root, "selected");
@@ -188,6 +203,106 @@ describe("resolveTerminalShell", () => {
     },
   );
 
+  it.skipIf(process.platform !== "darwin")(
+    "restores ZDOTDIR for a zsh that reads only .zshenv",
+    async () => {
+      const root = createTemporaryRoot("pwragent-zsh-child-");
+      const integrationDir = path.join(root, "integration");
+      const originalZdotdir = path.join(root, "original");
+      mkdirSync(originalZdotdir, { recursive: true });
+      await writeZshIntegrationDirectory(integrationDir);
+
+      // A non-interactive, non-login zsh reads .zshenv and nothing else. Left
+      // unrestored it hands PwrAgent's ZDOTDIR to every one of its children.
+      const resolved = execFileSync(
+        "/bin/zsh",
+        ["-c", 'print -r -- "${ZDOTDIR-unset}|${PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX-unset}"'],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: "/usr/bin:/bin",
+            PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+            PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/managed/bin",
+            ZDOTDIR: integrationDir,
+          },
+        },
+      ).trim();
+
+      expect(resolved).toBe("unset|unset");
+    },
+  );
+
+  it("drops runtime path state inherited from a parent PwrAgent terminal", () => {
+    // PwrAgent launched from a PwrAgent terminal inherits these through
+    // process.env, and the wrapper reapplies whatever prefix it finds.
+    const env = prependIntegratedTerminalRuntimePaths(
+      {
+        PATH: "/usr/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/stale/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: "/stale/integration",
+        PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: "/stale/home",
+        PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+      },
+      [],
+      "darwin",
+    );
+
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+    );
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR",
+    );
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR",
+    );
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET",
+    );
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
+  it("leaves the zsh-only prefix off a Windows terminal", () => {
+    const env = prependIntegratedTerminalRuntimePaths(
+      { Path: "C:\\Windows" },
+      ["C:\\managed\\codex\\codex.exe"],
+      "win32",
+    );
+
+    expect(env.Path).toBe("C:\\managed\\codex;C:\\Windows");
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+    );
+  });
+
+  it("leaves no ZDOTDIR state behind when the integration directory fails", async () => {
+    const env = await prepareIntegratedTerminalShellEnvironment({
+      env: {
+        HOME: "/Users/alice",
+        PATH: "/managed/codex/bin:/usr/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/managed/codex/bin",
+      },
+      platform: "darwin",
+      resolveZshIntegrationDirectory: async () => {
+        throw new Error("ENOSPC");
+      },
+      shell: "/bin/zsh",
+    });
+
+    expect(env).not.toHaveProperty("ZDOTDIR");
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR",
+    );
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET",
+    );
+  });
+});
+
+describe("resolveTerminalShell", () => {
   it("uses the login shell on POSIX", () => {
     expect(
       resolveTerminalShell({
