@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="stylesheet" href="./asbuilt.css" />
+        <link rel="stylesheet" href="./asbuilt-rail.css" />
+      </helmet>
+      <div class="wrap" data-screen-label="Log viewer">
+        <p class="eyebrow">As built · 2026-09-01 · Log viewer</p>
+        <h1>Log viewer</h1>
+        <p class="lede">
+          A secondary window over a live tail of the profile's main log. Four
+          stacked bands — titlebar, toolbar, file row, line list — and a status
+          line between the last two. It takes no props: the whole surface is
+          driven by one snapshot read and one subscription.
+        </p>
+
+        <div class="pagenav">
+          <a href="./As%20Built%202026-09-01%20-%20Index.dc.html">Index</a>
+          <a href="./As%20Built%202026-09-01%20-%20Main%20Window.dc.html">Main window</a>
+          <a href="./As%20Built%202026-09-01%20-%20Settings.dc.html">Settings</a>
+          <a href="./As%20Built%202026-09-01%20-%20Star%20Map%20and%20Activity.dc.html">Star Map &amp; Activity</a>
+        </div>
+
+        <h2>The window</h2>
+        <div class="boards">
+          <div class="board" style="width:100%">
+            <div class="board__cap">dark · debug collection on · 1100px</div>
+            <div class="board__body">
+              <div class="lv">
+                <div class="lv__titlebar">
+                  <span class="lv__brand">Pwr<em>Agent</em></span>
+                  <span class="lv__eyebrow">Help</span>
+                  <span class="lv__sep">›</span>
+                  <span class="lv__current">Logs</span>
+                </div>
+                <div class="lv__toolbar">
+                  <div class="lv__search">
+                    <span class="lv__search-label">Search</span>
+                    <span class="lv__placeholder">Find in logs</span>
+                  </div>
+                  <div class="lv__levels">
+                    <span class="lv__level lv__level--error">Error</span>
+                    <span class="lv__level lv__level--warn">Warning</span>
+                    <span class="lv__level lv__level--info">Info</span>
+                    <span class="lv__level lv__level--debug">Debug</span>
+                  </div>
+                </div>
+                <div class="lv__file">
+                  <span class="lv__file-label">File</span>
+                  <span class="lv__file-path">~/.pwragent/profiles/default/logs/main.log</span>
+                </div>
+                <div class="lv__status">
+                  <span class="lv__status-text">Live app log stream</span>
+                  <span class="lv__status-note">Debug collection on</span>
+                </div>
+                <div class="lv__lines">
+                  <div class="lv__line"><span class="lv__num">1</span><span class="lv__text">PwrAgent 1.9.3 starting (profile=default)</span></div>
+                  <div class="lv__line"><span class="lv__num">2</span><span class="lv__text">state.db opened, schema v58, WAL mode</span></div>
+                  <div class="lv__line"><span class="lv__num">3</span><span class="lv__text">profile-federation lease acquired (pid 48043)</span></div>
+                  <div class="lv__line"><span class="lv__num">4</span><span class="lv__text">telegram adapter connected, 3 bindings restored</span></div>
+                  <div class="lv__line"><span class="lv__num">5</span><span class="lv__text">discord adapter disabled: no bot token in secret store</span></div>
+                  <div class="lv__line"><span class="lv__num">6</span><span class="lv__text">app-server handshake ok, protocol 1.4.0</span></div>
+                  <div class="lv__line"><span class="lv__num">7</span><span class="lv__text">branch probe failed: not a git repository</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="board t-light" style="width:100%">
+            <div class="board__cap">light · same markup, swapped tokens</div>
+            <div class="board__body">
+              <div class="lv">
+                <div class="lv__titlebar">
+                  <span class="lv__brand">Pwr<em>Agent</em></span>
+                  <span class="lv__eyebrow">Help</span>
+                  <span class="lv__sep">›</span>
+                  <span class="lv__current">Logs</span>
+                </div>
+                <div class="lv__toolbar">
+                  <div class="lv__search">
+                    <span class="lv__search-label">Search</span>
+                    <span class="lv__placeholder">Find in logs</span>
+                  </div>
+                  <div class="lv__levels">
+                    <span class="lv__level lv__level--error">Error</span>
+                    <span class="lv__level lv__level--warn">Warning</span>
+                    <span class="lv__level lv__level--info">Info</span>
+                    <span class="lv__level lv__level--debug">Debug</span>
+                  </div>
+                </div>
+                <div class="lv__status">
+                  <span class="lv__status-text">Live app log stream</span>
+                  <span class="lv__status-note">Debug collection on</span>
+                </div>
+                <div class="lv__lines">
+                  <div class="lv__line"><span class="lv__num">1</span><span class="lv__text">PwrAgent 1.9.3 starting (profile=default)</span></div>
+                  <div class="lv__line"><span class="lv__num">2</span><span class="lv__text">state.db opened, schema v58, WAL mode</span></div>
+                  <div class="lv__line"><span class="lv__num">3</span><span class="lv__text">profile-federation lease acquired (pid 48043)</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h2>Chrome</h2>
+        <p>
+          The Logs window uses the <span class="mono">.activity-titlebar__*</span>
+          primitive — the same one the Messaging Activity window uses, not the
+          Settings one. It carries the brand mark, which the Settings titlebar
+          does not.
+        </p>
+
+        <table class="spec">
+          <thead><tr><th>Element</th><th>Type</th><th>Colour</th></tr></thead>
+          <tbody>
+            <tr><td>.activity-titlebar__brand</td><td>17 / 17, 700, <code>-0.17px</code></td><td><code>--text-primary</code></td></tr>
+            <tr><td>.activity-titlebar__brand-accent</td><td>17 / 17, 700</td><td><code>--accent</code></td></tr>
+            <tr><td>.activity-titlebar__eyebrow</td><td>10 / 10, 600, <code>0.8px</code>, uppercase</td><td><code>--accent</code></td></tr>
+            <tr><td>.activity-titlebar__separator</td><td>13 / 13, 500</td><td><code>--text-muted</code></td></tr>
+            <tr><td>.activity-titlebar__current</td><td>13 / 16.9, 600</td><td><code>--text-primary</code></td></tr>
+          </tbody>
+        </table>
+
+        <h2>Toolbar</h2>
+        <table class="spec">
+          <thead><tr><th>Element</th><th>Box</th><th>Fill / border</th><th>Type</th></tr></thead>
+          <tbody>
+            <tr><td>.log-window__toolbar</td><td>34px tall, gap 8</td><td>—</td><td>inherits 16px UA default</td></tr>
+            <tr><td>.log-window__search</td><td>34px tall, radius 7</td><td><code>#080808</code> / subtle</td><td>—</td></tr>
+            <tr><td>.log-window__search-label</td><td>—</td><td>—</td><td>10 700, <code>0.8px</code>, uppercase, muted</td></tr>
+            <tr><td>.log-window__level-option</td><td>segmented, 1px dividers</td><td>tinted per level</td><td>12 600</td></tr>
+            <tr><td>.log-window__file-path</td><td>—</td><td>—</td><td>12 IBM Plex Mono, secondary</td></tr>
+            <tr><td>.log-window__line-text</td><td>—</td><td>—</td><td>12 IBM Plex Mono, secondary</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Level filters are colour-coded to the status scale</h4>
+          <p>
+            Error, Warning and Info tint from
+            <span class="mono">--status-error</span>,
+            <span class="mono">--status-warning</span> and
+            <span class="mono">--accent</span>. Debug carries no tint, and it is
+            off by default — a snapshot containing debug lines renders fewer
+            rows than it holds until the operator enables the level.
+          </p>
+        </div>
+
+        <div class="note note--alert">
+          <h4>Line numbers fail AA in both themes</h4>
+          <p>
+            <span class="mono">.log-window__line-number</span> measures 3.72:1
+            on dark (<span class="mono">#6b6966</span> on
+            <span class="mono">#050505</span>) and 2.65:1 on light
+            (<span class="mono">#9a9792</span> on
+            <span class="mono">#f7f4ef</span>), both at 12px against a 4.5:1
+            requirement. The gutter is decorative-ish but it is real text and
+            axe treats it as such.
+          </p>
+          <p>
+            In light theme the debug-collection note
+            (<span class="mono">.log-window__status-note</span>,
+            <span class="mono">#a86b00</span> on white, 11px) measures 4.4:1 —
+            close enough that a slightly darker
+            <span class="mono">--status-warning</span> would clear it.
+          </p>
+          <p class="muted">
+            Neither is waived: the E2E a11y gate does not open this window, and
+            its <span class="mono">KNOWN_VIOLATIONS</span> list is empty.
+          </p>
+        </div>
+
+        <div class="note">
+          <h4>Everything here is copyable</h4>
+          <p>
+            The file path, each individual line, and the whole buffer all carry
+            copy affordances. Log content is the thing operators paste into bug
+            reports, so the surface is built around extraction rather than
+            reading.
+          </p>
+        </div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props="{}">
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

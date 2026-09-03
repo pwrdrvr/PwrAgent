@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="stylesheet" href="./asbuilt.css" />
+        <link rel="stylesheet" href="./asbuilt-settings.css" />
+      </helmet>
+      <div class="wrap" data-screen-label="Settings">
+        <p class="eyebrow">As built · 2026-09-01 · Settings</p>
+        <h1>Settings shell and field primitives</h1>
+        <p class="lede">
+          Twenty-four panels share one nav, one titlebar and one field grid.
+          This page records the shell and the primitives; individual panels are
+          compositions of them, so the primitives are what a new panel has to
+          match.
+        </p>
+
+        <div class="pagenav">
+          <a href="./As%20Built%202026-09-01%20-%20Index.dc.html">Index</a>
+          <a href="./As%20Built%202026-09-01%20-%20Main%20Window.dc.html">Main window</a>
+          <a href="./As%20Built%202026-09-01%20-%20Tool%20Cost.dc.html">Tool cost</a>
+          <a href="./As%20Built%202026-09-01%20-%20Log%20Viewer.dc.html">Log viewer</a>
+        </div>
+
+        <h2>The shell</h2>
+        <div class="boards">
+          <div class="board" style="width:100%">
+            <div class="board__cap">dark · General · nav 196px, content fluid</div>
+            <div class="board__body">
+              <div class="st">
+                <div class="st__nav">
+                  <div class="st__brand">Pwr<em>Agent</em></div>
+                  <div class="st__exit">← Exit Settings</div>
+                  <div class="st__group">General</div>
+                  <div class="st__row"><div class="st__btn is-active">General</div></div>
+                  <div class="st__row"><div class="st__btn">Applications</div></div>
+                  <div class="st__row"><div class="st__btn">Plugins</div></div>
+                  <div class="st__row"><div class="st__btn">Profiles</div></div>
+                  <div class="st__row"><div class="st__btn">AI Providers</div></div>
+                  <div class="st__row"><div class="st__btn">Usage &amp; Pricing</div></div>
+                  <div class="st__row"><div class="st__btn">Messaging</div></div>
+                  <div class="st__row"><div class="st__btn">Federation</div></div>
+                  <div class="st__divider"></div>
+                  <div class="st__row"><div class="st__btn">Access Control</div></div>
+                  <div class="st__row"><div class="st__btn">Git</div></div>
+                  <div class="st__row"><div class="st__btn">Worktrees</div></div>
+                  <div class="st__row"><div class="st__btn">About</div></div>
+                </div>
+                <div class="st__main">
+                  <div class="st__titlebar">
+                    <span class="st__eyebrow">Settings</span>
+                    <span class="st__sep">›</span>
+                    <span class="st__current">General</span>
+                  </div>
+                  <div class="st__content">
+                    <div class="st__head-eyebrow">General</div>
+                    <div class="st__title">General settings</div>
+                    <p class="st__help">Defaults that apply across PwrAgent surfaces.</p>
+                    <div class="st__card">
+                      <div class="st__card-head">
+                        <div>
+                          <div class="st__head-eyebrow">General</div>
+                          <div class="st__card-title">Attention lens</div>
+                        </div>
+                        <span class="st__chip">default</span>
+                      </div>
+                      <div class="st__field">
+                        <div>
+                          <div class="st__label">Move a thread to the top when its turn finishes</div>
+                          <div class="st__sub">Attention ranks threads by when their current turn started, so streaming output never re-sorts the queue mid-turn.</div>
+                        </div>
+                        <div class="st__control">
+                          <span class="sw-track"><span class="sw-thumb"></span></span>
+                          <span class="sw-label">On</span>
+                        </div>
+                      </div>
+                      <div class="st__field">
+                        <div>
+                          <div class="st__label">Desktop notifications</div>
+                          <div class="st__sub">Native alerts for approvals and turn completion while PwrAgent is unfocused.</div>
+                        </div>
+                        <div class="st__control">
+                          <span class="sw-track is-off"><span class="sw-thumb"></span></span>
+                          <span class="sw-label">Off</span>
+                        </div>
+                        <div class="st__fhelp">If you don't see notifications, allow them for PwrAgent in your OS notification settings.</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="board t-light" style="width:100%">
+            <div class="board__cap">light · same markup, swapped tokens</div>
+            <div class="board__body">
+              <div class="st">
+                <div class="st__nav">
+                  <div class="st__brand">Pwr<em>Agent</em></div>
+                  <div class="st__exit">← Exit Settings</div>
+                  <div class="st__group">General</div>
+                  <div class="st__row"><div class="st__btn is-active">General</div></div>
+                  <div class="st__row"><div class="st__btn">Applications</div></div>
+                  <div class="st__row"><div class="st__btn">Usage &amp; Pricing</div></div>
+                  <div class="st__row"><div class="st__btn">Messaging</div></div>
+                </div>
+                <div class="st__main">
+                  <div class="st__titlebar">
+                    <span class="st__eyebrow">Settings</span>
+                    <span class="st__sep">›</span>
+                    <span class="st__current">General</span>
+                  </div>
+                  <div class="st__content">
+                    <div class="st__head-eyebrow">General</div>
+                    <div class="st__title">General settings</div>
+                    <p class="st__help">Defaults that apply across PwrAgent surfaces.</p>
+                    <div class="st__card">
+                      <div class="st__card-head">
+                        <div>
+                          <div class="st__head-eyebrow">General</div>
+                          <div class="st__card-title">Quit confirmation</div>
+                        </div>
+                        <span class="st__chip">default</span>
+                      </div>
+                      <div class="st__field">
+                        <div>
+                          <div class="st__label">Confirm quit when threads or terminals are active</div>
+                          <div class="st__sub">Warn before quitting while agent turns or environment actions are running.</div>
+                        </div>
+                        <div class="st__control">
+                          <span class="sw-track"><span class="sw-thumb"></span></span>
+                          <span class="sw-label">On</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h2>Navigation</h2>
+        <table class="spec">
+          <caption>Nav rail, measured. Group labels are the only uppercase element in the rail.</caption>
+          <thead><tr><th>Element</th><th>Box</th><th>Fill / border</th><th>Type</th></tr></thead>
+          <tbody>
+            <tr><td>.settings-nav__brand</td><td>—</td><td>—</td><td>17/17 700, <code>-0.17px</code>, <code>#f7f3eb</code> + <code>#ff8a1f</code> accent</td></tr>
+            <tr><td>.settings-nav__group-label</td><td>—</td><td>—</td><td>10 700, <code>0.8px</code>, uppercase, <code>#8c857a</code></td></tr>
+            <tr><td>.settings-nav__row</td><td>28px tall</td><td>—</td><td>inherits 16px UA default</td></tr>
+            <tr><td>.settings-nav__button</td><td>28px tall, radius 6, padding <code>5 8 5 4</code></td><td>accent 12% / accent 42% when active</td><td>13 650, <code>#f7f3eb</code></td></tr>
+            <tr><td>.settings-nav__sublabel</td><td>—</td><td>—</td><td>12 600, <code>#8c857a</code></td></tr>
+            <tr><td>.settings-nav__exit</td><td>padding <code>6 8</code>, gap 6</td><td>—</td><td>12 600, <code>#b8b0a5</code></td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Groups open collapsed except the active route</h4>
+          <p>
+            A section hidden behind a closed caret reads as a dead nav, so the
+            group holding the initial route opens with it. Sub-items carry a
+            status dot (<span class="mono">--ok</span> /
+            <span class="mono">--off</span>) rather than a count.
+          </p>
+        </div>
+
+        <h2>Titlebar and breadcrumb</h2>
+        <p>
+          The Settings titlebar and the Activity/Logs titlebar are separate
+          primitives that must agree on colour. They do — but not on size.
+        </p>
+
+        <table class="spec">
+          <caption>Breadcrumb parts, both windows, measured side by side.</caption>
+          <thead><tr><th>Part</th><th>Settings</th><th>Activity / Logs</th><th>Colour</th></tr></thead>
+          <tbody>
+            <tr><td>Eyebrow</td><td>10 600, <code>0.8px</code>, upper</td><td>10/10 600, <code>0.8px</code>, upper</td><td><code>--accent</code>, both</td></tr>
+            <tr><td>Separator</td><td>12 500</td><td>13/13 500</td><td><code>--text-muted</code>, both</td></tr>
+            <tr><td>Current</td><td>12 600</td><td>13/16.9 600</td><td><code>--text-primary</code>, both</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note note--warn">
+          <h4>Colour contract holds, size contract does not</h4>
+          <p>
+            The theme-contract test compares the brand and breadcrumb
+            <em>tokens</em> across these primitives, and those match exactly.
+            The type sizes are one pixel apart — 12px in Settings, 13px in
+            Activity and Logs — and nothing pins that. Worth deciding whether
+            it is intentional before the next chrome change.
+          </p>
+        </div>
+
+        <h2>Field primitives</h2>
+        <p>
+          Every panel is built from <span class="mono">.settings-field</span>:
+          a two-column grid with a 220px label column, 24px column gap, 6px row
+          gap, and 14px / 18px padding. Help text spans both columns.
+        </p>
+
+        <table class="spec">
+          <thead><tr><th>Element</th><th>Box</th><th>Type</th><th>Colour</th></tr></thead>
+          <tbody>
+            <tr><td>.settings-field</td><td>padding <code>14 18</code>, gap <code>6 24</code></td><td>inherits 16px UA default</td><td>—</td></tr>
+            <tr><td>.settings-field__label</td><td>gap 4</td><td>13 / 16.9, 650</td><td><code>#f7f3eb</code></td></tr>
+            <tr><td>.settings-field__sub</td><td>—</td><td>12 / 17.4, 400</td><td><code>#8c857a</code></td></tr>
+            <tr><td>.settings-field__help</td><td>full width</td><td>11.5 / 16.675, 400</td><td><code>#8c857a</code></td></tr>
+            <tr><td>.settings-field__control</td><td>28px min, gap 8</td><td>—</td><td>—</td></tr>
+            <tr><td>.settings-head__title</td><td>—</td><td>22 / 24.2, 700, <code>-0.22px</code></td><td><code>#f7f3eb</code></td></tr>
+            <tr><td>.settings-head__help</td><td>—</td><td>13 / 19.5, 400</td><td><code>#b8b0a5</code></td></tr>
+            <tr><td>.settings-head__eyebrow</td><td>—</td><td>11 / 11, 650, <code>0.88px</code>, upper</td><td><code>#ff8a1f</code></td></tr>
+          </tbody>
+        </table>
+
+        <h3>Controls</h3>
+        <table class="spec">
+          <thead><tr><th>Element</th><th>Box</th><th>Fill / border</th><th>Type</th></tr></thead>
+          <tbody>
+            <tr><td>.settings-switch__track</td><td>26 × 14, radius 999</td><td>accent 16% / accent 42%</td><td>—</td></tr>
+            <tr><td>.settings-switch__thumb</td><td>10 × 10, radius 999</td><td><code>#ff8a1f</code></td><td>—</td></tr>
+            <tr><td>.settings-card__chip</td><td>18px tall, radius 999, padding <code>3 7</code></td><td><code>#101010</code> / subtle</td><td>10/10 500 IBM Plex Mono, <code>#8c857a</code></td></tr>
+            <tr><td>.button</td><td>26px tall, radius 6, padding <code>0 9</code></td><td>transparent / subtle</td><td>11 600, <code>#f7f3eb</code></td></tr>
+            <tr><td>.button--secondary</td><td>radius 6, padding <code>0 12</code></td><td><code>#101010</code> / subtle</td><td>12 650, <code>#f7f3eb</code></td></tr>
+            <tr><td>.button--ghost</td><td>26px tall, radius 6, padding <code>0 9</code></td><td>transparent / subtle</td><td>11 600, <code>#f7f3eb</code></td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>The switch is not a checkbox with a skin</h4>
+          <p>
+            No browser-default control ships in this UI. The track carries the
+            accent border at 42% and the fill at 16% when on, and drops to the
+            neutral strong border when off — the same two-tier border scale the
+            rest of the app uses.
+          </p>
+        </div>
+
+        <h2>Panels</h2>
+        <p>
+          Twenty-four panel components sit behind this shell. They divide into
+          four families, and a new panel almost always belongs to one of them
+          rather than needing new chrome.
+        </p>
+        <table class="spec">
+          <thead><tr><th>Family</th><th>Panels</th><th>Shape</th></tr></thead>
+          <tbody>
+            <tr><td>Toggle lists</td><td>General, Experimental, Thread Management, Notifications</td><td>Cards of <code>.settings-field</code> rows, one switch each</td></tr>
+            <tr><td>Credential + test</td><td>Models, Messaging, ACP Agents, Federation</td><td>Secret pills, a test block, per-provider sub-routes</td></tr>
+            <tr><td>Path / inventory</td><td>Applications, Git, Worktrees, Profiles, Plugins, Archived Threads</td><td><code>SettingsPathRow</code> lists with copy affordances</td></tr>
+            <tr><td>Read-only report</td><td>About, Troubleshooting, Usage &amp; Pricing, Access Control</td><td>Static rows, status pills, no writes</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Settings is the one surface with zero axe findings</h4>
+          <p>
+            All six Settings captures — General, Models and Usage &amp; Pricing,
+            each in both themes — returned no violations at
+            <span class="mono">wcag2a</span> through
+            <span class="mono">wcag22aa</span>. It is also the only screen the
+            E2E a11y gate already drives in both themes.
+          </p>
+        </div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props="{}">
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

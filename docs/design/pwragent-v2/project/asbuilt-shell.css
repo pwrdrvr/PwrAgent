@@ -1,0 +1,104 @@
+/* Sidebar recreation — every value below was read from the running
+   component on 2026-09-01, not from app.css. Selector names match the
+   renderer so a reader can grep straight across. */
+
+.sb {
+  width: 408px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 12px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sb__masthead { display: flex; align-items: center; justify-content: space-between; }
+.sb__brand { font-size: 17px; line-height: 17px; font-weight: 700; letter-spacing: -0.17px; color: var(--text-primary); }
+.sb__brand em { font-style: normal; color: var(--accent); }
+.sb__actions { display: flex; align-items: center; gap: 2px; }
+.sb__icon {
+  width: 28px; height: 28px; border-radius: 7px; border: 1px solid transparent;
+  background: none; color: var(--text-secondary); font-size: 13px;
+  display: flex; align-items: center; justify-content: center; cursor: default;
+}
+.sb__icon:hover { background: var(--bg-panel-hover); border-color: var(--accent-border); }
+
+.sb__identity {
+  height: 22px; border-radius: 6px; border: 1px solid var(--border-subtle);
+  background: var(--bg-panel); color: var(--text-secondary);
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 10.5px;
+  padding: 0 7px; display: flex; align-items: center; gap: 5px;
+}
+
+/* ---- lens switch ---- */
+.lens {
+  height: 32px; background: var(--bg-panel); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 2px; display: flex; gap: 1px; align-items: stretch;
+}
+.lens__btn {
+  height: 26px; border-radius: 6px; border: 1px solid transparent;
+  background: none; color: var(--text-secondary);
+  padding: 0 4px; display: flex; align-items: center; gap: 5px;
+  font-size: 12px; flex: 1; justify-content: center; cursor: default;
+}
+.lens__btn.is-active {
+  color: var(--accent-bright); background: var(--bg-row-active);
+  border-color: var(--accent-border); padding: 0 6px;
+}
+.lens__btn:not(.is-active):hover { background: var(--bg-panel-hover); border-color: var(--accent-border); }
+
+/* The real tabs draw inline SVG. These stand-ins are injected rather than
+   left as literal text because the calendar-plus glyph sits outside the
+   BMP and the folder glyph outside Geist's coverage — both rendered as
+   mojibake. Positions match the shipped order: 4 = Created, 5 = Directories. */
+.lens__btn:nth-child(4),
+.lens__btn:nth-child(5) { font-size: 0; }
+.lens__btn:nth-child(4)::before { content: "\229E"; font-size: 13px; }
+.lens__btn:nth-child(5)::before { content: "\25A4"; font-size: 13px; }
+
+.lens__count {
+  font-family: var(--font-mono); font-size: 10px; line-height: 10px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 2px;
+}
+.lens__count--active { color: var(--accent-bright); }
+.lens__count--idle { color: var(--text-secondary); }
+.lens__count--zero { color: var(--text-muted); }
+
+.scanner { width: 16px; height: 6px; border-radius: 999px; background: var(--accent-bg-medium); display: inline-block; position: relative; overflow: hidden; }
+.scanner::after { content: ""; position: absolute; inset: 0 60% 0 0; background: var(--accent); border-radius: 999px; }
+.scanner--off { background: color-mix(in srgb, var(--text-muted) 22%, transparent); }
+.scanner--off::after { background: var(--text-muted); }
+
+.cookie { width: 8px; height: 8px; border-radius: 999px; background: var(--accent); border: 1px solid var(--accent-border); display: inline-block; }
+.cookie--zero { background: var(--text-muted); border-color: transparent; }
+
+/* ---- thread rows ---- */
+.rows { display: flex; flex-direction: column; gap: 2px; }
+.row {
+  border: 1px solid transparent; border-radius: 8px; padding: 4px 10px;
+  display: flex; flex-direction: column; gap: 6px; position: relative;
+}
+.row:hover { background: var(--bg-panel-hover); border-color: var(--accent-border); }
+.row.is-selected { background: var(--bg-row-active); border-color: var(--accent-border); }
+.row.is-selected::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 999px; background: var(--accent);
+}
+.row__head { display: flex; align-items: center; gap: 8px; padding-bottom: 2px; }
+.row__lead { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.row__title {
+  font-size: 13px; line-height: 16.25px; font-weight: 600; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row__time { font-size: 12px; font-weight: 500; color: var(--text-muted); white-space: nowrap; }
+.row__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.chip {
+  height: 20px; border-radius: 999px; padding: 0 8px;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.chip--backend { background: var(--bg-panel-elevated); border: 1px solid var(--border-subtle); color: var(--text-secondary); }
+.chip--mono { background: var(--accent-soft); color: var(--text-primary); font-family: var(--font-mono); font-weight: 500; }
+.chip--draft { background: none; border: 1px dashed var(--border-strong); color: var(--text-secondary); }

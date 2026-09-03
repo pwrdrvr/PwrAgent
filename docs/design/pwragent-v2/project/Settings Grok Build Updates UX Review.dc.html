@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./settings-grok-build-review.css" />
+      </helmet>
+
+      <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+          <symbol id="i-check" viewBox="0 0 24 24">
+            <path d="m5 13 4.5 4.5L19 7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>
+          </symbol>
+          <symbol id="i-warn" viewBox="0 0 24 24">
+            <path d="M12 3 2 20h20L12 3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path>
+            <path d="M12 9v5M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          </symbol>
+          <symbol id="i-down" viewBox="0 0 24 24">
+            <path d="M12 4v12m0 0 5-5m-5 5-5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </symbol>
+          <symbol id="i-pin" viewBox="0 0 24 24">
+            <path d="M9 3h6l-1 6 4 4H6l4-4-1-6Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path>
+            <path d="M12 13v8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          </symbol>
+          <symbol id="i-ext" viewBox="0 0 24 24">
+            <path d="M14 4h6v6M20 4l-9 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+          </symbol>
+          <symbol id="i-x" viewBox="0 0 24 24">
+            <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"></path>
+          </symbol>
+        </defs>
+      </svg>
+
+      <div class="page">
+        <p class="eyebrow">PwrAgent &middot; Settings &rarr; AI Providers &rarr; Grok</p>
+        <h1>Two Grok build channels, one word for both &mdash; name it, check it, install it</h1>
+        <p class="lede">
+          This pane can be running a binary that <em>PwrAgent itself</em> downloaded, checksummed,
+          signature-checked and installed from <code>pwrdrvr/grok-build</code> &mdash; and it says
+          nothing about it. No installed tag, no last-checked time, no &ldquo;a newer build
+          exists&rdquo;, no check button, no install button. The only control that actually runs a
+          release check is labelled <span class="mono">Refresh</span> and described as re-running
+          discovery. Meanwhile the one notice this provider can raise is written for the
+          <em>other</em> channel &mdash; an xAI install updated from x.ai/build &mdash; and titles
+          itself &ldquo;Grok update available&rdquo; without ever saying <em>which</em> Grok.
+        </p>
+
+        <div class="note">
+          <span class="note__k">Provenance</span>
+          <span>The managed channel shipped with <code>main/acp/grok-managed-runtime.ts</code>;
+          the notice is <code>renderer/features/notifications/GrokCliUpdateNotice.tsx</code>; the
+          predicate that decides which channel a runtime belongs to is
+          <code>isPwrAgentOwnedGrokRuntime</code> in <code>main/acp/grok-cli-update.ts</code>. As of
+          this review the newest published <code>pwrdrvr/grok-build</code> release is
+          <span class="mono">pwragent-v1.0.4-pwragent.2</span> (2026&#8209;08&#8209;16), which is also
+          <code>MANAGED_GROK_MINIMUM_SIGNED_TAG</code> &mdash; so a machine on that tag is current,
+          and any &ldquo;update available&rdquo; it is shown today came from the xAI updater.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">01</span>
+          <h2>Two channels wearing one name</h2>
+          <p class="body">
+            Every confusion on this screen comes from the same root: <strong>&ldquo;Grok&rdquo; is
+            two different products here</strong>, with different publishers, different version
+            strings, different release pages and different updaters. Exactly one of them is live at
+            a time &mdash; whichever binary the pane marks <span class="mono">Using</span>. The pane
+            and the notices currently speak neither channel&rsquo;s language; they speak a generic
+            one that fits both and identifies neither.
+          </p>
+        </div>
+
+        <table class="tbl tbl--channels">
+          <thead>
+            <tr><th></th><th>PwrAgent build</th><th>xAI build</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Published by</td>
+              <td class="wrap">PwrDrvr &mdash; <span class="mono">pwrdrvr/grok-build</span>, a downstream fork build</td>
+              <td class="wrap">xAI &mdash; the official CLI</td>
+            </tr>
+            <tr>
+              <td>Lives at</td>
+              <td class="wrap"><code>~/.pwragent/agents/grok/versions/&lt;tag&gt;/grok</code>, or inside the app bundle</td>
+              <td class="wrap"><code>~/.grok/bin/grok</code> or anywhere on <code>PATH</code></td>
+            </tr>
+            <tr>
+              <td>Version looks like</td>
+              <td class="wrap"><span class="mono">1.0.4-pwragent.2</span></td>
+              <td class="wrap"><span class="mono">1.0.5</span></td>
+            </tr>
+            <tr>
+              <td>Updated by</td>
+              <td class="wrap"><b>PwrAgent</b> &mdash; GitHub releases API, SHA256SUMS, platform-signature check, install under <code>versions/</code></td>
+              <td class="wrap"><b>The vendor</b> &mdash; <code>grok update --check --json</code>, operator downloads from x.ai/build</td>
+            </tr>
+            <tr>
+              <td>Release page</td>
+              <td class="wrap"><span class="mono">github.com/pwrdrvr/grok-build/releases/tag/&lt;tag&gt;</span></td>
+              <td class="wrap"><span class="mono">x.ai/build</span></td>
+            </tr>
+            <tr>
+              <td>Check cadence</td>
+              <td class="wrap">once per Electron process in dev, at most once per 24&nbsp;h packaged, forced by the pane&rsquo;s Refresh</td>
+              <td class="wrap">24&nbsp;h success TTL / 1&nbsp;h failure TTL, in the background</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note note--good">
+          <span class="note__k">Rule</span>
+          <span><b>The runtime in effect owns the update story.</b> If the active binary is a
+          PwrAgent build, the operator only ever sees PwrAgent-build tags, a PwrAgent-build release
+          link and a PwrAgent-build install action. If it is an xAI install, they only ever see xAI
+          versions and x.ai/build. Never both, never one described in the other&rsquo;s vocabulary.
+          The code already believes this &mdash; the comment on
+          <code>refreshGrokUpdateStatusInBackground</code> says so in as many words. The predicate
+          underneath it just isn&rsquo;t strong enough to hold the line (&sect;02, finding 5).</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">02</span>
+          <h2>What is broken today</h2>
+          <p class="body">
+            Nine findings. The first four are visible on the reported screen; the rest surfaced
+            reading the code that produces it. Causes cite the file responsible.
+          </p>
+        </div>
+
+        <table class="tbl">
+          <thead>
+            <tr><th>Defect</th><th>Where</th><th>Cause</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>The installed PwrAgent build is never named</td>
+              <td class="mono">AcpAgentsSettings</td>
+              <td class="wrap">The <b>PwrAgent build</b> row is a bare toggle plus a paragraph about what the
+                  feature does. Which tag is installed, when PwrAgent last checked, and whether a
+                  newer one exists are all absent. The tag is legible only by reading the version
+                  directory out of a 78-character path string in the row below.</td>
+            </tr>
+            <tr>
+              <td>There is no check-for-updates control</td>
+              <td class="mono">ipc/settings.ts:532</td>
+              <td class="wrap">There <em>is</em> one, disguised: <span class="mono">Refresh</span> in the
+                  <b>Re-probe</b> row passes <code>force: true</code>, which becomes
+                  <code>checkMode: "force"</code> and runs the real release check. Its label reads
+                  &ldquo;Re-run discovery for enabled agents (versions, installs,
+                  capabilities).&rdquo; The only control that updates Grok is documented as a rescan.</td>
+            </tr>
+            <tr>
+              <td>The install runs invisibly and reports nothing</td>
+              <td class="mono">grok-managed-runtime.ts</td>
+              <td class="wrap">That same click can fetch a 50&ndash;130&nbsp;MB archive, verify SHA256SUMS, verify a
+                  platform signature and swap the active version directory. There is no progress, no
+                  &ldquo;installed pwragent-v&hellip;&rdquo; result, and no error surface: failure is a
+                  <code>managedGrokLog.warn</code> and a silent fall back to the cached build.</td>
+            </tr>
+            <tr>
+              <td><span class="mono">Use</span> on a PwrAgent build freezes it forever</td>
+              <td class="mono">AcpAgentsSettings</td>
+              <td class="wrap"><code>onUse</code> calls <code>commitPath(instance.command)</code>, writing the
+                  <em>version-specific</em> path as a manual override &mdash; and an override beats
+                  everything in <code>resolveActiveAcpInstance</code>. The reported machine is pinned to
+                  <span class="mono">versions/pwragent-v1.0.4-pwragent.2/grok</span>. When a newer tag
+                  publishes, PwrAgent will download it and keep launching the old one, indefinitely,
+                  with no indication. The override was never needed: with managed builds on, discovery
+                  splices the managed instance <em>ahead</em> of every PATH install, so it already wins.</td>
+            </tr>
+            <tr>
+              <td>A pinned PwrAgent build stops counting as one</td>
+              <td class="mono">grok-cli-update.ts:39</td>
+              <td class="wrap">Channel ownership is decided by <code>GROK_INSTALLER=pwragent</code>, and discovery
+                  stamps that only when <code>active.command</code> is string-equal to the command
+                  <em>this run&rsquo;s release check resolved</em>. Pin an older managed version &mdash; or
+                  let the check fail with no cache, or turn the toggle off while an override still points
+                  into <code>versions/</code> &mdash; and the identical binary silently changes channel.
+                  The xAI updater is then run against a PwrAgent build and its answer is shown to the
+                  operator. This is the mechanism behind the reported toast.</td>
+            </tr>
+            <tr>
+              <td>The notice does not name its channel</td>
+              <td class="mono">buildGrokCliUpdateNotice</td>
+              <td class="wrap">Title: <span class="mono">Grok update available</span>. Message:
+                  <span class="mono">Grok 1.0.5 is available; 1.0.4-pwragent.2 is installed.</span> Both
+                  are &ldquo;Grok versions&rdquo;; neither says whose. A reader holding a PwrAgent build
+                  cannot tell whether they are being told about their build or about a different product.</td>
+            </tr>
+            <tr>
+              <td>The PwrAgent channel has no notice at all</td>
+              <td class="mono">features/notifications/</td>
+              <td class="wrap">There is no counterpart to <code>GrokCliUpdateNotice</code> for
+                  <code>pwrdrvr/grok-build</code>. The channel PwrAgent fully controls is the one it never
+                  reports on &mdash; not when it installs a build, not when a pin is holding an old one back,
+                  not when a check fails.</td>
+            </tr>
+            <tr>
+              <td>Detected paths do not distinguish the channels</td>
+              <td class="mono">SettingsPathRow</td>
+              <td class="wrap">Chips are <span class="mono">override</span>/<span class="mono">path</span>, a
+                  version, and <span class="mono">available</span>. Two rows, two different products, one
+                  vocabulary. The only channel signal is whether the operator recognises
+                  <code>.pwragent/agents/grok</code> inside the path.</td>
+            </tr>
+            <tr>
+              <td><span class="mono">x.ai/build</span> is the only release link that exists</td>
+              <td class="mono">GROK_BUILD_UPDATE_URL</td>
+              <td class="wrap">Correct for the xAI channel. Wrong for a PwrAgent build, whose release notes
+                  live at <span class="mono">github.com/pwrdrvr/grok-build/releases/tag/&lt;tag&gt;</span> and
+                  whose update is not something the operator downloads by hand at all.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">03</span>
+          <h2>As built</h2>
+          <p class="body">
+            The reported screen, recreated in the dark theme. Read it as an operator who wants to
+            know one thing: <strong>is my Grok build current, and if not, how do I fix that?</strong>
+          </p>
+        </div>
+
+        <div class="frame">
+          <div class="frame__cap"><b>As built</b> &mdash; Settings &rarr; AI Providers &rarr; Grok<span class="tag tag--bad">before</span></div>
+          <div class="frame__body">
+            <div class="sect">
+              <div class="sect__head">
+                <div class="sect__headtext">
+                  <p class="sect__eyebrow">Models</p>
+                  <p class="sect__title">Grok</p>
+                </div>
+                <span class="chip chip--ok">Discovered</span>
+              </div>
+              <div class="fields">
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">Enabled</p>
+                    <p class="fld__sub">Show this agent in the model picker and launch threads with it.</p>
+                  </div>
+                  <div class="fld__ctl">
+                    <span class="tgl"><span class="tgl__knob"></span><span class="tgl__txt">On</span></span>
+                  </div>
+                </div>
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">PwrAgent build</p>
+                    <p class="fld__sub">Download verified releases from pwrdrvr/grok-build and prefer the
+                      newest one for new threads. Packaged macOS and Windows apps require platform
+                      signing; manual paths still win.</p>
+                  </div>
+                  <div class="fld__ctl">
+                    <span class="tgl"><span class="tgl__knob"></span><span class="tgl__txt">On</span></span>
+                  </div>
+                </div>
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">Detected paths</p>
+                    <p class="fld__sub">Binaries detected on this machine. The active one runs new threads
+                      &mdash; click Use to pick another.</p>
+                    <span class="fld__src">2 found</span>
+                  </div>
+                  <div class="fld__ctl">
+                    <div class="paths">
+                      <div class="prow prow--sel">
+                        <span class="prow__body"><span class="prow__path">/Users/huntharo/.pwragent/agents/grok/versions/pwragent-v1.0.4-pwragent.2/grok</span></span>
+                        <span class="prow__chips"><span class="chip">override</span><span class="chip">v1.0.4-pwragent.2</span></span>
+                        <span class="prow__action"><span class="chip chip--ok">Using</span></span>
+                      </div>
+                      <div class="prow">
+                        <span class="prow__body"><span class="prow__path">/Users/huntharo/.grok/bin/grok</span></span>
+                        <span class="prow__chips"><span class="chip">path</span><span class="chip">v1.0.5</span><span class="chip">available</span></span>
+                        <span class="prow__action"><span class="btn">Use</span></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">Manual path</p>
+                    <p class="fld__sub">Enter an absolute path. Save checks it immediately and updates the
+                      binary used by new threads.</p>
+                    <span class="fld__src">active override</span>
+                  </div>
+                  <div class="fld__ctl">
+                    <div class="inputrow">
+                      <span class="input">/Users/huntharo/.pwragent/agents/grok/versions/pwragent-v1.0.4-pwragent.2/grok</span>
+                      <span class="btn btn--dim">Save</span>
+                      <span class="btn">Clear</span>
+                    </div>
+                    <p class="fld__help">Active for new threads &middot; v1.0.4-pwragent.2.</p>
+                  </div>
+                </div>
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">Re-probe</p>
+                    <p class="fld__sub">Re-run discovery for enabled agents (versions, installs, capabilities).</p>
+                  </div>
+                  <div class="fld__ctl">
+                    <div class="build__actions"><span class="btn">Refresh</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="note note--bad">
+              <span class="note__k">Reads</span>
+              <span>Nothing on this screen answers the question. The active row&rsquo;s chips are
+              <span class="mono">override</span> and <span class="mono">v1.0.4-pwragent.2</span> &mdash;
+              the second row shows <span class="mono">v1.0.5</span>, which looks strictly newer and
+              is a different product. <b>Refresh</b> is the update button and does not say so. And the
+              override in the Manual path field &mdash; almost certainly created by clicking
+              <span class="mono">Use</span> on the top row &mdash; has quietly turned an auto-updating
+              channel into a permanent pin.</span>
+            </div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">04</span>
+          <h2>Proposed &mdash; the build row becomes the update surface</h2>
+          <p class="body">
+            One new idea, applied consistently: <strong>the PwrAgent build row stops being a feature
+            switch and becomes a channel status block</strong> &mdash; installed tag, last check,
+            state, and the two verbs that follow from it. Everything else on the pane is edited, not
+            added: path rows gain a channel chip, the Manual path row learns to say when it is
+            pinning, and Re-probe stops being the secret updater.
+          </p>
+        </div>
+
+        <div class="frame">
+          <div class="frame__cap"><b>Proposed</b> &mdash; a newer verified build is available and the operator is pinned<span class="tag tag--good">after</span></div>
+          <div class="frame__body">
+            <div class="sect">
+              <div class="sect__head">
+                <div class="sect__headtext">
+                  <p class="sect__eyebrow">Models</p>
+                  <p class="sect__title">Grok</p>
+                </div>
+                <span class="chip chip--warn"><svg><use href="#i-down"></use></svg>Update ready</span>
+              </div>
+              <div class="fields">
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">Enabled</p>
+                    <p class="fld__sub">Show this agent in the model picker and launch threads with it.</p>
+                  </div>
+                  <div class="fld__ctl">
+                    <span class="tgl"><span class="tgl__knob"></span><span class="tgl__txt">On</span></span>
+                  </div>
+                </div>
+
+                <div class="fld fld--focus">
+                  <div>
+                    <p class="fld__label">PwrAgent build</p>
+                    <p class="fld__sub">PwrAgent downloads, verifies and installs Grok builds from
+                      pwrdrvr/grok-build. New threads use the newest verified build.</p>
+                    <span class="fld__src">pwrdrvr/grok-build</span>
+                  </div>
+                  <div class="fld__ctl">
+                    <div class="build">
+                      <div class="build__line">
+                        <span class="tgl"><span class="tgl__knob"></span><span class="tgl__txt">On</span></span>
+                        <span class="build__tag">pwragent-v1.0.4-pwragent.2</span>
+                        <span class="build__arrow">&rarr;</span>
+                        <span class="build__next">pwragent-v1.0.5-pwragent.1</span>
+                      </div>
+                      <div class="build__state build__state--warn">
+                        <span class="build__dot build__dot--warn"></span>
+                        <span>Newer verified build downloaded and ready &mdash; <b>not in use</b>, a manual path is pinning 1.0.4-pwragent.2. Checked 6 minutes ago.</span>
+                      </div>
+                      <div class="build__actions">
+                        <span class="btn btn--primary">Use newest build</span>
+                        <span class="btn btn--ghost">Check for updates</span>
+                        <span class="btn btn--ghost"><svg><use href="#i-ext"></use></svg>Release notes</span>
+                      </div>
+                      <p class="fld__help">Release notes open
+                        <span class="mono">github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.5-pwragent.1</span>.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">Detected paths</p>
+                    <p class="fld__sub">Binaries detected on this machine. The active one runs new threads
+                      &mdash; click Use to pick another.</p>
+                    <span class="fld__src">3 found</span>
+                  </div>
+                  <div class="fld__ctl">
+                    <div class="paths">
+                      <div class="prow prow--sel">
+                        <span class="prow__body">
+                          <span class="prow__path">/Users/huntharo/.pwragent/agents/grok/versions/pwragent-v1.0.4-pwragent.2/grok</span>
+                          <span class="prow__sub"><b>Pinned</b> by the manual path below &mdash; new builds will download but never run.</span>
+                        </span>
+                        <span class="prow__chips"><span class="chip chip--warn"><svg><use href="#i-pin"></use></svg>pinned</span><span class="chip">PwrAgent build</span><span class="chip">v1.0.4-pwragent.2</span></span>
+                        <span class="prow__action"><span class="chip chip--ok">Using</span></span>
+                      </div>
+                      <div class="prow prow--warn">
+                        <span class="prow__body">
+                          <span class="prow__path">/Users/huntharo/.pwragent/agents/grok/versions/pwragent-v1.0.5-pwragent.1/grok</span>
+                          <span class="prow__sub">Verified and installed 6 minutes ago. This is what new threads would use.</span>
+                        </span>
+                        <span class="prow__chips"><span class="chip chip--warn">newest</span><span class="chip">PwrAgent build</span><span class="chip">v1.0.5-pwragent.1</span></span>
+                        <span class="prow__action"><span class="btn btn--primary">Use</span></span>
+                      </div>
+                      <div class="prow">
+                        <span class="prow__body">
+                          <span class="prow__path">/Users/huntharo/.grok/bin/grok</span>
+                          <span class="prow__sub">Updated by xAI, not by PwrAgent.</span>
+                        </span>
+                        <span class="prow__chips"><span class="chip chip--info">xAI build</span><span class="chip">on PATH</span><span class="chip">v1.0.5</span></span>
+                        <span class="prow__action"><span class="btn">Use</span></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">Manual path</p>
+                    <p class="fld__sub">Enter an absolute path. Save checks it immediately and updates the
+                      binary used by new threads.</p>
+                    <span class="fld__src">pinning a PwrAgent build</span>
+                  </div>
+                  <div class="fld__ctl">
+                    <div class="inputrow">
+                      <span class="input">/Users/huntharo/.pwragent/agents/grok/versions/pwragent-v1.0.4-pwragent.2/grok</span>
+                      <span class="btn btn--dim">Save</span>
+                      <span class="btn">Clear</span>
+                    </div>
+                    <p class="fld__help fld__help--warn">This path pins <b>one</b> PwrAgent build.
+                      Newer verified builds will keep downloading and will never run. Clear it to let
+                      PwrAgent follow the newest build again.</p>
+                  </div>
+                </div>
+
+                <div class="fld">
+                  <div>
+                    <p class="fld__label">Re-probe</p>
+                    <p class="fld__sub">Re-run discovery for enabled agents (versions, installs,
+                      capabilities). Release checks have their own control above.</p>
+                  </div>
+                  <div class="fld__ctl">
+                    <div class="build__actions"><span class="btn">Refresh</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="note note--good">
+              <span class="note__k">Reads</span>
+              <span>Installed tag, newest tag, when it was checked, and why the newest one is not
+              running &mdash; four facts, one line each. <b>Use newest build</b> is the whole fix for
+              the reported machine and it is a single click. The two products are now visually
+              different: <span class="mono">PwrAgent build</span> versus
+              <span class="mono">xAI build</span>, on the row, before the version.</span>
+            </div>
+            <div class="note">
+              <span class="note__k">Free</span>
+              <span>Every value in the build block is already on disk. The managed runtime writes
+              <code>{ tag, checkedAt, installedAt, asset, sha256 }</code> next to the install, and the
+              &ldquo;newest&rdquo; tag is simply the tag the last check resolved &mdash; a pinned operator&rsquo;s
+              forced check <em>already</em> downloads and installs it, it just never runs it. Nothing here
+              needs a second network call or a new release-feed parser; it needs the metadata surfaced
+              over IPC and a version list instead of a single command.</span>
+            </div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">05</span>
+          <h2>The build block, in every state it can be in</h2>
+          <p class="body">
+            One block, six states. The dot colour and the first sentence are the whole status; the
+            buttons follow from it. Note the state most operators live in &mdash; <b>up to date</b>
+            &mdash; carries no action beyond an explicit re-check, because on this channel PwrAgent
+            has already done the work.
+          </p>
+        </div>
+
+        <div class="states">
+          <div class="state">
+            <span class="state__k">Up to date &middot; the common case</span>
+            <div class="build">
+              <div class="build__line"><span class="build__tag">pwragent-v1.0.4-pwragent.2</span><span class="chip chip--ok"><svg><use href="#i-check"></use></svg>newest</span></div>
+              <div class="build__state"><span class="build__dot"></span><span>Up to date &middot; checked 2 hours ago</span></div>
+              <div class="build__actions"><span class="btn btn--ghost">Check for updates</span><span class="btn btn--ghost"><svg><use href="#i-ext"></use></svg>Release notes</span></div>
+            </div>
+            <p class="state__why"><b>No install button.</b> On this channel there is nothing for the
+              operator to install &mdash; PwrAgent already did.</p>
+          </div>
+
+          <div class="state">
+            <span class="state__k">Checking</span>
+            <div class="build">
+              <div class="build__line"><span class="build__tag">pwragent-v1.0.4-pwragent.2</span></div>
+              <div class="build__state"><span class="build__dot build__dot--busy"></span><span>Checking pwrdrvr/grok-build&hellip;</span></div>
+              <div class="build__actions"><span class="btn btn--ghost btn--dim">Checking&hellip;</span></div>
+            </div>
+            <p class="state__why">Pending state on the control the operator pressed &mdash; not on the
+              whole pane.</p>
+          </div>
+
+          <div class="state">
+            <span class="state__k">Installing</span>
+            <div class="build">
+              <div class="build__line"><span class="build__tag">pwragent-v1.0.4-pwragent.2</span><span class="build__arrow">&rarr;</span><span class="build__next">pwragent-v1.0.5-pwragent.1</span></div>
+              <div class="build__state"><span class="build__dot build__dot--busy"></span><span>Downloading 46&nbsp;MB of 118&nbsp;MB &middot; then checksum and signature</span></div>
+              <span class="bar"><span class="bar__fill"></span></span>
+            </div>
+            <p class="state__why">A 50&ndash;130&nbsp;MB fetch deserves a progress line. Today it happens
+              behind a button labelled <b>Refresh</b>.</p>
+          </div>
+
+          <div class="state">
+            <span class="state__k">Pinned &middot; the reported machine</span>
+            <div class="build">
+              <div class="build__line"><span class="build__tag">pwragent-v1.0.4-pwragent.2</span><span class="build__arrow">&rarr;</span><span class="build__next">pwragent-v1.0.5-pwragent.1</span></div>
+              <div class="build__state build__state--warn"><span class="build__dot build__dot--warn"></span><span>Ready but <b>not in use</b> &mdash; a manual path is pinning this build</span></div>
+              <div class="build__actions"><span class="btn btn--primary">Use newest build</span><span class="btn btn--ghost"><svg><use href="#i-ext"></use></svg>Release notes</span></div>
+            </div>
+            <p class="state__why">The only state where an operator action is genuinely required, and
+              the only one that earns a durable notice (&sect;06).</p>
+          </div>
+
+          <div class="state">
+            <span class="state__k">Check failed</span>
+            <div class="build">
+              <div class="build__line"><span class="build__tag">pwragent-v1.0.4-pwragent.2</span><span class="chip">still running</span></div>
+              <div class="build__state build__state--err"><span class="build__dot build__dot--err"></span><span>Last check failed 1 hour ago &mdash; GitHub API rate limit</span></div>
+              <div class="build__actions"><span class="btn btn--ghost">Try again</span></div>
+            </div>
+            <p class="state__why">Says what still runs. A failed check is not a broken Grok, and the
+              copy should not imply it is.</p>
+          </div>
+
+          <div class="state">
+            <span class="state__k">Off &middot; packaged, unsigned, or disabled</span>
+            <div class="build">
+              <div class="build__line"><span class="tgl tgl--off"><span class="tgl__knob"></span><span class="tgl__txt">Off</span></span></div>
+              <div class="build__state"><span class="build__dot build__dot--idle"></span><span>PwrAgent is not managing a Grok build. New threads use the xAI install on PATH.</span></div>
+            </div>
+            <p class="state__why">Names the consequence, not the setting. This is also the state that
+              must stop the PwrAgent-channel notices from firing.</p>
+          </div>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">06</span>
+          <h2>The notices &mdash; one channel, named, per operator</h2>
+          <p class="body">
+            The reported toast is on the left. It is the xAI notice, raised against a PwrAgent build,
+            with no channel in the title and an <span class="mono">x.ai/build</span> link that has
+            nothing to do with the binary in use. On the right, three notices that each name their
+            channel in the first two words and never mention the other one&rsquo;s versions or links.
+          </p>
+        </div>
+
+        <div class="cols">
+          <div>
+            <p class="col__cap col__cap--bad">Today &mdash; one notice, no channel</p>
+            <div class="toasts">
+              <div class="toast toast--warn">
+                <div>
+                  <p class="toast__eyebrow">Grok update available</p>
+                  <p class="toast__msg">Grok 1.0.5 is available; 1.0.4-pwragent.2 is installed.</p>
+                  <p class="toast__detail">Update Grok from x.ai/build, then restart active Grok sessions.</p>
+                  <p class="toast__life">durable &middot; never auto-dismisses</p>
+                </div>
+                <span class="toast__x"><svg width="11" height="11"><use href="#i-x"></use></svg></span>
+                <div class="toast__actions">
+                  <span class="btn btn--primary">Open update page</span>
+                  <span class="btn btn--ghost">Tomorrow</span>
+                </div>
+              </div>
+            </div>
+            <div class="note note--bad">
+              <span class="note__k">Why</span>
+              <span>Two version numbers from two different products in one sentence, and the one
+              button sends a PwrAgent-build operator to a vendor download page that cannot help them.
+              It is durable, so it stays until clicked.</span>
+            </div>
+          </div>
+
+          <div>
+            <p class="col__cap col__cap--good">Proposed &mdash; the active channel, named</p>
+            <div class="toasts">
+              <div class="toast toast--warn">
+                <div>
+                  <p class="toast__eyebrow">PwrAgent Grok build &middot; update not in use</p>
+                  <p class="toast__msg">PwrAgent Grok 1.0.5-pwragent.1 is verified and installed, but a manual path is pinning 1.0.4-pwragent.2, so new threads keep using the older build.</p>
+                  <p class="toast__detail">Use newest build clears the pinned path. Running threads keep the build they started on.</p>
+                  <p class="toast__life">durable &middot; once per new tag</p>
+                </div>
+                <span class="toast__x"><svg width="11" height="11"><use href="#i-x"></use></svg></span>
+                <div class="toast__actions">
+                  <span class="btn btn--primary">Use newest build</span>
+                  <span class="btn btn--ghost"><svg><use href="#i-ext"></use></svg>Release notes</span>
+                  <span class="btn btn--ghost">Tomorrow</span>
+                </div>
+              </div>
+
+              <div class="toast toast--ok">
+                <div>
+                  <p class="toast__eyebrow">PwrAgent Grok build updated</p>
+                  <p class="toast__msg">Installed PwrAgent Grok 1.0.5-pwragent.1, replacing 1.0.4-pwragent.2. New threads use it now.</p>
+                  <p class="toast__life">transient &middot; auto-dismisses</p>
+                </div>
+                <span class="toast__x"><svg width="11" height="11"><use href="#i-x"></use></svg></span>
+                <div class="toast__actions">
+                  <span class="btn btn--ghost"><svg><use href="#i-ext"></use></svg>Release notes</span>
+                </div>
+              </div>
+
+              <div class="toast toast--warn">
+                <div>
+                  <p class="toast__eyebrow">xAI Grok CLI update available</p>
+                  <p class="toast__msg">xAI Grok 1.0.5 is available. Your xAI install at ~/.grok/bin/grok is 1.0.4.</p>
+                  <p class="toast__detail">PwrAgent does not update this build. Update it from x.ai/build, then restart active Grok sessions.</p>
+                  <p class="toast__life">durable &middot; only when an xAI install is active</p>
+                </div>
+                <span class="toast__x"><svg width="11" height="11"><use href="#i-x"></use></svg></span>
+                <div class="toast__actions">
+                  <span class="btn btn--primary">Open x.ai/build</span>
+                  <span class="btn btn--ghost">Tomorrow</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="note">
+          <span class="note__k">Cadence</span>
+          <span>An operator on the PwrAgent channel who is <b>not</b> pinned should never be asked to
+          install anything &mdash; PwrAgent installs it itself within the check window. That is why
+          the middle notice is a transient <em>result</em>, not a durable <em>request</em>: it answers
+          &ldquo;what changed?&rdquo; and gets out of the way. The durable one fires only when a
+          decision is genuinely stuck with the operator.</span>
+        </div>
+
+        <div class="note note--good">
+          <span class="note__k">Invariant</span>
+          <span>Worth an explicit test, because it is the whole point of the change: <b>a notice must
+          never mention a version from the channel the active runtime does not belong to.</b> The
+          xAI notice must not appear for a PwrAgent build; the PwrAgent notices must not appear for
+          an xAI install; neither may link to the other&rsquo;s release page.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">07</span>
+          <h2>The build</h2>
+          <p class="body">
+            Ordered so the correctness fix lands first &mdash; items 1 and 2 alone stop the wrong
+            toast, without any new UI.
+          </p>
+        </div>
+
+        <ol class="checks">
+          <li><span class="n">1</span><span><b>Decide channel by provenance, not by string equality.</b>
+            <code>isPwrAgentOwnedGrokRuntime</code> must be true for any command under the managed
+            <code>agents/grok/versions/</code> root or inside the app bundle &mdash; not only for the exact
+            command this run&rsquo;s release check resolved. Stamp <code>GROK_INSTALLER=pwragent</code> on that
+            basis in <code>acp-instance-discovery.ts</code>. Fixes findings 5 and, with it, the reported toast.</span></li>
+          <li><span class="n">2</span><span><b>Name the channel in every notice.</b> Split
+            <code>buildGrokCliUpdateNotice</code> into an xAI notice and a PwrAgent-build notice; put the
+            channel in the title; route the release link per channel &mdash;
+            <code>x.ai/build</code> for xAI,
+            <span class="mono">github.com/pwrdrvr/grok-build/releases/tag/&lt;tag&gt;</span> for PwrAgent builds.</span></li>
+          <li><span class="n">3</span><span><b>Surface the managed metadata over IPC.</b> The install already
+            records <code>tag</code>, <code>checkedAt</code> and <code>installedAt</code>; add a managed-build
+            block to the Grok settings entry carrying installed tag, newest known tag, checked-at, and the
+            last check error. No new network call.</span></li>
+          <li><span class="n">4</span><span><b>Build the status block and its two verbs.</b>
+            <span class="mono">Check for updates</span> forces a managed release check on its own, rather than
+            riding inside <span class="mono">Refresh</span>; <span class="mono">Use newest build</span> appears
+            only when a newer verified build is installed and something is holding it back.</span></li>
+          <li><span class="n">5</span><span><b>Chip the channel on every detected path.</b>
+            <span class="mono">PwrAgent build</span> / <span class="mono">xAI build</span>, plus
+            <span class="mono">newest</span> / <span class="mono">pinned</span> for managed versions.
+            Show every installed managed version, not just the active one.</span></li>
+          <li><span class="n">6</span><span><b>Make the Manual path row admit when it is pinning.</b> When the
+            saved override resolves inside the managed versions root, say that newer builds will download and
+            never run, and offer the one-click way out.</span></li>
+          <li><span class="n">7</span><span><b>Re-label Re-probe.</b> It keeps forcing discovery; it stops being
+            the only way to check for a Grok release, and its sub-line points at the control that is.</span></li>
+          <li class="is-decision"><span class="n">8</span><span><b>Decision 1 &mdash; should
+            <span class="mono">Use</span> on a managed row write a path override at all?</b> It is what creates
+            the trap: with managed builds on, the managed instance already wins without an override, so the
+            override adds nothing and freezes the version. The clean fix is for <span class="mono">Use</span> on
+            the newest managed row to <em>clear</em> the override rather than write one. That changes existing
+            behaviour for anyone who used it deliberately as a pin &mdash; hence a decision, not a checkbox.
+            Recommended: change it, and keep the Manual path field as the explicit, labelled way to pin.</span></li>
+          <li class="is-decision"><span class="n">9</span><span><b>Decision 2 &mdash; does the PwrAgent channel get
+            a durable notice at all?</b> The pane banner may be enough, and the app already avoids nagging about
+            things it fixes itself. Recommended: yes, but only for the pinned-and-stale case, once per new tag,
+            snoozeable &mdash; that is the one state that never resolves on its own.</span></li>
+          <li class="is-decision"><span class="n">10</span><span><b>Decision 3 &mdash; should a managed install be
+            announced when it succeeds?</b> Today an operator&rsquo;s Grok binary can change underneath them with
+            no record anywhere in the UI. Recommended: yes, as the transient success notice in &sect;06 &mdash;
+            cheap, auto-dismissing, and the only place &ldquo;what changed?&rdquo; is ever answered.</span></li>
+        </ol>
+
+        <p class="footer">
+          Reviewed against <code>apps/desktop/src/main/acp/grok-managed-runtime.ts</code>,
+          <code>main/acp/grok-cli-update.ts</code>,
+          <code>main/acp/acp-instance-discovery.ts</code>,
+          <code>main/acp/acp-instance-resolver.ts</code>,
+          <code>main/app-server/acp-backend-adapter.ts</code>,
+          <code>main/ipc/settings.ts</code>,
+          <code>renderer/features/settings/AcpAgentsSettings.tsx</code>,
+          <code>renderer/features/notifications/GrokCliUpdateNotice.tsx</code>,
+          <code>packages/shared/src/contracts/backend.ts</code> and
+          <code>docs/bundled-grok-acp.md</code>.
+          Release facts read from <code>pwrdrvr/grok-build</code> on 2026-09-02.
+          Tokens copied from the bare <code>:root</code> block of <code>app.css</code>.
+        </p>
+      </div>
+    </x-dc>
+  </body>
+</html>

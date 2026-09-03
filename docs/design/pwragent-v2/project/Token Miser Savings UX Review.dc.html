@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="stylesheet" href="./token-miser-savings-review.css" />
+      </helmet>
+      <div class="page" data-screen-label="Token Miser Savings UX review">
+        <p class="eyebrow">UX review · 2026-09-02 · Token Miser Savings lens</p>
+        <h1>The Savings lens lost its list</h1>
+        <p class="lede">
+          The lens answers one question: what did gating buy, and where. The
+          headline still answers it. Everything under the headline has grown
+          into six fixed-height bands of monospace prose, and at the window size
+          it actually runs in they add up to more than the window, so the one
+          scrollable, explorable part of the screen is squeezed to a single row.
+        </p>
+        <dl class="meta">
+          <div><dt>Surface</dt><dd>Tool Output window · Savings lens<br /><span class="mono" style="font-size:11px;color:var(--text-muted)">ToolOutputIncidentExplorerWindow.tsx · TokenMiserSavingsLens</span></dd></div>
+          <div><dt>Observed at</dt><dd>1000 × 700 CSS px window (2× screenshot)<br /><span style="color:var(--text-muted)">620 px below the lens tabs</span></dd></div>
+          <div><dt>Stage</dt><dd>Shipped in #1926, one day old<br /><span style="color:var(--text-muted)">Layout regression, not a data problem</span></dd></div>
+          <div><dt>Verdict</dt><dd>Two blocking findings, three should-fix<br /><span style="color:var(--text-muted)">Option A recommended</span></dd></div>
+        </dl>
+
+        <div class="callout">
+          <p><b style="color:var(--text-primary)">Where the chart went.</b> The chart
+          you remember on the top right is the Incidents lens' <i>When it went</i>
+          turn strip. That lens lays its summary out as a two-column grid, headline
+          left and timeline right. The Savings lens never had a chart until #1926
+          added <i>Context by turn</i> yesterday, and it went in as a full-width
+          band between the hero and the results, with its own top and bottom
+          rules and a 72 px plot. The fix is to give the Savings lens the same
+          two-column hero the Incidents lens already has.</p>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="sec-head">
+          <p class="eyebrow">Findings</p>
+          <h2>What is wrong, in order of damage</h2>
+        </div>
+
+        <div class="grouphead g-block"><span>Blocking</span><hr /></div>
+
+        <div class="finding finding-blocking">
+          <div class="f-head"><span class="f-id f-id-block">F1</span><span class="f-title">The results list gets whatever height is left, and nothing is left</span></div>
+          <p class="f-body">Every band above the list is <code>flex: none</code> or has a fixed plot height. The list is the only <code>flex: 1</code> child with <code>min-height: 0</code>, so it absorbs the whole shortfall. At 700 px tall the fixed bands and their gaps use roughly 600 px before the results section starts, and the list, which is the only part of this screen you can actually explore, renders one row with a scrollbar. It reads as broken rather than as a scrolling list.</p>
+          <div class="f-ev"><b>Height budget at 1000 × 700, from the 2× screenshot:</b> chrome 70 · hero ≈160 (the three terms wrap under the confidence chip because their 560 px minimum plus the left column does not fit) · two caption lines ≈40 · Context by turn ≈105 · Context boundaries ≈75 · Code Mode ≈55 · gaps and padding ≈95 → ≈600 px spent before the results header, leaving a header and one 48 px row.</div>
+          <p class="f-fix"><strong>Fix:</strong> give the list a floor (three rows, about 160 px) and make the bands above it the thing that yields. Move the chart into the hero's right column, collapse the three prose sections into one-line rows, and let the operator drag the boundary.</p>
+        </div>
+
+        <div class="finding finding-blocking">
+          <div class="f-head"><span class="f-id f-id-block">F2</span><span class="f-title">Nothing above the list collapses, and there is no grip</span></div>
+          <p class="f-body">Context boundaries and Code Mode behavior are reference data. They matter on the day you are checking a compaction or debugging a dispatch cluster, and not otherwise. They are always fully expanded, and the divider above the results is a plain rule, so the operator has no recourse: they cannot fold what they are not reading and cannot pull the list taller.</p>
+          <p class="f-fix"><strong>Fix:</strong> each secondary section becomes a <code>details</code> row whose closed state carries its two or three headline numbers. A <code>row-resize</code> grip sits between the details stack and the results. Open state and grip height persist per machine in the renderer, never federated, the same rule as drafts.</p>
+        </div>
+
+        <div class="grouphead g-should"><span>Should fix</span><hr /></div>
+
+        <div class="finding">
+          <div class="f-head"><span class="f-id">F3</span><span class="f-title">Eight lines of dot-joined monospace with no hierarchy</span></div>
+          <p class="f-body">Between the hero and the list there are eight caption lines, all 11.5 px IBM Plex Mono in <code>--text-muted</code>, each a run of five to nine numbers separated by middle dots. Every number has the same weight, size, and colour as its label, so nothing is a landmark. The same counts appear three times: 18 summarized and 5 passed through are in the first caption, in the Code Mode line, and in the results filter row. Zero-valued items (0 policy pass-throughs, 0 patch cells, 0 polling cells) occupy the same space as the ones that carry information.</p>
+          <p class="f-fix"><strong>Fix:</strong> numbers become values in a labeled grid, label above in 10 px caps, value in 13.5 px mono primary. Each count appears once. Zeros stay visible but muted, matching the Attention lens rule that a missing indicator looks broken. The closed accordion row is the only place a section repeats its headline numbers.</p>
+        </div>
+
+        <div class="finding">
+          <div class="f-head"><span class="f-id">F4</span><span class="f-title">The three savings terms are shown as three tiles, not as an equation</span></div>
+          <p class="f-body">Savings is term 1 minus terms 2 and 3. The as-built record for the Pricing rail already documents that arithmetic, but the lens shows the terms as three equal tiles with no operators, and the total sits 60 px above them in a different type size. The reader has to do the subtraction to believe the headline.</p>
+          <p class="f-fix"><strong>Fix:</strong> lay the terms out as a subtraction that ends in the headline, with a proportional bar underneath that shows how much of the unfiltered cost was avoided. Five numbers become one sentence.</p>
+        </div>
+
+        <div class="finding">
+          <div class="f-head"><span class="f-id">F5</span><span class="f-title">Context by turn is a 105 px band for a chart that usually has one column</span></div>
+          <p class="f-body">The plot is 72 px tall, has its own header row, legend, caption, and two full-width rules. Columns are capped at 24 px, so a short thread draws a single orange bar in the far left of a 964 px empty box. The chart earns its place as a verification signal, but it is a sparkline, not a section.</p>
+          <p class="f-fix"><strong>Fix:</strong> 56 px plot in a 300 px column to the right of the headline. Columns stay 24 px max so a long thread still reads. Legend and the one-line caption stay; the section rules go.</p>
+        </div>
+
+        <div class="grouphead g-polish"><span>Polish</span><hr /></div>
+
+        <div class="finding">
+          <div class="f-head"><span class="f-id">F6</span><span class="f-title">The confidence chip is a box in a screen of no boxes</span></div>
+          <p class="f-body">The green Directly observed chip is the only bordered, filled element in the hero and it is 38 px tall. It is important (it says whether the figure was measured or reconstructed) but a dot plus a line of text carries the same meaning at a third of the height, and it reads better placed under the bar as the basis of the figure.</p>
+        </div>
+
+        <div class="grouphead g-clean"><span>What works</span><hr /></div>
+
+        <div class="finding">
+          <p class="f-body">The orange headline figure is the right first read and the right colour. The observed-versus-unfiltered comparison line is the right second read. The filter row on the results, with counts in every pill and disabled pills for empty groups, is exactly right and is kept in every option. Money in mono, labels in Geist, holds throughout.</p>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="sec-head">
+          <p class="eyebrow">As built</p>
+          <h2>The height budget, measured</h2>
+          <p class="body">Token-accurate recreation at 1000 × 700, the size in the screenshot. The ruler on the right is the vertical budget of this recreation; the app's type metrics are about ten percent tighter and end in the same place, a results header over one clipped row. Project and thread names are placeholders.</p>
+        </div>
+
+        <div class="opt-frame" style="width:1180px">
+          <div class="win" data-screen-label="As built">
+            <div class="tb">
+              <div class="tb-lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+              <span class="tb-brand">Pwr<b>Agent</b></span>
+              <div class="tb-crumb"><span>acme-services</span><span>›</span><span class="tb-chip">#Variant · 5th run</span><span>›</span><span class="cur">Token Miser Savings</span><span class="tb-pill">OpenAI</span></div>
+              <div class="tb-sp"></div>
+              <span class="tb-btn">Analyze history</span><span class="tb-link">Refresh</span>
+            </div>
+            <div class="lenses"><div class="lens on">Savings <em>2,434k avoided</em></div><div class="lens">Incidents <em>11 cases</em></div></div>
+            <div class="savings" style="gap:8px;line-height:1.3;padding-bottom:12px">
+              <div class="hero" style="gap:8px 32px">
+                <div>
+                  <p class="eb">Estimated same-trajectory savings</p>
+                  <p class="fig"><strong>$1.39</strong><span>50.3% less than estimated unfiltered cost</span></p>
+                  <p class="cmp">Observed thread cost <b>$1.38</b> · estimated same-trajectory cost without filtering <b>$2.77</b></p>
+                  <p class="conf" style="padding:3px 10px;margin-top:8px"><i></i>Directly observed · 370 payload replays across 23 decisions (5 pass-through), each counted at a request boundary</p>
+                </div>
+                <dl class="terms">
+                  <div><dt>1 · Without the gate</dt><dd>$1.65<span>157k uncached + 2,559k cached · gated tool output at gpt-5.6-sol rates</span></dd></div>
+                  <div><dt>2 · Gate compute</dt><dd>$0.07<span>309k total · gpt-5.6-luna</span></dd></div>
+                  <div><dt>3 · Revealed to parent</dt><dd>$0.19<span>21.2k uncached + 260k cached · summaries, retrievals, and deliberate pass-throughs</span></dd></div>
+                </dl>
+              </div>
+              <p class="cap">18 summarized · 5 passed through · 2.9k summary tokens · 18.3k pass-through tokens · nothing read back later</p>
+              <p class="cap">23 decisions · 23 Luna evaluations · 0 policy pass-throughs · 5 helper pass-throughs</p>
+              <div class="ctx">
+                <div class="ctx-head"><p class="eb">Context by turn</p><p class="legend"><i class="lf"></i> final <i class="lp"></i> peak <i class="lc"></i> compaction boundary</p></div>
+                <div class="chart" style="height:56px"><div class="col"><i style="height:25%"></i><b style="height:25%"></b></div></div>
+                <p class="cap">1 parent turn · 1 with context measurements · 0 compaction boundaries</p>
+              </div>
+              <div class="gates fixed">
+                <div class="gates-head"><p class="eb">Context boundaries</p></div>
+                <p class="cap">0 parent compactions · 0 compaction-attributed cold replay tokens · no attributed cold-replay cost</p>
+                <p class="cap">Token Miser replay savings stop at each recorded compaction boundary.</p>
+                <p class="cap">Peak context 64.6k / 258k (25.0%) · final context 64.6k / 258k (25.0%)</p>
+              </div>
+              <div class="gates" style="flex:1 1 auto;min-height:0;overflow:hidden">
+                <div class="gates-head"><p class="eb">Code Mode behavior</p></div>
+                <p class="cap">37 Code Mode calls · 0 command-bearing cells · 0 nested command invocations · 0.00 per command cell · 0 dispatch clusters · 0 multi-invocation</p>
+                <p class="cap">0 direct command cells · 23 reducer decisions · 18 summarized · 5 explicit pass-through · 0 patch cells · 37 other cells · 0 retrieval cells · 0 polling cells</p>
+              </div>
+              <div class="gates" style="flex:none;height:72px;overflow:hidden">
+                <div class="gates-head"><p class="eb">Tool output results</p><div class="filters"><span class="filt on">All <em>37</em></span><span class="filt">Wins <em>18</em></span><span class="filt dis">Misses <em>0</em></span><span class="filt dis">Big misses <em>0</em></span><span class="filt">Pass-throughs <em>5</em></span><span class="filt">Direct <em>14</em></span></div></div>
+                <ul class="glist" style="overflow:hidden">
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>4.5k → 167 summary</span></div><span class="gv">+4.4k</span></div></li>
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>12.1k → 210 summary</span></div><span class="gv">+11.9k</span></div></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div class="ruler">
+            <div class="band ok" style="top:0;height:80px"><b>80</b>chrome</div>
+            <div class="band" style="top:80px;height:222px"><b>≈195</b>hero, terms wrapped to a second row</div>
+            <div class="band" style="top:302px;height:46px"><b>≈40</b>two caption lines</div>
+            <div class="band" style="top:348px;height:126px"><b>≈120</b>Context by turn, one column</div>
+            <div class="band" style="top:474px;height:96px"><b>≈90</b>Context boundaries</div>
+            <div class="band" style="top:570px;height:46px"><b>≈90 needed</b>Code Mode, clipped</div>
+            <div class="band bad" style="top:616px;height:84px"><b>≈72</b>results: header, then one row</div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="sec-head">
+          <p class="eyebrow">Proposals</p>
+          <h2>Three layouts, same data, same tokens</h2>
+          <p class="body">All three keep the headline figure, the confidence signal, the Context by turn chart, and the filterable results list. They differ in where the reference numbers live. Each frame is 1000 × 700, the size that broke.</p>
+        </div>
+
+        <div class="opt" id="a">
+          <div class="opt-head"><span class="opt-id">A</span><span class="opt-name">Ledger: equation hero, chart on the right, three folding rows, a grip</span><span class="opt-rec">Recommended</span></div>
+          <p class="opt-note">The hero becomes the same two-column grid the Incidents lens uses. The three terms read as a subtraction that ends in the headline, with a bar showing the avoided share. Decisions, Context boundaries, and Code Mode fold into single rows whose closed state carries the numbers you would scan for. Below the grip, the results get four full rows at 700 px and every pixel past that.</p>
+          <div class="opt-frame">
+          <span class="pin pin-ok" style="left:1006px;top:92px">1</span>
+          <span class="pin pin-ok" style="left:-28px;top:158px">2</span>
+          <span class="pin pin-ok" style="left:-28px;top:274px">3</span>
+          <span class="pin pin-ok" style="left:-28px;top:376px">4</span>
+          <span class="pin pin-ok" style="left:-28px;top:404px">5</span>
+          <div class="win" data-screen-label="Option A Ledger">
+            <div class="tb">
+              <div class="tb-lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+              <span class="tb-brand">Pwr<b>Agent</b></span>
+              <div class="tb-crumb"><span>acme-services</span><span>›</span><span class="tb-chip">#Variant · 5th run</span><span>›</span><span class="cur">Token Miser Savings</span><span class="tb-pill">OpenAI</span></div>
+              <div class="tb-sp"></div>
+              <span class="tb-btn">Analyze history</span><span class="tb-link">Refresh</span>
+            </div>
+            <div class="lenses"><div class="lens on">Savings <em>2,434k avoided</em></div><div class="lens">Incidents <em>11 cases</em></div></div>
+            <div class="savings">
+              <div class="hero2">
+                <div>
+                  <p class="eb">Estimated same-trajectory savings</p>
+                  <p class="big"><strong>$1.39</strong><span>50.3% less than the <b class="mono" style="color:var(--text-primary)">$2.77</b> this trajectory would have cost unfiltered</span></p>
+                  <dl class="eq">
+                    <div class="t"><dt>Without the gate</dt><dd>$1.65</dd></div><span class="op">−</span>
+                    <div class="t"><dt>Gate compute</dt><dd>$0.07</dd></div><span class="op">−</span>
+                    <div class="t"><dt>Revealed to parent</dt><dd>$0.19</dd></div><span class="op">=</span>
+                    <div class="t res"><dt>Saved</dt><dd>$1.39</dd></div>
+                  </dl>
+                  <div class="bar"><i class="b1" style="width:84%"></i><i class="b2" style="width:4%"></i><i class="b3" style="width:12%"></i></div>
+                  <div class="barcap"><span><b>84%</b> avoided · <b>4%</b> gate · <b>12%</b> revealed</span><span>observed thread cost <b>$1.38</b></span></div>
+                  <p class="conf2" style="margin-top:8px"><i></i>Directly observed · 370 payload replays across 23 decisions, each counted at a request boundary</p>
+                </div>
+                <div class="ctx2">
+                  <div class="ctx-head" style="margin:0"><p class="eb">Context by turn</p><p class="legend"><i class="lf"></i> final <i class="lp"></i> peak <i class="lc"></i> compaction</p></div>
+                  <div class="chart sm" style="margin:0"><div class="col"><i style="height:25%"></i><b style="height:25%"></b></div></div>
+                  <p class="cap">1 turn · peak 64.6k / 258k (25%) · 0 compactions</p>
+                </div>
+              </div>
+              <div class="acc">
+                <details><summary><span class="ch">▶</span><span class="lb">Decisions</span><span class="kv"><span><b>23</b> decisions</span><span><b>18</b> summarized</span><span><b>5</b> passed through</span><span><b>2,716k</b> kept out of parent</span><span class="dim"><b>0</b> read back</span></span></summary></details>
+                <details><summary><span class="ch">▶</span><span class="lb">Context boundaries</span><span class="kv"><span class="dim"><b>0</b> compactions</span><span><b>25%</b> peak of window</span><span><b>64.6k</b> final</span><span class="dim"><b>$0.00</b> cold replay</span></span></summary></details>
+                <details><summary><span class="ch">▶</span><span class="lb">Code Mode</span><span class="kv"><span><b>37</b> calls</span><span><b>23</b> gated</span><span><b>14</b> direct</span><span class="dim"><b>0</b> command cells</span><span class="dim"><b>0</b> dispatch clusters</span></span></summary></details>
+              </div>
+              <div class="grip"></div>
+              <div class="gates">
+                <div class="gates-head"><p class="eb">Tool output results</p><div class="filters"><span class="filt on">All <em>37</em></span><span class="filt">Wins <em>18</em></span><span class="filt dis">Misses <em>0</em></span><span class="filt dis">Big misses <em>0</em></span><span class="filt">Pass-throughs <em>5</em></span><span class="filt">Direct <em>14</em></span></div></div>
+                <ul class="glist">
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>4.5k → 167 summary</span></div><span class="gv">+4.4k</span></div></li>
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>12.1k → 210 summary</span></div><span class="gv">+11.9k</span></div></li>
+                  <li class="g pt"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>3.2k passed through unchanged</span></div><span class="gv">unchanged</span></div></li>
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>8.7k → 190 summary</span></div><span class="gv">+8.5k</span></div></li>
+                  <li class="g dr"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>1.1k result, not gated</span></div><span class="gv">direct</span></div></li>
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>6.3k → 154 summary</span></div><span class="gv">+6.1k</span></div></li>
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>9.9k → 201 summary</span></div><span class="gv">+9.7k</span></div></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          </div>
+          <table class="spec">
+            <thead><tr><th style="width:40px">Pin</th><th>Change</th><th>Why</th></tr></thead>
+            <tbody>
+              <tr><td class="n">1</td><td>Context by turn moves into a 300 px right column; plot 56 px; rules removed</td><td>Mirrors the Incidents lens grid. Costs 0 px of vertical budget because it sits beside the headline.</td></tr>
+              <tr><td class="n">2</td><td>Three terms become a subtraction ending in the headline, with a proportional bar</td><td>F4. The reader sees why $1.39 is $1.39 without doing arithmetic. The bar answers &ldquo;how much of the unfiltered cost went away&rdquo; at a glance.</td></tr>
+              <tr><td class="n">3</td><td>Decisions, Context boundaries, Code Mode fold to one-line rows; closed state shows three to five headline numbers, values bright, labels muted, zeros dimmed</td><td>F2, F3. Reference data is available but not paid for. Open state is a labeled four-column grid (see B).</td></tr>
+              <tr><td class="n">4</td><td>Row-resize grip between the details stack and the results; results floor at three rows</td><td>F1, F2. The operator decides the split. Persist height per machine in renderer local storage.</td></tr>
+              <tr><td class="n">5</td><td>Results list gets the remainder: four full rows here against one today, and the whole remainder at any taller window</td><td>F1. The explorable part of the screen is the biggest part.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="opt" id="b">
+          <div class="opt-head"><span class="opt-id">B</span><span class="opt-name">Tiles: same hero, one stat row instead of the accordion, one fold for the long tail</span></div>
+          <p class="opt-note">A riff on A for readers who want the six numbers that matter always visible. One tile row replaces the three accordion rows. Everything else (Luna evaluations, policy pass-throughs, cells by kind) lives under a single fold, shown open here so the labeled grid is visible. Costs about 20 px more than A when closed; the same when open.</p>
+          <div class="opt-frame">
+          <div class="win" data-screen-label="Option B Tiles">
+            <div class="tb">
+              <div class="tb-lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+              <span class="tb-brand">Pwr<b>Agent</b></span>
+              <div class="tb-crumb"><span>acme-services</span><span>›</span><span class="tb-chip">#Variant · 5th run</span><span>›</span><span class="cur">Token Miser Savings</span><span class="tb-pill">OpenAI</span></div>
+              <div class="tb-sp"></div>
+              <span class="tb-btn">Analyze history</span><span class="tb-link">Refresh</span>
+            </div>
+            <div class="lenses"><div class="lens on">Savings <em>2,434k avoided</em></div><div class="lens">Incidents <em>11 cases</em></div></div>
+            <div class="savings">
+              <div class="hero2">
+                <div>
+                  <p class="eb">Estimated same-trajectory savings</p>
+                  <p class="big"><strong>$1.39</strong><span>50.3% less than the <b class="mono" style="color:var(--text-primary)">$2.77</b> this trajectory would have cost unfiltered</span></p>
+                  <dl class="eq">
+                    <div class="t"><dt>Without the gate</dt><dd>$1.65</dd></div><span class="op">−</span>
+                    <div class="t"><dt>Gate compute</dt><dd>$0.07</dd></div><span class="op">−</span>
+                    <div class="t"><dt>Revealed to parent</dt><dd>$0.19</dd></div><span class="op">=</span>
+                    <div class="t res"><dt>Saved</dt><dd>$1.39</dd></div>
+                  </dl>
+                  <div class="bar"><i class="b1" style="width:84%"></i><i class="b2" style="width:4%"></i><i class="b3" style="width:12%"></i></div>
+                  <div class="barcap"><span><b>84%</b> avoided · <b>4%</b> gate · <b>12%</b> revealed</span><span>observed thread cost <b>$1.38</b></span></div>
+                  <p class="conf2" style="margin-top:8px"><i></i>Directly observed · 370 payload replays across 23 decisions, each counted at a request boundary</p>
+                </div>
+                <div class="ctx2">
+                  <div class="ctx-head" style="margin:0"><p class="eb">Context by turn</p><p class="legend"><i class="lf"></i> final <i class="lp"></i> peak <i class="lc"></i> compaction</p></div>
+                  <div class="chart sm" style="margin:0"><div class="col"><i style="height:25%"></i><b style="height:25%"></b></div></div>
+                  <p class="cap">1 turn · peak 64.6k / 258k (25%) · 0 compactions</p>
+                </div>
+              </div>
+              <dl class="tiles" style="margin:0">
+                <div class="tile"><dt>Decisions</dt><dd>23<small>18 summarized · 5 passed</small></dd></div>
+                <div class="tile"><dt>Kept out of parent</dt><dd>2,716k<small>157k uncached · 2,559k cached</small></dd></div>
+                <div class="tile"><dt>Revealed</dt><dd>21.2k<small>2.9k summaries · 18.3k passed</small></dd></div>
+                <div class="tile zero"><dt>Read back later</dt><dd>0<small>nothing retrieved</small></dd></div>
+                <div class="tile"><dt>Peak context</dt><dd>25%<small>64.6k of 258k</small></dd></div>
+                <div class="tile zero"><dt>Compactions</dt><dd>0<small>no cold replay cost</small></dd></div>
+              </dl>
+              <div class="acc" style="border-top:0">
+                <details open="open"><summary><span class="ch">▶</span><span class="lb">Code Mode</span><span class="kv"><span><b>37</b> calls</span><span><b>23</b> gated</span><span><b>14</b> direct</span></span></summary>
+                  <dl class="dl">
+                    <div><dt>Luna evaluations</dt><dd>23</dd></div>
+                    <div><dt>Helper pass-throughs</dt><dd>5</dd></div>
+                    <div><dt>Policy pass-throughs</dt><dd style="color:var(--text-muted)">0</dd></div>
+                    <div><dt>Command-bearing cells</dt><dd style="color:var(--text-muted)">0<small>0 nested · 0 dispatch clusters</small></dd></div>
+                    <div><dt>Other cells</dt><dd>37</dd></div>
+                    <div><dt>Patch cells</dt><dd style="color:var(--text-muted)">0</dd></div>
+                    <div><dt>Retrieval cells</dt><dd style="color:var(--text-muted)">0</dd></div>
+                    <div><dt>Polling cells</dt><dd style="color:var(--text-muted)">0</dd></div>
+                  </dl>
+                </details>
+              </div>
+              <div class="grip"></div>
+              <div class="gates">
+                <div class="gates-head"><p class="eb">Tool output results</p><div class="filters"><span class="filt on">All <em>37</em></span><span class="filt">Wins <em>18</em></span><span class="filt dis">Misses <em>0</em></span><span class="filt dis">Big misses <em>0</em></span><span class="filt">Pass-throughs <em>5</em></span><span class="filt">Direct <em>14</em></span></div></div>
+                <ul class="glist">
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>4.5k → 167 summary</span></div><span class="gv">+4.4k</span></div></li>
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>12.1k → 210 summary</span></div><span class="gv">+11.9k</span></div></li>
+                  <li class="g pt"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>3.2k passed through unchanged</span></div><span class="gv">unchanged</span></div></li>
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>8.7k → 190 summary</span></div><span class="gv">+8.5k</span></div></li>
+                  <li class="g dr"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>1.1k result, not gated</span></div><span class="gv">direct</span></div></li>
+                  <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>6.3k → 154 summary</span></div><span class="gv">+6.1k</span></div></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <div class="opt" id="c">
+          <div class="opt-head"><span class="opt-id">C</span><span class="opt-name">Sidebar: figures in a 320 px column, results own the full height</span></div>
+          <p class="opt-note">The vertical fight is removed instead of managed. Every figure lives in a scrolling left column, always expanded, always labeled. The right column is the chart and the list, ten rows at 700 px. It is the most legible option and the biggest departure from the Incidents lens, which stacks vertically. Chosen only if the reference numbers turn out to be read on every visit.</p>
+          <div class="opt-frame">
+          <div class="win" data-screen-label="Option C Sidebar">
+            <div class="tb">
+              <div class="tb-lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+              <span class="tb-brand">Pwr<b>Agent</b></span>
+              <div class="tb-crumb"><span>acme-services</span><span>›</span><span class="tb-chip">#Variant · 5th run</span><span>›</span><span class="cur">Token Miser Savings</span><span class="tb-pill">OpenAI</span></div>
+              <div class="tb-sp"></div>
+              <span class="tb-btn">Analyze history</span><span class="tb-link">Refresh</span>
+            </div>
+            <div class="lenses"><div class="lens on">Savings <em>2,434k avoided</em></div><div class="lens">Incidents <em>11 cases</em></div></div>
+            <div class="split">
+              <div class="side">
+                <div class="side-sec">
+                  <p class="eb">Estimated same-trajectory savings</p>
+                  <p class="big" style="margin:0"><strong>$1.39</strong><span>50.3% less</span></p>
+                  <dl class="eq" style="margin-top:4px">
+                    <div class="t"><dt>Without the gate</dt><dd>$1.65</dd></div><span class="op">−</span>
+                    <div class="t"><dt>Gate compute</dt><dd>$0.07</dd></div><span class="op">−</span>
+                    <div class="t"><dt>Revealed to parent</dt><dd>$0.19</dd></div><span class="op">=</span>
+                    <div class="t res"><dt>Saved</dt><dd>$1.39</dd></div>
+                  </dl>
+                  <div class="bar" style="margin-top:2px"><i class="b1" style="width:84%"></i><i class="b2" style="width:4%"></i><i class="b3" style="width:12%"></i></div>
+                  <div class="barcap"><span>unfiltered <b>$2.77</b></span><span>observed <b>$1.38</b></span></div>
+                  <p class="conf2"><i></i>Directly observed · 370 replays across 23 decisions</p>
+                </div>
+                <div class="side-sec">
+                  <p class="eb">Decisions</p>
+                  <dl class="dl">
+                    <div><dt>Summarized</dt><dd>18</dd></div>
+                    <div><dt>Passed through</dt><dd>5<small>0 policy · 5 helper</small></dd></div>
+                    <div><dt>Kept out of parent</dt><dd>2,716k<small>157k uncached</small></dd></div>
+                    <div><dt>Read back later</dt><dd style="color:var(--text-muted)">0</dd></div>
+                  </dl>
+                </div>
+                <div class="side-sec">
+                  <p class="eb">Context boundaries</p>
+                  <dl class="dl">
+                    <div><dt>Compactions</dt><dd style="color:var(--text-muted)">0</dd></div>
+                    <div><dt>Cold replay</dt><dd style="color:var(--text-muted)">$0.00</dd></div>
+                    <div><dt>Peak context</dt><dd>25%<small>64.6k of 258k</small></dd></div>
+                    <div><dt>Final context</dt><dd>25%<small>64.6k of 258k</small></dd></div>
+                  </dl>
+                </div>
+                <div class="side-sec">
+                  <p class="eb">Code Mode</p>
+                  <dl class="dl">
+                    <div><dt>Calls</dt><dd>37<small>23 gated · 14 direct</small></dd></div>
+                    <div><dt>Command cells</dt><dd style="color:var(--text-muted)">0</dd></div>
+                  </dl>
+                </div>
+              </div>
+              <div class="mainc">
+                <div class="ctx-head" style="margin:0"><p class="eb">Context by turn</p><p class="legend"><i class="lf"></i> final <i class="lp"></i> peak <i class="lc"></i> compaction</p></div>
+                <div class="chart sm" style="margin:0"><div class="col"><i style="height:25%"></i><b style="height:25%"></b></div></div>
+                <div class="gates">
+                  <div class="gates-head"><p class="eb">Tool output results</p><div class="filters"><span class="filt on">All <em>37</em></span><span class="filt">Wins <em>18</em></span><span class="filt dis">Misses <em>0</em></span><span class="filt dis">Big misses <em>0</em></span><span class="filt">Pass-throughs <em>5</em></span><span class="filt">Direct <em>14</em></span></div></div>
+                  <ul class="glist">
+                    <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>4.5k → 167 summary</span></div><span class="gv">+4.4k</span></div></li>
+                    <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>12.1k → 210 summary</span></div><span class="gv">+11.9k</span></div></li>
+                    <li class="g pt"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>3.2k passed through unchanged</span></div><span class="gv">unchanged</span></div></li>
+                    <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>8.7k → 190 summary</span></div><span class="gv">+8.5k</span></div></li>
+                    <li class="g dr"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>1.1k result, not gated</span></div><span class="gv">direct</span></div></li>
+                    <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>6.3k → 154 summary</span></div><span class="gv">+6.1k</span></div></li>
+                    <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>9.9k → 201 summary</span></div><span class="gv">+9.7k</span></div></li>
+                    <li class="g pt"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>2.8k passed through unchanged</span></div><span class="gv">unchanged</span></div></li>
+                    <li class="g dr"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>0.9k result, not gated</span></div><span class="gv">direct</span></div></li>
+                    <li class="g"><span class="st"></span><div class="grow"><div class="gid"><code>Code Mode</code><span>5.4k → 172 summary</span></div><span class="gv">+5.2k</span></div></li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="sec-head">
+          <p class="eyebrow">Implementation</p>
+          <h2>What changes in the renderer for A</h2>
+        </div>
+        <table class="spec">
+          <thead><tr><th>Piece</th><th>Today</th><th>Proposed</th></tr></thead>
+          <tbody>
+            <tr><td>Hero</td><td><code>.incident-explorer__savings-hero</code> flex-wrap; terms wrap below at 1000 px</td><td>Two-column grid, <code>minmax(0,1fr) 300px</code>, same shape as <code>.incident-explorer__summary</code>. Terms become an inline subtraction plus an 8 px stacked bar from <code>withoutGateCostMicros</code>, <code>gateCostMicros</code>, <code>revealedCostMicros</code>.</td></tr>
+            <tr><td>Chart</td><td><code>TokenMiserContextTimeline</code> renders after the captions as a bordered band, 72 px plot</td><td>Same component mounted in the hero's right column, 56 px plot, no section rules. Empty state (no turns) leaves the column blank rather than collapsing the grid.</td></tr>
+            <tr><td>Captions</td><td>Two <code>__savings-caption</code> lines plus two more inside each stats section</td><td>Removed. Their numbers move into the accordion summaries and labeled grids. Each count rendered once.</td></tr>
+            <tr><td>Stats sections</td><td><code>TokenMiserCompactionStats</code>, <code>TokenMiserCodeModeStats</code> always open, prose captions</td><td>Each wraps in <code>details</code> with a summary row: label, then values in mono primary with muted labels, zero values in <code>--text-muted</code>. Body is a four-column <code>dl</code>. A new Decisions row absorbs the two loose captions.</td></tr>
+            <tr><td>Grip</td><td>None</td><td>A <code>row-resize</code> handle between the details stack and <code>TokenMiserResultList</code>. Drag sets a max-height on the details stack, which scrolls when exceeded. Results keep <code>min-height: 160px</code>.</td></tr>
+            <tr><td>Persistence</td><td>n/a</td><td>Open flags and grip height in renderer <code>localStorage</code> keyed by lens. Machine-local, never in SQLite, never federated. No write budget impact.</td></tr>
+            <tr><td>Tests</td><td>Timeline and savings tests in <code>ToolOutputIncidentExplorerWindow.test.tsx</code></td><td>Add a jsdom assertion that the results section receives at least the floor height when the details stack is open, and an axe pass on the accordion summaries (they are buttons with visible text, so no aria-label is needed).</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout" style="margin-top:28px">
+          <p><b style="color:var(--text-primary)">Next.</b> Pick A, B, or C, or say what to mix. Then this becomes one renderer PR: layout and component reorder in the window file, roughly 180 lines of CSS replaced in <code>app.css</code>, and the two tests above. The as-built record page for Tool Cost should get a pointer to this review once it ships.</p>
+        </div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props="{}">
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

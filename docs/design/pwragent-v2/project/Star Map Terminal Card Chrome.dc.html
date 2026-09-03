@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet" />
+        <style>
+          :root {
+            --bg-panel: #0a0a0a;
+            --border-subtle: rgba(247, 243, 235, 0.1);
+            --border-strong: rgba(247, 243, 235, 0.22);
+            --text-primary: #f7f3eb;
+            --text-secondary: #b8b0a5;
+            --text-muted: #8c857a;
+            --terminal-bg: #000000;
+            --accent: #ff8a1f;
+            --flag: oklch(0.68 0.17 25);
+            --ok: oklch(0.74 0.14 150);
+          }
+          body { margin: 0; background: #17161a; color: var(--text-primary); font-family: "Inter Tight", Helvetica, sans-serif; }
+          a { color: var(--accent); text-decoration: none; }
+          a:hover { color: var(--text-primary); }
+          .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+          .frame-label { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); cursor: grab; }
+          .frame-note { font-size: 13px; line-height: 1.5; color: var(--text-secondary); max-width: 700px; }
+
+          /* The card at 1:1 with the renderer's real geometry. */
+          .card { width: 520px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); box-shadow: 0 18px 40px rgba(0,0,0,0.55); overflow: hidden; display: flex; flex-direction: column; }
+          .bar { height: 30px; flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border-subtle); }
+          .bar-title { flex: 1; font-size: 11px; letter-spacing: 0.05em; color: var(--text-secondary); }
+          .bar-close { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); font-family: "IBM Plex Mono", monospace; font-size: 14px; line-height: 1; cursor: pointer; }
+          .bar-close:hover { background: rgba(247,243,235,0.08); color: var(--text-primary); }
+
+          .body { flex: 1; min-height: 0; background: var(--terminal-bg); }
+          .term { height: 100%; padding: 8px 10px; font-family: "IBM Plex Mono", monospace; font-size: 12px; line-height: 1.55; color: #d8d3c9; }
+          .seg { display: inline-block; padding: 0 6px; background: #4d5b9e; color: #eef1ff; }
+          .seg-alt { display: inline-block; padding: 0 6px; background: #2f3a6b; color: #cdd5f5; }
+          .caret { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -3px; }
+
+          /* Annotation marks: dashed overlays on the card, tags in the gutter. */
+          .flag-strip { position: absolute; border: 1px dashed var(--flag); border-radius: 3px; pointer-events: none; }
+          .tag { position: absolute; left: 544px; font-family: "IBM Plex Mono", monospace; font-size: 11px; line-height: 1.4; white-space: nowrap; }
+          .tag-flag { color: var(--flag); }
+          .tag-ok { color: var(--ok); }
+
+          /* Bottom resize grip: the affordance the card was missing. Same
+             10px hit height the pane's own handle had. */
+          .grip { height: 10px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; background: var(--bg-panel); border-top: 1px solid var(--border-subtle); cursor: ns-resize; }
+          .grip::after { content: ""; width: 34px; height: 2px; border-radius: 1px; background: var(--border-strong); }
+
+          .spec { width: 1560px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); padding: 22px 26px 24px; }
+          .spec h3 { margin: 0 0 14px; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+          .spec-grid { display: grid; grid-template-columns: 220px 1fr 1fr; font-size: 13px; }
+          .spec-grid > div { padding: 10px 18px 10px 0; border-top: 1px solid var(--border-subtle); }
+          .spec-grid > .head { border-top: 0; padding-top: 0; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+          .was { color: var(--text-muted); }
+          .now { color: var(--text-primary); }
+        </style>
+      </helmet>
+
+      <div data-screen-label="Now" style="position:absolute;left:40px;top:40px;width:900px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">Now &mdash; three leaks</div>
+        <div style="position:relative;height:292px;">
+          <div class="card" style="height:290px;">
+            <div class="bar">
+              <span class="bar-title">Terminal</span>
+              <button class="bar-close" type="button">&times;</button>
+            </div>
+            <div style="height:10px;flex:0 0 auto;border-top:1px solid var(--border-subtle);background:var(--bg-panel);"></div>
+            <div class="body" style="margin:0 12px;">
+              <div class="term" style="padding:10px 10px 8px;">
+                <div><span class="seg">&hellip;/pwragent</span><span class="seg-alt">feat/star-map-terminal-chrome $</span><span class="seg-alt">20:18</span></div>
+                <div style="color:var(--text-secondary);">&rsaquo; <span class="caret"></span></div>
+              </div>
+            </div>
+          </div>
+          <div class="bar-close" style="position:absolute;top:34px;right:404px;color:var(--flag);">&times;</div>
+          <div class="flag-strip" style="left:494px;top:32px;width:24px;height:22px;"></div>
+          <div class="flag-strip" style="left:1px;right:382px;top:31px;height:10px;"></div>
+          <div class="flag-strip" style="left:1px;top:41px;bottom:1px;width:12px;"></div>
+          <div class="flag-strip" style="left:507px;top:41px;bottom:1px;width:12px;"></div>
+          <div class="tag tag-flag" style="top:34px;">&mdash; a second close, 3px under the bar's</div>
+          <div class="tag tag-flag" style="top:66px;">&mdash; 10px dead band: the pane's own resize handle</div>
+          <div class="tag tag-flag" style="top:170px;">&mdash; 12px panel gutters, so the black never<br />&nbsp;&nbsp;&nbsp;reaches the card's border</div>
+        </div>
+        <div class="frame-note">The pane inside the card still wears the chrome it needs in the thread view &mdash; its own close button, its own top resize handle, its own 12px column margins. Inside a card that already has a title bar, all three read as damage.</div>
+      </div>
+
+      <div data-screen-label="Tightened" style="position:absolute;left:1000px;top:40px;width:900px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">Tightened</div>
+        <div style="position:relative;height:292px;">
+          <div class="card" style="height:290px;">
+            <div class="bar">
+              <span class="bar-title">Terminal</span>
+              <button class="bar-close" type="button">&times;</button>
+            </div>
+            <div class="body">
+              <div class="term">
+                <div><span class="seg">&hellip;/pwragent</span><span class="seg-alt">feat/star-map-terminal-chrome $</span><span class="seg-alt">20:18</span></div>
+                <div style="color:var(--text-secondary);">&rsaquo; <span class="caret"></span></div>
+              </div>
+            </div>
+            <div class="grip"></div>
+          </div>
+          <div class="tag tag-ok" style="top:6px;">&mdash; one close, in the bar that already had one</div>
+          <div class="tag tag-ok" style="top:110px;">&mdash; black to the border, clipped by the 8px radius;<br />&nbsp;&nbsp;&nbsp;the 10px inset lives inside the black now</div>
+          <div class="tag tag-ok" style="top:266px;">&mdash; grip on the bottom edge, the edge that moves</div>
+        </div>
+        <div class="frame-note">The card's bar owns the close. The pane's black fills the card edge to edge and the radius clips it. Height is dragged from the bottom edge &mdash; the edge that actually moves, since the card is pinned under its host.</div>
+      </div>
+
+      <div data-screen-label="Spec" style="position:absolute;left:40px;top:480px;width:1580px;">
+        <div class="spec">
+          <h3>What changes</h3>
+          <div class="spec-grid">
+            <div class="head">Element</div>
+            <div class="head">Now</div>
+            <div class="head">Tightened</div>
+
+            <div class="mono">Close affordance</div>
+            <div class="was">Two &mdash; the card bar's and the pane's, 3px apart</div>
+            <div class="now">One, in the card bar. A hosted pane renders none.</div>
+
+            <div class="mono">Band under the bar</div>
+            <div class="was">10px panel-colored resize handle</div>
+            <div class="now">Gone. The bar sits directly on the terminal.</div>
+
+            <div class="mono">Horizontal bleed</div>
+            <div class="was">12px panel gutters each side</div>
+            <div class="now">Full bleed; the inset moves inside the black.</div>
+
+            <div class="mono">Resize</div>
+            <div class="was">Top handle &mdash; drag up, the card grows down</div>
+            <div class="now">Bottom grip, 10px, ns-resize. Drag down to grow.</div>
+
+            <div class="mono">Remote instance chip</div>
+            <div class="was">Floats over the terminal's top-right corner</div>
+            <div class="now">In the bar, left of the close.</div>
+
+            <div class="mono">Thread view</div>
+            <div class="was">&mdash;</div>
+            <div class="now">Unchanged. The pane keeps its own chrome when it is not hosted.</div>
+          </div>
+        </div>
+      </div>
+    </x-dc>
+    <script
+      type="text/x-dc"
+      data-dc-script
+      data-props='{
+  "$preview": { "width": 1280, "height": 800 }
+}'
+    >
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

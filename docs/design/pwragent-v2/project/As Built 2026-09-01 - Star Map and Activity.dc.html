@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="stylesheet" href="./asbuilt.css" />
+        <link rel="stylesheet" href="./asbuilt-rail.css" />
+        <style>
+          .sm { position: relative; height: 320px; background: #000; overflow: hidden; }
+          .t-light .sm { background: #0b0a09; }
+          .sm__band { position: absolute; inset: 0 0 auto 0; display: flex; align-items: center; gap: 8px; padding: 10px 12px; z-index: 2; }
+          .sm__brand { font-size: 17px; line-height: 17px; font-weight: 700; letter-spacing: -0.17px; color: #f7f3eb; margin-right: 4px; }
+          .sm__brand em { font-style: normal; color: #ff8a1f; }
+          .sm__find { height: 26px; border-radius: 6px; border: 1px solid rgba(247,243,235,.1); background: #0a0a0a; padding: 0 9px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: #b8b0a5; }
+          .sm__chord { font-family: var(--font-mono); font-size: 10px; color: #8c857a; }
+          .sm__chip { height: 26px; border-radius: 6px; border: 1px solid rgba(247,243,235,.1); background: #0a0a0a; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #b8b0a5; }
+          .sm__chip--attention { border-color: color-mix(in srgb, #ff8a1f 42%, transparent); }
+          .sm__count { font-family: var(--font-mono); font-size: 10px; font-weight: 600; background: rgba(247,243,235,.08); border-radius: 999px; padding: 1px 6px; color: #8c857a; }
+          .sm__glow { position: absolute; left: 50%; top: 58%; width: 260px; height: 180px; transform: translate(-50%,-50%); background: radial-gradient(ellipse at center, rgba(255,138,31,.16), transparent 70%); }
+          .sm__label { position: absolute; left: 50%; top: 62%; transform: translateX(-50%); border: 1px solid color-mix(in srgb, #ff8a1f 42%, transparent); border-radius: 6px; background: #0a0a0a; padding: 5px 12px; font-size: 13px; font-weight: 650; color: #f7f3eb; }
+          .sm__cluster { position: absolute; left: 50%; top: 76%; transform: translateX(-50%); font-family: var(--font-mono); font-size: 11px; color: #8c857a; }
+          .sm__card { position: absolute; border: 1px solid rgba(247,243,235,.1); border-radius: 8px; background: #0a0a0a; padding: 10px 12px; width: 200px; }
+          .sm__card-h { font-size: 13px; font-weight: 600; color: #f7f3eb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .sm__card-c { margin-top: 6px; display: flex; gap: 6px; }
+          .sm__keys { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; border: 1px solid rgba(247,243,235,.1); border-radius: 8px; background: #0a0a0a; padding: 8px 10px; }
+          .sm__key { min-width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(247,243,235,.2); display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 10px; color: #b8b0a5; padding: 0 5px; }
+          .sm__key-label { font-size: 11px; color: #8c857a; }
+          .ma { border: 1px solid var(--border-subtle); border-radius: 10px; overflow: hidden; background: var(--bg-app); }
+          .ma__head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); }
+          .ma__title { font-size: 13px; font-weight: 650; color: var(--text-primary); }
+          .ma__count { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+          .ma__row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 14px; border-bottom: 1px solid var(--border-subtle); }
+          .ma__row:last-child { border-bottom: 0; }
+          .ma__dot { width: 8px; height: 8px; border-radius: 999px; margin-top: 6px; flex: none; }
+          .ma__sum { font-size: 13px; color: var(--text-primary); }
+          .ma__meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+          .pill { height: 18px; border-radius: 999px; padding: 0 8px; display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; }
+          .pill--ok { color: var(--status-ok); background: color-mix(in srgb, var(--status-ok) 16%, transparent); }
+          .pill--warn { color: var(--status-warning); background: color-mix(in srgb, var(--status-warning) 16%, transparent); }
+          .pill--bad { color: var(--status-error); background: color-mix(in srgb, var(--status-error) 16%, transparent); }
+          .pill--neutral { color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 16%, transparent); }
+        </style>
+      </helmet>
+      <div class="wrap" data-screen-label="Star Map and Messaging Activity">
+        <p class="eyebrow">As built · 2026-09-01 · Secondary screens</p>
+        <h1>Star Map and Messaging Activity</h1>
+        <p class="lede">
+          Two screens that each open in their own window and each break the
+          shell's rules on purpose. Star Map is the only surface in the product
+          with a spatial canvas; Activity is the only one built as a pure
+          append-only feed.
+        </p>
+
+        <div class="pagenav">
+          <a href="./As%20Built%202026-09-01%20-%20Index.dc.html">Index</a>
+          <a href="./As%20Built%202026-09-01%20-%20Main%20Window.dc.html">Main window</a>
+          <a href="./As%20Built%202026-09-01%20-%20Settings.dc.html">Settings</a>
+          <a href="./As%20Built%202026-09-01%20-%20Log%20Viewer.dc.html">Log viewer</a>
+        </div>
+
+        <h2>Star Map</h2>
+        <p>
+          Threads as bodies around the instance that owns them. Federated peers
+          get their own cluster; the local instance is labelled and centred at
+          rest.
+        </p>
+
+        <div class="boards">
+          <div class="board" style="width:100%">
+            <div class="board__cap">dark · 4 local threads, 1 instance, no peers</div>
+            <div class="board__body">
+              <div class="sm">
+                <div class="sm__band">
+                  <span class="sm__brand">Pwr<em>Agent</em></span>
+                  <span class="sm__find">Find <span class="sm__chord">Ctrl+K</span></span>
+                  <span class="sm__chip">View</span>
+                  <span class="sm__chip sm__chip--attention">1 · 0</span>
+                  <span class="sm__chip">Needs input <span class="sm__count">0</span></span>
+                  <span class="sm__chip">Open PR <span class="sm__count">0</span></span>
+                  <span class="sm__chip">Unpushed <span class="sm__count">0</span></span>
+                  <span class="sm__chip">Pinned <span class="sm__count">0</span></span>
+                </div>
+                <div class="sm__glow"></div>
+                <div class="sm__label">this mac</div>
+                <div class="sm__cluster">pwragent 4</div>
+                <div class="sm__card" style="left:8%;bottom:14%">
+                  <div class="sm__card-h">Messaging - debouncing</div>
+                  <div class="sm__card-c"><span class="ucard__chip">pwragent</span></div>
+                </div>
+                <div class="sm__card" style="right:8%;bottom:20%">
+                  <div class="sm__card-h">Telegram resume menu …</div>
+                  <div class="sm__card-c"><span class="ucard__chip">pwragent</span></div>
+                </div>
+                <div class="sm__keys">
+                  <span class="sm__key">W</span>
+                  <span class="sm__key">A</span>
+                  <span class="sm__key">S</span>
+                  <span class="sm__key">D</span>
+                  <span class="sm__key-label">pan</span>
+                  <span class="sm__key">−</span>
+                  <span class="sm__key">+</span>
+                  <span class="sm__key-label">zoom</span>
+                  <span class="sm__key">0</span>
+                  <span class="sm__key-label">reset</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <table class="spec">
+          <caption>Star Map chrome, measured.</caption>
+          <thead><tr><th>Element</th><th>Box</th><th>Type</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td>.star-map__top-band</td><td>full width, z above canvas</td><td>—</td><td>Brand, find, view, filters</td></tr>
+            <tr><td>.star-map__filter-chip</td><td>26px tall, radius 6, gap 6</td><td>12 600, <code>--text-secondary</code></td><td>One per attention category</td></tr>
+            <tr><td>…<span class="mono">--attention</span></td><td>accent 42% border</td><td>—</td><td>Live-turn / unread counts</td></tr>
+            <tr><td>.star-map__filter-count</td><td>radius 999, padding <code>1 6</code></td><td>10 600 IBM Plex Mono</td><td>Zero stays visible, greyed</td></tr>
+            <tr><td>.star-map__find-chord</td><td>—</td><td>10 IBM Plex Mono, muted</td><td><code>Ctrl+K</code> hint</td></tr>
+            <tr><td>.star-map__cluster-label</td><td>—</td><td>11 IBM Plex Mono, muted</td><td>Directory name + thread count</td></tr>
+            <tr><td>.star-map-card</td><td>radius 8, 1px subtle</td><td>13 600 heading</td><td>Thread body, chips beneath</td></tr>
+            <tr><td>.star-map__key</td><td>20px, radius 4, 1px strong</td><td>10 IBM Plex Mono</td><td>Always-on keyboard legend</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note note--warn">
+          <h4>The top band is contended space</h4>
+          <p>
+            Window chrome and the filter strip occupy the same band. New map
+            controls go top-right; anything added top-left collides with the
+            brand mark and the find affordance.
+          </p>
+        </div>
+
+        <div class="note">
+          <h4>Zero counts stay visible here too</h4>
+          <p>
+            Every filter chip renders its count even at zero, greyed — the same
+            rule the Attention lens follows. Four of the five chips read zero in
+            this capture and all four remain on screen.
+          </p>
+        </div>
+
+        <h2>Messaging Activity</h2>
+        <p>
+          Two stacked panes over one append-only log of inbound routing,
+          outbound posts, binding changes and policy decisions. Row status is
+          carried entirely by the icon tint and a pill, never by prose.
+        </p>
+
+        <div class="boards">
+          <div class="board" style="width:100%">
+            <div class="board__cap">dark · 7 entries</div>
+            <div class="board__body">
+              <div class="ma">
+                <div class="ma__head">
+                  <span class="ma__title">Recent activity</span>
+                  <span class="ma__count">7</span>
+                </div>
+                <div class="ma__row">
+                  <span class="ma__dot" style="background:var(--status-ok)"></span>
+                  <div>
+                    <div class="ma__sum">Routed to thread “Telegram resume menu not clearing”</div>
+                    <div class="ma__meta">telegram · pwragent-ops · operator · 12:09 AM</div>
+                  </div>
+                  <span class="pill pill--ok" style="margin-left:auto">inbound-routed</span>
+                </div>
+                <div class="ma__row">
+                  <span class="ma__dot" style="background:var(--status-ok)"></span>
+                  <div>
+                    <div class="ma__sum">Posted turn summary (3 edits, +56/-0)</div>
+                    <div class="ma__meta">telegram · pwragent-ops · 12:05 AM</div>
+                  </div>
+                  <span class="pill pill--ok" style="margin-left:auto">outbound</span>
+                </div>
+                <div class="ma__row">
+                  <span class="ma__dot" style="background:var(--status-error)"></span>
+                  <div>
+                    <div class="ma__sum">Rejected: actor lacks thread.reply permission</div>
+                    <div class="ma__meta">discord · #agents · guest · 12:01 AM</div>
+                  </div>
+                  <span class="pill pill--bad" style="margin-left:auto">inbound-rejected</span>
+                </div>
+                <div class="ma__row">
+                  <span class="ma__dot" style="background:var(--status-warning)"></span>
+                  <div>
+                    <div class="ma__sum">Full Access escalation denied by warningPolicy</div>
+                    <div class="ma__meta">telegram · pwragent-ops · 11:57 PM</div>
+                  </div>
+                  <span class="pill pill--warn" style="margin-left:auto">policy</span>
+                </div>
+                <div class="ma__row">
+                  <span class="ma__dot" style="background:var(--text-muted)"></span>
+                  <div>
+                    <div class="ma__sum">Bound thread t-2 to telegram:pwragent-ops</div>
+                    <div class="ma__meta">desktop · 11:53 PM</div>
+                  </div>
+                  <span class="pill pill--neutral" style="margin-left:auto">binding</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <table class="spec">
+          <caption>Activity row anatomy and the eight entry kinds.</caption>
+          <thead><tr><th>Element</th><th>Type</th><th>Colour</th></tr></thead>
+          <tbody>
+            <tr><td>.messaging-activity-row__summary</td><td>13 400</td><td><code>--text-primary</code></td></tr>
+            <tr><td>.messaging-activity-row__meta</td><td>11 IBM Plex Mono</td><td><code>--text-muted</code></td></tr>
+            <tr><td>.messaging-activity-row__icon--ok</td><td>8px dot</td><td><code>--status-ok</code></td></tr>
+            <tr><td>…<span class="mono">--warning</span></td><td>8px dot</td><td><code>--status-warning</code></td></tr>
+            <tr><td>…<span class="mono">--error</span></td><td>8px dot</td><td><code>--status-error</code></td></tr>
+            <tr><td>…<span class="mono">--muted</span></td><td>8px dot</td><td><code>--text-muted</code></td></tr>
+            <tr><td>.settings-pill</td><td>18px, radius 999, 11 600</td><td>Four variants matching the dots</td></tr>
+          </tbody>
+        </table>
+
+        <table class="spec">
+          <caption>Entry kinds. The pill text is the raw kind identifier, not a friendly label.</caption>
+          <thead><tr><th>Kind</th><th>Tint</th><th>Means</th></tr></thead>
+          <tbody>
+            <tr><td>inbound-routed</td><td>ok</td><td>Message reached a bound thread</td></tr>
+            <tr><td>outbound</td><td>ok</td><td>PwrAgent posted to the channel</td></tr>
+            <tr><td>inbound-rejected</td><td>error</td><td>Blocked by RBAC</td></tr>
+            <tr><td>inbound-ignored</td><td>muted</td><td>No binding matched</td></tr>
+            <tr><td>policy</td><td>warning</td><td>Escalation or warning-policy decision</td></tr>
+            <tr><td>pairing</td><td>ok</td><td>Pairing token consumed</td></tr>
+            <tr><td>binding</td><td>muted</td><td>Binding created or removed</td></tr>
+            <tr><td>diagnostic</td><td>warning</td><td>Adapter health event</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Identifiers stay literal</h4>
+          <p>
+            Channel names, actor handles and kind identifiers render exactly as
+            the source system spells them — <span class="mono">#agents</span>,
+            <span class="mono">inbound-rejected</span>,
+            <span class="mono">telegram:pwragent-ops</span>. No title-casing, no
+            friendly aliases. An operator matching a row against a log line has
+            to see the same string.
+          </p>
+        </div>
+
+        <div class="note note--warn">
+          <h4>The activity list is scrollable but not focusable</h4>
+          <p>
+            axe reports <span class="mono">scrollable-region-focusable</span>
+            (serious) on the top pane's list in both themes: the region scrolls
+            but no keyboard user can reach it. Rows themselves are reachable, so
+            this bites a screen-reader user paging through a long backlog.
+          </p>
+        </div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props="{}">
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

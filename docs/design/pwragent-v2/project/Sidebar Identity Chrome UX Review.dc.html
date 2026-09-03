@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet" />
+        <style>
+          :root {
+            --bg-sidebar: #0d0d0f;
+            --bg-panel: #131316;
+            --border-subtle: rgba(247, 243, 235, 0.1);
+            --text-primary: #f7f3eb;
+            --text-secondary: #b8b0a5;
+            --text-muted: #8c857a;
+            --accent: #ff8a1f;
+            --accent-soft: rgba(255, 138, 31, 0.16);
+            --accent-border: rgba(255, 138, 31, 0.45);
+            --flag: oklch(0.68 0.17 25);
+            --ok: oklch(0.74 0.14 150);
+            /* The canvas ground is light, so anything sitting directly on it
+               (labels, notes, gutter tags) needs its own dark ink -- the app
+               tokens above are dark-theme values and are only safe INSIDE the
+               dark cards below. */
+            --canvas-ink: #2b2822;
+            --canvas-ink-strong: #131210;
+            --canvas-ink-soft: #6d675d;
+            --flag-on-light: oklch(0.52 0.19 25);
+            --ok-on-light: oklch(0.45 0.13 150);
+            /* The rail is drawn at the real 300px sidebar width, borders and
+               16px side padding included -- so every annotation offset below
+               can be written against 300, the number the renderer uses. */
+            --rail-w: 300px;
+          }
+          * { box-sizing: border-box; }
+          body { margin: 0; background: #f2efe9; color: var(--canvas-ink); font-family: "Inter Tight", Helvetica, sans-serif; }
+          .frame-label { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--canvas-ink-soft); cursor: grab; }
+          .frame-note { font-size: 13px; line-height: 1.55; color: var(--canvas-ink); max-width: 380px; }
+          .frame-note b { color: var(--canvas-ink-strong); font-weight: 600; }
+
+          /* ---- The rail at 1:1 with the renderer's real geometry ---- */
+          .stage { position: relative; width: var(--rail-w); }
+          .rail { width: var(--rail-w); background: var(--bg-sidebar); border: 1px solid rgba(0,0,0,0.35); border-radius: 6px; padding: 0 16px; overflow: hidden; box-shadow: 0 18px 40px rgba(0,0,0,0.28); }
+          .masthead { min-height: 40px; display: flex; align-items: center; gap: 8px; padding-left: 80px; }
+          .brand { margin: 0; font-size: 17px; font-weight: 700; line-height: 1; letter-spacing: -0.01em; color: var(--text-primary); }
+          .brand i { color: var(--accent); font-style: normal; }
+          .mh-actions { margin-left: auto; margin-right: -8px; display: flex; gap: 2px; }
+          .mh-actions button { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+
+          .ri { display: flex; align-items: center; gap: 6px; padding: 6px 0; margin-inline: -8px; }
+          .ri--first { padding-top: 0; }
+          .pill { display: inline-flex; flex: 1 1 0; min-width: 0; height: 22px; align-items: center; gap: 5px; padding: 0 7px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-panel); color: var(--text-secondary); font-family: "SFMono-Regular", "SF Mono", ui-monospace, monospace; font-size: 10.5px; line-height: 1; }
+          .pill i { display: inline-flex; flex: 0 0 auto; color: var(--accent); }
+          .pill span { min-width: 0; overflow: hidden; text-overflow: clip; white-space: nowrap; }
+
+          /* the two states this review is about. The fix lands on the SPAN --
+             the element whose overflow makes its line box a clip box -- not
+             on the pill. */
+          .is-fix .pill span { line-height: normal; }
+          .is-now .ri { border-bottom: 1px solid var(--border-subtle); }
+          .is-now .lens-wrap { padding-top: 10px; }
+          .is-fix .lens-wrap { padding-top: 6px; }
+
+          .lens { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; width: calc(100% + 16px); margin-inline: -8px; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); }
+          .lens button { height: 26px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+          .lens button.on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent); }
+          .lens .n { font-family: "SFMono-Regular", ui-monospace, monospace; font-size: 11px; font-weight: 600; }
+          .lens .n.dim { color: var(--text-muted); }
+          .rows { height: 74px; margin: 8px -16px 0; }
+          .rowline { height: 20px; margin: 0 8px 8px; border-radius: 5px; background: rgba(247,243,235,0.045); }
+
+          /* ---- annotation layer ---- */
+          .anno { position: absolute; inset: 0; pointer-events: none; }
+          .gap { position: absolute; left: 0; width: var(--rail-w); }
+          .gap-fill { position: absolute; inset: 0; }
+          .gap-bad { background: repeating-linear-gradient(135deg, rgba(255,90,80,0.24) 0 5px, transparent 5px 10px); border-top: 1px dashed var(--flag); border-bottom: 1px dashed var(--flag); }
+          .gap-good { background: repeating-linear-gradient(135deg, rgba(90,220,150,0.2) 0 5px, transparent 5px 10px); border-top: 1px dashed var(--ok); border-bottom: 1px dashed var(--ok); }
+          .gap-tag { position: absolute; left: calc(var(--rail-w) + 14px); font-family: "IBM Plex Mono", monospace; font-size: 11px; white-space: nowrap; transform: translateY(-50%); }
+          .t-bad { color: var(--flag-on-light); }
+          .t-ok { color: var(--ok-on-light); }
+          .rule-mark { position: absolute; left: 0; width: var(--rail-w); height: 0; border-top: 2px solid var(--flag); }
+
+          /* ---- type detail ---- */
+          .zoom { width: 620px; border: 1px solid rgba(0,0,0,0.3); border-radius: 8px; background: var(--bg-panel); padding: 20px 22px 22px; box-shadow: 0 18px 40px rgba(0,0,0,0.28); }
+          .zoom h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+          .zoom p { margin: 0 0 18px; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+          .zoom p b { color: var(--text-primary); font-weight: 600; }
+          .glyphbox { position: relative; height: 150px; background: #0a0a0c; border-radius: 6px; overflow: hidden; }
+          .glyphtext { position: absolute; left: 26px; font-family: "SFMono-Regular", "SF Mono", ui-monospace, monospace; font-size: 84px; color: var(--text-secondary); white-space: nowrap; }
+          .linebox { position: absolute; left: 18px; right: 18px; }
+          .lb-clip { border: 1px solid var(--flag); background: rgba(255,90,80,0.08); }
+          .lb-ok { border: 1px solid var(--ok); background: rgba(90,220,150,0.07); }
+          .lb-cap { position: absolute; right: 24px; font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+          .lb-cap.t-bad { color: var(--flag); }
+          .lb-cap.t-ok { color: var(--ok); }
+
+          /* ---- findings table ---- */
+          .spec { width: 1240px; border: 1px solid rgba(0,0,0,0.3); border-radius: 8px; background: var(--bg-panel); padding: 22px 26px 24px; box-shadow: 0 18px 40px rgba(0,0,0,0.28); }
+          .spec h3 { margin: 0 0 4px; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+          .spec .sub { margin: 0 0 16px; font-size: 13px; color: var(--text-secondary); }
+          .spec-grid { display: grid; grid-template-columns: 210px 1fr 1fr 120px; font-size: 13px; line-height: 1.5; }
+          .spec-grid > div { padding: 11px 18px 11px 0; border-top: 1px solid var(--border-subtle); }
+          .spec-grid > .head { border-top: 0; padding-top: 0; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+          .was { color: var(--text-muted); }
+          .now { color: var(--text-primary); }
+          .sev { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-muted); }
+          .sev-a { color: var(--flag); }
+          .sev-b { color: var(--accent); }
+          .k { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--text-primary); }
+          code { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--accent); }
+          .frame-note code { color: #a1550a; }
+        </style>
+      </helmet>
+
+      <div data-screen-label="Now" style="position:absolute;left:40px;top:40px;width:660px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">Now &mdash; three unequal gaps, two redundant rules, clipped ink</div>
+        <div class="stage">
+          <div class="rail is-now">
+            <div class="masthead">
+              <p class="brand">Pwr<i>Agent</i></p>
+              <div class="mh-actions">
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/></svg></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 5v14M5 12h14"/></svg></button>
+              </div>
+            </div>
+            <div class="ri ri--first">
+              <div class="pill"><i><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></i><span>acme-app/feature-work</span></div>
+              <div class="pill"><i><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8M8 7h6"/></svg></i><span>claude/chip-typography-&hellip;-revi</span></div>
+            </div>
+            <div class="ri">
+              <div class="pill"><span>profile:default, codex:default</span></div>
+            </div>
+            <div class="lens-wrap">
+              <div class="lens">
+                <button class="on"><span class="n">0</span><span class="n">8</span></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 20 20 4"/></svg><span class="n dim">2</span></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8H3z"/></svg></button>
+              </div>
+              <div class="rows"><div class="rowline"></div><div class="rowline"></div><div class="rowline"></div></div>
+            </div>
+          </div>
+
+          <div class="anno">
+            <div class="gap" style="top:29px;height:11px;"><div class="gap-fill gap-bad"></div></div>
+            <div class="gap-tag t-bad" style="top:34px;">11.5px &mdash; wordmark ink to chip</div>
+            <div class="gap" style="top:62px;height:13px;"><div class="gap-fill gap-bad"></div></div>
+            <div class="gap-tag t-bad" style="top:68px;">13px &mdash; chip row to profile</div>
+            <div class="gap" style="top:97px;height:17px;"><div class="gap-fill gap-bad"></div></div>
+            <div class="gap-tag t-bad" style="top:105px;">17px &mdash; profile to lens switch</div>
+            <div class="rule-mark" style="top:68px;"></div>
+            <div class="rule-mark" style="top:103px;"></div>
+            <div class="gap-tag t-bad" style="top:130px;">2 rules boxing already-bordered pills</div>
+          </div>
+        </div>
+        <div class="frame-note">Three boundaries, three different numbers &mdash; <b>11.5 / 13 / 17px</b>. Each step down the stack is looser than the one above it, so the lens switch reads as drifting away from the chrome it belongs to rather than closing it. The two full-width rules then cut that stack into three unrelated boxes, around pills that are <b>already bordered</b>.</div>
+      </div>
+
+      <div data-screen-label="Proposed" style="position:absolute;left:760px;top:40px;width:660px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">Proposed &mdash; one 12px gap, no rules, full ink box</div>
+        <div class="stage">
+          <div class="rail is-fix">
+            <div class="masthead">
+              <p class="brand">Pwr<i>Agent</i></p>
+              <div class="mh-actions">
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/></svg></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 5v14M5 12h14"/></svg></button>
+              </div>
+            </div>
+            <div class="ri ri--first">
+              <div class="pill"><i><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></i><span>acme-app/feature-work</span></div>
+              <div class="pill"><i><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8M8 7h6"/></svg></i><span>claude/chip-typography-&hellip;-revi</span></div>
+            </div>
+            <div class="ri">
+              <div class="pill"><span>profile:default, codex:default</span></div>
+            </div>
+            <div class="lens-wrap">
+              <div class="lens">
+                <button class="on"><span class="n">0</span><span class="n">8</span></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 20 20 4"/></svg><span class="n dim">2</span></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></button>
+                <button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8H3z"/></svg></button>
+              </div>
+              <div class="rows"><div class="rowline"></div><div class="rowline"></div><div class="rowline"></div></div>
+            </div>
+          </div>
+          <div class="anno">
+            <div class="gap" style="top:29px;height:11px;"><div class="gap-fill gap-good"></div></div>
+            <div class="gap-tag t-ok" style="top:34px;">11.5px &mdash; the band's own air (macOS/Linux)</div>
+            <div class="gap" style="top:62px;height:12px;"><div class="gap-fill gap-good"></div></div>
+            <div class="gap-tag t-ok" style="top:68px;">12px</div>
+            <div class="gap" style="top:96px;height:12px;"><div class="gap-fill gap-good"></div></div>
+            <div class="gap-tag t-ok" style="top:102px;">12px</div>
+          </div>
+        </div>
+        <div class="frame-note">One number at every <b>internal</b> boundary: 6px below each row + 6px above the next. The top edge is not that number and is not platform-neutral &mdash; on macOS and Linux it is the chrome band's own trailing air; on Windows the masthead is hidden and the first pill lands flush at 0. With the rules gone the pills are the only frames left, and the stack reads as <b>one</b> block of chrome above the thread lanes.</div>
+      </div>
+
+      <div data-screen-label="Ink box" style="position:absolute;left:40px;top:470px;width:1380px;display:flex;gap:24px;">
+        <div class="zoom">
+          <h3>Now &mdash; the line box is a clip box</h3>
+          <p><code>.runtime-identity__text</code> carries <code>overflow: hidden</code> so it can truncate. That makes its line box a <b>clipping</b> box, not just a spacing one &mdash; and the pill set <code>line-height: 1</code>. At 10.5px the mono stack asks for <b>13px</b> of ink (ascent 10 + descent 3) inside a <b>10.5px</b> box.</p>
+          <div class="glyphbox">
+            <div class="linebox lb-clip" style="top:34px;height:82px;"></div>
+            <div class="glyphtext" style="top:8px;">profile:gy</div>
+            <div class="lb-cap t-bad" style="top:12px;">&minus;2.0px ascender</div>
+            <div class="lb-cap t-bad" style="top:122px;">&minus;0.5px descender</div>
+          </div>
+        </div>
+        <div class="zoom">
+          <h3>Proposed &mdash; <code>line-height: normal</code></h3>
+          <p>Put the fix on the element whose overflow does the clipping, and let the <b>font</b> size the box. <code>normal</code> measures <b>13.0px</b> &mdash; the ink box exactly &mdash; so nothing clips and the text <b>centers</b> in the pill (ink at 4.5px in a 20px interior). A hand-picked ratio does not: <code>1.35</code> gives a 14.2px box and leaves the glyphs <b>0.59px high</b>. Same remedy the codebase already uses at <code>.review-chip__label</code>. No chip dimension changes.</p>
+          <div class="glyphbox">
+            <div class="linebox lb-ok" style="top:19px;height:112px;"></div>
+            <div class="glyphtext" style="top:8px;">profile:gy</div>
+            <div class="lb-cap t-ok" style="top:24px;">ascenders whole</div>
+            <div class="lb-cap t-ok" style="top:112px;">descenders whole</div>
+          </div>
+        </div>
+      </div>
+
+      <div data-screen-label="Findings" style="position:absolute;left:40px;top:830px;width:1280px;">
+        <div class="spec">
+          <h3>Review &mdash; sidebar identity chrome</h3>
+          <p class="sub">Measured in headless Chromium against the shipped <code>app.css</code>, 300px rail, macOS, dark. Numbers are element rects, not estimates.</p>
+          <div class="spec-grid">
+            <div class="head">Finding</div>
+            <div class="head">Now</div>
+            <div class="head">Resolution</div>
+            <div class="head">Severity</div>
+
+            <div class="k">Clipped ascenders<br />and descenders</div>
+            <div class="was">A 13px ink box inside a 10.5px line box that <code>overflow: hidden</code> turns into a clip box. Loses 2.0px off <code>/</code> and <code>l</code>, 0.5px off <code>y</code>, <code>g</code>, <code>p</code>. Reads as a rendering fault, not a style.</div>
+            <div class="now"><code>line-height: normal</code> on <code>.runtime-identity__text</code> &mdash; the clip box itself. Box becomes 13.0px, ink centered, pill stays 22px.</div>
+            <div class="sev sev-a">defect</div>
+
+            <div class="k">Same clip, title-bar<br />form of the marker</div>
+            <div class="was"><code>.federation-remote-badge__text</code> mirrors the identity pill and repeats <code>overflow: hidden</code> under a <code>line-height: 1</code> pill at 11px.</div>
+            <div class="now">Same <code>normal</code>, on its own text span, so the two forms of one marker cannot drift.</div>
+            <div class="sev sev-a">defect</div>
+
+            <div class="k">Uneven vertical rhythm</div>
+            <div class="was">13px and 17px at the two internal boundaries. Each gap looser than the one above, so the stack falls apart top to bottom.</div>
+            <div class="now">6px above and below every row; <code>.sidebar__section</code> drops 10px &rarr; 6px. One 12px step at every internal boundary.</div>
+            <div class="sev sev-b">polish</div>
+
+            <div class="k">Redundant rules</div>
+            <div class="was">Two full-width dividers drawing a second frame around content that is already a row of bordered pills, splitting one chrome cluster into three boxes.</div>
+            <div class="now">Both removed. Air separates; the pill borders are the only frames. The lens switch still reads as its own band on its own fill.</div>
+            <div class="sev sev-b">polish</div>
+
+            <div class="k">Windows top edge</div>
+            <div class="was">The masthead is <code>display: none</code> on Windows, but <code>.sidebar__masthead + .runtime-identity</code> still matches, so the first pill lands flush at 0px with no air.</div>
+            <div class="now">Not changed here &mdash; pre-existing, and a Windows layout change wants platform verification. Recorded so the rhythm note does not claim a number that is false there.</div>
+            <div class="sev">reported</div>
+
+            <div class="k">Horizontal truncation</div>
+            <div class="was">The branch chip mid-elides at a 300px rail.</div>
+            <div class="now">Left as is. Mid-elision is deliberate &mdash; it keeps the prefix and the distinguishing tail, and the full value is in the tooltip and one click from the clipboard.</div>
+            <div class="sev">no change</div>
+          </div>
+        </div>
+      </div>
+    </x-dc>
+    <script
+      type="text/x-dc"
+      data-dc-script
+      data-props='{
+  "$preview": { "width": 1460, "height": 1140 }
+}'
+    >
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

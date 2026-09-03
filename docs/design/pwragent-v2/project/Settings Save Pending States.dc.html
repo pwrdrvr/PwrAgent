@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas">
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+        <style>
+          :root {
+            --bg-app: #000000;
+            --bg-panel: #0a0a0a;
+            --bg-panel-elevated: #101010;
+            --bg-row-active: #120800;
+            --bg-input: #080808;
+            --border-subtle: rgba(247, 243, 235, 0.1);
+            --border-strong: rgba(247, 243, 235, 0.2);
+            --text-primary: #f7f3eb;
+            --text-secondary: #b8b0a5;
+            --text-muted: #8c857a;
+            --accent: #ff8a1f;
+            --accent-bright: #ffb35c;
+            --accent-border: rgba(255, 138, 31, 0.42);
+            --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", system-ui, sans-serif;
+            --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+          }
+          body {
+            margin: 0;
+            background: var(--bg-app);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            -webkit-font-smoothing: antialiased;
+          }
+          a { color: var(--accent-bright); text-decoration: none; }
+          a:hover { color: var(--accent); text-decoration: underline; }
+
+          /* ---- canvas frame chrome ---- */
+          .frame { position: absolute; }
+          .flabel {
+            display: flex; align-items: baseline; gap: 10px;
+            margin: 0 0 12px; cursor: grab;
+            font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+            letter-spacing: 0.13em; text-transform: uppercase; color: var(--accent);
+          }
+          .flabel span { letter-spacing: 0; text-transform: none; color: var(--text-muted); font-size: 11px; }
+          .card {
+            border: 1px solid var(--border-subtle); border-radius: 8px;
+            background: var(--bg-panel); overflow: hidden;
+          }
+          .cardhead {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 13px 18px; border-bottom: 1px solid var(--border-subtle);
+            background: var(--bg-panel-elevated);
+          }
+          .cardhead b { font-size: 13px; font-weight: 650; }
+          .chip {
+            font-family: var(--font-mono); font-size: 10px; padding: 2px 7px;
+            border-radius: 999px; border: 1px solid var(--border-subtle);
+            background: var(--bg-panel); color: var(--text-muted);
+          }
+
+          /* ---- settings field row (mirrors .settings-field) ---- */
+          .field { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; padding: 16px 18px; }
+          .field + .field { border-top: 1px solid var(--border-subtle); }
+          .flab { display: flex; flex-direction: column; gap: 5px; }
+          .flab > b { font-size: 13px; font-weight: 650; line-height: 1.3; }
+          .fsub { max-width: 28ch; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+          .src {
+            align-self: flex-start; font-family: var(--font-mono); font-size: 10px;
+            padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-subtle);
+            background: var(--bg-panel-elevated); color: var(--text-muted);
+          }
+          .fctl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+          .row { display: inline-flex; align-self: flex-start; align-items: center; gap: 10px; }
+
+          /* ---- switch (mirrors .settings-switch) ---- */
+          .sw {
+            display: inline-flex; align-items: center; gap: 8px; height: 28px;
+            padding: 0 10px 0 6px; border: 1px solid var(--border-subtle);
+            border-radius: 8px; background: var(--bg-panel); color: var(--text-secondary);
+            font-size: 11px; font-weight: 500; line-height: 1;
+          }
+          .sw.off { opacity: 0.55; }
+          .track {
+            position: relative; flex: 0 0 auto; width: 26px; height: 14px;
+            border: 1px solid var(--border-strong); border-radius: 999px;
+            background: var(--bg-panel-elevated);
+          }
+          .thumb { position: absolute; top: 1px; left: 1px; width: 10px; height: 10px; border-radius: 999px; background: var(--text-secondary); }
+
+          /* ---- segmented (mirrors .settings-segmented) ---- */
+          .seg {
+            display: inline-flex; gap: 2px; padding: 3px;
+            border: 1px solid var(--border-subtle); border-radius: 8px;
+            background: var(--bg-panel-elevated);
+          }
+          .seg > i {
+            font-style: normal; padding: 6px 12px; border: 1px solid transparent;
+            border-radius: 5px; color: var(--text-secondary);
+            font-size: 12px; font-weight: 650; line-height: 1; white-space: nowrap;
+          }
+          .seg > i.on { border-color: var(--accent-border); background: var(--bg-row-active); color: var(--accent-bright); }
+          .seg.dim > i { opacity: 0.55; }
+
+          /* ---- the primitive under test ---- */
+          .pending { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; font-weight: 500; line-height: 1.3; white-space: nowrap; }
+          .spin {
+            flex: 0 0 auto; width: 14px; height: 14px;
+            border: 2px solid var(--border-subtle); border-top-color: var(--accent);
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+          }
+          .spin.sm { width: 12px; height: 12px; }
+          .spin.lg { width: 18px; height: 18px; }
+          .spin.still { animation: none; border-color: var(--accent); }
+          @keyframes spin { to { transform: rotate(360deg); } }
+          @media (prefers-reduced-motion: reduce) { .spin { animation: none; border-color: var(--accent); } }
+
+          /* ---- prose ---- */
+          .note { border: 1px solid var(--border-subtle); border-left: 2px solid var(--accent); border-radius: 0 8px 8px 0; background: var(--bg-panel); padding: 15px 19px; }
+          .note p { margin: 0; font-size: 13px; line-height: 1.65; color: var(--text-secondary); text-wrap: pretty; }
+          .note p + p { margin-top: 9px; }
+          .note b { color: var(--text-primary); font-weight: 600; }
+          code { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-bright); background: var(--bg-panel-elevated); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 1px 5px; }
+          .specs { display: grid; gap: 0; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+          .specs > div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; padding: 10px 14px; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+          .specs > div + div { border-top: 1px solid var(--border-subtle); }
+          .specs b { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); font-weight: 500; }
+          .sizes { display: flex; align-items: center; gap: 26px; padding: 20px 18px; }
+          .size { display: flex; flex-direction: column; align-items: center; gap: 9px; }
+          .size u { text-decoration: none; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+        </style>
+      </helmet>
+
+      <!-- ================= 1. today ================= -->
+      <div class="frame" style="left:0px;top:0px;width:840px">
+        <p class="flabel" data-drags-parent="1">Today <span>&mdash; the control just stops responding</span></p>
+        <div class="card" data-screen-label="Today">
+          <div class="cardhead"><b>Slack</b><span class="chip">Not configured</span></div>
+          <div class="field">
+            <div class="flab">
+              <b>Enabled</b>
+              <span class="fsub">Turn the Slack adapter on or off independently of the global messaging switch.</span>
+              <span class="src">default</span>
+            </div>
+            <div class="fctl">
+              <div class="row"><span class="sw off"><span class="track"><span class="thumb"></span></span>Off</span></div>
+            </div>
+          </div>
+          <div class="field">
+            <div class="flab">
+              <b>DM access</b>
+              <span class="fsub">Who may DM the bot directly (1:1).</span>
+              <span class="src">default</span>
+            </div>
+            <div class="fctl">
+              <div class="row"><span class="seg dim"><i class="on">Authorized users</i><i>Any workspace user</i><i>No DMs</i></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="note" style="margin-top:16px">
+          <p>The write round-trips through a config write and an adapter reload &mdash; <b>several seconds</b>. The only change on screen is that every control on the panel dims. Nothing says which one the operator hit, that anything is running, or when it finished.</p>
+        </div>
+      </div>
+
+      <!-- ================= 2. proposed toggle ================= -->
+      <div class="frame" style="left:900px;top:0px;width:840px">
+        <p class="flabel" data-drags-parent="1">Proposed <span>&mdash; pending on the actuated control</span></p>
+        <div class="card" data-screen-label="Proposed">
+          <div class="cardhead"><b>Slack</b><span class="chip">Not configured</span></div>
+          <div class="field">
+            <div class="flab">
+              <b>Enabled</b>
+              <span class="fsub">Turn the Slack adapter on or off independently of the global messaging switch.</span>
+              <span class="src">default</span>
+            </div>
+            <div class="fctl">
+              <div class="row">
+                <span class="sw off"><span class="track"><span class="thumb"></span></span>Off</span>
+                <span class="pending"><span class="spin sm"></span>Saving&hellip;</span>
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <div class="flab">
+              <b>DM access</b>
+              <span class="fsub">Who may DM the bot directly (1:1).</span>
+              <span class="src">default</span>
+            </div>
+            <div class="fctl">
+              <div class="row"><span class="seg dim"><i class="on">Authorized users</i><i>Any workspace user</i><i>No DMs</i></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="note" style="margin-top:16px">
+          <p><b>One</b> indicator, on the row the operator actuated. The other fields stay disabled but silent &mdash; a panel of spinners would say the panel is busy, not that this save is running.</p>
+          <p>The switch still reads <b>Off</b>, because it is. The value flips when the write lands, so a failed write never leaves a lie on screen.</p>
+        </div>
+      </div>
+
+      <!-- ================= 3. segmented ================= -->
+      <div class="frame" style="left:0px;top:620px;width:840px">
+        <p class="flabel" data-drags-parent="1">Segmented <span>&mdash; the picked option carries aria-busy</span></p>
+        <div class="card" data-screen-label="Segmented">
+          <div class="field">
+            <div class="flab">
+              <b>DM access</b>
+              <span class="fsub">Who may DM the bot directly (1:1). Authorized users only is the safest default.</span>
+              <span class="src">default</span>
+            </div>
+            <div class="fctl">
+              <div class="row">
+                <span class="seg dim"><i class="on">Authorized users</i><i>Any workspace user</i><i>No DMs</i></span>
+                <span class="pending"><span class="spin sm"></span>Saving&hellip;</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="note" style="margin-top:16px">
+          <p>The group has no room for a spinner inside it without shoving the segments around, so the indicator sits to the right of the whole control. <code>aria-busy</code> goes on the option that was picked &mdash; <b>Any workspace user</b> here &mdash; so assistive tech attaches the busy state to the choice, not the group.</p>
+        </div>
+      </div>
+
+      <!-- ================= 4. the primitive ================= -->
+      <div class="frame" style="left:900px;top:620px;width:640px">
+        <p class="flabel" data-drags-parent="1">Primitive <span>&mdash; .pending-spinner</span></p>
+        <div class="card" data-screen-label="Primitive">
+          <div class="sizes">
+            <div class="size"><span class="spin sm"></span><u>--sm &middot; 12px</u></div>
+            <div class="size"><span class="spin"></span><u>base &middot; 14px</u></div>
+            <div class="size"><span class="spin lg"></span><u>--lg &middot; 18px</u></div>
+            <div class="size" style="margin-left:14px"><span class="spin still"></span><u>reduced motion</u></div>
+          </div>
+          <div class="specs" style="border-radius:0;border-left:0;border-right:0;border-bottom:0">
+            <div><b>ring</b><span><code>--border-subtle</code></span></div>
+            <div><b>arc</b><span><code>--accent</code> on <code>border-top-color</code></span></div>
+            <div><b>motion</b><span><code>0.8s linear infinite</code>, unchanged from the composer's ring</span></div>
+            <div><b>reduced motion</b><span>animation off, ring goes uniformly <code>--accent</code> &mdash; a stopped arc reads as a <em>stalled</em> spinner, a plain ring reads as a still one</span></div>
+            <div><b>label</b><span>always paired with text; the ring is <code>aria-hidden</code> and never the only signal</span></div>
+          </div>
+        </div>
+        <div class="note" style="margin-top:16px">
+          <p>One definition, promoted out of <code>.composer__action-button-spinner</code> &mdash; the renderer's only spinner until now. The composer keeps its exact pixels and picks up reduced-motion support it did not have.</p>
+        </div>
+      </div>
+
+      <!-- ================= 5. rules ================= -->
+      <div class="frame" style="left:1800px;top:0px;width:520px">
+        <p class="flabel" data-drags-parent="1">Rules <span>&mdash; how a field opts in</span></p>
+        <div class="note">
+          <p><b>Pending is per action, not per panel.</b> <code>useDesktopSettings</code> exposes one <code>saving</code> boolean for the whole pane, so a control cannot learn from it whether it was the one actuated. Each field awaits the promise its own handler returns instead.</p>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p><b>Handlers return their promise.</b> <code>onChange</code> is typed <code>=&gt; Promise&lt;unknown&gt;</code>, so a fire-and-forget <code>void save(&hellip;)</code> is a type error rather than a control that silently never shows pending.</p>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p><b>It clears on failure too.</b> A ring left spinning after a rejected write reads as a save still running.</p>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p><b>Only narrow controls opt in.</b> Passing <code>pending</code> to <code>SettingsField</code> lays the control out on a row with the indicator to its right. A full-width input has no room, so it does not opt in &mdash; text fields save on blur, where the operator has already moved on.</p>
+        </div>
+        <div class="note" style="margin-top:14px">
+          <p><b>No standing announcer.</b> The <code>role="status"</code> region mounts only while the write is out. A pane holds dozens of these fields, and dozens of idle live regions is the worse trade.</p>
+        </div>
+      </div>
+
+      <!-- ================= 6. provenance ================= -->
+      <div class="frame" style="left:0px;top:940px;width:840px">
+        <p class="flabel" data-drags-parent="1">Provenance</p>
+        <div class="note">
+          <p>Split out of the <b>Connect Slack UX review</b>. Finding <code>B3</code> there was the same defect one level down &mdash; a shared <code>busy</code> flag putting a pending label on the wrong button. This generalises the per-action fix to every Settings field.</p>
+          <p>Verified against the real <code>MessagingSettings</code> component in headless Chromium: one indicator and one <code>aria-busy</code> element per save, both themes, and zero axe violations under the WCAG 2.0/2.1/2.2 AA rule set the E2E gate uses.</p>
+        </div>
+      </div>
+    </x-dc>
+    <script
+      type="text/x-dc"
+      data-dc-script
+      data-props='{}'
+    >
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

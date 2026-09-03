@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pricing — spend by provider and model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="pricing-provider-spend.css">
+</head>
+<body>
+
+<!-- ==================================================================
+     B1 — what ships today
+     ================================================================== -->
+<section class="dv-turn" id="b1">
+  <h2 class="dv-thd"><a class="dv-tid" href="#b1">B1</a><span class="dv-tname">Today — the same three facts, printed twice</span></h2>
+  <p class="dv-note">A Grok thread that ran one OpenAI review. <code>PricingPanel.tsx</code> gates two blocks on the same condition, <code>displaySummaries.length &gt; 1</code>: a <b>By provider</b> section inside the summary card, and a list of <code>.rail-card</code> rows right under it. Both print provider, cost, and row count — nothing else. The lower list is strictly worse at it: it prints the raw provider id (<code>xai</code>) instead of the label the section above already formats (<code>xAI</code>), and pads the same number with the words “list price”.</p>
+  <p class="dv-note">The card is also quietly incomplete. <b>Parent model token volume</b> is filtered to <code>isMainThreadUsageLine</code>, so the review’s 1.3M tokens are nowhere in the rail — only its dollars are. Whatever replaces the duplication should carry that missing half.</p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="b1a">
+      <div class="dv-olabel"><a class="dv-oid" href="#b1a">B1·a</a><span>Shipped rail, two providers</span></div>
+      <div class="dv-card">
+        <div class="rail" data-theme="light">
+          <p class="board-caption">Shipped · light</p>
+          <div class="rail__body">
+            <h3>Pricing</h3>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Pricing summary</span>
+                <span class="rail-summary-card__meta">5 rows</span>
+              </div>
+              <div class="rail-summary-card__headline">
+                <span class="rail-summary-card__primary">$3.66</span>
+              </div>
+              <div class="rail-summary-card__caption">5 priced · 0 unpriced · Aug 31 10:04 PM</div>
+              <div class="rail-summary-card__section">
+                <span class="rail-summary-card__section-title">Parent model token volume <span class="flag" data-tone="note">parent only</span></span>
+                <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Uncached input</span><span class="rail-summary-card__row-value">461.9k</span></div>
+                <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Cached input</span><span class="rail-summary-card__row-value">3.0M</span></div>
+                <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Output</span><span class="rail-summary-card__row-value">24.9k</span></div>
+                <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Reasoning</span><span class="rail-summary-card__row-value">20.8k</span></div>
+              </div>
+              <div class="rail-summary-card__section">
+                <span class="rail-summary-card__section-title">By provider <span class="flag">1 of 2</span></span>
+                <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">OpenAI</span><span class="rail-summary-card__row-value">$1.07 · 1 row</span></div>
+                <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">xAI</span><span class="rail-summary-card__row-value">$2.59 · 4 rows</span></div>
+              </div>
+            </div>
+            <ul class="context-list">
+              <li class="rail-card">
+                <p class="rail-card__title">openai · USD <span class="flag">2 of 2</span></p>
+                <p class="rail-card__usage">$1.07 list price · 1 row</p>
+              </li>
+              <li class="rail-card">
+                <p class="rail-card__title">xai · USD <span class="flag">raw id</span></p>
+                <p class="rail-card__usage">$2.59 list price · 4 rows</p>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================================================================
+     B2 — option A
+     ================================================================== -->
+<section class="dv-turn" id="b2">
+  <h2 class="dv-thd"><a class="dv-tid" href="#b2">B2</a><span class="dv-tname">Option A — one section, rows that open</span></h2>
+  <p class="dv-note">Both blocks collapse into a single <b>Spend by model</b> section inside the card. Each row is one <code>(provider, model)</code> bucket: model name, provider and row count, cost. Default collapsed. Opening a row shows that model’s token volume — which is how the parent-only section gets absorbed rather than deleted: the parent’s own row carries exactly what <b>Parent model token volume</b> used to show, and every helper now has the same thing for the first time.</p>
+  <p class="dv-note">The disclosure is the rail’s existing one. Chevron, label, right-aligned figure, 120ms rotate — the same shape as the per-turn <code>.pricing-token-miser</code> fold two sections down, so the tab has one way of opening things instead of two.</p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="b2a">
+      <div class="dv-olabel"><a class="dv-oid" href="#b2a">B2·a</a><span>Default — everything closed</span></div>
+      <div class="dv-card">
+        <div class="rail" data-theme="light">
+          <p class="board-caption">Option A · collapsed</p>
+          <div class="rail__body">
+            <h3>Pricing</h3>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Pricing summary</span>
+                <span class="rail-summary-card__meta">5 rows</span>
+              </div>
+              <div class="rail-summary-card__headline">
+                <span class="rail-summary-card__primary">$3.66</span>
+              </div>
+              <div class="rail-summary-card__caption">5 priced · 0 unpriced · Aug 31 10:04 PM</div>
+              <div class="rail-summary-card__section">
+                <span class="rail-summary-card__section-title">Spend by model</span>
+                <div class="spend-list">
+                  <div class="spend-row" data-expanded="false">
+                    <button class="spend-row__summary" type="button" aria-expanded="false">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">grok-4.1-fast</span>
+                      <span class="spend-row__meta">xAI · 4 rows</span>
+                      <span class="spend-row__cost">$2.59</span>
+                    </button>
+                  </div>
+                  <div class="spend-row" data-expanded="false">
+                    <button class="spend-row__summary" type="button" aria-expanded="false">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">gpt-5.6-sol</span>
+                      <span class="spend-row__meta">OpenAI · 1 row</span>
+                      <span class="spend-row__cost">$1.07</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="b2b">
+      <div class="dv-olabel"><a class="dv-oid" href="#b2b">B2·b</a><span>Both open — helper volume, visible for the first time</span></div>
+      <div class="dv-card">
+        <div class="rail" data-theme="light">
+          <p class="board-caption">Option A · expanded</p>
+          <div class="rail__body">
+            <h3>Pricing</h3>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Pricing summary</span>
+                <span class="rail-summary-card__meta">5 rows</span>
+              </div>
+              <div class="rail-summary-card__headline">
+                <span class="rail-summary-card__primary">$3.66</span>
+              </div>
+              <div class="rail-summary-card__caption">5 priced · 0 unpriced · Aug 31 10:04 PM</div>
+              <div class="rail-summary-card__section">
+                <span class="rail-summary-card__section-title">Spend by model</span>
+                <div class="spend-list">
+                  <div class="spend-row" data-expanded="true">
+                    <button class="spend-row__summary" type="button" aria-expanded="true">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">grok-4.1-fast</span>
+                      <span class="spend-row__meta">xAI · 4 rows</span>
+                      <span class="spend-row__cost">$2.59</span>
+                    </button>
+                    <div class="spend-row__body">
+                      <p class="spend-row__origin">This thread’s model</p>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Uncached input</span><span class="rail-summary-card__row-value">461.9k</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Cached input</span><span class="rail-summary-card__row-value">3.0M</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Output</span><span class="rail-summary-card__row-value">24.9k</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Reasoning</span><span class="rail-summary-card__row-value">20.8k</span></div>
+                    </div>
+                  </div>
+                  <div class="spend-row" data-expanded="true">
+                    <button class="spend-row__summary" type="button" aria-expanded="true">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">gpt-5.6-sol</span>
+                      <span class="spend-row__meta">OpenAI · 1 row</span>
+                      <span class="spend-row__cost">$1.07</span>
+                    </button>
+                    <div class="spend-row__body">
+                      <p class="spend-row__origin">1 sub-agent <span class="flag" data-tone="good">new</span></p>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Uncached input</span><span class="rail-summary-card__row-value">88.7k</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Cached input</span><span class="rail-summary-card__row-value">1.2M</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Output</span><span class="rail-summary-card__row-value">7.4k</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Reasoning</span><span class="rail-summary-card__row-value">4.1k</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================================================================
+     B3 — option B
+     ================================================================== -->
+<section class="dv-turn" id="b3">
+  <h2 class="dv-thd"><a class="dv-tid" href="#b3">B3</a><span class="dv-tname">Option B — spend gets its own card</span></h2>
+  <p class="dv-note">Same rows, moved out of the summary card into a sibling below it. The summary card shrinks back to what it is best at — one total, one timestamp — and the breakdown stops competing with it for the reader’s first glance.</p>
+  <p class="dv-note">It costs a second bordered box in a rail that already stacks four of them (summary, Token Miser, per-turn rows, incidents), and it re-opens the question the duplication came from: two boxes describing one bill. <b>A is the recommendation</b> — B is here because it is the honest alternative, not because it wins.</p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="b3a">
+      <div class="dv-olabel"><a class="dv-oid" href="#b3a">B3·a</a><span>Separate card, one row open</span></div>
+      <div class="dv-card">
+        <div class="rail" data-theme="light">
+          <p class="board-caption">Option B · light</p>
+          <div class="rail__body">
+            <h3>Pricing</h3>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Pricing summary</span>
+                <span class="rail-summary-card__meta">5 rows</span>
+              </div>
+              <div class="rail-summary-card__headline">
+                <span class="rail-summary-card__primary">$3.66</span>
+              </div>
+              <div class="rail-summary-card__caption">5 priced · 0 unpriced · Aug 31 10:04 PM</div>
+            </div>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Spend by model</span>
+                <span class="rail-summary-card__meta">2 models · 2 providers</span>
+              </div>
+              <div class="rail-summary-card__section" style="margin-top:8px;padding-top:0;border-top:0">
+                <div class="spend-list">
+                  <div class="spend-row" data-expanded="true">
+                    <button class="spend-row__summary" type="button" aria-expanded="true">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">grok-4.1-fast</span>
+                      <span class="spend-row__meta">xAI · 4 rows</span>
+                      <span class="spend-row__cost">$2.59</span>
+                    </button>
+                    <div class="spend-row__body">
+                      <p class="spend-row__origin">This thread’s model</p>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Uncached input</span><span class="rail-summary-card__row-value">461.9k</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Cached input</span><span class="rail-summary-card__row-value">3.0M</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Output</span><span class="rail-summary-card__row-value">24.9k</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Reasoning</span><span class="rail-summary-card__row-value">20.8k</span></div>
+                    </div>
+                  </div>
+                  <div class="spend-row" data-expanded="false">
+                    <button class="spend-row__summary" type="button" aria-expanded="false">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">gpt-5.6-sol</span>
+                      <span class="spend-row__meta">OpenAI · 1 row</span>
+                      <span class="spend-row__cost">$1.07</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================================================================
+     B4 — the five-model turn
+     ================================================================== -->
+<section class="dv-turn" id="b4">
+  <h2 class="dv-thd"><a class="dv-tid" href="#b4">B4</a><span class="dv-tname">The case that motivated it — Grok parent, four reviewers</span></h2>
+  <p class="dv-note">Sol and Terra on OpenAI, Kimi on Moonshot, Qwen on Alibaba, Grok driving the thread. Five models, four providers, eight usage rows. Today this renders four “By provider” lines <i>and</i> four cards underneath — eight lines of chrome for four numbers, with the two OpenAI reviews melted into one row you cannot take apart.</p>
+  <p class="dv-note">Collapsed, option A is five lines and reads top-down as a spend ranking. <b>B4·a</b> adds a provider header only where a provider contributed more than one model — that is the one place a provider subtotal is not already a row. <b>B4·b</b> drops headers entirely and keeps the provider in each row’s meta. B4·a is worth the extra line: reconciling against an invoice is a per-provider question, and it is the only shape that answers it.</p>
+  <p class="dv-note"><b>Watch for:</b> <code>formatPricingProviderLabel</code> only maps <code>openai</code>, <code>qwen</code>, and <code>xai</code>; everything else falls through unformatted, which is why Moonshot renders lowercase below. Worth fixing in the same change.</p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="b4a">
+      <div class="dv-olabel"><a class="dv-oid" href="#b4a">B4·a</a><span>Grouped — header only where a provider has more than one model</span></div>
+      <div class="dv-card" data-dark="true">
+        <div class="rail" data-theme="dark">
+          <p class="board-caption">Option A · grouped · dark</p>
+          <div class="rail__body">
+            <h3>Pricing</h3>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Pricing summary</span>
+                <span class="rail-summary-card__meta">8 rows</span>
+              </div>
+              <div class="rail-summary-card__headline">
+                <span class="rail-summary-card__primary">$4.85</span>
+              </div>
+              <div class="rail-summary-card__caption">8 priced · 0 unpriced · Aug 31 11:12 PM</div>
+              <div class="rail-summary-card__section">
+                <span class="rail-summary-card__section-title">Spend by model</span>
+                <div class="spend-list">
+                  <div class="spend-group">
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">grok-4.1-fast</span>
+                        <span class="spend-row__meta">xAI · 4 rows</span>
+                        <span class="spend-row__cost">$2.59</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="spend-group">
+                    <div class="spend-group__head"><span>OpenAI</span><span class="spend-group__total">$1.91 · 2 rows</span></div>
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">gpt-5.6-sol</span>
+                        <span class="spend-row__meta">1 row</span>
+                        <span class="spend-row__cost">$1.07</span>
+                      </button>
+                    </div>
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">gpt-5.6-terra</span>
+                        <span class="spend-row__meta">1 row</span>
+                        <span class="spend-row__cost">$0.84</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="spend-group">
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">kimi-k2.5</span>
+                        <span class="spend-row__meta">moonshot · 1 row <span class="flag">unmapped</span></span>
+                        <span class="spend-row__cost">$0.21</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="spend-group">
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">qwen3-max</span>
+                        <span class="spend-row__meta">Qwen · 1 row</span>
+                        <span class="spend-row__cost">$0.14</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="b4b">
+      <div class="dv-olabel"><a class="dv-oid" href="#b4b">B4·b</a><span>Flat — no headers, provider rides in the meta</span></div>
+      <div class="dv-card" data-dark="true">
+        <div class="rail" data-theme="dark">
+          <p class="board-caption">Option A · flat · dark</p>
+          <div class="rail__body">
+            <h3>Pricing</h3>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Pricing summary</span>
+                <span class="rail-summary-card__meta">8 rows</span>
+              </div>
+              <div class="rail-summary-card__headline">
+                <span class="rail-summary-card__primary">$4.85</span>
+              </div>
+              <div class="rail-summary-card__caption">8 priced · 0 unpriced · Aug 31 11:12 PM</div>
+              <div class="rail-summary-card__section">
+                <span class="rail-summary-card__section-title">Spend by model</span>
+                <div class="spend-list">
+                  <div class="spend-row" data-expanded="false">
+                    <button class="spend-row__summary" type="button" aria-expanded="false">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">grok-4.1-fast</span>
+                      <span class="spend-row__meta">xAI · 4 rows</span>
+                      <span class="spend-row__cost">$2.59</span>
+                    </button>
+                  </div>
+                  <div class="spend-row" data-expanded="false">
+                    <button class="spend-row__summary" type="button" aria-expanded="false">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">gpt-5.6-sol</span>
+                      <span class="spend-row__meta">OpenAI · 1 row</span>
+                      <span class="spend-row__cost">$1.07</span>
+                    </button>
+                  </div>
+                  <div class="spend-row" data-expanded="false">
+                    <button class="spend-row__summary" type="button" aria-expanded="false">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">gpt-5.6-terra</span>
+                      <span class="spend-row__meta">OpenAI · 1 row</span>
+                      <span class="spend-row__cost">$0.84</span>
+                    </button>
+                  </div>
+                  <div class="spend-row" data-expanded="false">
+                    <button class="spend-row__summary" type="button" aria-expanded="false">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">kimi-k2.5</span>
+                      <span class="spend-row__meta">moonshot · 1 row</span>
+                      <span class="spend-row__cost">$0.21</span>
+                    </button>
+                  </div>
+                  <div class="spend-row" data-expanded="false">
+                    <button class="spend-row__summary" type="button" aria-expanded="false">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">qwen3-max</span>
+                      <span class="spend-row__meta">Qwen · 1 row</span>
+                      <span class="spend-row__cost">$0.14</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dv-opt" id="b4c">
+      <div class="dv-olabel"><a class="dv-oid" href="#b4c">B4·c</a><span>Grouped, one reviewer open</span></div>
+      <div class="dv-card" data-dark="true">
+        <div class="rail" data-theme="dark">
+          <p class="board-caption">Option A · grouped · one open</p>
+          <div class="rail__body">
+            <h3>Pricing</h3>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Pricing summary</span>
+                <span class="rail-summary-card__meta">8 rows</span>
+              </div>
+              <div class="rail-summary-card__headline">
+                <span class="rail-summary-card__primary">$4.85</span>
+              </div>
+              <div class="rail-summary-card__caption">8 priced · 0 unpriced · Aug 31 11:12 PM</div>
+              <div class="rail-summary-card__section">
+                <span class="rail-summary-card__section-title">Spend by model</span>
+                <div class="spend-list">
+                  <div class="spend-group">
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">grok-4.1-fast</span>
+                        <span class="spend-row__meta">xAI · 4 rows</span>
+                        <span class="spend-row__cost">$2.59</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="spend-group">
+                    <div class="spend-group__head"><span>OpenAI</span><span class="spend-group__total">$1.91 · 2 rows</span></div>
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">gpt-5.6-sol</span>
+                        <span class="spend-row__meta">1 row</span>
+                        <span class="spend-row__cost">$1.07</span>
+                      </button>
+                    </div>
+                    <div class="spend-row" data-expanded="true">
+                      <button class="spend-row__summary" type="button" aria-expanded="true">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">gpt-5.6-terra</span>
+                        <span class="spend-row__meta">1 row</span>
+                        <span class="spend-row__cost">$0.84</span>
+                      </button>
+                      <div class="spend-row__body">
+                        <p class="spend-row__origin">1 sub-agent</p>
+                        <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Uncached input</span><span class="rail-summary-card__row-value">64.2k</span></div>
+                        <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Cached input</span><span class="rail-summary-card__row-value">812.5k</span></div>
+                        <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Output</span><span class="rail-summary-card__row-value">5.9k</span></div>
+                        <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Reasoning</span><span class="rail-summary-card__row-value">2.7k</span></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="spend-group">
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">kimi-k2.5</span>
+                        <span class="spend-row__meta">moonshot · 1 row</span>
+                        <span class="spend-row__cost">$0.21</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="spend-group">
+                    <div class="spend-row" data-expanded="false">
+                      <button class="spend-row__summary" type="button" aria-expanded="false">
+                        <span class="spend-row__chevron" aria-hidden="true">›</span>
+                        <span class="spend-row__label">qwen3-max</span>
+                        <span class="spend-row__meta">Qwen · 1 row</span>
+                        <span class="spend-row__cost">$0.14</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================================================================
+     B5 — the ordinary thread
+     ================================================================== -->
+<section class="dv-turn" id="b5">
+  <h2 class="dv-thd"><a class="dv-tid" href="#b5">B5</a><span class="dv-tname">One model — the case that must not regress</span></h2>
+  <p class="dv-note">Most threads use one model. Today they get <b>Parent model token volume</b> and no provider list at all, and the new section must not take that away or bury it behind a click that reveals a row equal to the total above it.</p>
+  <p class="dv-note">The rule is one line: <b>a lone row starts open.</b> Same component, same markup — the collapsed state simply has nothing to hide. The result is what ships today plus the model name and the provider, which the section previously never said out loud.</p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="b5a">
+      <div class="dv-olabel"><a class="dv-oid" href="#b5a">B5·a</a><span>Single model, opened by default</span></div>
+      <div class="dv-card">
+        <div class="rail" data-theme="light">
+          <p class="board-caption">Option A · single model</p>
+          <div class="rail__body">
+            <h3>Pricing</h3>
+            <div class="rail-summary-card">
+              <div class="rail-summary-card__header">
+                <span class="rail-summary-card__eyebrow">Pricing summary</span>
+                <span class="rail-summary-card__meta">4 rows</span>
+              </div>
+              <div class="rail-summary-card__headline">
+                <span class="rail-summary-card__primary">$2.59</span>
+              </div>
+              <div class="rail-summary-card__caption">4 priced · 0 unpriced · Aug 31 10:04 PM</div>
+              <div class="rail-summary-card__section">
+                <span class="rail-summary-card__section-title">Spend by model</span>
+                <div class="spend-list">
+                  <div class="spend-row" data-expanded="true">
+                    <button class="spend-row__summary" type="button" aria-expanded="true">
+                      <span class="spend-row__chevron" aria-hidden="true">›</span>
+                      <span class="spend-row__label">grok-4.1-fast</span>
+                      <span class="spend-row__meta">xAI · 4 rows</span>
+                      <span class="spend-row__cost">$2.59</span>
+                    </button>
+                    <div class="spend-row__body">
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Uncached input</span><span class="rail-summary-card__row-value">461.9k</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Cached input</span><span class="rail-summary-card__row-value">3.0M</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Output</span><span class="rail-summary-card__row-value">24.9k</span></div>
+                      <div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Reasoning</span><span class="rail-summary-card__row-value">20.8k</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="dv-next"><b>What this asks of the code.</b> <code>ThreadPricingSummary</code> has a provider but no model, so the buckets have to be folded out of <code>ThreadUsageLineRecord</code> with the existing <code>addUsageLineToSummary</code> reducer, keyed on <code>(provider, model, currency)</code>. <code>line.model</code> is optional — lines without one collect into a single trailing <i>Unnamed model</i> row rather than vanishing from a total that must still add up. Deleted: the <b>By provider</b> section, the <code>.pricing-provider-list</code> cards, and <code>parentModelSummary</code>’s <code>isMainThreadUsageLine</code> filter, which the parent’s own row replaces.</p>
+</section>
+
+</body>
+</html>

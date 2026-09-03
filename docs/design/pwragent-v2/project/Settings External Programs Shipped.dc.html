@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./settings-command-tools.css" />
+      </helmet>
+
+      <div class="page">
+        <p class="eyebrow">PwrAgent · Settings → Applications + Git · shipped</p>
+        <h1>External programs — what shipped, and where it diverged</h1>
+        <p class="lede">
+          Companion to <strong>Settings External Programs UX Review</strong>. That page is the
+          proposal; this one records what the build actually did, and the three places the
+          proposal turned out to be wrong once it met the code. PR
+          <code>pwrdrvr/PwrAgent#1954</code>.
+        </p>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">01</span>
+          <h2>Decisions</h2>
+        </div>
+
+        <table class="tbl">
+          <thead><tr><th>Question</th><th>Proposed</th><th>Shipped</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Where the picker lives</td>
+              <td class="wrap">Option B — Applications owns it, Git shows a "Tools in use" strip.</td>
+              <td class="wrap"><b>Option A</b>, on the operator's call: <em>"put the control in both places and have it link to one setting and share some code / layout."</em> One module, two panes, the same config keys — so a selection made on one is already made on the other and they cannot drift. `CommandToolsSettings.tsx` is the module; both `ApplicationsSettings` and `GitSettings` render it.</td>
+            </tr>
+            <tr>
+              <td>Brand marks</td>
+              <td class="wrap">Official Git logo + GitHub mark, with source READMEs.</td>
+              <td class="wrap">As proposed. Git icon by Jason Long (CC BY 3.0) from <code>git-scm.com/downloads/logos</code>; GitHub Invertocat from <code>brand.github.com/GitHub_Logos.zip</code>, black and white variants swapped by theme. Verbatim files, READMEs, rendered as <code>&lt;img&gt;</code>.</td>
+            </tr>
+            <tr>
+              <td>Windows git candidates</td>
+              <td class="wrap">Not raised.</td>
+              <td class="wrap"><b>Deliberately skipped.</b> <code>PATH</code> already finds a normal Git-for-Windows install, and putting a <code>cmd/git.exe</code> vs <code>bin/git.exe</code> choice into a picker is the launcher-handoff shape that has produced expensive Windows-only failures here before.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">02</span>
+          <h2>Where the proposal was wrong</h2>
+          <p class="body">
+            Three corrections, all found by building it. Worth recording, because each one reads
+            plausible on the page it came from.
+          </p>
+        </div>
+
+        <div class="note note--bad">
+          <span class="note__k">1</span>
+          <span><b>The radiogroup was the wrong pattern.</b> The review proposed
+          <code>role="radiogroup"</code> with roving <code>tabIndex</code> and arrow-key
+          navigation. But a radiogroup's arrow keys move <em>selection</em>, and selecting here
+          writes config and re-runs discovery probes — so arrowing down a five-candidate list
+          would fire five config writes and five rounds of <code>--version</code> spawns. Shipped
+          instead as buttons in a labelled group with <code>aria-current</code> on the live one:
+          natural tab order, no accidental selection, and the selected row is not a control at all
+          because there is nothing to activate. Verified with axe across wcag2a/aa, wcag21a/aa and
+          wcag22aa in both themes: zero violations.</span>
+        </div>
+
+        <div class="note note--bad">
+          <span class="note__k">2</span>
+          <span><b>"Apple" is not a chip label, it is a platform.</b> The review's chip vocabulary
+          named the top level after macOS. The shipped label is <b>System</b>, because the same
+          level has to carry a Windows OS-vendor signature too. The distinction that actually
+          matters is preserved — <em>System</em> for an OS-vendor signature, <em>Signed</em> for a
+          third-party one — which is exactly what collapsing both into "Signed" would have thrown
+          away on the rows where it counts: Apple's <code>/usr/bin/git</code> sitting next to a
+          Developer ID app.</span>
+        </div>
+
+        <div class="note note--bad">
+          <span class="note__k">3</span>
+          <span><b>"Re-check" was already broken, and the review did not notice.</b> The button
+          called a plain settings refresh, and git discovery is memoized for the process lifetime
+          — so it re-rendered the same snapshot every time. It needed a real re-probe channel
+          (<code>settings:refresh-git-discovery</code>), which selection also needs for the pane to
+          show the new choice as live.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">03</span>
+          <h2>As built</h2>
+          <p class="body">
+            Both panes, rendered from the real <code>ApplicationsSettings</code> component in
+            headless Chromium against the shipped <code>app.css</code> — not a redrawing.
+          </p>
+        </div>
+
+        <div class="stack" style="margin-top:22px">
+          <div class="srow srow--selected">
+            <span class="srow__icon" style="color:#f05133">
+              <svg viewBox="0 0 78 78" xmlns="http://www.w3.org/2000/svg"><path fill="#f03c2e" transform="translate(10 10) rotate(-45 29 29)" d="M5,58c-2.76142,0 -5,-2.23858 -5,-5v-48c0,-2.76142 2.23858,-5 5,-5h33v12.54404c-2.06553,0.94801 -3.5,3.03446 -3.5,5.45596c0,0.73514 0.13221,1.43941 0.37415,2.09031l-15.28384,15.28384c-0.6509,-0.24194 -1.35517,-0.37415 -2.09031,-0.37415c-3.31371,0 -6,2.68629 -6,6c0,3.31371 2.68629,6 6,6c3.31371,0 6,-2.68629 6,-6c0,-0.73514 -0.13221,-1.43941 -0.37415,-2.09031l14.87415,-14.87415l0,11.50851c-2.06553,0.94801 -3.5,3.03446 -3.5,5.45596c0,3.31371 2.68629,6 6,6c3.31371,0 6,-2.68629 6,-6c0,-2.42149 -1.43447,-4.50795 -3.5,-5.45596l0,-12.08808c2.06553,-0.94801 3.5,-3.03446 3.5,-5.45596c0,-2.42149 -1.43447,-4.50795 -3.5,-5.45596l0,-12.54404h10c2.76142,0 5,2.23858 5,5v48c0,2.76142 -2.23858,5 -5,5z"/></svg>
+            </span>
+            <div class="srow__body">
+              <div class="srow__titleline"><span class="srow__title">Homebrew</span><span class="srow__meta">2.54.0</span></div>
+              <span class="srow__path">/opt/homebrew/bin/git</span>
+            </div>
+            <div class="srow__chips"><span class="chip">Ad-hoc</span></div>
+            <span class="chip chip--ok srow__action">In&nbsp;use</span>
+          </div>
+          <div class="srow srow--focus">
+            <span class="srow__icon" style="color:#f05133">
+              <svg viewBox="0 0 78 78" xmlns="http://www.w3.org/2000/svg"><path fill="#f03c2e" transform="translate(10 10) rotate(-45 29 29)" d="M5,58c-2.76142,0 -5,-2.23858 -5,-5v-48c0,-2.76142 2.23858,-5 5,-5h33v12.54404c-2.06553,0.94801 -3.5,3.03446 -3.5,5.45596c0,0.73514 0.13221,1.43941 0.37415,2.09031l-15.28384,15.28384c-0.6509,-0.24194 -1.35517,-0.37415 -2.09031,-0.37415c-3.31371,0 -6,2.68629 -6,6c0,3.31371 2.68629,6 6,6c3.31371,0 6,-2.68629 6,-6c0,-0.73514 -0.13221,-1.43941 -0.37415,-2.09031l14.87415,-14.87415l0,11.50851c-2.06553,0.94801 -3.5,3.03446 -3.5,5.45596c0,3.31371 2.68629,6 6,6c3.31371,0 6,-2.68629 6,-6c0,-2.42149 -1.43447,-4.50795 -3.5,-5.45596l0,-12.08808c2.06553,-0.94801 3.5,-3.03446 3.5,-5.45596c0,-2.42149 -1.43447,-4.50795 -3.5,-5.45596l0,-12.54404h10c2.76142,0 5,2.23858 5,5v48c0,2.76142 -2.23858,5 -5,5z"/></svg>
+            </span>
+            <div class="srow__body">
+              <div class="srow__titleline"><span class="srow__title">Apple</span><span class="srow__meta">2.50.1</span></div>
+              <span class="srow__path">/usr/bin/git</span>
+            </div>
+            <div class="srow__chips"><span class="chip chip--ok">System</span></div>
+            <span class="srow__action" style="padding:3px 9px;border:1px solid var(--accent-border);border-radius:6px;color:var(--accent-bright);font-size:11px;font-weight:600">Use</span>
+          </div>
+        </div>
+        <div class="note note--good">
+          <span class="note__k">Hover</span>
+          <span>The second row is the hover / keyboard-focus state. The whole row is the button;
+          the trailing <b>Use</b> is a label inside it, not a nested control, and it takes the
+          accent border only while the row is hovered or focused. Measured heights: 56&nbsp;px and
+          59&nbsp;px, comfortably past the 24&nbsp;px WCAG 2.2 target-size floor.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">04</span>
+          <h2>Shipped chip vocabulary</h2>
+        </div>
+
+        <div class="legend">
+          <div class="legend__item">
+            <span class="chip chip--ok">System</span>
+            <p><b>OS-vendor signature</b>macOS <code>Software Signing</code>. Renders for <code>/usr/bin/git</code> and <code>Terminal.app</code>.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--ok">Notarized</span>
+            <p><b>Developer ID + notarized</b>The one level whose signature is actually verified, by the same <code>codesign --verify -R="notarized"</code> pass that checks the ticket.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip">Signed</span>
+            <p><b>Publisher signature</b>Developer ID without a ticket, or a valid Authenticode chain on Windows. The signer rides the hover.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip">Ad-hoc</span>
+            <p><b>No identity</b>Every Homebrew bottle. Neutral on purpose — warning here would be crying wolf on the default install.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--warn">Unsigned</span>
+            <p><b>No signature</b>Worth a look for a file early on <code>PATH</code> and named <code>git</code>.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--err">Bad signature</span>
+            <p><b>Did not verify</b>The only danger tone. <code>unknown</code> and Linux render no chip at all.</p>
+          </div>
+        </div>
+
+        <p class="footer">
+          Built 2026-09-02. Verification: full workspace suite (667 files, 9,831 tests),
+          <code>typecheck</code>, <code>lint:eslint</code> at zero errors,
+          <code>lint:boundaries</code>, <code>lint:colors</code>, <code>lint:sql</code>,
+          <code>lint:codex-storage</code>, <code>licenses:check</code>; plus a headless render of
+          the real <code>ApplicationsSettings</code> in both themes with axe reporting zero
+          violations in each.
+        </p>
+      </div>
+    </x-dc>
+  </body>
+</html>

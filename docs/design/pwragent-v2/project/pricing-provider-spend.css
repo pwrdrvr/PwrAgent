@@ -1,0 +1,153 @@
+/* ============================================================
+   Pricing tab — per-provider / per-model spend
+   Real PwrAgent renderer tokens + measurements, lifted from
+   apps/desktop/src/renderer/src/styles/app.css so these boards
+   are a true preview, not an approximation.
+   ============================================================ */
+:root {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+}
+.rail[data-theme="light"] {
+  --bg-app: #ffffff; --bg-panel: #fdfcfa; --bg-panel-elevated: #ffffff;
+  --bg-panel-hover: #f4f0e8; --bg-row-active: #fff5e9;
+  --border-subtle: rgba(0,0,0,0.08); --border-strong: rgba(0,0,0,0.18);
+  --text-primary: #1a1612; --text-secondary: #524a40; --text-muted: #736c64;
+  --accent: #b74c00; --accent-bright: #994c00; --status-warning: #a86b00;
+  --danger-text: #8a1f12;
+}
+.rail[data-theme="dark"] {
+  --bg-app: #000000; --bg-panel: #0a0a0a; --bg-panel-elevated: #101010;
+  --bg-panel-hover: #14110d; --bg-row-active: #120800;
+  --border-subtle: rgba(247,243,235,0.10); --border-strong: rgba(247,243,235,0.20);
+  --text-primary: #f7f3eb; --text-secondary: #b8b0a5; --text-muted: #8c857a;
+  --accent: #ff8a1f; --accent-bright: #ffb35c; --status-warning: #d99a3d;
+  --danger-text: #ffb0a1;
+}
+.rail {
+  --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
+  --surface-overlay-faint: color-mix(in srgb, var(--text-primary) 3.5%, transparent);
+}
+
+/* ---------- canvas chrome ---------- */
+body { margin: 0; background: #f0eee9; font-family: var(--font-sans); }
+.dv-turn { padding: 40px 44px 32px; border-bottom: 1px solid rgba(0,0,0,0.08); scroll-margin-top: 16px; }
+.dv-thd { display: flex; align-items: baseline; gap: 10px; margin: 0 0 6px; }
+.dv-tid { font: 600 10px ui-monospace, Menlo, monospace; padding: 3px 7px; background: #1a1a1a; color: #fff; border-radius: 4px; text-decoration: none; }
+.dv-tname { font: 600 13px/1.2 system-ui, sans-serif; color: #1a1a1a; }
+.dv-note { margin: 0 0 22px; max-width: 940px; font: 400 12px/1.55 system-ui, sans-serif; color: rgba(0,0,0,0.55); }
+.dv-note b { color: rgba(0,0,0,0.78); font-weight: 600; }
+.dv-note code { font: 500 11px var(--font-mono); background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; }
+.dv-note + .dv-note { margin-top: -14px; }
+.dv-opts { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+.dv-opt { flex: none; display: flex; flex-direction: column; gap: 9px; scroll-margin-top: 16px; }
+.dv-oid { font: 600 10.5px ui-monospace, Menlo, monospace; padding: 3px 7px; background: rgba(0,0,0,0.08); color: #1a1a1a; border-radius: 5px; text-decoration: none; }
+.dv-olabel { display: flex; align-items: baseline; gap: 8px; max-width: 382px; font: 400 11px/1.35 system-ui, sans-serif; color: rgba(0,0,0,0.55); }
+.dv-card { max-width: 100%; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid rgba(0,0,0,0.10); }
+.dv-card[data-dark="true"] { border-color: rgba(0,0,0,0.30); }
+.dv-next { margin: 22px 0 0; max-width: 940px; font: 12px/1.55 system-ui, sans-serif; color: rgba(0,0,0,0.5); }
+.dv-next b { color: rgba(0,0,0,0.78); font-weight: 600; }
+.dv-next code { font: 500 11px var(--font-mono); background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; }
+.board-caption {
+  margin: 0; padding: 7px 10px; border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-app); color: var(--text-muted);
+  font: 600 9.5px/1 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase;
+}
+.flag { display: inline-block; margin-left: 6px; padding: 1px 5px; border-radius: 3px; background: #d64a2a; color: #fff; font: 600 9px/1.5 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; vertical-align: 1px; }
+.flag[data-tone="good"] { background: #2f7d4f; }
+.flag[data-tone="note"] { background: #4a4a4a; }
+
+/* ============================================================
+   Rail surface — .context-panel at its 380px effective width
+   ============================================================ */
+.rail {
+  box-sizing: border-box; width: 380px;
+  background: var(--bg-panel); color: var(--text-primary);
+  font: 400 14px/1.5 var(--font-sans);
+}
+.rail__body { padding: 12px; }
+.rail *, .rail *::before, .rail *::after { box-sizing: border-box; }
+.rail h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.rail p { margin: 0; }
+
+/* ---------- .rail-summary-card (shipped) ---------- */
+.rail-summary-card {
+  margin-top: 12px; padding: 12px 14px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface-overlay-faint); color: var(--text-primary);
+}
+.rail-summary-card:first-child { margin-top: 0; }
+.rail-summary-card__header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.rail-summary-card__eyebrow, .rail-summary-card__section-title {
+  color: var(--text-muted); font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.rail-summary-card__meta { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.rail-summary-card__headline { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 6px; }
+.rail-summary-card__primary {
+  min-width: 0; color: var(--text-primary); font-family: var(--font-mono);
+  font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2;
+}
+.rail-summary-card__caption { margin-top: 6px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; line-height: 1.45; }
+.rail-summary-card__section {
+  display: flex; flex-direction: column; gap: 4px; margin-top: 10px; padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+.rail-summary-card__section-title { margin-bottom: 2px; }
+.rail-summary-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.rail-summary-card__row-label { color: var(--text-secondary); font-size: 12px; }
+.rail-summary-card__row-value {
+  color: var(--text-primary); font-family: var(--font-mono); font-size: 12px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+/* ---------- TODAY: the duplicate provider cards ---------- */
+.context-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.rail-card { padding: 9px 10px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-panel-elevated); }
+.rail-card__title { margin: 0; color: var(--text-primary); font-size: 12.5px; font-weight: 600; }
+.rail-card__usage { margin-top: 4px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; line-height: 1.45; }
+
+/* ============================================================
+   PROPOSED: spend rows that expand
+   Vocabulary lifted from the shipped `.pricing-token-miser`
+   fold so the rail keeps one disclosure idiom.
+   ============================================================ */
+.spend-row { border-top: 1px solid var(--border-subtle); }
+.spend-row:first-of-type { border-top: 0; }
+.spend-row__summary {
+  display: flex; align-items: baseline; gap: 7px; width: 100%;
+  padding: 5px 0; border: 0; background: transparent;
+  color: var(--text-secondary); font: inherit; font-size: 12px;
+  text-align: left; cursor: pointer;
+}
+.spend-row__summary:hover .spend-row__label { color: var(--accent-bright); }
+.spend-row__chevron { display: inline-block; width: 8px; color: var(--text-muted); transition: transform 120ms ease; }
+.spend-row[data-expanded="true"] .spend-row__chevron { transform: rotate(90deg); }
+.spend-row__label { color: var(--text-primary); font-family: var(--font-mono); font-size: 12px; }
+.spend-row__meta {
+  min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 11px;
+  white-space: nowrap; text-overflow: ellipsis;
+}
+.spend-row__cost {
+  margin-left: auto; color: var(--text-primary); font-family: var(--font-mono);
+  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.spend-row__body {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 0 0 8px 15px; padding-left: 9px;
+  border-left: 1px solid var(--border-subtle);
+}
+.spend-row__body .rail-summary-card__row-label { font-size: 11.5px; }
+.spend-row__body .rail-summary-card__row-value { font-size: 11.5px; }
+.spend-row__origin { margin-bottom: 2px; color: var(--text-muted); font-size: 11px; }
+
+/* the separate-card variant (option B) */
+.spend-list { display: flex; flex-direction: column; }
+.spend-group__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 8px 0 2px; color: var(--text-muted);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.spend-group:first-child .spend-group__head { padding-top: 2px; }
+.spend-group__total { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+.spend-group .spend-row:first-of-type { border-top: 1px solid var(--border-subtle); }
+.spend-group__head + .spend-row { border-top: 0; }

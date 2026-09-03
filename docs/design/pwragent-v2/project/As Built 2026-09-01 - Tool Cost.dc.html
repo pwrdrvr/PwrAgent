@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="stylesheet" href="./asbuilt.css" />
+        <link rel="stylesheet" href="./asbuilt-rail.css" />
+      </helmet>
+      <div class="wrap" data-screen-label="Tool cost and Token Miser">
+        <p class="eyebrow">As built · 2026-09-01 · Tool cost</p>
+        <h1>Tool cost and Token Miser</h1>
+        <p class="lede">
+          Spend does not have a screen of its own. It lives in the thread
+          context rail at 380px, as a stack of summary cards over a paginated
+          list of per-turn usage rows. Settings › Usage &amp; Pricing holds the
+          catalogue and the display toggles; the rail holds the numbers.
+        </p>
+
+        <div class="pagenav">
+          <a href="./As%20Built%202026-09-01%20-%20Index.dc.html">Index</a>
+          <a href="./As%20Built%202026-09-01%20-%20Main%20Window.dc.html">Main window</a>
+          <a href="./As%20Built%202026-09-01%20-%20Settings.dc.html">Settings</a>
+          <a href="./As%20Built%202026-09-01%20-%20Log%20Viewer.dc.html">Log viewer</a>
+        </div>
+
+        <h2>The rail</h2>
+        <div class="boards">
+          <div class="board">
+            <div class="board__cap">dark · context rail · 380px</div>
+            <div class="board__body">
+              <div class="rail">
+                <div class="rcard">
+                  <div class="rcard__head">
+                    <span class="rcard__eyebrow">Token Miser</span>
+                    <span class="rcard__meta">9 decisions</span>
+                  </div>
+                  <div class="rcard__primary">
+                    <span class="rcard__headline">$0.80 saved</span>
+                    <span class="rcard__secondary">39.9% less</span>
+                  </div>
+                  <div class="rcard__caption">Estimated same-trajectory savings · $2.01 unfiltered</div>
+                  <div class="rcard__section">
+                    <div class="rcard__section-title">Savings terms</div>
+                    <div class="rrow"><span class="rrow__label">1 · Without the gate</span><span class="rrow__value">$1.20</span></div>
+                    <div class="rrow"><span class="rrow__label">2 · Gate compute</span><span class="rrow__value">$0.15</span></div>
+                    <div class="rrow"><span class="rrow__label">3 · Revealed to parent</span><span class="rrow__value">$0.25</span></div>
+                  </div>
+                  <div class="rcard__section">
+                    <div class="rcard__section-title">Decisions</div>
+                    <div class="rrow"><span class="rrow__label">Summarized</span><span class="rrow__value">7</span></div>
+                    <div class="rrow"><span class="rrow__label">Passed through</span><span class="rrow__value">2</span></div>
+                    <div class="rrow"><span class="rrow__label">Parent context avoided</span><span class="rrow__value">93k</span></div>
+                  </div>
+                  <div class="rcard__cta">Token Miser Savings</div>
+                </div>
+
+                <div class="rcard">
+                  <div class="rcard__head">
+                    <span class="rcard__eyebrow">Pricing summary</span>
+                    <span class="rcard__meta">6 rows</span>
+                  </div>
+                  <div class="rcard__primary"><span class="rcard__headline">$1.21</span></div>
+                  <div class="rcard__caption">6 priced · 0 unpriced · Sep 1, 12:13 AM</div>
+                  <div class="rcard__section">
+                    <div class="rcard__section-title">Spend by model</div>
+                    <div class="rrow"><span class="rrow__label">Uncached input</span><span class="rrow__value">137.1k</span></div>
+                    <div class="rrow"><span class="rrow__label">Cached input</span><span class="rrow__value">437.4k</span></div>
+                    <div class="rrow"><span class="rrow__label">Output</span><span class="rrow__value">44.1k</span></div>
+                    <div class="rrow"><span class="rrow__label">Reasoning</span><span class="rrow__value">24.3k</span></div>
+                  </div>
+                </div>
+
+                <div class="ucard">
+                  <div class="ucard__id">
+                    <span class="ucard__chip">OpenAI</span>
+                    <span class="ucard__model">gpt-5.5</span>
+                  </div>
+                  <div class="ucard__cost">$0.15 list price this turn</div>
+                  <div class="ucard__usage">30,600 uncached in · 96,400 cached · 9,600 out (5,280 reasoning)</div>
+                  <div class="ucard__times">Started Sep 1, 12:07:20 AM · 3m 10s</div>
+                  <div class="ucard__times">Running total: $0.67 list price</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="board t-light">
+            <div class="board__cap">light · same markup, swapped tokens</div>
+            <div class="board__body">
+              <div class="rail">
+                <div class="rcard">
+                  <div class="rcard__head">
+                    <span class="rcard__eyebrow">Token Miser</span>
+                    <span class="rcard__meta">9 decisions</span>
+                  </div>
+                  <div class="rcard__primary">
+                    <span class="rcard__headline">$0.80 saved</span>
+                    <span class="rcard__secondary">39.9% less</span>
+                  </div>
+                  <div class="rcard__caption">Estimated same-trajectory savings · $2.01 unfiltered</div>
+                  <div class="rcard__section">
+                    <div class="rcard__section-title">Savings terms</div>
+                    <div class="rrow"><span class="rrow__label">1 · Without the gate</span><span class="rrow__value">$1.20</span></div>
+                    <div class="rrow"><span class="rrow__label">2 · Gate compute</span><span class="rrow__value">$0.15</span></div>
+                    <div class="rrow"><span class="rrow__label">3 · Revealed to parent</span><span class="rrow__value">$0.25</span></div>
+                  </div>
+                  <div class="rcard__cta">Token Miser Savings</div>
+                </div>
+                <div class="ucard">
+                  <div class="ucard__id">
+                    <span class="ucard__chip">OpenAI</span>
+                    <span class="ucard__model">gpt-5.5</span>
+                  </div>
+                  <div class="ucard__cost">$0.14 list price this turn</div>
+                  <div class="ucard__usage">27,500 uncached in · 87,000 cached · 8,700 out (4,785 reasoning)</div>
+                  <div class="ucard__times">Started Sep 1, 12:01:20 AM · 3m 10s</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h2>The summary card primitive</h2>
+        <p>
+          <span class="mono">.rail-summary-card</span> serves both Token Miser
+          and Pricing, and any future rail summary should use it rather than a
+          new card. Its parts are fixed; only the rows change.
+        </p>
+
+        <table class="spec">
+          <caption>Summary card, measured from the running rail.</caption>
+          <thead><tr><th>Part</th><th>Type</th><th>Colour</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td>__eyebrow</td><td>10 650, <code>0.8px</code>, uppercase</td><td><code>--text-muted</code></td><td>Card identity</td></tr>
+            <tr><td>__meta</td><td>11 IBM Plex Mono</td><td><code>--text-muted</code></td><td>Row / decision count</td></tr>
+            <tr><td>__headline</td><td>20 700, <code>-0.2px</code></td><td><code>--text-primary</code></td><td>The one number</td></tr>
+            <tr><td>__secondary</td><td>11 IBM Plex Mono</td><td><code>--text-secondary</code></td><td>Percentage comparison</td></tr>
+            <tr><td>__caption</td><td>11 IBM Plex Mono</td><td><code>--text-muted</code></td><td>Basis of the figure</td></tr>
+            <tr><td>__section-title</td><td>10 650, <code>0.8px</code>, uppercase</td><td><code>--text-muted</code></td><td>Row-group label</td></tr>
+            <tr><td>__row-label</td><td>13 400</td><td><code>--text-secondary</code></td><td>Term name</td></tr>
+            <tr><td>__row-value</td><td>12 IBM Plex Mono</td><td><code>--text-primary</code></td><td>Money or token count</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Money is mono, prose is not</h4>
+          <p>
+            Every figure on this surface — dollars, token counts, timestamps,
+            durations — renders in IBM Plex Mono so columns of them align. The
+            labels beside them stay in Geist. That split is the rail's whole
+            typographic rule.
+          </p>
+        </div>
+
+        <h2>Savings, stated as three terms</h2>
+        <p>
+          The Token Miser headline is a derived figure, and the card shows its
+          arithmetic rather than asserting it. Savings is term 1 minus terms 2
+          and 3.
+        </p>
+        <table class="spec">
+          <thead><tr><th>Term</th><th>Field</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>1 · Without the gate</td><td><code>withoutGateCostMicros</code></td><td>What the same trajectory would have billed unfiltered</td></tr>
+            <tr><td>2 · Gate compute</td><td><code>gateCostMicros</code></td><td>What running the reducer itself cost</td></tr>
+            <tr><td>3 · Revealed to parent</td><td><code>revealedCostMicros</code></td><td>What the summarised payload still cost the parent turn</td></tr>
+            <tr><td>= Saved</td><td><code>savingsMicros</code></td><td>The headline, with a percentage against observed spend</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Terms are absent until a gate is priced</h4>
+          <p>
+            A gate is priced only once its own usage line lands and the parent
+            turn has a known model and rate, so a live turn legitimately shows
+            decisions with no dollar terms. The card degrades to a bare decision
+            count rather than showing a zero.
+          </p>
+        </div>
+
+        <h2>Per-turn usage rows</h2>
+        <table class="spec">
+          <thead><tr><th>Element</th><th>Type</th><th>Colour</th></tr></thead>
+          <tbody>
+            <tr><td>.rail-card__provider-chip</td><td>11 600 Geist, 20px pill</td><td><code>#101010</code> on subtle border</td></tr>
+            <tr><td>.rail-card__model</td><td>12 IBM Plex Mono</td><td><code>--text-secondary</code></td></tr>
+            <tr><td>.pricing-usage-row__cost</td><td>13 600 IBM Plex Mono</td><td><code>--text-primary</code></td></tr>
+            <tr><td>.rail-card__usage</td><td>12 400</td><td><code>--text-secondary</code></td></tr>
+            <tr><td>.rail-card__times</td><td>12 400</td><td><code>--text-muted</code></td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Gate rows nest under their turn</h4>
+          <p>
+            A gate is created mid-turn, after the turn's first usage flush, so
+            in a flat time-sorted list every gate sorts <em>above</em> the turn
+            that produced it. Each is a full card, so a turn with 25 gates
+            pushed its own row a screen below its own noise. They are
+            partitioned under the anchoring turn instead.
+          </p>
+        </div>
+
+        <h2>Where the toggles live</h2>
+        <p>
+          Settings › Usage &amp; Pricing owns display options
+          (<span class="mono">codexCredits</span>,
+          <span class="mono">usd</span>) and the pricing catalogue. Per-thread
+          Token Miser is overridden from the composer's thread menu, not from
+          Settings — gating adds a synchronous helper round trip per large tool
+          result, so a latency-sensitive thread needs to opt out without leaving
+          the thread.
+        </p>
+
+        <div class="note">
+          <h4>No axe findings on this surface</h4>
+          <p>
+            The rail returned zero violations in both themes. The mono figures
+            clear AA against <span class="mono">--bg-panel</span> at 12px in
+            both.
+          </p>
+        </div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props="{}">
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

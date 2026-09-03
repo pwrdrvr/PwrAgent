@@ -1,0 +1,63 @@
+/* Context-rail + log-viewer recreation — measured 2026-09-01. */
+
+.rail { width: 380px; display: flex; flex-direction: column; gap: 14px; padding: 14px; background: var(--bg-app); }
+
+.rcard { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); padding: 14px 16px; }
+.rcard__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.rcard__eyebrow { font-size: 10px; font-weight: 650; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); }
+.rcard__meta { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+.rcard__primary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 6px; }
+.rcard__headline { font-size: 20px; font-weight: 700; letter-spacing: -0.2px; color: var(--text-primary); }
+.rcard__secondary { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.rcard__caption { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+.rcard__section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.rcard__section-title { font-size: 10px; font-weight: 650; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+.rrow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.rrow__label { font-size: 13px; color: var(--text-secondary); }
+.rrow__value { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
+.rcard__cta { margin-top: 12px; border: 1px solid var(--border-subtle); border-radius: 6px; padding: 7px 0; text-align: center; font-size: 12px; font-weight: 600; color: var(--accent); }
+
+.ucard { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); padding: 12px 14px; }
+.ucard__id { display: flex; align-items: center; gap: 8px; }
+.ucard__chip { height: 20px; border-radius: 999px; padding: 0 8px; display: inline-flex; align-items: center; background: var(--bg-panel-elevated); border: 1px solid var(--border-subtle); font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+.ucard__model { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+.ucard__cost { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 8px 0 4px; }
+.ucard__usage { font-size: 12px; color: var(--text-secondary); }
+.ucard__times { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+/* Star Map recreation: the two floating thread cards carry inline positions.
+   The lower-left one landed on top of the always-on keyboard legend, which is
+   an artifact of this drawing, not something the real canvas does — its layout
+   engine keeps cards clear of the chrome. Lift it. */
+.sm__card[style*="left:"] { bottom: 30% !important; }
+
+/* ---- log viewer ---- */
+.lv { border: 1px solid var(--border-subtle); border-radius: 10px; overflow: hidden; background: var(--bg-app); }
+.lv__titlebar { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--border-subtle); }
+.lv__brand { font-size: 17px; line-height: 17px; font-weight: 700; letter-spacing: -0.17px; color: var(--text-primary); margin-right: 6px; }
+.lv__brand em { font-style: normal; color: var(--accent); }
+.lv__eyebrow { font-size: 10px; line-height: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--accent); }
+.lv__sep { font-size: 13px; line-height: 13px; font-weight: 500; color: var(--text-muted); }
+.lv__current { font-size: 13px; line-height: 16.9px; font-weight: 600; color: var(--text-primary); }
+.lv__toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; }
+.lv__search { flex: 1; height: 34px; border-radius: 7px; border: 1px solid var(--border-subtle); background: var(--bg-input); display: flex; align-items: center; gap: 10px; padding: 0 12px; }
+.lv__search-label { font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); }
+.lv__placeholder { font-size: 13px; color: var(--text-muted); }
+.lv__levels { display: flex; border: 1px solid var(--border-subtle); border-radius: 7px; overflow: hidden; }
+.lv__level { padding: 8px 12px; font-size: 12px; font-weight: 600; border-right: 1px solid var(--border-subtle); }
+.lv__level:last-child { border-right: 0; }
+.lv__level--error { color: var(--status-error); background: color-mix(in srgb, var(--status-error) 12%, transparent); }
+.lv__level--warn { color: var(--status-warning); background: color-mix(in srgb, var(--status-warning) 12%, transparent); }
+.lv__level--info { color: var(--accent); background: var(--accent-soft); }
+.lv__level--debug { color: var(--text-muted); }
+.lv__file { display: flex; align-items: center; gap: 10px; margin: 0 14px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--bg-panel); }
+.lv__file-label { font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); }
+.lv__file-path { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+.lv__status { padding: 10px 14px 6px; display: flex; gap: 10px; align-items: baseline; }
+.lv__status-text { font-size: 12px; color: var(--text-secondary); }
+.lv__status-note { font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--accent); }
+.lv__lines { margin: 0 14px 14px; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 0; }
+.lv__line { display: flex; gap: 14px; padding: 1px 12px; }
+.lv__num { font-family: var(--font-mono); font-size: 12px; color: #6b6966; width: 24px; text-align: right; flex: none; }
+.lv__text { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+.t-light .lv__num { color: #9a9792; }

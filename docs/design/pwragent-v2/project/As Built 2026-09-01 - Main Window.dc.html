@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="stylesheet" href="./asbuilt.css" />
+        <link rel="stylesheet" href="./asbuilt-shell.css" />
+      </helmet>
+      <div class="wrap" data-screen-label="Main window — sidebar">
+        <p class="eyebrow">As built · 2026-09-01 · Main window</p>
+        <h1>Sidebar, lens switch, thread rows</h1>
+        <p class="lede">
+          The sidebar is the application's primary surface: a lens switch over
+          one thread list. Everything below is measured from
+          <span class="mono">features/navigation/Sidebar.tsx</span> mounted
+          against the real stylesheet.
+        </p>
+
+        <div class="pagenav">
+          <a href="./As%20Built%202026-09-01%20-%20Index.dc.html">Index</a>
+          <a href="./As%20Built%202026-09-01%20-%20Settings.dc.html">Settings</a>
+          <a href="./As%20Built%202026-09-01%20-%20Tool%20Cost.dc.html">Tool cost</a>
+          <a href="./As%20Built%202026-09-01%20-%20Log%20Viewer.dc.html">Log viewer</a>
+        </div>
+
+        <h2>The surface</h2>
+        <p>
+          408px default width, resizable. Both frames are the same markup with
+          only the token block swapped, which is exactly how the app switches
+          themes.
+        </p>
+
+        <div class="boards">
+          <div class="board">
+            <div class="board__cap">dark · lens: Updated · 408px</div>
+            <div class="board__body">
+              <div class="sb">
+                <div class="sb__masthead">
+                  <div class="sb__brand">Pwr<em>Agent</em></div>
+                  <div class="sb__actions">
+                    <div class="sb__icon">⌕</div>
+                    <div class="sb__icon">▦</div>
+                    <div class="sb__icon">⚙</div>
+                    <div class="sb__icon">＋</div>
+                  </div>
+                </div>
+                <div class="sb__identity">profile:default</div>
+                <div class="lens">
+                  <div class="lens__btn">
+                    <span class="lens__count lens__count--active"><span class="scanner"></span>1</span>
+                    <span class="lens__count lens__count--idle"><span class="cookie"></span>3</span>
+                  </div>
+                  <div class="lens__btn">✎<span class="lens__count lens__count--idle">1</span></div>
+                  <div class="lens__btn is-active">◴</div>
+                  <div class="lens__btn">Ὕ3</div>
+                  <div class="lens__btn">◱</div>
+                </div>
+                <div class="rows">
+                  <div class="row is-selected">
+                    <div class="row__head">
+                      <div class="row__lead">
+                        <span class="scanner"></span>
+                        <span class="row__title">Telegram resume menu not clearing</span>
+                      </div>
+                      <span class="row__time">Sep 1</span>
+                    </div>
+                    <div class="row__chips">
+                      <span class="chip chip--backend">OpenAI</span>
+                      <span class="chip chip--mono">pwragent</span>
+                      <span class="chip chip--mono">fix/telegram-topic-resume-picker</span>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row__head">
+                      <div class="row__lead">
+                        <span class="row__title">Messaging streaming responses OAI</span>
+                      </div>
+                      <span class="row__time">Sep 1</span>
+                    </div>
+                    <div class="row__chips">
+                      <span class="chip chip--backend">OpenAI</span>
+                      <span class="chip chip--draft">✎ Draft</span>
+                      <span class="chip chip--mono">pwragent</span>
+                      <span class="chip chip--mono">feat/streaming-oai</span>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row__head">
+                      <div class="row__lead">
+                        <span class="row__title">Branch naming / PR creation</span>
+                      </div>
+                      <span class="row__time">Aug 31</span>
+                    </div>
+                    <div class="row__chips">
+                      <span class="chip chip--backend">OpenAI</span>
+                      <span class="chip chip--mono">docs.pwragent.ai</span>
+                      <span class="chip chip--mono">main</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="board t-light">
+            <div class="board__cap">light · same markup, swapped tokens</div>
+            <div class="board__body">
+              <div class="sb">
+                <div class="sb__masthead">
+                  <div class="sb__brand">Pwr<em>Agent</em></div>
+                  <div class="sb__actions">
+                    <div class="sb__icon">⌕</div>
+                    <div class="sb__icon">▦</div>
+                    <div class="sb__icon">⚙</div>
+                    <div class="sb__icon">＋</div>
+                  </div>
+                </div>
+                <div class="sb__identity">profile:default</div>
+                <div class="lens">
+                  <div class="lens__btn">
+                    <span class="lens__count lens__count--active"><span class="scanner"></span>1</span>
+                    <span class="lens__count lens__count--idle"><span class="cookie"></span>3</span>
+                  </div>
+                  <div class="lens__btn">✎<span class="lens__count lens__count--idle">1</span></div>
+                  <div class="lens__btn is-active">◴</div>
+                  <div class="lens__btn">Ὕ3</div>
+                  <div class="lens__btn">◱</div>
+                </div>
+                <div class="rows">
+                  <div class="row is-selected">
+                    <div class="row__head">
+                      <div class="row__lead">
+                        <span class="scanner"></span>
+                        <span class="row__title">Telegram resume menu not clearing</span>
+                      </div>
+                      <span class="row__time">Sep 1</span>
+                    </div>
+                    <div class="row__chips">
+                      <span class="chip chip--backend">OpenAI</span>
+                      <span class="chip chip--mono">pwragent</span>
+                      <span class="chip chip--mono">fix/telegram-topic-resume-picker</span>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row__head">
+                      <div class="row__lead">
+                        <span class="row__title">Messaging streaming responses OAI</span>
+                      </div>
+                      <span class="row__time">Sep 1</span>
+                    </div>
+                    <div class="row__chips">
+                      <span class="chip chip--backend">OpenAI</span>
+                      <span class="chip chip--draft">✎ Draft</span>
+                      <span class="chip chip--mono">pwragent</span>
+                      <span class="chip chip--mono">feat/streaming-oai</span>
+                    </div>
+                  </div>
+                  <div class="row">
+                    <div class="row__head">
+                      <div class="row__lead">
+                        <span class="row__title">Branch naming / PR creation</span>
+                      </div>
+                      <span class="row__time">Aug 31</span>
+                    </div>
+                    <div class="row__chips">
+                      <span class="chip chip--backend">OpenAI</span>
+                      <span class="chip chip--mono">docs.pwragent.ai</span>
+                      <span class="chip chip--mono">main</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h2>The lens switch</h2>
+        <p>
+          Five tabs in one 32px pill. Every tab is icon-only — the name lives
+          in <span class="mono">aria-label</span> and the tooltip. Attention is
+          the exception: instead of an icon it renders two live counts.
+        </p>
+
+        <div class="note note--warn">
+          <h4>Shipped names, not doc names</h4>
+          <p>
+            <span class="mono">browseModeLabels</span> in
+            <span class="mono">Sidebar.tsx</span> maps
+            <span class="mono">inbox → "Updated"</span> and
+            <span class="mono">recents → "Created"</span>. The contributor docs
+            still call these lenses Inbox and Recents. The route values did not
+            change; only the user-facing names did.
+          </p>
+        </div>
+
+        <table class="spec">
+          <caption>Accessible names read from the rendered tabs. Order is left to right.</caption>
+          <thead><tr><th>Position</th><th>Accessible name</th><th>Route value</th><th>Indicator</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Attention, N active threads, N threads to review</td><td><code>attention</code></td><td>Two counts, no icon</td></tr>
+            <tr><td>2</td><td>Drafts, N threads with an unsent draft</td><td><code>drafts</code></td><td>Pencil + count</td></tr>
+            <tr><td>3</td><td>Updated</td><td><code>inbox</code></td><td>History glyph</td></tr>
+            <tr><td>4</td><td>Created</td><td><code>recents</code></td><td>Calendar-plus glyph</td></tr>
+            <tr><td>5</td><td>Directories</td><td><code>directories</code></td><td>Folder glyph</td></tr>
+          </tbody>
+        </table>
+
+        <table class="spec">
+          <caption>Lens switch, measured.</caption>
+          <thead><tr><th>Element</th><th>Box</th><th>Fill / border</th><th>Type</th></tr></thead>
+          <tbody>
+            <tr><td>.lens-switch</td><td>32px tall, radius 8, padding 2, gap 1</td><td><code>#0a0a0a</code> / <code>rgba(247,243,235,.1)</code></td><td>inherits 16px UA default</td></tr>
+            <tr><td>.lens-switch__button</td><td>26px tall, radius 6, padding 0 4, gap 5</td><td>transparent / transparent</td><td><code>#b8b0a5</code></td></tr>
+            <tr><td>…<span class="mono">.is-active</span></td><td>26px tall, radius 6, padding 0 6, gap 4</td><td><code>#120800</code> / accent 42%</td><td><code>#ffb35c</code></td></tr>
+            <tr><td>.signal-count--active</td><td>gap 2</td><td>—</td><td>10/10 600 IBM Plex Mono, <code>#ffb35c</code></td></tr>
+            <tr><td>.signal-count--idle</td><td>gap 2</td><td>—</td><td>10 600 IBM Plex Mono, <code>#b8b0a5</code></td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Zero counts stay visible</h4>
+          <p>
+            Attention renders both indicators at all times and greys them at
+            zero rather than hiding them. A missing indicator reads as a broken
+            tab, not an idle one.
+          </p>
+        </div>
+
+        <h2>Thread rows</h2>
+        <p>
+          One row shape serves every lens. The card is
+          <span class="mono">.thread-row</span>; the open-thread control is a
+          full-card empty overlay, so the title, chips and status marker are its
+          siblings rather than its children — a button inside a button is
+          invalid.
+        </p>
+
+        <table class="spec">
+          <caption>Row anatomy, measured.</caption>
+          <thead><tr><th>Element</th><th>Box</th><th>Fill / border</th><th>Type</th></tr></thead>
+          <tbody>
+            <tr><td>.thread-row</td><td>radius 8, padding 4 10, gap 6</td><td>transparent at rest</td><td>—</td></tr>
+            <tr><td>…<span class="mono">.is-selected</span></td><td>+ 3px accent bar, left edge</td><td><code>#120800</code> / accent 42%</td><td>—</td></tr>
+            <tr><td>… hover</td><td>—</td><td><code>#14110d</code> / accent 42%</td><td>colour shift only, no scale</td></tr>
+            <tr><td>.thread-row__title</td><td>padding-bottom 2</td><td>—</td><td>13/16.25 600, <code>#f7f3eb</code></td></tr>
+            <tr><td>.thread-row__time</td><td>—</td><td>—</td><td>12 500, <code>#8c857a</code></td></tr>
+            <tr><td>.thread-row__chips</td><td>gap 6, wraps</td><td>—</td><td>—</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Chips</h3>
+        <table class="spec">
+          <caption>All three chip variants are 20px tall, radius 999, padding 0 8, gap 5.</caption>
+          <thead><tr><th>Variant</th><th>Fill / border</th><th>Type</th><th>Carries</th></tr></thead>
+          <tbody>
+            <tr><td>--backend</td><td><code>#101010</code> / subtle</td><td>11 600 Geist, <code>#b8b0a5</code></td><td>Provider name — <code>OpenAI</code></td></tr>
+            <tr><td>--mono</td><td>accent 12% / none</td><td>11 500 IBM Plex Mono, <code>#f7f3eb</code></td><td>Directory, branch, worktree</td></tr>
+            <tr><td>--draft</td><td>transparent / strong, dashed</td><td>11 600 Geist, <code>#b8b0a5</code></td><td>Unsent composer text</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>The Draft chip is viewer-local</h4>
+          <p>
+            Draft state is derived from the composer draft store on the machine
+            that holds the text, never from the thread summary and never
+            federated. A viewer drafting a reply to a peer's thread sees the
+            chip; the instance that owns the thread does not.
+          </p>
+        </div>
+
+        <h3>Status markers</h3>
+        <table class="spec">
+          <thead><tr><th>Marker</th><th>Box</th><th>Fill</th><th>Means</th></tr></thead>
+          <tbody>
+            <tr><td>.thread-row__status-cookie</td><td>8 × 8, radius 999, 1px accent 42%</td><td><code>#ff8a1f</code></td><td>Unread</td></tr>
+            <tr><td>.thinking-scanner--mini</td><td>16 × 6, radius 999</td><td>accent 16% track, accent beam</td><td>Turn in progress</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Unread clears differently in Attention</h4>
+          <p>
+            In every browsing lens, focusing a thread clears its cookie. In
+            Attention it does not — only an accepted reply does, reported after
+            the backend resolves the send rather than when the operator presses
+            it. Attention is a work queue, so a glance must not empty it.
+          </p>
+        </div>
+
+        <h2>Ordering</h2>
+        <table class="spec">
+          <thead><tr><th>Lens</th><th>Order</th><th>Pins</th></tr></thead>
+          <tbody>
+            <tr><td>Attention</td><td>Rank assigned when a turn starts, held for the whole turn</td><td>—</td></tr>
+            <tr><td>Drafts</td><td><code>updatedAt</code></td><td>—</td></tr>
+            <tr><td>Updated</td><td><code>updatedAt</code>, pure sort</td><td>At natural position</td></tr>
+            <tr><td>Created</td><td><code>createdAt</code>, pure sort</td><td>At natural position</td></tr>
+            <tr><td>Directories</td><td>Pinned first, then <code>createdAt</code> within each directory</td><td>Drag, <code>⌘⇧↑/↓</code>, context menu</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <h4>Attention deliberately ignores updatedAt</h4>
+          <p>
+            <span class="mono">updatedAt</span> moves on every streamed item,
+            sub-agent call and tool result. Sorting the queue by it would
+            reshuffle rows under the operator's cursor mid-turn. A thread moves
+            at most twice per turn: once when it starts, optionally once when it
+            ends.
+          </p>
+        </div>
+
+        <div class="note note--alert">
+          <h4>Directories: orphaned listitem semantics</h4>
+          <p>
+            Rows carry <span class="mono">role="listitem"</span> in every lens,
+            but only Inbox and Recents wrap them in a
+            <span class="mono">role="list"</span> container. In Directories,
+            <span class="mono">.directory-row__threads</span> and all of its
+            ancestors carry no role, so axe reports
+            <span class="mono">aria-required-parent</span> at critical impact.
+            The same lens also trips <span class="mono">target-size</span> on
+            the selected row's open control.
+          </p>
+        </div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props="{}">
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

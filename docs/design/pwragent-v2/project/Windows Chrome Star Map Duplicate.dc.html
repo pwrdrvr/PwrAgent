@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=Inter+Tight:wght@400;500;600&amp;display=swap" rel="stylesheet" />
+        <style>
+:root {
+  --bg-app: #000000;
+  --bg-sidebar: #050505;
+  --bg-panel: #0a0a0a;
+  --bg-panel-elevated: #101010;
+  --border-subtle: rgba(247, 243, 235, 0.10);
+  --text-primary: #f7f3eb;
+  --text-secondary: #b8b0a5;
+  --text-muted: #8c857a;
+  --accent: #ff8a1f;
+  --flag: oklch(0.68 0.17 25);
+  --ok: oklch(0.74 0.14 150);
+  /* The canvas ground is light; app tokens above are dark-theme values and
+     are only safe INSIDE the dark window cards. Anything drawn straight on
+     the canvas needs its own ink. */
+  --canvas-ink: #2b2822;
+  --canvas-ink-strong: #131210;
+  --canvas-ink-soft: #6d675d;
+  --flag-on-light: oklch(0.52 0.19 25);
+  --ok-on-light: oklch(0.45 0.13 150);
+  /* Windows chrome geometry, 1:1 with the renderer. Both bands are
+     --chrome-band-h / --win-titlebar-h, which are the same 40px. */
+  --band-h: 40px;
+  --win-w: 1180px;
+  --rail-w: 376px;
+  --caption-w: 140px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: #f2efe9; color: var(--canvas-ink);
+       font-family: "Inter Tight", Helvetica, sans-serif; }
+.frame-label { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+               color: var(--canvas-ink-soft); cursor: grab; }
+.frame-note { font-size: 13px; line-height: 1.55; color: var(--canvas-ink); max-width: 1180px; }
+.frame-note b { color: var(--canvas-ink-strong); font-weight: 600; }
+.frame-note code, code { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: #a1550a; }
+
+/* ---- the window card, drawn at the renderer's real band geometry ---- */
+.win { width: var(--win-w); border: 1px solid rgba(0,0,0,0.35); border-radius: 8px;
+       overflow: hidden; background: var(--bg-app); box-shadow: 0 18px 40px rgba(0,0,0,0.28); }
+
+/* band 1 - the Windows title strip */
+.strip { display: flex; align-items: center; gap: 10px; height: var(--band-h);
+         padding: 0 var(--caption-w) 0 10px; background: var(--bg-sidebar); position: relative; }
+.brand { margin: 0; font-size: 14px; font-weight: 700; line-height: 1;
+         letter-spacing: -0.01em; color: var(--text-primary); white-space: nowrap; }
+.brand i { color: var(--accent); font-style: normal; }
+.menubar { display: flex; align-items: center; gap: 1px; }
+.menubar span { padding: 5px 9px; border-radius: 6px; font-size: 12.5px; font-weight: 500;
+                color: var(--text-secondary); white-space: nowrap; }
+.appacts { display: flex; align-items: center; gap: 2px; }
+.spacer { flex: 1 1 auto; }
+.caption { position: absolute; right: 0; top: 0; height: var(--band-h); width: var(--caption-w);
+           display: flex; align-items: center; justify-content: space-around;
+           color: var(--text-muted); font-size: 13px; }
+
+/* band 2 - sidebar identity row + the view header */
+.band2 { display: grid; grid-template-columns: var(--rail-w) minmax(0,1fr); align-items: stretch; }
+.rail2 { background: var(--bg-sidebar); border-right: 1px solid var(--border-subtle);
+         padding: 0 16px; display: flex; align-items: center; min-height: var(--band-h); }
+.pills { display: flex; gap: 6px; width: 100%; margin-inline: -8px; }
+.pill { display: inline-flex; flex: 1 1 0; min-width: 0; height: 22px; align-items: center;
+        gap: 5px; padding: 0 7px; border: 1px solid var(--border-subtle); border-radius: 6px;
+        background: var(--bg-panel); color: var(--text-secondary);
+        font-family: "IBM Plex Mono", monospace; font-size: 10.5px; line-height: normal; }
+.pill span { min-width: 0; overflow: hidden; white-space: nowrap; }
+
+.vhead { display: flex; align-items: center; gap: 16px; min-height: var(--band-h);
+         padding: 0 14px 0 0; min-width: 0; }
+.hist { display: flex; gap: 2px; color: var(--text-muted); padding-left: 34px; }
+.hist span { width: 24px; height: 24px; display: flex; align-items: center;
+             justify-content: center; font-size: 14px; }
+.crumb { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.eyebrow { color: var(--accent); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.sep { color: var(--text-muted); font-size: 13px; }
+.ttl { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);
+       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip { display: inline-flex; align-items: center; height: 22px; padding: 0 10px;
+        border: 1px solid var(--border-subtle); border-radius: 999px;
+        background: var(--bg-panel-elevated); color: var(--text-secondary);
+        font-size: 11.5px; white-space: nowrap; }
+.hchrome { margin-left: auto; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.ico { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+       color: var(--text-secondary); }
+.toggle { display: flex; gap: 4px; }
+.toggle i { display: block; width: 16px; height: 14px; border: 1.4px solid var(--text-muted);
+            border-radius: 3px; position: relative; }
+.toggle i.on { border-color: var(--accent); }
+.toggle i.on::before { content: ""; position: absolute; inset: 1px auto 1px 1px; width: 4px;
+                       background: var(--accent); border-radius: 1px; }
+.toggle i.r::before { inset: 1px 1px 1px auto; }
+
+.body { padding: 16px 22px 20px; color: var(--text-muted); font-size: 13px;
+        line-height: 1.5; background: var(--bg-app); }
+
+/* ---- annotation ----
+   `.marks` is a zero-origin overlay pinned under its card: negative tops
+   reach back up onto the card, positive tops land in the light gutter the
+   explicit height reserves. Badges go ON the thing being called out (dark
+   card, so they are filled and light-on-dark); the prose that names them
+   goes in the gutter, where dark ink on the light ground actually reads.
+   Offsets are measured, not guessed - the card is 138px tall, so the strip
+   centre is -132 and the view-header centre -92 from this origin. */
+.marks { position: relative; width: var(--win-w); }
+.dot { position: absolute; width: 22px; height: 22px; border-radius: 50%;
+       display: flex; align-items: center; justify-content: center;
+       font-size: 11px; font-weight: 600; font-family: "IBM Plex Mono", monospace;
+       box-shadow: 0 0 0 2px rgba(0,0,0,0.55); }
+.dot-bad { background: var(--flag-on-light); color: #fff; }
+.dot-ok { background: var(--ok-on-light); color: #fff; }
+.tag { position: absolute; font-size: 12.5px; line-height: 1.4; white-space: nowrap; }
+.tag-bad { color: var(--flag-on-light); }
+.tag-ok { color: var(--ok-on-light); }
+.tag b { font-family: "IBM Plex Mono", monospace; font-weight: 600; }
+
+/* ---- findings table ---- */
+.spec { width: 1180px; border: 1px solid rgba(0,0,0,0.3); border-radius: 8px;
+        background: var(--bg-panel); padding: 22px 26px 24px; box-shadow: 0 18px 40px rgba(0,0,0,0.28); }
+.spec h3 { margin: 0 0 4px; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase;
+           color: var(--text-muted); font-weight: 600; }
+.spec .sub { margin: 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.55; }
+.spec .sub code { color: var(--accent); }
+.spec-grid { display: grid; grid-template-columns: 200px 1fr 1fr 96px; font-size: 13px; line-height: 1.5; }
+.spec-grid > div { padding: 11px 18px 11px 0; border-top: 1px solid var(--border-subtle); }
+.spec-grid > .head { border-top: 0; padding-top: 0; font-size: 11px; letter-spacing: 0.08em;
+                     text-transform: uppercase; color: var(--text-muted); }
+.was { color: var(--text-muted); }
+.now { color: var(--text-primary); }
+.sev { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-muted); }
+.sev-a { color: var(--flag); }
+.sev-b { color: var(--accent); }
+.k { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--text-primary); }
+.spec code { color: var(--accent); }
+
+/* measurement table */
+.meas { width: 760px; border: 1px solid rgba(0,0,0,0.3); border-radius: 8px;
+        background: var(--bg-panel); padding: 22px 26px 24px; box-shadow: 0 18px 40px rgba(0,0,0,0.28); }
+.meas h3 { margin: 0 0 4px; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase;
+           color: var(--text-muted); font-weight: 600; }
+.meas .sub { margin: 0 0 16px; font-size: 13px; color: var(--text-secondary); line-height: 1.55; }
+.meas-grid { display: grid; grid-template-columns: 1fr 130px 130px; font-size: 13px; line-height: 1.5; }
+.meas-grid > div { padding: 10px 16px 10px 0; border-top: 1px solid var(--border-subtle); }
+.meas-grid > .head { border-top: 0; padding-top: 0; font-size: 11px; letter-spacing: 0.08em;
+                     text-transform: uppercase; color: var(--text-muted); }
+.num { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--text-primary); }
+.num.bad { color: var(--flag); }
+.num.ok { color: var(--ok); }
+</style>
+      </helmet>
+
+      <div data-screen-label="Windows now" style="position:absolute;left:40px;top:40px;width:1180px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">Windows now &mdash; two Star Maps, cluster torn across two rows</div>
+        <div class="win">
+        <div class="strip">
+          <p class="brand">Pwr<i>Agent</i></p>
+          <div class="menubar"><span>File</span><span>Edit</span><span>View</span><span>Profiles</span><span>Window</span><span>Help</span></div>
+          <div class="appacts"><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg></div><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></div><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M12 11v6M9 14h6"/></svg></div></div>
+          <div class="spacer"></div>
+          <div style="display:flex;align-items:center;gap:6px;"><div class="toggle"><i class="on"></i><i class="r"></i></div><div class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="9" r="3.2"/><circle cx="17" cy="15" r="3.2"/><path d="M9.6 10.7 14.4 13.3"/></svg></div></div>
+          <div class="caption"><span>&#8212;</span><span>&#9744;</span><span>&#10005;</span></div>
+        </div>
+        <div class="band2">
+          <div class="rail2">
+            <div class="pills">
+              <div class="pill"><span>C:\PwrLab\repos\PwrAgent</span></div>
+              <div class="pill"><span>main</span></div>
+            </div>
+          </div>
+          <div class="vhead">
+            <div class="hist"><span>&#8249;</span><span>&#8250;</span></div>
+            <div class="crumb">
+              <span class="eyebrow">codex-settings-store-hot-path</span>
+              <span class="sep">&#8250;</span>
+              <h2 class="ttl">Add Windows Codex Environment docs</h2>
+            </div>
+            <div class="hchrome"><span class="chip">OpenAI</span><div class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 8 4 4-4 4M13 16h6"/></svg></div><div class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="9" r="3.2"/><circle cx="17" cy="15" r="3.2"/><path d="M9.6 10.7 14.4 13.3"/></svg></div></div>
+          </div>
+        </div><div class="body">I&rsquo;ll trace the repository&rsquo;s Codex environment setup, check the official Codex guidance for Windows, then update the project instructions.</div></div>
+        <div class="marks" style="height:48px;">
+          <div class="dot dot-bad" style="left:1016px;top:-143px;">1</div>
+          <div class="dot dot-bad" style="left:1142px;top:-103px;">1</div>
+          <div class="dot dot-bad" style="left:445px;top:-103px;">2</div>
+          <div class="tag tag-bad" style="left:0;top:2px;"><b>1</b> &mdash; the same Star Map button, drawn twice: once by the title strip, once by the view header</div>
+          <div class="tag tag-bad" style="left:0;top:24px;"><b>2</b> &mdash; the thread breadcrumb sits level with the sidebar&rsquo;s identity pills, not with the window chrome</div>
+        </div>
+        <div class="frame-note">The Windows strip took the <b>panel toggles and the Star Map</b> off the view header but left the backend chip, the terminal toggle and a <b>second</b> Star Map behind. So the control cluster runs across two rows, and the thread breadcrumb &mdash; the one piece of text that says what this window is looking at &mdash; ends up on the identity-pill line reading against <code>C:\PwrLab\repos\PwrAgent</code>. That is what &ldquo;dropped out of the chrome row&rdquo; is.</div>
+      </div>
+
+      <div data-screen-label="macOS today" style="position:absolute;left:1300px;top:40px;width:1180px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">macOS today &mdash; the shape we are matching</div>
+        <div class="win">
+          <div class="band2">
+            <div class="rail2" style="padding-left:80px;">
+              <p class="brand" style="font-size:15px;">Pwr<i>Agent</i></p>
+              <div class="appacts" style="margin-left:auto;"><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg></div><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></div><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M12 11v6M9 14h6"/></svg></div></div>
+            </div>
+            <div class="vhead">
+              <div class="hist"><span>&#8249;</span><span>&#8250;</span></div>
+              <div class="crumb">
+                <span class="eyebrow">codex-settings-store-hot-path</span>
+                <span class="sep">&#8250;</span>
+                <h2 class="ttl">Add Windows Codex Environment docs</h2>
+              </div>
+              <div class="hchrome"><span class="chip">OpenAI</span><div class="toggle"><i class="on"></i><i class="r"></i></div><div class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 8 4 4-4 4M13 16h6"/></svg></div><div class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="9" r="3.2"/><circle cx="17" cy="15" r="3.2"/><path d="M9.6 10.7 14.4 13.3"/></svg></div></div>
+            </div>
+          </div>
+          <div class="band2">
+            <div class="rail2" style="min-height:34px;">
+              <div class="pills">
+                <div class="pill"><span>C:\PwrLab\repos\PwrAgent</span></div>
+                <div class="pill"><span>main</span></div>
+              </div>
+            </div>
+            <div style="background:var(--bg-app);"></div>
+          </div>
+          <div class="body">I&rsquo;ll trace the repository&rsquo;s Codex environment setup, check the official Codex guidance for Windows, then update the project instructions.</div>
+        </div>
+        <div class="frame-note">One chrome band: wordmark and app actions on the sidebar side, then history, breadcrumb, chip, and the <b>whole control cluster together</b> on the right. The identity pills sit on the row below, where they belong. macOS gets its menu from the system menu bar, so this band pays nothing for it.</div>
+      </div>
+
+      <div data-screen-label="Windows proposed" style="position:absolute;left:40px;top:600px;width:1180px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">Windows proposed &mdash; strip is OS chrome, view header is the macOS row</div>
+        <div class="win">
+        <div class="strip">
+          <p class="brand">Pwr<i>Agent</i></p>
+          <div class="menubar"><span>File</span><span>Edit</span><span>View</span><span>Profiles</span><span>Window</span><span>Help</span></div>
+          <div class="appacts"><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg></div><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></div><div class="ico"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M12 11v6M9 14h6"/></svg></div></div>
+          <div class="spacer"></div>
+          <div class="caption"><span>&#8212;</span><span>&#9744;</span><span>&#10005;</span></div>
+        </div>
+        <div class="band2">
+          <div class="rail2">
+            <div class="pills">
+              <div class="pill"><span>C:\PwrLab\repos\PwrAgent</span></div>
+              <div class="pill"><span>main</span></div>
+            </div>
+          </div>
+          <div class="vhead">
+            <div class="hist"><span>&#8249;</span><span>&#8250;</span></div>
+            <div class="crumb">
+              <span class="eyebrow">codex-settings-store-hot-path</span>
+              <span class="sep">&#8250;</span>
+              <h2 class="ttl">Add Windows Codex Environment docs</h2>
+            </div>
+            <div class="hchrome"><span class="chip">OpenAI</span><div class="toggle"><i class="on"></i><i class="r"></i></div><div class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 8 4 4-4 4M13 16h6"/></svg></div><div class="ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="9" r="3.2"/><circle cx="17" cy="15" r="3.2"/><path d="M9.6 10.7 14.4 13.3"/></svg></div></div>
+          </div>
+        </div><div class="body">I&rsquo;ll trace the repository&rsquo;s Codex environment setup, check the official Codex guidance for Windows, then update the project instructions.</div></div>
+        <div class="marks" style="height:48px;">
+          <div class="dot dot-ok" style="left:1142px;top:-103px;">&#10003;</div>
+          <div class="tag tag-ok" style="left:0;top:2px;">One Star Map, back in the cluster it belongs to &mdash; the same one macOS draws, in the same place.</div>
+          <div class="tag tag-ok" style="left:0;top:24px;">The strip is left carrying only what the OS itself would draw, plus the one global Messaging controller.</div>
+        </div>
+        <div class="frame-note">The rule: the <b>title strip carries OS chrome</b> &mdash; wordmark, application menu, app actions, the one Messaging controller, caption buttons. The <b>view header carries view chrome</b> &mdash; history, breadcrumb, chips, panel toggles, terminal, Star Map &mdash; identically on every platform. Nothing appears in both, so the duplicate cannot come back, and the Windows view header now renders the same cluster macOS does. Measured against the shipped components: with the same thread, both platforms put the cluster at <code>x=1138</code> and the breadcrumb at <code>548px</code> in a 1280 window.</div>
+      </div>
+
+      <div data-screen-label="Why not one band" style="position:absolute;left:1300px;top:600px;width:760px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">Why not fold it all into one band, like PwrGit and PwrSnap</div>
+        <div class="meas">
+          <h3>Measured in the real renderer</h3>
+          <p class="sub">A headless mount of the shipped <code>AppTitleBar</code> and <code>ThreadHeader</code> against <code>app.css</code>, using the labels off the reported screenshot. PwrGit and PwrSnap fit one band because their per-window context is a repo name and a branch. PwrAgent&rsquo;s is a variable-length thread title, and the painted menu bar costs 305px that macOS gets free from the system menu bar.</p>
+          <div class="meas-grid">
+            <div class="head">Strip, at any width</div><div class="head">Width</div><div class="head"></div>
+            <div>Wordmark</div><div class="num">66px</div><div></div>
+            <div>Application menu (File&hellip;Help)</div><div class="num bad">305px</div><div></div>
+            <div>App actions</div><div class="num">88px</div><div></div>
+            <div>Caption-button reserve</div><div class="num">140px</div><div></div>
+            <div class="now">Fixed cost before any content</div><div class="num bad">599px</div><div></div>
+            <div class="head" style="padding-top:22px;">One-band merge needs</div><div class="head" style="padding-top:22px;">Width</div><div class="head" style="padding-top:22px;">Verdict</div>
+            <div>History + breadcrumb + chip + cluster</div><div class="num">~732px</div><div></div>
+            <div class="now">Minimum viable window</div><div class="num bad">~1331px</div><div class="num bad">&#10007;</div>
+            <div class="now">Actual window minimum (<code>MAIN_WINDOW_MIN_WIDTH</code>)</div><div class="num">960px</div><div class="num bad">&#10007;</div>
+          </div>
+          <p class="sub" style="margin:18px 0 0;">At 960px a merged band leaves the breadcrumb about <b>50px</b> &mdash; roughly three characters. Windows keeps two bands; the fix is to make the split read as deliberate rather than as a half-finished macOS layout.</p>
+        </div>
+      </div>
+
+      <div data-screen-label="Findings" style="position:absolute;left:40px;top:1160px;width:1180px;display:flex;flex-direction:column;gap:16px;">
+        <div class="frame-label" data-drags-parent="1">Findings &amp; disposition</div>
+        <div class="spec">
+          <h3>Windows chrome &mdash; what changes</h3>
+          <p class="sub">Reproduced headlessly against the shipped renderer at 960 / 1280 / 1600. Every row below is a source change in <code>AppTitleBar.tsx</code>, <code>ThreadHeader.tsx</code>, <code>ThreadPlaceholderHeader.tsx</code>, and the <code>App.tsx</code> wiring.</p>
+          <div class="spec-grid">
+            <div class="head">Item</div><div class="head">Was</div><div class="head">Now</div><div class="head">Severity</div>
+
+            <div class="k">Star Map button</div>
+            <div class="was">Drawn twice on Windows &mdash; the strip and the view header each rendered one.</div>
+            <div class="now">Drawn once, in the view header, beside the terminal toggle as on macOS. The strip no longer takes a <code>starMap</code> prop, so it cannot come back.</div>
+            <div class="sev sev-a">defect</div>
+
+            <div class="k">Panel toggles</div>
+            <div class="was">Moved to the strip on Windows; the view header suppressed them behind an <code>isWindows</code> guard.</div>
+            <div class="now">In the view header on all three platforms. The chords were already bound once at the shell, so nothing double-binds.</div>
+            <div class="sev sev-b">layout</div>
+
+            <div class="k">Thread breadcrumb</div>
+            <div class="was">Alone on band 2, level with the sidebar identity pills, with a two-item cluster to its right.</div>
+            <div class="now">Unchanged in place &mdash; but band 2 now carries the full control cluster, so it reads as the chrome row instead of a leftover.</div>
+            <div class="sev sev-b">layout</div>
+
+            <div class="k">Messaging (MSG)</div>
+            <div class="was">One global controller in the strip; per-view copies hidden by CSS on win32.</div>
+            <div class="now">Unchanged. It is app-scoped, not view-scoped, so the strip is the right home.</div>
+            <div class="sev">no change</div>
+
+            <div class="k">Sidebar toggle over Settings</div>
+            <div class="was">Reachable on Windows only, because the strip floats above the Settings overlay.</div>
+            <div class="now">Gone, matching macOS. <code>Ctrl+B</code> / <code>Ctrl+Alt+B</code> still work everywhere &mdash; the chords are bound at the shell, not on the chips.</div>
+            <div class="sev sev-b">accepted</div>
+
+            <div class="k">Backend chip clipping</div>
+            <div class="was">At the 960px window minimum the <code>OpenAI</code> chip clips its own text.</div>
+            <div class="now">Left alone &mdash; measured identical on macOS and Windows, so it is pre-existing and not part of this change.</div>
+            <div class="sev">out of scope</div>
+          </div>
+        </div>
+      </div>
+    </x-dc>
+  </body>
+</html>

@@ -1,0 +1,230 @@
+<helmet data-dc-atomics><meta name="design_doc_mode" content="canvas" /><title>Pricing Tab — Token Miser Summary</title><link rel="stylesheet" href="pricing-token-miser.css" /></helmet>
+
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">The Explorer entry point — one control, two panels</span></div>
+<p class="dv-note">Today the Tool calls heading carries a full-size <code>.button.button--ghost</code>: 34px tall at 13px, beside a 14px <code>h3</code> — the control outweighs the heading it sits next to. And it says <b>Explore</b>, which is not what the window it opens calls itself. These options drop it to rail scale (24px / 11px, the same measurements as <code>.tool-call-row__details</code>) and take the label straight from the window's breadcrumb: <b>Tool Output Incidents</b> from Tool calls, <b>Token Miser Savings</b> from Pricing. One class, two labels, one popout icon.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="2a">
+<div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>Today — 34px ghost button, generic label</div>
+<div class="dv-card"><div class="rail" data-theme="light">
+<p class="board-caption">Reference · current build</p>
+<div class="spacer"></div>
+<div class="context-panel__section-heading"><h3>Tool calls</h3><button class="button button--ghost" type="button">Explore</button></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Tool output</span><span class="rail-summary-card__meta">191 invocations</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary">329.8k est. tokens</span><span class="rail-summary-card__secondary">1.3M chars</span></div>
+<div class="rail-summary-card__caption">16,496 output lines</div>
+</div></div></div>
+</div>
+
+<div class="dv-opt" id="2b">
+<div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a>Rail-scale action, popout icon, the window's own name</div>
+<div class="dv-card"><div class="rail" data-theme="light">
+<p class="board-caption">Proposed · recommended</p>
+<div class="spacer"></div>
+<div class="context-panel__section-heading"><h3>Tool calls</h3><button class="context-panel__section-action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Tool Output Incidents</button></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Tool output</span><span class="rail-summary-card__meta">191 invocations</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary">329.8k est. tokens</span><span class="rail-summary-card__secondary">1.3M chars</span></div>
+<div class="rail-summary-card__caption">16,496 output lines</div>
+</div></div></div>
+</div>
+
+<div class="dv-opt" id="2c">
+<div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a>Borderless — quietest, but stops reading as a control</div>
+<div class="dv-card"><div class="rail" data-theme="light">
+<p class="board-caption">Alternate · no chrome</p>
+<div class="spacer"></div>
+<div class="context-panel__section-heading"><h3>Tool calls</h3><button class="context-panel__section-action opt-bare" type="button">Tool Output Incidents<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg></button></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Tool output</span><span class="rail-summary-card__meta">191 invocations</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary">329.8k est. tokens</span><span class="rail-summary-card__secondary">1.3M chars</span></div>
+<div class="rail-summary-card__caption">16,496 output lines</div>
+</div></div></div>
+</div>
+
+<div class="dv-opt" id="2d">
+<div class="dv-olabel"><a class="dv-oid" href="#2d">2d</a><a class="dv-oid" href="#2b">2b</a> in dark, above the Pricing twin — same control, both panels</div>
+<div class="dv-card" data-dark="true"><div class="rail" data-theme="dark">
+<p class="board-caption">Proposed · dark · both entry points</p>
+<div class="spacer"></div>
+<div class="context-panel__section-heading"><h3>Tool calls</h3><button class="context-panel__section-action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Tool Output Incidents</button></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Tool output</span><span class="rail-summary-card__meta">191 invocations</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary">329.8k est. tokens</span><span class="rail-summary-card__secondary">1.3M chars</span></div>
+<div class="rail-summary-card__caption">16,496 output lines</div>
+</div>
+<div class="spacer"></div>
+<div class="context-panel__section-heading"><h3>Pricing</h3></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Token Miser</span><span class="rail-summary-card__meta">90 decisions</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary token-miser-summary-card__primary">$12.52 saved</span><span class="rail-summary-card__secondary">49.4% less</span></div>
+<div class="rail-summary-card__caption">Estimated same-trajectory savings</div>
+<button class="token-miser-summary-card__action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Token Miser Savings</button>
+</div></div></div>
+</div>
+
+</div>
+<p class="dv-next">Try next: “keep <a class="dv-oid" href="#2b">2b</a> but drop the icon” · “shorten both labels to Incidents / Savings” · “put the Pricing action in the card header instead of the footer”</p>
+</section>
+
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Pricing tab — Token Miser summary card</span></div>
+<p class="dv-note">The Pricing tab totals the bill but never says what the gate did for it: savings exist only inside the per-turn <b>Token Miser</b> folds, one turn at a time. This adds a single thread-level card directly under the pricing summary, in the same <code>.rail-summary-card</code> shape the tab already uses, with the popup window's vocabulary verbatim — <b>estimated same-trajectory savings</b>, <b>1 · Without the gate</b>, <b>2 · Gate compute</b>, <b>3 · Revealed to parent</b>, <b>decisions</b>, <b>Luna evaluations</b>, <b>passed through</b>. Figures are the real thread from the screenshots.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="1a">
+<div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Today — the gap. Nothing thread-level, no way to the window.</div>
+<div class="dv-card"><div class="rail" data-theme="light">
+<p class="board-caption">Reference · current build</p>
+<div class="spacer"></div>
+<h3>Pricing</h3>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Pricing summary</span><span class="rail-summary-card__meta">90 rows</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary">$12.53</span></div>
+<div class="rail-summary-card__caption">90 priced · 0 unpriced · Aug 31, 7:48 PM</div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Parent model token volume</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Uncached input</span><span class="rail-summary-card__row-value">681.3k</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Cached input</span><span class="rail-summary-card__row-value">18.9M</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Output</span><span class="rail-summary-card__row-value">67.9k</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Reasoning</span><span class="rail-summary-card__row-value">36k</span></div>
+</div></div>
+<ul class="context-list"><li class="rail-card">
+<p class="rail-card__runtime"><span class="rail-card__provider-chip">OpenAI</span><span class="rail-card__model">gpt-5.6-sol · xhigh</span></p>
+<p class="pricing-usage-row__cost">$1.69 list price this turn</p>
+<p class="rail-card__usage">217,531 uncached in · 1,781,888 cached · 3,485 out</p>
+<div class="pricing-token-miser"><button class="pricing-token-miser__summary" type="button"><span class="pricing-token-miser__chevron">›</span><span class="pricing-token-miser__label">Token Miser</span><span class="pricing-token-miser__count">8 decisions</span><span class="pricing-token-miser__verdict">$0.17 saved</span></button></div>
+</li></ul>
+</div></div>
+</div>
+
+<div class="dv-opt" id="1b">
+<div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Full card — three savings terms, decision mix, footer action</div>
+<div class="dv-card"><div class="rail" data-theme="light">
+<p class="board-caption">Proposed · recommended</p>
+<div class="spacer"></div>
+<h3>Pricing</h3>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Pricing summary</span><span class="rail-summary-card__meta">90 rows</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary">$12.53</span></div>
+<div class="rail-summary-card__caption">90 priced · 0 unpriced · Aug 31, 7:48 PM</div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Parent model token volume</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Uncached input</span><span class="rail-summary-card__row-value">681.3k</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Cached input</span><span class="rail-summary-card__row-value">18.9M</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Output</span><span class="rail-summary-card__row-value">67.9k</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Reasoning</span><span class="rail-summary-card__row-value">36k</span></div>
+</div></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Token Miser</span><span class="rail-summary-card__meta">90 decisions</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary token-miser-summary-card__primary">$12.52 saved</span><span class="rail-summary-card__secondary">49.4% less</span></div>
+<div class="rail-summary-card__caption">Estimated same-trajectory savings · $25.05 unfiltered</div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Savings terms</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">1 · Without the gate</span><span class="rail-summary-card__row-value">$15.22</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">2 · Gate compute</span><span class="rail-summary-card__row-value">$0.15</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">3 · Revealed to parent</span><span class="rail-summary-card__row-value">$2.55</span></div>
+</div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Decisions</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Summarized</span><span class="rail-summary-card__row-value">65</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Passed through</span><span class="rail-summary-card__row-value">25</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Luna evaluations</span><span class="rail-summary-card__row-value">89</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Kept out of context</span><span class="rail-summary-card__row-value">29,287k</span></div>
+</div>
+<button class="token-miser-summary-card__action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Token Miser Savings</button>
+</div>
+<ul class="context-list"><li class="rail-card">
+<p class="rail-card__runtime"><span class="rail-card__provider-chip">OpenAI</span><span class="rail-card__model">gpt-5.6-sol · xhigh</span></p>
+<p class="pricing-usage-row__cost">$1.69 list price this turn</p>
+<p class="rail-card__usage">217,531 uncached in · 1,781,888 cached · 3,485 out</p>
+<div class="pricing-token-miser"><button class="pricing-token-miser__summary" type="button"><span class="pricing-token-miser__chevron">›</span><span class="pricing-token-miser__label">Token Miser</span><span class="pricing-token-miser__count">8 decisions</span><span class="pricing-token-miser__verdict">$0.17 saved</span></button></div>
+</li></ul>
+</div></div>
+</div>
+
+<div class="dv-opt" id="1c">
+<div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>Compact — headline, terms, action. Decision mix stays in the window.</div>
+<div class="dv-card"><div class="rail" data-theme="light">
+<p class="board-caption">Proposed · lighter</p>
+<div class="spacer"></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Token Miser</span><span class="rail-summary-card__meta">90 decisions</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary token-miser-summary-card__primary">$12.52 saved</span><span class="rail-summary-card__secondary">49.4% less</span></div>
+<div class="rail-summary-card__caption">Estimated same-trajectory savings · $25.05 unfiltered</div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Savings terms</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">1 · Without the gate</span><span class="rail-summary-card__row-value">$15.22</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">2 · Gate compute</span><span class="rail-summary-card__row-value">$0.15</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">3 · Revealed to parent</span><span class="rail-summary-card__row-value">$2.55</span></div>
+</div>
+<button class="token-miser-summary-card__action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Token Miser Savings</button>
+</div>
+<p class="context-empty dim">…usage rows follow</p>
+</div></div>
+</div>
+
+<div class="dv-opt" id="1d">
+<div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a>Proportion bar — where the unfiltered dollar actually went</div>
+<div class="dv-card"><div class="rail" data-theme="light">
+<p class="board-caption">Proposed · visual</p>
+<div class="spacer"></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Token Miser</span><span class="rail-summary-card__meta">90 decisions</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary token-miser-summary-card__primary">$12.52 saved</span><span class="rail-summary-card__secondary">49.4% less</span></div>
+<div class="rail-summary-card__caption">Estimated same-trajectory savings</div>
+<div class="tm-bar"><span style="width:82.3%;background:var(--accent)"></span><span style="width:1.0%;background:var(--status-warning)"></span><span style="width:16.7%;background:var(--text-muted)"></span></div>
+<div class="tm-legend"><b><i class="tm-swatch" style="background:var(--accent)"></i>saved $12.52</b><b><i class="tm-swatch" style="background:var(--status-warning)"></i>gate $0.15</b><b><i class="tm-swatch" style="background:var(--text-muted)"></i>revealed $2.55</b></div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Savings terms</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">1 · Without the gate</span><span class="rail-summary-card__row-value">$15.22</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">2 · Gate compute</span><span class="rail-summary-card__row-value">$0.15</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">3 · Revealed to parent</span><span class="rail-summary-card__row-value">$2.55</span></div>
+</div>
+<button class="token-miser-summary-card__action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Token Miser Savings</button>
+</div>
+<p class="context-empty dim">…usage rows follow</p>
+</div></div>
+</div>
+
+<div class="dv-opt" id="1e">
+<div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><a class="dv-oid" href="#1b">1b</a> in dark — plus the two states that are not “saved”</div>
+<div class="dv-card" data-dark="true"><div class="rail" data-theme="dark">
+<p class="board-caption">Proposed · dark · edge states</p>
+<div class="spacer"></div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Token Miser</span><span class="rail-summary-card__meta">90 decisions</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary token-miser-summary-card__primary">$12.52 saved</span><span class="rail-summary-card__secondary">49.4% less</span></div>
+<div class="rail-summary-card__caption">Estimated same-trajectory savings · $25.05 unfiltered</div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Savings terms</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">1 · Without the gate</span><span class="rail-summary-card__row-value">$15.22</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">2 · Gate compute</span><span class="rail-summary-card__row-value">$0.15</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">3 · Revealed to parent</span><span class="rail-summary-card__row-value">$2.55</span></div>
+</div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Decisions</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Summarized</span><span class="rail-summary-card__row-value">65</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Passed through</span><span class="rail-summary-card__row-value">25</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Luna evaluations</span><span class="rail-summary-card__row-value">89</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">Kept out of context</span><span class="rail-summary-card__row-value">29,287k</span></div>
+</div>
+<button class="token-miser-summary-card__action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Token Miser Savings</button>
+</div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Token Miser</span><span class="rail-summary-card__meta">6 decisions</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary token-miser-summary-card__primary" data-negative="true">$0.03 net overhead</span></div>
+<div class="rail-summary-card__caption">Estimated same-trajectory overhead · $1.18 unfiltered</div>
+<div class="rail-summary-card__section"><span class="rail-summary-card__section-title">Savings terms</span>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">1 · Without the gate</span><span class="rail-summary-card__row-value">$0.11</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">2 · Gate compute</span><span class="rail-summary-card__row-value">$0.06</span></div>
+<div class="rail-summary-card__row"><span class="rail-summary-card__row-label">3 · Revealed to parent</span><span class="rail-summary-card__row-value">$0.08</span></div>
+</div>
+<button class="token-miser-summary-card__action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Token Miser Savings</button>
+</div>
+<div class="rail-summary-card">
+<div class="rail-summary-card__header"><span class="rail-summary-card__eyebrow">Token Miser</span><span class="rail-summary-card__meta">3 decisions</span></div>
+<div class="rail-summary-card__headline"><span class="rail-summary-card__primary token-miser-summary-card__primary">88.4k kept out</span></div>
+<div class="rail-summary-card__caption">Dollar terms appear once each gate's usage line is priced</div>
+<button class="token-miser-summary-card__action" type="button"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>Token Miser Savings</button>
+</div>
+</div></div>
+</div>
+
+</div>
+<p class="dv-next">Try next: “ship <a class="dv-oid" href="#1b">1b</a> but drop the Decisions section” · “put <a class="dv-oid" href="#1d">1d</a>’s bar on top of <a class="dv-oid" href="#1b">1b</a>” · “move the action into the card header”</p>
+</section>

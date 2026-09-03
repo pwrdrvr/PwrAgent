@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./settings-command-tools.css" />
+      </helmet>
+
+      <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+          <symbol id="i-git" viewBox="0 0 24 24">
+            <path d="M23.02 11.02 12.98.98a1.64 1.64 0 0 0-2.32 0L8.57 3.07l2.65 2.64a1.95 1.95 0 0 1 2.47 2.48l2.55 2.55a1.95 1.95 0 1 1-1.17 1.1l-2.38-2.38v6.26a1.95 1.95 0 1 1-1.6-.06V9.34a1.95 1.95 0 0 1-1.06-2.56L7.42 4.18.98 10.62a1.64 1.64 0 0 0 0 2.32l10.04 10.04a1.64 1.64 0 0 0 2.32 0l9.68-9.68a1.64 1.64 0 0 0 0-2.32Z" fill="currentColor"/>
+          </symbol>
+          <symbol id="i-github" viewBox="0 0 16 16">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z" fill="currentColor"/>
+          </symbol>
+          <symbol id="i-shield" viewBox="0 0 24 24">
+            <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="m8.5 11.8 2.4 2.4 4.6-4.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </symbol>
+          <symbol id="i-shield-plain" viewBox="0 0 24 24">
+            <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          </symbol>
+          <symbol id="i-shield-off" viewBox="0 0 24 24">
+            <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M9 9.5 15 15M15 9.5 9 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </symbol>
+          <symbol id="i-apple" viewBox="0 0 24 24">
+            <path d="M16.4 12.6c0-2.5 2-3.7 2.1-3.8-1.2-1.7-3-1.9-3.6-2-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.3-.8-1.7 0-3.3 1-4.2 2.5-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.5 1.3-.1 1.8-.8 3.3-.8 1.5 0 2 .8 3.3.8 1.4 0 2.2-1.2 3.1-2.5.7-1 1-2 1-2-.1 0-2.4-.9-2.4-3.6ZM14 5.6c.7-.8 1.1-2 1-3.1-1 0-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.9-1.4Z" fill="currentColor"/>
+          </symbol>
+          <symbol id="i-editor" viewBox="0 0 24 24">
+            <path d="m9 8-4 4 4 4M15 8l4 4-4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </symbol>
+          <symbol id="i-terminal" viewBox="0 0 24 24">
+            <path d="m5 8 4 4-4 4M12 16h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </symbol>
+          <symbol id="i-radio-on" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+            <circle cx="12" cy="12" r="4.5" fill="currentColor"/>
+          </symbol>
+        </defs>
+      </svg>
+
+      <div class="page">
+        <p class="eyebrow">PwrAgent · Settings → Applications + Git</p>
+        <h1>External programs — one inventory, one row, one trust signal</h1>
+        <p class="lede">
+          PwrAgent shells out to four programs it does not ship: an <strong>editor</strong>, a
+          <strong>terminal</strong>, <strong>git</strong>, and <strong>gh</strong>. Today two of
+          them are configurable on <em>Applications</em>, and the other two are half-configurable
+          on <em>Git</em> — the <code>gh</code> list has working <span class="mono">Use</span>
+          buttons, the <code>git</code> list has none at all. Nothing anywhere tells the operator
+          who signed the binary they are about to hand a repository to. This page audits both
+          panes, defines the shared model, and proposes the built design.
+        </p>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">01</span>
+          <h2>What is broken today</h2>
+          <p class="body">
+            Six of these were reported from the screenshots; three more surfaced while reading
+            the code behind them. Causes are cited to the file that produces the behaviour.
+          </p>
+        </div>
+
+        <table class="tbl">
+          <thead>
+            <tr><th>Defect</th><th>Where</th><th>Cause</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Apple's git can't be picked</td>
+              <td class="mono">Git</td>
+              <td><code>GitCandidateRow</code> renders every git candidate with
+                  <code>disabled</code> and <strong>no <code>onUse</code> handler</strong>, so the
+                  row has nothing to click. Underneath it there is no setting to write to:
+                  <code>applications.gh.path</code> exists in config, <code>applications.git.path</code>
+                  does not. Selection is hard-wired to "first executable candidate, env override
+                  aside" in <code>discoverGitCommands</code>.</td>
+            </tr>
+            <tr>
+              <td>Selecting git would not take effect</td>
+              <td class="mono">main</td>
+              <td>Every one of the eight git invocations in the main process spawns the bare word
+                  <code>"git"</code> and lets <code>PATH</code> decide. The discovery snapshot is
+                  <strong>display-only</strong> — even a correct picker would change a label and
+                  nothing else. This is the reason the fix is not a one-line handler.</td>
+            </tr>
+            <tr>
+              <td>No signing or notarization signal</td>
+              <td class="mono">both</td>
+              <td>Nothing in discovery reads a code signature. The operator cannot tell an
+                  Apple-signed system binary from an ad-hoc Homebrew bottle from an unsigned
+                  script that happens to be named <code>git</code> and sits earlier on
+                  <code>PATH</code>.</td>
+            </tr>
+            <tr>
+              <td>CLIs are missing from Applications</td>
+              <td class="mono">Applications</td>
+              <td>The pane is titled "Editor &amp; terminal" and lists exactly those two. It is
+                  the first place an operator looks for <em>which programs do you run and from
+                  where</em>, and it answers half the question.</td>
+            </tr>
+            <tr>
+              <td>No icons for git / gh</td>
+              <td class="mono">both</td>
+              <td>App rows get a real OS icon via <code>app.getFileIcon</code>; CLI rows get
+                  nothing, not even the letter fallback, because <code>GitCandidateRow</code> and
+                  <code>GhCandidateRow</code> pass no <code>icon</code>.</td>
+            </tr>
+            <tr>
+              <td>Two different row grammars</td>
+              <td class="mono">both</td>
+              <td>An application row reads <em>icon · name · path</em>. A CLI row reads
+                  <em>path-as-name</em> with the provenance demoted to a chip — so the same
+                  primitive presents the primary fact in the title on one pane and in a 10&nbsp;px
+                  chip on the other.</td>
+            </tr>
+            <tr>
+              <td>Rows are not clickable</td>
+              <td class="mono">both</td>
+              <td>Only the trailing <span class="mono">Use</span> button is a hit target. The row
+                  looks like a choice and behaves like a label — the reported "clicking the row
+                  does nothing" is true on <em>every</em> pane, git is just the case where there
+                  is no button either.</td>
+            </tr>
+            <tr>
+              <td>A picker with no group semantics</td>
+              <td class="mono">both</td>
+              <td>The lists are a <code>div</code> of <code>div</code>s. A screen reader gets
+                  buttons labelled "Use" with no indication that they are mutually exclusive, and
+                  arrow keys do nothing.</td>
+            </tr>
+            <tr>
+              <td>Selected state carries no verb</td>
+              <td class="mono">both</td>
+              <td>The selected row shows a green <span class="mono">Selected</span> chip in the
+                  slot where the other rows show a button. Nothing says <em>this is the one
+                  PwrAgent runs</em>, and the same word is also used for editors, terminals and
+                  auth profiles with three different meanings.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note note--bad">
+          <span class="note__k">Root</span>
+          <span>Eight of the nine are the same root cause: <b>the row primitive is shared, the
+          model behind it is not.</b> Applications rows are backed by a persisted preference
+          (<code>preferredEditorId</code>); CLI rows are backed by a discovery snapshot that
+          re-derives selection on every scan. Give both a persisted preference and the row can
+          become one control.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">02</span>
+          <h2>The model — four kinds of one thing</h2>
+          <p class="body">
+            An <strong>external program</strong> is something PwrAgent executes but does not ship.
+            Each one has: a provenance (who put it there), a location, a version, a trust level,
+            and exactly one of the candidates is the one we run. That is a single model with four
+            instances, and it should be a single list.
+          </p>
+        </div>
+
+        <table class="tbl">
+          <thead>
+            <tr><th>Program</th><th>Used for</th><th>Chosen by</th><th>Persisted as</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Editor</td><td class="wrap">Opening a worktree from the composer launcher</td><td class="wrap">Operator picks one of the detected apps</td><td class="mono">applications.editor.preferred_id</td></tr>
+            <tr><td>Terminal</td><td class="wrap">Opening a shell in a worktree</td><td class="wrap">Operator picks one of the detected apps</td><td class="mono">applications.terminal.preferred_id</td></tr>
+            <tr><td>gh</td><td class="wrap">Reading PR status for thread chips</td><td class="wrap">Operator picks, else first executable</td><td class="mono">applications.gh.path</td></tr>
+            <tr><td>git</td><td class="wrap">Worktrees, branches, stashes, remotes, handoff</td><td class="wrap"><b>Nobody — first executable wins</b></td><td class="mono">— nothing —</td></tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <span class="note__k">Fix</span>
+          <span>Add <code>applications.git.path</code> alongside <code>applications.gh.path</code>,
+          feed it into <code>discoverGitCommands</code> as a <code>config</code>-source candidate
+          the same way gh already does, and resolve every main-process git spawn through one
+          <code>getGitCommand()</code> accessor instead of the bare string <code>"git"</code>.
+          Precedence stays <b>env → config → first executable</b>, matching gh exactly.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">03</span>
+          <h2>Trust — what we can actually prove, and what it costs</h2>
+          <p class="body">
+            Measured on the reporting machine against the exact binaries in the screenshots.
+            <code>codesign -dvvv</code> answers the whole question for a CLI in about
+            <strong>7&nbsp;ms</strong>; a notarization check is only needed for the Developer&nbsp;ID
+            case and costs 0.3–0.6&nbsp;s, so it is run conditionally.
+          </p>
+        </div>
+
+        <table class="tbl">
+          <thead>
+            <tr><th>Binary</th><th>codesign says</th><th>Reads as</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="mono">/usr/bin/git</td>
+              <td class="wrap"><code>Authority=macOS Software Signing</code> → <code>Apple Code Signing CA</code> → <code>Apple Root CA</code>. Identifier <code>com.apple.dt.xcode_select.tool-shim-public</code>.</td>
+              <td>Apple-signed system binary. <b>Also a shim</b> — it dispatches to whatever <code>xcode-select</code> points at, which is worth saying out loud.</td>
+            </tr>
+            <tr>
+              <td class="mono">/opt/homebrew/bin/git</td>
+              <td class="wrap"><code>flags=0x2(adhoc)</code>, <code>Signature=adhoc</code>, <code>TeamIdentifier=not set</code></td>
+              <td>Ad-hoc signed. <b>Normal and expected</b> for a Homebrew bottle — it is relinked at install, which invalidates any upstream signature.</td>
+            </tr>
+            <tr>
+              <td class="mono">/opt/homebrew/bin/gh</td>
+              <td class="wrap"><code>flags=0x20002(adhoc,linker-signed)</code></td>
+              <td>Ad-hoc, linker-signed. Same story.</td>
+            </tr>
+            <tr>
+              <td class="mono">Visual Studio Code.app</td>
+              <td class="wrap"><code>Developer ID Application: Microsoft Corporation (UBF8T346G9)</code>, <code>flags=0x10000(runtime)</code>, passes <code>-R="notarized"</code></td>
+              <td>Developer&nbsp;ID + notarized. The strongest third-party signal macOS offers.</td>
+            </tr>
+            <tr>
+              <td class="mono">Ghostty.app</td>
+              <td class="wrap"><code>Developer ID Application: Mitchell Hashimoto (24VZTF6M5V)</code>, passes <code>-R="notarized"</code></td>
+              <td>Developer&nbsp;ID + notarized.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note note--bad">
+          <span class="note__k">Trap</span>
+          <span><b>Do not use <code>spctl</code> for CLI tools.</b> Measured:
+          <code>spctl -a -t exec /usr/bin/git</code> returns
+          <em>"rejected (the code is valid but does not seem to be an app)"</em> — for Apple's own
+          git. Gatekeeper assessment is an app-launch policy, not a signature reader; wiring it to
+          a chip would paint the most trustworthy binary on the machine red. Use
+          <code>codesign -dvvv</code> to classify, and
+          <code>codesign --verify -R="notarized" --check-notarization</code> only to upgrade a
+          Developer&nbsp;ID result to <em>notarized</em>.</span>
+        </div>
+
+        <h3 style="margin-top:32px">Chip vocabulary</h3>
+        <p class="body">
+          Six levels, ordered by strength. Tone is deliberate: ad-hoc is <em>neutral</em>, not a
+          warning — the overwhelmingly common case on a developer Mac is a Homebrew bottle, and a
+          chip that cries wolf on the default install teaches operators to ignore the chip.
+        </p>
+
+        <div class="legend">
+          <div class="legend__item">
+            <span class="chip chip--ok"><svg><use href="#i-apple"/></svg>Apple</span>
+            <p><b>Apple-signed</b>Signed by Apple's own <code>Software Signing</code> authority. A macOS system binary, part of the signed system volume.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--ok"><svg><use href="#i-shield"/></svg>Notarized</span>
+            <p><b>Developer ID + notarized</b>Signed with a Developer&nbsp;ID certificate and accepted by Apple's notary service. Hover shows the team: <span class="mono">Microsoft Corporation (UBF8T346G9)</span>.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip"><svg><use href="#i-shield-plain"/></svg>Developer ID</span>
+            <p><b>Signed, not notarized</b>A real Developer&nbsp;ID signature with no notarization ticket. Fine for a locally built tool; unusual for a download.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip">Ad-hoc</span>
+            <p><b>Ad-hoc signed</b>Signed with no identity — integrity only, no origin. Every Homebrew bottle. Neutral tone on purpose.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--warn"><svg><use href="#i-shield-off"/></svg>Unsigned</span>
+            <p><b>No signature</b>A shell script or a stripped binary. Worth a look when it is early on <code>PATH</code> and named <code>git</code>.</p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--err"><svg><use href="#i-shield-off"/></svg>Signature invalid</span>
+            <p><b>Broken or tampered</b><code>codesign</code> found a signature that does not verify. This is the only level that earns the danger tone.</p>
+          </div>
+        </div>
+
+        <h3 style="margin-top:32px">Per platform</h3>
+        <table class="tbl">
+          <thead>
+            <tr><th>Platform</th><th>Probe</th><th>Levels produced</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>macOS</td>
+              <td class="mono wrap">codesign -dvvv<br />codesign --verify -R="notarized"</td>
+              <td class="wrap">Apple · Notarized · Developer&nbsp;ID · Ad-hoc · Unsigned · Signature invalid</td>
+            </tr>
+            <tr>
+              <td>Windows</td>
+              <td class="mono wrap">Get-AuthenticodeSignature</td>
+              <td class="wrap"><span class="chip chip--ok">Authenticode</span> when <code>Status=Valid</code>, with the signer CN on hover · <span class="chip chip--warn">Unsigned</span> for <code>NotSigned</code> · <span class="chip chip--err">Signature invalid</span> for anything else</td>
+            </tr>
+            <tr>
+              <td>Linux</td>
+              <td class="wrap">—</td>
+              <td class="wrap">No platform-wide binary signing to report. <b>The chip is omitted entirely</b> rather than rendered as "Unknown", which would read as a defect on the one platform where there is nothing to know.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <span class="note__k">Cost</span>
+          <span>Signature inspection runs <b>outside discovery</b>, on its own IPC, cached by
+          <code>path + mtime + size</code>, and only for rows a settings pane has on screen.
+          Discovery keeps its current timing; an operator who never opens Settings never pays for
+          a single <code>codesign</code> spawn.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">04</span>
+          <h2>The row — before and after</h2>
+          <p class="body">
+            One primitive, one grammar: <strong>icon · what it is · version — where it is —
+            provenance · trust · state</strong>. The title answers the question the operator is
+            actually asking. For an app that is the app's name; for a CLI candidate every row is
+            <code>git</code>, so the title becomes the <em>provenance</em> — Homebrew or Apple —
+            which is the choice being made. The path drops to the mono line where it already lives
+            on the Applications pane.
+          </p>
+        </div>
+
+        <div class="cols">
+          <div>
+            <p class="col__cap col__cap--bad">As built — git candidates</p>
+            <div class="stack">
+              <div class="srow srow--selected">
+                <div class="srow__body">
+                  <div class="srow__titleline"><span class="srow__title">/opt/homebrew/bin/git</span></div>
+                </div>
+                <div class="srow__chips">
+                  <span class="chip">PATH</span><span class="chip">2.54.0</span>
+                </div>
+                <span class="chip chip--ok srow__action">Selected</span>
+              </div>
+              <div class="srow">
+                <div class="srow__body">
+                  <div class="srow__titleline"><span class="srow__title">/usr/bin/git</span></div>
+                </div>
+                <div class="srow__chips">
+                  <span class="chip">Apple Git</span><span class="chip">2.50.1</span>
+                </div>
+              </div>
+            </div>
+            <div class="note note--bad">
+              <span class="note__k">Reads</span>
+              <span>No icon. Provenance in a 10&nbsp;px chip, path in the 13&nbsp;px title —
+              backwards. The second row has <b>no action at all</b>, so it looks like a disabled
+              row for a reason that is never given.</span>
+            </div>
+          </div>
+
+          <div>
+            <p class="col__cap col__cap--good">Proposed</p>
+            <div class="stack">
+              <div class="srow srow--selected">
+                <span class="srow__icon"><svg><use href="#i-git"/></svg></span>
+                <div class="srow__body">
+                  <div class="srow__titleline">
+                    <span class="srow__title">Homebrew</span>
+                    <span class="srow__meta">2.54.0</span>
+                  </div>
+                  <span class="srow__path">/opt/homebrew/bin/git</span>
+                </div>
+                <div class="srow__chips"><span class="chip">Ad-hoc</span></div>
+                <span class="chip chip--ok srow__action"><svg><use href="#i-radio-on"/></svg>In&nbsp;use</span>
+              </div>
+              <div class="srow">
+                <span class="srow__icon"><svg><use href="#i-git"/></svg></span>
+                <div class="srow__body">
+                  <div class="srow__titleline">
+                    <span class="srow__title">Apple</span>
+                    <span class="srow__meta">2.50.1</span>
+                  </div>
+                  <span class="srow__path">/usr/bin/git · dispatches through xcode-select</span>
+                </div>
+                <div class="srow__chips"><span class="chip chip--ok"><svg><use href="#i-apple"/></svg>Apple</span></div>
+                <button class="btn srow__action">Use</button>
+              </div>
+            </div>
+            <div class="note note--good">
+              <span class="note__k">Reads</span>
+              <span>The choice — <b>Homebrew or Apple</b> — is the title. Version sits beside it
+              where the eye already is. Trust is one glance. <b>The whole row is the control</b>,
+              and the trailing element states which one is live.</span>
+            </div>
+          </div>
+        </div>
+
+        <h3 style="margin-top:34px">States</h3>
+        <div class="stack" style="margin-top:12px">
+          <div class="srow srow--selected">
+            <span class="srow__icon"><svg><use href="#i-git"/></svg></span>
+            <div class="srow__body">
+              <div class="srow__titleline"><span class="srow__title">Homebrew</span><span class="srow__meta">2.54.0</span></div>
+              <span class="srow__path">/opt/homebrew/bin/git</span>
+            </div>
+            <div class="srow__chips"><span class="chip">Ad-hoc</span></div>
+            <span class="chip chip--ok srow__action"><svg><use href="#i-radio-on"/></svg>In&nbsp;use</span>
+          </div>
+          <div class="srow srow--focus">
+            <span class="srow__icon"><svg><use href="#i-git"/></svg></span>
+            <div class="srow__body">
+              <div class="srow__titleline"><span class="srow__title">Apple</span><span class="srow__meta">2.50.1</span></div>
+              <span class="srow__path">/usr/bin/git</span>
+            </div>
+            <div class="srow__chips"><span class="chip chip--ok"><svg><use href="#i-apple"/></svg>Apple</span></div>
+            <button class="btn srow__action">Use</button>
+          </div>
+          <div class="srow srow--ghost">
+            <span class="srow__icon"><svg><use href="#i-git"/></svg></span>
+            <div class="srow__body">
+              <div class="srow__titleline"><span class="srow__title">Apple</span></div>
+              <span class="srow__path">/usr/bin/git — blocked by the Xcode license check</span>
+            </div>
+            <div class="srow__chips"><span class="chip chip--warn">Xcode license</span></div>
+            <button class="btn btn--ghost srow__action">Fix…</button>
+          </div>
+          <div class="srow srow--ghost">
+            <span class="srow__icon">?</span>
+            <div class="srow__body">
+              <div class="srow__titleline"><span class="srow__title">MacPorts</span></div>
+              <span class="srow__path">/opt/local/bin/git — not found</span>
+            </div>
+            <div class="srow__chips"><span class="chip chip--err">Unavailable</span></div>
+          </div>
+        </div>
+        <div class="note">
+          <span class="note__k">Rule</span>
+          <span>Row 1 selected · row 2 keyboard focus, showing the ring the current markup cannot
+          receive · row 3 present but blocked, action becomes the remediation that already exists
+          on the Git pane · row 4 checked and absent, dimmed, no action. <b>A row is never
+          actionless and unexplained</b> — the reason always rides the mono line.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">05</span>
+          <h2>Applications — the proposed pane</h2>
+          <p class="body">
+            Retitled from "Editor &amp; terminal" to cover what it now holds. Four sections in the
+            order they are asked about, CLIs last because they are the ones an operator changes
+            least. Every row is the same primitive.
+          </p>
+        </div>
+
+        <div class="frame">
+          <div class="frame__cap"><b>Settings → Applications</b> · proposed<span class="tag tag--good">4 sections · 1 row primitive</span></div>
+          <div class="frame__body">
+            <div class="pane__head">
+              <p class="pane__eyebrow">Applications</p>
+              <h3 class="pane__title" style="font-size:21px">External programs</h3>
+              <p class="pane__help">The programs PwrAgent runs but does not ship. Detected copies are listed below; pick the one each role should use.</p>
+            </div>
+
+            <div class="sect">
+              <div class="sect__head">
+                <p class="sect__eyebrow">Applications</p>
+                <p class="sect__title">Editor</p>
+                <p class="sect__desc">Opened by the editor launcher below the composer.</p>
+              </div>
+              <div class="sect__body">
+                <div class="srow srow--selected">
+                  <span class="srow__icon" style="background:#0d6ab5;color:#fff"><svg><use href="#i-editor"/></svg></span>
+                  <div class="srow__body">
+                    <div class="srow__titleline"><span class="srow__title">VS Code</span></div>
+                    <span class="srow__path">/Applications/Visual Studio Code.app</span>
+                  </div>
+                  <div class="srow__chips">
+                    <span class="chip chip--ok"><svg><use href="#i-shield"/></svg>Notarized</span>
+                  </div>
+                  <span class="chip chip--ok srow__action"><svg><use href="#i-radio-on"/></svg>In&nbsp;use</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sect">
+              <div class="sect__head">
+                <p class="sect__eyebrow">Applications</p>
+                <p class="sect__title">Terminal</p>
+                <p class="sect__desc">Opened by the terminal launcher below the composer.</p>
+              </div>
+              <div class="sect__body">
+                <div class="srow srow--selected">
+                  <span class="srow__icon" style="background:#1a1a2e;color:#cfd4ff"><svg><use href="#i-terminal"/></svg></span>
+                  <div class="srow__body">
+                    <div class="srow__titleline"><span class="srow__title">Ghostty</span></div>
+                    <span class="srow__path">/Applications/Ghostty.app</span>
+                  </div>
+                  <div class="srow__chips">
+                    <span class="chip chip--ok"><svg><use href="#i-shield"/></svg>Notarized</span>
+                  </div>
+                  <span class="chip chip--ok srow__action"><svg><use href="#i-radio-on"/></svg>In&nbsp;use</span>
+                </div>
+                <div class="srow">
+                  <span class="srow__icon" style="background:#111;color:#eee"><svg><use href="#i-terminal"/></svg></span>
+                  <div class="srow__body">
+                    <div class="srow__titleline"><span class="srow__title">Terminal</span></div>
+                    <span class="srow__path">/System/Applications/Utilities/Terminal.app</span>
+                  </div>
+                  <div class="srow__chips">
+                    <span class="chip chip--ok"><svg><use href="#i-apple"/></svg>Apple</span>
+                  </div>
+                  <button class="btn srow__action">Use</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="sect">
+              <div class="sect__head">
+                <p class="sect__eyebrow">Command line</p>
+                <p class="sect__title">Git</p>
+                <p class="sect__desc">Used for worktrees, branches, stashes and remotes. <b>Available</b> · 2.54.0</p>
+              </div>
+              <div class="sect__body">
+                <div class="srow srow--selected">
+                  <span class="srow__icon" style="color:#f05133"><svg><use href="#i-git"/></svg></span>
+                  <div class="srow__body">
+                    <div class="srow__titleline"><span class="srow__title">Homebrew</span><span class="srow__meta">2.54.0</span></div>
+                    <span class="srow__path">/opt/homebrew/bin/git</span>
+                  </div>
+                  <div class="srow__chips"><span class="chip">Ad-hoc</span></div>
+                  <span class="chip chip--ok srow__action"><svg><use href="#i-radio-on"/></svg>In&nbsp;use</span>
+                </div>
+                <div class="srow">
+                  <span class="srow__icon" style="color:#f05133"><svg><use href="#i-git"/></svg></span>
+                  <div class="srow__body">
+                    <div class="srow__titleline"><span class="srow__title">Apple</span><span class="srow__meta">2.50.1</span></div>
+                    <span class="srow__path">/usr/bin/git · dispatches through xcode-select</span>
+                  </div>
+                  <div class="srow__chips"><span class="chip chip--ok"><svg><use href="#i-apple"/></svg>Apple</span></div>
+                  <button class="btn srow__action">Use</button>
+                </div>
+                <div class="field" style="grid-template-columns:230px 1fr;border-bottom:0;padding-bottom:0">
+                  <div>
+                    <p class="field__label">Other location</p>
+                    <p class="field__sub">Pick a git outside the discovered paths.</p>
+                  </div>
+                  <div class="field__control"><div><button class="btn">Choose…</button></div></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sect">
+              <div class="sect__head">
+                <p class="sect__eyebrow">Command line</p>
+                <p class="sect__title">GitHub CLI</p>
+                <p class="sect__desc">Used to read pull request status. It never opens, comments on, or merges PRs. <b>Connected</b> as <b>huntharo</b></p>
+              </div>
+              <div class="sect__body">
+                <div class="srow srow--selected">
+                  <span class="srow__icon"><svg><use href="#i-github"/></svg></span>
+                  <div class="srow__body">
+                    <div class="srow__titleline"><span class="srow__title">Homebrew</span><span class="srow__meta">2.98.0</span></div>
+                    <span class="srow__path">/opt/homebrew/bin/gh</span>
+                  </div>
+                  <div class="srow__chips"><span class="chip">Ad-hoc</span></div>
+                  <span class="chip chip--ok srow__action"><svg><use href="#i-radio-on"/></svg>In&nbsp;use</span>
+                </div>
+                <div class="field" style="grid-template-columns:230px 1fr;border-bottom:0;padding-bottom:0">
+                  <div>
+                    <p class="field__label">Other location</p>
+                    <p class="field__sub">Pick a gh outside the discovered paths.</p>
+                  </div>
+                  <div class="field__control"><div><button class="btn">Choose…</button></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="note note--good">
+          <span class="note__k">Note</span>
+          <span>The CLI section headers carry the <b>one-line health summary</b> — "Available ·
+          2.54.0", "Connected as huntharo" — so the pane answers "is everything fine?" without
+          leaving. The full status block, scopes list and remediation stay on the Git pane, which
+          is where an operator goes when the answer is no.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">06</span>
+          <h2>Git — the one contested call</h2>
+          <p class="body">
+            Once the picker exists on Applications, the Git pane has the same picker twice over.
+            Two ways out, both defensible.
+          </p>
+        </div>
+
+        <div class="cols cols--tight">
+          <div>
+            <p class="col__cap">Option A — Git keeps the picker</p>
+            <div class="frame" style="margin-top:0">
+              <div class="frame__cap"><b>Settings → Git</b><span class="tag tag--warn">duplicated</span></div>
+              <div class="frame__body" style="padding:16px">
+                <div class="sect" style="margin-bottom:10px">
+                  <div class="sect__head" style="padding:10px 13px">
+                    <p class="sect__eyebrow">Git</p>
+                    <p class="sect__title" style="font-size:13px">Git</p>
+                  </div>
+                  <div class="sect__body" style="padding:11px 13px">
+                    <div class="status">
+                      <span class="pill pill--ok">Available</span>
+                      <span class="status__line">Path: <b>/opt/homebrew/bin/git</b></span>
+                      <span class="status__line">Version: <b>2.54.0</b></span>
+                    </div>
+                    <div class="srow srow--selected" style="padding:8px 10px">
+                      <span class="srow__icon" style="width:22px;height:22px;color:#f05133"><svg style="width:14px;height:14px"><use href="#i-git"/></svg></span>
+                      <div class="srow__body"><div class="srow__titleline"><span class="srow__title" style="font-size:12px">Homebrew</span><span class="srow__meta">2.54.0</span></div></div>
+                      <span class="chip chip--ok srow__action">In&nbsp;use</span>
+                    </div>
+                    <div class="srow" style="padding:8px 10px">
+                      <span class="srow__icon" style="width:22px;height:22px;color:#f05133"><svg style="width:14px;height:14px"><use href="#i-git"/></svg></span>
+                      <div class="srow__body"><div class="srow__titleline"><span class="srow__title" style="font-size:12px">Apple</span><span class="srow__meta">2.50.1</span></div></div>
+                      <button class="btn srow__action">Use</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="note">
+              <span class="note__k">For</span>
+              <span>Nothing moves. An operator who lands on Git from a git error fixes it where
+              they are. The two panes render the <b>same live component</b>, so they cannot drift.</span>
+            </div>
+            <div class="note note--bad">
+              <span class="note__k">Against</span>
+              <span>The same control in two places is the thing that makes a Settings screen feel
+              like it grew rather than was designed.</span>
+            </div>
+          </div>
+
+          <div>
+            <p class="col__cap col__cap--good">Option B — Git shows what is in use</p>
+            <div class="frame" style="margin-top:0">
+              <div class="frame__cap"><b>Settings → Git</b><span class="tag tag--good">one home</span></div>
+              <div class="frame__body" style="padding:16px">
+                <div class="sect" style="margin-bottom:10px">
+                  <div class="sect__head" style="padding:10px 13px">
+                    <p class="sect__eyebrow">Git</p>
+                    <p class="sect__title" style="font-size:13px">Tools in use</p>
+                  </div>
+                  <div class="sect__body" style="padding:11px 13px">
+                    <div class="srow" style="padding:8px 10px">
+                      <span class="srow__icon" style="width:22px;height:22px;color:#f05133"><svg style="width:14px;height:14px"><use href="#i-git"/></svg></span>
+                      <div class="srow__body">
+                        <div class="srow__titleline"><span class="srow__title" style="font-size:12px">git</span><span class="srow__meta">2.54.0 · Homebrew</span></div>
+                        <span class="srow__path" style="font-size:11px">/opt/homebrew/bin/git</span>
+                      </div>
+                      <div class="srow__chips"><span class="chip">Ad-hoc</span><span class="pill pill--ok">Available</span></div>
+                      <button class="btn btn--ghost srow__action">Change…</button>
+                    </div>
+                    <div class="srow" style="padding:8px 10px">
+                      <span class="srow__icon" style="width:22px;height:22px"><svg style="width:14px;height:14px"><use href="#i-github"/></svg></span>
+                      <div class="srow__body">
+                        <div class="srow__titleline"><span class="srow__title" style="font-size:12px">gh</span><span class="srow__meta">2.98.0 · Homebrew</span></div>
+                        <span class="srow__path" style="font-size:11px">/opt/homebrew/bin/gh · huntharo</span>
+                      </div>
+                      <div class="srow__chips"><span class="chip">Ad-hoc</span><span class="pill pill--ok">Connected</span></div>
+                      <button class="btn btn--ghost srow__action">Change…</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="note note--good">
+              <span class="note__k">For</span>
+              <span>One home for the choice, one summary for the answer. <b>Change…</b> deep-links
+              straight to the matching Applications section, so the repair path is one click, not
+              a hunt. The Git pane is then only about <em>behaviour</em>: PR polling, auto-dispatch
+              budget, auth scopes, Xcode-license remediation.</span>
+            </div>
+            <div class="note note--bad">
+              <span class="note__k">Against</span>
+              <span>An operator arriving from a broken-git error has to follow one link before
+              they can act.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="decision">
+          <h3>Recommendation — Option B</h3>
+          <p>
+            The Git pane is already <strong>975 lines</strong> covering PR polling, auto-dispatch
+            budgets, GitHub auth scopes and two discovery pickers. Its centre of gravity is
+            behaviour, not inventory. Moving the pickers out makes both panes describable in one
+            sentence — <em>Applications: which programs</em>, <em>Git: how we use them</em> — and
+            the "Tools in use" strip still answers the question that brings people to the Git pane
+            in the first place.
+          </p>
+          <p>
+            Option A is a one-prop fallback if that turns out to be wrong: the section component is
+            shared, so re-rendering the full picker on Git is a single line.
+          </p>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">07</span>
+          <h2>Interaction and accessibility</h2>
+        </div>
+
+        <ol class="checks">
+          <li><span class="n">01</span><span><b>The list becomes a radiogroup.</b> <code>role="radiogroup"</code> with an <code>aria-label</code> naming the program; each row is a <code>&lt;button role="radio" aria-checked&gt;</code>. That is what makes clicking the row work, and it is the same change that gives a screen reader "Apple, 2.50.1, Apple-signed, radio button, 2 of 2, not selected" instead of an unlabelled "Use".</span></li>
+          <li><span class="n">02</span><span><b>Arrow keys move within the group, Tab leaves it.</b> Roving <code>tabIndex</code>, so a list of five candidates is one tab stop rather than five.</span></li>
+          <li><span class="n">03</span><span><b>No nested interactives.</b> The trailing element is a state chip on the selected row and a label on the others — not a button inside a button. The visible "Use" affordance stays; it stops being a separate hit target.</span></li>
+          <li><span class="n">04</span><span><b>Trust is never colour-only.</b> Every chip carries a glyph and a word. The ad-hoc chip is neutral by design, so it is not carrying meaning through tone in the first place.</span></li>
+          <li><span class="n">05</span><span><b>A trust chip that has not resolved renders nothing</b>, not a spinner or an "Unknown" pill. Signature inspection is asynchronous and the row must not reflow when it lands — the chip slot is reserved at its final width.</span></li>
+          <li><span class="n">06</span><span><b>Selection is announced.</b> Switching git writes config and re-runs discovery; the section header's health summary is the <code>aria-live</code> region that reports the result.</span></li>
+          <li><span class="n">07</span><span><b>An env override disables the group and says so.</b> <code>PWRAGENT_GIT_PATH</code> already wins over config; when it is set the rows are inert with one line explaining why — the same treatment <code>gh</code> gives today.</span></li>
+        </ol>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">08</span>
+          <h2>Icons</h2>
+          <p class="body">
+            Both marks follow the pattern already used for Slack, Discord, Telegram, Mattermost,
+            Feishu and Line: the official file lands under
+            <code>renderer/src/assets/&lt;brand&gt;/</code> with a README recording its source and
+            usage rules, and renders through an <code>&lt;img&gt;</code> so surrounding CSS colour
+            state cannot recolour it.
+          </p>
+        </div>
+
+        <table class="tbl">
+          <thead><tr><th>Mark</th><th>For</th><th>Source and terms</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Git</td>
+              <td class="mono">git</td>
+              <td class="wrap">The Git logo by Jason Long, from <code>git-scm.com/downloads/logos</code>, licensed <b>CC BY 3.0</b>. Attribution goes in the asset README next to the file, matching how the other brand assets record their terms.</td>
+            </tr>
+            <tr>
+              <td>GitHub</td>
+              <td class="mono">gh</td>
+              <td class="wrap">The GitHub mark from <code>github.com/logos</code>. <b>Not</b> the GitHub Desktop icon — <code>gh</code> is GitHub's own CLI and is not part of GitHub Desktop, so the GitHub mark is both the accurate identity and the one GitHub's brand guidance covers for referring to GitHub.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <span class="note__k">Fallback</span>
+          <span>Neither asset is required for the feature to work. If a mark is unavailable the
+          row falls back to the same monogram chain <code>AppIcon</code> already implements, so
+          icon licensing never blocks the picker.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">09</span>
+          <h2>Build order</h2>
+        </div>
+
+        <ol class="checks">
+          <li><span class="n">01</span><span><b>Make git selectable for real.</b> <code>applications.git.path</code> in config → <code>discoverGitCommands({ configuredCommand })</code> → <code>resolveGitCommandPreference()</code> → a single <code>getGitCommand()</code> that all eight main-process spawn sites call. Without this step the picker is decoration.</span></li>
+          <li><span class="n">02</span><span><b>Manual path picker for git</b>, mirroring <code>settings:pick-gh-command</code>, including the "did it answer <code>--version</code>" validation.</span></li>
+          <li><span class="n">03</span><span><b>Code signature service.</b> Own module, own IPC, cached by path+mtime+size, <code>codesign</code> on macOS and <code>Get-AuthenticodeSignature</code> on Windows, nothing on Linux.</span></li>
+          <li><span class="n">04</span><span><b>Row primitive gains selection.</b> <code>onSelect</code> renders the row as a radio; existing <code>onUse</code> callers are untouched.</span></li>
+          <li><span class="n">05</span><span><b>One shared section component</b> for a program and its candidates, rendered by Applications for all four programs.</span></li>
+          <li><span class="n">06</span><span><b>Git pane reduces</b> to behaviour plus the tools-in-use strip with deep links.</span></li>
+          <li><span class="n">07</span><span><b>Brand assets</b> for git and GitHub, with READMEs.</span></li>
+        </ol>
+
+        <p class="footer">
+          Measurements taken 2026-09-02 on the reporting machine (macOS 25.6, Apple silicon)
+          against the exact binaries in the reported screenshots. Code references are to
+          <code>GitSettings.tsx</code>, <code>ApplicationsSettings.tsx</code>,
+          <code>SettingsPathRow.tsx</code>, <code>git-discovery.ts</code>,
+          <code>gh-discovery.ts</code>, <code>command-discovery.ts</code> and
+          <code>desktop-settings-service.ts</code>. Colour tokens are copied from the
+          <code>:root[data-theme="light"]</code> block of <code>app.css</code>.
+        </p>
+      </div>
+    </x-dc>
+  </body>
+</html>

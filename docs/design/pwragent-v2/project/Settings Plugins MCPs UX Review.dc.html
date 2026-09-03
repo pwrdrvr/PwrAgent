@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./settings-mcps-review.css" />
+      </helmet>
+
+      <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+          <symbol id="i-check" viewBox="0 0 24 24">
+            <path d="m5 13 4.5 4.5L19 7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </symbol>
+          <symbol id="i-key" viewBox="0 0 24 24">
+            <circle cx="8" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 12h9M18 12v4M15 12v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </symbol>
+          <symbol id="i-warn" viewBox="0 0 24 24">
+            <path d="M12 3 2 20h20L12 3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M12 9v5M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </symbol>
+          <symbol id="i-dash" viewBox="0 0 24 24">
+            <path d="M6 12h12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          </symbol>
+          <symbol id="i-q" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+            <path d="M9.5 9.5a2.5 2.5 0 1 1 3.2 2.4c-.5.2-.7.6-.7 1.1v.5M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </symbol>
+          <symbol id="i-x" viewBox="0 0 24 24">
+            <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          </symbol>
+          <symbol id="i-search" viewBox="0 0 24 24">
+            <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/>
+            <path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </symbol>
+          <symbol id="i-more" viewBox="0 0 24 24">
+            <circle cx="5" cy="12" r="1.7" fill="currentColor"/>
+            <circle cx="12" cy="12" r="1.7" fill="currentColor"/>
+            <circle cx="19" cy="12" r="1.7" fill="currentColor"/>
+          </symbol>
+        </defs>
+      </svg>
+
+      <div class="page">
+        <p class="eyebrow">PwrAgent &middot; Settings &rarr; Plugins &rarr; MCPs</p>
+        <h1>MCP servers &mdash; say which Codex, show the tools, name the state</h1>
+        <p class="lede">
+          The pane lists the MCP servers of <em>one</em> Codex profile and gives the operator two
+          verbs: <span class="mono">Relogin</span> and <span class="mono">Remove</span>. It counts
+          206 tools and shows none of them; it prints the OAuth <em>mechanism</em> where the
+          operator is looking for a <em>state</em>; and it never says the one thing that explains
+          every surprise on this screen &mdash; that these servers and their sign-ins belong to
+          <code>~/.codex/profiles/work</code> and not to the <code>~/.codex</code> that a
+          <span class="mono">codex</span> run outside PwrAgent uses. This page audits the pane,
+          corrects the model behind it, and proposes the build.
+        </p>
+
+        <div class="note">
+          <span class="note__k">Provenance</span>
+          <span>This pane is not from <b>#1900</b>. It shipped in
+          <b>#1495</b> <span class="mono">feat(desktop): manage Codex MCP servers in Settings</span>,
+          with <b>#1886</b> adding the <code>unknown</code> auth status. #1900
+          (<span class="mono">prefer managed CLIs in integrated terminals</span>) touches no MCP
+          code; it makes an integrated terminal's <span class="mono">codex</span> the managed
+          <em>binary</em>, pairing with the <code>CODEX_HOME</code> that terminal already exports.
+          See &sect;02.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">01</span>
+          <h2>What is broken today</h2>
+          <p class="body">
+            Twelve findings. The first six are visible in the screenshot; the rest surfaced while
+            reading the code that produces it. Causes cite the file responsible.
+          </p>
+        </div>
+
+        <table class="tbl">
+          <thead>
+            <tr><th>Defect</th><th>Where</th><th>Cause</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Tools are counted, never shown</td>
+              <td class="mono">PluginsSettings</td>
+              <td class="wrap"><code>McpServerRow</code> renders <code>{server.tools.length} tools</code> as dead
+                  text. The full <code>tools</code> array is already in hand &mdash; the thread rail's
+                  <code>McpInventoryPanel</code> renders the identical field with an expandable
+                  <span class="mono">Show N more</span>. Two surfaces, one payload, one of them hides it.</td>
+            </tr>
+            <tr>
+              <td>The auth chip names a mechanism, not a state</td>
+              <td class="mono">formatAuthStatus</td>
+              <td class="wrap"><code>authStatus: "oAuth"</code> means <b>Codex holds OAuth credentials for this
+                  server</b>. The chip prints <span class="mono">OAuth</span> &mdash; a protocol name. The
+                  operator asking &ldquo;is datadog signed in?&rdquo; gets an answer to a question they
+                  did not ask.</td>
+            </tr>
+            <tr>
+              <td>&ldquo;No login&rdquo; reads as a failure</td>
+              <td class="mono">formatAuthStatus</td>
+              <td class="wrap"><code>unsupported</code> renders as <span class="mono">No login</span>, which scans
+                  as <em>not logged in</em>. It means the opposite: the server needs no authentication at
+                  all. Seven of the twelve rows in the screenshot carry it.</td>
+            </tr>
+            <tr>
+              <td>Zero tools is ambiguous</td>
+              <td class="mono">PluginsSettings</td>
+              <td class="wrap"><span class="mono">awsdocs &middot; 0 tools &middot; No login</span> is
+                  indistinguishable from a server that failed to start. <code>startupStatus</code> is
+                  rendered only when set, and it is populated from
+                  <code>mcpServer/startupStatus/updated</code> notifications this pane may never have
+                  been mounted to receive. A dead server and a working-but-toolless one look identical.</td>
+            </tr>
+            <tr>
+              <td>The header counts config, not health</td>
+              <td class="mono">SettingsSection</td>
+              <td class="wrap">The chip says <span class="mono">12 configured</span>. Two of those twelve need a
+                  sign-in and expose nothing. The one number on the pane is the one number that cannot
+                  go wrong.</td>
+            </tr>
+            <tr>
+              <td>A 900&nbsp;px hole in every row</td>
+              <td class="mono">.settings-mcp-row</td>
+              <td class="wrap">Name hard left, chips and buttons hard right, nothing between. At the reported
+                  1440&nbsp;px the row is mostly empty &mdash; while the content that would fill it
+                  (the tools) is being suppressed two lines above.</td>
+            </tr>
+            <tr>
+              <td>Remove is present 12 times, always</td>
+              <td class="mono">McpServerRow</td>
+              <td class="wrap">The most destructive verb on the pane is rendered at full prominence on every
+                  row, unconditionally. <span class="mono">Relogin</span> &mdash; the verb that fixes
+                  things &mdash; appears on only the rows that can use it, so the destructive action is
+                  the <em>more</em> consistently available of the two.</td>
+            </tr>
+            <tr>
+              <td>Nothing says these are Codex's servers</td>
+              <td class="mono">PluginsSettings</td>
+              <td class="wrap">The pane is titled &ldquo;Plugin connections&rdquo;. That these are
+                  <b>Codex</b> MCP servers, scoped to <b>one Codex profile</b>, appears only in help
+                  text and in a grey 11&nbsp;px strip. See &sect;02 &mdash; this is the root cause of
+                  the surprise, not a labelling nicety.</td>
+            </tr>
+            <tr>
+              <td>Nothing says which Codex build produced the list</td>
+              <td class="mono">PluginsSettings</td>
+              <td class="wrap">PwrAgent runs a managed Codex from <code>pwrdrvr/codex</code>. Its state and
+                  version are already in the renderer at
+                  <code>snapshot.runtime.tokenMiser.managedCodex</code> and go unused here.</td>
+            </tr>
+            <tr>
+              <td>Two vocabularies for one enum</td>
+              <td class="mono">both surfaces</td>
+              <td class="wrap">Two separate <code>formatAuthStatus</code> functions disagree:
+                  <span class="mono">No login</span> / <span class="mono">Login required</span> here,
+                  <span class="mono">No authentication</span> / <span class="mono">Sign-in required</span>
+                  in the thread rail &mdash; for the same protocol values.</td>
+            </tr>
+            <tr>
+              <td>Collapse&nbsp;all / Expand&nbsp;all over one section</td>
+              <td class="mono">SettingsScreen</td>
+              <td class="wrap">Both controls act on a single section whose contents do not expand. The pane
+                  advertises a disclosure affordance it does not have &mdash; next to the list that most
+                  needs one.</td>
+            </tr>
+            <tr>
+              <td>No filter for 12 servers &times; 206 tools</td>
+              <td class="mono">PluginsSettings</td>
+              <td class="wrap">Once the tools are visible this stops being optional. It is the mechanism by
+                  which an operator answers &ldquo;who gives me <code>aggregate_spans</code>?&rdquo;</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">02</span>
+          <h2>The model &mdash; two axes, and only one of them moves credentials</h2>
+          <p class="body">
+            The brief for this review assumed MCP sign-ins are separated because PwrAgent runs a
+            custom Codex build. <strong>They are separated, but the custom build is not what does
+            it.</strong> Getting this right changes the copy, so it is worth stating exactly.
+          </p>
+        </div>
+
+        <table class="tbl tbl--matrix">
+          <thead>
+            <tr><th>Axis</th><th>What it selects</th><th>Where it comes from</th><th>Moves MCP credentials?</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Codex&nbsp;profile</td>
+              <td class="wrap">The <code>CODEX_HOME</code> every Codex process is given &mdash; and therefore
+                  <code>config.toml</code>, <code>auth.json</code> and each MCP server's stored OAuth
+                  credentials.</td>
+              <td class="wrap"><code>discoverCodexAuthProfiles</code>. <b>System default</b> resolves to
+                  <code>~/.codex</code>; every named profile resolves to
+                  <code>~/.codex/profiles/&lt;name&gt;</code> &mdash; <code>resolveCodexProfileRoot</code>
+                  joins <span class="mono">"profiles"</span> unconditionally.</td>
+              <td class="wrap"><b>Yes.</b> This is the whole mechanism.</td>
+            </tr>
+            <tr>
+              <td>Codex&nbsp;build</td>
+              <td class="wrap">Which binary runs &mdash; PwrAgent's managed build from
+                  <code>pwrdrvr/codex</code> (required by Token&nbsp;Miser) or a Codex the operator
+                  installed themselves.</td>
+              <td class="wrap"><code>codex-managed-runtime.ts</code>, tags <span class="mono">pwragent-v*</span>,
+                  signature-verified and pinned.</td>
+              <td class="wrap"><b>No.</b> Both builds read whatever <code>CODEX_HOME</code> they are handed.
+                  A managed build on <code>~/.codex</code> sees exactly the sign-ins a stock build sees
+                  there.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note note--good">
+          <span class="note__k">So</span>
+          <span>The honest sentence for the UI is <b>&ldquo;these sign-ins belong to this Codex
+          profile&rdquo;</b> &mdash; not &ldquo;to PwrAgent's Codex&rdquo;. On the screenshot's
+          <span class="mono">work</span> profile the split is real and total:
+          <code>~/.codex/profiles/work/config.toml</code> is a different file from
+          <code>~/.codex/config.toml</code>, Codex does not merge them, and an OAuth login performed
+          against one is invisible to the other. On <b>System&nbsp;default</b> there is no split at
+          all &mdash; PwrAgent and a bare <span class="mono">codex</span> share one store, and a
+          second list would show the same twelve rows twice.</span>
+        </div>
+
+        <div class="note note--good">
+          <span class="note__k">Already&nbsp;handled</span>
+          <span>Integrated terminals <b>do</b> export the selected profile's
+          <code>CODEX_HOME</code>. Every path through
+          <code>resolveTerminalSpawnEnvAsync</code> runs <code>withStartupCodexHome</code>, which
+          sets it from <code>startupCodexHome</code> &mdash;
+          <code>resolveCodexHomeForProfile(config.models.codex.profile)</code>, on main since #1227
+          and untouched by #1900. So a <span class="mono">codex</span> typed in a PwrAgent terminal
+          already agrees with the app on <em>which store</em>, and #1900 makes it agree on
+          <em>which binary</em> too. The gap this pane has to explain is therefore only ever with a
+          Codex run <b>outside PwrAgent</b> &mdash; the operator's own terminal app, an editor, any
+          other tool &mdash; which falls back to <code>~/.codex</code>.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">03</span>
+          <h2>Sign-in vocabulary &mdash; five states, one wording, both surfaces</h2>
+          <p class="body">
+            The protocol gives five values. Each one should render as a <em>state the operator is
+            in</em>, in the same words on the Settings pane and in the thread rail. One exported
+            <code>formatMcpAuthStatus</code> in <code>@pwragent/shared</code>, imported by both, so
+            the two cannot drift again.
+          </p>
+        </div>
+
+        <div class="legend">
+          <div class="legend__item">
+            <span class="chip chip--ok"><svg><use href="#i-check"/></svg>Signed in</span>
+            <p><b><code>oAuth</code></b>Codex holds OAuth credentials for this server. Hover:
+            <em>&ldquo;Signed in with OAuth. PwrAgent proves this when the server next starts.&rdquo;</em>
+            <span class="was">was &ldquo;OAuth&rdquo; / &ldquo;OAuth&rdquo;</span></p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--ok"><svg><use href="#i-key"/></svg>Signed in &middot; token</span>
+            <p><b><code>bearerToken</code></b>A static bearer token is configured. Same healthy tone
+            as OAuth &mdash; it is a working credential, just not an interactive one.
+            <span class="was">was &ldquo;Bearer token&rdquo; / &ldquo;Bearer token&rdquo;</span></p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--warn"><svg><use href="#i-warn"/></svg>Sign-in required</span>
+            <p><b><code>notLoggedIn</code></b>The one state that needs the operator. It is the only
+            state that earns a warning tone, and the only one that promotes
+            <span class="mono">Sign in</span> into the collapsed row.
+            <span class="was">was &ldquo;Login required&rdquo; / &ldquo;Sign-in required&rdquo;</span></p>
+          </div>
+          <div class="legend__item">
+            <span class="chip"><svg><use href="#i-dash"/></svg>No sign-in needed</span>
+            <p><b><code>unsupported</code></b>The server authenticates nobody. Neutral, and phrased
+            so it cannot be read as a failure &mdash; this is the majority state on the reported
+            screen.
+            <span class="was">was &ldquo;No login&rdquo; / &ldquo;No authentication&rdquo;</span></p>
+          </div>
+          <div class="legend__item">
+            <span class="chip"><svg><use href="#i-q"/></svg>Sign-in state unknown</span>
+            <p><b><code>unknown</code></b>The Codex build did not report one (#1886 added this so an
+            older build degrades instead of throwing). Muted, not alarming &mdash; it describes our
+            ignorance, not the server's health.
+            <span class="was">was &ldquo;Authentication unknown&rdquo; / same</span></p>
+          </div>
+          <div class="legend__item">
+            <span class="chip chip--err"><svg><use href="#i-x"/></svg>Failed to start</span>
+            <p><b><code>startupStatus: "failed"</code></b>A separate axis from sign-in, and the only
+            one that earns the danger tone. It carries <code>startupError</code> inline. Today this
+            renders as the bare lowercase word <span class="mono">failed</span>.</p>
+          </div>
+        </div>
+
+        <div class="note">
+          <span class="note__k">Honesty</span>
+          <span>&ldquo;Signed in&rdquo; is a statement about <b>stored credentials</b>, not a live
+          probe &mdash; the protocol reports what Codex holds, and an expired refresh token still
+          reads as <code>oAuth</code> until a start attempt fails. That is why the health dot is
+          driven by <code>startupStatus</code> and the chip by <code>authStatus</code>: the pane
+          shows a credential and a proof, and never lets one impersonate the other.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">04</span>
+          <h2>The row &mdash; before and after</h2>
+          <p class="body">
+            One grammar: <strong>health &middot; name &middot; what it gives you &mdash; sign-in
+            state &mdash; the one useful verb</strong>. The row becomes a disclosure; the tools it
+            was counting move inside it. <span class="mono">Remove</span> leaves the collapsed row
+            entirely and lives in the overflow, where a destructive verb belongs.
+          </p>
+        </div>
+
+        <div class="cols">
+          <div>
+            <p class="col__cap col__cap--bad">As built &mdash; 1440&nbsp;px, as reported</p>
+            <div class="stack">
+              <div class="srow srow--asbuilt">
+                <div class="srow__body">
+                  <div class="srow__titleline"><span class="srow__title">atlassian</span></div>
+                  <span class="srow__sub">0 tools</span>
+                </div>
+                <div class="srow__chips"><span class="chip">Login required</span></div>
+                <div class="srow__actions">
+                  <span class="btn">Relogin</span><span class="btn btn--ghost">Remove</span>
+                </div>
+              </div>
+              <div class="srow srow--asbuilt">
+                <div class="srow__body">
+                  <div class="srow__titleline"><span class="srow__title">awsdocs</span></div>
+                  <span class="srow__sub">0 tools</span>
+                </div>
+                <div class="srow__chips"><span class="chip">No login</span></div>
+                <div class="srow__actions"><span class="btn btn--ghost">Remove</span></div>
+              </div>
+              <div class="srow srow--asbuilt">
+                <div class="srow__body">
+                  <div class="srow__titleline"><span class="srow__title">datadog</span></div>
+                  <span class="srow__sub">28 tools</span>
+                </div>
+                <div class="srow__chips"><span class="chip">OAuth</span></div>
+                <div class="srow__actions">
+                  <span class="btn">Relogin</span><span class="btn btn--ghost">Remove</span>
+                </div>
+              </div>
+            </div>
+            <div class="note note--bad">
+              <span class="note__k">Reads</span>
+              <span><b>atlassian</b> and <b>awsdocs</b> are the same row to the eye &mdash; both
+              &ldquo;0 tools&rdquo;, both a grey chip &mdash; but one is broken and one is fine.
+              <b>datadog</b> says <span class="mono">OAuth</span> where it means <em>signed
+              in</em>, and offers to replace a credential that is working. Every row offers
+              <b>Remove</b>. The 28 tools are a number.</span>
+            </div>
+          </div>
+
+          <div>
+            <p class="col__cap col__cap--good">Proposed</p>
+            <div class="stack">
+              <div class="srow srow--bad">
+                <span class="srow__dot srow__dot--err"></span>
+                <span class="srow__chev">&rsaquo;</span>
+                <div class="srow__body">
+                  <div class="srow__titleline">
+                    <span class="srow__title">atlassian</span>
+                    <span class="srow__meta">no tools &mdash; not started</span>
+                  </div>
+                  <span class="srow__err">Sign in to load this server's tools.</span>
+                </div>
+                <div class="srow__chips"><span class="chip chip--warn"><svg><use href="#i-warn"/></svg>Sign-in required</span></div>
+                <div class="srow__actions">
+                  <span class="btn">Sign in</span><span class="btn btn--ghost btn--icon"><svg><use href="#i-more"/></svg></span>
+                </div>
+              </div>
+              <div class="srow">
+                <span class="srow__dot"></span>
+                <span class="srow__chev">&rsaquo;</span>
+                <div class="srow__body">
+                  <div class="srow__titleline">
+                    <span class="srow__title">awsdocs</span>
+                    <span class="srow__meta">ready &mdash; <b>no tools</b> published</span>
+                  </div>
+                </div>
+                <div class="srow__chips"><span class="chip"><svg><use href="#i-dash"/></svg>No sign-in needed</span></div>
+                <div class="srow__actions">
+                  <span class="btn btn--ghost btn--icon"><svg><use href="#i-more"/></svg></span>
+                </div>
+              </div>
+              <div class="srow srow--open">
+                <span class="srow__dot"></span>
+                <span class="srow__chev">&and;</span>
+                <div class="srow__body">
+                  <div class="srow__titleline">
+                    <span class="srow__title">datadog</span>
+                    <span class="srow__meta"><b>28</b> tools</span>
+                  </div>
+                </div>
+                <div class="srow__chips"><span class="chip chip--ok"><svg><use href="#i-check"/></svg>Signed in</span></div>
+                <div class="srow__actions">
+                  <span class="btn btn--ghost btn--icon"><svg><use href="#i-more"/></svg></span>
+                </div>
+                <div class="srow__drawer">
+                  <div class="srow__drawer-head">
+                    <span>Tools &middot; 28</span>
+                    <span class="sp"></span>
+                    <span class="btn btn--ghost">Sign in again</span>
+                  </div>
+                  <div class="toolgrid">
+                    <span class="tool">__dd_gff</span><span class="tool">__dd_guc</span>
+                    <span class="tool">__dd_rfw</span><span class="tool">aggregate_events</span>
+                    <span class="tool">aggregate_rum_events</span><span class="tool">aggregate_spans</span>
+                    <span class="tool">analyze_datadog_logs</span><span class="tool">get_change_stories</span>
+                    <span class="tool tool--more">Show 20 more</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="note note--good">
+              <span class="note__k">Reads</span>
+              <span>The two &ldquo;0 tools&rdquo; rows are now <b>visibly different problems</b>:
+              a red dot and a reason on one, a green dot and &ldquo;no tools published&rdquo; on the
+              other. <b>datadog</b> says <em>signed in</em> and, opened, answers the question the
+              count was standing in for. <b>Remove</b> is behind the overflow. The row that needs
+              the operator is the only one with a filled button.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="note">
+          <span class="note__k">Free</span>
+          <span>The drawer needs <b>no protocol work</b>: <code>tools: string[]</code> is already
+          populated by <code>listCodexMcpServers</code> at the pane's existing
+          <code>detail: "toolsAndAuthOnly"</code>. The overflow <span class="mono">Show 20 more</span>
+          is <code>InventoryLine</code> from <code>McpInventoryPanel</code>, lifted to a shared
+          component so both surfaces expand identically.</span>
+        </div>
+
+        <div class="note">
+          <span class="note__k">Later</span>
+          <span>Tool <em>descriptions</em> are one contract change away, not one protocol change
+          away: <code>readMcpServerStatusPage</code> receives <code>tools</code> as an
+          <b>object keyed by tool name</b> and immediately discards the values with
+          <code>Object.keys(tools).sort(...)</code>. Widening <code>CodexMcpServerSummary.tools</code>
+          to carry each entry's description would let a tool chip explain itself on hover. Out of
+          scope here; worth not forgetting.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">05</span>
+          <h2>The pane &mdash; name the scope before you list anything</h2>
+          <p class="body">
+            The grey 11&nbsp;px strip that currently carries
+            <span class="mono">Active Codex profile &middot; work &middot; /Users/&hellip;</span> is
+            the most important sentence on the screen and is styled like a footnote. It becomes a
+            banner that answers three questions in three lines: <strong>whose servers are
+            these</strong>, <strong>which Codex read them</strong>, and <strong>what that means for
+            sign-ins</strong>. The section chip stops counting configuration and starts counting
+            health.
+          </p>
+        </div>
+
+        <div class="frame">
+          <div class="frame__cap"><b>Proposed</b> &mdash; Settings &rarr; Plugins &rarr; MCPs<span class="tag tag--good">after</span></div>
+          <div class="frame__body">
+            <div class="pane__head">
+              <div class="pane__headtext">
+                <p class="pane__eyebrow">Plugins</p>
+                <h3 class="pane__title">Codex MCP servers</h3>
+                <p class="pane__help">
+                  MCP servers give Codex threads extra tools. They are configured per Codex
+                  profile &mdash; PwrAgent inspects and repairs the profile it is running.
+                </p>
+              </div>
+              <div class="pane__actions">
+                <span class="btn btn--ghost">Reload config</span>
+              </div>
+            </div>
+
+            <div class="sect">
+              <div class="scope">
+                <span class="scope__k">Profile</span>
+                <span class="scope__v">
+                  <span class="scope__name">work</span>
+                  <span class="scope__path">~/.codex/profiles/work</span>
+                </span>
+                <span class="scope__k">Codex</span>
+                <span class="scope__v">
+                  <span class="scope__name">PwrAgent&nbsp;managed</span>
+                  <span class="scope__path">pwragent-v0.149.0</span>
+                  <span class="chip chip--ok"><svg><use href="#i-check"/></svg>Token Miser ready</span>
+                </span>
+                <p class="scope__note">
+                  These servers and their sign-ins live in <b>this profile only</b>. PwrAgent's own
+                  terminals use it too; a <span class="mono">codex</span> you run
+                  <b>outside PwrAgent</b> falls back to <code>~/.codex</code> and has its own
+                  separate sign-ins.
+                </p>
+              </div>
+
+              <div class="sect__head">
+                <div class="sect__headtext">
+                  <p class="sect__title">12 servers &middot; 206 tools</p>
+                </div>
+                <div class="srow__actions">
+                  <span class="chip chip--ok"><svg><use href="#i-check"/></svg>9 ready</span>
+                  <span class="chip chip--warn"><svg><use href="#i-warn"/></svg>2 need sign-in</span>
+                  <span class="chip chip--err"><svg><use href="#i-x"/></svg>1 failed</span>
+                </div>
+              </div>
+
+              <div class="sect__body">
+                <div class="search">
+                  <svg><use href="#i-search"/></svg>
+                  <span>Filter servers and tools&hellip;</span>
+                </div>
+                <div class="srow srow--bad">
+                  <span class="srow__dot srow__dot--err"></span>
+                  <span class="srow__chev">&rsaquo;</span>
+                  <div class="srow__body">
+                    <div class="srow__titleline">
+                      <span class="srow__title">atlassian</span>
+                      <span class="srow__meta">no tools &mdash; not started</span>
+                    </div>
+                    <span class="srow__err">Sign in to load this server's tools.</span>
+                  </div>
+                  <div class="srow__chips"><span class="chip chip--warn"><svg><use href="#i-warn"/></svg>Sign-in required</span></div>
+                  <div class="srow__actions">
+                    <span class="btn">Sign in</span><span class="btn btn--ghost btn--icon"><svg><use href="#i-more"/></svg></span>
+                  </div>
+                </div>
+                <div class="srow">
+                  <span class="srow__dot"></span>
+                  <span class="srow__chev">&rsaquo;</span>
+                  <div class="srow__body">
+                    <div class="srow__titleline">
+                      <span class="srow__title">codex_apps</span>
+                      <span class="srow__meta"><b>144</b> tools</span>
+                    </div>
+                  </div>
+                  <div class="srow__chips"><span class="chip chip--ok"><svg><use href="#i-key"/></svg>Signed in &middot; token</span></div>
+                  <div class="srow__actions"><span class="btn btn--ghost btn--icon"><svg><use href="#i-more"/></svg></span></div>
+                </div>
+                <div class="srow">
+                  <span class="srow__dot"></span>
+                  <span class="srow__chev">&rsaquo;</span>
+                  <div class="srow__body">
+                    <div class="srow__titleline">
+                      <span class="srow__title">context7</span>
+                      <span class="srow__meta"><b>2</b> tools</span>
+                    </div>
+                  </div>
+                  <div class="srow__chips"><span class="chip"><svg><use href="#i-dash"/></svg>No sign-in needed</span></div>
+                  <div class="srow__actions"><span class="btn btn--ghost btn--icon"><svg><use href="#i-more"/></svg></span></div>
+                </div>
+                <div class="srow">
+                  <span class="srow__dot"></span>
+                  <span class="srow__chev">&rsaquo;</span>
+                  <div class="srow__body">
+                    <div class="srow__titleline">
+                      <span class="srow__title">datadog</span>
+                      <span class="srow__meta"><b>28</b> tools</span>
+                    </div>
+                  </div>
+                  <div class="srow__chips"><span class="chip chip--ok"><svg><use href="#i-check"/></svg>Signed in</span></div>
+                  <div class="srow__actions"><span class="btn btn--ghost btn--icon"><svg><use href="#i-more"/></svg></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="note">
+          <span class="note__k">Also</span>
+          <span>Drop <b>Collapse&nbsp;all / Expand&nbsp;all</b> from this pane, or wire them to the
+          new row drawers. Today they act on one section that does not expand, next to a list that
+          now does. And when <code>Reload&nbsp;config</code> is disabled because the profile
+          selection changed, say so <em>on the button</em> &mdash; the pane already knows
+          (<code>profileChanged</code>) and already writes the sentence in a banner; the dim button
+          should not be a second, unexplained signal.</span>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">06</span>
+          <h2>The second list &mdash; what it would take</h2>
+          <p class="body">
+            The ask: show the operator both their PwrAgent-profile MCP servers <em>and</em> the ones
+            in the Codex they use outside PwrAgent, so the split stops being a surprise. The
+            design is a scope switch above the list. The cost is in the second tab, and it is not
+            small.
+          </p>
+        </div>
+
+        <div class="frame">
+          <div class="frame__cap"><b>Proposed</b> &mdash; scope switch, second tab selected<span class="tag tag--good">chosen: B</span></div>
+          <div class="frame__body">
+            <div class="switch">
+              <span class="switch__opt switch__opt--on">work <span class="n">12</span></span>
+              <span class="switch__opt">System default <span class="n">~/.codex</span></span>
+            </div>
+            <div class="sect" style="margin-top:14px">
+              <div class="scope">
+                <span class="scope__k">Profile</span>
+                <span class="scope__v">
+                  <span class="scope__name">System default</span>
+                  <span class="scope__path">~/.codex</span>
+                  <span class="chip chip--info">Read-only</span>
+                </span>
+                <p class="scope__note">
+                  PwrAgent is not running this profile. This is what a
+                  <span class="mono">codex</span> you launch yourself would see. Sign-ins here are
+                  <b>separate</b> from <span class="mono">work</span>'s.
+                </p>
+              </div>
+              <div class="sect__body">
+                <div class="srow">
+                  <span class="srow__dot srow__dot--idle"></span>
+                  <span class="srow__chev">&rsaquo;</span>
+                  <div class="srow__body">
+                    <div class="srow__titleline">
+                      <span class="srow__title">datadog</span>
+                      <span class="srow__meta">configured &mdash; not inspected</span>
+                    </div>
+                  </div>
+                  <div class="srow__chips"><span class="chip"><svg><use href="#i-q"/></svg>Sign-in state unknown</span></div>
+                  <div class="srow__actions"><span class="btn btn--ghost btn--dim">Sign in</span></div>
+                </div>
+                <div class="srow">
+                  <span class="srow__dot srow__dot--idle"></span>
+                  <span class="srow__chev">&rsaquo;</span>
+                  <div class="srow__body">
+                    <div class="srow__titleline">
+                      <span class="srow__title">playwright</span>
+                      <span class="srow__meta">configured &mdash; not inspected</span>
+                    </div>
+                  </div>
+                  <div class="srow__chips"><span class="chip"><svg><use href="#i-q"/></svg>Sign-in state unknown</span></div>
+                  <div class="srow__actions"><span class="btn btn--ghost btn--dim">Sign in</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="note note--bad">
+          <span class="note__k">Cost</span>
+          <span>Every fact on the first tab &mdash; tool lists, sign-in state, startup health &mdash;
+          comes from <code>this.codexClient.listMcpServers()</code>, the <b>one running app-server
+          process</b>, bound to one <code>CODEX_HOME</code>. There is no second client, and the
+          repository's Codex data boundary forbids reading
+          <code>~/.codex/config.toml</code> to fake one. Filling the second tab with real state
+          means <b>spawning a second Codex app-server</b> against <code>~/.codex</code> &mdash;
+          which starts that profile's MCP servers, with their subprocesses and network calls, as a
+          side effect of opening a settings pane.</span>
+        </div>
+
+        <div class="decision">
+          <h3>Decision 1 &mdash; how much of the second list do we build? <em>Answered: B</em></h3>
+          <p>
+            Three answers, cheapest first. The mockup above shows the chosen one. All three are
+            compatible with everything in &sect;01&ndash;&sect;05, which is why that work does not
+            wait on this.
+          </p>
+          <div class="opt">
+            <h4>A &mdash; Tell, don't show</h4>
+            <p>No second tab. The scope banner's third line does the whole job. Zero new process
+            cost, ships with the rest, and kills the surprise even though it never shows the other
+            list. Hidden when the selected profile <em>is</em> System default, where there is
+            nothing to warn about.</p>
+          </div>
+          <div class="opt">
+            <h4>B &mdash; Second tab, names only, on demand <em>(chosen)</em></h4>
+            <p>The tab appears only for a named profile. Nothing loads until the operator clicks it.
+            It lists server <b>names only</b>, every row explicitly
+            <span class="mono">not inspected</span>, with actions disabled and a line saying sign in
+            from your own Codex. Answers &ldquo;did my <span class="mono">work</span> profile miss
+            servers I set up?&rdquo; &mdash; the actual question &mdash; without starting anything.
+            Needs a names-only source that respects the data boundary: a protocol call scoped to a
+            given <code>CODEX_HOME</code>, or a narrowly authorized config read added to
+            <code>check-codex-storage-boundary.mjs</code> the way the rollout-repair module was.
+            <b>That authorization is a PwrDrvr call, not an implementation detail.</b></p>
+          </div>
+          <div class="opt">
+            <h4>C &mdash; Second tab, fully live</h4>
+            <p>Spawn a second app-server against <code>~/.codex</code> behind an explicit
+            <span class="mono">Inspect</span> button, and get real tools, sign-in state and health
+            &mdash; plus working <span class="mono">Sign in</span> for that store. Strictly the best
+            answer and strictly the most expensive: a second Codex process, that profile's MCP
+            servers all started, and a second lifecycle to own. Worth it only if operators are
+            expected to <em>manage</em> both stores from here rather than understand the split.</p>
+          </div>
+        </div>
+
+        <hr class="rule" />
+
+        <div class="section-head">
+          <span class="num">07</span>
+          <h2>Build order</h2>
+          <p class="body">
+            Steps 1&ndash;7 are the pane the screenshots asked for and are independent of the second
+            list. Step 8 is Decision&nbsp;1's implementation, answered <b>B</b>, and is gated on the
+            boundary question inside it.
+          </p>
+        </div>
+
+        <ol class="checks">
+          <li><span class="n">1</span><span><b>One vocabulary.</b> Export
+            <code>formatMcpAuthStatus</code> from <code>@pwragent/shared</code> with the &sect;03
+            wording; delete both local copies in <code>PluginsSettings</code> and
+            <code>McpInventoryPanel</code>. A test asserts all five values, so a sixth protocol
+            value cannot ship as a silent blank.</span></li>
+          <li><span class="n">2</span><span><b>Show the tools.</b> Lift
+            <code>InventoryLine</code> out of <code>McpInventoryPanel</code> into a shared component
+            and put it in a row drawer. No contract change &mdash; the array is already
+            fetched.</span></li>
+          <li><span class="n">3</span><span><b>Split credential from proof.</b> Health dot from
+            <code>startupStatus</code>, chip from <code>authStatus</code>, and never collapse the
+            two. Give <code>startupStatus: "failed"</code> the danger tone and its
+            <code>startupError</code> inline.</span></li>
+          <li><span class="n">4</span><span><b>Disambiguate zero.</b> A ready server with no tools
+            says <em>no tools published</em>; a server that never started says why. Requires
+            keeping the pane subscribed to
+            <code>mcpServer/startupStatus/updated</code> from mount, not only while an action is
+            pending.</span></li>
+          <li><span class="n">5</span><span><b>Rebuild the row.</b> Dot, chevron, name, tool count,
+            chip, one verb. <span class="mono">Remove</span> into the overflow;
+            <span class="mono">Sign in</span> filled only where <code>notLoggedIn</code>.</span></li>
+          <li><span class="n">6</span><span><b>Health in the header.</b>
+            <span class="mono">12 servers &middot; 206 tools</span> with ready / need-sign-in /
+            failed counts, replacing <span class="mono">12 configured</span>.</span></li>
+          <li><span class="n">7</span><span><b>The scope banner.</b> Profile name and
+            <code>CODEX_HOME</code>, the managed Codex build and version from
+            <code>snapshot.runtime.tokenMiser.managedCodex</code>, and the outside-PwrAgent
+            sentence &mdash; suppressed on System default. Plus the filter, and the
+            Collapse/Expand cleanup.</span></li>
+          <li class="is-decision"><span class="n">8</span><span><b>The second list (B).</b>
+            On-demand, names-only System&nbsp;default tab, shown only for a named profile. Blocked
+            on choosing its boundary-safe source: a <code>CODEX_HOME</code>-scoped protocol call, or
+            an explicit PwrDrvr authorization for a names-only <code>config.toml</code> read in
+            <code>check-codex-storage-boundary.mjs</code>.</span></li>
+        </ol>
+
+        <p class="footer">
+          Reviewed against <code>apps/desktop/src/renderer/src/features/settings/PluginsSettings.tsx</code>,
+          <code>features/thread-detail/McpInventoryPanel.tsx</code>,
+          <code>main/app-server/backend-registry.ts</code>,
+          <code>main/codex-app-server/client.ts</code>,
+          <code>main/codex-managed-runtime.ts</code>,
+          <code>main/settings/desktop-settings-service.ts</code>,
+          <code>packages/shared/src/contracts/agent.ts</code> and
+          <code>@pwrdrvr/codex-discovery@0.4.0</code>.
+          Pane shipped in #1495; <code>unknown</code> auth status added in #1886.
+          Tokens copied from the bare <code>:root</code> block of <code>app.css</code>.
+        </p>
+      </div>
+    </x-dc>
+  </body>
+</html>
