@@ -1007,13 +1007,45 @@ function resolveWindowsTerminalShell(
     return { file: env.ComSpec || "cmd.exe", args: [] };
   }
 
-  if (commandExistsOnPath("pwsh.exe", env, "win32")) {
+  // Discovery searches the operator's PATH, not the pinned one. The runtime
+  // directories lead PATH by the time this runs, so scanning them would let a
+  // `pwsh.exe` inside a Codex or Grok release bundle become the shell PwrAgent
+  // launches. The pin is for the operator's commands, not for choosing a shell.
+  const discoveryEnv = withoutRuntimePathPrefix(env);
+  if (commandExistsOnPath("pwsh.exe", discoveryEnv, "win32")) {
     return { file: "pwsh.exe", args: windowsPowerShellArgs(env) };
   }
-  if (commandExistsOnPath("powershell.exe", env, "win32")) {
+  if (commandExistsOnPath("powershell.exe", discoveryEnv, "win32")) {
     return { file: "powershell.exe", args: windowsPowerShellArgs(env) };
   }
   return { file: env.ComSpec || "cmd.exe", args: [] };
+}
+
+/**
+ * The environment with the pinned runtime directories removed from PATH, for
+ * decisions that must reflect what the operator had rather than what PwrAgent
+ * prepended.
+ */
+function withoutRuntimePathPrefix(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const prefix = env[RUNTIME_PATH_PREFIX_ENV];
+  if (!prefix) return env;
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH");
+  if (!pathKey) return env;
+  const pinned = new Set(
+    prefix.split(";").map((entry) => path.win32.normalize(entry).toLowerCase()),
+  );
+  return {
+    ...env,
+    [pathKey]: (env[pathKey] ?? "")
+      .split(";")
+      .filter((entry) => {
+        if (entry.length === 0) return false;
+        return !pinned.has(path.win32.normalize(entry).toLowerCase());
+      })
+      .join(";"),
+  };
 }
 
 function commandExistsOnPath(

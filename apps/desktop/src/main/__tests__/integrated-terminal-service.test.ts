@@ -32,6 +32,22 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => settingsServiceMock,
 }));
 
+const temporaryRoots: string[] = [];
+
+/** Fixture roots for the tests that need real files on disk. */
+function createTemporaryRoot(prefix: string): string {
+  const root = mkdtempSync(path.join(os.tmpdir(), prefix));
+  temporaryRoots.push(root);
+  return root;
+}
+
+afterAll(() => {
+  for (const root of temporaryRoots) {
+    rmSync(root, { force: true, recursive: true });
+  }
+  temporaryRoots.length = 0;
+});
+
 beforeEach(() => {
   settingsServiceMock.resolveIntegratedTerminalWindowsShell.mockReturnValue("auto");
   settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([]);
@@ -41,20 +57,6 @@ beforeEach(() => {
 });
 
 describe("integrated terminal runtime PATH", () => {
-  const temporaryRoots: string[] = [];
-  const createTemporaryRoot = (prefix: string): string => {
-    const root = mkdtempSync(path.join(os.tmpdir(), prefix));
-    temporaryRoots.push(root);
-    return root;
-  };
-
-  afterAll(() => {
-    for (const root of temporaryRoots) {
-      rmSync(root, { force: true, recursive: true });
-    }
-    temporaryRoots.length = 0;
-  });
-
   it("puts selected Codex and Grok runtime directories first without duplicates", () => {
     expect(
       prependIntegratedTerminalRuntimePaths(
@@ -398,6 +400,28 @@ describe("resolveTerminalShell", () => {
     }
   });
 
+  it("does not let a pinned directory decide which PowerShell to launch", () => {
+    // `commandExistsOnPath` stats the filesystem, so the bundled pwsh has to
+    // really be there: a fixture path that does not exist would make this pass
+    // whether or not discovery skips the pinned directory.
+    const bundle = createTemporaryRoot("pwragent-pinned-shell-");
+    writeFileSync(path.join(bundle, "pwsh.exe"), "");
+
+    const shell = resolveTerminalShell({
+      env: {
+        ComSpec: "C:\\Windows\\System32\\cmd.exe",
+        Path: `${bundle};C:\\Windows\\System32`,
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: bundle,
+      },
+      platform: "win32",
+      windowsShell: "auto",
+    });
+
+    // A `pwsh.exe` shipped inside a Codex or Grok release must not become the
+    // shell PwrAgent launches; discovery falls through to ComSpec instead.
+    expect(shell.file).toBe("C:\\Windows\\System32\\cmd.exe");
+  });
+
   it("leaves the PowerShell invocation alone when nothing is pinned", () => {
     expect(
       resolveTerminalShell({
@@ -624,6 +648,50 @@ describe("resolveTerminalShell", () => {
       spawnOptions?.env?.PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR,
     );
     expect(spawnOptions?.env?.ZDOTDIR).toContain("shell-integration");
+  });
+
+  it("carries the PowerShell reassertion through the real spawn path", async () => {
+    const pty = fakePty();
+    let spawnArgs: string[] | undefined;
+    const spawn = vi.fn((...args: unknown[]) => {
+      spawnArgs = args[1] as string[];
+      return pty;
+    });
+    // `resolveTerminalShell` only sees the prefix because the PATH prepend runs
+    // first in `spawnTerminalPty`. Nothing enforces that order, and every other
+    // test hands the resolver a hand-built env, so a swap of those two
+    // statements would drop the Windows reassertion with the suite still green.
+    settingsServiceMock.resolveIntegratedTerminalWindowsShell.mockReturnValue(
+      "pwsh",
+    );
+    settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      Path: "C:\\Windows\\System32",
+    });
+    settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([
+      "C:\\managed\\codex\\codex.exe",
+    ]);
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: spawn as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "win32",
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "codex:thread-windows-pin",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(spawnArgs?.slice(0, 3)).toEqual(["-NoLogo", "-NoExit", "-Command"]);
+    expect(spawnArgs?.[3]).toContain(
+      "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+    );
   });
 
   it("reports terminal sessions with a foreground command for quit confirmation", async () => {

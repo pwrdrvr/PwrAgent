@@ -2291,11 +2291,11 @@ export class DesktopSettingsService {
   resolveIntegratedTerminalCommands(): string[] {
     // Reads the two sections it needs rather than `readConfig()`, which
     // `structuredClone`s every section — this runs on each terminal open. The
-    // store hands back its live objects, so clone the two that are read here:
-    // `readConfig` protects every other reader in the class the same way.
-    const grok = providerConfigSection(
-      structuredClone(this.configStore.read("providers").grok),
-    );
+    // store hands back its live objects, so `models` is cloned before it
+    // leaves; `providerConfigSection` already returns a fresh object built
+    // from three primitives, so cloning its input would guard nothing and
+    // would copy the projection's candidate and validation history.
+    const grok = providerConfigSection(this.configStore.read("providers").grok);
     const grokEnabled = grok.enabled !== false;
     const grokOverride = grokEnabled
       ? this.resolveString(grok.cliPath, ACP_AGENTS_GROK_CLI_PATH_ENV)
