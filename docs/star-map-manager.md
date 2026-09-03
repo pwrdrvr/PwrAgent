@@ -45,7 +45,7 @@ a finished snapshot.
 
 | Tool | Serves | Messaging RBAC |
 |---|---|---|
-| `read_star_map_view` | Instances, clouds and their full membership, drawn vs folded cards, selection, open chat cards, camera, filters. Each thread carries `backend` / `threadId` / `instanceId`. | `tools.thread_inspection` |
+| `read_star_map_view` | Instances, clouds and their full membership, drawn vs folded cards, selection, open chat cards, camera, filters, and where each drawn card sits. Each thread carries `backend` / `threadId` / `instanceId`. | `tools.thread_inspection` |
 
 It is gated for messaging-originated turns at the same permission as any other
 read of thread metadata.
@@ -56,6 +56,25 @@ counts — a shortened list must not read as a smaller cloud, or "the others in
 this cloud" acts on the wrong set. Drawn cards survive truncation ahead of
 folded ones.
 
+### Spatial references without pixels
+
+"That card over on the left about Foo" is a position question, and the answer
+is numbers rather than an image. Every drawn card reports `rect` in map space
+and `screenRect` in viewport pixels, so the leftmost card is the drawn one with
+the smallest `screenRect.x` — no rasterising, no OCR, no estimating positions
+off an image.
+
+`screenRect` is derived here rather than left to the caller. The canvas carries
+`translate(camera.x, camera.y) scale(camera.scale)`, and a CSS transform list
+applies right to left, so `screen = map * scale + camera` — **not**
+`(map + camera) * scale`, which is what this contract's own comment used to
+say. A spatial reference resolved off a flipped transform names the wrong card
+and never looks uncertain, which is the worst way for this to fail.
+
+`onScreen` is the other half: a card the layout placed is `visible: true` and
+carries geometry even when the operator has panned it out of view, so "the card
+on the left" has to exclude it.
+
 ### Why there is no screenshot tool
 
 An earlier revision had a `capture_star_map` beside this one. It was cut before
@@ -63,8 +82,10 @@ merge, and the reasoning is worth keeping so it is not re-added by reflex.
 
 A picture cannot do the job. Acting on "that thread" needs a `threadId`, and a
 PNG carries titles at best — an Agent would read the label off the image and
-still have no handle to call `mutate_thread` with. Everything the manager
-actually does is done from the structured view.
+still have no handle to call `mutate_thread` with. The spatial case that looks
+like it needs pixels is answered by `screenRect` above, and answered more
+precisely: an image would be a lossy encode of coordinates this already
+reports exactly.
 
 Against that it cost real things: Codex dynamic tools carry text only, and
 Codex is the default backend, so the tool returned no image at all for most
@@ -72,8 +93,9 @@ operators. It also wanted the higher `tools.instance_management` permission, a
 capture and PNG encode per call, and a size ceiling with a downscale-and-retry
 path.
 
-The remaining use is genuinely spatial — "do these clouds overlap?" — which is
-design and debugging work with better tools already available to it.
+What genuinely still needs pixels is appearance rather than position — does a
+label collide with a chip, do two clouds overlap, does this look wrong — which
+is design and debugging work with better tools already available to it.
 
 ## How the manager gets its instructions
 

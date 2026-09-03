@@ -50,7 +50,6 @@ export type StarMapViewLayout = (typeof STAR_MAP_VIEW_LAYOUTS)[number];
 export type StarMapViewSurface = "window" | "in-app";
 
 export type StarMapViewRect = {
-  /** Map-space, not screen-space: the camera below converts. */
   x: number;
   y: number;
   width: number;
@@ -60,7 +59,12 @@ export type StarMapViewRect = {
 export type StarMapViewCamera = {
   x: number;
   y: number;
-  /** 1 is unzoomed. Screen = (map + camera) * scale. */
+  /**
+   * 1 is unzoomed. The canvas is transformed `translate(x, y) scale(scale)`,
+   * which applies right to left, so `screen = map * scale + camera` — not
+   * `(map + camera) * scale`. Each thread carries a derived `screenRect` so
+   * nothing downstream has to get this order right.
+   */
   scale: number;
 };
 
@@ -130,6 +134,19 @@ export type StarMapViewThread = {
   chatCardOpen: boolean;
   /** Map-space card rect; absent while the card is folded away. */
   rect?: StarMapViewRect;
+  /**
+   * The same card in the viewport's own coordinates, origin top-left, so a
+   * question about where a card sits on screen needs no arithmetic.
+   *
+   * Derived rather than left to the caller because the camera transform is
+   * easy to apply subtly wrong, and a spatial reference resolved off a wrong
+   * transform names the wrong card without ever looking uncertain. Present
+   * whenever `rect` is; may fall outside the viewport when the operator has
+   * panned the card off screen, which `onScreen` reports.
+   */
+  screenRect?: StarMapViewRect;
+  /** Whether `screenRect` overlaps the viewport at all. */
+  onScreen?: boolean;
   pinned?: boolean;
   /**
    * The attention categories driving the map's own filter chips:
