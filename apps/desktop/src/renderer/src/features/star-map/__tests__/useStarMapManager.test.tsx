@@ -38,6 +38,7 @@ afterEach(() => {
 describe("useStarMapManager", () => {
   it("opens a card on a manager thread this window already knows", async () => {
     const openThread = vi.fn();
+    const onError = vi.fn();
     const { result } = renderHook(() =>
       useStarMapManager({
         desktopApi: api(async () => ({
@@ -48,17 +49,20 @@ describe("useStarMapManager", () => {
         })),
         threads: [thread("manager-1")],
         openThread,
+        onError,
       }),
     );
     act(() => result.current.open());
     await waitFor(() => expect(openThread).toHaveBeenCalledTimes(1));
     expect(openThread.mock.calls[0][0].id).toBe("manager-1");
-    expect(result.current.status).toBe("idle");
+    expect(result.current.busy).toBe(false);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("waits for a freshly created thread to arrive before opening its card", async () => {
     const openThread = vi.fn();
     const onRefreshLocalThreads = vi.fn();
+    const onError = vi.fn();
     const { rerender, result } = renderHook(
       (props: { threads: NavigationThreadSummary[] }) =>
         useStarMapManager({
@@ -71,6 +75,7 @@ describe("useStarMapManager", () => {
           threads: props.threads,
           openThread,
           onRefreshLocalThreads,
+          onError,
         }),
       { initialProps: { threads: [] as NavigationThreadSummary[] } },
     );
@@ -81,10 +86,12 @@ describe("useStarMapManager", () => {
 
     rerender({ threads: [thread("manager-new")] });
     await waitFor(() => expect(openThread).toHaveBeenCalledTimes(1));
-    expect(result.current.status).toBe("idle");
+    expect(result.current.busy).toBe(false);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("stops waiting, and says so, when the thread never arrives", async () => {
+    const onError = vi.fn();
     const { result } = renderHook(() =>
       useStarMapManager({
         desktopApi: api(async () => ({
@@ -95,18 +102,20 @@ describe("useStarMapManager", () => {
         })),
         threads: [],
         openThread: vi.fn(),
+        onError,
       }),
     );
     act(() => result.current.open());
-    await waitFor(() => expect(result.current.status).toBe("opening"));
+    await waitFor(() => expect(result.current.busy).toBe(true));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
-    expect(result.current.status).toBe("failed");
-    expect(result.current.error).toMatch(/try again/i);
+    expect(result.current.busy).toBe(false);
+    expect(onError).toHaveBeenCalledWith(expect.stringMatching(/try again/i));
   });
 
   it("surfaces a main-process failure instead of spinning", async () => {
+    const onError = vi.fn();
     const { result } = renderHook(() =>
       useStarMapManager({
         desktopApi: api(async () => ({
@@ -115,17 +124,20 @@ describe("useStarMapManager", () => {
         })),
         threads: [],
         openThread: vi.fn(),
+        onError,
       }),
     );
     act(() => result.current.open());
-    await waitFor(() => expect(result.current.status).toBe("failed"));
-    expect(result.current.error).toBe("no backend configured");
-    act(() => result.current.dismissError());
-    expect(result.current.error).toBeUndefined();
-    expect(result.current.status).toBe("idle");
+    await waitFor(() =>
+      expect(onError).toHaveBeenCalledWith("no backend configured"),
+    );
+    // Reported through the map's single banner, and the button is usable
+    // again rather than stuck on "Opening…".
+    expect(result.current.busy).toBe(false);
   });
 
   it("ignores a second click while the first is still resolving", async () => {
+    const onError = vi.fn();
     const openStarMapManager = vi.fn(
       async () =>
         await new Promise<never>(() => {
@@ -137,6 +149,7 @@ describe("useStarMapManager", () => {
         desktopApi: api(openStarMapManager as never),
         threads: [],
         openThread: vi.fn(),
+        onError,
       }),
     );
     act(() => result.current.open());

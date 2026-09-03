@@ -13,14 +13,11 @@ import type { DesktopApi } from "../../lib/desktop-api";
  */
 const MANAGER_THREAD_ARRIVAL_TIMEOUT_MS = 15_000;
 
-export type StarMapManagerStatus = "idle" | "opening" | "failed";
-
 export type StarMapManagerController = {
-  status: StarMapManagerStatus;
-  error?: string;
+  /** True while the manager is being resolved; the button reads it. */
+  busy: boolean;
   /** Resolve the manager thread and float its chat card over the map. */
   open: () => void;
-  dismissError: () => void;
 };
 
 /**
@@ -38,9 +35,14 @@ export function useStarMapManager(params: {
   threads: readonly NavigationThreadSummary[];
   openThread: (thread: NavigationThreadSummary) => void;
   onRefreshLocalThreads?: () => void;
+  /**
+   * Where a failure is shown. The map already owns one error banner, and
+   * `.star-map__card-error` is absolutely positioned, so a second one would
+   * sit in the same box as the first.
+   */
+  onError: (message: string) => void;
 }): StarMapManagerController {
-  const [status, setStatus] = useState<StarMapManagerStatus>("idle");
-  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
   const [pendingThreadKey, setPendingThreadKey] = useState<string>();
   const timerRef = useRef<number | undefined>(undefined);
   const openThreadRef = useRef(params.openThread);
@@ -54,6 +56,13 @@ export function useStarMapManager(params: {
   resolveRef.current = params.desktopApi?.openStarMapManager;
   const refreshRef = useRef(params.onRefreshLocalThreads);
   refreshRef.current = params.onRefreshLocalThreads;
+  const errorRef = useRef(params.onError);
+  errorRef.current = params.onError;
+  // `open`'s continuation can land after the surface is gone: resolving the
+  // manager writes files and starts a thread, so the operator has time to
+  // close the window. The unmount cleanup runs before the timer is created,
+  // so without this flag nothing is left to clear it.
+  const mountedRef = useRef(true);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== undefined) {
@@ -62,18 +71,29 @@ export function useStarMapManager(params: {
     }
   }, []);
 
-  useEffect(() => clearTimer, [clearTimer]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearTimer();
+    };
+  }, [clearTimer]);
+
+  const fail = useCallback((message: string) => {
+    setBusy(false);
+    setPendingThreadKey(undefined);
+    errorRef.current(message);
+  }, []);
 
   const open = useCallback(() => {
     const resolve = resolveRef.current;
-    if (!resolve || status === "opening") return;
-    setError(undefined);
-    setStatus("opening");
+    if (!resolve || busy) return;
+    setBusy(true);
     void resolve({})
       .then((response) => {
+        if (!mountedRef.current) return;
         if (response.status !== "ready") {
-          setStatus("failed");
-          setError(response.error);
+          fail(response.error ?? "The Star Map manager could not be opened.");
           return;
         }
         const threadKey = buildThreadIdentityKey(
@@ -86,25 +106,26 @@ export function useStarMapManager(params: {
         );
         if (existing) {
           openThreadRef.current(existing);
-          setStatus("idle");
+          setBusy(false);
           return;
         }
         // Freshly created: the card needs the thread's navigation summary,
         // which only arrives with the next snapshot.
         setPendingThreadKey(threadKey);
-        refreshRef.current?.();
+        // Awaited only for its failure: the arrival effect is what ends the
+        // wait, but an unhandled rejection here would leave the button
+        // disabled for the full timeout with nothing said.
+        void Promise.resolve(refreshRef.current?.()).catch(() => undefined);
         clearTimer();
         timerRef.current = window.setTimeout(() => {
-          setPendingThreadKey(undefined);
-          setStatus("failed");
-          setError("The manager thread did not load. Try again.");
+          fail("The manager thread did not load. Try again.");
         }, MANAGER_THREAD_ARRIVAL_TIMEOUT_MS);
       })
       .catch((cause: unknown) => {
-        setStatus("failed");
-        setError(cause instanceof Error ? cause.message : String(cause));
+        if (!mountedRef.current) return;
+        fail(cause instanceof Error ? cause.message : String(cause));
       });
-  }, [clearTimer, status]);
+  }, [busy, clearTimer, fail]);
 
   useEffect(() => {
     if (!pendingThreadKey) return;
@@ -115,17 +136,9 @@ export function useStarMapManager(params: {
     if (!arrived) return;
     clearTimer();
     setPendingThreadKey(undefined);
-    setStatus("idle");
+    setBusy(false);
     openThreadRef.current(arrived);
   }, [clearTimer, params.threads, pendingThreadKey]);
 
-  return {
-    status,
-    error,
-    open,
-    dismissError: useCallback(() => {
-      setError(undefined);
-      setStatus("idle");
-    }, []),
-  };
+  return { busy, open };
 }
