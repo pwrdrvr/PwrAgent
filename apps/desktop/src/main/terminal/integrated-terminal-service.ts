@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -719,8 +719,14 @@ export function prependIntegratedTerminalRuntimePaths(
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env = buildPwrAgentChildProcessEnv(baseEnv);
-  for (const key of OWNED_TERMINAL_ENV) {
-    delete env[key];
+  // Same rule `mergePwrAgentChildProcessEnv` applies to ELECTRON_RENDERER_URL:
+  // Windows environment names are case-insensitive, and this is a plain object
+  // that is not, so every casing has to go.
+  const owned = new Set<string>(OWNED_TERMINAL_ENV);
+  for (const key of Object.keys(env)) {
+    if (owned.has(key.toUpperCase())) {
+      delete env[key];
+    }
   }
   const pathApi = platform === "win32" ? path.win32 : path.posix;
   const runtimeDirectories = commands
@@ -824,6 +830,10 @@ export async function writeZshIntegrationDirectory(
   ),
 ): Promise<string> {
   await mkdir(directory, { recursive: true });
+  // A crash between `writeFile` and `rename`, or a sibling write rejecting
+  // first and abandoning the others, leaves a staged file in the directory
+  // PwrAgent hands zsh as ZDOTDIR. Nothing else ever removes one.
+  await removeOrphanedIntegrationTempFiles(directory);
   await Promise.all(
     Object.entries(ZSH_INTEGRATION_FILES).map(async ([name, contents]) => {
       const destination = path.join(directory, name);
@@ -841,6 +851,23 @@ export async function writeZshIntegrationDirectory(
     }),
   );
   return directory;
+}
+
+async function removeOrphanedIntegrationTempFiles(
+  directory: string,
+): Promise<void> {
+  try {
+    const entries = await readdir(directory);
+    await Promise.all(
+      entries
+        .filter((entry) => entry.startsWith(".") && entry.endsWith(".tmp"))
+        .map(async (entry) => {
+          await unlink(path.join(directory, entry)).catch(() => undefined);
+        }),
+    );
+  } catch {
+    // A directory we cannot list is not a reason to skip writing the wrappers.
+  }
 }
 
 export function clampTerminalColumns(value: number): number {

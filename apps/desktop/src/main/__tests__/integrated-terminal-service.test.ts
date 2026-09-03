@@ -146,8 +146,8 @@ describe("integrated terminal runtime PATH", () => {
         {
           encoding: "utf8",
           env: {
-            ...process.env,
-            PATH: `/usr/bin:/bin`,
+            HOME: root,
+            PATH: "/usr/bin:/bin",
             PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
             PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
             PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: managedBin,
@@ -188,7 +188,7 @@ describe("integrated terminal runtime PATH", () => {
         {
           encoding: "utf8",
           env: {
-            ...process.env,
+            HOME: root,
             PATH: "/usr/bin:/bin",
             PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
             PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
@@ -220,7 +220,7 @@ describe("integrated terminal runtime PATH", () => {
         {
           encoding: "utf8",
           env: {
-            ...process.env,
+            HOME: root,
             PATH: "/usr/bin:/bin",
             PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
             PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
@@ -241,6 +241,9 @@ describe("integrated terminal runtime PATH", () => {
     const env = prependIntegratedTerminalRuntimePaths(
       {
         PATH: "/usr/bin",
+        // Windows preserves the casing a variable was set with, and this is a
+        // plain object, so the delete has to be case-insensitive.
+        Pwragent_Integrated_Terminal_Runtime_Path_Prefix: "/stale/mixed",
         PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/stale/bin",
         PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: "/stale/integration",
         PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: "/stale/home",
@@ -252,6 +255,9 @@ describe("integrated terminal runtime PATH", () => {
 
     expect(env).not.toHaveProperty(
       "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+    );
+    expect(env).not.toHaveProperty(
+      "Pwragent_Integrated_Terminal_Runtime_Path_Prefix",
     );
     expect(env).not.toHaveProperty(
       "PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR",
@@ -518,6 +524,53 @@ describe("resolveTerminalShell", () => {
       TERM: "xterm-256color",
       COLORTERM: "truecolor",
     });
+  });
+
+  it("wires the zsh startup integration through the real spawn path", async () => {
+    const pty = fakePty();
+    let spawnOptions: { env?: NodeJS.ProcessEnv } | undefined;
+    const spawn = vi.fn((...args: unknown[]) => {
+      spawnOptions = args[2] as { env?: NodeJS.ProcessEnv } | undefined;
+      return pty;
+    });
+    // Every other test of this feature calls the helpers directly, so the one
+    // function that actually spawns the PTY had no coverage of the ZDOTDIR
+    // half — a `/bin/sh` login shell leaves at the `basename !== "zsh"` guard.
+    settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
+      HOME: "/Users/alice",
+      PATH: "/usr/bin",
+      SHELL: "/bin/zsh",
+    });
+    settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([
+      "/managed/codex/bin/codex",
+    ]);
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: spawn as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "darwin",
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "codex:thread-zsh-env",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(spawnOptions?.env).toMatchObject({
+      PATH: "/managed/codex/bin:/usr/bin",
+      PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/managed/codex/bin",
+      PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: "/Users/alice",
+      PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+    });
+    expect(spawnOptions?.env?.ZDOTDIR).toBe(
+      spawnOptions?.env?.PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR,
+    );
+    expect(spawnOptions?.env?.ZDOTDIR).toContain("shell-integration");
   });
 
   it("reports terminal sessions with a foreground command for quit confirmation", async () => {
