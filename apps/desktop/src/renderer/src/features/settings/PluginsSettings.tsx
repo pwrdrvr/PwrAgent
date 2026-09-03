@@ -72,10 +72,8 @@ function readStartupStatus(
 
 function matchesMcpFilter(
   server: CodexMcpServerSummary,
-  filter: string,
+  needle: string,
 ): boolean {
-  const needle = filter.trim().toLowerCase();
-  if (!needle) return true;
   return (
     server.name.toLowerCase().includes(needle)
     || server.tools.some((tool) => tool.toLowerCase().includes(needle))
@@ -104,7 +102,6 @@ export function PluginsSettings(props: {
   const [removeCandidate, setRemoveCandidate] =
     useState<CodexMcpServerSummary>();
   const [notice, setNotice] = useState<ActionNotice>();
-  const filterId = useId();
   const selectedProfile = props.snapshot.models.codex.profiles.profiles.find(
     (profile) => profile.selected,
   );
@@ -121,17 +118,26 @@ export function PluginsSettings(props: {
     && normalizeCodexHome(activeCodexHome)
       !== normalizeCodexHome(selectedCodexHome),
   );
+  // A CODEX_HOME outside `<profile root>/<name>` matches no discovered
+  // profile. Calling that "System default" would assert the store is
+  // `~/.codex` when it demonstrably is not, so it is named for what it is.
+  const activeProfileLabel = activeProfile?.displayName
+    ?? (activeCodexHome ? "Custom CODEX_HOME" : "Loading...");
   // The System-default profile *is* `~/.codex`, so PwrAgent and a bare `codex`
-  // share one store and there is no separation to warn about. Every named
-  // profile resolves to `<codex home>/profiles/<name>` and is fully isolated.
-  const usesNamedProfile = Boolean(activeProfile?.name);
+  // share one store and there is no separation to warn about. Every other
+  // home — a named profile or a custom CODEX_HOME — is fully isolated from it,
+  // and an unrecognized home is exactly where the note matters most.
+  const usesIsolatedCodexHome = Boolean(
+    activeCodexHome && activeProfile?.name !== "",
+  );
   const managedCodex = props.snapshot.runtime.tokenMiser?.managedCodex;
 
   const health = useMemo(() => countMcpServerHealth(servers), [servers]);
-  const visibleServers = useMemo(
-    () => servers.filter((server) => matchesMcpFilter(server, filter)),
-    [filter, servers],
-  );
+  const visibleServers = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    if (!needle) return servers;
+    return servers.filter((server) => matchesMcpFilter(server, needle));
+  }, [filter, servers]);
 
   const setPendingAction = useCallback((action?: PendingAction) => {
     pendingActionRef.current = action;
@@ -203,6 +209,18 @@ export function PluginsSettings(props: {
       });
       setActiveCodexHome(response.codexHome);
       setServers(response.servers);
+      // A name that vanished (removed here, or edited out of `config.toml`)
+      // would otherwise sit in the expanded set forever and silently re-open
+      // the drawer if that name ever came back.
+      setExpandedServers((current) => {
+        if (current.size === 0) return current;
+        const live = new Set(response.servers.map((server) => server.name));
+        const next = new Set<string>();
+        for (const name of current) {
+          if (live.has(name)) next.add(name);
+        }
+        return next.size === current.size ? current : next;
+      });
       return true;
     } catch (error) {
       setNotice({
@@ -326,12 +344,22 @@ export function PluginsSettings(props: {
         });
       }
       const waiter = startupWaiterRef.current;
-      if (!waiter || !name || !status || name !== waiter.name || !isGlobalStatus) {
+      // `starting` is the normal precursor to a terminal status and must leave
+      // the waiter armed. Disarming on it would clear the fallback timer
+      // without resolving, and `finishLogin` would await a promise that can
+      // never settle — wedging the pane with its pending action forever.
+      if (
+        !waiter
+        || !name
+        || !status
+        || status === "starting"
+        || name !== waiter.name
+        || !isGlobalStatus
+      ) {
         return;
       }
       window.clearTimeout(waiter.timer);
       startupWaiterRef.current = undefined;
-      if (status === "starting") return;
       waiter.resolve({
         status,
         ...(typeof params.error === "string" ? { error: params.error } : {}),
@@ -525,13 +553,13 @@ export function PluginsSettings(props: {
             : `${health.total} ${health.total === 1 ? "server" : "servers"} · ${health.tools} tools`
         }
         chipKind={
-          health.needsSignIn > 0 ? "warn" : health.failed > 0 ? "err" : "default"
+          health.failed > 0 ? "err" : health.needsSignIn > 0 ? "warn" : "default"
         }
       >
         <div className="settings-mcp-scope">
           <span className="settings-mcp-scope__key">Profile</span>
           <span className="settings-mcp-scope__value">
-            <strong>{activeProfile?.displayName ?? "System default"}</strong>
+            <strong>{activeProfileLabel}</strong>
             <code>
               {activeCodexHome ? shortenCodexHome(activeCodexHome) : "Loading..."}
             </code>
@@ -554,7 +582,7 @@ export function PluginsSettings(props: {
               </span>
             ) : null}
           </span>
-          {usesNamedProfile ? (
+          {usesIsolatedCodexHome ? (
             <p className="settings-mcp-scope__note">
               These servers and their sign-ins live in <strong>this profile only</strong>.
               PwrAgent's own terminals use it too; a <code>codex</code> you run outside
@@ -593,7 +621,6 @@ export function PluginsSettings(props: {
             <div className="settings-mcp-toolbar">
               <input
                 className="settings-mcp-filter"
-                id={filterId}
                 aria-label="Filter MCP servers and tools"
                 placeholder="Filter servers and tools..."
                 type="search"
@@ -601,9 +628,16 @@ export function PluginsSettings(props: {
                 onChange={(event) => setFilter(event.target.value)}
               />
               <div className="settings-mcp-toolbar__counts">
-                <span className="settings-pathrow__chip settings-pathrow__chip--ok">
-                  {health.ready} ready
-                </span>
+                {health.ready > 0 ? (
+                  <span className="settings-pathrow__chip settings-pathrow__chip--ok">
+                    {health.ready} ready
+                  </span>
+                ) : null}
+                {health.starting > 0 ? (
+                  <span className="settings-pathrow__chip">
+                    {health.starting} starting
+                  </span>
+                ) : null}
                 {health.needsSignIn > 0 ? (
                   <span className="settings-pathrow__chip settings-pathrow__chip--warn">
                     {health.needsSignIn} need sign-in
@@ -629,7 +663,6 @@ export function PluginsSettings(props: {
                     busy={pendingAction?.name === server.name}
                     disabled={actionsDisabled}
                     expanded={expandedServers.has(server.name)}
-                    filter={filter}
                     server={server}
                     onSignIn={() => void signIn(server)}
                     onRemove={() => setRemoveCandidate(server)}
@@ -665,7 +698,6 @@ export function PluginsSettings(props: {
             <div className="settings-confirm-dialog__actions">
               <button
                 className="button button--secondary"
-                disabled={actionsDisabled}
                 type="button"
                 onClick={() => setRemoveCandidate(undefined)}
               >
@@ -691,7 +723,6 @@ function McpServerRow(props: {
   busy: boolean;
   disabled: boolean;
   expanded: boolean;
-  filter: string;
   server: CodexMcpServerSummary;
   onRemove: () => void;
   onSignIn: () => void;
@@ -714,7 +745,7 @@ function McpServerRow(props: {
     <article className="settings-mcp-row" data-health={health}>
       <div className="settings-mcp-row__main">
         <button
-          aria-controls={drawerId}
+          aria-controls={props.expanded ? drawerId : undefined}
           aria-expanded={props.expanded}
           className="settings-mcp-row__toggle"
           type="button"

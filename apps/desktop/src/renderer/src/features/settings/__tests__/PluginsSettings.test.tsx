@@ -325,4 +325,55 @@ describe("PluginsSettings", () => {
     const counts = screen.getByText("1 failed");
     expect(within(counts).queryByText("0")).not.toBeInTheDocument();
   });
+
+  it("finishes a sign-in whose server reports starting before it reports ready", async () => {
+    let emit: ((event: { notification: { method: string; params: Record<string, unknown> } }) => void) | undefined;
+    const desktopApi = {
+      ...createDesktopApi([
+        server({ name: "datadog", authStatus: "notLoggedIn" }),
+      ]),
+      startCodexMcpServerLogin: vi.fn().mockResolvedValue({ ok: true }),
+      onAgentEvent: vi.fn((listener: typeof emit) => {
+        emit = listener;
+        return () => {};
+      }),
+    } as unknown as DesktopApi;
+
+    render(<PluginsSettings desktopApi={desktopApi} snapshot={createSnapshot()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    await waitFor(() => {
+      expect(desktopApi.startCodexMcpServerLogin).toHaveBeenCalled();
+    });
+
+    emit?.({
+      notification: {
+        method: "mcpServer/oauthLogin/completed",
+        params: { serverName: "datadog", success: true },
+      },
+    });
+
+    // A reload reports `starting` before it reports `ready`. Treating that as
+    // a terminal answer disarmed the waiter without resolving it, so the
+    // promise the pane awaits never settled and every control on the row
+    // stayed disabled for the life of the window.
+    emit?.({
+      notification: {
+        method: "mcpServer/startupStatus/updated",
+        params: { name: "datadog", status: "starting" },
+      },
+    });
+    emit?.({
+      notification: {
+        method: "mcpServer/startupStatus/updated",
+        params: { name: "datadog", status: "ready" },
+      },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "More actions for datadog" }),
+      ).toBeEnabled();
+    });
+  });
 });

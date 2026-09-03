@@ -11143,6 +11143,12 @@ textarea,
   background: var(--status-ok);
 }
 
+/* Mid-start is neither healthy nor broken. `--info-text` is the in-progress
+   dot color the transcript and messaging surfaces already use. */
+.settings-mcp-row[data-health="starting"] .settings-mcp-row__health {
+  background: var(--info-text);
+}
+
 .settings-mcp-row[data-health="needsSignIn"] .settings-mcp-row__health {
   background: var(--status-warning);
 }
@@ -11222,8 +11228,7 @@ textarea,
 }
 
 .settings-mcp-row__tools {
-  display: grid;
-  gap: 4px;
+  align-items: baseline;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -39,11 +39,13 @@ describe("readMcpServerHealth", () => {
   });
 
   it("does not call a server mid-start ready on the strength of its tools", () => {
+    // Nor `unknown`: folding mid-start into that bucket made the pane say
+    // "not started yet" about a server that was starting right then.
     expect(
       readMcpServerHealth(
         server({ name: "a", startupStatus: "starting", tools: ["t"] }),
       ),
-    ).toBe("unknown");
+    ).toBe("starting");
   });
 });
 
@@ -55,6 +57,12 @@ describe("describeMcpServerTools", () => {
       .toBe("ready — no tools published");
     expect(describeMcpServerTools(broken, readMcpServerHealth(broken)))
       .toBe("no tools — sign-in required");
+  });
+
+  it("says a starting server is starting rather than idle", () => {
+    const starting = server({ name: "a", startupStatus: "starting" });
+    expect(describeMcpServerTools(starting, readMcpServerHealth(starting)))
+      .toBe("starting…");
   });
 
   it("counts in singular and plural", () => {
@@ -78,6 +86,7 @@ describe("countMcpServerHealth", () => {
       total: 4,
       tools: 2,
       ready: 1,
+      starting: 0,
       needsSignIn: 1,
       failed: 1,
       unknown: 1,

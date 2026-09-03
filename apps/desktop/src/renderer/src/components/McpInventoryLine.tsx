@@ -12,6 +12,11 @@ export function McpInventoryLine(props: {
   label: string;
   previewLimit: number;
   values: string[];
+  /**
+   * Extra class, appended to the base line class rather than replacing it —
+   * the base carries the shared two-column line grid, and a caller that
+   * swapped it out silently lost that layout.
+   */
   className?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -22,7 +27,13 @@ export function McpInventoryLine(props: {
   const hiddenCount = props.values.length - visibleValues.length;
 
   return (
-    <div className={props.className ?? "mcp-inventory-panel__line"}>
+    <div
+      className={
+        props.className
+          ? `mcp-inventory-panel__line ${props.className}`
+          : "mcp-inventory-panel__line"
+      }
+    >
       <span className="mcp-inventory-panel__line-label">
         {props.label}
         <span className="mcp-inventory-panel__line-count">
