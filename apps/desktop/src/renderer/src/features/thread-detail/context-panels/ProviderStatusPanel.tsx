@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendRuntimeBuild, BackendSummary } from "@pwragent/shared";
 import {
   formatBackendAccountText,
   formatRateLimitLine,
@@ -47,12 +47,18 @@ export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
               </p>
               {backend.available && hasProviderMetadata(backend) ? (
                 <div className="backend-status-list__metadata">
-                  {backendVersion(backend) || backend.acp || backend.account ? (
+                  {hasIdentityMetadata(backend) ? (
                     <dl className="backend-status-list__metadata-grid">
                       {backendVersion(backend) ? (
                         <div>
                           <dt>Version</dt>
                           <dd>{backendVersion(backend)}</dd>
+                        </div>
+                      ) : null}
+                      {backend.runtimeBuild ? (
+                        <div>
+                          <dt>Build</dt>
+                          <dd>{formatRuntimeBuild(backend.runtimeBuild)}</dd>
                         </div>
                       ) : null}
                       {backend.acp ? (
@@ -97,12 +103,42 @@ export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
 }
 
 function hasProviderMetadata(backend: BackendSummary): boolean {
+  return hasIdentityMetadata(backend) || Boolean(backend.rateLimits?.length);
+}
+
+/** Whether anything belongs in the identity grid above the rate limits. */
+function hasIdentityMetadata(backend: BackendSummary): boolean {
   return Boolean(
     backendVersion(backend)
+    || backend.runtimeBuild
     || backend.acp
-    || backend.account
-    || backend.rateLimits?.length,
+    || backend.account,
   );
+}
+
+/**
+ * Who supplied the runtime, in the operator's terms. The version alone cannot
+ * answer it: `0.149.0` and `0.149.0-pwragent.2` differ by a suffix that reads
+ * as noise until something names who published it.
+ *
+ * A channel this build has never heard of — a federated peer can be newer than
+ * the viewer — falls back to the publisher alone. Naming it a release or a
+ * build would describe an unknown channel in a known one's terms, which is the
+ * confusion the row exists to remove.
+ */
+function formatRuntimeBuild(build: BackendRuntimeBuild): string {
+  switch (build.channel) {
+    case "pwragent":
+      return `${build.publisher} build`;
+    case "vendor":
+      return `${build.publisher} release`;
+    default: {
+      // Exhaustiveness gate: adding a channel is a compile error here.
+      const unhandled: never = build.channel;
+      void unhandled;
+      return build.publisher;
+    }
+  }
 }
 
 function backendVersion(backend: BackendSummary): string | undefined {

@@ -30,7 +30,7 @@ import {
   verifyMacosCodeModeHostJitEntitlements,
   verifyMatchingPlatformSignature,
 } from "./managed-runtime-signature.js";
-import { resolvePwragentRoot } from "./profile.js";
+import { managedCodexRoot } from "./codex-build-channel.js";
 
 const execFile = promisify(execFileCallback);
 const managedCodexLog = getMainLogger("pwragent:codex-managed-runtime");
@@ -243,11 +243,7 @@ const MANAGED_CODEX_ARTIFACT_TARGETS = [
 export async function ensureManagedCodexRuntime(
   options: ManagedCodexRuntimeOptions = {},
 ): Promise<ManagedCodexRuntime> {
-  const rootDir = options.rootDir ?? path.join(
-    resolvePwragentRoot(),
-    "agents",
-    "codex",
-  );
+  const rootDir = options.rootDir ?? managedCodexRoot();
   const checkMode = options.checkMode ?? "ttl";
   if (checkMode === "ttl" && !options.waitForUpdate) {
     const cached = await readCachedRuntime(rootDir, options);

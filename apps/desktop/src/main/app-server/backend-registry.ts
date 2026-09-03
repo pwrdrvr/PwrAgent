@@ -125,6 +125,7 @@ import {
   type BackendLaunchpadOptions,
   type BackendModelOption,
   type BackendRateLimitSummary,
+  type BackendRuntimeBuild,
   type BackendSummary,
   type DesktopProviderModelDefaults,
   type DesktopProviderThreadModelMigration,
@@ -373,6 +374,7 @@ import {
   isCodexInvalidResponseMessageIdError,
   type CodexInvalidResponseMessageIdRecoveryResult,
 } from "../codex-app-server/invalid-response-message-id-recovery";
+import { codexVersionFromUserAgent } from "../codex-app-server/protocol-compatibility";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
@@ -553,6 +555,7 @@ import {
   assertProviderDiscoveryPermit,
   type ProviderDiscoveryPermit,
 } from "../settings/provider-discovery-permit";
+import { managedCodexTagForCommand } from "../codex-build-channel";
 import {
   PROVIDER_IDS,
   providerLastKnownGoodMatchesConfig,
@@ -1915,6 +1918,30 @@ function normalizeWorktreePathForComparison(worktreePath: string): string {
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   codex: "OpenAI",
 };
+
+/** Who publishes each Codex channel's builds. Deliberately not
+ *  `BACKEND_LABELS.codex`: that names the backend in the UI, and renaming a
+ *  display label must never change a claim about who built a binary. */
+const CODEX_VENDOR_PUBLISHER = "OpenAI";
+const CODEX_MANAGED_PUBLISHER = "PwrDrvr";
+
+/**
+ * Who built the Codex executable PwrAgent launches. Decided from the resolved
+ * command's path: a managed download lives under the PwrAgent Codex channel's
+ * `versions/<tag>/` root, and anything else on this machine is OpenAI's own
+ * release. Returns `undefined` until a command has been resolved — "OpenAI" is
+ * a claim about a specific binary, not a fallback.
+ */
+function codexRuntimeBuild(
+  selectedCommand?: string,
+): BackendRuntimeBuild | undefined {
+  if (!selectedCommand) {
+    return undefined;
+  }
+  return managedCodexTagForCommand(selectedCommand) === undefined
+    ? { channel: "vendor", publisher: CODEX_VENDOR_PUBLISHER }
+    : { channel: "pwragent", publisher: CODEX_MANAGED_PUBLISHER };
+}
 
 const OPENAI_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"];
 const OPENAI_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -8346,6 +8373,20 @@ export class DesktopBackendRegistry {
     codexCommand: string;
     codexEnv: NodeJS.ProcessEnv;
   }>;
+  /**
+   * The Codex executable a launch would use right now — the same resolution
+   * the stdio transport performs, so the summary describes the runtime that
+   * actually answers, not one a later discovery pass might select.
+   *
+   * It is the only reliable source for a managed build: `resolveCodexCommand`
+   * returns the PwrAgent-managed runtime before it consults discovery, so a
+   * profile running one can reach the App Server without ever recording a
+   * provider observation, leaving the durable projection empty.
+   */
+  private readonly resolveCodexRuntimeCommandFn?: () => Promise<{
+    command: string;
+    version?: string;
+  }>;
   private readonly mcpConnectionService?: Pick<
     PwrSnapConnectionService,
     "registerBridge"
@@ -8426,6 +8467,11 @@ export class DesktopBackendRegistry {
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
     resolveManagedTokenMiserActivationRequired?: () => boolean;
     markManagedCodexRuntimeSwitchComplete?: () => void;
+    /** Overrides the settings service's Codex executable resolution. */
+    resolveCodexRuntimeCommand?: () => Promise<{
+      command: string;
+      version?: string;
+    }>;
     watchManagedCodexRuntime?: (
       listener: (
         change: ManagedCodexSelectionChange,
@@ -8681,6 +8727,11 @@ export class DesktopBackendRegistry {
       codexEnv,
       tokenMiserBridgeDescriptorPath,
     );
+    this.resolveCodexRuntimeCommandFn =
+      options?.resolveCodexRuntimeCommand
+      ?? (settingsService
+        ? async () => await settingsService.resolveCodexCommand()
+        : undefined);
     this.resolveTokenMiserCodexRuntimeFn = settingsService
       ? async () => {
           const [resolvedCommand, resolvedEnv] = await Promise.all([
@@ -8750,6 +8801,7 @@ export class DesktopBackendRegistry {
           });
           this.codexRuntimeRestartPending = true;
           this.managedCodexRuntimeSwitchPending = true;
+          this.redescribeCachedCodexRuntime(change.runtime);
           return this.maybeRestartCodexForManagedRuntimeChange();
         }),
       );
@@ -23771,15 +23823,61 @@ export class DesktopBackendRegistry {
     );
   }
 
+  /**
+   * Re-describe the cached summary's runtime identity after a managed Codex
+   * selection change.
+   *
+   * Nothing else invalidates that cache on this path: it is cleared only when
+   * a `providers.*` fingerprint changes, and the managed channel turns over
+   * without one. A passive `listBackends` therefore keeps serving the summary
+   * built for the executable that was just replaced, so the providers panel
+   * would name the superseded build's publisher and version.
+   *
+   * A change that leaves no managed runtime drops both fields rather than
+   * guessing at the vendor executable taking over — the next discovery names
+   * it, and until then silence beats the wrong publisher.
+   */
+  private redescribeCachedCodexRuntime(
+    runtime?: ManagedCodexSelectionChange["runtime"],
+  ): void {
+    if (!this.codexBackendSummary) {
+      return;
+    }
+    this.codexBackendSummary = {
+      ...this.codexBackendSummary,
+      runtimeBuild: runtime ? codexRuntimeBuild(runtime.command) : undefined,
+      serverVersion: runtime?.metadata.version,
+    };
+  }
+
+  /**
+   * The Codex provider projection and its durable executable observation, the
+   * observation dropped when it no longer describes the current
+   * configuration. One snapshot read serves both, so a summary cannot pair a
+   * validation error with a `lastKnownGood` from a different revision.
+   *
+   * The pre-discovery summary is built entirely from this; the discovered
+   * summary falls back to it for the version and provenance that live runtime
+   * resolution could not name.
+   */
+  private readCodexProvider(): {
+    lastKnownGood?: ConfigDomainMap["providers"]["codex"]["lastKnownGood"];
+    provider?: ConfigDomainMap["providers"]["codex"];
+  } {
+    const provider = this.configStore?.read("providers").codex;
+    return {
+      ...(provider && providerLastKnownGoodMatchesConfig(provider)
+        ? { lastKnownGood: provider.lastKnownGood }
+        : {}),
+      ...(provider ? { provider } : {}),
+    };
+  }
+
   private readCodexBackendSummary(): BackendSummary {
     if (this.codexBackendSummary) {
       return this.codexBackendSummary;
     }
-    const provider = this.configStore?.read("providers").codex;
-    const lastKnownGood = provider
-      && providerLastKnownGoodMatchesConfig(provider)
-      ? provider.lastKnownGood
-      : undefined;
+    const { lastKnownGood, provider } = this.readCodexProvider();
     const available = Boolean(lastKnownGood?.selectedCommand);
     const methods: string[] = [];
     const capabilities = buildCapabilities(methods, "codex");
@@ -23797,6 +23895,7 @@ export class DesktopBackendRegistry {
       label: BACKEND_LABELS.codex,
       available,
       serverVersion: lastKnownGood?.selectedVersion,
+      runtimeBuild: codexRuntimeBuild(lastKnownGood?.selectedCommand),
       methods,
       capabilities,
       launchpadOptions: buildLaunchpadOptions("codex", []),
@@ -23824,17 +23923,26 @@ export class DesktopBackendRegistry {
   ): Promise<BackendSummary> {
     assertProviderDiscoveryPermit(permit);
     const previousSummary = this.readCodexBackendSummary();
+    const { lastKnownGood } = this.readCodexProvider();
     const [
       initializeResult,
       defaultModelsResult,
       accountResult,
       rateLimitsResult,
+      runtimeCommandResult,
     ] = await Promise.allSettled([
       this.codexClient.getInitializeResult(),
       this.readCodexDefaultModelsOnce("backend-summary"),
       readClientAccount(this.codexClient),
       readClientRateLimits(this.codexClient),
+      this.resolveCodexRuntimeCommandFn?.(),
     ]);
+    // Resolution rejects when nothing is selected yet; the durable observation
+    // is then the only thing left that can name a command.
+    const runtimeCommand =
+      runtimeCommandResult.status === "fulfilled"
+        ? runtimeCommandResult.value
+        : undefined;
     const successful =
       initializeResult.status === "fulfilled" ? [initializeResult.value] : [];
     const methods = mergeMethods(successful);
@@ -23886,7 +23994,17 @@ export class DesktopBackendRegistry {
           ? rateLimitsResult.value
           : undefined,
       serverName: successful[0]?.serverInfo?.name,
-      serverVersion: successful[0]?.serverInfo?.version,
+      // Today's `initialize` carries no `serverInfo` at all; the App Server's
+      // version reaches us inside the `userAgent` it does report. The resolved
+      // executable stands in when this connection never handshook.
+      serverVersion:
+        successful[0]?.serverInfo?.version
+        ?? codexVersionFromUserAgent(successful[0]?.userAgent)
+        ?? runtimeCommand?.version
+        ?? lastKnownGood?.selectedVersion,
+      runtimeBuild: codexRuntimeBuild(
+        runtimeCommand?.command ?? lastKnownGood?.selectedCommand,
+      ),
       methods,
       capabilities,
       launchpadOptions: buildLaunchpadOptions("codex", discoveredModels),
