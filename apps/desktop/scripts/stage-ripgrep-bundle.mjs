@@ -74,11 +74,25 @@ async function download(url, targetPath) {
 }
 
 export function expectedChecksum(checksumText, assetName) {
-  const match = /^([0-9a-fA-F]{64})\s+\*?(.+)$/u.exec(checksumText.trim());
-  if (!match || basename(match[2]) !== assetName) {
-    throw new Error(`Invalid checksum for ${assetName}`);
+  const trimmedChecksum = checksumText.trim();
+  const checksumMatch = /^([0-9a-fA-F]{64})\s+\*?(.+)$/u.exec(trimmedChecksum);
+  if (checksumMatch && basename(checksumMatch[2]) === assetName) {
+    return checksumMatch[1].toLowerCase();
   }
-  return match[1].toLowerCase();
+
+  const certUtilLines = trimmedChecksum
+    .split(/\r?\n/u)
+    .map((line) => line.trim());
+  if (
+    certUtilLines.length === 3
+    && certUtilLines[0] === `SHA256 hash of ${assetName}:`
+    && /^[0-9a-fA-F]{64}$/u.test(certUtilLines[1])
+    && certUtilLines[2] === "CertUtil: -hashfile command completed successfully."
+  ) {
+    return certUtilLines[1].toLowerCase();
+  }
+
+  throw new Error(`Invalid checksum for ${assetName}`);
 }
 
 async function sha256(path) {
