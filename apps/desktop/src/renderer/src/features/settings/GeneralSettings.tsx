@@ -6,7 +6,6 @@ import type {
 } from "@pwragent/shared";
 import type {
   AppUpdateCheckResult,
-  AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
   AppUpdateStatus,
 } from "../../../../shared/app-metadata";
@@ -28,6 +27,7 @@ import {
   ToggleField,
   useSettingsFieldPending,
 } from "./SettingsLayout";
+import { ReleaseSlotMatrix } from "./ReleaseSlotMatrix";
 import { sourceBadge } from "./settings-fields";
 
 const THEME_OPTIONS: Array<{
@@ -123,40 +123,6 @@ const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   },
 ];
 
-const UPDATE_TRAIN_OPTIONS: Array<{
-  label: string;
-  value: DesktopUpdateTrain;
-}> = [
-  { label: "Stable", value: "stable" },
-  { label: "Beta", value: "beta" },
-];
-
-const UPDATE_CHANNEL_OPTIONS: Array<{
-  label: string;
-  value: DesktopUpdateChannel;
-}> = [
-  { label: "Latest", value: "latest" },
-  { label: "Prerelease", value: "prerelease" },
-];
-
-function releaseVersionText(release: AppUpdateReleaseInfo | undefined): string {
-  return release?.version ?? "Unavailable";
-}
-
-function releaseHelpText(
-  releases: AppUpdateReleaseVersions | undefined,
-): string {
-  if (!releases) {
-    return "Release versions are loading.";
-  }
-  return [
-    `Stable latest: ${releaseVersionText(releases.stable.latest)}`,
-    `Stable prerelease: ${releaseVersionText(releases.stable.prerelease)}`,
-    `Beta latest: ${releaseVersionText(releases.beta.latest)}`,
-    `Beta prerelease: ${releaseVersionText(releases.beta.prerelease)}`,
-  ].join(". ");
-}
-
 function updateResultText(result: AppUpdateCheckResult): string {
   if (result.status === "skipped") {
     return result.reason;
@@ -189,19 +155,28 @@ export function GeneralSettings(props: {
   onAttentionPromoteOnTurnEndChange: (value: boolean) => Promise<void>;
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
-  onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
-  onUpdateTrainChange: (value: DesktopUpdateTrain) => Promise<void>;
+  /** Both axes travel together: naming either one is what tells main the
+   *  selection is a pin rather than a guess, so a tile click writes the
+   *  whole pair in one patch. */
+  onUpdateSelectionChange: (value: {
+    channel: DesktopUpdateChannel;
+    train: DesktopUpdateTrain;
+  }) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
   onClearMessagingAcknowledgment: () => Promise<void>;
 }) {
   const [releaseVersions, setReleaseVersions] = useState<
     AppUpdateReleaseVersions | undefined
   >();
+  // Whether the release read has ANSWERED, not whether it succeeded. A read
+  // that fails still settles, and the tiles must fall through to Unavailable
+  // rather than claim a read is in flight for the rest of the window's life.
+  const [releasesSettled, setReleasesSettled] = useState(false);
+  const [installedVersion, setInstalledVersion] = useState<string>();
   const [updateChecking, setUpdateChecking] = useState(false);
-  // The track group sits inside a composite control with its own buttons, so
-  // the field cannot own the tracker — the indicator goes last in the button
-  // row, where arriving mid-save displaces nothing.
-  const updateChannelPending = useSettingsFieldPending();
+  // The slot matrix is a grid, so it has no room for the indicator beside it
+  // the way a segmented control does — the field renders it underneath.
+  const updateSelectionPending = useSettingsFieldPending();
   const [updateResult, setUpdateResult] = useState<
     AppUpdateCheckResult | undefined
   >();
@@ -222,6 +197,7 @@ export function GeneralSettings(props: {
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
   const updateTrain = props.snapshot.updates.train;
+  const updateSelectionSource = props.snapshot.updates.selectionSource;
   const messagingAcknowledgment =
     props.snapshot.general.messagingAcknowledgment;
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
@@ -230,11 +206,52 @@ export function GeneralSettings(props: {
 
   useEffect(() => {
     let canceled = false;
-    void props.desktopApi?.readAppUpdateReleaseVersions?.().then((versions) => {
-      if (!canceled) {
+    const read = props.desktopApi?.readAppUpdateReleaseVersions;
+    // A build without the reader settles immediately: every slot is
+    // Unavailable, which is the honest report, and "Loading…" forever is not.
+    if (!read) {
+      setReleasesSettled(true);
+      return;
+    }
+    void read().then(
+      (versions) => {
+        if (canceled) {
+          return;
+        }
         setReleaseVersions(versions);
-      }
-    });
+        setReleasesSettled(true);
+      },
+      () => {
+        if (!canceled) {
+          setReleasesSettled(true);
+        }
+      },
+    );
+    return () => {
+      canceled = true;
+    };
+  }, [props.desktopApi]);
+
+  // The running build's own version, for the matrix's "Installed" chip. The
+  // slot it lands in is the one an inferred selection is derived from, so
+  // seeing it marked is how an operator checks that inference agreed.
+  useEffect(() => {
+    let canceled = false;
+    const read = props.desktopApi?.readAppMetadata;
+    if (!read) {
+      return;
+    }
+    void read().then(
+      (metadata) => {
+        if (!canceled) {
+          setInstalledVersion(metadata.applicationVersion);
+        }
+      },
+      () => {
+        // Cosmetic: without it no tile carries the chip, which is the same
+        // as a build whose version matches no published slot.
+      },
+    );
     return () => {
       canceled = true;
     };
@@ -291,6 +308,7 @@ export function GeneralSettings(props: {
           await props.desktopApi?.readAppUpdateReleaseVersions?.();
         if (versions) {
           setReleaseVersions(versions);
+          setReleasesSettled(true);
         }
       } catch {
         // Keep the check result the operator just asked for.
@@ -455,25 +473,43 @@ export function GeneralSettings(props: {
         }
       >
         <div className="settings-fields">
-          <SegmentedField
+          <SettingsField
             label="Release channel"
-            sub="Stable is the smoke-checked train. Beta follows main and stays selectable even when its versions are still Unavailable."
-            help={releaseHelpText(releaseVersions)}
-            error={updateTrain.error}
+            sub="Two trains, two tracks. Stable is the smoke-checked feed; Beta follows main. Latest is smoke-checked within its train; Prerelease is newer and may not install."
+            help={
+              // The inference rule is only worth explaining while it is
+              // still live — once an operator pins a slot, saying "we
+              // guessed" is noise.
+              updateSelectionSource === "inferred"
+                ? "Following the build you installed. Pick a slot to pin it."
+                : undefined
+            }
+            error={updateTrain.error ?? updateChannel.error}
             source={sourceBadge(updateTrain)}
-            disabled={props.saving}
-            options={UPDATE_TRAIN_OPTIONS.map((option) => ({
-              ...option,
-              meta: releaseVersionText(releaseVersions?.[option.value]?.latest),
-            }))}
-            value={updateTrain.value}
-            onChange={(value) => {
-              return props.onUpdateTrainChange(value);
-            }}
+            actions={
+              <SettingsPendingIndicator
+                pending={updateSelectionPending.pending}
+              />
+            }
+            control={
+              <ReleaseSlotMatrix
+                channel={updateChannel.value}
+                disabled={props.saving}
+                installedVersion={installedVersion}
+                releaseVersions={releaseVersions}
+                releasesSettled={releasesSettled}
+                train={updateTrain.value}
+                onSelect={(next) => {
+                  const result = props.onUpdateSelectionChange(next);
+                  updateSelectionPending.track(result);
+                  return result;
+                }}
+              />
+            }
           />
           <SettingsField
-            label="Update track"
-            sub="Latest is smoke-checked. Prerelease is newer and may not install."
+            label="Check for updates"
+            sub="PwrAgent also checks on its own. A build older than the one you are running only installs when you ask for it here."
             help={
               updateResult ? (
                 <span
@@ -490,26 +526,9 @@ export function GeneralSettings(props: {
                 </span>
               ) : undefined
             }
-            error={updateChannel.error}
-            source={sourceBadge(updateChannel)}
             control={
               <div className="settings-update-channel">
                 <div className="settings-update-channel__controls">
-                  <SegmentedControl
-                    disabled={props.saving}
-                    label="Update track"
-                    options={UPDATE_CHANNEL_OPTIONS.map((option) => ({
-                      ...option,
-                      meta: releaseVersionText(
-                        releaseVersions?.[updateTrain.value]?.[option.value],
-                      ),
-                    }))}
-                    pending={updateChannelPending}
-                    value={updateChannel.value}
-                    onChange={(value) => {
-                      return props.onUpdateChannelChange(value);
-                    }}
-                  />
                   {downloadedVersion ? (
                     <button
                       aria-label={`${restartActionLabel} (${downloadedVersion})`}
@@ -538,9 +557,6 @@ export function GeneralSettings(props: {
                   >
                     {updateChecking ? "Checking..." : "Check for Update"}
                   </button>
-                  <SettingsPendingIndicator
-                    pending={updateChannelPending.pending}
-                  />
                 </div>
                 {downloadedVersion ? (
                   <>

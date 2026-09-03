@@ -1570,6 +1570,7 @@ describe("App", () => {
       updates: {
         channel: { value: "latest", source: "default" },
         train: { value: "stable", source: "default" },
+        selectionSource: "inferred",
       },
       integratedTerminal: {
         windowsShell: { value: "auto", source: "default" },

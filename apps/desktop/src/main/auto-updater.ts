@@ -213,6 +213,68 @@ function downgradeOfferAllowed(trigger: UpdateCheckTrigger): boolean {
   return trigger === "manual" || trigger === "menu";
 }
 
+const UPDATE_TRAIN_LABEL: Record<DesktopUpdateTrain, string> = {
+  stable: "Stable",
+  beta: "Beta",
+};
+
+const UPDATE_CHANNEL_LABEL: Record<DesktopUpdateChannel, string> = {
+  latest: "Latest",
+  prerelease: "Prerelease",
+};
+
+/** Longest error we will put on screen. Past this the operator is reading
+ *  diagnostics, not a report they can act on. */
+const UPDATE_ERROR_MESSAGE_MAX = 200;
+
+/**
+ * electron-updater reports a failed feed read as ONE multi-kilobyte string:
+ * the request URL, every response header, and a stack of packaged file
+ * paths. Settings renders that message verbatim, so a single 404 filled the
+ * pane with a wall of text an operator cannot act on — and response headers
+ * are not ours to put on screen either. The whole error still goes to the
+ * log; this is what the UI gets.
+ */
+function summarizeUpdateError(err: unknown): string {
+  const raw = (err instanceof Error ? err.message : String(err)).trim();
+  // Both suffixes are appended to the same single line as the message, so a
+  // plain first-line cut is not enough to drop them.
+  const head = raw.split("\n")[0].split(" Headers: ")[0].trim();
+  if (head.length <= UPDATE_ERROR_MESSAGE_MAX) {
+    return head;
+  }
+  return `${head.slice(0, UPDATE_ERROR_MESSAGE_MAX - 1).trimEnd()}…`;
+}
+
+/**
+ * The 404 above is worth naming rather than truncating, because it is not a
+ * transport failure and a shorter version of the raw text would not say so.
+ * `Cannot find channel "<file>" update info` means the GitHub release we
+ * pointed the feed at carries no update manifest for THIS platform: the
+ * release exists, the Settings matrix shows its version, and there is still
+ * nothing installable in that slot. Saying which manifest is missing is the
+ * one detail that makes the gap fixable.
+ */
+function describeUpdateCheckFailure(
+  err: unknown,
+  context: {
+    channel: DesktopUpdateChannel;
+    train: DesktopUpdateTrain;
+    tag?: string;
+  },
+): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const missingManifest = /^Cannot find channel "([^"]+)" update info/.exec(
+    raw,
+  )?.[1];
+  if (!missingManifest) {
+    return summarizeUpdateError(err);
+  }
+  const slot = `${UPDATE_TRAIN_LABEL[context.train]} ${UPDATE_CHANNEL_LABEL[context.channel]}`;
+  const release = context.tag === undefined ? "" : ` (${context.tag})`;
+  return `The ${slot} release${release} publishes no ${missingManifest} for this platform, so there is nothing to install from it yet.`;
+}
+
 function configureAutoUpdaterFeedForRelease(release: GitHubRelease): void {
   const tag = release.tag_name;
   if (!tag) {
@@ -363,12 +425,25 @@ export async function checkForAppUpdatesNow(
     return updateCheckInFlight;
   }
 
+  // What the catch below needs to name the slot it failed on, filled in as
+  // the check learns each part. It reuses the selection the check already
+  // read rather than reading settings a second time — one settings read per
+  // check is an invariant the suite asserts.
+  let failureContext:
+    | {
+        channel: DesktopUpdateChannel;
+        train: DesktopUpdateTrain;
+        tag?: string;
+      }
+    | undefined;
+
   updateCheckInFlight = (async () => {
     try {
       const {
         channel: updateChannel,
         train: updateTrain,
       } = currentUpdateSelection();
+      failureContext = { channel: updateChannel, train: updateTrain };
       const updateSelection = updateSelectionKey(updateTrain, updateChannel);
       reconcileDownloadedUpdateEligibility(updateSelection);
       const downloadedResult = downloadedUpdateMatchesChannel(updateSelection);
@@ -451,6 +526,7 @@ export async function checkForAppUpdatesNow(
         });
       }
       configureAutoUpdaterFeedForRelease(release);
+      failureContext = { ...failureContext, tag: release.tag_name };
       updateCheckChannelInFlight = updateSelection;
       const result = await autoUpdater.checkForUpdates();
       if (result?.updateInfo?.version !== currentVersion) {
@@ -476,12 +552,23 @@ export async function checkForAppUpdatesNow(
     } catch (err) {
       const result = {
         status: "error",
-        message: err instanceof Error ? err.message : String(err),
+        message:
+          failureContext === undefined
+            // Reading the selection itself failed, so there is no slot to
+            // name — the generic summary is all the truth there is.
+            ? summarizeUpdateError(err)
+            : describeUpdateCheckFailure(err, failureContext),
       } as const;
       setUpdateStatusUnlessDownloaded(result);
+      // The log keeps the whole error — URL, headers, stack. `result.message`
+      // is only what Settings shows, and diagnosing a feed failure from the
+      // truncated copy would be worse than having no summary at all.
       log.warn("checkForUpdates failed", {
-        message: result.message,
+        message: err instanceof Error ? err.message : String(err),
+        reported: result.message,
         trigger,
+        updateChannel: failureContext?.channel,
+        updateTrain: failureContext?.train,
       });
       return result;
     } finally {
@@ -962,8 +1049,8 @@ export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVe
       },
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const unavailable = { unavailableReason: message };
+    // Rendered inside a release slot tile, which has room for a sentence.
+    const unavailable = { unavailableReason: summarizeUpdateError(err) };
     return {
       fetchedAt: Date.now(),
       stable: { latest: unavailable, prerelease: unavailable },
@@ -1063,8 +1150,13 @@ export function initAutoUpdater(): void {
     reconcileDownloadedUpdateEligibility();
   });
   autoUpdater.on("error", (err: Error) => {
+    // Same multi-kilobyte shape as a failed check — this handler is where a
+    // download failure arrives, and it reaches the same Settings row.
     log.warn("auto-update error", { message: err.message });
-    setUpdateStatusUnlessDownloaded({ status: "error", message: err.message });
+    setUpdateStatusUnlessDownloaded({
+      status: "error",
+      message: summarizeUpdateError(err),
+    });
   });
 
   startPeriodicUpdateChecks();

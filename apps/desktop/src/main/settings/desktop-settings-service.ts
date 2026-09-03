@@ -32,6 +32,8 @@ import type {
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
   DesktopUpdateChannel,
+  DesktopUpdateSelectionSource,
+  DesktopUpdateSettingsSnapshot,
   DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
@@ -419,6 +421,55 @@ const FEISHU_DEFAULT_TENANT_URL = "https://open.feishu.cn";
 const LARK_DEFAULT_TENANT_URL = "https://open.larksuite.com";
 const FEISHU_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47823";
 const settingsLog = getMainLogger("pwragent:settings");
+
+/** The pair every pre-`selection_source` config landed on when nobody had
+ *  chosen: the shape the defaults shipped as, and what the old
+ *  `resolveUpdateSelection` filled a missing axis with. This is a
+ *  HISTORICAL FACT about files already on disk, so it is frozen here rather
+ *  than read from `DESKTOP_UPDATE_*_DEFAULT` — moving the shipped default
+ *  later must not retroactively reclassify those files as deliberate pins
+ *  and freeze that population on Stable Latest forever. */
+const LEGACY_UNCHOSEN_UPDATE_PAIR: {
+  channel: DesktopUpdateChannel;
+  train: DesktopUpdateTrain;
+} = {
+  channel: "latest",
+  train: "stable",
+};
+
+/** Classify an `[updates]` table written before `selection_source` existed.
+ *  A complete pair that is NOT the historical unchosen pair could only have
+ *  been written by a deliberate click, and that means "leave it alone" — so
+ *  it reads as `"user"`. Everything else (no pair, a half pair, or that
+ *  pair) is indistinguishable from "never chose", so it reads as
+ *  `"inferred"` and gets re-derived from the running binary.
+ *
+ *  A half pair is the case this fix exists for: `channel` shipped before
+ *  `train` did, so every config written by an older build carries `channel`
+ *  alone. Reading that as a Stable pin is what offered a 1.1.0-alpha
+ *  install the last stable release forever and never told it about the
+ *  newer alpha it came from.
+ *
+ *  The one behavior change this can produce: an operator who deliberately
+ *  pinned Stable/Latest while running an alpha is moved back onto
+ *  Beta/Prerelease once. That is the same state as the bug it fixes, and
+ *  nothing on disk separates the two. Their next click writes `"user"` and
+ *  pins for good. */
+function legacyUpdateSelectionSource(
+  channel: DesktopUpdateChannel | undefined,
+  train: DesktopUpdateTrain | undefined,
+): DesktopUpdateSelectionSource {
+  if (channel === undefined || train === undefined) {
+    return "inferred";
+  }
+  if (
+    channel === LEGACY_UNCHOSEN_UPDATE_PAIR.channel
+    && train === LEGACY_UNCHOSEN_UPDATE_PAIR.train
+  ) {
+    return "inferred";
+  }
+  return "user";
+}
 
 function clampInteger(value: number, maxValue: number): number {
   return Math.min(Math.max(value, 0), maxValue);
@@ -2967,30 +3018,39 @@ export class DesktopSettingsService {
   private resolveUpdateSelection(updates?: {
     channel?: DesktopUpdateChannel;
     train?: DesktopUpdateTrain;
-  }): {
-    channel: DesktopSettingsValue<DesktopUpdateChannel>;
-    train: DesktopSettingsValue<DesktopUpdateTrain>;
-  } {
-    // Infer the version-derived pair only when neither key exists. A
-    // pre-train config with only `channel = "prerelease"` must stay on
-    // Stable so installing a 1.1.0-beta binary does not silently move
-    // that operator onto Beta Prerelease / alphas.
-    if (updates?.channel === undefined && updates?.train === undefined) {
-      const inferred = inferDesktopUpdateSelection(this.currentAppVersion());
+    selectionSource?: DesktopUpdateSelectionSource;
+  }): DesktopUpdateSettingsSnapshot {
+    const selectionSource =
+      updates?.selectionSource
+      ?? legacyUpdateSelectionSource(updates?.channel, updates?.train);
+    if (selectionSource === "user") {
+      // A pin is honored even when one axis did not survive the round trip
+      // (a truncated write, a hand edit that misspelled a value).
+      // Re-inferring the whole pair there would discard the axis that IS
+      // valid and un-pin the selection — on an alpha binary that quietly
+      // moves a deliberate Stable pin onto the alpha feed. Fall back per
+      // axis instead.
       return {
-        channel: { value: inferred.channel, source: "default" },
-        train: { value: inferred.train, source: "default" },
+        channel: {
+          value: updates?.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+          source: updates?.channel === undefined ? "default" : "config",
+        },
+        train: {
+          value: updates?.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
+          source: updates?.train === undefined ? "default" : "config",
+        },
+        selectionSource: "user",
       };
     }
+    // An inferred selection is RE-DERIVED on every read from the version of
+    // the binary doing the reading, so installing an alpha over a stable
+    // build (or the reverse) moves the feed with it instead of stranding
+    // the install on a slot it can never advance from.
+    const inferred = inferDesktopUpdateSelection(this.currentAppVersion());
     return {
-      channel: {
-        value: updates.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
-        source: updates.channel === undefined ? "default" : "config",
-      },
-      train: {
-        value: updates.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
-        source: updates.train === undefined ? "default" : "config",
-      },
+      channel: { value: inferred.channel, source: "default" },
+      train: { value: inferred.train, source: "default" },
+      selectionSource: "inferred",
     };
   }
 

@@ -484,6 +484,64 @@ describe("auto updater", () => {
     expect(autoUpdaterMock.allowDowngrade).toBe(false);
   });
 
+  it("names the missing manifest instead of dumping the raw HttpError", async () => {
+    // electron-updater reports a 404 on the channel file as one multi-KB
+    // string — request URL, every response header, a stack of packaged file
+    // paths — and Settings rendered it verbatim. It is also not a transport
+    // failure: the GitHub release exists and the release matrix shows its
+    // version, but this platform has nothing installable in that slot.
+    resolveUpdateTrainMock.mockReturnValue("beta");
+    resolveUpdateChannelMock.mockReturnValue("prerelease");
+    mockGitHubReleases([githubRelease("v1.1.0-alpha.2", { prerelease: true })]);
+    autoUpdaterMock.currentVersion = { version: "1.1.0-alpha.1" };
+    checkForUpdatesMock.mockRejectedValue(
+      new Error(
+        'Cannot find channel "latest.yml" update info: HttpError: 404 "method: GET url:'
+        + " https://github.com/pwrdrvr/PwrAgent/releases/download/v1.1.0-alpha.2/latest.yml"
+        + '\n\nPlease double check that your authentication token is correct."'
+        + ' Headers: { "cache-control": "no-cache", "content-encoding": "gzip" }'
+        + " at createHttpError (C:\\Users\\x\\httpExecutor.js:53:12)",
+      ),
+    );
+    const updater = await importAutoUpdater();
+
+    await expect(updater.checkForAppUpdatesNow("manual")).resolves.toEqual({
+      status: "error",
+      message:
+        "The Beta Prerelease release (v1.1.0-alpha.2) publishes no latest.yml"
+        + " for this platform, so there is nothing to install from it yet.",
+    });
+    // The whole error still reaches the log — diagnosing a feed failure from
+    // the reported sentence alone would be worse than having no summary.
+    expect(logWarnMock).toHaveBeenCalledWith(
+      "checkForUpdates failed",
+      expect.objectContaining({
+        message: expect.stringContaining("Headers: {"),
+        updateChannel: "prerelease",
+        updateTrain: "beta",
+      }),
+    );
+  });
+
+  it("truncates any other update failure to one line", async () => {
+    mockGitHubReleases([githubRelease("v1.0.0-beta.8")]);
+    checkForUpdatesMock.mockRejectedValue(
+      new Error(
+        `HttpError: 500 ${"very long body ".repeat(40)}`
+        + '\nHeaders: { "server": "github.com" }',
+      ),
+    );
+    const updater = await importAutoUpdater();
+
+    const result = await updater.checkForAppUpdatesNow("manual");
+    expect(result.status).toBe("error");
+    const message = result.status === "error" ? result.message : "";
+    expect(message.length).toBeLessThanOrEqual(200);
+    expect(message.startsWith("HttpError: 500 very long body")).toBe(true);
+    expect(message.endsWith("…")).toBe(true);
+    expect(message).not.toContain("Headers");
+  });
+
   it("does not treat an unreadable release tag as a switch back", async () => {
     // compareSemver sorts a tag it cannot parse below every real version, so
     // an unreadable tag must not reach the downgrade path and pin the feed.

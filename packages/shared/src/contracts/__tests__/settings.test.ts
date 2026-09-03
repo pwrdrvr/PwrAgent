@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { DesktopSettingsSnapshot } from "../settings";
 import {
+  DESKTOP_UPDATE_SELECTION_SOURCE_DEFAULT,
   inferDesktopUpdateSelection,
   isDesktopChatReplyComposer,
+  isDesktopUpdateSelectionSource,
 } from "../settings";
 
 describe("desktop settings contracts", () => {
@@ -147,6 +149,7 @@ describe("desktop settings contracts", () => {
       updates: {
         channel: { value: "latest", source: "default" },
         train: { value: "stable", source: "default" },
+        selectionSource: "inferred",
       },
       integratedTerminal: {
         windowsShell: { value: "auto", source: "default" },
@@ -475,5 +478,22 @@ describe("inferDesktopUpdateSelection", () => {
       train: "stable",
       channel: "latest",
     });
+  });
+});
+
+describe("isDesktopUpdateSelectionSource", () => {
+  it("accepts only the two derived sources", () => {
+    expect(isDesktopUpdateSelectionSource("inferred")).toBe(true);
+    expect(isDesktopUpdateSelectionSource("user")).toBe(true);
+    // The guard is what a hand-edited config passes through, so anything
+    // else must re-derive rather than be trusted as a pin.
+    expect(isDesktopUpdateSelectionSource("User")).toBe(false);
+    expect(isDesktopUpdateSelectionSource("config")).toBe(false);
+    expect(isDesktopUpdateSelectionSource(undefined)).toBe(false);
+    expect(isDesktopUpdateSelectionSource(true)).toBe(false);
+  });
+
+  it("defaults to inferring from the running binary", () => {
+    expect(DESKTOP_UPDATE_SELECTION_SOURCE_DEFAULT).toBe("inferred");
   });
 });

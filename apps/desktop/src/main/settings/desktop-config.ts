@@ -28,6 +28,7 @@ import type {
   DesktopTextSize,
   DesktopToolOutputAlertPolicy,
   DesktopUpdateChannel,
+  DesktopUpdateSelectionSource,
   DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
@@ -50,6 +51,7 @@ import {
   isDesktopIntegratedTerminalWindowsShell,
   isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
+  isDesktopUpdateSelectionSource,
   isDesktopUpdateTrain,
   parseDesktopUpdateChannel,
   sanitizeMessagingContactHandle,
@@ -142,6 +144,10 @@ export type DesktopSettingsConfig = {
   updates?: {
     channel?: DesktopUpdateChannel;
     train?: DesktopUpdateTrain;
+    /** Derived by the write path, never accepted from a patch — see
+     *  `DesktopUpdateSelectionSource`. Absent in every file written before
+     *  this key existed; `resolveUpdateSelection` classifies those. */
+    selectionSource?: DesktopUpdateSelectionSource;
   };
   integratedTerminal?: {
     windowsShell?: DesktopIntegratedTerminalWindowsShell;
@@ -893,6 +899,19 @@ export function desktopSettingsPatchToEdits(
 
   if (patch.updates?.train !== undefined) {
     set(["updates", "train"], patch.updates.train);
+  }
+
+  // `selection_source` is derived here rather than accepted from the patch:
+  // naming EITHER axis is what makes a selection an operator's pin. Deriving
+  // it means no call site can persist a slot that the next read would
+  // silently re-infer away, and no renderer can pin (or un-pin) a selection
+  // nobody picked — `DesktopSettingsConfigPatch["updates"]` has no such key,
+  // and this writer only emits keys it names.
+  if (
+    patch.updates?.channel !== undefined
+    || patch.updates?.train !== undefined
+  ) {
+    set(["updates", "selection_source"], "user");
   }
 
   if (patch.integratedTerminal?.windowsShell !== undefined) {
@@ -1779,6 +1798,7 @@ function normalizeDesktopConfig(
     updates: {
       channel: readUpdateChannel(updates?.channel),
       train: readUpdateTrain(updates?.train),
+      selectionSource: readUpdateSelectionSource(updates?.selection_source),
     },
     integratedTerminal: {
       windowsShell: readIntegratedTerminalWindowsShell(
@@ -2392,6 +2412,12 @@ function readUpdateTrain(
   return typeof value === "string" && isDesktopUpdateTrain(value)
     ? value
     : undefined;
+}
+
+function readUpdateSelectionSource(
+  value: TomlScalar | undefined,
+): DesktopUpdateSelectionSource | undefined {
+  return isDesktopUpdateSelectionSource(value) ? value : undefined;
 }
 
 function readAppearanceTheme(

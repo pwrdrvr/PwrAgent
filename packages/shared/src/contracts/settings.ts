@@ -72,6 +72,41 @@ export type DesktopUpdateTrain = (typeof DESKTOP_UPDATE_TRAINS)[number];
 
 export const DESKTOP_UPDATE_TRAIN_DEFAULT: DesktopUpdateTrain = "stable";
 
+export const DESKTOP_UPDATE_SELECTION_SOURCES = ["inferred", "user"] as const;
+
+/**
+ * Where the persisted train/track pair came from.
+ *
+ * `"inferred"` means nobody has picked a slot yet, so the pair is derived
+ * from the RUNNING BINARY's version on every settings read — install an
+ * alpha and you follow the alpha feed, install a stable build and you
+ * follow Stable Latest. `"user"` means somebody picked a slot in Settings
+ * and the pair is pinned until they pick another one.
+ *
+ * Without this flag the two states are indistinguishable on disk, and a
+ * pre-`train` config carrying only `channel = "latest"` read as a
+ * deliberate Stable pin. That is what stranded 1.1.0-alpha installs on the
+ * Stable Latest feed: PwrAgent offered them the last stable release and
+ * never mentioned the newer alpha their own binary came from.
+ *
+ * Main-owned. It is not part of `DesktopSettingsConfigPatch`, and the write
+ * path derives it from whether a patch named either axis.
+ */
+export type DesktopUpdateSelectionSource =
+  (typeof DESKTOP_UPDATE_SELECTION_SOURCES)[number];
+
+export const DESKTOP_UPDATE_SELECTION_SOURCE_DEFAULT: DesktopUpdateSelectionSource =
+  "inferred";
+
+export function isDesktopUpdateSelectionSource(
+  value: unknown,
+): value is DesktopUpdateSelectionSource {
+  return (
+    typeof value === "string"
+    && (DESKTOP_UPDATE_SELECTION_SOURCES as readonly string[]).includes(value)
+  );
+}
+
 // Last 1.0 core that used `-beta.N` as the Stable prerelease line. Builds
 // at this core stay on Stable so a website Beta download cannot be confused
 // with `v1.0.0-beta.50`.
@@ -95,10 +130,18 @@ function parseDesktopUpdateVersion(
 }
 
 /**
- * Map a desktop app version onto the Settings update train/track.
- * Used only when both `updates.train` and `updates.channel` are unset so a
- * GitHub or website download of Beta/Prerelease follows that feed. A
- * pre-train config that only set `channel` stays on Stable.
+ * Map an installed desktop app version onto the Settings update
+ * train/track, so a GitHub or website download follows the feed it came
+ * from. This is the whole rule for a selection whose
+ * {@link DesktopUpdateSelectionSource} is still `"inferred"`: an `-alpha`
+ * binary is evidence of Beta/Prerelease, a `-beta` binary is evidence of
+ * Beta/Latest, an `-rc` / `-prerelease` binary is evidence of
+ * Stable/Prerelease, and a plain release means Stable/Latest. Once an
+ * operator picks a slot in Settings the source flips to `"user"` and this
+ * function is no longer consulted.
+ *
+ * `v1.0.0-beta.N` is the one exception: those tags were the STABLE
+ * prerelease line before the trains split, so they stay on Stable.
  */
 export function inferDesktopUpdateSelection(version: string): {
   channel: DesktopUpdateChannel;
@@ -495,6 +538,12 @@ export type DesktopImageUploadSettingsSnapshot = {
 export type DesktopUpdateSettingsSnapshot = {
   channel: DesktopSettingsValue<DesktopUpdateChannel>;
   train: DesktopSettingsValue<DesktopUpdateTrain>;
+  /** Whether the pair above is a pin or a guess. A bare scalar rather than
+   *  a `DesktopSettingsValue`: it has no provenance of its own to report —
+   *  it IS the provenance, and main derives it on every read. The renderer
+   *  uses it to say "following the build you installed" only while that
+   *  claim is still true. */
+  selectionSource: DesktopUpdateSelectionSource;
 };
 
 export type DesktopIntegratedTerminalSettingsSnapshot = {
@@ -1160,6 +1209,12 @@ export type DesktopSettingsConfigPatch = {
   imageUploads?: {
     pastedImageMaxPatches?: number;
   };
+  /** Only the two selectable axes. `selectionSource` is main-owned derived
+   *  state: the write path sets it to `"user"` whenever a patch names
+   *  either axis, so a renderer can neither forget to send it nor forge
+   *  it. Leaving it off the patch type is what enforces that — the TOML
+   *  writer only emits the keys it names explicitly, so an extra field on
+   *  a patch object reaches no file. */
   updates?: {
     channel?: DesktopUpdateChannel;
     train?: DesktopUpdateTrain;
