@@ -1152,6 +1152,96 @@ describe("DesktopSettingsService", () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  it("waits for the in-flight startup discovery instead of reporting no executable", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[models.codex]",
+      'path = "/operator/codex"',
+      "",
+    ].join("\n"));
+    let releaseDiscovery: (() => void) | undefined;
+    const discoveryGate = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    const discover = vi.fn(async (configuredCommand?: string) => {
+      await discoveryGate;
+      const command = configuredCommand ?? "/operator/codex";
+      return {
+        candidates: [{
+          command,
+          executable: true,
+          selected: true,
+          source: "config" as const,
+        }],
+        selectedCommand: command,
+        selectedSource: "config" as const,
+      };
+    });
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover,
+        invalidate: vi.fn(),
+        resolve: vi.fn(),
+      },
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    // The durable last-known-good this resolver reads first is empty for the
+    // whole window between process start and the first published discovery —
+    // several seconds when a managed runtime has to be verified. Callers that
+    // land inside it (the boot Token Miser probe, archived binding cleanup)
+    // used to be told to "Refresh Codex in Settings" for a Codex that was
+    // about to resolve normally, which also left Token Miser recorded as
+    // unavailable for the rest of the session.
+    expect(service.isCodexDiscoveryPending()).toBe(true);
+    const startupDiscovery = service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    const resolved = service.resolveCodexCommand();
+    expect(service.isCodexDiscoveryPending()).toBe(true);
+
+    releaseDiscovery?.();
+    await startupDiscovery;
+
+    await expect(resolved).resolves.toMatchObject({
+      command: "/operator/codex",
+      source: "config",
+    });
+    expect(service.isCodexDiscoveryPending()).toBe(false);
+  });
+
+  it("stops reporting Codex discovery pending once an attempt found nothing", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, "");
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => {
+          throw new Error("no codex on this machine");
+        }),
+        invalidate: vi.fn(),
+        resolve: vi.fn(),
+      },
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect(service.isCodexDiscoveryPending()).toBe(true);
+    await service.refreshStartupDiscovery(
+      issueProviderDiscoveryPermit("startup"),
+    );
+
+    // A discovery that ran and found nothing is a real answer. Reporting it as
+    // still pending would leave a startup surface waiting forever for one.
+    expect(service.isCodexDiscoveryPending()).toBe(false);
+    await expect(service.resolveCodexCommand()).rejects.toThrow(
+      "Refresh Codex in Settings",
+    );
+  });
+
+
   it("returns to ordinary Codex discovery without checking managed releases when disabled", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

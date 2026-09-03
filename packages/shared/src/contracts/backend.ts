@@ -217,6 +217,16 @@ export type BackendSummary = {
   source?: BackendSourceKind;
   label: string;
   available: boolean;
+  /**
+   * This backend is unavailable only because the one permitted startup
+   * discovery has not published a selection yet. A surface that decides
+   * whether the profile has any usable provider must keep that decision
+   * pending instead of reading `available: false` as "not configured" — the
+   * durable last-known-good it is derived from is legitimately empty on a cold
+   * profile and for the whole window between process start and first
+   * discovery. Never set alongside `available: true`.
+   */
+  discoveryPending?: boolean;
   acp?: BackendAcpSummary;
   account?: BackendAccountSummary;
   rateLimits?: BackendRateLimitSummary[];

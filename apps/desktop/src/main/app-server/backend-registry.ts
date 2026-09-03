@@ -8314,6 +8314,7 @@ export class DesktopBackendRegistry {
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
   private readonly resolveManagedTokenMiserActivationRequiredFn: () => boolean;
+  private readonly resolveCodexDiscoveryPendingFn: () => boolean;
   private readonly markManagedCodexRuntimeSwitchCompleteFn: () => void;
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
@@ -8425,6 +8426,7 @@ export class DesktopBackendRegistry {
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
     resolveManagedTokenMiserActivationRequired?: () => boolean;
+    resolveCodexDiscoveryPending?: () => boolean;
     markManagedCodexRuntimeSwitchComplete?: () => void;
     watchManagedCodexRuntime?: (
       listener: (
@@ -8608,6 +8610,12 @@ export class DesktopBackendRegistry {
     this.markManagedCodexRuntimeSwitchCompleteFn =
       options?.markManagedCodexRuntimeSwitchComplete
       ?? (() => settingsService?.markManagedCodexRuntimeSwitchComplete());
+    // A replay or test registry has no settings service and therefore no
+    // startup discovery to wait for: its summary is final the moment it is
+    // read, never pending.
+    this.resolveCodexDiscoveryPendingFn =
+      options?.resolveCodexDiscoveryPending
+      ?? (() => settingsService?.isCodexDiscoveryPending() ?? false);
     this.resolveToolOutputAlertPolicyFn =
       options?.resolveToolOutputAlertPolicy ??
       (() => {
@@ -8878,12 +8886,6 @@ export class DesktopBackendRegistry {
             error: error instanceof Error ? error.message : String(error),
           });
         });
-      // Bring the gate up at boot when the feature is on, so a resumed thread
-      // is covered from its first tool call rather than from whenever a new
-      // thread happens to be created. Retention pruning rides this one call.
-      if (this.resolveTokenMiserEnabledFn()) {
-        void this.prepareTokenMiserRuntime({ prune: true });
-      }
     }
     this.gitDirectoryService =
       options?.gitDirectoryService ??
@@ -10283,6 +10285,27 @@ export class DesktopBackendRegistry {
       threadCount: threads.length,
     });
     return threads;
+  }
+
+  /**
+   * Bring the Token Miser gate up at boot when the feature is on, so a resumed
+   * thread is covered from its first tool call rather than from whenever a new
+   * thread happens to be created. Retention pruning rides this one call.
+   *
+   * The caller must run this AFTER the one permitted startup Codex discovery
+   * has published a selection. Preparation opens the app-server to read its
+   * capabilities, and the registry is constructed before startup discovery is
+   * even requested, so doing this from the constructor raced discovery: the
+   * capability probe resolved no executable, `prepareTokenMiserRuntime` caught
+   * a "Refresh Codex in Settings" error and recorded Token Miser as
+   * unavailable, and nothing re-ran it for the rest of the session unless the
+   * managed runtime happened to change.
+   */
+  async prepareTokenMiserRuntimeAtStartup(): Promise<void> {
+    if (!this.tokenMiserStore || !this.resolveTokenMiserEnabledFn()) {
+      return;
+    }
+    await this.prepareTokenMiserRuntime({ prune: true });
   }
 
   refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
@@ -23781,6 +23804,12 @@ export class DesktopBackendRegistry {
       ? provider.lastKnownGood
       : undefined;
     const available = Boolean(lastKnownGood?.selectedCommand);
+    // "Not selected yet" and "not configured" read identically in this
+    // projection, and a durable last-known-good is legitimately absent for the
+    // whole window between process start and the first published discovery.
+    // Startup surfaces must be able to tell those apart before concluding a
+    // configured profile has no provider.
+    const discoveryPending = !available && this.resolveCodexDiscoveryPendingFn();
     const methods: string[] = [];
     const capabilities = buildCapabilities(methods, "codex");
     if (
@@ -23796,6 +23825,7 @@ export class DesktopBackendRegistry {
       kind: "codex",
       label: BACKEND_LABELS.codex,
       available,
+      ...(discoveryPending ? { discoveryPending } : {}),
       serverVersion: lastKnownGood?.selectedVersion,
       methods,
       capabilities,

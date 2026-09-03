@@ -417,6 +417,20 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  // Same dependency as the provider refresh below: reading Token Miser's
+  // server capabilities opens the app-server, which cannot resolve an
+  // executable until startup discovery has published this profile's
+  // selection. Running it from the registry constructor raced that and left
+  // Token Miser recorded as unavailable for the whole session.
+  void startupSettingsDiscovery
+    .then(async () =>
+      await getDesktopBackendRegistry().prepareTokenMiserRuntimeAtStartup(),
+    )
+    .catch((error) => {
+      mainLog.warn("startup Token Miser preparation failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   void getDesktopBackendRegistry()
     .listThreads({
       callerReason: "startup-prewarm",

@@ -6467,6 +6467,49 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("marks the durable Codex summary pending while startup discovery runs", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      resolveCodexDiscoveryPending: () => true,
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    // "Not selected yet" and "not configured" both read as `available: false`
+    // here, and a startup surface that cannot tell them apart sends a working
+    // profile through provider setup. Only the pending flag separates them.
+    expect(
+      response.backends.find((backend) => backend.kind === "codex"),
+    ).toMatchObject({
+      available: false,
+      discoveryPending: true,
+    });
+
+    await registry.close();
+  });
+
+  it("leaves the Codex summary unpending once discovery has answered", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      resolveCodexDiscoveryPending: () => false,
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(
+      response.backends.find((backend) => backend.kind === "codex"),
+    ).toMatchObject({ available: false });
+    expect(
+      response.backends.find((backend) => backend.kind === "codex"),
+    ).not.toHaveProperty("discoveryPending");
+
+    await registry.close();
+  });
+
   it("does not report banned ACP adapters as backend summaries", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({}),

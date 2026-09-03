@@ -556,6 +556,7 @@ export class DesktopSettingsService {
   private managedCodexRuntimeSwitchAttempt?: Promise<void>;
   private startupDiscoveryAttempted = false;
   private startupDiscoveryPromise?: Promise<void>;
+  private codexDiscoveryAttempted = false;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -2192,6 +2193,19 @@ export class DesktopSettingsService {
     permit: ProviderDiscoveryPermit,
   ): Promise<void> {
     assertProviderDiscoveryPermit(permit);
+    try {
+      await this.runCodexDiscoveryAttempt(permit);
+    } finally {
+      // Marks the attempt, not its outcome. A discovery that ran and found
+      // nothing is a real answer that surfaces must be free to act on; only a
+      // discovery that has not run yet leaves them without one.
+      this.codexDiscoveryAttempted = true;
+    }
+  }
+
+  private async runCodexDiscoveryAttempt(
+    permit: ProviderDiscoveryPermit,
+  ): Promise<void> {
     this.codexSpawnEnvHydratedAt = undefined;
     const config = this.readConfig().config;
     const checkMode = permit.intent === "startup" ? "ttl" : "force";
@@ -2257,6 +2271,39 @@ export class DesktopSettingsService {
   }
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
+    const resolved = this.readSelectedCodexCommand();
+    if (resolved) {
+      return resolved;
+    }
+    // The one permitted startup discovery is the authority for this profile's
+    // selection, and it is already running. Waiting for the answer that is in
+    // flight is not a retry: the durable last-known-good read above is an
+    // optimization that is legitimately empty on a cold profile, after a
+    // provider fingerprint change, and for the whole window between process
+    // start and the first published discovery. Background callers that land
+    // inside that window — archived binding cleanup is the routine one — were
+    // otherwise told to "Refresh Codex in Settings" about a Codex that was
+    // seconds from resolving normally.
+    const startupDiscovery = this.startupDiscoveryPromise;
+    if (startupDiscovery) {
+      await startupDiscovery;
+      const discovered = this.readSelectedCodexCommand();
+      if (discovered) {
+        return discovered;
+      }
+    }
+    throw new Error(
+      "Codex discovery has not selected an executable. Refresh Codex in Settings.",
+    );
+  }
+
+  /**
+   * The currently selected Codex executable, or `undefined` when no discovery
+   * has published one yet. Never probes the machine.
+   */
+  private readSelectedCodexCommand():
+    | ResolvedCodexCommandCandidate
+    | undefined {
     const managedRuntime = this.managedCodexRuntime;
     if (managedRuntime) {
       return {
@@ -2270,15 +2317,31 @@ export class DesktopSettingsService {
       ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
     const selected = cached.candidates.find((candidate) => candidate.selected);
     if (!selected) {
-      throw new Error(
-        "Codex discovery has not selected an executable. Refresh Codex in Settings.",
-      );
+      return undefined;
     }
     return {
       command: selected.command,
       source: selected.source,
       ...(selected.version ? { version: selected.version } : {}),
     };
+  }
+
+  /**
+   * Whether this profile is still owed a Codex selection. True until some
+   * discovery has published one or has run and found none. The desktop uses
+   * it to keep a startup surface pending rather than reporting a configured
+   * profile as having no provider.
+   */
+  isCodexDiscoveryPending(): boolean {
+    if (this.readSelectedCodexCommand()) {
+      return false;
+    }
+    if (this.startupDiscoveryPromise) {
+      return true;
+    }
+    // No discovery has run in this process, so the empty durable projection
+    // above is the absence of an answer rather than an answer of "none".
+    return !this.codexDiscoveryAttempted;
   }
 
   /**

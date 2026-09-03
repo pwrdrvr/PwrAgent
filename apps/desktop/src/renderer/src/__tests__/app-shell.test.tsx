@@ -3299,7 +3299,7 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
-  it("reopens onboarding when a stale selection has no usable backend", async () => {
+  it("points a completed profile with no usable backend at provider settings", async () => {
     const ensureDirectoryLaunchpad = vi.fn();
 
     Object.defineProperty(window, "pwragent", {
@@ -3380,11 +3380,148 @@ describe("App", () => {
 
     render(<App />);
 
+    // `[onboarding] completed = true` says this operator already answered every
+    // question the wizard asks. A missing provider is a health problem to point
+    // at, not setup to redo, so the wizard must stay closed.
     expect(
-      await screen.findByRole("heading", { name: /A few short choices/i }),
+      await screen.findByText("No agent backend is available"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open AI Providers" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /A few short choices/i }),
+    ).not.toBeInTheDocument();
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
+
+  it("holds the startup landing while Codex discovery has not answered", async () => {
+    const ensureDirectoryLaunchpad = vi.fn();
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+              codexProfileModel: { value: "shared", source: "default" },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            models: {
+              codex: {
+                path: { value: "", source: "default" },
+                profile: { value: "", source: "default" },
+                discovery: {
+                  selectedCommand: undefined,
+                  candidates: [],
+                },
+                profiles: {
+                  profileRoot: "/home/example/.codex/profiles",
+                  effectiveCodexHome: "/home/example/.codex",
+                  profiles: [],
+                },
+              },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as unknown as DesktopSettingsSnapshot,
+        }),
+        // What the main process reports for the several seconds between
+        // process start and the first published startup discovery. Reading it
+        // as "no provider configured" is what used to hijack a working
+        // profile's window with the first-run wizard.
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex" as const,
+              source: "builtin" as const,
+              label: "Codex",
+              available: false,
+              discoveryPending: true,
+              unavailableReason: "Codex discovery has not completed yet.",
+              methods: [],
+              capabilities: {
+                listThreads: false,
+                createThread: false,
+                resumeThread: false,
+                renameThread: false,
+                readThread: false,
+                startTurn: false,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: false,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: false,
+              },
+              executionModes: [],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:pending-thread"],
+          threads: [{
+            id: "pending-thread",
+            title: "Existing thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: {
+              inInbox: true,
+              reason: "new-thread" as const,
+            },
+            updatedAt: 1,
+          }],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: "Existing thread" }),
+    ).toBeInTheDocument();
+    await flushReactUpdates();
+    await flushReactUpdates();
+
+    expect({
+      noticeVisible: Boolean(
+        screen.queryByText("No agent backend is available"),
+      ),
+      onboardingVisible: Boolean(
+        screen.queryByRole("heading", { name: /A few short choices/i }),
+      ),
+    }).toEqual({ noticeVisible: false, onboardingVisible: false });
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
 
   it("routes the new-thread menu push into the existing launchpad flow", async () => {
     let openNewThreadListener: (() => void) | undefined;
