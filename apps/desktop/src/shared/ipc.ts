@@ -51,9 +51,11 @@ export const STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL =
  * selection, camera and filters live only in the renderer, so an Agent
  * asked about "that thread" or "its cloud" has no other source.
  *
- * Push rather than pull: the main process cannot ask a renderer a
- * question, and the alternative — main reimplementing the clustering the
- * renderer already does — would drift from what is actually drawn. The
+ * Push rather than pull. Main can query a renderer (`executeJavaScript`
+ * elsewhere in this app does), so the reason is not impossibility: a pull
+ * at tool-call time answers from whichever renderer happens to respond and
+ * blocks the turn on it, while the alternative of main reimplementing the
+ * clustering the renderer already does would drift from what is drawn. The
  * registry keeps the snapshot in memory only; nothing here is persisted.
  */
 export const STAR_MAP_PUBLISH_VIEW_CHANNEL = "star-map:publish-view";

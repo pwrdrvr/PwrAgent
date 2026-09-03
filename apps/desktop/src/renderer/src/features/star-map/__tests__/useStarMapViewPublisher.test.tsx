@@ -27,6 +27,7 @@ function input(cameraX: number): StarMapViewSnapshotInput {
     localInstanceId: "local",
     threadsByInstance: new Map(),
     instanceLabels: new Map(),
+    cardRects: new Map(),
     selection: new Set(),
     openChatCardThreadKeys: new Set(),
     now: 1,

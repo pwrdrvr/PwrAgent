@@ -50,6 +50,20 @@ export type StarMapViewSnapshotInput = {
   clouds?: ReadonlyMap<string, StarMapClusterCloud>;
   /** Project pools, in the projects lens. */
   projects?: readonly StarMapProject[];
+  /**
+   * Sub-cloud layout inside each project body, by project key. The projects
+   * lens draws labelled clusters inside a project, and those are what a card
+   * is "in" — reporting the project instead answers "the others in its
+   * cloud" with the whole project.
+   */
+  projectClouds?: ReadonlyMap<string, StarMapClusterCloud>;
+  /**
+   * True below the overview zoom threshold, where the map draws cloud labels
+   * and no thread cards at all. The rect maps are not gated on it, so without
+   * this the snapshot reports every card drawn in the one state where the
+   * operator can see none of them.
+   */
+  overview?: boolean;
   /** Card keys the operator has gathered. */
   selection: ReadonlySet<string>;
   /** Thread keys with a floating chat card open over the map. */
@@ -58,8 +72,11 @@ export type StarMapViewSnapshotInput = {
    * Map-space geometry by card key, for the cards being drawn. Its key set
    * is also what "drawn" means here: a card the layout is not placing has no
    * rect, so the geometry and the visibility can never disagree.
+   *
+   * Required, not optional: omitting it publishes a map where every card
+   * reports itself invisible, which reads to an Agent as an empty screen.
    */
-  cardRects?: ReadonlyMap<
+  cardRects: ReadonlyMap<
     string,
     { x: number; y: number; width: number; height: number }
   >;
@@ -82,20 +99,27 @@ export function buildStarMapViewSnapshot(
 ): StarMapViewSnapshot {
   const cloudKeyByCard = new Map<string, string>();
   const clouds: StarMapViewCloud[] = [];
+  // Overview draws no cards, so no card has geometry the operator can point
+  // at. Resolved once here so every drawn-ness question in this function
+  // reads the same source.
+  const drawnRects = input.overview ? undefined : input.cardRects;
 
   for (const [instanceId, cloud] of input.clouds ?? []) {
     const instanceLabel = input.instanceLabels.get(instanceId) ?? instanceId;
-    const drawn = new Set(
-      cloud.threads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
-      ),
-    );
     for (const cluster of cloud.clusters) {
       const threadKeys = cluster.threads.map((thread) =>
         buildThreadIdentityKey(thread.source, thread.id),
       );
+      // Counted off the same rects the per-thread `visible` flag reads, in
+      // one pass. A cloud that counted its own allocation instead could
+      // report five drawn members while five of its own threads said
+      // otherwise — and at overview zoom, where nothing is painted, every
+      // cloud claimed a full house.
+      let visibleCount = 0;
       for (const threadKey of threadKeys) {
-        cloudKeyByCard.set(cardKeyOf(instanceId, threadKey), cluster.key);
+        const cardKey = cardKeyOf(instanceId, threadKey);
+        cloudKeyByCard.set(cardKey, cluster.key);
+        if (drawnRects?.has(cardKey)) visibleCount += 1;
       }
       clouds.push({
         key: cluster.key,
@@ -106,11 +130,8 @@ export function buildStarMapViewSnapshot(
         isParentGroup: cluster.isParentGroup,
         expanded: cluster.expanded,
         threadCount: threadKeys.length,
-        // `visibleCount` is what the cloud allocated; intersecting with the
-        // cards actually drawn keeps the two from disagreeing when a filter
-        // removed a member after the layout ran.
-        visibleCount: threadKeys.filter((key) => drawn.has(key)).length,
-        hiddenCount: threadKeys.filter((key) => !drawn.has(key)).length,
+        visibleCount,
+        hiddenCount: threadKeys.length - visibleCount,
         threadKeys,
       });
     }
@@ -130,34 +151,74 @@ export function buildStarMapViewSnapshot(
       else instancesByThreadKey.set(threadKey, [instanceId]);
     }
   }
-  for (const project of input.projects ?? []) {
-    const threadKeys = project.threads.map((thread) =>
-      buildThreadIdentityKey(thread.source, thread.id),
-    );
+  /**
+   * Claim a set of threads as one cloud and record it against every card key
+   * that can address them. A thread can sit under two instances (a pinned
+   * remote row alongside its owner), so membership is recorded per card.
+   */
+  const pushProjectCloud = (params: {
+    key: string;
+    label: string;
+    isProject: boolean;
+    isParentGroup: boolean;
+    expanded: boolean;
+    threadKeys: readonly string[];
+  }): void => {
     let visibleCount = 0;
-    for (const threadKey of threadKeys) {
-      // A project cloud is the answer to "its cloud" in this lens, so its
-      // members carry the cloud key the same way an orbit cloud's do —
-      // without this every thread reported `cloudKey: undefined` here, and
-      // the one reference the tool exists to resolve went unanswered.
+    for (const threadKey of params.threadKeys) {
       let drawn = false;
       for (const instanceId of instancesByThreadKey.get(threadKey) ?? []) {
         const cardKey = cardKeyOf(instanceId, threadKey);
-        cloudKeyByCard.set(cardKey, project.key);
-        if (input.cardRects?.has(cardKey)) drawn = true;
+        cloudKeyByCard.set(cardKey, params.key);
+        if (drawnRects?.has(cardKey)) drawn = true;
       }
       if (drawn) visibleCount += 1;
     }
     clouds.push({
+      key: params.key,
+      label: params.label,
+      isProject: params.isProject,
+      isParentGroup: params.isParentGroup,
+      expanded: params.expanded,
+      threadCount: params.threadKeys.length,
+      visibleCount,
+      hiddenCount: params.threadKeys.length - visibleCount,
+      threadKeys: [...params.threadKeys],
+    });
+  };
+
+  for (const project of input.projects ?? []) {
+    // A project body is not itself a cloud: the lens groups its threads into
+    // labelled sub-clouds and paints those labels, so those are what a card
+    // is in. Reporting the project instead answers "the others in its cloud"
+    // with every thread in the project.
+    const projectCloud = input.projectClouds?.get(project.key);
+    if (projectCloud) {
+      for (const cluster of projectCloud.clusters) {
+        pushProjectCloud({
+          key: cluster.key,
+          label: cluster.label,
+          isProject: cluster.isProject,
+          isParentGroup: cluster.isParentGroup,
+          expanded: cluster.expanded,
+          threadKeys: cluster.threads.map((thread) =>
+            buildThreadIdentityKey(thread.source, thread.id),
+          ),
+        });
+      }
+      continue;
+    }
+    // No layout yet (the lens is opening): the project pool is the best
+    // grouping available, and is still better than no cloud at all.
+    pushProjectCloud({
       key: project.key,
       label: project.label,
       isProject: project.key !== STAR_MAP_NO_PROJECT_KEY,
       isParentGroup: false,
       expanded: false,
-      threadCount: threadKeys.length,
-      visibleCount,
-      hiddenCount: threadKeys.length - visibleCount,
-      threadKeys,
+      threadKeys: project.threads.map((thread) =>
+        buildThreadIdentityKey(thread.source, thread.id),
+      ),
     });
   }
 
@@ -169,9 +230,9 @@ export function buildStarMapViewSnapshot(
     for (const thread of instanceThreads) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       const cardKey = cardKeyOf(instanceId, threadKey);
-      const visible = input.cardRects?.has(cardKey) ?? false;
+      const visible = drawnRects?.has(cardKey) ?? false;
       if (visible) visibleThreadCount += 1;
-      const rect = input.cardRects?.get(cardKey);
+      const rect = drawnRects?.get(cardKey);
       threads.push({
         backend: thread.source,
         threadId: thread.id,

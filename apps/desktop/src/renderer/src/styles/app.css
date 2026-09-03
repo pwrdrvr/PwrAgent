@@ -14264,24 +14264,6 @@ a.button {
   margin-left: auto;
 }
 
-/* The manager rides `.star-map__filter-chip` like Find and View, so this
-   only carries what differs: it acts on the fleet rather than filtering it,
-   and wears the accent to say so. */
-.star-map__manager {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--text-primary);
-}
-
-.star-map__manager:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
-.star-map__manager:disabled {
-  color: var(--text-muted);
-  cursor: progress;
-}
-
 /* The map covers the whole window, so its top-left chrome has to clear the
    OS window controls itself. macOS floats the traffic lights over the
    content: reserve the same 80px the sidebar masthead does, so the
@@ -14624,6 +14606,25 @@ a.button {
   color: var(--text-muted);
   text-decoration: line-through;
   text-decoration-color: var(--danger-text);
+}
+
+/* The manager rides `.star-map__filter-chip` like Find and View, so this
+   only carries what differs: it acts on the fleet rather than filtering it,
+   and wears the accent to say so. After the base rule, beside the other
+   chip modifiers: same specificity, so source order is what lets it win. */
+.star-map__manager {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.star-map__manager:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.star-map__manager:disabled {
+  color: var(--text-muted);
+  cursor: progress;
 }
 
 /* The strike is for a label, and the Attention chip has none: the only text

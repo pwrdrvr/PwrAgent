@@ -46,7 +46,10 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 import { requestShowThread } from "../window-show-thread";
-import { showStarMapWindow } from "../star-map-window";
+import {
+  isStarMapWindowWebContents,
+  showStarMapWindow,
+} from "../star-map-window";
 import { publishStarMapView } from "../star-map/star-map-view-registry";
 import { openStarMapManagerThread } from "../star-map/star-map-manager-thread";
 
@@ -197,6 +200,13 @@ export function registerStarMapIpcHandlers(): void {
   ipcMain.handle(
     STAR_MAP_PUBLISH_VIEW_CHANNEL,
     async (event, snapshot: StarMapViewSnapshot): Promise<void> => {
+      // The sender is checked, not just the payload. The preload is shared
+      // by every window, so without this a Settings or Activity renderer
+      // could publish a fabricated map that `read_star_map_view` then
+      // reports to a model as the operator's screen.
+      if (!isStarMapWindowWebContents(event.sender)) {
+        return;
+      }
       // Validated rather than trusted: this lands in an Agent tool result,
       // and a malformed snapshot would be reported to the model as the
       // operator's screen.

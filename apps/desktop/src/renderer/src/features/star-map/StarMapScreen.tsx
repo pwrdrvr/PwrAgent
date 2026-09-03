@@ -2646,19 +2646,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   /**
-   * The manager: one long-lived thread that can read this map through the
-   * star-map Agent tools and act on it with the tool catalog every thread
-   * already carries. Opened as an ordinary chat card, because that is what
-   * it is.
-   */
-  const manager = useStarMapManager({
-    desktopApi: props.desktopApi,
-    threads: props.localThreads,
-    openThread,
-    onRefreshLocalThreads: props.onRefreshLocalThreads,
-  });
-
-  /**
    * Escape hatch off the card and into the full thread surface, for when
    * triage turns into real work. Local threads land in this window; remote
    * ones open their owning instance's viewer, which is what the card click
@@ -2682,6 +2669,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   const [cardError, setCardError] = useState<string | undefined>(undefined);
+
+  /**
+   * The manager: one long-lived thread that can read this map through the
+   * star-map Agent tools and act on it with the tool catalog every thread
+   * already carries. Opened as an ordinary chat card, because that is what
+   * it is.
+   */
+  const manager = useStarMapManager({
+    desktopApi: props.desktopApi,
+    threads: props.localThreads,
+    openThread,
+    onRefreshLocalThreads: props.onRefreshLocalThreads,
+    // Reported through the map's one error banner rather than a second one:
+    // `.star-map__card-error` is absolutely positioned at a fixed spot, so
+    // two of them occupy the same box and the later sibling hides the other.
+    onError: setCardError,
+  });
 
   /** Cards the operator has gathered, by card key. */
   const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
@@ -3612,6 +3616,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       iconFor: celestialIcons.iconFor,
       clouds: clusterClouds,
       projects: projectsMode ? projects : undefined,
+      projectClouds,
+      overview,
       selection,
       openChatCardThreadKeys,
       cardRects: flightRects,
@@ -3630,6 +3636,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       openChatCardThreadKeys,
       preferences.hideOfflineInstances,
       preferences.layout,
+      overview,
+      projectClouds,
       projects,
       projectsMode,
       props.sessionKeys,
@@ -5362,18 +5370,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }}
         />
       ) : null}
-      {manager.error ? (
-        <p className="star-map__card-error" role="alert">
-          {manager.error}
-          <button
-            type="button"
-            aria-label="Dismiss manager error"
-            onClick={manager.dismissError}
-          >
-            ×
-          </button>
-        </p>
-      ) : null}
       {cardError ? (
         <p className="star-map__card-error" role="alert">
           {cardError}
@@ -5485,10 +5481,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
             type="button"
             className="star-map__filter-chip star-map__manager"
             aria-label="Ask the Star Map manager"
-            disabled={manager.status === "opening"}
+            disabled={manager.busy}
             onClick={manager.open}
           >
-            {manager.status === "opening" ? "Opening…" : "Manager"}
+            {manager.busy ? "Opening…" : "Manager"}
           </button>
         </div>
       </div>

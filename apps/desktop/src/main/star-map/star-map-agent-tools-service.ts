@@ -78,6 +78,29 @@ function readViewResponse(
   const narrowToInstance = (keys: string[]): string[] =>
     instanceKeys ? keys.filter((key) => instanceKeys.has(key)) : keys;
 
+  // A projects-lens cloud pools threads from the whole fleet, so it carries
+  // no instanceId. Filtering it out by instance would strand the `cloudKey`
+  // its own members still point at, which is the one reference the tool
+  // exists to resolve; keep it, with its membership narrowed instead.
+  const clouds = snapshot.clouds
+    .filter((cloud) => cloud.instanceId === undefined
+      || matchesInstance(cloud.instanceId))
+    .map((cloud) => {
+      const threadKeys = narrowToInstance(cloud.threadKeys);
+      // The cap bounds the payload, never the counts: a cloud that reports
+      // a shorter membership than it has is how "the others in this cloud"
+      // acts on the wrong set. `threadCount` stays whole and the omission
+      // is stated outright.
+      const listed = threadKeys.slice(0, maxThreads);
+      return {
+        ...cloud,
+        threadKeys: listed,
+        ...(threadKeys.length > listed.length
+          ? { omittedThreadKeyCount: threadKeys.length - listed.length }
+          : {}),
+      };
+    });
+
   return {
     ok: true,
     data: {
@@ -89,9 +112,7 @@ function readViewResponse(
         instances: snapshot.instances.filter((instance) =>
           matchesInstance(instance.instanceId),
         ),
-        clouds: snapshot.clouds.filter((cloud) =>
-          matchesInstance(cloud.instanceId),
-        ),
+        clouds,
         threads,
         // Selection and open cards are reported as the operator holds them,
         // narrowed only by an explicit instance filter.
@@ -99,6 +120,15 @@ function readViewResponse(
         openChatCardThreadKeys: narrowToInstance(
           snapshot.openChatCardThreadKeys,
         ),
+        // Fleet-wide by construction, so an instance-scoped answer has to
+        // recount rather than pass them through: reporting "40 threads match"
+        // beside five listed and no truncation notice reads as a stale map.
+        ...(args.instanceId
+          ? {
+              matchedThreadCount: eligible.length,
+              hiddenInstanceCount: 0,
+            }
+          : {}),
       },
     },
   };

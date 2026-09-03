@@ -529,7 +529,7 @@ export type StarMapIntakePhase =
  *
  * It is an ordinary thread — it gets the same PwrAgent tool catalog every
  * thread gets, including `mutate_thread` and the orchestration tools, plus
- * the two star-map tools that let it see what is on screen. What makes it
+ * `read_star_map_view`, which lets it see what is on screen. What makes it
  * the manager is where it is remembered and the persona it starts with, not
  * a privileged execution path.
  */

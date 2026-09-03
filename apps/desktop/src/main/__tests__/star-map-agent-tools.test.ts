@@ -319,6 +319,116 @@ describe("read_star_map_view", () => {
   });
 });
 
+  it("keeps a projects-lens cloud that belongs to no one instance", async () => {
+    const handler = createStarMapAgentToolsHandler({
+      readView: () =>
+        snapshot({
+          layout: "projects",
+          // A project pools the fleet, so it carries no instanceId. Filtering
+          // it out by instance would strand the cloudKey its own members
+          // still point at.
+          clouds: [
+            {
+              key: "work",
+              label: "work",
+              isProject: true,
+              isParentGroup: false,
+              expanded: false,
+              threadCount: 2,
+              visibleCount: 2,
+              hiddenCount: 0,
+              threadKeys: ["codex:a", "codex:b"],
+            },
+          ],
+          threads: [
+            thread({ threadKey: "codex:a", cloudKey: "work" }),
+            thread({
+              threadKey: "codex:b",
+              instanceId: "peer-7",
+              cloudKey: "work",
+            }),
+          ],
+        }),
+    });
+    const response = expectOk(
+      (await handler({
+        operation: "read_star_map_view",
+        context: {},
+        args: { instanceId: "local" },
+      })) as PwrAgentStarMapResponse<"read_star_map_view">,
+    );
+    expect(response.data.snapshot.clouds).toHaveLength(1);
+    // Membership narrows with the filter; the cloud itself survives so the
+    // surviving thread's cloudKey still resolves.
+    expect(response.data.snapshot.clouds[0].threadKeys).toEqual(["codex:a"]);
+    expect(response.data.snapshot.threads[0].cloudKey).toBe("work");
+  });
+
+  it("recounts the fleet-wide totals when scoped to one instance", async () => {
+    const handler = createStarMapAgentToolsHandler({
+      readView: () =>
+        snapshot({
+          matchedThreadCount: 40,
+          hiddenInstanceCount: 3,
+          threads: [
+            thread({ threadKey: "codex:a" }),
+            thread({ threadKey: "codex:b", instanceId: "peer-7" }),
+          ],
+        }),
+    });
+    const response = expectOk(
+      (await handler({
+        operation: "read_star_map_view",
+        context: {},
+        args: { instanceId: "local" },
+      })) as PwrAgentStarMapResponse<"read_star_map_view">,
+    );
+    // "40 threads match" beside one listed and no truncation notice reads as
+    // a stale map; the counts have to answer the question that was asked.
+    expect(response.data.snapshot.matchedThreadCount).toBe(1);
+    expect(response.data.snapshot.hiddenInstanceCount).toBe(0);
+    expect(response.data.snapshot.threads).toHaveLength(1);
+  });
+
+  it("caps a cloud's listed members without shrinking its count", async () => {
+    const threadKeys = Array.from({ length: 40 }, (_, index) => `codex:t${index}`);
+    const handler = createStarMapAgentToolsHandler({
+      readView: () =>
+        snapshot({
+          clouds: [
+            {
+              key: "big",
+              label: "Big",
+              instanceId: "local",
+              instanceLabel: "This instance",
+              isProject: false,
+              isParentGroup: false,
+              expanded: true,
+              threadCount: threadKeys.length,
+              visibleCount: threadKeys.length,
+              hiddenCount: 0,
+              threadKeys,
+            },
+          ],
+          threads: threadKeys.map((threadKey) => thread({ threadKey })),
+        }),
+    });
+    const response = expectOk(
+      (await handler({
+        operation: "read_star_map_view",
+        context: {},
+        args: { maxThreads: 5 },
+      })) as PwrAgentStarMapResponse<"read_star_map_view">,
+    );
+    const cloud = response.data.snapshot.clouds[0];
+    // The cap bounds the payload; the count stays whole, because a cloud
+    // that reports fewer members than it has is how "the others in this
+    // cloud" acts on the wrong set.
+    expect(cloud.threadKeys).toHaveLength(5);
+    expect(cloud.threadCount).toBe(40);
+    expect(cloud.omittedThreadKeyCount).toBe(35);
+  });
+
 describe("star map tool definitions", () => {
   const context = (
     transport: AgentToolCallContext["transport"],
