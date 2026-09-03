@@ -30,17 +30,38 @@ export type LoadedTranscriptHistory = {
   pagination: AppServerReadThreadResponse["replay"]["pagination"];
 };
 
+type TranscriptHistoryTurnPage = {
+  entryIndexes: number[];
+  page: TranscriptHistoryPage;
+};
+
+type TranscriptHistoryInsertionPoint = {
+  entryIndex: number;
+  page: TranscriptHistoryPage;
+};
+
+type CachedRetainedEntryPlacement = {
+  entryTime: number | undefined;
+  insertionPoint: TranscriptHistoryInsertionPoint;
+  turnId: string;
+  turnPageCount: number;
+};
+
 export type TranscriptHistoryIndex = {
   entryIds: Set<string>;
   messageIds: Set<string>;
+  retainedEntryPlacements: Map<string, CachedRetainedEntryPlacement>;
   review: TranscriptReviewHistoryIndex;
+  turnPages: Map<string, TranscriptHistoryTurnPage[]>;
 };
 
 export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
   return {
     entryIds: new Set(),
     messageIds: new Set(),
+    retainedEntryPlacements: new Map(),
     review: createTranscriptReviewHistoryIndex(),
+    turnPages: new Map(),
   };
 }
 
@@ -120,6 +141,21 @@ export function prependTranscriptHistoryPage(params: {
       // next page cannot make a previously returned view grow.
       oldestPage.olderPage = page;
     }
+    const entryIndexesByTurn = new Map<string, number[]>();
+    entries.forEach((entry, entryIndex) => {
+      const turnId = entry.turn?.id;
+      if (!turnId) {
+        return;
+      }
+      const entryIndexes = entryIndexesByTurn.get(turnId) ?? [];
+      entryIndexes.push(entryIndex);
+      entryIndexesByTurn.set(turnId, entryIndexes);
+    });
+    for (const [turnId, entryIndexes] of entryIndexesByTurn) {
+      const turnPages = params.index.turnPages.get(turnId) ?? [];
+      turnPages.push({ entryIndexes, page });
+      params.index.turnPages.set(turnId, turnPages);
+    }
     oldestPage = page;
     newestPage ??= page;
   }
@@ -148,6 +184,7 @@ function historyOverlapIds<T extends { id: string }>(
 
 type SegmentedArraySource<T> = {
   excludedHistoryIds: ReadonlySet<string>;
+  excludedTailIds?: ReadonlySet<string>;
   historyCount: number;
   historyNewestPage: TranscriptHistoryPage | undefined;
   historyPage: TranscriptHistoryPage | undefined;
@@ -168,14 +205,21 @@ function* iterateSegmentedArray<T extends { id: string }>(
     }
     page = page.newerPage;
   }
-  yield* source.tail;
+  for (const item of source.tail) {
+    if (!source.excludedTailIds?.has(item.id)) {
+      yield item;
+    }
+  }
 }
 
 function* iterateSegmentedArrayReverse<T extends { id: string }>(
   source: SegmentedArraySource<T>,
 ): Generator<T> {
   for (let index = source.tail.length - 1; index >= 0; index -= 1) {
-    yield source.tail[index]!;
+    const item = source.tail[index]!;
+    if (!source.excludedTailIds?.has(item.id)) {
+      yield item;
+    }
   }
 
   let remainingHistoryItems =
@@ -300,7 +344,11 @@ function isArrayIndex(property: PropertyKey): property is string {
 function createSegmentedArray<T extends { id: string }>(
   source: SegmentedArraySource<T>,
 ): T[] {
-  const length = source.historyCount - source.excludedHistoryIds.size + source.tail.length;
+  const length =
+    source.historyCount
+    - source.excludedHistoryIds.size
+    + source.tail.length
+    - (source.excludedTailIds?.size ?? 0);
   const target = new Array<T>(length);
   let materialized: T[] | undefined;
   const materialize = (): T[] => {
@@ -435,6 +483,7 @@ export function combineTranscriptEntries(
     TranscriptReviewPresentation,
     "excludedHistoryEntryIds" | "historyEntryOverrides"
   >,
+  retainedEntries: readonly AppServerThreadEntry[] = [],
 ): AppServerThreadEntry[] {
   if (!history?.oldestPage || !index) {
     return tailEntries;
@@ -443,15 +492,176 @@ export function combineTranscriptEntries(
   for (const id of presentation?.excludedHistoryEntryIds ?? []) {
     excludedHistoryIds.add(id);
   }
+  const historyInsertions = placeRetainedArtifactsInHistory(
+    retainedEntries,
+    index,
+  );
+  const insertedEntryIds = new Set(
+    [...historyInsertions.values()].flatMap((insertionsByIndex) =>
+      [...insertionsByIndex.values()].flat().map((entry) => entry.id)
+    )
+  );
   return createSegmentedArray({
     excludedHistoryIds,
-    historyCount: history.entryCount,
+    excludedTailIds: insertedEntryIds,
+    historyCount: history.entryCount + insertedEntryIds.size,
     historyNewestPage: history.newestPage,
     historyPage: history.oldestPage,
     itemOverrides: presentation?.historyEntryOverrides,
-    pageItems: (page) => page.entries,
+    pageItems: (page) => entriesWithHistoryInsertions(
+      page,
+      historyInsertions.get(page),
+    ),
     tail: tailEntries,
   });
+}
+
+type HistoryEntryInsertions = Map<
+  TranscriptHistoryPage,
+  Map<number, AppServerThreadEntry[]>
+>;
+
+function isTerminalRetainedArtifactEntry(
+  entry: AppServerThreadEntry,
+): boolean {
+  const status = entry.turn?.status;
+  return (
+    (entry.type === "activity" || entry.type === "plan")
+    && Boolean(entry.turn)
+    && (
+      status === "completed"
+      || status === "failed"
+      || status === "cancelled"
+      || status === "interrupted"
+      || typeof entry.turn?.completedAt === "number"
+      || typeof entry.turn?.durationMs === "number"
+    )
+  );
+}
+
+function transcriptEntryTime(entry: AppServerThreadEntry): number | undefined {
+  return entry.createdAt ?? entry.turn?.completedAt ?? entry.turn?.startedAt;
+}
+
+function findHistoryInsertionPoint(
+  entry: AppServerThreadEntry,
+  turnPages: TranscriptHistoryTurnPage[],
+): TranscriptHistoryInsertionPoint | undefined {
+  const entryTime = transcriptEntryTime(entry);
+  let lastTurnEntry:
+    | { entryIndex: number; page: TranscriptHistoryPage }
+    | undefined;
+
+  for (let pageIndex = turnPages.length - 1; pageIndex >= 0; pageIndex -= 1) {
+    const turnPage = turnPages[pageIndex]!;
+    for (const entryIndex of turnPage.entryIndexes) {
+      const historyEntry = turnPage.page.entries[entryIndex];
+      if (!historyEntry) {
+        continue;
+      }
+      const historyEntryTime = transcriptEntryTime(historyEntry);
+      if (
+        typeof entryTime === "number"
+        && typeof historyEntryTime === "number"
+        && historyEntryTime > entryTime
+      ) {
+        return { entryIndex, page: turnPage.page };
+      }
+      lastTurnEntry = { entryIndex, page: turnPage.page };
+    }
+  }
+
+  return lastTurnEntry
+    ? {
+        entryIndex: lastTurnEntry.entryIndex + 1,
+        page: lastTurnEntry.page,
+      }
+    : undefined;
+}
+
+function retainedEntryInsertionPoint(
+  entry: AppServerThreadEntry,
+  index: TranscriptHistoryIndex,
+  turnId: string,
+  turnPages: TranscriptHistoryTurnPage[],
+): TranscriptHistoryInsertionPoint | undefined {
+  const entryTime = transcriptEntryTime(entry);
+  const cached = index.retainedEntryPlacements.get(entry.id);
+  if (
+    cached
+    && cached.entryTime === entryTime
+    && cached.turnId === turnId
+    && cached.turnPageCount === turnPages.length
+  ) {
+    return cached.insertionPoint;
+  }
+
+  const insertionPoint = findHistoryInsertionPoint(entry, turnPages);
+  if (insertionPoint) {
+    index.retainedEntryPlacements.set(entry.id, {
+      entryTime,
+      insertionPoint,
+      turnId,
+      turnPageCount: turnPages.length,
+    });
+  }
+  return insertionPoint;
+}
+
+function placeRetainedArtifactsInHistory(
+  retainedEntries: readonly AppServerThreadEntry[],
+  index: TranscriptHistoryIndex,
+): HistoryEntryInsertions {
+  const insertions: HistoryEntryInsertions = new Map();
+
+  for (const entry of retainedEntries) {
+    const turnId = entry.turn?.id;
+    const turnPages = turnId ? index.turnPages.get(turnId) : undefined;
+    // ThreadView supplies only the small set of live artifacts retained at a
+    // terminal turn boundary. The owning-turn index avoids any transcript
+    // history scan, and the cached insertion point avoids rescanning even
+    // that turn while a newer message streams character updates.
+    const belongsInHistory =
+      isTerminalRetainedArtifactEntry(entry)
+      && Boolean(turnPages?.length)
+      && !index.entryIds.has(entry.id);
+    if (belongsInHistory && turnId && turnPages) {
+      const insertionPoint = retainedEntryInsertionPoint(
+        entry,
+        index,
+        turnId,
+        turnPages,
+      );
+      if (insertionPoint) {
+        const insertionsByIndex = insertions.get(insertionPoint.page) ?? new Map();
+        const entries = insertionsByIndex.get(insertionPoint.entryIndex) ?? [];
+        entries.push(entry);
+        insertionsByIndex.set(insertionPoint.entryIndex, entries);
+        insertions.set(insertionPoint.page, insertionsByIndex);
+        continue;
+      }
+    }
+  }
+
+  return insertions;
+}
+
+function entriesWithHistoryInsertions(
+  page: TranscriptHistoryPage,
+  insertionsByIndex: Map<number, AppServerThreadEntry[]> | undefined,
+): AppServerThreadEntry[] {
+  if (!insertionsByIndex || insertionsByIndex.size === 0) {
+    return page.entries;
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+  for (let entryIndex = 0; entryIndex <= page.entries.length; entryIndex += 1) {
+    entries.push(...(insertionsByIndex.get(entryIndex) ?? []));
+    if (entryIndex < page.entries.length) {
+      entries.push(page.entries[entryIndex]!);
+    }
+  }
+  return entries;
 }
 
 export function combineTranscriptMessages(

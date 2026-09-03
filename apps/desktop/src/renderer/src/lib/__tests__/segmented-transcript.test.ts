@@ -208,6 +208,182 @@ describe("segmented transcript history", () => {
     expect(retainedHistoryIdReads).toBe(0);
   });
 
+  it("places a retained completed plan beside its owning historical turn", () => {
+    const index = createTranscriptHistoryIndex();
+    const olderTurn = {
+      id: "turn-older",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 2_000,
+    };
+    const retainedPlan: AppServerThreadEntry = {
+      type: "plan",
+      id: "retained-plan",
+      createdAt: 1_500,
+      steps: [{ status: "completed", step: "Keep the plan with its turn" }],
+      turn: olderTurn,
+    };
+    const history = prependTranscriptHistoryPage({
+      history: undefined,
+      index,
+      page: response([{
+        ...message("older-final"),
+        createdAt: 2_000,
+        turn: olderTurn,
+      }]),
+      tailEntries: [],
+    });
+    const tail: AppServerThreadEntry[] = [
+      {
+        ...message("newer-commentary"),
+        createdAt: 3_100,
+        turn: {
+          id: "turn-newer",
+          status: "in_progress",
+          startedAt: 3_000,
+        },
+      },
+      retainedPlan,
+    ];
+
+    const entries = combineTranscriptEntries(
+      history,
+      index,
+      tail,
+      undefined,
+      [retainedPlan],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "retained-plan",
+      "older-final",
+      "newer-commentary",
+    ]);
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "places retained edits from a %s turn beside that historical turn",
+    (status) => {
+      const index = createTranscriptHistoryIndex();
+      const olderTurn = {
+        id: "turn-older",
+        status,
+        startedAt: 1_000,
+        completedAt: 2_000,
+      };
+      const retainedEdit: AppServerThreadEntry = {
+        type: "activity",
+        id: `retained-${status}-edit`,
+        createdAt: 1_500,
+        details: [],
+        status: "completed",
+        summary: "Edited 1 file",
+        turn: olderTurn,
+      };
+      const history = prependTranscriptHistoryPage({
+        history: undefined,
+        index,
+        page: response([{
+          ...message("older-terminal-message"),
+          createdAt: 2_000,
+          turn: olderTurn,
+        }]),
+        tailEntries: [],
+      });
+      const tail: AppServerThreadEntry[] = [
+        {
+          ...message("newer-commentary"),
+          createdAt: 3_100,
+          turn: {
+            id: "turn-newer",
+            status: "in_progress",
+            startedAt: 3_000,
+          },
+        },
+        retainedEdit,
+      ];
+
+      const entries = combineTranscriptEntries(
+        history,
+        index,
+        tail,
+        undefined,
+        [retainedEdit],
+      );
+
+      expect(entries.map((entry) => entry.id)).toEqual([
+        `retained-${status}-edit`,
+        "older-terminal-message",
+        "newer-commentary",
+      ]);
+    },
+  );
+
+  it("caches retained-entry placement across streamed tail updates", () => {
+    const index = createTranscriptHistoryIndex();
+    const olderTurn = {
+      id: "turn-older",
+      status: "completed" as const,
+    };
+    let owningTurnTimeReads = 0;
+    let unrelatedTurnTimeReads = 0;
+    const history = prependTranscriptHistoryPage({
+      history: undefined,
+      index,
+      page: response([
+        ...Array.from({ length: 100 }, (_value, entryIndex) => ({
+          ...message(`unrelated-${entryIndex}`),
+          get createdAt() {
+            unrelatedTurnTimeReads += 1;
+            return entryIndex;
+          },
+          turn: { id: `unrelated-turn-${entryIndex}`, status: "completed" as const },
+        })),
+        {
+          ...message("older-final"),
+          get createdAt() {
+            owningTurnTimeReads += 1;
+            return 2_000;
+          },
+          turn: olderTurn,
+        },
+      ]),
+      tailEntries: [],
+    });
+    const retainedEdit: AppServerThreadEntry = {
+      type: "activity",
+      id: "retained-edit",
+      createdAt: 1_500,
+      details: [],
+      status: "completed",
+      summary: "Edited 1 file",
+      turn: olderTurn,
+    };
+
+    expect(combineTranscriptEntries(
+      history,
+      index,
+      [message("streaming-message"), retainedEdit],
+      undefined,
+      [retainedEdit],
+    )).toHaveLength(103);
+    expect(owningTurnTimeReads).toBe(1);
+    expect(unrelatedTurnTimeReads).toBe(0);
+
+    owningTurnTimeReads = 0;
+    for (let updateIndex = 0; updateIndex < 100; updateIndex += 1) {
+      expect(combineTranscriptEntries(
+        history,
+        index,
+        [message("streaming-message", `update-${updateIndex}`), retainedEdit],
+        undefined,
+        [retainedEdit],
+      )).toHaveLength(103);
+    }
+    expect(owningTurnTimeReads).toBe(0);
+    expect(unrelatedTurnTimeReads).toBe(0);
+  });
+
   it("pins linear work for reverse numeric-index searches", () => {
     const index = createTranscriptHistoryIndex();
     let history: LoadedTranscriptHistory | undefined;

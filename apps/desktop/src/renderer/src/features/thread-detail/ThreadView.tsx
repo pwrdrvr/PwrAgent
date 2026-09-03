@@ -798,9 +798,10 @@ function normalizeNotificationDuration(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function buildCompletedLiveTurnMetadata(params: {
+function buildTerminalLiveTurnMetadata(params: {
   activeTurnStartedAt?: number;
   fallbackTurnId?: string;
+  status: Exclude<AppServerThreadTurnMetadata["status"], "in_progress" | undefined>;
   turn?: {
     id?: unknown;
     startedAt?: unknown;
@@ -819,7 +820,7 @@ function buildCompletedLiveTurnMetadata(params: {
       normalizeNotificationTimestamp(params.turn?.startedAt) ?? params.activeTurnStartedAt,
     completedAt: normalizeNotificationTimestamp(params.turn?.completedAt) ?? Date.now(),
     durationMs: normalizeNotificationDuration(params.turn?.durationMs),
-    status: "completed",
+    status: params.status,
   });
 }
 
@@ -2728,9 +2729,35 @@ export function ThreadView(props: ThreadViewProps) {
         // that turn's work instead of dropping it until a replay refresh
         // happens to re-fetch it. Protocol/usage entries are status/cost,
         // not edits, so they're still cleared.
+        const terminalTurnRecord =
+          typeof event.notification.params.turn === "object" &&
+          event.notification.params.turn !== null
+            ? event.notification.params.turn
+            : undefined;
+        const terminalTurn = buildTerminalLiveTurnMetadata({
+          activeTurnStartedAt: props.activeTurnStartedAt,
+          fallbackTurnId:
+            props.activeTurnId ??
+            (typeof event.notification.params.turnId === "string"
+              ? event.notification.params.turnId
+              : undefined),
+          status:
+            event.notification.method === "turn/failed"
+              ? "failed"
+              : "cancelled",
+          turn: terminalTurnRecord,
+        });
+        const liveTerminalTurn =
+          terminalTurn && props.activeTurnId && terminalTurn.id !== props.activeTurnId
+            ? { ...terminalTurn, id: props.activeTurnId }
+            : terminalTurn;
         const interruptedActivity = pendingActivityEntryRef.current;
         if (interruptedActivity && activityHasFileDiff(interruptedActivity)) {
-          deferLiveTranscriptEntry(interruptedActivity);
+          deferLiveTranscriptEntry(
+            liveTerminalTurn
+              ? { ...interruptedActivity, turn: liveTerminalTurn }
+              : interruptedActivity,
+          );
         }
         setPendingActivityEntry(undefined);
         setPendingProtocolActivityEntry(undefined);
@@ -2744,13 +2771,14 @@ export function ThreadView(props: ThreadViewProps) {
           event.notification.params.turn !== null
             ? event.notification.params.turn
             : undefined;
-        const turn = buildCompletedLiveTurnMetadata({
+        const turn = buildTerminalLiveTurnMetadata({
           activeTurnStartedAt: props.activeTurnStartedAt,
           fallbackTurnId:
             props.activeTurnId ??
             (typeof event.notification.params.turnId === "string"
               ? event.notification.params.turnId
               : undefined),
+          status: "completed",
           turn: completedTurnRecord,
         });
         const liveTurn =
