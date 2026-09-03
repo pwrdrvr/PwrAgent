@@ -387,22 +387,9 @@ describe("codex environment runtime", () => {
 
   it("strips parent Electron runtime variables from detached actions", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-electron-"));
-    const shellPath = path.join(root, "test-shell.sh");
     const outputPath = path.join(root, "env.txt");
 
     try {
-      await writeFile(
-        shellPath,
-        [
-          "#!/bin/sh",
-          'if [ "$1" != "-lc" ]; then exit 64; fi',
-          'exec /bin/sh -c "$2"',
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      await chmod(shellPath, 0o755);
-
       const result = await startLocalCodexEnvironmentAction({
         actionId: "start-dev",
         runId: "test-run-3",
@@ -411,9 +398,10 @@ describe("codex environment runtime", () => {
           ELECTRON_RENDERER_URL: "http://127.0.0.1:5173",
           ELECTRON_RUN_AS_NODE: "1",
           PWRAGENT_TEST_HYDRATED_ENV: "hydrated",
-          // On Windows the `.sh` passthrough script isn't directly spawnable;
-          // use Git bash. Electron-var stripping is shell-independent.
-          SHELL: spawnableShell(shellPath),
+          // Electron-var stripping is shell-independent. Use a stable shell
+          // instead of executing a just-written fixture, which can race with
+          // file closure on Linux and fail spawn with ETXTBSY.
+          SHELL: spawnableShell("/bin/sh"),
           VITE_DEV_SERVER_URL: "http://127.0.0.1:5174",
         },
         runtime: {
