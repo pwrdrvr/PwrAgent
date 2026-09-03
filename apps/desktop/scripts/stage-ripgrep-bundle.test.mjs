@@ -28,9 +28,25 @@ describe("ripgrep bundle staging", () => {
       `${digest}  ripgrep-15.2.0-aarch64-apple-darwin.tar.gz\n`,
       "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
     )).toBe(digest);
+    expect(expectedChecksum(
+      [
+        "SHA256 hash of ripgrep-15.2.0-x86_64-pc-windows-msvc.zip:",
+        digest.toUpperCase(),
+        "CertUtil: -hashfile command completed successfully.",
+      ].join("\r\n"),
+      "ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+    )).toBe(digest);
     expect(() => expectedChecksum(
       `${digest}  another-asset.tar.gz\n`,
       "ripgrep.tar.gz",
+    )).toThrow("Invalid checksum");
+    expect(() => expectedChecksum(
+      [
+        "SHA256 hash of another-asset.zip:",
+        digest,
+        "CertUtil: -hashfile command completed successfully.",
+      ].join("\r\n"),
+      "ripgrep.zip",
     )).toThrow("Invalid checksum");
   });
 });
