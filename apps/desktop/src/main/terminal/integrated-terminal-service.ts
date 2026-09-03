@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { mkdir, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -25,6 +26,7 @@ import type {
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { resolvePwragentRoot } from "../profile";
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 18;
@@ -32,6 +34,150 @@ const MAX_COLUMNS = 500;
 const MAX_ROWS = 200;
 const OUTPUT_BUFFER_LIMIT = 128 * 1024;
 const PTY_SHUTDOWN_FORCE_KILL_MS = 500;
+const RUNTIME_PATH_PREFIX_ENV =
+  "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX";
+const ORIGINAL_ZDOTDIR_ENV = "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR";
+const ORIGINAL_ZDOTDIR_UNSET_ENV =
+  "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET";
+const INTEGRATION_ZDOTDIR_ENV =
+  "PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR";
+
+// Every variable this module exports into a terminal. PwrAgent launched from
+// a PwrAgent terminal inherits them through `process.env`, so each spawn
+// clears them before deciding what this terminal needs. Without that, a stale
+// prefix from the previous instance is reapplied to PATH.
+const OWNED_TERMINAL_ENV = [
+  RUNTIME_PATH_PREFIX_ENV,
+  ORIGINAL_ZDOTDIR_ENV,
+  ORIGINAL_ZDOTDIR_UNSET_ENV,
+  INTEGRATION_ZDOTDIR_ENV,
+] as const;
+
+// Supplying PATH to `zsh -l` is insufficient: common `.zprofile` setup such
+// as `brew shellenv` prepends another bin directory during startup. ZDOTDIR is
+// zsh's supported user-startup-file root, so these wrappers source the user's
+// real files in order and reassert the selected runtime path afterward.
+const ZSH_INTEGRATION_FILES: Readonly<Record<string, string>> = {
+  // Each wrapper hands off to the next startup file zsh will read, and the
+  // last one restores. `restoreWhen` names the case where there is no next
+  // file: without it a `zsh -c` spawned from a user startup file reads only
+  // `.zshenv`, never restores, and leaks ZDOTDIR to all of its descendants.
+  ".zshenv": zshStartupFileWrapper(".zshenv", {
+    restoreWhen: '[[ ! -o RCS ]] || [[ ! -o LOGIN && ! -o INTERACTIVE ]]',
+  }),
+  // `.zprofile` runs only for a login shell, which always reaches `.zlogin`.
+  ".zprofile": zshStartupFileWrapper(".zprofile", {
+    restoreWhen: "[[ ! -o RCS ]]",
+  }),
+  ".zshrc": zshStartupFileWrapper(".zshrc", {
+    prependRuntimePath: true,
+    restoreWhen: "[[ ! -o RCS ]] || [[ ! -o LOGIN ]]",
+  }),
+  ".zlogin": zshStartupFileWrapper(".zlogin", {
+    prependRuntimePath: true,
+    restoreWhen: "always",
+  }),
+};
+
+function zshStartupFileWrapper(
+  fileName: string,
+  options: {
+    prependRuntimePath?: boolean;
+    restoreWhen: string | "always";
+  },
+): string {
+  // Prepend only when the prefix is not already leading. `.zshrc` and
+  // `.zlogin` both run this on a PATH that already starts with the prefix
+  // Node put there, and an unconditional prepend duplicates it every time.
+  const prependRuntimePath = options.prependRuntimePath
+    ? `
+if [[ -n "$${RUNTIME_PATH_PREFIX_ENV}" && "$PATH" != "$${RUNTIME_PATH_PREFIX_ENV}" && "$PATH" != "$${RUNTIME_PATH_PREFIX_ENV}:"* ]]; then
+  export PATH="$${RUNTIME_PATH_PREFIX_ENV}${"${PATH:+:$PATH}"}"
+fi
+`
+    : "";
+  const restoreZdotdir = zshRestoreOriginalZdotdir();
+  return `
+if [[ "$${ORIGINAL_ZDOTDIR_UNSET_ENV}" == "1" ]]; then
+  unset ZDOTDIR
+else
+  ZDOTDIR="$${ORIGINAL_ZDOTDIR_ENV}"
+fi
+if [[ "$${ORIGINAL_ZDOTDIR_ENV}" != "$${INTEGRATION_ZDOTDIR_ENV}" && -r "$${ORIGINAL_ZDOTDIR_ENV}/${fileName}" ]]; then
+  source "$${ORIGINAL_ZDOTDIR_ENV}/${fileName}"
+fi
+if (( ${"${+ZDOTDIR}"} )); then
+  export ${ORIGINAL_ZDOTDIR_ENV}="$ZDOTDIR"
+  unset ${ORIGINAL_ZDOTDIR_UNSET_ENV}
+else
+  export ${ORIGINAL_ZDOTDIR_ENV}="$HOME"
+  export ${ORIGINAL_ZDOTDIR_UNSET_ENV}="1"
+fi
+ZDOTDIR="$${INTEGRATION_ZDOTDIR_ENV}"
+${prependRuntimePath}${options.restoreWhen === "always"
+    ? restoreZdotdir
+    : `
+if ${options.restoreWhen}; then
+${restoreZdotdir}
+fi
+`}
+`.trimStart();
+}
+
+function zshRestoreOriginalZdotdir(): string {
+  return `if [[ "$${ORIGINAL_ZDOTDIR_UNSET_ENV}" == "1" ]]; then
+  unset ZDOTDIR
+else
+  ZDOTDIR="$${ORIGINAL_ZDOTDIR_ENV}"
+fi
+unset ${OWNED_TERMINAL_ENV.join(" ")}`;
+}
+
+let zshIntegrationDirectoryPromise: Promise<string> | undefined;
+
+/**
+ * The PowerShell counterpart to the zsh wrappers above. `$PROFILE` is the same
+ * hazard as `.zprofile` — conda, scoop and chocolatey initializers all prepend
+ * to `$env:Path` — and PwrAgent launches PowerShell with `-NoLogo` only, so
+ * profiles run. PowerShell has no ZDOTDIR, but it runs `-Command` *after* the
+ * profile, and `-NoExit` keeps the session interactive afterwards, so the
+ * reassertion rides on the invocation instead of on a startup file.
+ *
+ * Two deliberate constraints on the text:
+ *
+ * - Inline rather than a `.ps1`, because ExecutionPolicy gates script files
+ *   and not `-Command`. A `Restricted` machine would otherwise print a load
+ *   error into every terminal.
+ * - No `"` anywhere, so node-pty's `argsToCommandLine` quoting has nothing to
+ *   escape and PowerShell's own `-Command` requoting cannot alter it.
+ *
+ * The body runs inside `& { … }` so `$p` and `$c` do not leak into the
+ * operator's session; `$env:` assignments are process-wide regardless.
+ */
+const POWERSHELL_RUNTIME_PATH_COMMAND = [
+  "& {",
+  `$p = $env:${RUNTIME_PATH_PREFIX_ENV};`,
+  "if (-not $p) { return };",
+  "$c = $env:Path;",
+  "if (-not $c) { $env:Path = $p; return };",
+  "if ($c -eq $p -or $c.StartsWith($p + ';',"
+  + " [StringComparison]::OrdinalIgnoreCase)) { return };",
+  "$env:Path = $p + ';' + $c",
+  "};",
+  `Remove-Item Env:${RUNTIME_PATH_PREFIX_ENV} -ErrorAction SilentlyContinue`,
+].join(" ");
+
+/**
+ * `-NoExit -Command` is appended only when there is something to pin, so a
+ * terminal with no managed runtime keeps the plain invocation it always had.
+ * The exact-case lookup is safe because `prependIntegratedTerminalRuntimePaths`
+ * removes every other casing before writing this one.
+ */
+function windowsPowerShellArgs(env: NodeJS.ProcessEnv): string[] {
+  return env[RUNTIME_PATH_PREFIX_ENV]
+    ? ["-NoLogo", "-NoExit", "-Command", POWERSHELL_RUNTIME_PATH_COMMAND]
+    : ["-NoLogo"];
+}
 
 type TerminalSession = {
   sessionId: string;
@@ -579,12 +725,23 @@ export async function spawnTerminalPty(params: {
 }): Promise<SpawnedTerminalPty> {
   const platform = params.platform ?? process.platform;
   const settings = getDesktopSettingsService();
-  const env = await settings.resolveTerminalSpawnEnvAsync();
+  const runtimeCommands = settings.resolveIntegratedTerminalCommands();
+  const baseEnv = await settings.resolveTerminalSpawnEnvAsync();
+  let env = prependIntegratedTerminalRuntimePaths(
+    baseEnv,
+    runtimeCommands,
+    platform,
+  );
   const cwd = resolveTerminalCwd(params.cwd);
   const shell = resolveTerminalShell({
     env,
     platform,
     windowsShell: settings.resolveIntegratedTerminalWindowsShell(),
+  });
+  env = await prepareIntegratedTerminalShellEnvironment({
+    env,
+    platform,
+    shell: shell.file,
   });
   const nodePty = await (params.loadNodePty ?? loadNodePty)();
   const pty = nodePty.spawn(shell.file, shell.args, {
@@ -598,6 +755,162 @@ export async function spawnTerminalPty(params: {
     }),
   });
   return { pty, cwd, shell };
+}
+
+export function prependIntegratedTerminalRuntimePaths(
+  baseEnv: NodeJS.ProcessEnv,
+  commands: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const env = buildPwrAgentChildProcessEnv(baseEnv);
+  // Same rule `mergePwrAgentChildProcessEnv` applies to ELECTRON_RENDERER_URL:
+  // Windows environment names are case-insensitive, and this is a plain object
+  // that is not, so every casing has to go.
+  const owned = new Set<string>(OWNED_TERMINAL_ENV);
+  for (const key of Object.keys(env)) {
+    if (owned.has(key.toUpperCase())) {
+      delete env[key];
+    }
+  }
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const runtimeDirectories = commands
+    .map((command) => command.trim())
+    .filter((command) => pathApi.isAbsolute(command))
+    .map((command) => pathApi.dirname(command));
+  if (runtimeDirectories.length === 0) return env;
+
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH")
+    ?? "PATH";
+  const existingEntries = (env[pathKey] ?? "")
+    .split(pathApi.delimiter)
+    .filter((entry) => entry.length > 0);
+  const seen = new Set<string>();
+  const normalizedKey = (entry: string): string => {
+    const normalized = pathApi.normalize(entry);
+    return platform === "win32" ? normalized.toLowerCase() : normalized;
+  };
+  const runtimeSeen = new Set<string>();
+  const runtimeEntries = runtimeDirectories.filter((entry) => {
+    const key = normalizedKey(entry);
+    if (runtimeSeen.has(key)) return false;
+    runtimeSeen.add(key);
+    return true;
+  });
+  const entries = [...runtimeEntries, ...existingEntries].filter((entry) => {
+    const key = normalizedKey(entry);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  env[pathKey] = entries.join(pathApi.delimiter);
+  // Read by the zsh startup wrappers on POSIX and by the PowerShell command
+  // `resolveWindowsTerminalShell` appends on Windows. Both consume it and
+  // remove it, so it does not survive into the operator's session.
+  env[RUNTIME_PATH_PREFIX_ENV] = runtimeEntries.join(pathApi.delimiter);
+  return env;
+}
+
+/**
+ * Mutates and returns `options.env`. Pass the object
+ * `prependIntegratedTerminalRuntimePaths` returned, which is already a private
+ * copy — copying it a second time would rebuild the whole environment on a
+ * path that runs for every terminal.
+ */
+export async function prepareIntegratedTerminalShellEnvironment(options: {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  shell: string;
+  resolveZshIntegrationDirectory?: () => Promise<string>;
+}): Promise<NodeJS.ProcessEnv> {
+  const env = options.env;
+  if (
+    options.platform === "win32"
+    || path.basename(options.shell) !== "zsh"
+    || !env[RUNTIME_PATH_PREFIX_ENV]
+  ) {
+    return env;
+  }
+  try {
+    const integrationZdotdir = await (
+      options.resolveZshIntegrationDirectory
+      ?? ensureZshIntegrationDirectory
+    )();
+    // Written only once the directory exists: a failure must not leave the
+    // shell describing an integration that was never wired.
+    const originalZdotdir = env.ZDOTDIR?.trim();
+    env[ORIGINAL_ZDOTDIR_ENV] = originalZdotdir || env.HOME || homedir();
+    if (!originalZdotdir) {
+      env[ORIGINAL_ZDOTDIR_UNSET_ENV] = "1";
+    }
+    env[INTEGRATION_ZDOTDIR_ENV] = integrationZdotdir;
+    env.ZDOTDIR = integrationZdotdir;
+  } catch (error) {
+    getMainLogger("pwragent:integrated-terminal").warn(
+      "zsh-runtime-path-integration-failed",
+      { error: error instanceof Error ? error.message : String(error) },
+    );
+  }
+  return env;
+}
+
+async function ensureZshIntegrationDirectory(): Promise<string> {
+  // Caching a rejection would turn one transient write failure into a
+  // permanently disabled integration for the life of the process.
+  zshIntegrationDirectoryPromise ??= writeZshIntegrationDirectory().catch(
+    (error: unknown) => {
+      zshIntegrationDirectoryPromise = undefined;
+      throw error;
+    },
+  );
+  return await zshIntegrationDirectoryPromise;
+}
+
+export async function writeZshIntegrationDirectory(
+  directory = path.join(
+    resolvePwragentRoot(),
+    "shell-integration",
+    "zsh-v2",
+  ),
+): Promise<string> {
+  await mkdir(directory, { recursive: true });
+  // A crash between `writeFile` and `rename`, or a sibling write rejecting
+  // first and abandoning the others, leaves a staged file in the directory
+  // PwrAgent hands zsh as ZDOTDIR. Nothing else ever removes one.
+  await removeOrphanedIntegrationTempFiles(directory);
+  await Promise.all(
+    Object.entries(ZSH_INTEGRATION_FILES).map(async ([name, contents]) => {
+      const destination = path.join(directory, name);
+      const temporary = path.join(
+        directory,
+        `.${name}.${process.pid}.${randomUUID()}.tmp`,
+      );
+      try {
+        await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600 });
+        await rename(temporary, destination);
+      } catch (error) {
+        await unlink(temporary).catch(() => undefined);
+        throw error;
+      }
+    }),
+  );
+  return directory;
+}
+
+async function removeOrphanedIntegrationTempFiles(
+  directory: string,
+): Promise<void> {
+  try {
+    const entries = await readdir(directory);
+    await Promise.all(
+      entries
+        .filter((entry) => entry.startsWith(".") && entry.endsWith(".tmp"))
+        .map(async (entry) => {
+          await unlink(path.join(directory, entry)).catch(() => undefined);
+        }),
+    );
+  } catch {
+    // A directory we cannot list is not a reason to skip writing the wrappers.
+  }
 }
 
 export function clampTerminalColumns(value: number): number {
@@ -682,22 +995,57 @@ function resolveWindowsTerminalShell(
   args: string[];
 } {
   if (preference === "pwsh") {
-    return { file: "pwsh.exe", args: ["-NoLogo"] };
+    return { file: "pwsh.exe", args: windowsPowerShellArgs(env) };
   }
   if (preference === "powershell") {
-    return { file: "powershell.exe", args: ["-NoLogo"] };
+    return { file: "powershell.exe", args: windowsPowerShellArgs(env) };
   }
+  // cmd.exe reasserts nothing: its only startup hook is the AutoRun registry
+  // value, and batch has no cheap way to ask whether PATH already leads with
+  // the prefix. An AutoRun that rewrites PATH still wins here.
   if (preference === "cmd") {
     return { file: env.ComSpec || "cmd.exe", args: [] };
   }
 
-  if (commandExistsOnPath("pwsh.exe", env, "win32")) {
-    return { file: "pwsh.exe", args: ["-NoLogo"] };
+  // Discovery searches the operator's PATH, not the pinned one. The runtime
+  // directories lead PATH by the time this runs, so scanning them would let a
+  // `pwsh.exe` inside a Codex or Grok release bundle become the shell PwrAgent
+  // launches. The pin is for the operator's commands, not for choosing a shell.
+  const discoveryEnv = withoutRuntimePathPrefix(env);
+  if (commandExistsOnPath("pwsh.exe", discoveryEnv, "win32")) {
+    return { file: "pwsh.exe", args: windowsPowerShellArgs(env) };
   }
-  if (commandExistsOnPath("powershell.exe", env, "win32")) {
-    return { file: "powershell.exe", args: ["-NoLogo"] };
+  if (commandExistsOnPath("powershell.exe", discoveryEnv, "win32")) {
+    return { file: "powershell.exe", args: windowsPowerShellArgs(env) };
   }
   return { file: env.ComSpec || "cmd.exe", args: [] };
+}
+
+/**
+ * The environment with the pinned runtime directories removed from PATH, for
+ * decisions that must reflect what the operator had rather than what PwrAgent
+ * prepended.
+ */
+function withoutRuntimePathPrefix(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const prefix = env[RUNTIME_PATH_PREFIX_ENV];
+  if (!prefix) return env;
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH");
+  if (!pathKey) return env;
+  const pinned = new Set(
+    prefix.split(";").map((entry) => path.win32.normalize(entry).toLowerCase()),
+  );
+  return {
+    ...env,
+    [pathKey]: (env[pathKey] ?? "")
+      .split(";")
+      .filter((entry) => {
+        if (entry.length === 0) return false;
+        return !pinned.has(path.win32.normalize(entry).toLowerCase());
+      })
+      .join(";"),
+  };
 }
 
 function commandExistsOnPath(

@@ -1,16 +1,28 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import type { WebContents } from "electron";
 import type { IPty } from "node-pty";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IntegratedTerminalService,
+  prependIntegratedTerminalRuntimePaths,
+  prepareIntegratedTerminalShellEnvironment,
   resolveTerminalShell,
+  writeZshIntegrationDirectory,
 } from "../terminal/integrated-terminal-service";
 
 const settingsServiceMock = vi.hoisted(() => ({
   resolveIntegratedTerminalWindowsShell: vi.fn(() => "auto"),
+  resolveIntegratedTerminalCommands: vi.fn(() => [] as string[]),
   resolveTerminalSpawnEnvAsync: vi.fn(
     async (): Promise<NodeJS.ProcessEnv> => ({ SHELL: "/bin/sh" }),
   ),
@@ -20,10 +32,282 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => settingsServiceMock,
 }));
 
+const temporaryRoots: string[] = [];
+
+/** Fixture roots for the tests that need real files on disk. */
+function createTemporaryRoot(prefix: string): string {
+  const root = mkdtempSync(path.join(os.tmpdir(), prefix));
+  temporaryRoots.push(root);
+  return root;
+}
+
+afterAll(() => {
+  for (const root of temporaryRoots) {
+    rmSync(root, { force: true, recursive: true });
+  }
+  temporaryRoots.length = 0;
+});
+
 beforeEach(() => {
   settingsServiceMock.resolveIntegratedTerminalWindowsShell.mockReturnValue("auto");
+  settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([]);
   settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
     SHELL: "/bin/sh",
+  });
+});
+
+describe("integrated terminal runtime PATH", () => {
+  it("puts selected Codex and Grok runtime directories first without duplicates", () => {
+    expect(
+      prependIntegratedTerminalRuntimePaths(
+        {
+          PATH: "/opt/homebrew/bin:/managed/codex/bin:/usr/bin",
+        },
+        [
+          "/managed/codex/bin/codex",
+          "/managed/grok/bin/grok",
+          "/managed/codex/bin/codex",
+          "codex",
+        ],
+        "darwin",
+      ),
+    ).toMatchObject({
+      PATH: "/managed/codex/bin:/managed/grok/bin:/opt/homebrew/bin:/usr/bin",
+      PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX:
+        "/managed/codex/bin:/managed/grok/bin",
+    });
+  });
+
+  it("wires the zsh startup integration without changing other shells", async () => {
+    const zshEnv = await prepareIntegratedTerminalShellEnvironment({
+      env: {
+        HOME: "/Users/alice",
+        PATH: "/managed/codex/bin:/usr/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX:
+          "/managed/codex/bin",
+      },
+      platform: "darwin",
+      resolveZshIntegrationDirectory: async () => "/pwragent/zsh-integration",
+      shell: "/bin/zsh",
+    });
+    expect(zshEnv).toMatchObject({
+      ZDOTDIR: "/pwragent/zsh-integration",
+      PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: "/Users/alice",
+      PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+      PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR:
+        "/pwragent/zsh-integration",
+    });
+
+    const bashEnv = await prepareIntegratedTerminalShellEnvironment({
+      env: {
+        PATH: "/managed/codex/bin:/usr/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX:
+          "/managed/codex/bin",
+      },
+      platform: "darwin",
+      resolveZshIntegrationDirectory: async () => "/unused",
+      shell: "/bin/bash",
+    });
+    expect(bashEnv).not.toHaveProperty("ZDOTDIR");
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "reasserts the selected runtime after zsh login files rewrite PATH",
+    async () => {
+      const root = createTemporaryRoot("pwragent-zsh-path-");
+      const integrationDir = path.join(root, "integration");
+      const originalZdotdir = path.join(root, "original");
+      const managedBin = path.join(root, "managed");
+      const otherBin = path.join(root, "other");
+      mkdirSync(originalZdotdir, { recursive: true });
+      mkdirSync(managedBin, { recursive: true });
+      mkdirSync(otherBin, { recursive: true });
+      const managedCodex = path.join(managedBin, "codex");
+      const otherCodex = path.join(otherBin, "codex");
+      writeFileSync(managedCodex, "#!/bin/sh\nexit 0\n");
+      writeFileSync(otherCodex, "#!/bin/sh\nexit 0\n");
+      chmodSync(managedCodex, 0o700);
+      chmodSync(otherCodex, 0o700);
+      writeFileSync(
+        path.join(originalZdotdir, ".zprofile"),
+        [
+          "typeset PWRAGENT_TEST_TOP_LEVEL=preserved",
+          `export PATH="${otherBin}:$PATH"`,
+          "",
+        ].join("\n"),
+      );
+      await writeZshIntegrationDirectory(integrationDir);
+
+      expect(existsSync("/bin/zsh")).toBe(true);
+      const resolved = execFileSync(
+        "/bin/zsh",
+        [
+          "-lic",
+          "print -r -- \"$(command -v codex)|${PWRAGENT_TEST_TOP_LEVEL:-missing}\"",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            HOME: root,
+            PATH: "/usr/bin:/bin",
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
+            PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
+            PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: managedBin,
+            ZDOTDIR: integrationDir,
+          },
+        },
+      ).trim();
+
+      expect(resolved).toBe(`${managedCodex}|preserved`);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "preserves a ZDOTDIR selected by the user zsh startup files",
+    async () => {
+      const root = createTemporaryRoot("pwragent-zsh-zdotdir-");
+      const integrationDir = path.join(root, "integration");
+      const originalZdotdir = path.join(root, "original");
+      const selectedZdotdir = path.join(root, "selected");
+      mkdirSync(originalZdotdir, { recursive: true });
+      mkdirSync(selectedZdotdir, { recursive: true });
+      writeFileSync(
+        path.join(originalZdotdir, ".zshenv"),
+        `ZDOTDIR="${selectedZdotdir}"\n`,
+      );
+      writeFileSync(
+        path.join(selectedZdotdir, ".zprofile"),
+        "typeset PWRAGENT_SELECTED_ZDOTDIR_PROFILE=loaded\n",
+      );
+      await writeZshIntegrationDirectory(integrationDir);
+
+      const resolved = execFileSync(
+        "/bin/zsh",
+        [
+          "-lic",
+          "print -r -- \"$ZDOTDIR|${PWRAGENT_SELECTED_ZDOTDIR_PROFILE:-missing}\"",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            HOME: root,
+            PATH: "/usr/bin:/bin",
+            PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+            PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/managed/bin",
+            ZDOTDIR: integrationDir,
+          },
+        },
+      ).trim();
+
+      expect(resolved).toBe(`${selectedZdotdir}|loaded`);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "restores ZDOTDIR for a zsh that reads only .zshenv",
+    async () => {
+      const root = createTemporaryRoot("pwragent-zsh-child-");
+      const integrationDir = path.join(root, "integration");
+      const originalZdotdir = path.join(root, "original");
+      mkdirSync(originalZdotdir, { recursive: true });
+      await writeZshIntegrationDirectory(integrationDir);
+
+      // A non-interactive, non-login zsh reads .zshenv and nothing else. Left
+      // unrestored it hands PwrAgent's ZDOTDIR to every one of its children.
+      const resolved = execFileSync(
+        "/bin/zsh",
+        ["-c", 'print -r -- "${ZDOTDIR-unset}|${PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX-unset}"'],
+        {
+          encoding: "utf8",
+          env: {
+            HOME: root,
+            PATH: "/usr/bin:/bin",
+            PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+            PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/managed/bin",
+            ZDOTDIR: integrationDir,
+          },
+        },
+      ).trim();
+
+      expect(resolved).toBe("unset|unset");
+    },
+  );
+
+  it("drops runtime path state inherited from a parent PwrAgent terminal", () => {
+    // PwrAgent launched from a PwrAgent terminal inherits these through
+    // process.env, and the wrapper reapplies whatever prefix it finds.
+    const env = prependIntegratedTerminalRuntimePaths(
+      {
+        PATH: "/usr/bin",
+        // Windows preserves the casing a variable was set with, and this is a
+        // plain object, so the delete has to be case-insensitive.
+        Pwragent_Integrated_Terminal_Runtime_Path_Prefix: "/stale/mixed",
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/stale/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: "/stale/integration",
+        PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: "/stale/home",
+        PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+      },
+      [],
+      "darwin",
+    );
+
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+    );
+    expect(env).not.toHaveProperty(
+      "Pwragent_Integrated_Terminal_Runtime_Path_Prefix",
+    );
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR",
+    );
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR",
+    );
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET",
+    );
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
+  it("pins the runtime directory on a Windows terminal", () => {
+    const env = prependIntegratedTerminalRuntimePaths(
+      { Path: "C:\\Windows" },
+      ["C:\\managed\\codex\\codex.exe"],
+      "win32",
+    );
+
+    expect(env.Path).toBe("C:\\managed\\codex;C:\\Windows");
+    // Read by the PowerShell command the Windows shell resolution appends.
+    expect(env.PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX).toBe(
+      "C:\\managed\\codex",
+    );
+  });
+
+  it("leaves no ZDOTDIR state behind when the integration directory fails", async () => {
+    const env = await prepareIntegratedTerminalShellEnvironment({
+      env: {
+        HOME: "/Users/alice",
+        PATH: "/managed/codex/bin:/usr/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/managed/codex/bin",
+      },
+      platform: "darwin",
+      resolveZshIntegrationDirectory: async () => {
+        throw new Error("ENOSPC");
+      },
+      shell: "/bin/zsh",
+    });
+
+    expect(env).not.toHaveProperty("ZDOTDIR");
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR",
+    );
+    expect(env).not.toHaveProperty(
+      "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET",
+    );
   });
 });
 
@@ -83,6 +367,80 @@ describe("resolveTerminalShell", () => {
         env: { PATH: "", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
         platform: "win32",
         windowsShell: "auto",
+      }),
+    ).toEqual({ file: "C:\\Windows\\System32\\cmd.exe", args: [] });
+  });
+
+  it("reasserts the runtime path after the PowerShell profile", () => {
+    const env = {
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX:
+        "C:\\managed\\codex;C:\\managed\\grok",
+    };
+
+    for (const windowsShell of ["pwsh", "powershell"] as const) {
+      const shell = resolveTerminalShell({
+        env,
+        platform: "win32",
+        windowsShell,
+      });
+      // PwrAgent passes -NoLogo and never -NoProfile, so $PROFILE runs and can
+      // prepend to $env:Path the way .zprofile does. -Command runs after it.
+      expect(shell.args.slice(0, 3)).toEqual(["-NoLogo", "-NoExit", "-Command"]);
+      expect(shell.args).toHaveLength(4);
+      expect(shell.args[3]).toContain(
+        "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+      );
+      expect(shell.args[3]).toContain("$env:Path = $p + ';' + $c");
+      expect(shell.args[3]).toContain("Remove-Item Env:");
+      // node-pty wraps an argument containing spaces in double quotes and
+      // backslash-escapes any inside it. Carrying none keeps the command the
+      // shell receives byte-identical to the one generated here.
+      expect(shell.args[3]).not.toContain('"');
+    }
+  });
+
+  it("does not let a pinned directory decide which PowerShell to launch", () => {
+    // `commandExistsOnPath` stats the filesystem, so the bundled pwsh has to
+    // really be there: a fixture path that does not exist would make this pass
+    // whether or not discovery skips the pinned directory.
+    const bundle = createTemporaryRoot("pwragent-pinned-shell-");
+    writeFileSync(path.join(bundle, "pwsh.exe"), "");
+
+    const shell = resolveTerminalShell({
+      env: {
+        ComSpec: "C:\\Windows\\System32\\cmd.exe",
+        Path: `${bundle};C:\\Windows\\System32`,
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: bundle,
+      },
+      platform: "win32",
+      windowsShell: "auto",
+    });
+
+    // A `pwsh.exe` shipped inside a Codex or Grok release must not become the
+    // shell PwrAgent launches; discovery falls through to ComSpec instead.
+    expect(shell.file).toBe("C:\\Windows\\System32\\cmd.exe");
+  });
+
+  it("leaves the PowerShell invocation alone when nothing is pinned", () => {
+    expect(
+      resolveTerminalShell({
+        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        platform: "win32",
+        windowsShell: "pwsh",
+      }),
+    ).toEqual({ file: "pwsh.exe", args: ["-NoLogo"] });
+  });
+
+  it("does not add a reassertion to cmd, which cannot cheaply test PATH", () => {
+    expect(
+      resolveTerminalShell({
+        env: {
+          ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "C:\\managed\\codex",
+        },
+        platform: "win32",
+        windowsShell: "cmd",
       }),
     ).toEqual({ file: "C:\\Windows\\System32\\cmd.exe", args: [] });
   });
@@ -211,8 +569,13 @@ describe("resolveTerminalShell", () => {
     settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
       ELECTRON_RENDERER_URL: "http://localhost:5175",
       KEEP_TERMINAL_ENV: "yes",
+      PATH: "/opt/homebrew/bin:/usr/bin",
       SHELL: "/bin/sh",
     });
+    settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([
+      "/managed/codex/bin/codex",
+      "/managed/grok/bin/grok",
+    ]);
     const service = new IntegratedTerminalService({
       loadNodePty: async () => ({
         spawn: spawn as unknown as typeof import("node-pty").spawn,
@@ -233,9 +596,102 @@ describe("resolveTerminalShell", () => {
     expect(spawnOptions?.env).not.toHaveProperty("ELECTRON_RENDERER_URL");
     expect(spawnOptions?.env).toMatchObject({
       KEEP_TERMINAL_ENV: "yes",
+      PATH:
+        "/managed/codex/bin:/managed/grok/bin:/opt/homebrew/bin:/usr/bin",
       TERM: "xterm-256color",
       COLORTERM: "truecolor",
     });
+  });
+
+  it("wires the zsh startup integration through the real spawn path", async () => {
+    const pty = fakePty();
+    let spawnOptions: { env?: NodeJS.ProcessEnv } | undefined;
+    const spawn = vi.fn((...args: unknown[]) => {
+      spawnOptions = args[2] as { env?: NodeJS.ProcessEnv } | undefined;
+      return pty;
+    });
+    // Every other test of this feature calls the helpers directly, so the one
+    // function that actually spawns the PTY had no coverage of the ZDOTDIR
+    // half — a `/bin/sh` login shell leaves at the `basename !== "zsh"` guard.
+    settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
+      HOME: "/Users/alice",
+      PATH: "/usr/bin",
+      SHELL: "/bin/zsh",
+    });
+    settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([
+      "/managed/codex/bin/codex",
+    ]);
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: spawn as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "darwin",
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "codex:thread-zsh-env",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(spawnOptions?.env).toMatchObject({
+      PATH: "/managed/codex/bin:/usr/bin",
+      PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/managed/codex/bin",
+      PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: "/Users/alice",
+      PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+    });
+    expect(spawnOptions?.env?.ZDOTDIR).toBe(
+      spawnOptions?.env?.PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR,
+    );
+    expect(spawnOptions?.env?.ZDOTDIR).toContain("shell-integration");
+  });
+
+  it("carries the PowerShell reassertion through the real spawn path", async () => {
+    const pty = fakePty();
+    let spawnArgs: string[] | undefined;
+    const spawn = vi.fn((...args: unknown[]) => {
+      spawnArgs = args[1] as string[];
+      return pty;
+    });
+    // `resolveTerminalShell` only sees the prefix because the PATH prepend runs
+    // first in `spawnTerminalPty`. Nothing enforces that order, and every other
+    // test hands the resolver a hand-built env, so a swap of those two
+    // statements would drop the Windows reassertion with the suite still green.
+    settingsServiceMock.resolveIntegratedTerminalWindowsShell.mockReturnValue(
+      "pwsh",
+    );
+    settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      Path: "C:\\Windows\\System32",
+    });
+    settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([
+      "C:\\managed\\codex\\codex.exe",
+    ]);
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: spawn as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "win32",
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "codex:thread-windows-pin",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(spawnArgs?.slice(0, 3)).toEqual(["-NoLogo", "-NoExit", "-Command"]);
+    expect(spawnArgs?.[3]).toContain(
+      "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX",
+    );
   });
 
   it("reports terminal sessions with a foreground command for quit confirmation", async () => {

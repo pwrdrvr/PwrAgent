@@ -272,6 +272,7 @@ type DesktopSettingsServiceOptions = {
     signal?: AbortSignal;
     waitForUpdate?: boolean;
   }) => Promise<ManagedCodexRuntime>;
+  resolveActiveManagedGrokCommand?: () => string | undefined;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
   secretStore: DesktopSecretStore;
@@ -685,8 +686,7 @@ export class DesktopSettingsService {
     );
     const managedCodexRuntime = this.managedCodexRuntime;
     const managedCodexError = this.managedCodexError;
-    const codexDiscoveryCommand = managedCodexRuntime?.command
-      ?? this.resolveCodexCommandPreferenceFromConfig(config);
+    const codexDiscoveryCommand = this.resolveActiveCodexCommand(config);
     const codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
       codexDiscoveryCommand,
     ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
@@ -2221,8 +2221,7 @@ export class DesktopSettingsService {
         runtime: this.managedCodexRuntime,
       });
     }
-    const configuredCommand = this.managedCodexRuntime?.command
-      ?? this.resolveCodexCommandPreferenceFromConfig(config);
+    const configuredCommand = this.resolveActiveCodexCommand(config);
     const discovery = await this.codexDiscoveryCoordinator.discover(
       configuredCommand,
       {
@@ -2280,6 +2279,47 @@ export class DesktopSettingsService {
       source: selected.source,
       ...(selected.version ? { version: selected.version } : {}),
     };
+  }
+
+  /**
+   * Commands whose containing directories must lead PATH in a newly opened
+   * human-facing integrated terminal. This is intentionally separate from the
+   * agent subprocess environments: an operator running `codex mcp login` or a
+   * Grok command in PwrAgent should reach the same selected runtime PwrAgent
+   * launches for threads.
+   */
+  resolveIntegratedTerminalCommands(): string[] {
+    // Reads the two sections it needs rather than `readConfig()`, which
+    // `structuredClone`s every section — this runs on each terminal open. The
+    // store hands back its live objects, so `models` is cloned before it
+    // leaves; `providerConfigSection` already returns a fresh object built
+    // from three primitives, so cloning its input would guard nothing and
+    // would copy the projection's candidate and validation history.
+    const grok = providerConfigSection(this.configStore.read("providers").grok);
+    const grokEnabled = grok.enabled !== false;
+    const grokOverride = grokEnabled
+      ? this.resolveString(grok.cliPath, ACP_AGENTS_GROK_CLI_PATH_ENV)
+        .value
+        .trim() || undefined
+      : undefined;
+    const shouldResolveManagedGrok =
+      grokEnabled
+      && !grokOverride
+      && (
+        grok.managedBuilds
+        ?? this.options.defaultManagedGrokBuilds
+        ?? true
+      );
+    const codexCommand = this.resolveActiveCodexCommand({
+      models: structuredClone(this.configStore.read("models")),
+    });
+    const grokCommand = grokOverride
+      ?? (shouldResolveManagedGrok
+        ? this.options.resolveActiveManagedGrokCommand?.()
+        : undefined);
+    return [codexCommand, grokCommand].filter(
+      (command): command is string => command !== undefined,
+    );
   }
 
   /**
@@ -2505,8 +2545,21 @@ export class DesktopSettingsService {
     return this.codexSpawnEnv;
   }
 
+  /**
+   * The Codex command PwrAgent launches right now. Gating this on
+   * `experimental.tokenMiserEnabled` instead would answer `undefined` while
+   * the managed runtime is still installing or after it failed, even though a
+   * thread started at that moment falls back to the configured command.
+   */
+  private resolveActiveCodexCommand(
+    config: Pick<DesktopSettingsConfig, "models">,
+  ): string | undefined {
+    return this.managedCodexRuntime?.command
+      ?? this.resolveCodexCommandPreferenceFromConfig(config);
+  }
+
   private resolveCodexCommandPreferenceFromConfig(
-    config: DesktopSettingsConfig,
+    config: Pick<DesktopSettingsConfig, "models">,
   ): string | undefined {
     return (
       readEnvString(this.env, CODEX_COMMAND_ENV)

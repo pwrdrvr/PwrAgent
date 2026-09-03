@@ -9,6 +9,7 @@ import {
   MemoryDesktopSecretStore,
 } from "./desktop-secret-store";
 import { ensureManagedCodexRuntime } from "../codex-managed-runtime";
+import { resolveActiveManagedGrokCommand } from "../acp/grok-managed-runtime";
 import { SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
 import { subscribersForChannel } from "../window-channels";
 import {
@@ -62,6 +63,7 @@ export function getDesktopSettingsService(): DesktopSettingsService {
           signal,
           waitForUpdate,
         }),
+      resolveActiveManagedGrokCommand,
       resolveAppVersion: () => app.getVersion(),
       secretStore,
       configPath,

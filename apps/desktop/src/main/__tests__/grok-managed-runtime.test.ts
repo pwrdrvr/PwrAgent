@@ -20,6 +20,7 @@ import {
   MANAGED_GROK_RELEASES_URL,
   selectManagedGrokRelease,
   selectManagedGrokReleaseFromFeed,
+  resolveActiveManagedGrokCommand,
   selectManagedGrokReleaseSlots,
   setManagedGrokSignatureRejectionReporter,
 } from "../acp/grok-managed-runtime";
@@ -260,6 +261,8 @@ describe("ensureManagedGrokRuntime", () => {
       })}\n`,
     );
 
+    expect(resolveActiveManagedGrokCommand(rootDir)).toBeUndefined();
+
     const runtime = await ensureManagedGrokRuntime({
       arch: "x64",
       checkMode: "force",
@@ -271,6 +274,9 @@ describe("ensureManagedGrokRuntime", () => {
 
     expect(runtime?.command).toBe(path.join(commandDir, "grok"));
     expect(runtime?.metadata.tag).toBe(tag);
+    expect(resolveActiveManagedGrokCommand(rootDir)).toBe(
+      path.join(commandDir, "grok"),
+    );
   });
 
   it("uses the public release feed on Prerelease when the API is limited", async () => {
