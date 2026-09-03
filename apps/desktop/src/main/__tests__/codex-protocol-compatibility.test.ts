@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  codexVersionFromUserAgent,
   resolveCodexProtocolCompatibility,
   usesGeneratedCodexModelListResponse,
 } from "../codex-app-server/protocol-compatibility";
@@ -75,4 +76,32 @@ describe("Codex App Server protocol compatibility", () => {
       expect(usesGeneratedCodexModelListResponse(version)).toBe(expected);
     },
   );
+
+  it.each([
+    {
+      // Captured verbatim from a `codex app-server` handshake answering
+      // PwrAgent's own `clientInfo`.
+      expected: "0.149.1",
+      userAgent:
+        "pwragent-desktop/0.149.1 (Mac OS 26.6.2; arm64) unknown"
+        + " (pwragent-desktop; 1.4.0)",
+    },
+    {
+      // The suffix is the whole point: it is what separates a PwrAgent build
+      // from OpenAI's release of the same upstream version.
+      expected: "0.149.0-pwragent.2",
+      userAgent: "pwragent-desktop/0.149.0-pwragent.2 (Linux; x86_64) unknown",
+    },
+    { expected: undefined, userAgent: undefined },
+    { expected: undefined, userAgent: "   " },
+    // A client name with no version after it, and a version-shaped string
+    // that never named a client, are both unreadable rather than a guess.
+    { expected: undefined, userAgent: "pwragent-desktop (Mac OS 26.6.2; arm64)" },
+    { expected: undefined, userAgent: "0.149.1 (Mac OS 26.6.2; arm64)" },
+  ])("reads the App Server version out of $userAgent", ({
+    expected,
+    userAgent,
+  }) => {
+    expect(codexVersionFromUserAgent(userAgent)).toBe(expected);
+  });
 });

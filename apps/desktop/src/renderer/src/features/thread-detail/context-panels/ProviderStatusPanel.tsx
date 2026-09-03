@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendRuntimeBuild, BackendSummary } from "@pwragent/shared";
 import {
   formatBackendAccountText,
   formatRateLimitLine,
@@ -47,12 +47,21 @@ export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
               </p>
               {backend.available && hasProviderMetadata(backend) ? (
                 <div className="backend-status-list__metadata">
-                  {backendVersion(backend) || backend.acp || backend.account ? (
+                  {backendVersion(backend)
+                  || backend.runtimeBuild
+                  || backend.acp
+                  || backend.account ? (
                     <dl className="backend-status-list__metadata-grid">
                       {backendVersion(backend) ? (
                         <div>
                           <dt>Version</dt>
                           <dd>{backendVersion(backend)}</dd>
+                        </div>
+                      ) : null}
+                      {backend.runtimeBuild ? (
+                        <div>
+                          <dt>Build</dt>
+                          <dd>{formatRuntimeBuild(backend.runtimeBuild)}</dd>
                         </div>
                       ) : null}
                       {backend.acp ? (
@@ -99,10 +108,22 @@ export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
 function hasProviderMetadata(backend: BackendSummary): boolean {
   return Boolean(
     backendVersion(backend)
+    || backend.runtimeBuild
     || backend.acp
     || backend.account
     || backend.rateLimits?.length,
   );
+}
+
+/**
+ * Who supplied the runtime, in the operator's terms. The version alone cannot
+ * answer it: `0.149.0` and `0.149.0-pwragent.2` differ by a suffix that reads
+ * as noise until something names who published it.
+ */
+function formatRuntimeBuild(build: BackendRuntimeBuild): string {
+  return build.channel === "pwragent"
+    ? `${build.publisher} build`
+    : `${build.publisher} release`;
 }
 
 function backendVersion(backend: BackendSummary): string | undefined {

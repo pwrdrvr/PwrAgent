@@ -121,6 +121,42 @@ describe("ProviderStatusPanel", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
+  it("names the version and publisher of the Codex runtime in effect", () => {
+    render(
+      <ProviderStatusPanel
+        backends={[
+          {
+            ...codexBackend,
+            runtimeBuild: { channel: "vendor", publisher: "OpenAI" },
+            serverVersion: "0.149.1",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("0.149.1")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI release")).toBeInTheDocument();
+  });
+
+  it("names a PwrDrvr build rather than leaving it to the version suffix", () => {
+    // `0.149.0-pwragent.2` is the only thing separating this from OpenAI's
+    // 0.149.0, and a suffix alone reads as noise.
+    render(
+      <ProviderStatusPanel
+        backends={[
+          {
+            ...codexBackend,
+            runtimeBuild: { channel: "pwragent", publisher: "PwrDrvr" },
+            serverVersion: "0.149.0-pwragent.2",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("0.149.0-pwragent.2")).toBeInTheDocument();
+    expect(screen.getByText("PwrDrvr build")).toBeInTheDocument();
+  });
+
   it("renders account, plan, and rate limits for an available backend", () => {
     render(<ProviderStatusPanel backends={[codexBackend]} />);
 
