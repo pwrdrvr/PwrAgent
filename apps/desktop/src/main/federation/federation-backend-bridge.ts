@@ -31,6 +31,8 @@ import type {
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   FederationCapability,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
   FederationInstanceId,
   FederatedThreadRef,
   FederationLoadStatus,
@@ -150,6 +152,7 @@ import type {
 import {
   encodeNavigationSnapshotThreadKeysForProtocolV1,
   normalizeNavigationSnapshotThreadKeys,
+  rankThreadJumpMatches,
 } from "@pwragent/shared";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import type { FederationRouter } from "./federation-router";
@@ -351,6 +354,7 @@ function authenticateScheduledTurnOrigin<
 
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
+  searchNavigationThreads: "backend.searchNavigationThreads",
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
@@ -447,6 +451,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   FederationCapability
 > = {
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.searchNavigationThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
@@ -553,6 +558,13 @@ export type FederationBackendOperations = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot>;
+  /**
+   * Optional because test doubles and non-desktop adapters can let the bridge
+   * derive this from getNavigationSnapshot. The remote client implements it.
+   */
+  searchNavigationThreads?(
+    request: FederationJumpSearchRequest,
+  ): Promise<FederationJumpSearchResponse>;
   listThreads(
     request?: AppServerListThreadsRequest,
   ): Promise<AppServerListThreadsResponse>;
@@ -806,6 +818,26 @@ export function registerFederationBackendHandlers(params: {
         selection,
         snapshot,
       });
+    },
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.searchNavigationThreads,
+    async (envelope) => {
+      const request = envelope.params as FederationJumpSearchRequest;
+      if (params.backend.searchNavigationThreads) {
+        return await params.backend.searchNavigationThreads(request);
+      }
+      const query = request.query.trim();
+      if (!query) {
+        return { results: [] } satisfies FederationJumpSearchResponse;
+      }
+      const limit = Math.max(1, Math.min(request.limit ?? 8, 50));
+      const snapshot = await params.backend.getNavigationSnapshot({
+        refreshMode: "full",
+      });
+      return {
+        results: rankThreadJumpMatches(snapshot.threads, query).slice(0, limit),
+      } satisfies FederationJumpSearchResponse;
     },
   );
   params.router.registerHandler(
@@ -1512,6 +1544,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       NavigationSnapshot | NavigationSnapshotTransportResponse
     >({
       method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+      params: request,
+    });
+  }
+
+  async searchNavigationThreads(
+    request: FederationJumpSearchRequest,
+  ): Promise<FederationJumpSearchResponse> {
+    return await this.rpc.request<FederationJumpSearchResponse>({
+      method: FEDERATION_BACKEND_METHODS.searchNavigationThreads,
       params: request,
     });
   }

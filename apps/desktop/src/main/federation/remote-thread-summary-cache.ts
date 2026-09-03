@@ -12,8 +12,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
-  threadHasExactPrNumberMatch,
-  threadMatchesQuery,
+  rankThreadJumpMatches,
 } from "@pwragent/shared";
 import { ThreadInfoStore } from "../app-server/thread-info-store";
 
@@ -51,11 +50,12 @@ export type ResolvedRemotePins = {
 };
 
 /**
- * Peer navigation snapshots are the only remote summary shape that carries
- * PR chips (the owner merges its overlay `prs` before serving), so both the
- * ⌘K jump search and the pinned-thread merge read through this cache rather
- * than `listThreads`. The TTL keeps keystroke-debounced jump queries and
- * back-to-back snapshot merges from re-fetching full snapshots per call.
+ * Peer navigation summaries are the only remote row shape that carries PR
+ * chips (the owner merges its overlay `prs` before serving). Pinned-thread
+ * merges and the older-peer Cmd+K fallback read full snapshots through this
+ * cache; current peers filter and bound Cmd+K rows on the owner. The TTL keeps
+ * compatibility searches and back-to-back pin merges from re-fetching full
+ * snapshots per call.
  */
 const REMOTE_SNAPSHOT_TTL_MS = 15_000;
 /** Mirrors the federated-search per-peer deadline. */
@@ -177,6 +177,14 @@ export class RemoteThreadSummaryCache {
         target: FederationRemoteTarget,
         selection: FederationThreadSelection,
       ) => Promise<NavigationSnapshot>;
+      /**
+       * Bounded owner-side Cmd+K search. Older peers reject the new method;
+       * those alone fall back to the full-snapshot compatibility path.
+       */
+      searchPeer?: (
+        target: FederationRemoteTarget,
+        request: FederationJumpSearchRequest,
+      ) => Promise<NavigationThreadSummary[]>;
       /** Archived threads for one backend on a connected peer. */
       fetchArchivedThreads: (
         target: FederationRemoteTarget,
@@ -262,11 +270,7 @@ export class RemoteThreadSummaryCache {
     const groups = await Promise.all(
       this.navigationPeers().map(async (peer) => {
         try {
-          return await this.threadsForPeer(
-            peer.target,
-            { kind: "all" },
-            "jump-search",
-          );
+          return await this.searchPeerForJump(peer.target, { query, limit });
         } catch {
           // ⌘K is a jump surface, not a diagnostics surface: a slow or
           // failing peer contributes nothing rather than an error row.
@@ -274,22 +278,7 @@ export class RemoteThreadSummaryCache {
         }
       }),
     );
-    const results = groups
-      .flat()
-      .filter((thread) => threadMatchesQuery(thread, query))
-      .sort((left, right) => {
-        const exactPrPriority =
-          Number(threadHasExactPrNumberMatch(right, query))
-          - Number(threadHasExactPrNumberMatch(left, query));
-        if (exactPrPriority !== 0) {
-          return exactPrPriority;
-        }
-        return (
-          (right.updatedAt ?? right.createdAt ?? 0)
-          - (left.updatedAt ?? left.createdAt ?? 0)
-        );
-      })
-      .slice(0, limit);
+    const results = rankThreadJumpMatches(groups.flat(), query).slice(0, limit);
     return { results };
   }
 
@@ -786,6 +775,32 @@ export class RemoteThreadSummaryCache {
       .filter((peer) => peer.capabilities.includes("thread_navigation"));
   }
 
+  private async searchPeerForJump(
+    target: FederationRemoteTarget,
+    request: FederationJumpSearchRequest,
+  ): Promise<NavigationThreadSummary[]> {
+    if (this.options.searchPeer) {
+      const timeoutMs =
+        this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
+      try {
+        return await withTimeout(
+          this.options.searchPeer(target, request),
+          timeoutMs,
+          `Remote thread search timed out after ${Math.round(timeoutMs / 1000)}s.`,
+        );
+      } catch (error) {
+        if (!hasFederationErrorCode(error, "method_not_found")) {
+          throw error;
+        }
+      }
+    }
+    return await this.threadsForPeer(
+      target,
+      { kind: "all" },
+      "jump-search",
+    );
+  }
+
   private async threadsForPeer(
     target: FederationRemoteTarget,
     selection: FederationThreadSelection,
@@ -984,4 +999,13 @@ function withTimeout<T>(
       },
     );
   });
+}
+
+function hasFederationErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === code
+  );
 }

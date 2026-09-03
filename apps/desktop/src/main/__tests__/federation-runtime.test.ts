@@ -25,6 +25,7 @@ import {
   findPreferredReviewWorkspaceCwd,
 } from "@pwragent/shared";
 import {
+  FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
 } from "../federation/federation-backend-bridge";
@@ -2393,7 +2394,61 @@ describe("DesktopFederationRuntime", () => {
 
     expect(invalidated).toEqual([]);
   });
-  it("subscribes Cmd+K snapshot peers to navigation updates for the cache TTL", async () => {
+  it("does not retain navigation subscriptions for bounded Cmd+K searches", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "viewer_one" });
+    router.registerConnection(createConnection({
+      peerId: "owner_one",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.router = router;
+    runtime.connectedPeerTargets = () => [{
+      target: { scope: "remote", instanceId: "owner_one" },
+      label: "Owner",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+    }];
+
+    const cache = runtime.remoteThreadSummaries();
+    try {
+      const pending = cache.searchForJump({ query: "49" });
+      const request = sent.find(
+        (envelope) =>
+          envelope.kind === "request"
+          && envelope.method
+            === FEDERATION_BACKEND_METHODS.searchNavigationThreads,
+      );
+      if (!request || request.kind !== "request") {
+        throw new Error("Expected a bounded navigation search request.");
+      }
+      await runtime.receiveEnvelope(
+        {
+          id: "jump-response",
+          kind: "response",
+          requestId: request.id,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: "owner_one",
+          targetInstanceId: "viewer_one",
+          createdAt: 1_100,
+          result: { results: [] },
+        },
+        "owner_one",
+      );
+      await pending;
+
+      expect(sent.filter(
+        (envelope) =>
+          envelope.kind === "notification"
+          && envelope.method === "federation.eventSubscription",
+      )).toEqual([]);
+    } finally {
+      cache.dispose();
+    }
+  });
+
+  it("subscribes legacy Cmd+K snapshot peers to navigation updates for the cache TTL", async () => {
     vi.useFakeTimers();
     const sent: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "viewer_one" });
@@ -2425,8 +2480,39 @@ describe("DesktopFederationRuntime", () => {
 
     const cache = runtime.remoteThreadSummaries();
     try {
-      await cache.searchForJump({ query: "49" });
-      expect(sent).toMatchObject([{
+      const pending = cache.searchForJump({ query: "49" });
+      const request = sent.find(
+        (envelope) =>
+          envelope.kind === "request"
+          && envelope.method
+            === FEDERATION_BACKEND_METHODS.searchNavigationThreads,
+      );
+      if (!request || request.kind !== "request") {
+        throw new Error("Expected a bounded navigation search request.");
+      }
+      await runtime.receiveEnvelope(
+        {
+          id: "jump-method-missing",
+          kind: "error",
+          requestId: request.id,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: "owner_one",
+          targetInstanceId: "viewer_one",
+          createdAt: 1_100,
+          error: {
+            code: "method_not_found",
+            message: "Older peer",
+          },
+        },
+        "owner_one",
+      );
+      await pending;
+      const subscriptions = sent.filter(
+        (envelope) =>
+          envelope.kind === "notification"
+          && envelope.method === "federation.eventSubscription",
+      );
+      expect(subscriptions).toMatchObject([{
         kind: "notification",
         method: "federation.eventSubscription",
         params: { eventClasses: ["navigation"] },
