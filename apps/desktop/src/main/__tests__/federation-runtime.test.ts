@@ -33,6 +33,7 @@ import {
   DesktopFederationRuntime,
   disposeDesktopFederationRuntime,
   getDesktopFederationRuntime,
+  navigationWireResponseThreadCount,
 } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
@@ -510,6 +511,36 @@ describe("DesktopFederationRuntime", () => {
         selection: { kind: "all" },
       },
     });
+  });
+
+  it("counts every upsert in batched navigation changes for diagnostics", () => {
+    const change = (
+      baseRevision: string,
+      revision: string,
+      count: number,
+    ) => ({
+      kind: "delta" as const,
+      baseRevision,
+      revision,
+      fetchedAt: 1_000,
+      removedThreadKeys: [],
+      upsertedThreads: Array.from(
+        { length: count },
+        () => ({} as NavigationSnapshot["threads"][number]),
+      ),
+      removedDirectoryKeys: [],
+      upsertedDirectories: [],
+    });
+
+    expect(navigationWireResponseThreadCount({
+      kind: "changes",
+      baseRevision: "revision-1",
+      revision: "revision-3",
+      changes: [
+        change("revision-1", "revision-2", 300),
+        change("revision-2", "revision-3", 300),
+      ],
+    })).toBe(600);
   });
 
   it("uses full snapshots when an older owner does not advertise delta support", async () => {

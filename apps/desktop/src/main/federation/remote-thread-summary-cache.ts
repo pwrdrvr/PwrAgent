@@ -779,9 +779,10 @@ export class RemoteThreadSummaryCache {
     target: FederationRemoteTarget,
     request: FederationJumpSearchRequest,
   ): Promise<NavigationThreadSummary[]> {
+    const timeoutMs =
+      this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
+    const deadlineAt = Date.now() + timeoutMs;
     if (this.options.searchPeer) {
-      const timeoutMs =
-        this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
       try {
         return await withTimeout(
           this.options.searchPeer(target, request),
@@ -798,6 +799,7 @@ export class RemoteThreadSummaryCache {
       target,
       { kind: "all" },
       "jump-search",
+      deadlineAt,
     );
   }
 
@@ -805,6 +807,7 @@ export class RemoteThreadSummaryCache {
     target: FederationRemoteTarget,
     selection: FederationThreadSelection,
     interestKey: string,
+    deadlineAt?: number,
   ): Promise<NavigationThreadSummary[]> {
     const now = this.options.now?.() ?? Date.now();
     const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
@@ -828,31 +831,41 @@ export class RemoteThreadSummaryCache {
       pending?.generation === generation
       && selectionIncludes(pending.selection, selection)
     ) {
-      return await pending.promise;
+      return await this.awaitPeerSnapshot(
+        pending.promise,
+        deadlineAt,
+      );
     }
     if (pending?.generation === generation) {
       try {
-        await pending.promise;
+        await this.awaitPeerSnapshot(pending.promise, deadlineAt);
       } catch {
         // The next read below gets its own attempt for the wider/different
         // collection; an unrelated sparse failure must not answer it.
       }
-      return await this.threadsForPeer(target, selection, interestKey);
+      return await this.threadsForPeer(
+        target,
+        selection,
+        interestKey,
+        deadlineAt,
+      );
     }
     // Reserved before the fetch, not after it: a snapshot that starts first and
     // finishes last must not overwrite the names a later refresh already
     // recorded.
     const nameObservationSequence = this.reserveThreadNameObservation();
     const promise = (async () => {
-      const timeoutMs =
-        this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
-      const snapshot = await withTimeout(
+      const snapshot = await this.awaitPeerSnapshot(
         this.options.fetchSnapshot(target, selection),
-        timeoutMs,
-        `Remote thread summaries timed out after ${Math.round(timeoutMs / 1000)}s.`,
+        deadlineAt,
       );
       if (this.generationFor(target.instanceId) !== generation) {
-        return await this.threadsForPeer(target, selection, interestKey);
+        return await this.threadsForPeer(
+          target,
+          selection,
+          interestKey,
+          deadlineAt,
+        );
       }
       const threads = snapshot.threads;
       this.cache.set(target.instanceId, {
@@ -886,6 +899,23 @@ export class RemoteThreadSummaryCache {
         this.inFlight.delete(target.instanceId);
       }
     }
+  }
+
+  private async awaitPeerSnapshot<T>(
+    promise: Promise<T>,
+    deadlineAt?: number,
+  ): Promise<T> {
+    const defaultTimeoutMs =
+      this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
+    const timeoutMs = deadlineAt === undefined
+      ? defaultTimeoutMs
+      : Math.max(0, deadlineAt - Date.now());
+    const message =
+      `Remote thread summaries timed out after ${Math.round(defaultTimeoutMs / 1000)}s.`;
+    if (timeoutMs <= 0) {
+      throw new Error(message);
+    }
+    return await withTimeout(promise, timeoutMs, message);
   }
 
   private async archivedThreadKeysForPeer(

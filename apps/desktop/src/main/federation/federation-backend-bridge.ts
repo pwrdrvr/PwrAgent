@@ -152,7 +152,6 @@ import type {
 import {
   encodeNavigationSnapshotThreadKeysForProtocolV1,
   normalizeNavigationSnapshotThreadKeys,
-  rankThreadJumpMatches,
 } from "@pwragent/shared";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import type { FederationRouter } from "./federation-router";
@@ -559,8 +558,9 @@ export type FederationBackendOperations = {
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot>;
   /**
-   * Optional because test doubles and non-desktop adapters can let the bridge
-   * derive this from getNavigationSnapshot. The remote client implements it.
+   * Optional for test doubles and non-desktop adapters. When absent, the RPC
+   * handler is omitted so callers receive method_not_found and may use their
+   * bounded legacy fallback without forcing a persistent owner refresh.
    */
   searchNavigationThreads?(
     request: FederationJumpSearchRequest,
@@ -820,26 +820,19 @@ export function registerFederationBackendHandlers(params: {
       });
     },
   );
-  params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.searchNavigationThreads,
-    async (envelope) => {
-      const request = envelope.params as FederationJumpSearchRequest;
-      if (params.backend.searchNavigationThreads) {
-        return await params.backend.searchNavigationThreads(request);
-      }
-      const query = request.query.trim();
-      if (!query) {
-        return { results: [] } satisfies FederationJumpSearchResponse;
-      }
-      const limit = Math.max(1, Math.min(request.limit ?? 8, 50));
-      const snapshot = await params.backend.getNavigationSnapshot({
-        refreshMode: "full",
-      });
-      return {
-        results: rankThreadJumpMatches(snapshot.threads, query).slice(0, limit),
-      } satisfies FederationJumpSearchResponse;
-    },
-  );
+  if (params.backend.searchNavigationThreads) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.searchNavigationThreads,
+      async (envelope) => {
+        if (!params.backend.searchNavigationThreads) {
+          throw new Error("Bounded navigation search became unavailable.");
+        }
+        return await params.backend.searchNavigationThreads(
+          envelope.params as FederationJumpSearchRequest,
+        );
+      },
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
     async (envelope) =>

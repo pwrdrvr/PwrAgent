@@ -161,6 +161,39 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     expect(fetchSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps an older peer's fallback inside the original peer deadline", async () => {
+    vi.useFakeTimers();
+    const unavailable = Object.assign(new Error("method not found"), {
+      code: "method_not_found",
+    });
+    const searchPeer = vi.fn(() =>
+      new Promise<NavigationThreadSummary[]>((_, reject) => {
+        setTimeout(() => reject(unavailable), 80);
+      }),
+    );
+    const fetchSnapshot = vi.fn(() => new Promise<NavigationSnapshot>(() => {}));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+      peerTimeoutMs: 100,
+    });
+
+    try {
+      const pending = cache.searchForJump({ query: "match" });
+      await vi.advanceTimersByTimeAsync(80);
+      expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(pending).resolves.toEqual({ results: [] });
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("matches remote threads by PR number, title, and branch with local parity", async () => {
     const threads = [
       stampedThread({

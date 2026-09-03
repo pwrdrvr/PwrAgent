@@ -301,6 +301,28 @@ import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 import { federationReconnectDelayMs } from "./federation-reconnect-policy";
 
 const log = getMainLogger("pwragent:federation-runtime");
+
+export function navigationWireResponseThreadCount(
+  response: NavigationSnapshot | NavigationSnapshotTransportResponse,
+): number {
+  if ("threads" in response) {
+    return response.threads.length;
+  }
+  switch (response.kind) {
+    case "full":
+      return response.snapshot.threads.length;
+    case "delta":
+      return response.upsertedThreads.length;
+    case "changes":
+      return response.changes.reduce(
+        (count, change) => count + change.upsertedThreads.length,
+        0,
+      );
+    case "unchanged":
+      return 0;
+  }
+}
+
 const INSTANCE_ID_META_KEY = "federation_instance_id";
 const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
@@ -2009,13 +2031,7 @@ export class DesktopFederationRuntime {
     const responseKind = "threads" in params.response
       ? "legacy-full"
       : params.response.kind;
-    const threadCount = "threads" in params.response
-      ? params.response.threads.length
-      : params.response.kind === "full"
-        ? params.response.snapshot.threads.length
-        : params.response.kind === "delta"
-          ? params.response.upsertedThreads.length
-          : 0;
+    const threadCount = navigationWireResponseThreadCount(params.response);
     // Exact size requires serialization. Avoid adding that work to ordinary
     // small responses; a large collection or an already-slow response earns
     // the diagnostic cost.
@@ -4877,10 +4893,13 @@ async function mountRemoteParentForLocalChild(
 }
 
 function localBackendOperations(): FederationBackendOperations {
+  const messagingBridge = new DesktopMessagingBackendBridge();
   return {
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
-      return await new DesktopMessagingBackendBridge()
-        .getNavigationSnapshot(request);
+      return await messagingBridge.getNavigationSnapshot(request);
+    },
+    async searchNavigationThreads(request) {
+      return await messagingBridge.searchNavigationThreads(request);
     },
     async listThreads(
       request: AppServerListThreadsRequest = {},

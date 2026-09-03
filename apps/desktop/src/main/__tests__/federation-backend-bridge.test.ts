@@ -8,7 +8,10 @@ import type {
   NavigationThreadSummary,
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import {
+  buildFederatedThreadRef,
+  rankThreadJumpMatches,
+} from "@pwragent/shared";
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -598,6 +601,12 @@ describe("federation backend bridge", () => {
           executionMode: "default" as const,
         },
       })),
+      searchNavigationThreads: vi.fn(async (request) => ({
+        results: rankThreadJumpMatches(threads, request.query).slice(
+          0,
+          request.limit ?? 8,
+        ),
+      })),
     } as unknown as FederationBackendOperations;
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -634,9 +643,48 @@ describe("federation backend bridge", () => {
     expect(JSON.stringify(replies[0]).length).toBeLessThan(
       JSON.stringify(threads).length / 100,
     );
-    expect(backend.getNavigationSnapshot).toHaveBeenCalledWith({
-      refreshMode: "full",
+    expect(backend.searchNavigationThreads).toHaveBeenCalledWith({
+      query: "553",
+      limit: 8,
     });
+    expect(backend.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reports bounded search as unsupported without building a full snapshot", async () => {
+    const backend = {
+      getNavigationSnapshot: vi.fn(),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "jump-search-unsupported",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.searchNavigationThreads,
+        params: { query: "553", limit: 8 },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(replies[0]).toMatchObject({
+      kind: "error",
+      error: { code: "method_not_found" },
+    });
+    expect(backend.getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("sends unchanged and sparse navigation responses instead of full Federation payloads", async () => {
