@@ -7655,6 +7655,89 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps retained completed work beside its older turn while a newer turn streams", async () => {
+    const olderTurn = {
+      id: "turn-older",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 2_000,
+    };
+    const newerTurn = {
+      id: "turn-newer",
+      status: "in_progress" as const,
+      startedAt: 3_000,
+    };
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [{
+          ...messageEntry({
+            id: "newer-commentary",
+            text: "I am working on the next turn.",
+            createdAt: 3_100,
+          }),
+          phase: "commentary" as const,
+          turn: newerTurn,
+        }],
+        hasPreviousPage: true,
+        previousCursor: "older-turn",
+        threadStatus: "active",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [{
+          ...messageEntry({
+            id: "older-final",
+            text: "The older turn is complete.",
+            createdAt: 2_000,
+          }),
+          phase: "final" as const,
+          turn: olderTurn,
+        }],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:The older turn is complete.",
+      "message:I am working on the next turn.",
+    ]);
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry({
+        type: "activity",
+        id: "older-retained-work",
+        summary: "Edited 18 files, +764, -41",
+        createdAt: 1_500,
+        status: "completed",
+        details: [{
+          id: "older-retained-work-detail",
+          kind: "write",
+          label: "Update old-turn.ts",
+        }],
+        turn: olderTurn,
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Edited 18 files, +764, -41",
+      "message:The older turn is complete.",
+      "message:I am working on the next turn.",
+    ]);
+  });
+
   it("preserves session-owned live activity across thread switches and hydration", async () => {
     let now = 20_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
