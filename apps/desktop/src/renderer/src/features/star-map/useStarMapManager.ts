@@ -47,6 +47,13 @@ export function useStarMapManager(params: {
   openThreadRef.current = params.openThread;
   const threadsRef = useRef(params.threads);
   threadsRef.current = params.threads;
+  // Held in refs so `open` keeps one identity: the caller rebuilds this
+  // props object every render, and a callback that changes with it would
+  // make the button's `onClick` a new value on every frame of a pan.
+  const resolveRef = useRef(params.desktopApi?.openStarMapManager);
+  resolveRef.current = params.desktopApi?.openStarMapManager;
+  const refreshRef = useRef(params.onRefreshLocalThreads);
+  refreshRef.current = params.onRefreshLocalThreads;
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== undefined) {
@@ -58,7 +65,7 @@ export function useStarMapManager(params: {
   useEffect(() => clearTimer, [clearTimer]);
 
   const open = useCallback(() => {
-    const resolve = params.desktopApi?.openStarMapManager;
+    const resolve = resolveRef.current;
     if (!resolve || status === "opening") return;
     setError(undefined);
     setStatus("opening");
@@ -85,7 +92,7 @@ export function useStarMapManager(params: {
         // Freshly created: the card needs the thread's navigation summary,
         // which only arrives with the next snapshot.
         setPendingThreadKey(threadKey);
-        params.onRefreshLocalThreads?.();
+        refreshRef.current?.();
         clearTimer();
         timerRef.current = window.setTimeout(() => {
           setPendingThreadKey(undefined);
@@ -97,7 +104,7 @@ export function useStarMapManager(params: {
         setStatus("failed");
         setError(cause instanceof Error ? cause.message : String(cause));
       });
-  }, [clearTimer, params, status]);
+  }, [clearTimer, status]);
 
   useEffect(() => {
     if (!pendingThreadKey) return;
