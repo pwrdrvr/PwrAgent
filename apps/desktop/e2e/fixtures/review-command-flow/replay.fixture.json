@@ -19,8 +19,7 @@
           "thread/list",
           "thread/read",
           "skills/list",
-          "turn/start",
-          "review/start"
+          "turn/start"
         ]
       }
     },
@@ -86,12 +85,11 @@
       }
     },
     {
-      "id": "review-start-1",
+      "id": "review-turn-start-1",
       "kind": "response",
-      "method": "review/start",
+      "method": "turn/start",
       "result": {
         "threadId": "thread-review-command",
-        "reviewThreadId": "thread-review-command",
         "turnId": "turn-review-1"
       }
     },
