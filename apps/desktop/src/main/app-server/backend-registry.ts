@@ -1919,6 +1919,12 @@ const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   codex: "OpenAI",
 };
 
+/** Who publishes each Codex channel's builds. Deliberately not
+ *  `BACKEND_LABELS.codex`: that names the backend in the UI, and renaming a
+ *  display label must never change a claim about who built a binary. */
+const CODEX_VENDOR_PUBLISHER = "OpenAI";
+const CODEX_MANAGED_PUBLISHER = "PwrDrvr";
+
 /**
  * Who built the Codex executable PwrAgent launches. Decided from the resolved
  * command's path: a managed download lives under the PwrAgent Codex channel's
@@ -1933,8 +1939,8 @@ function codexRuntimeBuild(
     return undefined;
   }
   return managedCodexTagForCommand(selectedCommand) === undefined
-    ? { channel: "vendor", publisher: BACKEND_LABELS.codex }
-    : { channel: "pwragent", publisher: "PwrDrvr" };
+    ? { channel: "vendor", publisher: CODEX_VENDOR_PUBLISHER }
+    : { channel: "pwragent", publisher: CODEX_MANAGED_PUBLISHER };
 }
 
 const OPENAI_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"];
@@ -8795,6 +8801,7 @@ export class DesktopBackendRegistry {
           });
           this.codexRuntimeRestartPending = true;
           this.managedCodexRuntimeSwitchPending = true;
+          this.redescribeCachedCodexRuntime(change.runtime);
           return this.maybeRestartCodexForManagedRuntimeChange();
         }),
       );
@@ -23817,26 +23824,60 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The durable Codex executable observation, when it still describes the
-   * current configuration. The pre-discovery summary is built entirely from
-   * it; the discovered summary falls back to it for the version and
-   * provenance that live runtime resolution could not name.
+   * Re-describe the cached summary's runtime identity after a managed Codex
+   * selection change.
+   *
+   * Nothing else invalidates that cache on this path: it is cleared only when
+   * a `providers.*` fingerprint changes, and the managed channel turns over
+   * without one. A passive `listBackends` therefore keeps serving the summary
+   * built for the executable that was just replaced, so the providers panel
+   * would name the superseded build's publisher and version.
+   *
+   * A change that leaves no managed runtime drops both fields rather than
+   * guessing at the vendor executable taking over — the next discovery names
+   * it, and until then silence beats the wrong publisher.
    */
-  private readCodexProviderLastKnownGood():
-    | ConfigDomainMap["providers"]["codex"]["lastKnownGood"]
-    | undefined {
+  private redescribeCachedCodexRuntime(
+    runtime?: ManagedCodexSelectionChange["runtime"],
+  ): void {
+    if (!this.codexBackendSummary) {
+      return;
+    }
+    this.codexBackendSummary = {
+      ...this.codexBackendSummary,
+      runtimeBuild: runtime ? codexRuntimeBuild(runtime.command) : undefined,
+      serverVersion: runtime?.metadata.version,
+    };
+  }
+
+  /**
+   * The Codex provider projection and its durable executable observation, the
+   * observation dropped when it no longer describes the current
+   * configuration. One snapshot read serves both, so a summary cannot pair a
+   * validation error with a `lastKnownGood` from a different revision.
+   *
+   * The pre-discovery summary is built entirely from this; the discovered
+   * summary falls back to it for the version and provenance that live runtime
+   * resolution could not name.
+   */
+  private readCodexProvider(): {
+    lastKnownGood?: ConfigDomainMap["providers"]["codex"]["lastKnownGood"];
+    provider?: ConfigDomainMap["providers"]["codex"];
+  } {
     const provider = this.configStore?.read("providers").codex;
-    return provider && providerLastKnownGoodMatchesConfig(provider)
-      ? provider.lastKnownGood
-      : undefined;
+    return {
+      ...(provider && providerLastKnownGoodMatchesConfig(provider)
+        ? { lastKnownGood: provider.lastKnownGood }
+        : {}),
+      ...(provider ? { provider } : {}),
+    };
   }
 
   private readCodexBackendSummary(): BackendSummary {
     if (this.codexBackendSummary) {
       return this.codexBackendSummary;
     }
-    const provider = this.configStore?.read("providers").codex;
-    const lastKnownGood = this.readCodexProviderLastKnownGood();
+    const { lastKnownGood, provider } = this.readCodexProvider();
     const available = Boolean(lastKnownGood?.selectedCommand);
     const methods: string[] = [];
     const capabilities = buildCapabilities(methods, "codex");
@@ -23882,7 +23923,7 @@ export class DesktopBackendRegistry {
   ): Promise<BackendSummary> {
     assertProviderDiscoveryPermit(permit);
     const previousSummary = this.readCodexBackendSummary();
-    const lastKnownGood = this.readCodexProviderLastKnownGood();
+    const { lastKnownGood } = this.readCodexProvider();
     const [
       initializeResult,
       defaultModelsResult,

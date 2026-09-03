@@ -70,8 +70,9 @@ export function resolveCodexProtocolCompatibility(
 /**
  * The App Server's own version, read out of the `userAgent` it reports from
  * `initialize`. That string is shaped `<client name>/<server version> (<os>;
- * <arch>) …`, so the version is the first slash-delimited token — and the
- * *whole* token, prerelease suffix included: `0.149.0-pwragent.2` is what
+ * <arch>) …`, so the version follows the LAST slash of the leading token — a
+ * client name may itself contain one, a version never does — and it is taken
+ * *whole*, prerelease suffix included: `0.149.0-pwragent.2` is what
  * distinguishes a PwrAgent Codex build from OpenAI's 0.149.0 release, and
  * truncating it to a bare `x.y.z` would describe one as the other.
  *
@@ -84,7 +85,7 @@ export function codexVersionFromUserAgent(
   userAgent?: string,
 ): string | undefined {
   const token = userAgent?.trim().split(/\s+/, 1)[0];
-  const version = token?.slice(token.indexOf("/") + 1);
+  const version = token?.slice(token.lastIndexOf("/") + 1);
   return token?.includes("/") && version && /^\d+\.\d+\.\d+/.test(version)
     ? version
     : undefined;
