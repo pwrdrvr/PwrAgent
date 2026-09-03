@@ -30,10 +30,16 @@ export type LoadedTranscriptHistory = {
   pagination: AppServerReadThreadResponse["replay"]["pagination"];
 };
 
+type TranscriptHistoryTurnPage = {
+  entryIndexes: number[];
+  page: TranscriptHistoryPage;
+};
+
 export type TranscriptHistoryIndex = {
   entryIds: Set<string>;
   messageIds: Set<string>;
   review: TranscriptReviewHistoryIndex;
+  turnPages: Map<string, TranscriptHistoryTurnPage[]>;
 };
 
 export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
@@ -41,6 +47,7 @@ export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
     entryIds: new Set(),
     messageIds: new Set(),
     review: createTranscriptReviewHistoryIndex(),
+    turnPages: new Map(),
   };
 }
 
@@ -119,6 +126,21 @@ export function prependTranscriptHistoryPage(params: {
       // views remain bounded by their captured entry count, so attaching the
       // next page cannot make a previously returned view grow.
       oldestPage.olderPage = page;
+    }
+    const entryIndexesByTurn = new Map<string, number[]>();
+    entries.forEach((entry, entryIndex) => {
+      const turnId = entry.turn?.id;
+      if (!turnId) {
+        return;
+      }
+      const entryIndexes = entryIndexesByTurn.get(turnId) ?? [];
+      entryIndexes.push(entryIndex);
+      entryIndexesByTurn.set(turnId, entryIndexes);
+    });
+    for (const [turnId, entryIndexes] of entryIndexesByTurn) {
+      const turnPages = params.index.turnPages.get(turnId) ?? [];
+      turnPages.push({ entryIndexes, page });
+      params.index.turnPages.set(turnId, turnPages);
     }
     oldestPage = page;
     newestPage ??= page;
@@ -443,15 +465,153 @@ export function combineTranscriptEntries(
   for (const id of presentation?.excludedHistoryEntryIds ?? []) {
     excludedHistoryIds.add(id);
   }
+  const historyInsertions = placeMisorderedCompletedActivityInHistory(
+    tailEntries,
+    index,
+  );
+  const insertedEntries = new Set(
+    [...historyInsertions.values()].flatMap((insertionsByIndex) =>
+      [...insertionsByIndex.values()].flat()
+    )
+  );
+  const projectedTailEntries = insertedEntries.size > 0
+    ? tailEntries.filter((entry) => !insertedEntries.has(entry))
+    : tailEntries;
   return createSegmentedArray({
     excludedHistoryIds,
-    historyCount: history.entryCount,
+    historyCount: history.entryCount + insertedEntries.size,
     historyNewestPage: history.newestPage,
     historyPage: history.oldestPage,
     itemOverrides: presentation?.historyEntryOverrides,
-    pageItems: (page) => page.entries,
-    tail: tailEntries,
+    pageItems: (page) => entriesWithHistoryInsertions(
+      page,
+      historyInsertions.get(page),
+    ),
+    tail: projectedTailEntries,
   });
+}
+
+type HistoryEntryInsertions = Map<
+  TranscriptHistoryPage,
+  Map<number, AppServerThreadEntry[]>
+>;
+
+function isCompletedActivityEntry(
+  entry: AppServerThreadEntry,
+): boolean {
+  const status = entry.turn?.status;
+  return (
+    entry.type === "activity"
+    && Boolean(entry.turn)
+    && (
+      status === "completed"
+      || status === "failed"
+      || status === "cancelled"
+      || status === "interrupted"
+      || typeof entry.turn?.completedAt === "number"
+      || typeof entry.turn?.durationMs === "number"
+    )
+  );
+}
+
+function transcriptEntryTime(entry: AppServerThreadEntry): number | undefined {
+  return entry.createdAt ?? entry.turn?.completedAt ?? entry.turn?.startedAt;
+}
+
+function findHistoryInsertionPoint(
+  entry: AppServerThreadEntry,
+  turnPages: TranscriptHistoryTurnPage[],
+): { entryIndex: number; page: TranscriptHistoryPage } | undefined {
+  const entryTime = transcriptEntryTime(entry);
+  let lastTurnEntry:
+    | { entryIndex: number; page: TranscriptHistoryPage }
+    | undefined;
+
+  for (let pageIndex = turnPages.length - 1; pageIndex >= 0; pageIndex -= 1) {
+    const turnPage = turnPages[pageIndex]!;
+    for (const entryIndex of turnPage.entryIndexes) {
+      const historyEntry = turnPage.page.entries[entryIndex];
+      if (!historyEntry) {
+        continue;
+      }
+      const historyEntryTime = transcriptEntryTime(historyEntry);
+      if (
+        typeof entryTime === "number"
+        && typeof historyEntryTime === "number"
+        && historyEntryTime > entryTime
+      ) {
+        return { entryIndex, page: turnPage.page };
+      }
+      lastTurnEntry = { entryIndex, page: turnPage.page };
+    }
+  }
+
+  return lastTurnEntry
+    ? {
+        entryIndex: lastTurnEntry.entryIndex + 1,
+        page: lastTurnEntry.page,
+      }
+    : undefined;
+}
+
+function placeMisorderedCompletedActivityInHistory(
+  tailEntries: AppServerThreadEntry[],
+  index: TranscriptHistoryIndex,
+): HistoryEntryInsertions {
+  const insertions: HistoryEntryInsertions = new Map();
+  let greatestSeenTime: number | undefined;
+
+  for (const entry of tailEntries) {
+    const entryTime = transcriptEntryTime(entry);
+    const turnId = entry.turn?.id;
+    const turnPages = turnId ? index.turnPages.get(turnId) : undefined;
+    // A turn can legitimately span the history/tail boundary. Move only a
+    // completed activity that has already fallen behind a newer tail item.
+    // The owning-turn index then restores its position without walking pages
+    // from unrelated turns on each streamed update.
+    const belongsBeforeTail =
+      isCompletedActivityEntry(entry)
+      && typeof entryTime === "number"
+      && typeof greatestSeenTime === "number"
+      && entryTime < greatestSeenTime
+      && Boolean(turnPages?.length)
+      && !index.entryIds.has(entry.id);
+    if (belongsBeforeTail && turnPages) {
+      const insertionPoint = findHistoryInsertionPoint(entry, turnPages);
+      if (insertionPoint) {
+        const insertionsByIndex = insertions.get(insertionPoint.page) ?? new Map();
+        const entries = insertionsByIndex.get(insertionPoint.entryIndex) ?? [];
+        entries.push(entry);
+        insertionsByIndex.set(insertionPoint.entryIndex, entries);
+        insertions.set(insertionPoint.page, insertionsByIndex);
+        continue;
+      }
+    }
+
+    if (typeof entryTime === "number") {
+      greatestSeenTime = Math.max(greatestSeenTime ?? entryTime, entryTime);
+    }
+  }
+
+  return insertions;
+}
+
+function entriesWithHistoryInsertions(
+  page: TranscriptHistoryPage,
+  insertionsByIndex: Map<number, AppServerThreadEntry[]> | undefined,
+): AppServerThreadEntry[] {
+  if (!insertionsByIndex || insertionsByIndex.size === 0) {
+    return page.entries;
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+  for (let entryIndex = 0; entryIndex <= page.entries.length; entryIndex += 1) {
+    entries.push(...(insertionsByIndex.get(entryIndex) ?? []));
+    if (entryIndex < page.entries.length) {
+      entries.push(page.entries[entryIndex]!);
+    }
+  }
+  return entries;
 }
 
 export function combineTranscriptMessages(
