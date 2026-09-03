@@ -838,12 +838,27 @@ describe("Tangerine Terminal theme contract", () => {
     // Unpinned the header clears the 48px spine; pinned it clears the panel
     // too, read from the SAME `--context-rail-effective` the chat column
     // reserves, so the header's right edge and the chat's cannot drift apart.
-    expect(css).toMatch(
-      /:root\[data-platform="win32"\] \.thread-header \{[^}]*padding-right:\s*48px;/
-    );
+    //
+    // Both reserves are keyed off the RAIL'S OWN classes through `:has()`, not
+    // off a flag mirrored onto `.thread-view` in JSX. Six places render a
+    // `.thread-view` — the thread, two launchpads, empty, pending, and search
+    // — and only some mount a rail. A mirrored flag has to be threaded through
+    // every one of them or the reserve is wrong: the launchpads DO mount a
+    // rail, so a header that never got the flag slides under the pinned panel,
+    // while search and the placeholders reserve 48px for a rail that is not
+    // there. Asking for the rail directly is right for all six with nothing to
+    // keep in sync, so assert the selectors name `.context-rail` and that no
+    // mirrored flag comes back.
     expect(css).toContain(
-      ':root[data-platform="win32"] .thread-view.has-pinned-context-rail .thread-header {',
+      '.thread-view:has(> .thread-view__layout > .context-rail)\n  .thread-header {',
     );
+    expect(css).toMatch(
+      /\.thread-view:has\(> \.thread-view__layout > \.context-rail\)\s*\.thread-header \{[^}]*padding-right:\s*48px;/
+    );
+    expect(css).toMatch(
+      /\.thread-view:has\(> \.thread-view__layout > \.context-rail\.is-pinned\)\s*\.thread-header \{[^}]*padding-right:\s*calc\(var\(--context-rail-effective, 380px\) \+ 48px\);/
+    );
+    expect(css).not.toContain("has-pinned-context-rail .thread-header");
   });
 
   it("keeps header chips from clipping when the row is squeezed", () => {
@@ -852,9 +867,27 @@ describe("Tangerine Terminal theme contract", () => {
     // CLIPS ("OpenAI" renders as "OpenA") instead of ellipsizing. The thread
     // title beside it is a block whose ellipsis works, and it is the long,
     // variable one, so the chips hold their size and the title yields.
+    // `.thread-row__chip` already carried `flex: 0 0 auto` (with a 26ch/28%
+    // cap) further down; `.chip` is the one that had nothing. Assert both, so
+    // neither half can quietly go back to shrinking.
     expect(css).toMatch(
-      /\.thread-header__eyebrow-row > \.chip,\s*\.thread-header__eyebrow-row > \.thread-row__chip \{[^}]*flex:\s*0 0 auto;/
+      /\.thread-header__eyebrow-row > \.chip \{[^}]*flex:\s*0 0 auto;/
     );
+    expect(css).toMatch(
+      /\.thread-header__eyebrow-row > \.thread-row__chip \{[^}]*flex:\s*0 0 auto;/
+    );
+    // Because they do not shrink, the ROW has to clip. A thread wearing
+    // backend + agent + automation + approval chips runs past the header's
+    // right edge once the title is squeezed to nothing, and on Windows the
+    // header's right edge is the context rail — measured at 1280 with the rail
+    // pinned, the last chip reached x=890 against a rail edge at 852 and
+    // painted over the panel. Clipping keeps the spill inside the header.
+    // `clip` on x only, not `overflow: hidden` — hidden would also cut the 4px
+    // focus ring on the title button off at the row's top and bottom.
+    const eyebrowRow = extractRuleBody(css, ".thread-header__eyebrow-row");
+    expect(eyebrowRow).toContain("overflow-x: clip;");
+    expect(eyebrowRow).toContain("overflow-y: visible;");
+    expect(eyebrowRow).not.toContain("overflow: hidden;");
   });
 
   it("keeps the live work rail inset to match the chat column", () => {

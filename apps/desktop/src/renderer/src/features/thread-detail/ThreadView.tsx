@@ -3373,14 +3373,7 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <section
-      // The pinned flag is also on `.thread-view__layout` below, where the
-      // chat column reads it. It is repeated here because on Windows the
-      // HEADER has to reserve the rail too (the rail runs the full column
-      // height there, up to the title strip), and the header is an earlier
-      // sibling of the layout — no CSS selector reaches backwards.
-      className={`thread-view${
-        contextRailPinned ? " has-pinned-context-rail" : ""
-      }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
+      className="thread-view"
       style={
         {
           "--context-rail-width": `${contextRailWidth}px`,
