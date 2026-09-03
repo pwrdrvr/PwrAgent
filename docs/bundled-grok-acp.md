@@ -93,6 +93,13 @@ the 24-hour window, and installs that track's build even when it is a step back
 from what is running — a downgrade is the point of moving from Prerelease to
 Latest.
 
+The verified download is machine-wide, and it holds one build. A check that
+finds the cached build was installed for the other track ignores its TTL and
+re-checks, so a profile on Latest is never handed a build a profile on
+Prerelease installed. Two profiles on the same machine following different
+tracks therefore reinstall in turn rather than sharing, which costs a download
+each time the tracks disagree.
+
 Each check records what both tracks resolved to, so the pane can name each
 track's version without a second network round trip. One case cannot: when the
 unauthenticated GitHub API is rate-limited, PwrAgent falls back to the public

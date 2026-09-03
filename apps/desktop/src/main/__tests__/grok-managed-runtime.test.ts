@@ -319,6 +319,65 @@ describe("ensureManagedGrokRuntime", () => {
     );
   });
 
+  it("re-checks when the fresh cache was installed for the other track", async () => {
+    // The managed root is machine-wide. A profile on Prerelease rewrites the
+    // record a profile on Latest reads next, and the fresh `checkedAt` alone
+    // would hand Latest the build it exists to avoid.
+    const rootDir = await temporaryRoot();
+    const cachedTag = "pwragent-v2.1.0-pwragent.1";
+    await writeManagedCache(rootDir, {
+      asset: "pwragent-grok-2.1.0-pwragent.1-linux-x86_64.tar.gz",
+      channel: "prerelease",
+      tag: cachedTag,
+    });
+    const archiveName = "pwragent-grok-2.0.0-pwragent.1-linux-x86_64.tar.gz";
+    const archive = Buffer.from("promoted archive bytes");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === MANAGED_GROK_RELEASES_URL) {
+        return Response.json([
+          release("pwragent-v2.1.0-pwragent.1", [
+            asset("SHA256SUMS"),
+            asset("pwragent-grok-2.1.0-pwragent.1-linux-x86_64.tar.gz"),
+          ], { prerelease: true }),
+          release("pwragent-v2.0.0-pwragent.1", [
+            asset("SHA256SUMS"),
+            asset(archiveName, digest, archive.length),
+          ]),
+        ]);
+      }
+      if (url.endsWith("/SHA256SUMS")) {
+        return new Response(`${digest}  ${archiveName}\n`);
+      }
+      if (url.endsWith(`/${archiveName}`)) {
+        return new Response(archive);
+      }
+      return new Response("missing", { status: 404 });
+    });
+
+    const runtime = await ensureManagedGrokRuntime({
+      arch: "x64",
+      channel: "latest",
+      // A TTL check against a record written moments ago: the short-circuit
+      // this test exists to defeat.
+      checkMode: "ttl",
+      extractArchive: async (_archivePath, targetDir) => {
+        await writeFakeBundle(targetDir);
+      },
+      fetch: fetchMock as typeof globalThis.fetch,
+      now: () => 200,
+      platform: "linux",
+      probeVersion: async () => "grok 2.0.0-test",
+      rootDir,
+    });
+
+    expect(runtime?.metadata.tag).toBe("pwragent-v2.0.0-pwragent.1");
+    expect(runtime?.metadata.channel).toBe("latest");
+    // Both tracks are recorded, so the pane can name each one.
+    expect(runtime?.metadata.prereleaseTag).toBe("pwragent-v2.1.0-pwragent.1");
+  });
+
   it("keeps the cached build on Latest when only the feed answers", async () => {
     // The feed cannot say which builds are promoted, so the Latest track has
     // no usable answer this cycle. Installing the newest tag anyway would put
@@ -640,6 +699,7 @@ async function writeManagedCache(
   rootDir: string,
   options: {
     asset: string;
+    channel?: string;
     commandContents?: string;
     tag: string;
   },
@@ -655,6 +715,7 @@ async function writeManagedCache(
     path.join(rootDir, "managed-release.json"),
     `${JSON.stringify({
       asset: options.asset,
+      ...(options.channel ? { channel: options.channel } : {}),
       checkedAt: 100,
       installedAt: 100,
       repository: "pwrdrvr/grok-build",

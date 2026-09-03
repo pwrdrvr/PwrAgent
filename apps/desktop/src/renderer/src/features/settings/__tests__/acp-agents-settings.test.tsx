@@ -1088,6 +1088,50 @@ describe("AcpAgentsSettings", () => {
     });
   });
 
+  it("follows the track the config holds, not the last discovery", async () => {
+    // A switch writes the config, then rescans. If the rescan fails — offline,
+    // or the forced release check throws — the control must still show the
+    // track that was written, not snap back and claim the write did not take.
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1_000,
+      entries: [
+        grokEntry({
+          managedBuild: {
+            repository: "pwrdrvr/grok-build",
+            channel: "latest" as const,
+            latestTag: "pwragent-v1.0.4-pwragent.2",
+            prereleaseTag: "pwragent-v1.0.5-pwragent.1",
+            installedTag: "pwragent-v1.0.4-pwragent.2",
+            activeTag: "pwragent-v1.0.4-pwragent.2",
+            checkedAt: 1_000,
+            installedAt: 1_000,
+          },
+        }),
+      ],
+    }));
+    const snapshot = acpSnapshot("grok", "");
+    (
+      snapshot.acpAgents as unknown as {
+        grok: { managedBuildChannel?: string };
+      }
+    ).grok.managedBuildChannel = "prerelease";
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={snapshot}
+        onManagedGrokBuildsChange={vi.fn(async () => true)}
+        onManagedGrokBuildChannelChange={vi.fn(async () => true)}
+      />,
+    );
+
+    const track = await screen.findByRole("radiogroup", { name: "Build track" });
+    expect(within(track).getByRole("radio", { name: /Prerelease/ }))
+      .toHaveAttribute("aria-checked", "true");
+    expect(within(track).getByRole("radio", { name: /Latest/ }))
+      .toHaveAttribute("aria-checked", "false");
+  });
+
   it("keeps Prerelease selectable when both tracks are the same build", async () => {
     // Between publishing a build and promoting it the tracks agree. The
     // control still has to be usable: this is exactly when an operator moves

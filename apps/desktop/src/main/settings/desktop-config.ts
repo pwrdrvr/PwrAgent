@@ -50,9 +50,8 @@ import {
   isDesktopIntegratedTerminalWindowsShell,
   isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
-  isDesktopUpdateChannel,
   isDesktopUpdateTrain,
-  MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
+  parseDesktopUpdateChannel,
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
@@ -398,20 +397,6 @@ export function managedGrokBuildsEnabledFor(
   defaultEnabled = true,
 ): boolean {
   return config.acpAgents?.grok?.managedBuilds ?? defaultEnabled;
-}
-
-/**
- * Which grok-build track the managed runtime follows. Latest is the default:
- * an operator who never opens the control must not be handed a build that was
- * published for testing.
- */
-export function managedGrokBuildChannelFor(
-  config: DesktopSettingsConfig,
-): DesktopUpdateChannel {
-  return (
-    config.acpAgents?.grok?.managedBuildChannel
-    ?? MANAGED_GROK_BUILD_CHANNEL_DEFAULT
-  );
 }
 
 /**
@@ -2383,9 +2368,7 @@ function readToolUpdateMode(
 function readUpdateChannel(
   value: TomlScalar | undefined,
 ): DesktopUpdateChannel | undefined {
-  return typeof value === "string" && isDesktopUpdateChannel(value)
-    ? value
-    : undefined;
+  return parseDesktopUpdateChannel(value);
 }
 
 function readUpdateTrain(

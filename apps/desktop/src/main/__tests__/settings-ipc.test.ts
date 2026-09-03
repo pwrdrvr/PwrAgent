@@ -1756,6 +1756,51 @@ describe("settings ipc", () => {
     // setup doesn't flake the suite.
   }, 20_000);
 
+  it("passes the configured managed Grok track to local discovery", async () => {
+    // The whole feature is this value reaching `ensureManagedGrokRuntime`.
+    // Every other test on this path would pass with the chain unwired,
+    // because an unwired chain produces the default.
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    fs.writeFileSync(
+      path.join(tempRoot, "config.toml"),
+      "[acp_agents.grok]\nmanaged_build_channel = \"prerelease\"\n",
+    );
+    const { initializeAppState, disposeAppState } = await import(
+      "../state/app-state"
+    );
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState();
+    try {
+      registerSettingsIpcHandlers(service);
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: true, discoveryIntent: "settings-user-action" },
+      );
+
+      expect(
+        localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          managedGrok: expect.objectContaining({ channel: "prerelease" }),
+        }),
+      );
+    } finally {
+      disposeAppState();
+    }
+  }, 20_000);
+
   it("skips local discovery and runtime probes for disabled ACP agents", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),

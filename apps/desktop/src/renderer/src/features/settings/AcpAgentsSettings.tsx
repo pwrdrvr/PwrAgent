@@ -59,6 +59,19 @@ function managedGrokBuildsSnapshot(
 }
 
 /**
+ * The track the config holds, not the one the last discovery reported.
+ *
+ * The two differ for as long as a switch takes to rescan — a forced release
+ * check that can download a build — and permanently if that rescan fails. The
+ * control has to follow the write it made, the way the sibling toggle does.
+ */
+function managedGrokBuildChannelSnapshot(
+  snapshot: DesktopSettingsSnapshot | undefined,
+): DesktopUpdateChannel | undefined {
+  return snapshot?.acpAgents.grok?.managedBuildChannel;
+}
+
+/**
  * Renders each discovered ACP agent (Gemini / Grok / Kimi / Qwen) as its own
  * `SettingsSection`, styled identically to the Codex section (SettingsField
  * rows + the shared SettingsPathRow install list). Returns a FRAGMENT — no
@@ -168,6 +181,9 @@ export function AcpAgentsSettings(props: {
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
             enabled={acpAgentEnabledInSnapshot(props.snapshot, entry.registryId)}
             managedGrokBuilds={managedGrokBuildsSnapshot(props.snapshot)}
+            managedGrokBuildChannel={
+              managedGrokBuildChannelSnapshot(props.snapshot)
+            }
             saving={props.saving}
             refreshing={refreshing || loading || props.catalogRefreshing}
             onCliPathChange={
@@ -310,6 +326,8 @@ function AcpAgentSection(props: {
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
   enabled: boolean;
   managedGrokBuilds: boolean;
+  /** Track the config holds, which the control follows. */
+  managedGrokBuildChannel?: DesktopUpdateChannel;
   saving?: boolean;
   refreshing?: boolean;
   onCliPathChange?: (
@@ -506,7 +524,7 @@ function AcpAgentSection(props: {
             // Same wait as the toggle: the config write, then the rescan that
             // installs and activates the track's build.
             pendingLabel="Saving and rescanning…"
-            value={managedBuild.channel}
+            value={props.managedGrokBuildChannel ?? managedBuild.channel}
             onChange={(channel) => {
               return (
                 props.onManagedGrokBuildChannelChange?.(channel).then(

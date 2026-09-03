@@ -1828,6 +1828,19 @@ export function isDesktopUpdateChannel(
   return DESKTOP_UPDATE_CHANNELS.includes(value as DesktopUpdateChannel);
 }
 
+/**
+ * Read a persisted update channel from an unvalidated source — a TOML scalar,
+ * a JSON field on disk. One parser for both, so a channel that stops being
+ * accepted stops being accepted everywhere at once.
+ */
+export function parseDesktopUpdateChannel(
+  value: unknown,
+): DesktopUpdateChannel | undefined {
+  return typeof value === "string" && isDesktopUpdateChannel(value)
+    ? value
+    : undefined;
+}
+
 export function isDesktopUpdateTrain(
   value: string,
 ): value is DesktopUpdateTrain {

@@ -1,7 +1,7 @@
 import type { DesktopUpdateChannel } from "@pwragent/shared";
 import {
-  isDesktopUpdateChannel,
   MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
+  parseDesktopUpdateChannel,
 } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import {
@@ -287,7 +287,7 @@ async function readManagedGrokMetadata(
   // that does not parse and keep the record.
   return {
     ...(metadata as ManagedGrokMetadata),
-    channel: readMetadataChannel(metadata.channel),
+    channel: parseDesktopUpdateChannel(metadata.channel),
     latestTag: readMetadataTag(metadata.latestTag),
     prereleaseTag: readMetadataTag(metadata.prereleaseTag),
   };
@@ -319,12 +319,24 @@ async function ensureManagedGrokRuntimeInner(
   const cached = await readCachedRuntime(rootDir, options);
   const checkMode = options.checkMode ?? "ttl";
   const channel = options.channel ?? MANAGED_GROK_BUILD_CHANNEL_DEFAULT;
+  // A cache installed for the other track is not this track's answer. The
+  // managed root is machine-wide, so a profile following Prerelease rewrites
+  // the record a profile following Latest reads next; without this the fresh
+  // `checkedAt` alone would hand Latest the build it exists to avoid. A record
+  // written before tracks existed names no channel and is left alone, so an
+  // offline machine does not re-check on every launch forever.
+  const cachedOtherTrack =
+    cached?.metadata.channel !== undefined
+    && cached.metadata.channel !== channel;
   if (
-    (checkMode === "once-per-process" && processChecks.has(rootDir))
-    || (
-      checkMode === "ttl"
-      && cached
-      && now - cached.metadata.checkedAt < MANAGED_GROK_CHECK_TTL_MS
+    !cachedOtherTrack
+    && (
+      (checkMode === "once-per-process" && processChecks.has(rootDir))
+      || (
+        checkMode === "ttl"
+        && cached
+        && now - cached.metadata.checkedAt < MANAGED_GROK_CHECK_TTL_MS
+      )
     )
   ) {
     return cached
@@ -342,11 +354,17 @@ async function ensureManagedGrokRuntimeInner(
       );
     }
     // What each track resolved to, recorded on every check so the settings
-    // pane can name both versions without a second network round trip.
+    // pane can name both versions without a second network round trip. A check
+    // that answered from the Atom feed saw one track only; carry the other
+    // track's last known tag rather than blanking a version this machine
+    // already learned, whichever branch below writes the record.
+    const latestTag = slots.latest?.tag ?? cached?.metadata.latestTag;
+    const prereleaseTag =
+      slots.prerelease?.tag ?? cached?.metadata.prereleaseTag;
     const observed = {
       channel,
-      ...(slots.latest ? { latestTag: slots.latest.tag } : {}),
-      ...(slots.prerelease ? { prereleaseTag: slots.prerelease.tag } : {}),
+      ...(latestTag ? { latestTag } : {}),
+      ...(prereleaseTag ? { prereleaseTag } : {}),
     };
     if (cached?.metadata.tag === release.tag) {
       const metadata = { ...cached.metadata, ...observed, checkedAt: now };
@@ -504,7 +522,9 @@ export function selectManagedGrokReleaseSlots(
   // Precedence, not publish order. A promotion lands on a release published
   // weeks ago, and a repair to an older line is published last; either one
   // makes the newest entry in the response the wrong answer.
-  candidates.sort((left, right) => compareParsedSemver(right.version, left.version));
+  candidates.sort(
+    (left, right) => compareParsedSemver(right.version, left.version),
+  );
   const latest = candidates.find((candidate) => !candidate.prerelease)?.release;
   const newest = candidates[0]?.release;
   return {
@@ -539,11 +559,17 @@ export function selectManagedGrokReleaseFromFeed(
       + "(pwragent-v[0-9A-Za-z][0-9A-Za-z.+-]*)",
     "gu",
   );
-  const tags = [...feed.matchAll(linkPattern)]
-    .map((match) => match[1])
-    .filter((tag) => isManagedGrokTagEligible(tag))
-    .sort((left, right) => compareManagedGrokTags(right, left));
-  const tag = tags[0];
+  const candidates: Array<{ tag: string; version: ParsedSemver }> = [];
+  for (const match of feed.matchAll(linkPattern)) {
+    const version = parseManagedGrokSemver(match[1]);
+    if (isManagedGrokTagEligible(match[1]) && version !== undefined) {
+      candidates.push({ tag: match[1], version });
+    }
+  }
+  candidates.sort(
+    (left, right) => compareParsedSemver(right.version, left.version),
+  );
+  const tag = candidates[0]?.tag;
   if (tag === undefined) {
     return undefined;
   }
@@ -576,25 +602,13 @@ export function isManagedGrokTagEligible(tag: string): boolean {
   );
 }
 
-function readMetadataChannel(value: unknown): DesktopUpdateChannel | undefined {
-  return typeof value === "string" && isDesktopUpdateChannel(value)
-    ? value
-    : undefined;
-}
-
 function readMetadataTag(value: unknown): string | undefined {
-  return typeof value === "string" && isManagedGrokTag(value)
+  // The same bar the record's own tag is held to. A tag below the first signed
+  // release can never be installed, so reporting one as a track's version
+  // would offer the operator a build that selecting the track cannot produce.
+  return typeof value === "string" && isManagedGrokTagEligible(value)
     ? value
     : undefined;
-}
-
-/** Precedence order for two tags both known to parse. */
-function compareManagedGrokTags(left: string, right: string): number {
-  const leftVersion = parseManagedGrokSemver(left);
-  const rightVersion = parseManagedGrokSemver(right);
-  return leftVersion && rightVersion
-    ? compareParsedSemver(leftVersion, rightVersion)
-    : 0;
 }
 
 function isManagedGrokTag(tag: string): boolean {
