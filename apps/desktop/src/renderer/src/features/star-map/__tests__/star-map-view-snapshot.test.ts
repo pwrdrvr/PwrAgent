@@ -61,6 +61,7 @@ function baseInput(overrides: Partial<Parameters<typeof buildStarMapViewSnapshot
     localInstanceId: "local",
     threadsByInstance: new Map(),
     instanceLabels: new Map([["local", "This instance"]]),
+    cardRects: drawn(),
     selection: new Set<string>(),
     openChatCardThreadKeys: new Set<string>(),
     now: NOW,
@@ -198,6 +199,28 @@ describe("buildStarMapViewSnapshot", () => {
     ]);
   });
 
+  it("reports nothing drawn at overview zoom, where no card is painted", () => {
+    const threads = [
+      thread("a1", { path: "/repo/alpha" }),
+      thread("a2", { path: "/repo/alpha" }),
+    ];
+    const snapshot = buildStarMapViewSnapshot(
+      baseInput({
+        threadsByInstance: new Map([["local", threads]]),
+        clouds: new Map([["local", cloudFor(threads)]]),
+        // The rect maps are not gated on the zoom, so they still describe
+        // where each card WOULD sit. Overview paints cloud labels only.
+        cardRects: drawn("local::codex:a1", "local::codex:a2"),
+        overview: true,
+      }),
+    );
+    expect(snapshot.threads.every((entry) => entry.visible)).toBe(false);
+    expect(snapshot.threads.every((entry) => entry.rect === undefined)).toBe(true);
+    expect(snapshot.instances[0].visibleThreadCount).toBe(0);
+    expect(snapshot.clouds[0].visibleCount).toBe(0);
+    expect(snapshot.clouds[0].hiddenCount).toBe(2);
+  });
+
   it("passes the card geometry through for the cards that have it", () => {
     const threads = [thread("a1", { path: "/repo/alpha" })];
     const snapshot = buildStarMapViewSnapshot(
@@ -215,6 +238,44 @@ describe("buildStarMapViewSnapshot", () => {
       width: 220,
       height: 112,
     });
+  });
+
+  it("reports the sub-clouds a project body draws, not the project", () => {
+    const alpha = thread("a1", { path: "/repo/alpha" });
+    const beta = thread("b1", { path: "/repo/beta" });
+    const project = {
+      key: "work",
+      label: "work",
+      threads: [alpha, beta],
+      mass: 2,
+      lastActivityAt: NOW,
+    };
+    const snapshot = buildStarMapViewSnapshot(
+      baseInput({
+        layout: "projects",
+        threadsByInstance: new Map([["local", [alpha, beta]]]),
+        projects: [project],
+        // The lens groups a project's threads into labelled sub-clouds and
+        // paints those labels, so a card is in one of those — not in the
+        // project. Answering with the project makes "the others in its
+        // cloud" every thread in it.
+        projectClouds: new Map([["work", cloudFor([alpha, beta])]]),
+        cardRects: drawn("local::codex:a1", "local::codex:b1"),
+      }),
+    );
+    expect(snapshot.clouds.map((cloud) => cloud.label).sort()).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    const alphaCloud = snapshot.clouds.find((cloud) => cloud.label === "alpha");
+    expect(alphaCloud?.threadKeys).toEqual(["codex:a1"]);
+    expect(
+      snapshot.threads.find((entry) => entry.threadKey === "codex:a1")?.cloudKey,
+    ).toBe(alphaCloud?.key);
+    // The project is still reported, per thread, so nothing is lost.
+    expect(
+      snapshot.threads.every((entry) => entry.projectLabel !== undefined),
+    ).toBe(true);
   });
 
   it("pools the projects lens into clouds that belong to no one instance", () => {

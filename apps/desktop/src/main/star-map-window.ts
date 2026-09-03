@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { BrowserWindow, type WebContents } from "electron";
 import { getMainLogger } from "./log";
 import {
   applyWindowSecurityHardening,
@@ -48,6 +48,25 @@ const STAR_MAP_WINDOW_HEIGHT = 820;
 const STAR_MAP_HASH = "star-map";
 
 let starMapWindow: BrowserWindow | undefined;
+
+/**
+ * Whether a renderer message came from the Star Map surface itself.
+ *
+ * The preload is shared by every window, so a channel that only validates
+ * its payload accepts one from Settings, Activity or a Federation viewer
+ * too. For the published view that matters: it is served back to an Agent
+ * as what the operator is looking at.
+ */
+export function isStarMapWindowWebContents(
+  contents: WebContents | undefined,
+): boolean {
+  return (
+    contents !== undefined
+    && starMapWindow !== undefined
+    && !starMapWindow.isDestroyed()
+    && starMapWindow.webContents.id === contents.id
+  );
+}
 
 /**
  * Spawn (or focus, if already open) the dedicated Federation Star Map

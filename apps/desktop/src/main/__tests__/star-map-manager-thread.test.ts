@@ -21,15 +21,21 @@ function deps(options: {
   renameThread?: ReturnType<typeof vi.fn>;
   setRemembered?: ReturnType<typeof vi.fn>;
   listThreadKeys?: () => Promise<Set<string>>;
+  /**
+   * Supply this instead of `listThreadKeys` to exercise the real membership
+   * check, including its archived-thread filter.
+   */
+  listThreads?: ReturnType<typeof vi.fn>;
 } = {}) {
   const startThread =
     options.startThread
     ?? vi.fn(async () => ({ backend: "codex", threadId: "made-1" }));
   const renameThread = options.renameThread ?? vi.fn(async () => ({}));
   const setRemembered = options.setRemembered ?? vi.fn();
+  const listThreads = options.listThreads ?? vi.fn(async () => []);
   return {
     workspaceDir: () => workspace,
-    registry: { startThread, renameThread } as never,
+    registry: { startThread, renameThread, listThreads } as never,
     overlayStore: {
       getStarMapManagerThread: () => options.remembered,
       setStarMapManagerThread: setRemembered,
@@ -39,10 +45,16 @@ function deps(options: {
         model: "gpt-5",
       }),
     } as never,
-    listThreadKeys:
-      options.listThreadKeys
-      ?? (async () => new Set(options.existingThreadKeys ?? [])),
-    handles: { startThread, renameThread, setRemembered },
+    // Omitted entirely when the caller supplies `listThreads`, so the real
+    // membership check runs instead of being stubbed past.
+    ...(options.listThreads
+      ? {}
+      : {
+          listThreadKeys:
+            options.listThreadKeys
+            ?? (async () => new Set(options.existingThreadKeys ?? [])),
+        }),
+    handles: { startThread, renameThread, setRemembered, listThreads },
   };
 }
 
@@ -120,14 +132,33 @@ describe("openStarMapManagerThread", () => {
   });
 
   it("replaces a remembered thread the operator archived", async () => {
+    // Goes through the real membership check rather than a stubbed key set:
+    // the archived filter lives inside it, and stubbing the seam meant the
+    // filter could be deleted with every test still green.
     const injected = deps({
       remembered: { backend: "codex", threadId: "archived-1" },
-      // The navigation snapshot still carries archived threads, so the check
-      // has to exclude them itself — this is the seam where that happens.
-      listThreadKeys: async () => new Set<string>(),
+      listThreads: vi.fn(async () => [
+        { id: "archived-1", archivedAt: 1_700_000_000_000 },
+        { id: "other-1" },
+      ]),
     });
     const response = await openStarMapManagerThread({}, injected);
     expect(response).toMatchObject({ threadId: "made-1", created: true });
+    // Scoped to the remembered thread's own backend: the check is on the
+    // click path, and a fleet-wide listing is a lot of work for one lookup.
+    expect(injected.handles.listThreads).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "codex" }),
+    );
+  });
+
+  it("keeps a remembered thread the real membership check still finds", async () => {
+    const injected = deps({
+      remembered: { backend: "codex", threadId: "kept-1" },
+      listThreads: vi.fn(async () => [{ id: "kept-1" }]),
+    });
+    const response = await openStarMapManagerThread({}, injected);
+    expect(response).toMatchObject({ threadId: "kept-1", created: false });
+    expect(injected.handles.startThread).not.toHaveBeenCalled();
   });
 
   it("still reopens a manager when its instructions cannot be rewritten", async () => {

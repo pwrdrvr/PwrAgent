@@ -26,13 +26,18 @@ export function useStarMapViewPublisher(params: {
   input: StarMapViewSnapshotInput;
   intervalMs?: number;
 }): void {
+  // Assigned from an effect, never during render. A render React starts and
+  // abandons (concurrent rendering interrupts non-discrete work) must not be
+  // what a pending publish picks up: the snapshot would describe rects and
+  // selection that were never painted, which is exactly what this module
+  // promises cannot happen.
   const inputRef = useRef(params.input);
-  inputRef.current = params.input;
   const publishRef = useRef<{ lastAt: number; timer?: number }>({ lastAt: 0 });
   const publish = params.desktopApi?.publishStarMapView;
   const intervalMs = params.intervalMs ?? STAR_MAP_VIEW_PUBLISH_INTERVAL_MS;
 
   useEffect(() => {
+    inputRef.current = params.input;
     if (!publish) return;
     const state = publishRef.current;
     const send = () => {
