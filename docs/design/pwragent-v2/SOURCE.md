@@ -84,13 +84,24 @@ Two further exclusions, applied by hand on 2026-09-03:
 
 ## Redactions
 
-Keep this list current. Anything here has to be re-applied on the next import,
-because the upstream project still carries the original text.
+Nothing here is currently redacted relative to upstream. The one redaction this
+import needed was fixed at the source instead, so a re-import reproduces what is
+checked in.
+
+Keep it that way. If a future import needs a redaction, prefer fixing the
+upstream project so the two can't drift; list it below only while that isn't
+possible, because anything listed has to be re-applied by hand on every import.
 
 - 2026-09-03, `project/Settings Plugins MCPs UX Review.dc.html`: a Codex profile
-  named after the user's employer was replaced with `work` (9 occurrences). The
-  page uses it as an example of a second, non-default Codex profile
-  (`~/.codex/profiles/<name>`), so the substitution costs the page nothing.
+  named after the user's employer was replaced with `work` (9 occurrences), and
+  the same change was then written back to the Claude Design project. The page
+  uses the name only as an example of a second, non-default Codex profile
+  (`~/.codex/profiles/<name>`), so the substitution costs it nothing. Upstream
+  and this copy are byte-identical.
+
+The project's `uploads/` screenshots are outside this: no import reads them and
+they are never committed, but they can still show whatever was on screen when
+they were pasted.
 
 Personal paths of the form `/Users/huntharo/...` appear in mock thread data
 throughout the bundle. They were already checked in as of 2026-05-05 and are
@@ -116,7 +127,9 @@ short, listed, mechanical set.
    anyway, but keep the working tree clean.)
 3. Scan the staging directory before it touches the repo: employer names,
    personal paths, tokens (`xoxb-`, `ghp_`, `sk-ant`, `Bearer`), and anything
-   else that shouldn't ship. Record what you redact under "Redactions".
+   else that shouldn't ship. Fix what you find in the upstream project where you
+   can, so the two don't drift; record anything you can only fix locally under
+   "Redactions".
 4. Replace this directory wholesale: `rm -rf docs/design/pwragent-v2/project`
    then `cp -R <staging>/project docs/design/pwragent-v2/`.
 5. Replace `README.md` if you produced a real export bundle and its README has
