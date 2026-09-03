@@ -112,6 +112,10 @@ import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
+import {
+  buildNoStartupBackendNotice,
+  NO_STARTUP_BACKEND_NOTICE_ID,
+} from "./features/notifications/provider-startup-notice";
 import { QuitBlockerQueueToast } from "./features/notifications/QuitBlockerQueueToast";
 import {
   appNoticeReducer,
@@ -342,20 +346,31 @@ function DesktopAppShell(props: {
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     SettingsSection | undefined
   >(undefined);
+  // Sub-screen within `settingsInitialSection` (a provider registry id under
+  // "models", a platform kind under "messaging"). Always written together with
+  // the section through `openSettingsSection` so a deep link can never carry a
+  // previous link's sub-screen into a different section.
+  const [settingsInitialSubsection, setSettingsInitialSubsection] = useState<
+    string | undefined
+  >(undefined);
   const [threadViewReady, setThreadViewReady] = useState(false);
-  // Onboarding wizard overlay state. Two paths into it:
+  // Onboarding wizard overlay state. Three paths into it:
   //  (1) auto-launch on first snapshot if `onboarding.completed` is
   //      false for the active profile;
   //  (2) explicit replay via Help → Replay Onboarding (main process
-  //      menu push → renderer subscribes below).
-  // The auto-launch leans on `autoOpenSeen` so we don't re-open after
+  //      menu push → renderer subscribes below);
+  //  (3) the "Run setup" action on the no-backend startup notice.
+  // A completed profile that lands with no provider gets that notice, never
+  // an unrequested wizard: it has already answered every question the wizard
+  // asks, so a missing provider is a health problem to point at, not setup to
+  // redo. The auto-launch leans on `autoOpenSeen` so we don't re-open after
   // the user dismisses without persisting (snapshot refresh case).
   const [onboardingOpen, setOnboardingOpen] = useState<
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
   const startupLandingStateRef = useRef<
-    "pending" | "onboarding-opened" | "complete"
+    "pending" | "notice-shown" | "complete"
   >("pending");
   // Boot info is fetched once on mount and is stable across the
   // renderer's lifetime (the main process recorded it before this
@@ -562,10 +577,17 @@ function DesktopAppShell(props: {
   const openMessagingActivityWindow = useCallback(() => {
     void desktopApi?.openMessagingActivityWindow?.();
   }, [desktopApi]);
+  const openSettingsSection = useCallback(
+    (section: SettingsSection | undefined, subsection?: string) => {
+      setSettingsInitialSection(section);
+      setSettingsInitialSubsection(section ? subsection : undefined);
+      setMainView("settings");
+    },
+    [],
+  );
   const openMessagingSettings = useCallback(() => {
-    setSettingsInitialSection("messaging");
-    setMainView("settings");
-  }, []);
+    openSettingsSection("messaging");
+  }, [openSettingsSection]);
   const dismissGithubPrSamlNotice = useCallback(() => {
     dispatchAppNotice({ type: "dismiss-prefix", prefix: "github-pr-saml:" });
     setGithubPrSamlEvents((current) => current.slice(1));
@@ -577,9 +599,8 @@ function DesktopAppShell(props: {
       prefix: "github-pr-authentication-failure",
     });
     setGithubPrAuthenticationFailure(undefined);
-    setSettingsInitialSection("git");
-    setMainView("settings");
-  }, [dismissGithubPrSamlNotice]);
+    openSettingsSection("git");
+  }, [dismissGithubPrSamlNotice, openSettingsSection]);
   const githubPrSamlNotice = useMemo(() => {
     const event = githubPrSamlEvents[0];
     return event
@@ -1915,12 +1936,9 @@ function DesktopAppShell(props: {
       return;
     }
     return desktopApi.onOpenSettingsRequested((section) => {
-      setSettingsInitialSection(
-        isSettingsSection(section) ? section : undefined,
-      );
-      setMainView("settings");
+      openSettingsSection(isSettingsSection(section) ? section : undefined);
     });
-  }, [desktopApi]);
+  }, [desktopApi, openSettingsSection]);
   useEffect(() => {
     if (!desktopApi?.onOpenNewThreadRequested) {
       return;
@@ -2002,29 +2020,74 @@ function DesktopAppShell(props: {
       if (backendSummaries.error) {
         return;
       }
+      // Nor is a discovery that has not answered yet. The Codex summary is
+      // derived from a durable last-known-good that is legitimately empty for
+      // the whole window between process start and the first published startup
+      // discovery — several seconds when a managed runtime has to be verified.
+      // `navigation/providerThreads/refreshed` re-runs this effect with the
+      // real answer once that discovery lands.
+      if (
+        backendSummaries.backends.some((backend) => backend.discoveryPending)
+      ) {
+        return;
+      }
       if (startupLandingStateRef.current === "pending") {
-        startupLandingStateRef.current = "onboarding-opened";
-        setOnboardingOpen("replay");
+        startupLandingStateRef.current = "notice-shown";
+        showAppNotice(
+          buildNoStartupBackendNotice({
+            backends: backendSummaries.backends,
+            // Every exit from the notice returns the landing decision to
+            // "pending". Without that, closing the toast — or opening setup
+            // and cancelling it — left a provider-less window with nothing on
+            // screen and no way to get the notice back, which the modal wizard
+            // this replaced could not do. A notice-supplied `onDismiss`
+            // replaces the stack's own removal, so it has to dismiss too.
+            onDismiss: () => {
+              startupLandingStateRef.current = "pending";
+              dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
+            },
+            onOpenProviderSettings: (registryId) => {
+              startupLandingStateRef.current = "pending";
+              dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
+              openSettingsSection("models", registryId);
+            },
+            onRunSetup: () => {
+              startupLandingStateRef.current = "pending";
+              dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
+              setOnboardingOpen("replay");
+            },
+          }),
+        );
       }
       return;
     }
 
+    // A provider that showed up late clears the notice it caused.
+    dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
     startupLandingStateRef.current = "complete";
-    if (navigation.selectedThreadKey) {
+    // Landing is for a window that is still sitting on the startup view. The
+    // notice sends operators into Settings to fix exactly this, so a provider
+    // appearing while they are mid-edit there must not navigate away from the
+    // pane that repaired it.
+    if (navigation.selectedThreadKey || mainView !== "thread") {
       return;
     }
-    setMainView("thread");
     void openWorkspaceLaunchpad(startupBackend.kind);
   }, [
+    backendSummaries.backends,
     backendSummaries.error,
     backendSummaries.loaded,
     desktopApi,
+    dismissAppNotice,
+    mainView,
     navigation.loaded,
     navigation.selectedThreadKey,
     onboardingOpen,
+    openSettingsSection,
     openWorkspaceLaunchpad,
     remoteReadsSuspended,
     settings.snapshot?.onboarding?.completed.value,
+    showAppNotice,
     startupBackend,
   ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
@@ -2092,8 +2155,7 @@ function DesktopAppShell(props: {
       setMainView("automations");
     },
     onOpenSettings: () => {
-      setSettingsInitialSection(undefined);
-      setMainView("settings");
+      openSettingsSection(undefined);
     },
     onToggleThreadSearch: () => {
       toggleGlobalThreadSearch();
@@ -2618,8 +2680,7 @@ function DesktopAppShell(props: {
             await navigation.openDirectoryLaunchpad(directory, preferredBackend);
           }}
           onOpenSettings={() => {
-            setSettingsInitialSection(undefined);
-            setMainView("settings");
+            openSettingsSection(undefined);
           }}
           onOpenProfile={profiles.openProfile}
           onSelectThread={(thread) => {
@@ -2853,6 +2914,7 @@ function DesktopAppShell(props: {
                 cachedBackends={backendSummaries.backends}
                 desktopApi={desktopApi}
                 initialSection={settingsInitialSection}
+                initialSubsection={settingsInitialSubsection}
                 profiles={profiles}
                 settings={settings}
                 onClose={() => setMainView("thread")}
@@ -2962,8 +3024,7 @@ function DesktopAppShell(props: {
                 setOnboardingOpen(null);
               }}
               onOpenMessagingSettings={() => {
-                setSettingsInitialSection("messaging");
-                setMainView("settings");
+                openSettingsSection("messaging");
               }}
             />
           </Suspense>

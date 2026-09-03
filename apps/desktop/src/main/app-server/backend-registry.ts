@@ -8341,6 +8341,7 @@ export class DesktopBackendRegistry {
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
   private readonly resolveManagedTokenMiserActivationRequiredFn: () => boolean;
+  private readonly resolveCodexDiscoveryPendingFn: () => boolean;
   private readonly markManagedCodexRuntimeSwitchCompleteFn: () => void;
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
@@ -8466,6 +8467,7 @@ export class DesktopBackendRegistry {
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
     resolveManagedTokenMiserActivationRequired?: () => boolean;
+    resolveCodexDiscoveryPending?: () => boolean;
     markManagedCodexRuntimeSwitchComplete?: () => void;
     /** Overrides the settings service's Codex executable resolution. */
     resolveCodexRuntimeCommand?: () => Promise<{
@@ -8654,6 +8656,12 @@ export class DesktopBackendRegistry {
     this.markManagedCodexRuntimeSwitchCompleteFn =
       options?.markManagedCodexRuntimeSwitchComplete
       ?? (() => settingsService?.markManagedCodexRuntimeSwitchComplete());
+    // A replay or test registry has no settings service and therefore no
+    // startup discovery to wait for: its summary is final the moment it is
+    // read, never pending.
+    this.resolveCodexDiscoveryPendingFn =
+      options?.resolveCodexDiscoveryPending
+      ?? (() => settingsService?.isCodexDiscoveryPending() ?? false);
     this.resolveToolOutputAlertPolicyFn =
       options?.resolveToolOutputAlertPolicy ??
       (() => {
@@ -8930,12 +8938,6 @@ export class DesktopBackendRegistry {
             error: error instanceof Error ? error.message : String(error),
           });
         });
-      // Bring the gate up at boot when the feature is on, so a resumed thread
-      // is covered from its first tool call rather than from whenever a new
-      // thread happens to be created. Retention pruning rides this one call.
-      if (this.resolveTokenMiserEnabledFn()) {
-        void this.prepareTokenMiserRuntime({ prune: true });
-      }
     }
     this.gitDirectoryService =
       options?.gitDirectoryService ??
@@ -10335,6 +10337,33 @@ export class DesktopBackendRegistry {
       threadCount: threads.length,
     });
     return threads;
+  }
+
+  /**
+   * Bring the Token Miser gate up at boot when the feature is on, so a resumed
+   * thread is covered from its first tool call rather than from whenever a new
+   * thread happens to be created. Retention pruning rides this one call.
+   *
+   * The caller must run this AFTER the one permitted startup Codex discovery
+   * has published a selection. Preparation opens the app-server to read its
+   * capabilities, and the registry is constructed before startup discovery is
+   * even requested, so doing this from the constructor raced discovery: the
+   * capability probe resolved no executable, `prepareTokenMiserRuntime` caught
+   * a "Refresh Codex in Settings" error and recorded Token Miser as
+   * unavailable, and nothing re-ran it for the rest of the session unless the
+   * managed runtime happened to change.
+   */
+  async prepareTokenMiserRuntimeAtStartup(): Promise<void> {
+    // Deferring this behind startup discovery means a quit can land first —
+    // a managed-runtime download holds discovery open for many seconds.
+    // Preparation opens the app-server, so without this guard a shutdown
+    // could be followed by a fresh Codex child process and writes to a store
+    // `close()` already finalized. `maybeRestartCodexForManagedRuntimeChange`
+    // guards on `closed` for the same reason.
+    if (this.closed || !this.resolveTokenMiserEnabledFn()) {
+      return;
+    }
+    await this.prepareTokenMiserRuntime({ prune: true });
   }
 
   refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
@@ -23875,7 +23904,12 @@ export class DesktopBackendRegistry {
 
   private readCodexBackendSummary(): BackendSummary {
     if (this.codexBackendSummary) {
-      return this.codexBackendSummary;
+      // A summary cached by `discoverCodexBackend` carries no pending flag, and
+      // a failing one is invalidated only by a provider fingerprint change —
+      // which a later successful discovery does not produce. Re-deriving the
+      // flag here keeps a summary cached mid-discovery from reading as a
+      // settled "no provider" for the rest of the process.
+      return this.withCodexDiscoveryPending(this.codexBackendSummary);
     }
     const { lastKnownGood, provider } = this.readCodexProvider();
     const available = Boolean(lastKnownGood?.selectedCommand);
@@ -23888,9 +23922,16 @@ export class DesktopBackendRegistry {
     ) {
       capabilities.startReview = true;
     }
+    // Only claim discovery is outstanding when it actually is. A discovery
+    // that ran and selected nothing records no `validation.error`, so this
+    // default used to describe a completed discovery as incomplete — and the
+    // no-backend notice renders this string as its operator-facing detail and
+    // copy text.
     const unavailableReason = provider?.validation.error
-      ?? "Codex discovery has not completed yet.";
-    return {
+      ?? (this.resolveCodexDiscoveryPendingFn()
+        ? "Codex discovery has not completed yet."
+        : "No Codex executable was found on this machine.");
+    return this.withCodexDiscoveryPending({
       kind: "codex",
       label: BACKEND_LABELS.codex,
       available,
@@ -23915,7 +23956,27 @@ export class DesktopBackendRegistry {
         },
       ],
       ...(available ? {} : { unavailableReason }),
-    };
+    });
+  }
+
+  /**
+   * Stamp `discoveryPending` onto a Codex summary that is unavailable only
+   * because discovery has not answered yet.
+   *
+   * Applied at every return of `readCodexBackendSummary`, including the cached
+   * one, so "not selected yet" and "not configured" never read alike to a
+   * startup surface deciding whether the profile has a provider at all.
+   */
+  private withCodexDiscoveryPending(summary: BackendSummary): BackendSummary {
+    const pending = !summary.available && this.resolveCodexDiscoveryPendingFn();
+    if (pending === Boolean(summary.discoveryPending)) {
+      return summary;
+    }
+    if (pending) {
+      return { ...summary, discoveryPending: true };
+    }
+    const { discoveryPending: _settled, ...settledSummary } = summary;
+    return settledSummary;
   }
 
   private async discoverCodexBackend(
