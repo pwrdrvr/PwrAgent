@@ -30,7 +30,8 @@ type ThreadPlaceholderHeaderProps = {
   onOpenMessagingSettings?: () => void;
   /**
    * Window panel toggles — mirrors ThreadHeader so the loading / empty
-   * states share the same chrome (no layout shift, no stoplight overlap).
+   * states share the same chrome (no layout shift, no stoplight overlap),
+   * on every platform.
    */
   layout?: ThreadPlaceholderLayoutControls;
   /** Star Map toggle, mirroring ThreadHeader so the chrome never shifts. */
@@ -102,7 +103,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
           </div>
         </div>
         <div className="thread-header__chrome">
-          {props.layout && !isWindows ? (
+          {props.layout ? (
             <PanelToggleButtons
               sidebarOpen={props.layout.sidebarOpen}
               railOpen={props.layout.railOpen}

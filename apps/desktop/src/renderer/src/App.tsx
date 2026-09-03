@@ -2535,13 +2535,7 @@ function DesktopAppShell(props: {
         desktopApi={desktopApi}
         onOpenMessagingActivity={openMessagingActivityWindow}
         onOpenMessagingSettings={openMessagingSettings}
-        layout={{
-          sidebarOpen: !sidebarHidden,
-          railOpen: contextRailPinned,
-          onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-          onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-        }}
-        starMap={starMapControls}
+        layout={{ sidebarOpen: !sidebarHidden }}
         actions={mastheadActions}
       />
       <div

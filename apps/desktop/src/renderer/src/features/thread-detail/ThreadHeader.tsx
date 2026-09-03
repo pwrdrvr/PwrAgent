@@ -59,16 +59,16 @@ type ThreadHeaderProps = {
   onOpenMessagingSettings?: () => void;
   onRevealSelectedThreadInList?: () => void;
   /**
-   * Window panel toggles. Rendered here (top-right, beside MSG) on
-   * macOS/Linux; on Windows the AppTitleBar owns them instead, so this
-   * is skipped to avoid a duplicate control + a second hotkey listener.
+   * Window panel toggles, top-right beside the terminal + Star Map. Rendered
+   * on every platform: this header is the one home for view chrome, and the
+   * Windows title strip carries none of it. The chords themselves are bound
+   * once at the shell, so mounting the chips here binds no listener.
    */
   layout?: ThreadHeaderLayoutControls;
   /**
-   * Star Map mission-control toggle, rendered left of the MSG chip on
-   * macOS/Linux (Windows renders it in the AppTitleBar instead). Absent in
-   * federation remote windows — the map is a whole-federation surface owned
-   * by the primary window.
+   * Star Map mission-control toggle, rendered left of the MSG chip on every
+   * platform. Absent in federation remote windows — the map is a
+   * whole-federation surface owned by the primary window.
    */
   starMap?: StarMapToggleControls;
   /**
@@ -102,9 +102,10 @@ type ThreadHeaderProps = {
  */
 export function ThreadHeader(props: ThreadHeaderProps) {
   const projectLabel = props.projectLabel?.trim();
-  // On Windows the AppTitleBar strip owns the layout toggles + masthead
-  // actions; rendering them here too would duplicate the control and the
-  // ⌘B/⌘⌥B listener.
+  // Windows draws its own title strip, which already carries the wordmark +
+  // masthead actions; only the relocate-on-hidden-sidebar cluster below is
+  // platform-dependent. Every other control in this header renders on all
+  // three platforms.
   const isWindows = getDesktopApi()?.platform === "win32";
   // When the sidebar is hidden, its wordmark + action buttons relocate
   // here (macOS/Linux only — Windows keeps them in the title bar).
@@ -290,7 +291,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             </button>
           ) : null}
           {workflowBudgetTooltip.tooltipNode}
-          {props.layout && !isWindows ? (
+          {props.layout ? (
             <PanelToggleButtons
               sidebarOpen={props.layout.sidebarOpen}
               railOpen={props.layout.railOpen}
