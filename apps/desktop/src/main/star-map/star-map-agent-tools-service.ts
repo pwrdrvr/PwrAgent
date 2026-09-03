@@ -1,34 +1,24 @@
 import type {
-  CaptureStarMapToolArgs,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
   ReadStarMapViewToolArgs,
   StarMapViewSnapshot,
   StarMapViewThread,
 } from "@pwragent/shared";
-import {
-  DEFAULT_STAR_MAP_CAPTURE_MAX_WIDTH,
-  DEFAULT_STAR_MAP_VIEW_MAX_THREADS,
-  MAX_STAR_MAP_CAPTURE_BYTES,
-} from "@pwragent/shared";
+import { DEFAULT_STAR_MAP_VIEW_MAX_THREADS } from "@pwragent/shared";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
-import {
-  captureStarMapView,
-  readStarMapView,
-  type StarMapCapture,
-} from "./star-map-view-registry";
+import { readStarMapView } from "./star-map-view-registry";
 
 const NOT_OPEN_MESSAGE =
   "No Star Map surface is open, so there is nothing on screen to read. Ask the operator to open the Star Map (View → Star Map, or the map button in the sidebar).";
 
 export type StarMapAgentToolsDeps = {
   readView?: () => StarMapViewSnapshot | undefined;
-  capture?: (options: { maxWidth?: number }) => Promise<StarMapCapture | undefined>;
   now?: () => number;
 };
 
 /**
- * Serves the two Star Map tools from the view the renderer last published.
+ * Serves the Star Map tool from the view the renderer last published.
  *
  * Filtering happens here rather than in the renderer so the published
  * snapshot stays one shape: the publisher is on the drag path and should do
@@ -38,16 +28,11 @@ export function createStarMapAgentToolsHandler(
   deps: StarMapAgentToolsDeps = {},
 ): PwrAgentStarMapHandler {
   const readView = deps.readView ?? readStarMapView;
-  const capture = deps.capture ?? captureStarMapView;
   const now = deps.now ?? (() => Date.now());
   return async (
     request: PwrAgentStarMapRequest,
-  ): Promise<PwrAgentStarMapResponse> => {
-    if (request.operation === "read_star_map_view") {
-      return readViewResponse(readView(), request.args, now());
-    }
-    return await captureResponse(capture, request.args, readView());
-  };
+  ): Promise<PwrAgentStarMapResponse> =>
+    readViewResponse(readView(), request.args, now());
 }
 
 function readViewResponse(
@@ -116,59 +101,5 @@ function readViewResponse(
         ),
       },
     },
-  };
-}
-
-async function captureResponse(
-  capture: (options: { maxWidth?: number }) => Promise<StarMapCapture | undefined>,
-  args: CaptureStarMapToolArgs,
-  snapshot: StarMapViewSnapshot | undefined,
-): Promise<PwrAgentStarMapResponse<"capture_star_map">> {
-  if (!snapshot) {
-    return {
-      ok: false,
-      error: { code: "star_map_not_open", message: NOT_OPEN_MESSAGE },
-    };
-  }
-  let result = await capture({
-    maxWidth: args.maxWidth ?? DEFAULT_STAR_MAP_CAPTURE_MAX_WIDTH,
-  });
-  if (result && result.png.byteLength > MAX_STAR_MAP_CAPTURE_BYTES) {
-    // A wide capture of a dense map encodes to megabytes, and base64 adds a
-    // third on top before it reaches the model. Halve the long edge once
-    // rather than handing back a tool result that size.
-    result =
-      (await capture({ maxWidth: Math.max(320, Math.floor(result.width / 2)) }))
-      ?? result;
-  }
-  if (result && result.png.byteLength > MAX_STAR_MAP_CAPTURE_BYTES) {
-    return {
-      ok: false,
-      error: {
-        code: "capture_failed",
-        message: `The capture encoded to ${Math.round(result.png.byteLength / 1_024)} KB, over the ${Math.round(MAX_STAR_MAP_CAPTURE_BYTES / 1_024)} KB limit for a tool result. Call again with a smaller maxWidth, or use read_star_map_view.`,
-      },
-    };
-  }
-  if (!result) {
-    return {
-      ok: false,
-      error: {
-        code: "capture_failed",
-        message:
-          "The Star Map surface could not be captured. It may have just closed; read_star_map_view reports the same state without pixels.",
-      },
-    };
-  }
-  return {
-    ok: true,
-    data: {
-      surface: result.surface,
-      width: result.width,
-      height: result.height,
-      byteLength: result.png.byteLength,
-    },
-    imageBase64: result.png.toString("base64"),
-    imageMimeType: "image/png",
   };
 }
