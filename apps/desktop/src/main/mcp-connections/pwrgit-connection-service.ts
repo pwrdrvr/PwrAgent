@@ -56,6 +56,11 @@ export type PwrGitConnectionServiceOptions = {
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
   resolveInstallPaths?: () => string[];
+  /** Existence check for the resolved install path. Injectable so a test does
+   * not silently depend on whether PwrGit happens to be installed on the
+   * machine running it — locally that made three pairing tests pass and fail
+   * on every CI runner. */
+  exists?: (path: string) => boolean;
   resolveBundledScript?: (installPath: string) => string | undefined;
   resolveExecutable?: (installPath: string) => string | undefined;
   settings?: PwrGitSettings;
@@ -134,6 +139,7 @@ export class PwrGitConnectionService {
   private readonly openExternal: (url: string) => Promise<void>;
   private readonly openPath: (path: string) => Promise<string>;
   private readonly resolveInstallPaths: () => string[];
+  private readonly exists: (path: string) => boolean;
   private readonly resolveBundledScript: (
     installPath: string,
   ) => string | undefined;
@@ -155,6 +161,7 @@ export class PwrGitConnectionService {
     this.openPath = options.openPath ?? ((path) => shell.openPath(path));
     this.resolveInstallPaths =
       options.resolveInstallPaths ?? resolveDefaultPwrGitInstallPaths;
+    this.exists = options.exists ?? existsSync;
     this.resolveBundledScript =
       options.resolveBundledScript ?? defaultBundledScript;
     this.resolveExecutable = options.resolveExecutable ?? defaultExecutable;
@@ -373,7 +380,7 @@ export class PwrGitConnectionService {
   }
 
   private findInstalledPath(): string | undefined {
-    return this.resolveInstallPaths().find((candidate) => existsSync(candidate));
+    return this.resolveInstallPaths().find((candidate) => this.exists(candidate));
   }
 
   private async readCredential(): Promise<PwrGitCredential> {
