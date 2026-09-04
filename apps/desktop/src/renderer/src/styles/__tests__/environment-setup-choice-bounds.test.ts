@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+import { firstCssRuleBody as ruleBody } from "./css-rule-body";
 
 /**
  * Locks the declarations that keep the environment-setup failure panel from
@@ -23,21 +22,6 @@ import { describe, expect, it } from "vitest";
  * scrolling body rather than a child of it — is asserted against the rendered
  * DOM in `thread-view.test.tsx`, which is where a refactor would break it.
  */
-const testDir = path.dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
-
-/** Body of the first top-level CSS rule whose selector matches exactly. */
-function ruleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = css.match(
-    new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`),
-  );
-  if (!match?.groups?.body) {
-    throw new Error(`Expected app.css to define ${selector}`);
-  }
-  return match.groups.body;
-}
-
 describe("environment setup failure panel bounds", () => {
   it("keeps the pane that clips the panel clipped", () => {
     // The subject of the whole fix: `.thread-view` shows no scrollbar, so
@@ -59,7 +43,9 @@ describe("environment setup failure panel bounds", () => {
     // chat column the actions row wraps onto a second flex line, and a
     // wrapped line is sized to its content — capping the section would clip
     // the buttons rather than shrink the body.
-    expect(body).toMatch(/max-height:\s*\d+vh/);
+    // Any window-relative form, including the `min(<px>, <vh>)` cap the
+    // stylesheet uses elsewhere — the invariant is the unit, not the syntax.
+    expect(body).toMatch(/max-height:[^;]*\d+vh/);
     // A bound with no scroller just moves the clip inside the panel.
     expect(body).toMatch(/overflow-y:\s*auto/);
     // `overflow-y: auto` alone still cannot shrink past the content floor.
@@ -70,7 +56,7 @@ describe("environment setup failure panel bounds", () => {
     // A percentage here resolves against the section's `auto` height, which
     // means it does not resolve at all and the bound silently disappears.
     expect(ruleBody(".environment-setup-choice__body")).not.toMatch(
-      /max-height:\s*\d+%/,
+      /max-height:[^;]*\d+%/,
     );
   });
 

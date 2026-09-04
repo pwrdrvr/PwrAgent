@@ -15983,12 +15983,13 @@ a.button {
      body under ~1200px of chat column, and a wrapped flex line is sized to
      its content: capping the section would clip the buttons instead of
      shrinking the body. A percentage would resolve against the section's
-     auto height (that is, not at all), so the bound is window-relative. The
-     panel then costs ~40vh plus its own chrome at every window size, which
-     keeps the actions inside the pane well below the 640px minimum window
-     height and leaves the transcript a scrollable remainder. */
+     auto height (that is, not at all), so the bound is window-relative, in
+     the `min(<px>, <vh>)` form `.launchpad-pending__command` already uses:
+     the vh share keeps the actions inside the pane well below the 640px
+     minimum window height, and the pixel ceiling stops a tall display from
+     handing the panel 600px of transcript for no reason. */
   min-height: 0;
-  max-height: 40vh;
+  max-height: min(360px, 40vh);
   overflow-y: auto;
 }
 
@@ -16030,6 +16031,17 @@ a.button {
   font-size: 12px;
   color: var(--text-secondary);
   user-select: none;
+  /* `__body` scrolls, and this summary carries the exit code and the collapse
+     control — the two things worth keeping in view while reading the output.
+     Its containing block is the `<details>`, which spans the whole scrolled
+     stack, so it stays pinned for as long as any of the detail is visible.
+     `.launchpad-pending__output`'s header is pinned for the same reason. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel-elevated);
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
 }
 
 .environment-setup-choice__details > summary::-webkit-details-marker {
@@ -16076,11 +16088,16 @@ a.button {
 }
 
 .environment-setup-choice__pre--output {
-  /* No height cap of its own. `__body` is the panel's scroll container, and a
-     320px box inside a body that is itself shorter than that on a small
+  /* No height cap of its own: `__body` is the panel's one scroll container,
+     and a 320px box inside a body that is itself shorter than that on a small
      window made two nested vertical scrollers the wheel had to chain out of.
-     Horizontal scrolling for long lines stays on `__pre`. */
-  overflow-y: visible;
+     Wrapping rather than scrolling sideways matches
+     `.launchpad-pending__output pre`, the live setup panel's output block —
+     and it is what keeps this readable now that the body scrolls, because
+     `__pre`'s horizontal scrollbar would otherwise sit at the bottom of the
+     full output, outside the body's viewport. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .environment-setup-choice__path {

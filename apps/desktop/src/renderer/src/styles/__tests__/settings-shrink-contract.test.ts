@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+import { firstCssRuleBody as ruleBody } from "./css-rule-body";
 
 /**
  * Locks the declarations that let a settings panel narrow to its column.
@@ -20,21 +19,6 @@ import { describe, expect, it } from "vitest";
  * nothing in a render test can see it, because jsdom does no layout. Only
  * the stylesheet can be asserted here.
  */
-const testDir = path.dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
-
-/** Body of the first top-level CSS rule whose selector matches exactly. */
-function ruleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = css.match(
-    new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`),
-  );
-  if (!match?.groups?.body) {
-    throw new Error(`Expected app.css to define ${selector}`);
-  }
-  return match.groups.body;
-}
-
 describe("settings panel shrink contract", () => {
   it("gives the collapsible body a column track with no min-content floor", () => {
     const body = ruleBody(".settings-section__body-clip");

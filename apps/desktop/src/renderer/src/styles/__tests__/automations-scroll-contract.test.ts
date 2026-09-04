@@ -1,33 +1,6 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const testDir = path.dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
-
-/**
- * Every top-level rule whose selector line is exactly `selector`. Plural
- * because several of these selectors also appear inside a grouped rule (the
- * header and the row share one grid definition), and the assertion below
- * wants the standalone block, not whichever came first.
- */
-function ruleBodies(selector: string): string[] {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const bodies = [
-    ...css.matchAll(
-      new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`, "g"),
-    ),
-  ].map((match) => match.groups?.body ?? "");
-  if (bodies.length === 0) {
-    throw new Error(`Expected app.css to define ${selector}`);
-  }
-  return bodies;
-}
-
-function ruleBody(selector: string): string {
-  return ruleBodies(selector).join("\n");
-}
+import { cssRuleBodies as ruleBodies, cssRuleBody as ruleBody } from "./css-rule-body";
 
 /**
  * The Automations screen scrolls at `.automations-content`; everything inside
