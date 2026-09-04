@@ -25909,6 +25909,67 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("leaves multi-request Astra turn aggregates above 272K unpriced", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-6-astra",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    for (const cumulativeInputTokens of [200_000, 400_000]) {
+      await codexClient.emit({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          tokenUsage: {
+            last_token_usage: {
+              input_tokens: 200_000,
+              cached_input_tokens: 100_000,
+              output_tokens: 10_000,
+              reasoning_output_tokens: 0,
+              total_tokens: 210_000,
+            },
+            total_token_usage: {
+              input_tokens: cumulativeInputTokens,
+              cached_input_tokens: cumulativeInputTokens / 2,
+              output_tokens: cumulativeInputTokens / 20,
+              reasoning_output_tokens: 0,
+              total_tokens: cumulativeInputTokens * 1.05,
+            },
+          },
+        },
+      });
+    }
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      cachedInputTokens: 200_000,
+      inputTokens: 400_000,
+      priceStatus: "unpriced",
+      totalCostMicros: 0,
+      uncachedInputTokens: 200_000,
+    });
+
+    await registry.close();
+  });
+
   it("attributes turnless usage emitted after completion to the completed turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },

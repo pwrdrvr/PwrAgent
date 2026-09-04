@@ -5516,6 +5516,60 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("prices a single Astra request above 272K at the long-context rate", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-astra-long-request", {
+      events: [
+        {
+          type: "turn_context",
+          timestamp: "2026-09-04T12:00:00.000Z",
+          payload: {
+            turn_id: "turn-1",
+            model: "gpt-6-astra",
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-09-04T12:00:10.000Z",
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: {
+                input_tokens: 272_001,
+                cached_input_tokens: 72_001,
+                output_tokens: 100_000,
+                reasoning_output_tokens: 0,
+                total_tokens: 372_001,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-astra-long-request",
+    });
+    const usage = replay.entries.find(
+      (entry) => entry.type === "activity" && entry.usageLine,
+    );
+
+    expect(usage?.type === "activity" ? usage.usageLine : undefined).toMatchObject({
+      cachedInputCostMicros: 144_002,
+      priceStatus: "priced",
+      pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-gt-272k",
+      totalCostMicros: 11_644_002,
+      uncachedInputCostMicros: 4_000_000,
+    });
+
+    await client.close();
+  });
+
   it("prices token_count entries with each turn's own model metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-token-count-model-switch", {

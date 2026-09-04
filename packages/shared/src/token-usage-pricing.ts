@@ -2,6 +2,8 @@ export type TokenUsagePricingServiceTier = "standard" | "priority";
 
 export type TokenUsagePricingProvider = "openai" | "qwen" | "xai";
 
+export type TokenUsagePricingInputScope = "aggregate" | "request";
+
 export type TokenUsagePriceStatus = "priced" | "unpriced";
 
 export type TokenUsagePriceUnavailableReason =
@@ -232,6 +234,7 @@ type PricingCatalogEntry = {
   outputTokensIncludeReasoning?: boolean;
   provider: TokenUsagePricingProvider;
   rateBandId?: string;
+  requiresRequestInputTokens?: boolean;
   serviceTier: TokenUsagePricingServiceTier;
 };
 
@@ -317,6 +320,8 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     maximumInputTokens: 272_000,
     rateBandId: "input-lte-272k",
   },
+  // OpenAI applies the higher band per request. Turn-wide totals above the
+  // boundary are ambiguous and must not select this rate.
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
     catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
@@ -331,6 +336,38 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     outputUsdPerMillion: 75,
     minimumInputTokens: 272_001,
     rateBandId: "input-gt-272k",
+    requiresRequestInputTokens: true,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
+    model: "gpt-6-astra",
+    displayModel: "GPT-6 Astra",
+    displayTier: "Fast (<=272K input)",
+    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    inputUsdPerMillion: 20,
+    cachedInputUsdPerMillion: 2,
+    outputUsdPerMillion: 100,
+    maximumInputTokens: 272_000,
+    rateBandId: "input-lte-272k",
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
+    model: "gpt-6-astra",
+    displayModel: "GPT-6 Astra",
+    displayTier: "Fast (>272K input)",
+    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    inputUsdPerMillion: 40,
+    cachedInputUsdPerMillion: 4,
+    outputUsdPerMillion: 150,
+    minimumInputTokens: 272_001,
+    rateBandId: "input-gt-272k",
+    requiresRequestInputTokens: true,
   },
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
@@ -818,6 +855,7 @@ export function estimateOpenAiTokenUsageCost(params: {
   cachedInputTokens: number;
   at?: number;
   fastMode?: boolean;
+  inputTokenScope?: TokenUsagePricingInputScope;
   outputTokensIncludeReasoning?: boolean;
   model?: string;
   outputTokens: number;
@@ -832,6 +870,7 @@ export function estimateTokenUsageCost(params: {
   cachedInputTokens: number;
   at?: number;
   fastMode?: boolean;
+  inputTokenScope?: TokenUsagePricingInputScope;
   outputTokensIncludeReasoning?: boolean;
   model?: string;
   outputTokens: number;
@@ -847,6 +886,7 @@ function estimateTokenUsageCostFromCatalog(
     cachedInputTokens: number;
     at?: number;
     fastMode?: boolean;
+    inputTokenScope?: TokenUsagePricingInputScope;
     outputTokensIncludeReasoning?: boolean;
     model?: string;
     outputTokens: number;
@@ -868,6 +908,7 @@ function estimateTokenUsageCostFromCatalog(
       && pricingEntryMatchesInputTokens(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
+        params.inputTokenScope,
       ),
   );
   const provider = matchingEntries[0]?.provider;
@@ -895,6 +936,7 @@ function estimateTokenUsageCostFromCatalog(
       && pricingEntryMatchesInputTokens(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
+        params.inputTokenScope,
       ),
   );
   const uncachedInputCostMicros = calculateTokenCostMicros(
@@ -1172,9 +1214,11 @@ function pricingEntryMatchesModel(
 function pricingEntryMatchesInputTokens(
   entry: PricingCatalogEntry,
   inputTokens: number,
+  inputTokenScope: TokenUsagePricingInputScope | undefined,
 ): boolean {
   return (
-    (
+    (!entry.requiresRequestInputTokens || inputTokenScope === "request")
+    && (
       entry.minimumInputTokens === undefined
       || inputTokens >= entry.minimumInputTokens
     )

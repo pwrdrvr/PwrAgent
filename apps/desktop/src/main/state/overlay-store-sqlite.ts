@@ -7329,6 +7329,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
     at: line.createdAt,
     cachedInputTokens: line.cachedInputTokens,
     fastMode: line.fastMode,
+    inputTokenScope: line.scope === "latest-request" ? "request" : "aggregate",
     model: line.model,
     outputTokens: line.outputTokens,
     reasoningOutputTokens: line.reasoningOutputTokens,

@@ -2963,6 +2963,7 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
          provider,
          reasoning_output_tokens,
          service_tier,
+         scope,
          uncached_input_tokens
        FROM thread_usage_lines
        WHERE provider IN ('openai', 'qwen', 'xai')
@@ -2979,6 +2980,7 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
       provider: string;
       reasoning_output_tokens: number;
       service_tier: string | null;
+      scope: ThreadUsageLineRecord["scope"];
       uncached_input_tokens: number;
       usage_line_id: string;
     }>;
@@ -3005,6 +3007,7 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
       at: row.created_at,
       cachedInputTokens: row.cached_input_tokens,
       fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+      inputTokenScope: row.scope === "latest-request" ? "request" : "aggregate",
       model: row.model ?? undefined,
       outputTokens: row.output_tokens,
       reasoningOutputTokens: row.reasoning_output_tokens,

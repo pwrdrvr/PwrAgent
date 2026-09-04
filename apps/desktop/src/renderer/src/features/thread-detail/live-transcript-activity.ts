@@ -404,6 +404,7 @@ export function buildTokenUsageActivityEntry(params: {
     at: params.pricingAt,
     cachedInputTokens,
     fastMode: params.fastMode,
+    inputTokenScope: scope === "latest-request" ? "request" : "aggregate",
     model: params.model,
     outputTokens,
     reasoningOutputTokens,

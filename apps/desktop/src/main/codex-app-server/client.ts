@@ -3496,6 +3496,7 @@ function summarizeTokenUsageActivity(
     cachedInputTokens,
     at: createdAt,
     fastMode: resolvedPricingContext.fastMode,
+    inputTokenScope: scope === "latest-request" ? "request" : "aggregate",
     model: resolvedPricingContext.model,
     outputTokens,
     reasoningOutputTokens,
