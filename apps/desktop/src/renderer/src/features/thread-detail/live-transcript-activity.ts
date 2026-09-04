@@ -287,6 +287,7 @@ export function buildTokenUsageActivityEntry(params: {
   const cost = estimateTokenUsageCost({
     cachedInputTokens,
     fastMode: params.fastMode,
+    inputTokenScope: scope === "latest-request" ? "request" : "aggregate",
     model: params.model,
     outputTokens,
     reasoningOutputTokens,
