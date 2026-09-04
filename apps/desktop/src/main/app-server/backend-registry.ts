@@ -5646,6 +5646,12 @@ type CreatedThreadDirectoryVisibility = Pick<
 > & {
   directoryThreadsCollapsed: boolean;
   hasPinnedTopLevelThread: boolean;
+  /**
+   * Identity keys of this directory's pinned threads. A pinned row always
+   * renders, so it is the only parent that can carry a new child through a
+   * collapse without a pin of the child's own.
+   */
+  pinnedThreadKeys: ReadonlySet<string>;
 };
 
 let threadListCacheSequence = 0;
@@ -9561,22 +9567,30 @@ export class DesktopBackendRegistry {
       .map((thread) => thread.pinnedRank)
       .filter((rank): rank is string => Boolean(rank));
     this.createdThreadDirectoryVisibility = new Map(
-      snapshot.directories.map((directory) => [
-        directory.key,
-        {
-          key: directory.key,
-          kind: directory.kind,
-          path: directory.path,
-          directoryThreadsCollapsed:
-            directory.directoryThreadsCollapsed === true,
-          hasPinnedTopLevelThread: directory.threadKeys.some((threadKey) => {
-            const thread = threadsByKey.get(threadKey);
-            return Boolean(
-              thread && !thread.parentThreadId && thread.pinnedRank,
-            );
-          }),
-        },
-      ]),
+      snapshot.directories.map((directory) => {
+        let hasPinnedTopLevelThread = false;
+        const pinnedThreadKeys = new Set<string>();
+        for (const threadKey of directory.threadKeys) {
+          const thread = threadsByKey.get(threadKey);
+          if (!thread?.pinnedRank) continue;
+          pinnedThreadKeys.add(threadKey);
+          if (!thread.parentThreadId) {
+            hasPinnedTopLevelThread = true;
+          }
+        }
+        return [
+          directory.key,
+          {
+            key: directory.key,
+            kind: directory.kind,
+            path: directory.path,
+            directoryThreadsCollapsed:
+              directory.directoryThreadsCollapsed === true,
+            hasPinnedTopLevelThread,
+            pinnedThreadKeys,
+          },
+        ];
+      }),
     );
     this.navigationDirectoriesByKey = new Map(
       snapshot.directories.map((directory) => [directory.key, directory]),
@@ -13726,10 +13740,10 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Keep a newly created top-level thread visible when its directory's
-   * unpinned section is collapsed. This runs after parent and directory
-   * relationships are persisted so every creation surface shares the same
-   * policy and a child of an already-visible parent is never pinned itself.
+   * Keep a newly created thread visible when its directory's unpinned section
+   * is collapsed. This runs after parent and directory relationships are
+   * persisted so every creation surface shares the same policy and a child of
+   * an already-visible parent is never pinned itself.
    */
   private resolveCreatedThreadDirectoryVisibility(params: {
     directoryKey?: string;
@@ -13788,17 +13802,32 @@ export class DesktopBackendRegistry {
     directoryKey?: string;
     cwd?: string;
     linkedDirectories?: LinkedDirectorySummary[];
+    parentThreadBackend?: AppServerBackendKind;
     parentThreadId?: string;
     threadId: string;
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
-    if (params.parentThreadId?.trim()) {
-      return {};
-    }
-
     const directory = this.resolveCreatedThreadDirectoryVisibility(params);
     if (
       !directory?.directoryThreadsCollapsed
       || !directory.hasPinnedTopLevelThread
+    ) {
+      return {};
+    }
+
+    // A sub-thread rides its parent's row, so it needs no pin of its own —
+    // but only when that parent is a pinned row in this very directory. The
+    // collapse hides every unpinned row, and a group parent that aged out of
+    // the navigation window is in no directory at all, so a child of either
+    // would otherwise be created straight into the hidden section.
+    const parentThreadId = params.parentThreadId?.trim();
+    if (
+      parentThreadId
+      && directory.pinnedThreadKeys.has(
+        buildThreadIdentityKey(
+          params.parentThreadBackend ?? params.backend,
+          parentThreadId,
+        ),
+      )
     ) {
       return {};
     }
@@ -14329,6 +14358,7 @@ export class DesktopBackendRegistry {
         resolvedLinkedDirectories?.length
           ? resolvedLinkedDirectories
           : buildLocalLinkedDirectory(cwd),
+      parentThreadBackend,
       parentThreadId,
       threadId: result.threadId,
     });
@@ -14684,6 +14714,7 @@ export class DesktopBackendRegistry {
       backend,
       cwd,
       linkedDirectories,
+      parentThreadBackend: request.parentThreadBackend,
       parentThreadId: request.parentThreadId,
       threadId: result.threadId,
     });

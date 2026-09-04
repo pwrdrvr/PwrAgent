@@ -123,4 +123,116 @@ describe("large directory thread render model", () => {
     expect(model.expanded?.overflowUnpinnedThreads).toHaveLength(97);
     expect(model.expanded?.selectionOrder).toHaveLength(10);
   });
+
+  it("gives a pinned subthread its own row when its parent stays collapsed", () => {
+    const hiddenParent = {
+      id: "hidden-parent",
+      title: "Hidden parent",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    } as NavigationThreadSummary;
+    const pinnedAnchor = {
+      id: "pinned-anchor",
+      title: "Pinned anchor",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      pinnedRank: "1024",
+    } as NavigationThreadSummary;
+    const pinnedChild = {
+      id: "pinned-child",
+      title: "Pinned child",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadBackend: "codex",
+      parentThreadId: "hidden-parent",
+      pinnedRank: "2048",
+    } as NavigationThreadSummary;
+    const model = buildDirectoryThreadRenderModel({
+      directory: {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [
+          "codex:pinned-anchor",
+          "codex:hidden-parent",
+          "codex:pinned-child",
+        ],
+        needsAttentionCount: 0,
+        directoryThreadsCollapsed: true,
+      },
+      expanded: true,
+      threadsByKey: new Map([
+        ["codex:pinned-anchor", pinnedAnchor],
+        ["codex:hidden-parent", hiddenParent],
+        ["codex:pinned-child", pinnedChild],
+      ]),
+    });
+
+    expect(model.expanded?.directoryThreadsCollapsed).toBe(true);
+    expect(
+      model.expanded?.directoryPinnedThreads.map((thread) => thread.id),
+    ).toEqual(["pinned-anchor", "pinned-child"]);
+    expect(model.expanded?.childThreadsByParentKey.size).toBe(0);
+    expect(model.expanded?.selectionOrder).toEqual([
+      "codex:pinned-anchor",
+      "codex:pinned-child",
+    ]);
+  });
+
+  it("keeps an unpinned subthread nested under its rendered parent", () => {
+    const parent = {
+      id: "parent",
+      title: "Parent",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      pinnedRank: "1024",
+    } as NavigationThreadSummary;
+    const child = {
+      id: "child",
+      title: "Child",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadBackend: "codex",
+      parentThreadId: "parent",
+      pinnedRank: "2048",
+    } as NavigationThreadSummary;
+    const model = buildDirectoryThreadRenderModel({
+      directory: {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: ["codex:parent", "codex:child"],
+        needsAttentionCount: 0,
+        directoryThreadsCollapsed: true,
+      },
+      expanded: true,
+      threadsByKey: new Map([
+        ["codex:parent", parent],
+        ["codex:child", child],
+      ]),
+    });
+
+    expect(
+      model.expanded?.directoryPinnedThreads.map((thread) => thread.id),
+    ).toEqual(["parent"]);
+    expect(model.expanded?.childThreadsByParentKey.get("codex:parent")).toEqual([
+      child,
+    ]);
+    expect(model.expanded?.selectionOrder).toEqual([
+      "codex:parent",
+      "codex:child",
+    ]);
+  });
 });

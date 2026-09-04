@@ -59,7 +59,12 @@ export function buildDirectoryThreadRenderModel(params: {
     ? new Set(params.directory.threadKeys)
     : undefined;
   const topLevelVisibleThreads: NavigationThreadSummary[] = [];
-  const childThreadCandidates: NavigationThreadSummary[] = [];
+  // The parent key is resolved once here and carried, because the later
+  // nesting pass would otherwise walk `threadsByKey` for every child again.
+  const childThreadCandidates: Array<{
+    parentKey: string;
+    thread: NavigationThreadSummary;
+  }> = [];
   for (const threadKey of params.directory.threadKeys) {
     const thread = params.threadsByKey.get(threadKey);
     if (!thread) continue;
@@ -79,7 +84,7 @@ export function buildDirectoryThreadRenderModel(params: {
     }
     const parentKey = resolveThreadParentKey(thread, params.threadsByKey);
     if (parentKey && directoryThreadKeys.has(parentKey)) {
-      childThreadCandidates.push(thread);
+      childThreadCandidates.push({ parentKey, thread });
     } else {
       topLevelVisibleThreads.push(thread);
     }
@@ -93,13 +98,11 @@ export function buildDirectoryThreadRenderModel(params: {
     };
   }
 
-  const directoryPinnedThreads = topLevelVisibleThreads
-    .filter(isPinnedThread)
-    .sort(comparePinnedThreads);
+  const topLevelPinnedThreads = topLevelVisibleThreads.filter(isPinnedThread);
   const directoryUnpinnedThreadCount =
-    topLevelVisibleThreads.length - directoryPinnedThreads.length;
+    topLevelVisibleThreads.length - topLevelPinnedThreads.length;
   const directoryThreadsCollapsed =
-    directoryPinnedThreads.length > 0
+    topLevelPinnedThreads.length > 0
     && params.directory.directoryThreadsCollapsed === true;
   // A sticky Directory threads collapse only renders pins. Keep its large
   // hidden population as a count instead of allocating and slicing three
@@ -130,17 +133,47 @@ export function buildDirectoryThreadRenderModel(params: {
         ...(unpinnedExpanded ? overflowUnpinnedThreads : []),
       ];
   const renderedParentKeys = new Set(
-    [...directoryPinnedThreads, ...visibleUnpinnedThreads].map((thread) =>
+    [...topLevelPinnedThreads, ...visibleUnpinnedThreads].map((thread) =>
       threadSummaryIdentityKey(thread),
     ),
   );
+  // A pinned sub-thread must never be swallowed by a parent that does not
+  // render. The collapse hides every unpinned row, and a group parent that
+  // aged out of the navigation window is in no directory at all, so nesting
+  // alone would drop a row the directory still reports as pinned — including
+  // the visibility pin the main process appends at creation time. Give it a
+  // top-level pinned row instead.
+  const promotedPinnedChildren = childThreadCandidates.filter(
+    (candidate) =>
+      isPinnedThread(candidate.thread)
+      && !renderedParentKeys.has(candidate.parentKey),
+  );
+  const directoryPinnedThreads =
+    promotedPinnedChildren.length === 0
+      ? topLevelPinnedThreads
+      : [
+          ...topLevelPinnedThreads,
+          ...promotedPinnedChildren.map((candidate) => candidate.thread),
+        ];
+  directoryPinnedThreads.sort(comparePinnedThreads);
+  const promotedThreadKeys = new Set(
+    promotedPinnedChildren.map((candidate) =>
+      threadSummaryIdentityKey(candidate.thread),
+    ),
+  );
+  for (const threadKey of promotedThreadKeys) {
+    renderedParentKeys.add(threadKey);
+  }
   const childThreadsByParentKey = new Map<
     string,
     NavigationThreadSummary[]
   >();
-  for (const thread of childThreadCandidates) {
-    const parentKey = resolveThreadParentKey(thread, params.threadsByKey);
-    if (!parentKey || !renderedParentKeys.has(parentKey)) continue;
+  for (const { parentKey, thread } of childThreadCandidates) {
+    if (!renderedParentKeys.has(parentKey)) continue;
+    // A promotion already gave this row its own top-level place. Nesting it
+    // under a parent that a later promotion made visible would render it
+    // twice.
+    if (promotedThreadKeys.has(threadSummaryIdentityKey(thread))) continue;
     const children = childThreadsByParentKey.get(parentKey) ?? [];
     children.push(thread);
     childThreadsByParentKey.set(parentKey, children);
