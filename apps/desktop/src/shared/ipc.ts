@@ -159,6 +159,14 @@ export const MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL =
   "mcp-connection:pwrsnap-open";
 export const MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrsnap-download";
+export const MCP_CONNECTION_PWRGIT_STATUS_CHANNEL =
+  "mcp-connection:pwrgit-status";
+export const MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL =
+  "mcp-connection:pwrgit-connect";
+export const MCP_CONNECTION_PWRGIT_OPEN_CHANNEL =
+  "mcp-connection:pwrgit-open";
+export const MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL =
+  "mcp-connection:pwrgit-download";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";

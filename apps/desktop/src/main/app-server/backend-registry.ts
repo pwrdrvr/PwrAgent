@@ -51,6 +51,10 @@ import {
   type PwrSnapConnectionService,
 } from "../mcp-connections/pwrsnap-connection-service";
 import {
+  getPwrGitConnectionService,
+  type PwrGitConnectionService,
+} from "../mcp-connections/pwrgit-connection-service";
+import {
   buildManagedReviewContextInput,
   buildManagedReviewPrompt,
   formatManagedReviewOutput,
@@ -319,6 +323,7 @@ import {
   type PendingRequestApprovalContext,
   normalizeFileChangeApprovalDiff,
   PWRSNAP_MCP_CONNECTION_ID,
+  PWRGIT_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
@@ -8394,6 +8399,15 @@ export class DesktopBackendRegistry {
     "registerBridge"
   >;
   /**
+   * PwrGit's server is a stdio binary that takes a bearer token in its
+   * environment, so its registration is a direct launch rather than a bridged
+   * proxy. Same shape, so `registerMcpConnections` routes to either one.
+   */
+  private readonly pwrGitConnectionService?: Pick<
+    PwrGitConnectionService,
+    "registerBridge"
+  >;
+  /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
    * hard-fails to an empty result regardless of any other gate —
@@ -8434,6 +8448,10 @@ export class DesktopBackendRegistry {
     pdfToolMcpServer?: AgentToolMcpServerLike | null;
     mcpConnectionService?: Pick<
       PwrSnapConnectionService,
+      "registerBridge"
+    > | null;
+    pwrGitConnectionService?: Pick<
+      PwrGitConnectionService,
       "registerBridge"
     > | null;
     messagingStore?: MessagingArchiveCleanupStore | null;
@@ -8503,6 +8521,11 @@ export class DesktopBackendRegistry {
         ? undefined
         : options?.mcpConnectionService ??
           (isAppStateInitialized() ? getPwrSnapConnectionService() : undefined);
+    this.pwrGitConnectionService =
+      options?.pwrGitConnectionService === null
+        ? undefined
+        : options?.pwrGitConnectionService ??
+          (isAppStateInitialized() ? getPwrGitConnectionService() : undefined);
     this.providerThreadSnapshotStore =
       options?.providerThreadSnapshotStore === null
         ? undefined
@@ -15163,12 +15186,18 @@ export class DesktopBackendRegistry {
       ),
     ].filter(Boolean);
     if (selected.length === 0) return [];
-    if (!this.mcpConnectionService) {
+    if (!this.mcpConnectionService && !this.pwrGitConnectionService) {
       throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
     }
     const registrations: McpConnectionBridgeRegistration[] = [];
     for (const connectionId of selected) {
-      if (connectionId !== PWRSNAP_MCP_CONNECTION_ID) {
+      const service =
+        connectionId === PWRSNAP_MCP_CONNECTION_ID
+          ? this.mcpConnectionService
+          : connectionId === PWRGIT_MCP_CONNECTION_ID
+            ? this.pwrGitConnectionService
+            : undefined;
+      if (!service) {
         backendRegistryLog.warn("ignoring unknown MCP connection", {
           connectionId,
           threadId: threadId ?? null,
@@ -15176,7 +15205,7 @@ export class DesktopBackendRegistry {
         continue;
       }
       registrations.push(
-        await this.mcpConnectionService.registerBridge(connectionId, threadId),
+        await service.registerBridge(connectionId, threadId),
       );
     }
     return registrations;

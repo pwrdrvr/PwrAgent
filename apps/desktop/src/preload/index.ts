@@ -220,8 +220,11 @@ import type {
   PickGhCommandResponse,
   PickGitCommandResponse,
   PickReferenceFromDiskResponse,
+  ConnectPwrGitResponse,
   ConnectPwrSnapResponse,
+  OpenPwrGitResponse,
   OpenPwrSnapResponse,
+  PwrGitConnectionStatus,
   PwrSnapConnectionStatus,
   ReadPwrSnapConnectionStatusRequest,
   InspectPdfReferencePathsRequest,
@@ -623,6 +626,10 @@ import {
   MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL,
   MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
   MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
+  MCP_CONNECTION_PWRGIT_STATUS_CHANNEL,
+  MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
+  MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
+  MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -894,6 +901,14 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL),
   openPwrSnapDownload: async (): Promise<OpenPwrSnapResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL),
+  readPwrGitConnectionStatus: async (): Promise<PwrGitConnectionStatus> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_STATUS_CHANNEL),
+  connectPwrGit: async (): Promise<ConnectPwrGitResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL),
+  openPwrGit: async (): Promise<OpenPwrGitResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_OPEN_CHANNEL),
+  openPwrGitDownload: async (): Promise<OpenPwrGitResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL),
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),
   readLicenseDocument: async (

@@ -55,6 +55,7 @@ import {
   isBranchDrifted,
   isRemoteFederationTarget,
   PWRSNAP_MCP_CONNECTION_ID,
+  PWRGIT_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
   resolveThreadTerminalCwd,
 } from "@pwragent/shared";
@@ -108,6 +109,10 @@ import {
   PwrSnapConnectionPrompt,
   pwrSnapConnectionIds,
 } from "./PwrSnapConnectionPrompt";
+import {
+  PwrGitConnectionPrompt,
+  pwrGitConnectionIds,
+} from "./PwrGitConnectionPrompt";
 import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
@@ -3269,26 +3274,58 @@ export function ThreadView(props: ThreadViewProps) {
         >
           <div className="thread-view__primary">
             {!launchpadMaterializing ? (
-              <PwrSnapConnectionPrompt
-                backend={selectedLaunchpad.backend}
-                desktopApi={props.desktopApi}
-                enabled={
-                  selectedLaunchpad.mcpConnectionIds?.includes(
-                    PWRSNAP_MCP_CONNECTION_ID,
-                  ) === true
-                }
-                remoteOwnerLabel={
-                  props.activeFederationTarget
-                    ? props.activeFederationOwnerLabel ?? "the remote machine"
-                    : undefined
-                }
-                onEnabledChange={async (enabled) => {
-                  await props.onUpdateLaunchpad?.(
-                    selectedLaunchpad.directoryKey,
-                    { mcpConnectionIds: pwrSnapConnectionIds(enabled) },
-                  );
-                }}
-              />
+              <>
+                <PwrSnapConnectionPrompt
+                  backend={selectedLaunchpad.backend}
+                  desktopApi={props.desktopApi}
+                  enabled={
+                    selectedLaunchpad.mcpConnectionIds?.includes(
+                      PWRSNAP_MCP_CONNECTION_ID,
+                    ) === true
+                  }
+                  remoteOwnerLabel={
+                    props.activeFederationTarget
+                      ? props.activeFederationOwnerLabel ?? "the remote machine"
+                      : undefined
+                  }
+                  onEnabledChange={async (enabled) => {
+                    await props.onUpdateLaunchpad?.(
+                      selectedLaunchpad.directoryKey,
+                      {
+                        mcpConnectionIds: pwrSnapConnectionIds(
+                          selectedLaunchpad.mcpConnectionIds,
+                          enabled,
+                        ),
+                      },
+                    );
+                  }}
+                />
+                <PwrGitConnectionPrompt
+                  backend={selectedLaunchpad.backend}
+                  desktopApi={props.desktopApi}
+                  enabled={
+                    selectedLaunchpad.mcpConnectionIds?.includes(
+                      PWRGIT_MCP_CONNECTION_ID,
+                    ) === true
+                  }
+                  remoteOwnerLabel={
+                    props.activeFederationTarget
+                      ? props.activeFederationOwnerLabel ?? "the remote machine"
+                      : undefined
+                  }
+                  onEnabledChange={async (enabled) => {
+                    await props.onUpdateLaunchpad?.(
+                      selectedLaunchpad.directoryKey,
+                      {
+                        mcpConnectionIds: pwrGitConnectionIds(
+                          selectedLaunchpad.mcpConnectionIds,
+                          enabled,
+                        ),
+                      },
+                    );
+                  }}
+                />
+              </>
             ) : null}
             <div className="thread-view__launchpad-composer">
               {launchpadMaterializing && launchpadMaterializeError ? (
