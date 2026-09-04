@@ -21827,18 +21827,24 @@ command = "pnpm dev"
       installedAgent,
       sessions,
     });
-    await emitStartedTurn(registry, backend, "grok-session-1", "turn-1");
+    const pendingTurnId = "pending:grok-session-1:1000";
+    await emitStartedTurn(
+      registry,
+      backend,
+      "grok-session-1",
+      pendingTurnId,
+    );
 
     await expect(registry.steerTurn({
       backend,
       threadId: "grok-session-1",
-      expectedTurnId: "turn-1",
+      expectedTurnId: pendingTurnId,
       input: [{ type: "text", text: "Add blueberries" }],
       requestId: "grok-steer-1",
     })).resolves.toEqual({
       backend,
       threadId: "grok-session-1",
-      turnId: "turn-1",
+      turnId: pendingTurnId,
       disposition: "steered",
     });
     expect(steerSession).toHaveBeenCalledWith({
@@ -25009,7 +25015,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("terminal-gates failed managed reviews and releases the parent thread", async () => {
+  it("terminal-gates failed managed reviews and holds the parent queue for retry", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
       startThreadResult: { threadId: "managed-review-child" },
@@ -25078,6 +25084,24 @@ command = "pnpm dev"
       }),
     ]);
 
+    if (queuedTurn.status !== "queued") {
+      throw new Error("Expected the parent turn to be queued.");
+    }
+    expect(registry.getQueuedTurnsSnapshot()).toEqual({
+      [buildThreadIdentityKey("codex", "thread-parent")]: [
+        expect.objectContaining({
+          queueEntryId: queuedTurn.entry.id,
+          manualReleaseRequired: true,
+          holdReason: "You have 8147 weighted tokens left",
+        }),
+      ],
+    });
+    await expect(
+      registry.releaseQueuedTurnWithDisposition(queuedTurn.entry.id),
+    ).resolves.toMatchObject({
+      disposition: "started",
+      turnId: expect.any(String),
+    });
     await expect.poll(() => codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-parent",
       input: [{ type: "text", text: "Continue after failure" }],
@@ -32072,8 +32096,17 @@ script = "printf setup"
       },
     });
     await vi.waitFor(() => {
-      expect(codexClient.startTurnCallCount).toBe(2);
+      expect(registry.getQueuedTurnsSnapshot()).toEqual({
+        [buildThreadIdentityKey("codex", "ordinary-thread")]: [
+          expect.objectContaining({
+            displayText: "queued normal turn",
+            manualReleaseRequired: true,
+            position: 0,
+          }),
+        ],
+      });
     });
+    expect(codexClient.startTurnCallCount).toBe(1);
     expect(registry.canStartThreadTurnImmediately({
       backend: "codex",
       threadId: "ordinary-thread",
@@ -32082,6 +32115,7 @@ script = "printf setup"
       [buildThreadIdentityKey("codex", "ordinary-thread")]: [
         expect.objectContaining({
           displayText: "queued normal turn",
+          manualReleaseRequired: true,
           position: 0,
         }),
       ],
@@ -32238,8 +32272,17 @@ script = "printf setup"
     });
 
     await vi.waitFor(() => {
-      expect(codexClient.startTurnCallCount).toBe(2);
+      expect(registry.getQueuedTurnsSnapshot()).toEqual({
+        [buildThreadIdentityKey("codex", "ordinary-thread")]: [
+          expect.objectContaining({
+            displayText: "queued normal turn",
+            manualReleaseRequired: true,
+            position: 0,
+          }),
+        ],
+      });
     });
+    expect(codexClient.startTurnCallCount).toBe(1);
     expect(registry.canStartThreadTurnImmediately({
       backend: "codex",
       threadId: "ordinary-thread",
@@ -32248,6 +32291,7 @@ script = "printf setup"
       [buildThreadIdentityKey("codex", "ordinary-thread")]: [
         expect.objectContaining({
           displayText: "queued normal turn",
+          manualReleaseRequired: true,
           position: 0,
         }),
       ],

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent, ReleaseQueuedTurnResponse } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
@@ -38,6 +38,28 @@ function createHarness(now = 1_000) {
   }));
   const cancelQueuedTurn = vi.fn(() => true);
   const cancelPendingReview = vi.fn(() => true);
+  const submitHeldTurn = vi.fn(async (input: { queueEntryId?: string }) => ({
+    status: "held" as const,
+    entry: {
+      id: input.queueEntryId ?? "scheduled-turn:scheduled-1",
+      backend: "codex" as const,
+      threadId: "thread-1",
+      origin: "scheduled" as const,
+      input: [{ type: "text" as const, text: "Follow up" }],
+      createdAt: now,
+      manualReleaseRequired: true,
+      holdReason:
+        "This steering message was held after its target turn ended. Retry it when the provider is ready.",
+    },
+    position: 1,
+  }));
+  const releaseQueuedTurnWithDisposition = vi.fn(
+    async (): Promise<ReleaseQueuedTurnResponse> => ({
+      disposition: "started" as const,
+      queueEntryId: "scheduled-turn:scheduled-1",
+      turnId: "turn-retried",
+    }),
+  );
   const publishLocalEvent = vi.fn(async () => undefined);
   const markScheduledThreadBorn = vi.fn(async () => undefined);
   const markScheduledThreadStartTerminal = vi.fn(async () => undefined);
@@ -51,7 +73,9 @@ function createHarness(now = 1_000) {
     markScheduledThreadBorn,
     markScheduledThreadStartTerminal,
     publishLocalEvent,
+    releaseQueuedTurnWithDisposition,
     submitReview,
+    submitHeldTurn,
     submitTurn,
   } as unknown as DesktopBackendRegistry;
   const service = new ScheduledThreadActionService({
@@ -69,8 +93,10 @@ function createHarness(now = 1_000) {
     markScheduledThreadStartTerminal,
     publishLocalEvent,
     registry,
+    releaseQueuedTurnWithDisposition,
     service,
     submitReview,
+    submitHeldTurn,
     submitTurn,
   };
 }
@@ -193,6 +219,57 @@ describe("ScheduledThreadActionService", () => {
       status: "queued",
       queueEntryId: "scheduled-turn:scheduled-1",
     });
+  });
+
+  it("persists a registry hold and retries its existing queue entry", async () => {
+    const harness = createHarness(20_000);
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 10_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+    await harness.service.evaluateDueActions();
+    harness.service.start();
+
+    for (const listener of harness.listeners) {
+      await listener({
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: "scheduled-turn:scheduled-1",
+            origin: "scheduled",
+            status: "held",
+            errorMessage: "Provider unavailable",
+          },
+        },
+      });
+    }
+
+    expect(store.get("scheduled-1")).toMatchObject({
+      status: "held",
+      queueEntryId: "scheduled-turn:scheduled-1",
+      errorMessage: "Provider unavailable",
+      manualReleaseRequired: true,
+    });
+    const retried = await harness.service.sendNow({ id: "scheduled-1" });
+    expect(retried.action).toMatchObject({
+      status: "started",
+      turnId: "turn-retried",
+    });
+    expect(harness.submitHeldTurn).toHaveBeenCalledWith(expect.objectContaining({
+      queueEntryId: "scheduled-turn:scheduled-1",
+    }));
+    expect(harness.releaseQueuedTurnWithDisposition)
+      .toHaveBeenCalledWith("scheduled-turn:scheduled-1");
+    harness.service.dispose();
   });
 
   it("does not claim a later action until the current admission settles", async () => {
@@ -363,6 +440,86 @@ describe("ScheduledThreadActionService", () => {
     expect(harness.submitTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a stale steer held until send-now explicitly releases it", async () => {
+    const harness = createHarness(5_000);
+    const created = await harness.service.create(
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        kind: "turn",
+        origin: "desktop",
+        scheduledFor: 5_000,
+        manualReleaseRequired: true,
+        displayText: "Follow up",
+        turn: { input: [{ type: "text", text: "Follow up" }] },
+      },
+      { id: "stale-steer-1" },
+    );
+
+    expect(created.action).toMatchObject({
+      status: "held",
+      manualReleaseRequired: true,
+    });
+    expect(harness.submitTurn).not.toHaveBeenCalled();
+    expect(harness.submitHeldTurn).not.toHaveBeenCalled();
+
+    const retried = await harness.service.sendNow({ id: created.action.id });
+
+    expect(retried.action).toMatchObject({
+      status: "started",
+      turnId: "turn-retried",
+    });
+    expect(harness.submitHeldTurn).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "thread-1",
+      queueEntryId: `scheduled-turn:${created.action.id}`,
+    }));
+    expect(harness.releaseQueuedTurnWithDisposition)
+      .toHaveBeenCalledWith(`scheduled-turn:${created.action.id}`);
+  });
+
+  it("keeps a stale steer retryable when provider admission is still blocked", async () => {
+    const harness = createHarness(5_000);
+    harness.releaseQueuedTurnWithDisposition
+      .mockResolvedValueOnce({
+        disposition: "blocked",
+        queueEntryId: "scheduled-turn:scheduled-1",
+        errorMessage: "provider still offline",
+      })
+      .mockResolvedValueOnce({
+        disposition: "started",
+        queueEntryId: "scheduled-turn:scheduled-1",
+        turnId: "turn-retried",
+      });
+    const created = await harness.service.create(
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        kind: "turn",
+        origin: "desktop",
+        scheduledFor: 5_000,
+        manualReleaseRequired: true,
+        displayText: "Follow up",
+        turn: { input: [{ type: "text", text: "Follow up" }] },
+      },
+      { id: "stale-steer-1" },
+    );
+
+    const blocked = await harness.service.sendNow({ id: created.action.id });
+    expect(blocked.action).toMatchObject({
+      status: "held",
+      errorMessage: "provider still offline",
+      manualReleaseRequired: true,
+    });
+
+    const retried = await harness.service.sendNow({ id: created.action.id });
+    expect(retried.action).toMatchObject({
+      status: "started",
+      turnId: "turn-retried",
+    });
+    expect(harness.releaseQueuedTurnWithDisposition).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects send-now when backend admission fails without losing the error", async () => {
     const harness = createHarness(5_000);
     harness.submitTurn.mockRejectedValueOnce(new Error("backend offline"));
@@ -461,6 +618,50 @@ describe("ScheduledThreadActionService", () => {
       .resolves.toMatchObject({
         action: { status: "cancelled" },
       });
+  });
+
+  it("cancels a held action whose process-local queue entry was lost", async () => {
+    const harness = createHarness(20_000);
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 10_000,
+      manualReleaseRequired: true,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+    store.claim("scheduled-1", {
+      now: 2_000,
+      ownerId: "scheduler-1",
+      leaseExpiresAt: 32_000,
+    });
+    store.markQueued(
+      "scheduled-1",
+      "scheduled-turn:scheduled-1",
+      2_001,
+      "scheduler-1",
+    );
+    store.markHeld(
+      "scheduled-1",
+      "scheduled-turn:scheduled-1",
+      "Provider unavailable",
+      2_002,
+      "scheduler-1",
+    );
+    harness.cancelQueuedTurn.mockReturnValueOnce(false);
+
+    await expect(harness.service.cancel({ id: "scheduled-1" }))
+      .resolves.toMatchObject({
+        action: { status: "cancelled" },
+      });
+    expect(harness.cancelQueuedTurn).toHaveBeenCalledWith(
+      "scheduled-turn:scheduled-1",
+      "Scheduled action cancelled.",
+    );
   });
 
   it("tracks a scheduled review until the registry actually starts it", async () => {

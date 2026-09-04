@@ -44,6 +44,7 @@ type CreateScheduledThreadActionRecord = {
   displayText: string;
   imageAttachments?: ScheduledThreadAction["imageAttachments"];
   fileAttachments?: ScheduledThreadAction["fileAttachments"];
+  manualReleaseRequired?: boolean;
   turn?: ScheduledThreadTurnPayload;
   review?: ScheduledThreadReviewPayload;
   now: number;
@@ -66,6 +67,7 @@ type ClaimParams = {
 };
 
 const ACTIVE_STATUSES: readonly ScheduledThreadActionStatus[] = [
+  "held",
   "scheduled",
   "dispatching",
   "queued",
@@ -107,11 +109,12 @@ export class ScheduledThreadActionStore {
       threadId: input.threadId,
       kind: input.kind,
       origin: input.origin,
-      status: "scheduled",
+      status: input.manualReleaseRequired ? "held" : "scheduled",
       scheduledFor: input.scheduledFor,
       displayText: input.displayText,
       imageAttachments: input.imageAttachments,
       fileAttachments: input.fileAttachments,
+      manualReleaseRequired: input.manualReleaseRequired,
       turn: input.turn,
       review: input.review,
       createdAt: input.now,
@@ -227,13 +230,13 @@ export class ScheduledThreadActionStore {
   }
 
   cancel(id: string, now: number): ScheduledThreadAction | undefined {
-    return this.transition(id, ["scheduled"], { status: "cancelled" }, now);
+    return this.transition(id, ["held", "scheduled"], { status: "cancelled" }, now);
   }
 
   claim(id: string, params: ClaimParams): ScheduledThreadAction | undefined {
     return this.transition(
       id,
-      ["scheduled"],
+      ["held", "scheduled"],
       { status: "dispatching" },
       params.now,
       {
@@ -280,7 +283,28 @@ export class ScheduledThreadActionStore {
     return this.transition(
       id,
       ["dispatching", "queued"],
-      { status: "started", turnId },
+      { status: "started", turnId, errorMessage: undefined },
+      now,
+      { clearClaim: true, expectedOwner: ownerId },
+    );
+  }
+
+  markHeld(
+    id: string,
+    queueEntryId: string,
+    errorMessage: string,
+    now: number,
+    ownerId?: string,
+  ): ScheduledThreadAction | undefined {
+    return this.transition(
+      id,
+      ["dispatching", "queued"],
+      {
+        status: "held",
+        queueEntryId,
+        errorMessage,
+        manualReleaseRequired: true,
+      },
       now,
       { clearClaim: true, expectedOwner: ownerId },
     );
@@ -308,7 +332,7 @@ export class ScheduledThreadActionStore {
   ): ScheduledThreadAction | undefined {
     return this.transition(
       id,
-      ["dispatching", "queued"],
+      ["held", "dispatching", "queued"],
       { status: "cancelled" },
       now,
       { clearClaim: true, expectedOwner: ownerId },
@@ -354,25 +378,34 @@ export class ScheduledThreadActionStore {
           row.claim_owner
           && protectedOwnerIds.has(row.claim_owner)
         ) return [];
-        const updated = row.status === "dispatching"
+        const current = this.get(row.action_id);
+        const updated = current?.manualReleaseRequired
           ? this.transition(
               row.action_id,
-              ["dispatching"],
-              {
-                status: "failed",
-                errorMessage:
-                  "The scheduler lease expired while this action was being dispatched. Check the thread before scheduling it again.",
-              },
+              ["dispatching", "queued"],
+              { status: "held", queueEntryId: undefined },
               now,
               { clearClaim: true, requireExpiredAt: now },
             )
-          : this.transition(
-              row.action_id,
-              ["queued"],
-              { status: "scheduled", queueEntryId: undefined },
-              now,
-              { clearClaim: true, requireExpiredAt: now },
-            );
+          : row.status === "dispatching"
+            ? this.transition(
+                row.action_id,
+                ["dispatching"],
+                {
+                  status: "failed",
+                  errorMessage:
+                    "The scheduler lease expired while this action was being dispatched. Check the thread before scheduling it again.",
+                },
+                now,
+                { clearClaim: true, requireExpiredAt: now },
+              )
+            : this.transition(
+                row.action_id,
+                ["queued"],
+                { status: "scheduled", queueEntryId: undefined },
+                now,
+                { clearClaim: true, requireExpiredAt: now },
+              );
         return updated ? [updated] : [];
       });
     })();
@@ -382,7 +415,7 @@ export class ScheduledThreadActionStore {
     const rows = this.stateDb.raw.prepare(
       `SELECT action_id, payload_ref
        FROM scheduled_thread_actions
-       WHERE status NOT IN ('scheduled', 'dispatching', 'queued')
+       WHERE status NOT IN ('held', 'scheduled', 'dispatching', 'queued')
          AND updated_at < ?`,
     ).all(cutoff) as Array<{
       action_id: string;
@@ -391,7 +424,7 @@ export class ScheduledThreadActionStore {
     const remove = this.stateDb.raw.prepare(
       `DELETE FROM scheduled_thread_actions
        WHERE action_id = ? AND payload_ref = ?
-         AND status NOT IN ('scheduled', 'dispatching', 'queued')`,
+         AND status NOT IN ('held', 'scheduled', 'dispatching', 'queued')`,
     );
     for (const row of rows) {
       if (!row.payload_ref) continue;
@@ -405,7 +438,11 @@ export class ScheduledThreadActionStore {
     expectedStatuses: readonly ScheduledThreadActionStatus[],
     patch: Partial<Pick<
       ScheduledThreadAction,
-      "errorMessage" | "queueEntryId" | "status" | "turnId"
+      | "errorMessage"
+      | "manualReleaseRequired"
+      | "queueEntryId"
+      | "status"
+      | "turnId"
     >>,
     now: number,
     claim?: {
@@ -419,33 +456,50 @@ export class ScheduledThreadActionStore {
     const current = this.get(id);
     if (!current || !expectedStatuses.includes(current.status)) return undefined;
     const updated: ScheduledThreadAction = { ...current, ...patch, updatedAt: now };
+    const updatesPayload = patch.manualReleaseRequired !== undefined;
+    const previousPayloadRef = updatesPayload ? this.readPayloadRef(id) : undefined;
+    const nextPayloadRef = updatesPayload
+      ? this.payloadStore.write(id, payloadFromAction(updated))
+      : undefined;
     const ownerClause = claim?.expectedOwner ? " AND claim_owner = ?" : "";
     const expiredClause = claim?.requireExpiredAt !== undefined
       ? " AND (claim_owner IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)"
       : "";
-    const result = this.stateDb.raw.prepare(
-      `UPDATE scheduled_thread_actions
-       SET status = ?, queue_entry_id = ?, turn_id = ?, error_message = ?,
-           claim_owner = ?, claim_expires_at = ?, updated_at = ?
-       WHERE action_id = ?
-         AND status IN (${expectedStatuses.map(() => "?").join(", ")})
-         ${ownerClause}${expiredClause}`,
-    ).run(
-      updated.status,
-      updated.queueEntryId ?? null,
-      updated.turnId ?? null,
-      updated.errorMessage ?? null,
-      claim?.clearClaim ? null : claim?.claimOwner ?? this.readClaimOwner(id),
-      claim?.clearClaim
-        ? null
-        : claim?.claimExpiresAt ?? this.readClaimExpiresAt(id),
-      updated.updatedAt,
-      id,
-      ...expectedStatuses,
-      ...(claim?.expectedOwner ? [claim.expectedOwner] : []),
-      ...(claim?.requireExpiredAt !== undefined ? [claim.requireExpiredAt] : []),
-    );
-    return result.changes === 1 ? updated : undefined;
+    try {
+      const result = this.stateDb.raw.prepare(
+        `UPDATE scheduled_thread_actions
+         SET status = ?, queue_entry_id = ?, turn_id = ?, error_message = ?,
+             payload_ref = COALESCE(?, payload_ref), claim_owner = ?,
+             claim_expires_at = ?, updated_at = ?
+         WHERE action_id = ?
+           AND status IN (${expectedStatuses.map(() => "?").join(", ")})
+           ${ownerClause}${expiredClause}`,
+      ).run(
+        updated.status,
+        updated.queueEntryId ?? null,
+        updated.turnId ?? null,
+        updated.errorMessage ?? null,
+        nextPayloadRef ?? null,
+        claim?.clearClaim ? null : claim?.claimOwner ?? this.readClaimOwner(id),
+        claim?.clearClaim
+          ? null
+          : claim?.claimExpiresAt ?? this.readClaimExpiresAt(id),
+        updated.updatedAt,
+        id,
+        ...expectedStatuses,
+        ...(claim?.expectedOwner ? [claim.expectedOwner] : []),
+        ...(claim?.requireExpiredAt !== undefined ? [claim.requireExpiredAt] : []),
+      );
+      if (result.changes !== 1) {
+        if (nextPayloadRef) this.payloadStore.delete(nextPayloadRef);
+        return undefined;
+      }
+      if (previousPayloadRef) this.payloadStore.delete(previousPayloadRef);
+      return updated;
+    } catch (error) {
+      if (nextPayloadRef) this.payloadStore.delete(nextPayloadRef);
+      throw error;
+    }
   }
 
   private write(action: ScheduledThreadAction): void {
@@ -576,6 +630,7 @@ function payloadFromAction(
     displayText: action.displayText,
     imageAttachments: action.imageAttachments,
     fileAttachments: action.fileAttachments,
+    manualReleaseRequired: action.manualReleaseRequired,
     turn: action.turn,
     review: action.review,
   };

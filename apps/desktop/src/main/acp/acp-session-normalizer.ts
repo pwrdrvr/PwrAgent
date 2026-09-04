@@ -425,10 +425,10 @@ export class AcpSessionReplayNormalizer {
     } else if (isAcpSessionMetadataUpdateKind(kind)) {
       // Session title/timestamp metadata. The title is consumed by
       // readAcpTopicTitle on the acp-client side.
-    } else if (kind === "turn_completed") {
-      // Grok persists this as a durable replay terminal, but emits it before
-      // the live session/prompt request resolves. The client defers the live
-      // idle transition until prompt resolution so queued work cannot overlap.
+    } else if (kind === "turn_completed" || kind === "turn_finished") {
+      // Some agents persist a durable replay terminal before the live
+      // session/prompt request resolves. The client defers the live idle
+      // transition until prompt resolution so queued work cannot overlap.
       if (!update.deferTurnCompletion) {
         this.recordTurnFinished(undefined, createdAt);
       }
@@ -473,8 +473,6 @@ export class AcpSessionReplayNormalizer {
         this.endActiveAssistantMessage();
         this.knownToolCallIds.clear();
         this.status = "active";
-      } else if (kind === "turn_finished") {
-        this.recordTurnFinished(readString(update.update, "turnId"), createdAt);
       } else if (kind === "pwragent_turn_failed") {
         this.recordTurnFailed({
           sessionId: update.sessionId,

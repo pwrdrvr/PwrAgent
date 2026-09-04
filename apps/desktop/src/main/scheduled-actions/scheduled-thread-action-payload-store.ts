@@ -8,6 +8,7 @@ export type ScheduledThreadActionPayload = Pick<
   | "displayText"
   | "fileAttachments"
   | "imageAttachments"
+  | "manualReleaseRequired"
   | "review"
   | "turn"
 >;

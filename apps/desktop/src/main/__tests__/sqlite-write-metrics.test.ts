@@ -16,6 +16,8 @@ import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../automations/automation-store";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
+import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
+import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
 import {
   AppRuntimeInstanceStore,
   RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
@@ -101,6 +103,112 @@ describe("sqlite write metrics", () => {
     expect(
       metrics?.tables.find((table) => table.table === "thread_tool_invocations"),
     ).toMatchObject({ commits: 2, rowsChanged: 2, statements: 2 });
+  });
+
+  it("holds one explicit scheduled-action retry to its write budget", async () => {
+    const actionStore = new ScheduledThreadActionStore(stateDb);
+    actionStore.create({
+      id: "held-retry-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 1_000,
+      manualReleaseRequired: true,
+      displayText: "Retry after outage",
+      turn: { input: [{ type: "text", text: "Retry after outage" }] },
+      now: 1_000,
+    });
+    const registry = {
+      publishLocalEvent: vi.fn(async () => undefined),
+      releaseQueuedTurnWithDisposition: vi.fn(async () => ({
+        queueEntryId: "scheduled-turn:held-retry-1",
+        disposition: "started" as const,
+        turnId: "turn-retried",
+      })),
+      submitHeldTurn: vi.fn(async () => ({
+        status: "held" as const,
+        entry: {
+          id: "scheduled-turn:held-retry-1",
+          backend: "codex" as const,
+          threadId: "thread-1",
+          origin: "scheduled" as const,
+          input: [{ type: "text" as const, text: "Retry after outage" }],
+          createdAt: 2_000,
+          manualReleaseRequired: true,
+          holdReason: "Retry after outage",
+        },
+        position: 1,
+      })),
+    } as unknown as DesktopBackendRegistry;
+    const service = new ScheduledThreadActionService({
+      registry,
+      store: actionStore,
+      now: () => 2_000,
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await service.sendNow({ id: "held-retry-1" });
+    });
+
+    expect(actionStore.get("held-retry-1")).toMatchObject({
+      status: "started",
+      turnId: "turn-retried",
+    });
+    expectSqliteWriteBudget({
+      note:
+        "one operator-triggered held retry: claim, queue admission, and "
+        + "successful turn start; no timer or automatic retry",
+      scenario: "held-scheduled-action-retry",
+      writes,
+    });
+  });
+
+  it("holds one queued scheduled action to its write budget", async () => {
+    const actionStore = new ScheduledThreadActionStore(stateDb);
+    actionStore.create({
+      id: "queued-hold-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 1_000,
+      displayText: "Wait through outage",
+      turn: { input: [{ type: "text", text: "Wait through outage" }] },
+      now: 1_000,
+    });
+    actionStore.claim("queued-hold-1", {
+      now: 2_000,
+      ownerId: "scheduler-1",
+      leaseExpiresAt: 32_000,
+    });
+    actionStore.markQueued(
+      "queued-hold-1",
+      "scheduled-turn:queued-hold-1",
+      2_001,
+      "scheduler-1",
+    );
+
+    const { writes } = await measureSqliteWrites(() => {
+      actionStore.markHeld(
+        "queued-hold-1",
+        "scheduled-turn:queued-hold-1",
+        "Provider unavailable",
+        3_000,
+      );
+    });
+
+    expect(actionStore.get("queued-hold-1")).toMatchObject({
+      status: "held",
+      manualReleaseRequired: true,
+    });
+    expectSqliteWriteBudget({
+      note:
+        "one queued scheduled action durably held after its preceding turn "
+        + "fails; one boundary transition, not a timer",
+      scenario: "queued-scheduled-action-hold",
+      writes,
+    });
   });
 
   it("persists live Token Miser helper pricing and batches terminal cards", async () => {

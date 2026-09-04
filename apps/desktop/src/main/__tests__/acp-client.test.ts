@@ -3689,6 +3689,62 @@ describe("AcpAgentClient", () => {
     expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
   });
 
+  it("fails a turn when a terminal update is not followed by a prompt response", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const errors: unknown[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      agentDisplayName: "Grok Build",
+      store,
+      transport,
+      now: () => 1000,
+      onPromptError: ({ error }) => {
+        errors.push(error);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Are you there?",
+      turnId: "turn-1",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "turn_finished",
+    });
+
+    expect(client.readReplay(session.sessionId).threadStatus).toBe("active");
+    expect(errors).toEqual([]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve();
+
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toContain(
+      "Grok Build reported that the turn ended, but its ACP prompt request did not close",
+    );
+    expect(store.getSession("acp:grok", session.sessionId)).toMatchObject({
+      status: "idle",
+      lastError: expect.stringContaining("provider connection may be unavailable"),
+    });
+    expect(
+      client.readReplay(session.sessionId).entries,
+    ).toContainEqual(expect.objectContaining({
+      type: "activity",
+      summary: "Turn failed",
+    }));
+  });
+
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
     const quotaError =

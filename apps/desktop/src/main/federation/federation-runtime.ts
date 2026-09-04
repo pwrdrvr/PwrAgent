@@ -11,6 +11,7 @@ import type {
   AppServerThreadSummary,
   AttachDirectoryToThreadResponse,
   CancelQueuedTurnResponse,
+  ReleaseQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
   CompactThreadResponse,
@@ -109,6 +110,7 @@ import {
   type AppServerBackendKind,
   type AttachDirectoryToThreadRequest,
   type CancelQueuedTurnRequest,
+  type ReleaseQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CelestialIconAssignment,
   type CelestialIconId,
@@ -5272,6 +5274,13 @@ function localBackendOperations(): FederationBackendOperations {
       return getDesktopBackendRegistry().cancelQueuedTurnWithDisposition(
         request.queueEntryId,
         "Cancelled from a federated desktop composer.",
+      );
+    },
+    async releaseQueuedTurn(
+      request: ReleaseQueuedTurnRequest,
+    ): Promise<ReleaseQueuedTurnResponse> {
+      return await getDesktopBackendRegistry().releaseQueuedTurnWithDisposition(
+        request.queueEntryId,
       );
     },
     async listScheduledThreadActions(

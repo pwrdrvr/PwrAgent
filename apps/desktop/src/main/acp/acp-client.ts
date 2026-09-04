@@ -81,6 +81,7 @@ export type AcpJsonRpcTransport = {
 
 const ACP_PROTOCOL_VERSION = 1;
 const ACP_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
+const ACP_TERMINAL_RESPONSE_GRACE_MS = 5_000;
 const ACP_PROVIDER_STATUS_REQUEST_TIMEOUT_MS = 20_000;
 const ACP_REWIND_REQUEST_TIMEOUT_MS = 20_000;
 
@@ -147,6 +148,8 @@ type AcpActiveTurn = {
   assistantText: string;
   assistantMessageSequence: number;
   knownToolCallIds: Set<string>;
+  onTerminalUpdate?: () => void;
+  terminalResponseGraceStarted?: boolean;
   turnId: string;
 };
 
@@ -635,14 +638,12 @@ export class AcpAgentClient {
     let result: unknown;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     try {
-      const promptRequest = this.options.transport.request(
-        "session/prompt",
-        {
-          sessionId: protocolSessionId,
-          prompt: params.promptContent ?? textPrompt(params.prompt),
-        },
-        ACP_PROMPT_REQUEST_TIMEOUT_MS,
-      );
+      const promptRequest = this.requestPromptWithTerminalGuard({
+        protocolSessionId,
+        prompt: params.promptContent ?? textPrompt(params.prompt),
+        sessionId: params.sessionId,
+        turnId,
+      });
       result = await promptRequest;
       this.assertPromptProducedResponse(params.sessionId, result);
     } catch (error) {
@@ -781,14 +782,12 @@ export class AcpAgentClient {
     });
     this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
-    const promptRequest = this.options.transport.request(
-      "session/prompt",
-      {
-        sessionId: protocolSessionId,
-        prompt: params.promptContent ?? textPrompt(params.prompt),
-      },
-      ACP_PROMPT_REQUEST_TIMEOUT_MS,
-    );
+    const promptRequest = this.requestPromptWithTerminalGuard({
+      protocolSessionId,
+      prompt: params.promptContent ?? textPrompt(params.prompt),
+      sessionId: params.sessionId,
+      turnId,
+    });
     void promptRequest
       .then((result) => {
         this.assertPromptProducedResponse(params.sessionId, result);
@@ -1103,6 +1102,12 @@ export class AcpAgentClient {
     const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
+    if (
+      activeTurn
+      && (updateKind === "turn_finished" || updateKind === "turn_completed")
+    ) {
+      activeTurn.onTerminalUpdate?.();
+    }
     if (isProviderTranscriptReplayUpdate(update)) {
       if (loadState) {
         loadState.replayedTranscript = true;
@@ -1157,7 +1162,7 @@ export class AcpAgentClient {
         touchActivity: !fromSessionLoad,
       });
     } else if (
-      updateKind === "turn_finished" ||
+      (updateKind === "turn_finished" && activeTurn === undefined) ||
       updateKind === "pwragent_turn_failed" ||
       (updateKind === "turn_completed" && activeTurn === undefined)
     ) {
@@ -1241,7 +1246,8 @@ export class AcpAgentClient {
       update,
       receivedAt,
       deferTurnCompletion:
-        updateKind === "turn_completed" && activeTurn !== undefined,
+        (updateKind === "turn_finished" || updateKind === "turn_completed")
+        && activeTurn !== undefined,
     } satisfies AcpSessionUpdate);
     void this.notifySessionUpdate({
       assistantMessageItemId,
@@ -1586,6 +1592,41 @@ export class AcpAgentClient {
       turnId,
     });
     this.updateSessionStatus(sessionId, "active");
+  }
+
+  private requestPromptWithTerminalGuard(params: {
+    protocolSessionId: string;
+    prompt: AcpPromptContentBlock[];
+    sessionId: string;
+    turnId: string;
+  }): Promise<unknown> {
+    const activeTurn = this.activeTurns.get(params.sessionId);
+    const terminalResponseGuard = new Promise<never>((_resolve, reject) => {
+      if (!activeTurn || activeTurn.turnId !== params.turnId) return;
+      activeTurn.onTerminalUpdate = () => {
+        if (activeTurn.terminalResponseGraceStarted) return;
+        activeTurn.terminalResponseGraceStarted = true;
+        const timer = setTimeout(() => {
+          if (this.activeTurns.get(params.sessionId) !== activeTurn) return;
+          const displayName = this.options.agentDisplayName?.trim() || "ACP agent";
+          reject(new Error(
+            `${displayName} reported that the turn ended, but its ACP prompt request did not close. The provider connection may be unavailable.`,
+          ));
+        }, ACP_TERMINAL_RESPONSE_GRACE_MS);
+        timer.unref?.();
+      };
+    });
+    return Promise.race([
+      this.options.transport.request(
+        "session/prompt",
+        {
+          sessionId: params.protocolSessionId,
+          prompt: params.prompt,
+        },
+        ACP_PROMPT_REQUEST_TIMEOUT_MS,
+      ),
+      terminalResponseGuard,
+    ]);
   }
 
   private finishTrackedTurn(sessionId: string, completedAt: number): {

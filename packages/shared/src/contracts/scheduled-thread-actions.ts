@@ -17,6 +17,7 @@ import type {
 export type ScheduledThreadActionKind = "turn" | "review";
 
 export type ScheduledThreadActionStatus =
+  | "held"
   | "scheduled"
   | "dispatching"
   | "queued"
@@ -72,6 +73,7 @@ export type ScheduledThreadAction = {
   queueEntryId?: string;
   turnId?: string;
   errorMessage?: string;
+  manualReleaseRequired?: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -84,6 +86,7 @@ export type CreateScheduledThreadActionRequest = {
   origin?: ScheduledThreadActionOrigin;
   scheduledFor: number;
   displayText: string;
+  manualReleaseRequired?: boolean;
   imageAttachments?: NavigationLaunchpadImageAttachment[];
   fileAttachments?: NavigationLaunchpadFileAttachment[];
   turn?: ScheduledThreadTurnPayload;

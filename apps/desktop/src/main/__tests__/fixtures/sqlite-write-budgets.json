@@ -97,6 +97,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "held-scheduled-action-retry": {
+    "commits": 3,
+    "note": "one operator-triggered held retry: claim, queue admission, and successful turn start; no timer or automatic retry",
+    "observedWalBytes": 45320,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "idle-hour-runtime-leases": {
     "commits": 0,
     "note": "one idle hour: PID-owned messaging and federation leases",
@@ -157,6 +164,13 @@
     "commits": 1,
     "note": "one secret-free provider thread projection per successful full provider list, never per thread",
     "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "queued-scheduled-action-hold": {
+    "commits": 1,
+    "note": "one queued scheduled action durably held after its preceding turn fails; one boundary transition, not a timer",
+    "observedWalBytes": 16480,
     "rowsChanged": 1,
     "statements": 1
   },

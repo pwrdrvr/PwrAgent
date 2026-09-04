@@ -89,6 +89,7 @@ export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
 export const AGENT_CANCEL_QUEUED_TURN_CHANNEL = "agent:cancel-queued-turn";
+export const AGENT_RELEASE_QUEUED_TURN_CHANNEL = "agent:release-queued-turn";
 export const SCHEDULED_ACTIONS_LIST_CHANNEL = "scheduled-actions:list";
 export const SCHEDULED_ACTIONS_CREATE_CHANNEL = "scheduled-actions:create";
 export const SCHEDULED_ACTIONS_UPDATE_CHANNEL = "scheduled-actions:update";

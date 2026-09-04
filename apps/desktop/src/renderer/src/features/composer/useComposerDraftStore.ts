@@ -36,6 +36,8 @@ export type ComposerQueuedTurnSnapshot = {
   /** Terminal scheduled action converted into a locally recoverable draft. */
   failedScheduledActionId?: string;
   errorMessage?: string;
+  manualReleaseRequired?: boolean;
+  holdReason?: string;
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];

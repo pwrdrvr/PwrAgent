@@ -263,6 +263,8 @@ export type ThreadQueuedTurnSummary = {
   createdAt: number;
   /** 0-based dispatch position within the thread's queue. */
   position: number;
+  manualReleaseRequired?: boolean;
+  holdReason?: string;
 };
 
 /**

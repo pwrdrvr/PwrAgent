@@ -56,6 +56,51 @@ describe("scheduled thread action projections", () => {
     ]);
   });
 
+  it("keeps a stale-steer hold at the queue head during reconciliation", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = "thread:codex:thread-1";
+    store.setQueuedTurns(scopeKey, [{
+      id: "local-1",
+      text: "Earlier queued message",
+      imageAttachments: [],
+      fileAttachments: [],
+    }]);
+    const held = scheduledAction({
+      id: "held-1",
+      status: "held",
+      manualReleaseRequired: true,
+      displayText: "Interrupted steer",
+      updatedAt: 2_000,
+    });
+
+    applyScheduledActionProjection(store, held);
+    expect(store.getQueuedTurns(scopeKey).map((entry) => entry.id)).toEqual([
+      "scheduled-projection:held-1",
+      "local-1",
+    ]);
+
+    syncScheduledActionProjections(store, [
+      {
+        ...held,
+        queueEntryId: "scheduled-turn:held-1",
+        errorMessage: "Provider still unavailable",
+        updatedAt: 3_000,
+      },
+      scheduledAction({ id: "scheduled-2", scheduledFor: 30_000 }),
+    ]);
+
+    expect(store.getQueuedTurns(scopeKey).map((entry) => entry.id)).toEqual([
+      "scheduled-projection:held-1",
+      "local-1",
+      "scheduled-projection:scheduled-2",
+    ]);
+    expect(store.getQueuedTurns(scopeKey)[0]).toMatchObject({
+      queueEntryId: "scheduled-turn:held-1",
+      holdReason: "Provider still unavailable",
+    });
+  });
+
   it("removes the projection when the backend action becomes terminal", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;

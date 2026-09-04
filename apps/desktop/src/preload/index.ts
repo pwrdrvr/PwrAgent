@@ -20,6 +20,8 @@ import type {
   ArchiveThreadResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
+  ReleaseQueuedTurnRequest,
+  ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
@@ -456,6 +458,7 @@ import type {
 } from "../shared/quit-blockers";
 import {
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
+  AGENT_RELEASE_QUEUED_TURN_CHANNEL,
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
   SCHEDULED_ACTIONS_CREATE_CHANNEL,
   SCHEDULED_ACTIONS_LIST_CHANNEL,
@@ -1608,6 +1611,10 @@ const desktopApi = Object.freeze({
     request: CancelQueuedTurnRequest,
   ): Promise<CancelQueuedTurnResponse> =>
     await ipcRenderer.invoke(AGENT_CANCEL_QUEUED_TURN_CHANNEL, request),
+  releaseQueuedTurn: async (
+    request: ReleaseQueuedTurnRequest,
+  ): Promise<ReleaseQueuedTurnResponse> =>
+    await ipcRenderer.invoke(AGENT_RELEASE_QUEUED_TURN_CHANNEL, request),
   listScheduledThreadActions: async (
     request?: ListScheduledThreadActionsRequest,
   ): Promise<ListScheduledThreadActionsResponse> =>

@@ -259,7 +259,7 @@ describe("ThreadTurnQueue", () => {
       .toMatchObject([{ id: "queued-2" }]);
   });
 
-  it("retries a blocked queued start after a coalesced idle release", async () => {
+  it("holds a blocked queued start until an operator releases it", async () => {
     let rejectFirstQueuedStart!: (reason?: unknown) => void;
     let resolveFirstQueuedAttempt!: () => void;
     let resolveRetriedQueuedStart!: () => void;
@@ -305,6 +305,19 @@ describe("ThreadTurnQueue", () => {
     rejectFirstQueuedStart(new Error("backend rejected queued start"));
 
     await terminalRelease;
+    expect(startedEntries).toEqual(["running", "queued"]);
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toMatchObject([{
+        id: "queued",
+        manualReleaseRequired: true,
+        holdReason: "backend rejected queued start",
+      }]);
+
+    await expect(queue.releaseEntryWithDisposition("queued"))
+      .resolves.toMatchObject({
+        disposition: "started",
+        turnId: "turn-queued-2",
+      });
     await retriedQueuedStart;
     expect(startedEntries).toEqual(["running", "queued", "queued"]);
     expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
@@ -348,10 +361,14 @@ describe("ThreadTurnQueue", () => {
       "queued",
       "queued",
       "blocked",
+      "held",
+      "held",
     ]);
 
     rejectBadEntry = false;
     await queue.releaseThread({ backend: "codex", threadId: "thread-1" });
+    expect(startedEntries).toEqual([]);
+    await queue.releaseEntryWithDisposition("bad-entry");
     expect(startedEntries).toEqual(["bad-entry"]);
     await queue.releaseThread({
       backend: "codex",
@@ -359,6 +376,81 @@ describe("ThreadTurnQueue", () => {
       turnId: "turn-bad-entry",
     });
     expect(startedEntries).toEqual(["bad-entry", "good-entry"]);
+  });
+
+  it("holds queued work after a failed running turn until manual release", async () => {
+    const startedEntries: string[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        return {
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}`,
+        };
+      },
+    });
+
+    await queue.submit(buildEntry({ id: "running" }));
+    await queue.submit(buildEntry({ id: "queued" }));
+    await queue.releaseThread({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-running",
+      status: "turn/failed",
+      errorMessage: "Provider unavailable",
+    });
+
+    expect(startedEntries).toEqual(["running"]);
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toMatchObject([{
+        id: "queued",
+        manualReleaseRequired: true,
+        holdReason: "Provider unavailable",
+      }]);
+
+    await queue.releaseThread({ backend: "codex", threadId: "thread-1" });
+    expect(startedEntries).toEqual(["running"]);
+    await expect(queue.releaseEntryWithDisposition("queued"))
+      .resolves.toMatchObject({ disposition: "started" });
+    expect(startedEntries).toEqual(["running", "queued"]);
+  });
+
+  it("places stale steering fallbacks at the held queue head", async () => {
+    let active = true;
+    const startedEntries: string[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => active,
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        return {
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}`,
+        };
+      },
+    });
+
+    await queue.submit(buildEntry({ id: "already-queued" }));
+    await queue.submitHeld(
+      buildEntry({ id: "stale-steer" }),
+      "The steer target ended.",
+    );
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toMatchObject([
+        { id: "stale-steer", manualReleaseRequired: true },
+        { id: "already-queued" },
+      ]);
+    await expect(queue.releaseEntryWithDisposition("already-queued"))
+      .resolves.toEqual({
+        disposition: "not_head",
+        entryId: "already-queued",
+      });
+
+    active = false;
+    await expect(queue.releaseEntryWithDisposition("stale-steer"))
+      .resolves.toMatchObject({ disposition: "started" });
+    expect(startedEntries).toEqual(["stale-steer"]);
   });
 
   it("cancels pending queue entries by id", async () => {

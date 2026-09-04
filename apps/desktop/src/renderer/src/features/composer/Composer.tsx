@@ -503,6 +503,8 @@ type QueuedTurnDraft = {
   scheduledActionId?: string;
   failedScheduledActionId?: string;
   errorMessage?: string;
+  manualReleaseRequired?: boolean;
+  holdReason?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -4065,14 +4067,42 @@ export function Composer(props: ComposerProps) {
   const upsertScheduledProjectionInScope = (
     scopeKey: string,
     projection: QueuedTurnDraft,
+    options?: { atHead?: boolean },
+  ): void => {
+    const current = draftStore.getQueuedTurns(scopeKey);
+    const matchingIndex = current.findIndex(
+      (candidate) =>
+        candidate.scheduledActionId === projection.scheduledActionId,
+    );
+    const withoutProjection = current.filter(
+      (candidate) =>
+        candidate.scheduledActionId !== projection.scheduledActionId,
+    );
+    const insertionIndex = options?.atHead
+      ? 0
+      : matchingIndex >= 0
+        ? matchingIndex
+        : withoutProjection.length;
+    const nextQueuedTurns = [
+      ...withoutProjection.slice(0, insertionIndex),
+      projection,
+      ...withoutProjection.slice(insertionIndex),
+    ];
+    saveQueuedTurnSnapshots(scopeKey, nextQueuedTurns);
+    if (activeComposerScopeKeyRef.current === scopeKey) {
+      setQueuedTurnsState(nextQueuedTurns);
+    }
+  };
+  const upsertBackendQueueProjectionInScope = (
+    scopeKey: string,
+    projection: QueuedTurnDraft,
   ): void => {
     const current = draftStore.getQueuedTurns(scopeKey);
     const nextQueuedTurns = [
-      ...current.filter(
-        (candidate) =>
-          candidate.scheduledActionId !== projection.scheduledActionId,
-      ),
       projection,
+      ...current.filter(
+        (candidate) => candidate.queueEntryId !== projection.queueEntryId,
+      ),
     ];
     saveQueuedTurnSnapshots(scopeKey, nextQueuedTurns);
     if (activeComposerScopeKeyRef.current === scopeKey) {
@@ -4211,6 +4241,63 @@ export function Composer(props: ComposerProps) {
     } catch (error) {
       reportError(error instanceof Error ? error.message : String(error));
       return "failed";
+    }
+  };
+  const releaseHeldQueuedTurn = async (
+    queued: QueuedTurnDraft,
+    scopeKey = composerScopeKey,
+  ): Promise<void> => {
+    if (queued.scheduledActionId) {
+      sendQueuedTurnNow(queued);
+      return;
+    }
+    if (!queued.queueEntryId || !props.desktopApi?.releaseQueuedTurn) {
+      setSendError("Queued turn retry is unavailable.");
+      return;
+    }
+    updateSending(true);
+    setSendError(undefined);
+    try {
+      const federationTarget =
+        props.thread?.federation?.ref.target
+        ?? readRendererFederationTarget();
+      const response = await props.desktopApi.releaseQueuedTurn({
+        ...(federationTarget ? { federationTarget } : {}),
+        queueEntryId: queued.queueEntryId,
+      });
+      if (response.disposition === "started") {
+        removeQueuedTurnInScope(scopeKey, queued);
+        if (response.turnId) {
+          updateActiveTurnId(response.turnId);
+          props.onActiveTurnIdChange?.(response.turnId);
+        }
+        if (props.thread) {
+          props.onUserRepliedToThread?.(props.thread);
+        }
+        props.onPendingStatusChange?.("Thinking");
+        return;
+      }
+      if (response.disposition === "blocked") {
+        const message =
+          response.errorMessage ?? "The provider still could not start this turn.";
+        updateQueuedTurnInScope(scopeKey, queued, (current) => ({
+          ...current,
+          manualReleaseRequired: true,
+          holdReason: message,
+        }));
+        setSendError(message);
+        return;
+      }
+      const message = response.disposition === "busy"
+        ? "Wait for the active turn to finish before retrying this message."
+        : response.disposition === "not_head"
+          ? "Retry the first held message before this one."
+          : "This queued message is no longer held for retry.";
+      setSendError(message);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      updateSending(false);
     }
   };
   const removeLocalQueuedTurn = (queued: QueuedTurnDraft): void => {
@@ -5164,7 +5251,9 @@ export function Composer(props: ComposerProps) {
         typeof event.notification.params === "object" &&
         event.notification.params !== null
           ? (event.notification.params as {
+              displayText?: unknown;
               errorMessage?: unknown;
+              manualReleaseRequired?: unknown;
               queueEntryId?: unknown;
               queueEntryCreatedAt?: unknown;
               status?: unknown;
@@ -5175,7 +5264,10 @@ export function Composer(props: ComposerProps) {
       if (
         notificationThreadId &&
         typeof turnQueueRecord?.queueEntryId === "string" &&
-        turnQueueRecord.status === "queued"
+        (
+          turnQueueRecord.status === "queued"
+          || turnQueueRecord.status === "held"
+        )
       ) {
         // Mirror entries queued by OTHER windows (or other federated
         // viewers) — the FIFO lives in the owning instance's main
@@ -5187,28 +5279,49 @@ export function Composer(props: ComposerProps) {
           notificationThreadId,
         );
         const mirrorCurrent = draftStore.getQueuedTurns(mirrorScopeKey);
-        const alreadyKnown = mirrorCurrent.some(
-          (queued) =>
-            queued.queueEntryId === turnQueueRecord.queueEntryId
-            || queued.backendQueuePending,
+        const matchingIndex = mirrorCurrent.findIndex(
+          (queued) => queued.queueEntryId === turnQueueRecord.queueEntryId,
         );
-        if (!alreadyKnown) {
-          const displayText = (
-            event.notification.params as { displayText?: unknown }
-          ).displayText;
-          draftStore.setQueuedTurns(mirrorScopeKey, [
-            ...mirrorCurrent,
-            {
+        const manualReleaseRequired =
+          turnQueueRecord.manualReleaseRequired === true
+          || turnQueueRecord.status === "held";
+        const holdReason = manualReleaseRequired
+          && typeof turnQueueRecord.errorMessage === "string"
+            ? turnQueueRecord.errorMessage
+            : undefined;
+        if (matchingIndex >= 0) {
+          const next = mirrorCurrent.map((queued, index) =>
+            index === matchingIndex
+              ? {
+                  ...queued,
+                  manualReleaseRequired,
+                  holdReason,
+                }
+              : queued
+          );
+          draftStore.setQueuedTurns(mirrorScopeKey, next);
+        } else if (!mirrorCurrent.some((queued) => queued.backendQueuePending)) {
+          const mirrored = {
               id: `backend-queued:${turnQueueRecord.queueEntryId}`,
               queueEntryId: turnQueueRecord.queueEntryId,
               ...(typeof turnQueueRecord.queueEntryCreatedAt === "number"
                 ? { queueEntryCreatedAt: turnQueueRecord.queueEntryCreatedAt }
                 : {}),
-              text: typeof displayText === "string" ? displayText : "",
+              manualReleaseRequired,
+              holdReason,
+              text:
+                typeof turnQueueRecord.displayText === "string"
+                  ? turnQueueRecord.displayText
+                  : "",
               imageAttachments: [],
               fileAttachments: [],
-            },
-          ]);
+          };
+          draftStore.setQueuedTurns(
+            mirrorScopeKey,
+            manualReleaseRequired
+              ? [mirrored, ...mirrorCurrent]
+              : [...mirrorCurrent, mirrored],
+          );
         }
       }
 
@@ -6405,7 +6518,8 @@ export function Composer(props: ComposerProps) {
             return;
           }
           if (
-            response.action.status === "scheduled"
+            response.action.status === "held"
+            || response.action.status === "scheduled"
             || response.action.status === "dispatching"
             || response.action.status === "queued"
           ) {
@@ -6413,16 +6527,30 @@ export function Composer(props: ComposerProps) {
               ...queued,
               backendQueuePending: response.action.status === "dispatching",
               queueEntryId:
-                response.action.status === "queued"
+                response.action.status === "held"
+                || response.action.status === "queued"
                   ? response.action.queueEntryId
                   : undefined,
               scheduledSendAt:
                 response.action.status === "scheduled"
                   ? response.action.scheduledFor
                   : undefined,
+              manualReleaseRequired:
+                response.action.status === "held"
+                || response.action.manualReleaseRequired
+                  ? true
+                  : undefined,
+              holdReason:
+                response.action.status === "held"
+                  ? response.action.errorMessage
+                    ?? "The queued turn is still held for manual retry."
+                  : undefined,
             });
           } else {
             removeQueuedTurn(queued);
+            if (response.action.status === "started" && props.thread) {
+              props.onUserRepliedToThread?.(props.thread);
+            }
           }
           updateSending(false);
         },
@@ -6975,7 +7103,9 @@ export function Composer(props: ComposerProps) {
       // Steering is a reply too, and like the send path this only counts once
       // the backend has taken it — a throw below must leave the thread in the
       // Attention queue.
-      props.onUserRepliedToThread?.(props.thread);
+      if (response.disposition !== "held") {
+        props.onUserRepliedToThread?.(props.thread);
+      }
       if (response.disposition === "queued") {
         if (steeringRequestIdRef.current === pending.id) {
           steeringRequestIdRef.current = undefined;
@@ -7011,6 +7141,35 @@ export function Composer(props: ComposerProps) {
         });
         setPendingSteer(undefined);
         setSendError(undefined);
+      }
+      if (response.disposition === "held") {
+        const projection = {
+          id: response.scheduledAction
+            ? `scheduled-projection:${response.scheduledAction.id}`
+            : `backend-queued:${response.queueEntryId ?? pending.id}`,
+          scheduledActionId: response.scheduledAction?.id,
+          queueEntryId: response.queueEntryId,
+          manualReleaseRequired: true,
+          holdReason:
+            response.holdReason
+            ?? "The turn ended before this steering message could be delivered.",
+          input: payload.input,
+          text: pending.text,
+          imageAttachments: pending.imageAttachments,
+          fileAttachments: pending.fileAttachments,
+        };
+        if (response.scheduledAction) {
+          upsertScheduledProjectionInScope(
+            expectedScopeKey,
+            projection,
+            { atHead: true },
+          );
+        } else {
+          upsertBackendQueueProjectionInScope(expectedScopeKey, projection);
+        }
+        setPendingSteer(undefined);
+        setSendError(undefined);
+        props.onPendingStatusChange?.("Queued");
       }
     } catch (error) {
       if (steeringRequestIdRef.current === pending.id) {
@@ -10222,7 +10381,9 @@ export function Composer(props: ComposerProps) {
           queued.scheduledSendAt,
           scheduleNow,
         );
-        const queuedLabel = queued.errorMessage
+        const queuedLabel = queued.manualReleaseRequired
+          ? "Held for retry"
+          : queued.errorMessage
           ? "Failed to send"
           : scheduledSendAt
           ? `Scheduled · sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
@@ -10235,12 +10396,18 @@ export function Composer(props: ComposerProps) {
             className={[
               "composer__queued",
               scheduledSendAt ? "composer__queued--scheduled" : "",
-              queued.errorMessage ? "composer__queued--failed" : "",
+              queued.errorMessage || queued.manualReleaseRequired
+                ? "composer__queued--failed"
+                : "",
             ]
               .filter(Boolean)
               .join(" ")}
             aria-label={
-              scheduledSendAt
+              queued.manualReleaseRequired
+                ? index === 0
+                  ? "Held queued message"
+                  : `Held queued message ${index + 1}`
+                : scheduledSendAt
                 ? index === 0
                   ? "Scheduled message"
                   : `Scheduled message ${index + 1}`
@@ -10262,10 +10429,31 @@ export function Composer(props: ComposerProps) {
                   {queued.errorMessage}
                 </span>
               ) : null}
+              {queued.holdReason ? (
+                <span className="composer__queued-error">
+                  {queued.holdReason}
+                </span>
+              ) : null}
             </div>
             <QueuedImageAttachments attachments={queued.imageAttachments} />
             <div className="composer__queued-actions">
-              {queued.scheduledActionId && scheduledSendAt ? (
+              {queued.manualReleaseRequired && index === 0 ? (
+                <button
+                  className="composer__secondary-action"
+                  disabled={
+                    props.disabled
+                    || sending
+                    || Boolean(activeTurnId)
+                    || (!queued.queueEntryId && !queued.scheduledActionId)
+                  }
+                  type="button"
+                  onClick={() => {
+                    void releaseHeldQueuedTurn(queued, queuedScopeKey);
+                  }}
+                >
+                  Retry
+                </button>
+              ) : queued.scheduledActionId && scheduledSendAt ? (
                 <button
                   className="composer__secondary-action"
                   disabled={props.disabled || sending}

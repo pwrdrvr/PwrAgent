@@ -17,6 +17,8 @@ import type {
   ArchiveThreadResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
+  ReleaseQueuedTurnRequest,
+  ReleaseQueuedTurnResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   CelestialIconId,
@@ -379,6 +381,7 @@ export const FEDERATION_BACKEND_METHODS = {
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
   cancelQueuedTurn: "backend.cancelQueuedTurn",
+  releaseQueuedTurn: "backend.releaseQueuedTurn",
   startReview: "backend.startReview",
   listScheduledThreadActions: "backend.listScheduledThreadActions",
   createScheduledThreadAction: "backend.createScheduledThreadAction",
@@ -480,6 +483,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.releaseQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.listScheduledThreadActions]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.createScheduledThreadAction]: "scheduled_actions",
@@ -631,6 +635,9 @@ export type FederationBackendOperations = {
   cancelQueuedTurn(
     request: CancelQueuedTurnRequest,
   ): Promise<CancelQueuedTurnResponse>;
+  releaseQueuedTurn(
+    request: ReleaseQueuedTurnRequest,
+  ): Promise<ReleaseQueuedTurnResponse>;
   startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
   listScheduledThreadActions(
     request?: ListScheduledThreadActionsRequest,
@@ -1096,6 +1103,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.cancelQueuedTurn(
         envelope.params as CancelQueuedTurnRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.releaseQueuedTurn,
+    async (envelope) =>
+      await params.backend.releaseQueuedTurn(
+        envelope.params as ReleaseQueuedTurnRequest,
       ),
   );
   params.router.registerHandler(
@@ -1779,6 +1793,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<CancelQueuedTurnResponse> {
     return await this.rpc.request<CancelQueuedTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
+      params: request,
+    });
+  }
+
+  async releaseQueuedTurn(
+    request: ReleaseQueuedTurnRequest,
+  ): Promise<ReleaseQueuedTurnResponse> {
+    return await this.rpc.request<ReleaseQueuedTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.releaseQueuedTurn,
       params: request,
     });
   }
