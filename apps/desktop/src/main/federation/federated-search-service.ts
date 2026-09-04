@@ -11,6 +11,7 @@ import {
   buildThreadIdentityKey,
 } from "@pwragent/shared";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
+import { hasFederationErrorCode } from "./federation-rpc";
 
 export type FederatedSearchPeer = {
   instanceId: FederationInstanceId;
@@ -208,7 +209,10 @@ export class FederatedSearchService {
       if (!request.includeArchived) {
         return null;
       }
-    } catch {
+    } catch (error) {
+      if (!hasFederationErrorCode(error, "method_not_found")) {
+        throw error;
+      }
       // Mixed-version peers may not expose the exact lookup RPC yet. Fall
       // through to exact list scans rather than using fuzzy UUID filtering.
     }

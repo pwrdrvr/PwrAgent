@@ -50,7 +50,10 @@ function buildRuntime(params: {
       };
       const resolveThread = vi.fn(async () => {
         if (peer.resolveUnsupported) {
-          throw new Error("Unsupported federation method: backend.resolveThread");
+          throw Object.assign(
+            new Error("Unsupported federation method: backend.resolveThread"),
+            { code: "method_not_found" },
+          );
         }
         return peer.ownsThread ? { thread: ownedThread } : {};
       });
@@ -275,7 +278,10 @@ describe("federated thread message service", () => {
       }],
       remoteBackend: () => ({
         resolveThread: vi.fn(async () => {
-          throw new Error("Unsupported federation method: backend.resolveThread");
+          throw Object.assign(
+            new Error("Unsupported federation method: backend.resolveThread"),
+            { code: "method_not_found" },
+          );
         }),
         listThreads,
         startTurn,
@@ -517,6 +523,31 @@ describe("federated thread message service", () => {
     expect(backends.get("pwr_older")?.listThreads).toHaveBeenCalledWith({
       backend: "codex",
     });
+  });
+
+  it("does not amplify a resolve failure into a full thread-list scan", async () => {
+    const listThreads = vi.fn();
+    const runtime = {
+      connectedPeerTargets: () => [{
+        target: { scope: "remote" as const, instanceId: "pwr_broken" },
+        label: "Broken Mac",
+        capabilities: ["thread_navigation", "turn_control"],
+      }],
+      remoteBackend: () => ({
+        resolveThread: vi.fn(async () => {
+          throw Object.assign(new Error("Remote handler failed"), {
+            code: "handler_failed",
+          });
+        }),
+        listThreads,
+      }),
+    } as unknown as DesktopFederationRuntime;
+    const handler = createFederatedThreadMessageHandler({
+      runtime: () => runtime,
+    });
+
+    await expect(handler(request)).rejects.toThrow("Remote handler failed");
+    expect(listThreads).not.toHaveBeenCalled();
   });
 
   it("refuses an ambiguous UUID reported by multiple peers", async () => {

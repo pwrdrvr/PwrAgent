@@ -11,6 +11,7 @@ import { formatFederationPeerDisplayLabel } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
+import { hasFederationErrorCode } from "./federation-rpc";
 
 export type FederatedThreadTargetRuntime = {
   connectedPeerTargets(): Array<{
@@ -169,7 +170,10 @@ async function resolveThreadOnPeer(
         threadId: request.threadId,
       })
     ).thread;
-  } catch {
+  } catch (error) {
+    if (!hasFederationErrorCode(error, "method_not_found")) {
+      throw error;
+    }
     // Mixed-version peers may predate backend.resolveThread. Their unfiltered
     // list still provides an exact-ID compatibility path.
     thread = (

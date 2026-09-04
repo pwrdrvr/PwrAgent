@@ -74,7 +74,9 @@ describe("FederatedSearchService", () => {
           label: "Older Mac",
           backend: {
             resolveThread: vi.fn(async () => {
-              throw new Error("Unsupported federation method");
+              throw Object.assign(new Error("Unsupported federation method"), {
+                code: "method_not_found",
+              });
             }),
             listThreads: vi.fn(async () => ({
               backend: "codex" as const,
@@ -99,6 +101,40 @@ describe("FederatedSearchService", () => {
       ],
       failures: [],
     });
+  });
+
+  it("does not amplify a resolve failure into full active and archive scans", async () => {
+    const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
+    const listThreads = vi.fn();
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "pwr_broken",
+        label: "Broken Mac",
+        backend: {
+          resolveThread: vi.fn(async () => {
+            throw Object.assign(new Error("Remote handler failed"), {
+              code: "handler_failed",
+            });
+          }),
+          listThreads,
+        },
+      }],
+    });
+
+    await expect(service.search({
+      query: threadId,
+      backend: "codex",
+      includeArchived: true,
+    })).resolves.toMatchObject({
+      results: [],
+      failures: [{
+        instanceId: "pwr_broken",
+        error: "Remote handler failed",
+      }],
+    });
+    expect(listThreads).not.toHaveBeenCalled();
   });
 
   it("fans out to local and remote peers and preserves source identity", async () => {
