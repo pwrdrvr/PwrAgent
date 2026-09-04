@@ -3096,6 +3096,10 @@ export class DesktopFederationRuntime {
   }
 
   private registerGatewayConnection(connection: FederationGatewayConnection): void {
+    // A live socket can be replaced without a disconnected status transition.
+    // Transport revisions are scoped to the remote process lifetime, so a
+    // replacement must not reuse any selection state from the prior session.
+    this.clearRemoteNavigationTransportForPeer(connection.peerId);
     this.router?.registerConnection({
       peerId: connection.peerId,
       capabilities: connection.capabilities,

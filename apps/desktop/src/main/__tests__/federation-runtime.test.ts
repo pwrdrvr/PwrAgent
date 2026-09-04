@@ -749,6 +749,55 @@ describe("DesktopFederationRuntime", () => {
     });
   });
 
+  it("clears every cached selection when a connected peer session is replaced", async () => {
+    const getNavigationSnapshotTransport =
+      createRevisionAwareNavigationTransport();
+    const runtime = createNavigationTransportRuntime(
+      getNavigationSnapshotTransport,
+    );
+    runtime.router = new FederationRouter({ localInstanceId: "viewer_one" });
+    const target = { scope: "remote" as const, instanceId: "client_one" };
+    const allSelection = { kind: "all" as const };
+    const sparseSelection = {
+      kind: "threads" as const,
+      threads: [{ backend: "codex" as const, threadId: "thread-1" }],
+    };
+    const oldConnection = createConnection({
+      peerId: "client_one",
+      capabilities: ["thread_navigation", "navigation_snapshot_deltas"],
+      sendEnvelope: () => undefined,
+    });
+    const replacementConnection = createConnection({
+      peerId: "client_one",
+      capabilities: ["thread_navigation", "navigation_snapshot_deltas"],
+      sendEnvelope: () => undefined,
+    });
+
+    runtime.registerGatewayConnection(oldConnection);
+    await runtime.remoteNavigationSnapshot(target, {}, allSelection);
+    await runtime.remoteNavigationSnapshot(target, {}, sparseSelection);
+    runtime.registerGatewayConnection(replacementConnection);
+    runtime.unregisterGatewayConnection(oldConnection);
+    await runtime.remoteNavigationSnapshot(target, {}, allSelection);
+    await runtime.remoteNavigationSnapshot(target, {}, sparseSelection);
+
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(3, {
+      transport: {
+        protocol: 1,
+        selection: { kind: "all" },
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(4, {
+      transport: {
+        protocol: 1,
+        selection: {
+          kind: "threads",
+          threadKeys: ["codex:thread-1"],
+        },
+      },
+    });
+  });
+
   it("counts every upsert in batched navigation changes for diagnostics", () => {
     const change = (
       baseRevision: string,
