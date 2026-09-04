@@ -14,6 +14,18 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+export function hasFederationErrorCode(
+  error: unknown,
+  code: string,
+): boolean {
+  return (
+    typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === code
+  );
+}
+
 export class FederationRpcEndpoint {
   private readonly pending = new Map<string, PendingRequest>();
 

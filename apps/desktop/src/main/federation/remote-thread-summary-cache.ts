@@ -18,6 +18,7 @@ import {
 } from "@pwragent/shared";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { ThreadInfoStore } from "../app-server/thread-info-store";
+import { hasFederationErrorCode } from "./federation-rpc";
 
 export type RemoteThreadSummaryPeer = {
   target: FederationRemoteTarget;
@@ -1079,14 +1080,6 @@ function withTimeout<T>(
   });
 }
 
-function hasFederationErrorCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object"
-    && error !== null
-    && "code" in error
-    && error.code === code
-  );
-}
 
 function rankUniqueThreadJumpMatches(
   threads: readonly NavigationThreadSummary[],
