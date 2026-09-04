@@ -11,6 +11,7 @@ import type {
   FederationEventSubscription,
   FederationInstanceId,
   FederationProtocolEnvelope,
+  FederationThreadSelection,
   GetNavigationSnapshotTransportRequest,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
@@ -159,6 +160,7 @@ type RuntimeHarness = {
   remoteNavigationSnapshot: (
     target: { scope: "remote"; instanceId: FederationInstanceId },
     request: { backend?: "all" | "codex"; filter?: string },
+    selectionOverride?: FederationThreadSelection,
   ) => Promise<NavigationSnapshot>;
   remoteThreadSummaries: () => {
     searchForJump: (request: { query: string }) => Promise<{ results: unknown[] }>;
@@ -286,6 +288,79 @@ function applyEventSubscription(params: {
     ...(params.hopCount === undefined ? {} : { hopCount: params.hopCount }),
     createdAt: 1_000,
   }, params.sourcePeerId ?? params.subscriberInstanceId)).toBe(true);
+}
+
+function createNavigationSnapshot(threadId: string): NavigationSnapshot {
+  return {
+    backend: "all",
+    fetchedAt: 1_000,
+    unchanged: false,
+    threads: [{
+      id: threadId,
+      title: `Remote ${threadId}`,
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    }],
+    inboxThreadKeys: [],
+    directories: [],
+    launchpadDefaults: {
+      backend: "codex",
+      executionMode: "default",
+    },
+  };
+}
+
+function createNavigationTransportRuntime(
+  getNavigationSnapshotTransport: (
+    request: GetNavigationSnapshotTransportRequest,
+  ) => Promise<NavigationSnapshotTransportResponse>,
+): RuntimeHarness {
+  const fallbackSnapshot = createNavigationSnapshot("fallback");
+  const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+  runtime.remoteBackend = () => ({
+    getNavigationSnapshot: async () => fallbackSnapshot,
+    getNavigationSnapshotTransport,
+    listThreads: async () => ({
+      backend: "codex",
+      fetchedAt: 1_000,
+      threads: [],
+    }),
+  });
+  runtime.store = () => ({
+    getPeer: () => ({ label: "Studio Mac", status: "connected" }),
+    listPeers: () => [],
+  });
+  runtime.visiblePeers = () => [{
+    id: "client_one",
+    label: "Studio Mac",
+    role: "client",
+    status: "connected",
+    capabilities: ["thread_navigation", "navigation_snapshot_deltas"],
+  }];
+  return runtime;
+}
+
+function createRevisionAwareNavigationTransport() {
+  return vi
+    .fn<(request: GetNavigationSnapshotTransportRequest) =>
+      Promise<NavigationSnapshotTransportResponse>>()
+    .mockImplementation(async (request) => {
+      const selection = request.transport.selection ?? { kind: "all" };
+      const selectionKey = selection.kind === "all"
+        ? "all"
+        : selection.threadKeys.join(",");
+      const revision = `revision:${selectionKey}`;
+      if (request.transport.baseRevision === revision) {
+        return { kind: "unchanged", revision };
+      }
+      return {
+        kind: "full",
+        revision,
+        snapshot: createNavigationSnapshot(selectionKey),
+      };
+    });
 }
 
 describe("DesktopFederationRuntime", () => {
@@ -509,6 +584,167 @@ describe("DesktopFederationRuntime", () => {
         baseRevision: "peer-revision-2",
         protocol: 1,
         selection: { kind: "all" },
+      },
+    });
+  });
+
+  it("reuses explicit all-selection revisions without an event subscription", async () => {
+    const getNavigationSnapshotTransport =
+      createRevisionAwareNavigationTransport();
+    const runtime = createNavigationTransportRuntime(
+      getNavigationSnapshotTransport,
+    );
+    const target = { scope: "remote" as const, instanceId: "client_one" };
+
+    await runtime.remoteNavigationSnapshot(target, {}, { kind: "all" });
+    await runtime.remoteNavigationSnapshot(target, {}, { kind: "all" });
+
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(2, {
+      transport: {
+        baseRevision: "revision:all",
+        protocol: 1,
+        selection: { kind: "all" },
+      },
+    });
+  });
+
+  it("retains independent revisions for explicit sparse and all selections", async () => {
+    const getNavigationSnapshotTransport =
+      createRevisionAwareNavigationTransport();
+    const runtime = createNavigationTransportRuntime(
+      getNavigationSnapshotTransport,
+    );
+    const target = { scope: "remote" as const, instanceId: "client_one" };
+    const allSelection = { kind: "all" as const };
+    const sparseSelection = {
+      kind: "threads" as const,
+      threads: [{ backend: "codex" as const, threadId: "thread-1" }],
+    };
+
+    await runtime.remoteNavigationSnapshot(target, {}, allSelection);
+    await runtime.remoteNavigationSnapshot(target, {}, sparseSelection);
+    await runtime.remoteNavigationSnapshot(target, {}, allSelection);
+    await runtime.remoteNavigationSnapshot(target, {}, sparseSelection);
+
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(3, {
+      transport: {
+        baseRevision: "revision:all",
+        protocol: 1,
+        selection: { kind: "all" },
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(4, {
+      transport: {
+        baseRevision: "revision:codex:thread-1",
+        protocol: 1,
+        selection: {
+          kind: "threads",
+          threadKeys: ["codex:thread-1"],
+        },
+      },
+    });
+  });
+
+  it("bounds each peer selection cache with deterministic LRU eviction", async () => {
+    const getNavigationSnapshotTransport =
+      createRevisionAwareNavigationTransport();
+    const runtime = createNavigationTransportRuntime(
+      getNavigationSnapshotTransport,
+    );
+    const target = { scope: "remote" as const, instanceId: "client_one" };
+    const cacheLimit = 8;
+    const selections = Array.from({ length: cacheLimit + 1 }, (_, index) => ({
+      kind: "threads" as const,
+      threads: [{
+        backend: "codex" as const,
+        threadId: `thread-${index}`,
+      }],
+    }));
+
+    for (const selection of selections.slice(0, cacheLimit)) {
+      await runtime.remoteNavigationSnapshot(target, {}, selection);
+    }
+    await runtime.remoteNavigationSnapshot(target, {}, selections[0]);
+    await runtime.remoteNavigationSnapshot(target, {}, selections[cacheLimit]);
+    await runtime.remoteNavigationSnapshot(target, {}, selections[0]);
+    await runtime.remoteNavigationSnapshot(target, {}, selections[1]);
+
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(9, {
+      transport: {
+        baseRevision: "revision:codex:thread-0",
+        protocol: 1,
+        selection: {
+          kind: "threads",
+          threadKeys: ["codex:thread-0"],
+        },
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(10, {
+      transport: {
+        protocol: 1,
+        selection: {
+          kind: "threads",
+          threadKeys: ["codex:thread-8"],
+        },
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(11, {
+      transport: {
+        baseRevision: "revision:codex:thread-0",
+        protocol: 1,
+        selection: {
+          kind: "threads",
+          threadKeys: ["codex:thread-0"],
+        },
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(12, {
+      transport: {
+        protocol: 1,
+        selection: {
+          kind: "threads",
+          threadKeys: ["codex:thread-1"],
+        },
+      },
+    });
+  });
+
+  it("clears every cached selection when a peer disconnects", async () => {
+    const getNavigationSnapshotTransport =
+      createRevisionAwareNavigationTransport();
+    const runtime = createNavigationTransportRuntime(
+      getNavigationSnapshotTransport,
+    );
+    const target = { scope: "remote" as const, instanceId: "client_one" };
+    const allSelection = { kind: "all" as const };
+    const sparseSelection = {
+      kind: "threads" as const,
+      threads: [{ backend: "codex" as const, threadId: "thread-1" }],
+    };
+
+    await runtime.remoteNavigationSnapshot(target, {}, allSelection);
+    await runtime.remoteNavigationSnapshot(target, {}, sparseSelection);
+    runtime.publishPeerStatus(
+      "client_one",
+      "disconnected",
+      "Federation peer connection closed.",
+    );
+    await runtime.remoteNavigationSnapshot(target, {}, allSelection);
+    await runtime.remoteNavigationSnapshot(target, {}, sparseSelection);
+
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(3, {
+      transport: {
+        protocol: 1,
+        selection: { kind: "all" },
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(4, {
+      transport: {
+        protocol: 1,
+        selection: {
+          kind: "threads",
+          threadKeys: ["codex:thread-1"],
+        },
       },
     });
   });
