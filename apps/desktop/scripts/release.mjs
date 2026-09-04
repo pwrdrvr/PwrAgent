@@ -278,6 +278,36 @@ function currentLinuxBuilderArch() {
   return arch;
 }
 
+// electron-updater asks the feed for one fixed channel file name per platform:
+// `latest.yml` on Windows, `latest-linux.yml` on Linux x64, and
+// `latest-linux-<arch>.yml` on every other Linux arch (Provider
+// #getChannelFilePrefix in electron-updater 6.8.9). The name stays `latest`
+// even for a prerelease version: electron-builder derives a channel from the
+// version's prerelease tag only for the `generic` publish provider, and
+// electron-builder.yml publishes through `github`. Verified against
+// electron-builder 26.15.7 at version 1.1.0-alpha.2 — the deb, nsis, and mac
+// targets each wrote a `latest*.yml`, never an `alpha*.yml`.
+const WINDOWS_UPDATE_MANIFEST = "latest.yml";
+
+function linuxUpdateManifestName(arch) {
+  return arch === "x64" ? "latest-linux.yml" : `latest-linux-${arch}.yml`;
+}
+
+// electron-builder writes the channel file as a side effect of packaging, not
+// of publishing, so a `--publish=never` build still produces one. A missing
+// file means the running app would fetch a 404 from the release feed and every
+// update check on that platform would fail, so fail the build instead.
+function requireUpdateManifest(distDir, name) {
+  const manifestPath = join(distDir, name);
+  if (!existsSync(manifestPath)) {
+    throw new Error(
+      `electron-updater channel file ${name} is missing from ${distDir}. `
+      + "Auto-update cannot resolve an update without it.",
+    );
+  }
+  return manifestPath;
+}
+
 function findLinuxUnpackedDir(distDir) {
   const candidates = readdirSync(distDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && /^linux(?:-.+)?-unpacked$/.test(entry.name))
@@ -374,9 +404,21 @@ function publishLinuxArtifacts(distDir) {
   }
   const artifacts = linuxDebArtifacts(distDir).map((artifact) => artifact.name);
   const checksum = "SHA256SUMS";
+  const manifest = linuxUpdateManifestName(currentLinuxBuilderArch());
+  requireUpdateManifest(distDir, manifest);
   runChecked(
     "gh",
-    ["release", "upload", tag, ...artifacts, checksum, "--repo", "pwrdrvr/PwrAgent", "--clobber"],
+    [
+      "release",
+      "upload",
+      tag,
+      ...artifacts,
+      manifest,
+      checksum,
+      "--repo",
+      "pwrdrvr/PwrAgent",
+      "--clobber",
+    ],
     { cwd: distDir },
   );
 }
@@ -991,6 +1033,9 @@ if (win) {
   const checksumPath = writeWindowsChecksums(dist);
   console.log(`  checksum: ${checksumPath}`);
 
+  step("verify Windows update manifest");
+  console.log(`  manifest: ${requireUpdateManifest(dist, WINDOWS_UPDATE_MANIFEST)}`);
+
   step("done");
   console.log(`  artifacts: ${dist}`);
   process.exit(0);
@@ -1017,6 +1062,11 @@ if (linux) {
   step("write Linux checksums");
   const checksumPath = writeLinuxChecksums(dist);
   console.log(`  checksum: ${checksumPath}`);
+
+  step("verify Linux update manifest");
+  console.log(
+    `  manifest: ${requireUpdateManifest(dist, linuxUpdateManifestName(currentLinuxBuilderArch()))}`,
+  );
 
   if (publish) {
     step("publish Linux artifacts");
@@ -1122,6 +1172,9 @@ runChecked("lipo", [
 
 step("verify packaged asar contents");
 runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
+
+step("verify macOS update manifest");
+console.log(`  manifest: ${requireUpdateManifest(dist, "latest-mac.yml")}`);
 
 step("done");
 console.log(`  artifacts: ${dist}`);

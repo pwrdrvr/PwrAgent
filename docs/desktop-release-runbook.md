@@ -319,6 +319,49 @@ gh release upload v1.0.0-beta.4 PwrAgent.dmg --repo pwrdrvr/PwrAgent --clobber
 
 ---
 
+## Updater channel files
+
+`configureAutoUpdaterFeedForRelease` points electron-updater at a `generic`
+feed rooted at one release's download directory
+(`.../releases/download/<tag>/`). electron-updater then fetches exactly one
+file name from that directory, chosen by platform:
+
+| Platform | Channel file |
+|---|---|
+| macOS | `latest-mac.yml` |
+| Windows | `latest.yml` |
+| Linux x64 | `latest-linux.yml` |
+| Linux arm64 | `latest-linux-arm64.yml` |
+
+If the release does not carry the file for a platform, that platform's update
+check fetches a 404 and fails. Every release up to and including
+`v1.1.0-alpha.2` published only `latest-mac.yml`, so Windows update checks
+failed on every release.
+
+electron-builder writes these files as a side effect of **packaging**, not of
+publishing, so the `--publish=never` packaging jobs produce them. The bug was
+that the Windows and Linux workflow artifacts never collected them.
+
+The name is `latest*` even for a prerelease version such as `1.1.0-alpha.2`.
+electron-builder derives a channel from the version's prerelease tag (writing
+`alpha.yml` instead) only for the `generic` publish provider;
+`electron-builder.yml` publishes through `github`, which expresses prerelease
+status with the release's `Pre-release` flag instead. Do not set
+`publish.channel` — that would rename the published files away from the names
+the installed builds ask for.
+
+Three checks guard this, so a dropped asset fails the release instead of
+shipping a broken updater:
+
+- `release.mjs` fails each platform's packaging step if the channel file is
+  absent from `dist/`.
+- `Verify updater channel files` fails the publication job if any of the four
+  is missing from the downloaded artifacts or declares the wrong version.
+- The publication step re-reads the created release and fails if any of the
+  four did not upload.
+
+---
+
 ## Promoting a release to Latest
 
 CI publishes every release as a GitHub `Pre-release`, so a freshly published
