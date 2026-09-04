@@ -314,6 +314,21 @@ export type CodexThreadEnvironmentRuntime = {
   setupExitCode?: number;
   setupDurationMs?: number;
   /**
+   * When the operator resolved the failure prompt this runtime raised — by
+   * continuing anyway, or by the thread moving on without them.
+   *
+   * `setupStatus: "failed"` and a failed entry in `actionRuns` are permanent
+   * historical facts: nothing ever rewrites them, and the transcript keeps its
+   * own `codex-environment-setup-*` activity entry with the same output. The
+   * decision prompt they raise is not permanent, so it needs its own state.
+   * Without this the prompt was suppressed only by the thread having messages,
+   * which is also false while a thread hydrates — so it came back on every
+   * open, weeks later, until the transcript finished loading.
+   *
+   * A failure that happens *after* this timestamp raises the prompt again.
+   */
+  setupFailureAcknowledgedAt?: number;
+  /**
    * Non-secret toolchain environment captured after a successful local
    * Codex environment setup. Used by PwrAgent to start local Codex
    * app-server threads with the same PATH/version-manager context.

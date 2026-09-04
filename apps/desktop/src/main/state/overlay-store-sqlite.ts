@@ -2863,6 +2863,45 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return true;
   }
 
+  /**
+   * Record that the operator has resolved this thread's environment-failure
+   * prompt. `setupStatus: "failed"` and failed `actionRuns` entries are
+   * permanent history and are deliberately left untouched — the transcript's
+   * `codex-environment-setup-*` activity entry keeps showing the same output.
+   * Only the prompt is dismissed.
+   *
+   * Writes once per thread: a second call with the runtime already
+   * acknowledged returns false without touching sqlite, which is what keeps
+   * the renderer's self-healing backfill from writing on every thread open.
+   */
+  async acknowledgeThreadEnvironmentFailure(params: {
+    acknowledgedAt?: number;
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<boolean> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey);
+    const runtime = current?.codexEnvironmentRuntime;
+    if (!current || !runtime) {
+      return false;
+    }
+    const acknowledgedAt = params.acknowledgedAt ?? Date.now();
+    if (
+      typeof runtime.setupFailureAcknowledgedAt === "number"
+      && runtime.setupFailureAcknowledgedAt >= acknowledgedAt
+    ) {
+      return false;
+    }
+    this.putThread(threadKey, {
+      ...current,
+      codexEnvironmentRuntime: {
+        ...runtime,
+        setupFailureAcknowledgedAt: acknowledgedAt,
+      },
+    });
+    return true;
+  }
+
   async setThreadArchiveTombstone(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;

@@ -128,6 +128,8 @@ import {
   type SetThreadReactionResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
+  type AcknowledgeThreadEnvironmentFailureRequest,
+  type AcknowledgeThreadEnvironmentFailureResponse,
   type AcknowledgeThreadSpendAlertRequest,
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
@@ -269,6 +271,7 @@ import {
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
+  NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
@@ -384,6 +387,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "updateRemoteThreadPinSnapshots"
     | "setThreadToolIncidentNotice"
     | "acknowledgeThreadSpendAlert"
+    | "acknowledgeThreadEnvironmentFailure"
   >;
 
 type ThreadPrRefreshContext = {
@@ -5960,6 +5964,28 @@ class DesktopAppServerService {
     };
   }
 
+  async acknowledgeThreadEnvironmentFailure(
+    request: AcknowledgeThreadEnvironmentFailureRequest,
+  ): Promise<AcknowledgeThreadEnvironmentFailureResponse> {
+    const backend = request.backend ?? "codex";
+    const acknowledged = await this.getOverlayStore()
+      .acknowledgeThreadEnvironmentFailure({
+        acknowledgedAt: request.acknowledgedAt,
+        backend,
+        threadId: request.threadId,
+      });
+    logDebug("acknowledgeThreadEnvironmentFailure", {
+      acknowledged,
+      backend,
+      threadId: request.threadId,
+    });
+    return {
+      acknowledged,
+      backend,
+      threadId: request.threadId,
+    };
+  }
+
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
@@ -7908,6 +7934,16 @@ export function registerAppServerIpcHandlers(): void {
       request: AcknowledgeThreadSpendAlertRequest,
     ): Promise<AcknowledgeThreadSpendAlertResponse> => {
       return await appServerService.acknowledgeThreadSpendAlert(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
+    async (
+      _event,
+      request: AcknowledgeThreadEnvironmentFailureRequest,
+    ): Promise<AcknowledgeThreadEnvironmentFailureResponse> => {
+      return await appServerService.acknowledgeThreadEnvironmentFailure(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_PIN_CHANNEL);

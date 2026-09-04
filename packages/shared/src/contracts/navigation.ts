@@ -55,6 +55,18 @@ export type AcknowledgeThreadSpendAlertResponse = {
   threadId: string;
 };
 
+export type AcknowledgeThreadEnvironmentFailureRequest = {
+  acknowledgedAt?: number;
+  backend?: AppServerBackendKind;
+  threadId: string;
+};
+
+export type AcknowledgeThreadEnvironmentFailureResponse = {
+  acknowledged: boolean;
+  backend: AppServerBackendKind;
+  threadId: string;
+};
+
 export type InboxReason = "new-thread" | "updated-since-seen";
 
 export type ThreadInboxState = {

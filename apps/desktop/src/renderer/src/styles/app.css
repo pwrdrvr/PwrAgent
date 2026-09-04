@@ -16095,6 +16095,15 @@ a.button {
   /* Stay inside the transcript column even when the context rail is pinned. */
   max-width: 100%;
   box-sizing: border-box;
+  /* The panel is a sibling of the transcript inside `.thread-view__primary`,
+     so every pixel it takes comes out of the transcript. A flex item's
+     `min-height: auto` floor let it size to its own content and refuse to
+     shrink: at a 700px-tall window it measured 685px inside a 644px pane,
+     which left the transcript 0px tall (nothing to scroll) and pushed the
+     actions row 53px below the `overflow: hidden` on `.thread-view`, so
+     "Continue anyway" could not be reached at all. The height bound lives on
+     `__body` — the part that scrolls — and the actions row sits outside it. */
+  min-height: 0;
   border: 1px solid var(--danger-border);
   border-radius: 8px;
   background: var(--danger-soft);
@@ -16110,6 +16119,19 @@ a.button {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* The panel's vertical bound, and the panel's one scroll container. It is
+     here rather than on the section because the actions row wraps below the
+     body under ~1200px of chat column, and a wrapped flex line is sized to
+     its content: capping the section would clip the buttons instead of
+     shrinking the body. A percentage would resolve against the section's
+     auto height (that is, not at all), so the bound is window-relative, in
+     the `min(<px>, <vh>)` form `.launchpad-pending__command` already uses:
+     the vh share keeps the actions inside the pane well below the 640px
+     minimum window height, and the pixel ceiling stops a tall display from
+     handing the panel 600px of transcript for no reason. */
+  min-height: 0;
+  max-height: min(360px, 40vh);
+  overflow-y: auto;
 }
 
 .environment-setup-choice__heading > *:first-child {
@@ -16150,6 +16172,17 @@ a.button {
   font-size: 12px;
   color: var(--text-secondary);
   user-select: none;
+  /* `__body` scrolls, and this summary carries the exit code and the collapse
+     control — the two things worth keeping in view while reading the output.
+     Its containing block is the `<details>`, which spans the whole scrolled
+     stack, so it stays pinned for as long as any of the detail is visible.
+     `.launchpad-pending__output`'s header is pinned for the same reason. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel-elevated);
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
 }
 
 .environment-setup-choice__details > summary::-webkit-details-marker {
@@ -16196,8 +16229,16 @@ a.button {
 }
 
 .environment-setup-choice__pre--output {
-  max-height: 320px;
-  overflow: auto;
+  /* No height cap of its own: `__body` is the panel's one scroll container,
+     and a 320px box inside a body that is itself shorter than that on a small
+     window made two nested vertical scrollers the wheel had to chain out of.
+     Wrapping rather than scrolling sideways matches
+     `.launchpad-pending__output pre`, the live setup panel's output block —
+     and it is what keeps this readable now that the body scrolls, because
+     `__pre`'s horizontal scrollbar would otherwise sit at the bottom of the
+     full output, outside the body's viewport. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .environment-setup-choice__path {
