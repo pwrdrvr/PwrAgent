@@ -6275,6 +6275,78 @@ describe("ThreadView", () => {
     expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-1");
   });
 
+  it("keeps the environment setup failure actions outside the panel's scroll container", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{}}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupStatus: "failed",
+            setupCommand: "nvm install\ncorepack enable\npnpm install",
+            setupExitCode: 1,
+            setupOutput: Array.from(
+              { length: 200 },
+              (_unused, index) => `nvm option ${index}: a long line of help`,
+            ).join("\n"),
+          },
+          linkedDirectories: [
+            {
+              id: "/repo",
+              kind: "worktree",
+              label: "repo",
+              path: "/repo",
+              worktreePath: "/repo/.worktrees/thread-env-failure",
+            },
+          ],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    // `__body` is the panel's scroll container and carries its height bound
+    // (see `environment-setup-choice-bounds.test.ts`). A long setup output is
+    // exactly what pushes it past that bound, and the two buttons are the
+    // operator's only way out of this state — so they have to be a sibling of
+    // the scroller, never a descendant of it. jsdom does no layout, but it
+    // can see this containment, which is the half a refactor would break.
+    const panel = document.querySelector(".environment-setup-choice");
+    const body = panel?.querySelector(".environment-setup-choice__body");
+    const actions = panel?.querySelector(".environment-setup-choice__actions");
+    expect(panel).not.toBeNull();
+    expect(body).not.toBeNull();
+    expect(actions).not.toBeNull();
+    expect(body!.contains(actions!)).toBe(false);
+    expect(actions!.parentElement).toBe(panel);
+    for (const name of ["Delete worktree and close", "Continue anyway"]) {
+      expect(actions!.contains(screen.getByRole("button", { name }))).toBe(
+        true,
+      );
+    }
+  });
+
   it("hides the environment setup failure choice after the thread has messages", () => {
     render(
       <ThreadView
