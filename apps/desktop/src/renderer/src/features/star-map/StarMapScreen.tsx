@@ -21,6 +21,7 @@ import {
   STAR_MAP_LOAD_CARD_POSITION_KEY,
   type FederationPeerSummary,
   type NavigationThreadSummary,
+  type StarMapViewSurface,
   type StarMapWorkspaceAnchor,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -116,6 +117,8 @@ import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import { StarMapRenameDialog } from "./StarMapRenameDialog";
+import { useStarMapViewPublisher } from "./useStarMapViewPublisher";
+import { useStarMapManager } from "./useStarMapManager";
 import {
   readStoredPreferences,
   writeStoredPreferences,
@@ -446,6 +449,12 @@ type StarMapScreenProps = {
   pricingDisplayOptions?: { codexCredits: boolean; usd: boolean };
   pastedImageMaxPatches?: number;
   threadPricingSummaryEnabled?: boolean;
+  /**
+   * Which surface this is, for the published view snapshot. The map is its
+   * own window today; the field survives because it once was a layer in the
+   * main shell and the registry keys published views per renderer either way.
+   */
+  surface?: StarMapViewSurface;
 };
 
 /**
@@ -2661,6 +2670,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const [cardError, setCardError] = useState<string | undefined>(undefined);
 
+  /**
+   * The manager: one long-lived thread that can read this map through the
+   * star-map Agent tools and act on it with the tool catalog every thread
+   * already carries. Opened as an ordinary chat card, because that is what
+   * it is.
+   */
+  const manager = useStarMapManager({
+    desktopApi: props.desktopApi,
+    threads: props.localThreads,
+    openThread,
+    onRefreshLocalThreads: props.onRefreshLocalThreads,
+    // Reported through the map's one error banner rather than a second one:
+    // `.star-map__card-error` is absolutely positioned at a fixed spot, so
+    // two of them occupy the same box and the later sibling hides the other.
+    onError: setCardError,
+  });
+
   /** Cards the operator has gathered, by card key. */
   const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
 
@@ -3544,6 +3570,87 @@ export function StarMapScreen(props: StarMapScreenProps) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  /**
+   * What the operator can see, published to the main process for the
+   * `read_star_map_view` Agent tool.
+   *
+   * Cloud membership, the `+N more` fold, the marquee selection and the
+   * camera exist only in this component, so an Agent asked to act on "that
+   * thread" or "the others in its cloud" has no other source for either
+   * reference. The input is memoized and the snapshot is built inside the
+   * publisher's throttle — this sits on the drag path.
+   *
+   * Reads `flightRects` rather than `cardRects` for the same reason the
+   * camera does: it is the geometry of whichever lens is drawing, so the
+   * projects lens reports its cards instead of reporting none.
+   *
+   * This input is assembled on every render, and a pan re-renders per
+   * frame, so it stays a plain object over structures the render path
+   * already holds. The collections the snapshot needs are derived inside
+   * the builder, which runs at most once per publish window.
+   */
+  const openChatCardThreadKeys = useMemo(
+    () =>
+      new Set(
+        chatCards.cards.map((card) =>
+          buildThreadIdentityKey(card.thread.source, card.thread.id),
+        ),
+      ),
+    [chatCards.cards],
+  );
+
+  const starMapViewInput = useMemo(
+    () => ({
+      surface: props.surface ?? ("window" as const),
+      layout: preferences.layout,
+      camera: view,
+      viewport: viewportSize,
+      filterSelection,
+      hideOfflineInstances: preferences.hideOfflineInstances,
+      hiddenInstanceCount,
+      matchedThreadCount,
+      localInstanceId,
+      threadsByInstance: attentionByInstance,
+      instanceLabels: displayLabelById,
+      iconFor: celestialIcons.iconFor,
+      clouds: clusterClouds,
+      projects: projectsMode ? projects : undefined,
+      projectClouds,
+      overview,
+      selection,
+      openChatCardThreadKeys,
+      cardRects: flightRects,
+      sessionKeys: props.sessionKeys,
+    }),
+    [
+      attentionByInstance,
+      celestialIcons,
+      clusterClouds,
+      displayLabelById,
+      filterSelection,
+      flightRects,
+      hiddenInstanceCount,
+      localInstanceId,
+      matchedThreadCount,
+      openChatCardThreadKeys,
+      preferences.hideOfflineInstances,
+      preferences.layout,
+      overview,
+      projectClouds,
+      projects,
+      projectsMode,
+      props.sessionKeys,
+      props.surface,
+      selection,
+      view,
+      viewportSize,
+    ],
+  );
+  useStarMapViewPublisher({
+    desktopApi: props.desktopApi,
+    input: starMapViewInput,
+  });
 
   /**
    * Canvas scale for the overlays drawn inside the transform. Every lens
@@ -5365,6 +5472,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
             onCycle={cycleFilter}
             onClear={clearFilters}
           />
+        </div>
+        {/* The band's right slot, which #1788 reserved for the next
+            map-level action. Same chip primitive as Find and View so the
+            three read as one family. */}
+        <div className="star-map__actions">
+          <button
+            type="button"
+            className="star-map__filter-chip star-map__manager"
+            aria-label="Ask the Star Map manager"
+            disabled={manager.busy}
+            onClick={manager.open}
+          >
+            {manager.busy ? "Opening…" : "Manager"}
+          </button>
         </div>
       </div>
       {/* Two different settings can empty the map, and a blank star field

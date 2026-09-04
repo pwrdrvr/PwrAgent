@@ -45,6 +45,25 @@ export const STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL =
  */
 export const STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL =
   "star-map:focus-main-window";
+/**
+ * Renderer → main push: the Star Map surface's current on-screen state,
+ * for the `read_star_map_view` Agent tool. Cloud membership, overflow,
+ * selection, camera and filters live only in the renderer, so an Agent
+ * asked about "that thread" or "its cloud" has no other source.
+ *
+ * Push rather than pull. Main can query a renderer (`executeJavaScript`
+ * elsewhere in this app does), so the reason is not impossibility: a pull
+ * at tool-call time answers from whichever renderer happens to respond and
+ * blocks the turn on it, while the alternative of main reimplementing the
+ * clustering the renderer already does would drift from what is drawn. The
+ * registry keeps the snapshot in memory only; nothing here is persisted.
+ */
+export const STAR_MAP_PUBLISH_VIEW_CHANNEL = "star-map:publish-view";
+/**
+ * Renderer → main invoke: resolve (creating on first use) the Star Map
+ * manager thread the map's Manager card talks to.
+ */
+export const STAR_MAP_OPEN_MANAGER_CHANNEL = "star-map:open-manager";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL =
   "app-server:analyze-thread-tool-history";

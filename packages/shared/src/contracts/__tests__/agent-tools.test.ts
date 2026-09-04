@@ -21,6 +21,7 @@ describe("agent tool contracts", () => {
       "thread_orchestration",
       "federation",
       "token_miser",
+      "star_map",
     ]);
     expect(isAgentToolCatalogId("automation_inspection")).toBe(true);
     expect(isAgentToolCatalogId("app_management")).toBe(true);

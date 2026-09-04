@@ -570,6 +570,12 @@ function normalizeLaunchpadDefaults(
 }
 
 const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
+/**
+ * Which thread the Star Map manager card reopens. Written once when the
+ * manager thread is created (and once more if the operator resets it), so
+ * it needs no write budget: this is not a per-turn or per-event write.
+ */
+const STAR_MAP_MANAGER_THREAD_META_KEY = "star_map_manager_thread";
 const LEGACY_HANDOFF_AGENT_INSTRUCTIONS =
   "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.";
 
@@ -6054,6 +6060,36 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     );
     this.writeLaunchpadDefaults(next);
     return next;
+  }
+
+  /** The remembered Star Map manager thread, if one was ever created. */
+  getStarMapManagerThread():
+    | { backend: string; threadId: string }
+    | undefined {
+    const raw = this.stateDb.getMeta(STAR_MAP_MANAGER_THREAD_META_KEY);
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as { backend?: unknown; threadId?: unknown };
+      if (
+        typeof parsed?.backend !== "string"
+        || typeof parsed?.threadId !== "string"
+        || parsed.backend.length === 0
+        || parsed.threadId.length === 0
+      ) {
+        return undefined;
+      }
+      return { backend: parsed.backend, threadId: parsed.threadId };
+    } catch {
+      // A meta row we cannot parse is one we re-create rather than trust.
+      return undefined;
+    }
+  }
+
+  setStarMapManagerThread(thread: { backend: string; threadId: string }): void {
+    this.stateDb.setMeta(
+      STAR_MAP_MANAGER_THREAD_META_KEY,
+      JSON.stringify({ backend: thread.backend, threadId: thread.threadId }),
+    );
   }
 
   getNavigationBrowseModeSync(): NavigationBrowseMode {

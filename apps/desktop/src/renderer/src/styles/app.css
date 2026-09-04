@@ -14396,10 +14396,8 @@ a.button {
   gap: 12px;
 }
 
-/* Right slot, reserved. Nothing occupies it today; it exists so that the
-   next map-level action has somewhere to go that is not the chrome. A
-   third child of the band lands here on its own - this rule only decides
-   that it hugs the right edge rather than the centre track. */
+/* Right slot of the band. The Manager is its first occupant; the slot only
+   decides that it hugs the right edge rather than the centre track. */
 .star-map__actions {
   display: flex;
   align-items: center;
@@ -14749,6 +14747,25 @@ a.button {
   color: var(--text-muted);
   text-decoration: line-through;
   text-decoration-color: var(--danger-text);
+}
+
+/* The manager rides `.star-map__filter-chip` like Find and View, so this
+   only carries what differs: it acts on the fleet rather than filtering it,
+   and wears the accent to say so. After the base rule, beside the other
+   chip modifiers: same specificity, so source order is what lets it win. */
+.star-map__manager {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.star-map__manager:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.star-map__manager:disabled {
+  color: var(--text-muted);
+  cursor: progress;
 }
 
 /* The strike is for a label, and the Attention chip has none: the only text
