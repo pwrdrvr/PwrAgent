@@ -640,6 +640,7 @@ const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 // changes, so this window can cover ordinary foreground idle time while
 // background polling catches external Codex changes on a slower cadence.
 const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
+const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
@@ -7790,6 +7791,9 @@ export class DesktopBackendRegistry {
     "read" | "subscribe"
   >;
   private codexBackendSummary?: BackendSummary;
+  private codexRateLimitBroadcastTimer?: ReturnType<typeof setTimeout>;
+  private codexRateLimitLastBroadcastAt?: number;
+  private pendingCodexRateLimitBroadcast?: AgentEvent;
   private codexRateLimitsNotificationVersion = 0;
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
   private providerRuntimeInvalidationPromise?: Promise<void>;
@@ -21161,6 +21165,11 @@ export class DesktopBackendRegistry {
       clearTimeout(this.missingCodexThreadEvaluationTimer);
       this.missingCodexThreadEvaluationTimer = undefined;
     }
+    if (this.codexRateLimitBroadcastTimer) {
+      clearTimeout(this.codexRateLimitBroadcastTimer);
+      this.codexRateLimitBroadcastTimer = undefined;
+    }
+    this.pendingCodexRateLimitBroadcast = undefined;
     await this.missingCodexThreadEvaluation;
     // Live usage and command output may each have one bounded window sitting
     // in memory. `closed` prevents either drain from re-arming its timer; the
@@ -22316,7 +22325,16 @@ export class DesktopBackendRegistry {
           backend === "codex"
           && notification.method === "account/rateLimits/updated"
         ) {
-          await this.updateCachedCodexRateLimits(notification.params.rateLimits);
+          const changed = await this.updateCachedCodexRateLimits(
+            notification.params.rateLimits,
+          );
+          if (changed) {
+            await this.scheduleCodexRateLimitBroadcast({
+              backend,
+              notification,
+            });
+          }
+          return;
         }
         if (
           backend === "codex" &&
@@ -24018,14 +24036,14 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private async updateCachedCodexRateLimits(value: unknown): Promise<void> {
+  private async updateCachedCodexRateLimits(value: unknown): Promise<boolean> {
     const rateLimits = extractRateLimitSummaries(value);
     if (rateLimits.length === 0) {
-      return;
+      return false;
     }
     const notificationVersion = ++this.codexRateLimitsNotificationVersion;
     if (!this.codexBackendSummary) {
-      return;
+      return false;
     }
     if (rateLimits.some((limit) => !limit.limitId?.trim())) {
       let refetchedRateLimits: BackendRateLimitSummary[];
@@ -24036,13 +24054,13 @@ export class DesktopBackendRegistry {
           "Codex rate-limit refetch after sparse notification failed",
           { error: error instanceof Error ? error.message : String(error) },
         );
-        return;
+        return false;
       }
       if (
         notificationVersion !== this.codexRateLimitsNotificationVersion
         || refetchedRateLimits.length === 0
       ) {
-        return;
+        return false;
       }
       const currentRateLimits = this.codexBackendSummary.rateLimits ?? [];
       if (
@@ -24051,13 +24069,13 @@ export class DesktopBackendRegistry {
           [...refetchedRateLimits].sort(compareRateLimitSummaries),
         )
       ) {
-        return;
+        return false;
       }
       this.codexBackendSummary = {
         ...this.codexBackendSummary,
         rateLimits: refetchedRateLimits,
       };
-      return;
+      return true;
     }
     const currentRateLimits = this.codexBackendSummary.rateLimits ?? [];
     const updatesByKey = new Map(
@@ -24079,12 +24097,52 @@ export class DesktopBackendRegistry {
         [...mergedRateLimits].sort(compareRateLimitSummaries),
       )
     ) {
-      return;
+      return false;
     }
     this.codexBackendSummary = {
       ...this.codexBackendSummary,
       rateLimits: mergedRateLimits,
     };
+    return true;
+  }
+
+  private async scheduleCodexRateLimitBroadcast(event: AgentEvent): Promise<void> {
+    const now = Date.now();
+    this.pendingCodexRateLimitBroadcast = event;
+    const elapsed = this.codexRateLimitLastBroadcastAt === undefined
+      ? CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS
+      : now - this.codexRateLimitLastBroadcastAt;
+    if (elapsed >= CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS) {
+      if (this.codexRateLimitBroadcastTimer) {
+        clearTimeout(this.codexRateLimitBroadcastTimer);
+        this.codexRateLimitBroadcastTimer = undefined;
+      }
+      await this.flushPendingCodexRateLimitBroadcast(now);
+      return;
+    }
+    if (this.codexRateLimitBroadcastTimer) {
+      return;
+    }
+    this.codexRateLimitBroadcastTimer = setTimeout(() => {
+      this.codexRateLimitBroadcastTimer = undefined;
+      void this.flushPendingCodexRateLimitBroadcast().catch((error) => {
+        backendRegistryLog.error("Codex rate-limit broadcast failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS - elapsed);
+  }
+
+  private async flushPendingCodexRateLimitBroadcast(
+    broadcastAt = Date.now(),
+  ): Promise<void> {
+    const event = this.pendingCodexRateLimitBroadcast;
+    this.pendingCodexRateLimitBroadcast = undefined;
+    if (!event || this.closed) {
+      return;
+    }
+    this.codexRateLimitLastBroadcastAt = broadcastAt;
+    await this.emitToListeners(event);
   }
 
   /**
@@ -37548,10 +37606,12 @@ export class DesktopBackendRegistry {
   /**
    * Fan an event out to subscribers without running any of `emit`'s recording
    * stages. Only for events that are a *view* of something already recorded —
-   * a managed review's forwarded activity is the sole caller. Running those
-   * through `emit` would re-execute the whole pipeline against the parent
-   * thread id, which double-counts tool accounting (a sqlite write per item)
-   * and pollutes the file-change approval-context cache.
+   * managed-review forwarding and coalesced rate-limit cache broadcasts use
+   * this path. Running managed-review views through `emit` would re-execute
+   * the whole pipeline against the parent thread id, which double-counts tool
+   * accounting (a sqlite write per item) and pollutes the file-change
+   * approval-context cache. Rate-limit broadcasts have no thread recording
+   * semantics and likewise belong only at the listener boundary.
    */
   private async emitToListeners(event: AgentEvent): Promise<void> {
     for (const listener of this.eventListeners) {
