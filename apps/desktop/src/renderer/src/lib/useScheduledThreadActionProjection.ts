@@ -188,24 +188,63 @@ export function syncScheduledActionProjections(
     projectedScopes.add(scopeKeyForAction(action));
   }
   for (const scopeKey of projectedScopes) {
-    const scheduled = (byScope.get(scopeKey) ?? [])
-      .sort((left, right) => left.scheduledFor - right.scheduledFor)
-      .map(projectionFromAction);
+    const current = store.getQueuedTurns(scopeKey);
+    const scopedActions = (byScope.get(scopeKey) ?? [])
+      .sort((left, right) => left.scheduledFor - right.scheduledFor);
+    const actionsById = new Map(
+      scopedActions.map((action) => [action.id, action]),
+    );
+    const projectionsById = new Map(
+      scopedActions.map((action) => [action.id, projectionFromAction(action)]),
+    );
     const scheduledQueueEntryIds = new Set(
-      scheduled
-        .map((entry) => entry.queueEntryId)
+      scopedActions
+        .map((action) => action.queueEntryId)
         .filter((queueEntryId): queueEntryId is string => Boolean(queueEntryId)),
     );
-    const local = store.getQueuedTurns(scopeKey).filter(
-      (entry) =>
-        !entry.scheduledActionId
-        && !entry.failedScheduledActionId
-        && (
-          !entry.queueEntryId
-          || !scheduledQueueEntryIds.has(entry.queueEntryId)
-        ),
+    const placedHeldActions = new Set<string>();
+    const reconciledCurrent = current.flatMap((entry) => {
+      const actionId = entry.scheduledActionId ?? entry.failedScheduledActionId;
+      if (actionId) {
+        const action = actionsById.get(actionId);
+        const projection = projectionsById.get(actionId);
+        if (action?.status === "held" && projection) {
+          placedHeldActions.add(actionId);
+          return [projection];
+        }
+        return [];
+      }
+      if (
+        entry.queueEntryId
+        && scheduledQueueEntryIds.has(entry.queueEntryId)
+      ) {
+        return [];
+      }
+      return [entry];
+    });
+    const newHeld = scopedActions
+      .filter(
+        (action) =>
+          action.status === "held" && !placedHeldActions.has(action.id),
+      )
+      .sort((left, right) => {
+        const leftIsUnqueued = !left.queueEntryId;
+        const rightIsUnqueued = !right.queueEntryId;
+        if (leftIsUnqueued !== rightIsUnqueued) {
+          return leftIsUnqueued ? -1 : 1;
+        }
+        return leftIsUnqueued
+          ? right.updatedAt - left.updatedAt
+          : left.scheduledFor - right.scheduledFor;
+      })
+      .map(projectionFromAction);
+    const scheduled = scopedActions
+      .filter((action) => action.status !== "held")
+      .map(projectionFromAction);
+    store.setQueuedTurns(
+      scopeKey,
+      [...newHeld, ...reconciledCurrent, ...scheduled],
     );
-    store.setQueuedTurns(scopeKey, [...local, ...scheduled]);
   }
   return new Set(byScope.keys());
 }
@@ -226,9 +265,19 @@ export function applyScheduledActionProjection(
       ),
   );
   if (isProjectableAction(action)) {
+    const currentIndex = current.findIndex(
+      (entry) => entry.scheduledActionId === action.id,
+    );
+    const insertionIndex =
+      action.status === "held" && !action.queueEntryId
+        ? 0
+        : currentIndex >= 0
+          ? currentIndex
+          : withoutAction.length;
     store.setQueuedTurns(scopeKey, [
-      ...withoutAction,
+      ...withoutAction.slice(0, insertionIndex),
       projectionFromAction(action),
+      ...withoutAction.slice(insertionIndex),
     ]);
   } else {
     store.setQueuedTurns(scopeKey, withoutAction);

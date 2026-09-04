@@ -4067,14 +4067,26 @@ export function Composer(props: ComposerProps) {
   const upsertScheduledProjectionInScope = (
     scopeKey: string,
     projection: QueuedTurnDraft,
+    options?: { atHead?: boolean },
   ): void => {
     const current = draftStore.getQueuedTurns(scopeKey);
+    const matchingIndex = current.findIndex(
+      (candidate) =>
+        candidate.scheduledActionId === projection.scheduledActionId,
+    );
+    const withoutProjection = current.filter(
+      (candidate) =>
+        candidate.scheduledActionId !== projection.scheduledActionId,
+    );
+    const insertionIndex = options?.atHead
+      ? 0
+      : matchingIndex >= 0
+        ? matchingIndex
+        : withoutProjection.length;
     const nextQueuedTurns = [
-      ...current.filter(
-        (candidate) =>
-          candidate.scheduledActionId !== projection.scheduledActionId,
-      ),
+      ...withoutProjection.slice(0, insertionIndex),
       projection,
+      ...withoutProjection.slice(insertionIndex),
     ];
     saveQueuedTurnSnapshots(scopeKey, nextQueuedTurns);
     if (activeComposerScopeKeyRef.current === scopeKey) {
@@ -6506,7 +6518,8 @@ export function Composer(props: ComposerProps) {
             return;
           }
           if (
-            response.action.status === "scheduled"
+            response.action.status === "held"
+            || response.action.status === "scheduled"
             || response.action.status === "dispatching"
             || response.action.status === "queued"
           ) {
@@ -6514,12 +6527,23 @@ export function Composer(props: ComposerProps) {
               ...queued,
               backendQueuePending: response.action.status === "dispatching",
               queueEntryId:
-                response.action.status === "queued"
+                response.action.status === "held"
+                || response.action.status === "queued"
                   ? response.action.queueEntryId
                   : undefined,
               scheduledSendAt:
                 response.action.status === "scheduled"
                   ? response.action.scheduledFor
+                  : undefined,
+              manualReleaseRequired:
+                response.action.status === "held"
+                || response.action.manualReleaseRequired
+                  ? true
+                  : undefined,
+              holdReason:
+                response.action.status === "held"
+                  ? response.action.errorMessage
+                    ?? "The queued turn is still held for manual retry."
                   : undefined,
             });
           } else {
@@ -7135,7 +7159,11 @@ export function Composer(props: ComposerProps) {
           fileAttachments: pending.fileAttachments,
         };
         if (response.scheduledAction) {
-          upsertScheduledProjectionInScope(expectedScopeKey, projection);
+          upsertScheduledProjectionInScope(
+            expectedScopeKey,
+            projection,
+            { atHead: true },
+          );
         } else {
           upsertBackendQueueProjectionInScope(expectedScopeKey, projection);
         }

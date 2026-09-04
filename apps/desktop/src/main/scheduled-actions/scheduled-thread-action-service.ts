@@ -205,10 +205,11 @@ export class ScheduledThreadActionService {
         current.queueEntryId,
         "Scheduled action cancelled.",
       );
-      if (!cancelledInRegistry) {
-        throw new Error("The scheduled action is no longer waiting.");
-      }
-      cancelled = this.options.store.markCancelled(current.id, this.now());
+      // The durable action can outlive the process-local FIFO. A missing
+      // queue entry after restart must not make the held action undeletable.
+      cancelled = cancelledInRegistry
+        ? this.options.store.markCancelled(current.id, this.now())
+        : this.options.store.cancel(current.id, this.now());
     } else if (current.status === "held" || current.status === "scheduled") {
       cancelled = this.options.store.cancel(current.id, this.now());
     } else if (current.status === "queued" && current.queueEntryId) {
@@ -225,10 +226,10 @@ export class ScheduledThreadActionService {
         throw new Error("The scheduled action is no longer waiting.");
       }
       cancelled = this.options.store.markCancelled(current.id, this.now());
-      if (!cancelled) {
-        const latest = this.options.store.get(current.id);
-        cancelled = latest?.status === "cancelled" ? latest : undefined;
-      }
+    }
+    if (!cancelled) {
+      const latest = this.options.store.get(current.id);
+      cancelled = latest?.status === "cancelled" ? latest : undefined;
     }
     if (!cancelled) {
       throw new Error("The scheduled action can no longer be cancelled.");
@@ -311,7 +312,8 @@ export class ScheduledThreadActionService {
       if (!action.turn) {
         throw new Error("Scheduled turn payload is missing.");
       }
-      const queueEntryId = queueEntryIdForAction(action.id);
+      const queueEntryId =
+        action.queueEntryId ?? queueEntryIdForAction(action.id);
       if (action.manualReleaseRequired) {
         const held = await this.options.registry.submitHeldTurn({
           ...action.turn,
@@ -424,6 +426,15 @@ export class ScheduledThreadActionService {
       updated = this.options.store.markQueued(
         actionId,
         params.queueEntryId,
+        this.now(),
+      );
+    } else if (params.status === "held") {
+      updated = this.options.store.markHeld(
+        actionId,
+        params.queueEntryId,
+        typeof params.errorMessage === "string"
+          ? params.errorMessage
+          : "The queued turn is held for manual retry.",
         this.now(),
       );
     } else if (params.status === "started") {

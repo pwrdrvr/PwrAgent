@@ -299,7 +299,12 @@ export class ScheduledThreadActionStore {
     return this.transition(
       id,
       ["dispatching", "queued"],
-      { status: "held", queueEntryId, errorMessage },
+      {
+        status: "held",
+        queueEntryId,
+        errorMessage,
+        manualReleaseRequired: true,
+      },
       now,
       { clearClaim: true, expectedOwner: ownerId },
     );
@@ -433,7 +438,11 @@ export class ScheduledThreadActionStore {
     expectedStatuses: readonly ScheduledThreadActionStatus[],
     patch: Partial<Pick<
       ScheduledThreadAction,
-      "errorMessage" | "queueEntryId" | "status" | "turnId"
+      | "errorMessage"
+      | "manualReleaseRequired"
+      | "queueEntryId"
+      | "status"
+      | "turnId"
     >>,
     now: number,
     claim?: {
@@ -447,33 +456,50 @@ export class ScheduledThreadActionStore {
     const current = this.get(id);
     if (!current || !expectedStatuses.includes(current.status)) return undefined;
     const updated: ScheduledThreadAction = { ...current, ...patch, updatedAt: now };
+    const updatesPayload = patch.manualReleaseRequired !== undefined;
+    const previousPayloadRef = updatesPayload ? this.readPayloadRef(id) : undefined;
+    const nextPayloadRef = updatesPayload
+      ? this.payloadStore.write(id, payloadFromAction(updated))
+      : undefined;
     const ownerClause = claim?.expectedOwner ? " AND claim_owner = ?" : "";
     const expiredClause = claim?.requireExpiredAt !== undefined
       ? " AND (claim_owner IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)"
       : "";
-    const result = this.stateDb.raw.prepare(
-      `UPDATE scheduled_thread_actions
-       SET status = ?, queue_entry_id = ?, turn_id = ?, error_message = ?,
-           claim_owner = ?, claim_expires_at = ?, updated_at = ?
-       WHERE action_id = ?
-         AND status IN (${expectedStatuses.map(() => "?").join(", ")})
-         ${ownerClause}${expiredClause}`,
-    ).run(
-      updated.status,
-      updated.queueEntryId ?? null,
-      updated.turnId ?? null,
-      updated.errorMessage ?? null,
-      claim?.clearClaim ? null : claim?.claimOwner ?? this.readClaimOwner(id),
-      claim?.clearClaim
-        ? null
-        : claim?.claimExpiresAt ?? this.readClaimExpiresAt(id),
-      updated.updatedAt,
-      id,
-      ...expectedStatuses,
-      ...(claim?.expectedOwner ? [claim.expectedOwner] : []),
-      ...(claim?.requireExpiredAt !== undefined ? [claim.requireExpiredAt] : []),
-    );
-    return result.changes === 1 ? updated : undefined;
+    try {
+      const result = this.stateDb.raw.prepare(
+        `UPDATE scheduled_thread_actions
+         SET status = ?, queue_entry_id = ?, turn_id = ?, error_message = ?,
+             payload_ref = COALESCE(?, payload_ref), claim_owner = ?,
+             claim_expires_at = ?, updated_at = ?
+         WHERE action_id = ?
+           AND status IN (${expectedStatuses.map(() => "?").join(", ")})
+           ${ownerClause}${expiredClause}`,
+      ).run(
+        updated.status,
+        updated.queueEntryId ?? null,
+        updated.turnId ?? null,
+        updated.errorMessage ?? null,
+        nextPayloadRef ?? null,
+        claim?.clearClaim ? null : claim?.claimOwner ?? this.readClaimOwner(id),
+        claim?.clearClaim
+          ? null
+          : claim?.claimExpiresAt ?? this.readClaimExpiresAt(id),
+        updated.updatedAt,
+        id,
+        ...expectedStatuses,
+        ...(claim?.expectedOwner ? [claim.expectedOwner] : []),
+        ...(claim?.requireExpiredAt !== undefined ? [claim.requireExpiredAt] : []),
+      );
+      if (result.changes !== 1) {
+        if (nextPayloadRef) this.payloadStore.delete(nextPayloadRef);
+        return undefined;
+      }
+      if (previousPayloadRef) this.payloadStore.delete(previousPayloadRef);
+      return updated;
+    } catch (error) {
+      if (nextPayloadRef) this.payloadStore.delete(nextPayloadRef);
+      throw error;
+    }
   }
 
   private write(action: ScheduledThreadAction): void {

@@ -9301,6 +9301,14 @@ describe("Composer", () => {
   });
 
   it("projects the backend-owned fallback when a steer target is no longer active", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurns("thread:codex:thread-1", [{
+      id: "backend-queued:older",
+      queueEntryId: "older",
+      text: "Earlier queued message",
+      imageAttachments: [],
+      fileAttachments: [],
+    }]);
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -9369,6 +9377,7 @@ describe("Composer", () => {
           steerTurn,
         }}
         disabled={false}
+        draftStore={draftStore}
         onActiveTurnIdChange={onActiveTurnIdChange}
         skills={[]}
         thread={{
@@ -9420,6 +9429,9 @@ describe("Composer", () => {
     expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
     expect(screen.getByText("Held for retry")).toBeInTheDocument();
     expect(screen.getByText("Review the failed turn, then retry.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Held queued message"))
+      .toHaveTextContent("Send after stale steer");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
   it("does not reinterpret a backend-owned stale steer fallback in React", async () => {
@@ -9605,6 +9617,69 @@ describe("Composer", () => {
     expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-retry-1");
     expect(onUserRepliedToThread).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("Try this after the outage")).not.toBeInTheDocument();
+  });
+
+  it("keeps a scheduled action visible when retry remains held", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurns("thread:codex:thread-1", [{
+      id: "scheduled-projection:held-1",
+      scheduledActionId: "held-1",
+      queueEntryId: "scheduled-turn:held-1",
+      manualReleaseRequired: true,
+      holdReason: "Provider unavailable",
+      text: "Try this after the outage",
+      imageAttachments: [],
+      fileAttachments: [],
+    }]);
+    const sendScheduledThreadActionNow = vi.fn(async () => ({
+      action: {
+        id: "held-1",
+        backend: "codex" as const,
+        threadId: "thread-1",
+        kind: "turn" as const,
+        origin: "desktop" as const,
+        status: "held" as const,
+        scheduledFor: 1_000,
+        displayText: "Try this after the outage",
+        turn: {
+          input: [{ type: "text" as const, text: "Try this after the outage" }],
+        },
+        queueEntryId: "scheduled-turn:held-1",
+        errorMessage: "Provider is still unavailable",
+        manualReleaseRequired: true,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    }));
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ sendScheduledThreadActionNow }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Recover after outage",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    await clickButton("Retry");
+
+    expect(sendScheduledThreadActionNow).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      id: "held-1",
+    });
+    expect(screen.getByText("Try this after the outage")).toBeInTheDocument();
+    expect(screen.getByText("Provider is still unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
   it("does not restore a handed-off steer when turn completion leaves a backend queue", async () => {

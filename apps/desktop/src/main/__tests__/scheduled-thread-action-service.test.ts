@@ -221,6 +221,57 @@ describe("ScheduledThreadActionService", () => {
     });
   });
 
+  it("persists a registry hold and retries its existing queue entry", async () => {
+    const harness = createHarness(20_000);
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 10_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+    await harness.service.evaluateDueActions();
+    harness.service.start();
+
+    for (const listener of harness.listeners) {
+      await listener({
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: "scheduled-turn:scheduled-1",
+            origin: "scheduled",
+            status: "held",
+            errorMessage: "Provider unavailable",
+          },
+        },
+      });
+    }
+
+    expect(store.get("scheduled-1")).toMatchObject({
+      status: "held",
+      queueEntryId: "scheduled-turn:scheduled-1",
+      errorMessage: "Provider unavailable",
+      manualReleaseRequired: true,
+    });
+    const retried = await harness.service.sendNow({ id: "scheduled-1" });
+    expect(retried.action).toMatchObject({
+      status: "started",
+      turnId: "turn-retried",
+    });
+    expect(harness.submitHeldTurn).toHaveBeenCalledWith(expect.objectContaining({
+      queueEntryId: "scheduled-turn:scheduled-1",
+    }));
+    expect(harness.releaseQueuedTurnWithDisposition)
+      .toHaveBeenCalledWith("scheduled-turn:scheduled-1");
+    harness.service.dispose();
+  });
+
   it("does not claim a later action until the current admission settles", async () => {
     const harness = createHarness(20_000);
     let releaseFirst!: () => void;
@@ -567,6 +618,50 @@ describe("ScheduledThreadActionService", () => {
       .resolves.toMatchObject({
         action: { status: "cancelled" },
       });
+  });
+
+  it("cancels a held action whose process-local queue entry was lost", async () => {
+    const harness = createHarness(20_000);
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 10_000,
+      manualReleaseRequired: true,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+    store.claim("scheduled-1", {
+      now: 2_000,
+      ownerId: "scheduler-1",
+      leaseExpiresAt: 32_000,
+    });
+    store.markQueued(
+      "scheduled-1",
+      "scheduled-turn:scheduled-1",
+      2_001,
+      "scheduler-1",
+    );
+    store.markHeld(
+      "scheduled-1",
+      "scheduled-turn:scheduled-1",
+      "Provider unavailable",
+      2_002,
+      "scheduler-1",
+    );
+    harness.cancelQueuedTurn.mockReturnValueOnce(false);
+
+    await expect(harness.service.cancel({ id: "scheduled-1" }))
+      .resolves.toMatchObject({
+        action: { status: "cancelled" },
+      });
+    expect(harness.cancelQueuedTurn).toHaveBeenCalledWith(
+      "scheduled-turn:scheduled-1",
+      "Scheduled action cancelled.",
+    );
   });
 
   it("tracks a scheduled review until the registry actually starts it", async () => {
