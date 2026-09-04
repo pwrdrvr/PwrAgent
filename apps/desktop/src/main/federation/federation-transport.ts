@@ -74,6 +74,22 @@ export const FEDERATION_KEEPALIVE_INTERVAL_MS = 15_000;
  * peer can force that allocation per frame.
  */
 export const FEDERATION_MAX_FRAME_BYTES = 16 * 1024 * 1024;
+const FEDERATION_LARGE_FRAME_LOG_BYTES = 512 * 1024;
+
+export class FederationFrameTooLargeError extends Error {
+  readonly code = "frame_too_large";
+
+  constructor(
+    readonly byteCount: number,
+    readonly maxFrameBytes: number,
+  ) {
+    super(
+      `Federation envelope exceeds configured frame send limit (${byteCount} > ${maxFrameBytes} bytes).`,
+    );
+    this.name = "FederationFrameTooLargeError";
+  }
+}
+
 const FEDERATION_BLOB_FRAME_MAGIC = Buffer.from("PWRBLOB1", "ascii");
 const FEDERATION_BLOB_FRAME_PREFIX_BYTES =
   FEDERATION_BLOB_FRAME_MAGIC.byteLength + 4;
@@ -265,7 +281,7 @@ export type FederationGatewayWebSocketServerOptions = {
   noiseStatic?: NoiseKeyPair;
   /** Ping cadence; a peer missing one interval's pong is terminated. */
   keepaliveIntervalMs?: number;
-  /** Per-frame receive ceiling (ws maxPayload). */
+  /** Per-frame send and receive ceiling. */
   maxFrameBytes?: number;
   /** Deadline for a connected socket to finish Noise + identity auth. */
   authTimeoutMs?: number;
@@ -574,6 +590,7 @@ export class FederationGatewayWebSocketServer {
           socket,
           { kind: "envelope", envelope },
           transport,
+          this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
         );
         if (byteCount > 0) {
           this.options.onEnvelopeTransfer?.({
@@ -588,6 +605,7 @@ export class FederationGatewayWebSocketServer {
           socket,
           { kind: "envelope", envelope },
           transport,
+          this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
         );
         if (byteCount > 0) {
           this.options.onEnvelopeTransfer?.({
@@ -835,7 +853,7 @@ export async function connectFederationClient(params: {
   connectTimeoutMs?: number;
   /** Ping cadence; a gateway missing one interval's pong is terminated. */
   keepaliveIntervalMs?: number;
-  /** Per-frame receive ceiling (ws maxPayload). */
+  /** Per-frame send and receive ceiling. */
   maxFrameBytes?: number;
   /** Client's Noise static keypair. Enables encryption (initiator role). */
   noiseStatic?: NoiseKeyPair;
@@ -921,6 +939,7 @@ async function establishFederationClient(
   socket: WebSocket,
   reader: FederationFrameReader,
 ): Promise<FederationClientWebSocketClient> {
+  const maxFrameBytes = params.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES;
   await waitForOpen(socket);
 
   // Phase 1: Noise_IK handshake (initiator). Skipped in tunnel mode.
@@ -1128,7 +1147,12 @@ async function establishFederationClient(
     // granting a capability we predate is ignored, not fatal.
     capabilities: knownCapabilities(accepted.capabilities),
     sendEnvelope: (envelope) => {
-      const byteCount = sendFrame(socket, { kind: "envelope", envelope }, transport);
+      const byteCount = sendFrame(
+        socket,
+        { kind: "envelope", envelope },
+        transport,
+        maxFrameBytes,
+      );
       if (byteCount > 0) {
         params.onEnvelopeTransfer?.({ direction: "sent", byteCount });
       }
@@ -1138,6 +1162,7 @@ async function establishFederationClient(
         socket,
         { kind: "envelope", envelope },
         transport,
+        maxFrameBytes,
       );
       if (byteCount > 0) {
         params.onEnvelopeTransfer?.({ direction: "sent", byteCount });
@@ -1242,10 +1267,39 @@ function sendFrame(
   socket: WebSocket,
   message: FederationSocketMessage,
   transport?: NoiseTransport,
+  maxFrameBytes = FEDERATION_MAX_FRAME_BYTES,
 ): number {
   if (socket.readyState !== WebSocket.OPEN) return 0;
   const payload = encodeFederationSocketPayload(message);
   const wire = transport ? transport.encrypt(payload) : payload;
+  if (wire.byteLength > maxFrameBytes) {
+    const envelope = message.kind === "envelope" ? message.envelope : undefined;
+    log.error("federation frame exceeds configured send limit", {
+      byteCount: wire.byteLength,
+      envelopeKind: envelope?.kind,
+      maxFrameBytes,
+      messageKind: message.kind,
+      method: envelope?.kind === "request" ? envelope.method : undefined,
+      sourceInstanceId: envelope?.sourceInstanceId,
+      targetInstanceId: envelope?.targetInstanceId,
+    });
+    throw new FederationFrameTooLargeError(wire.byteLength, maxFrameBytes);
+  }
+  const envelope = message.kind === "envelope" ? message.envelope : undefined;
+  if (
+    wire.byteLength >= FEDERATION_LARGE_FRAME_LOG_BYTES
+    && envelope?.kind !== "blob_chunk"
+  ) {
+    log.info("large federation frame queued for send", {
+      byteCount: wire.byteLength,
+      envelopeKind: envelope?.kind,
+      maxFrameBytes,
+      messageKind: message.kind,
+      method: envelope?.kind === "request" ? envelope.method : undefined,
+      sourceInstanceId: envelope?.sourceInstanceId,
+      targetInstanceId: envelope?.targetInstanceId,
+    });
+  }
   socket.send(wire);
   return wire.byteLength;
 }
@@ -1254,12 +1308,13 @@ async function sendFrameWithBackpressure(
   socket: WebSocket,
   message: FederationSocketMessage,
   transport?: NoiseTransport,
+  maxFrameBytes = FEDERATION_MAX_FRAME_BYTES,
 ): Promise<number> {
   await waitForFederationSendCapacity(socket);
   if (socket.readyState !== WebSocket.OPEN) {
     throw new Error("Federation connection closed while sending an attachment.");
   }
-  return sendFrame(socket, message, transport);
+  return sendFrame(socket, message, transport, maxFrameBytes);
 }
 
 export async function waitForFederationSendCapacity(

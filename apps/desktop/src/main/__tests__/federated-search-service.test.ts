@@ -1,9 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerListThreadsResponse,
   AppServerThreadSummary,
+  FederationProtocolEnvelope,
 } from "@pwragent/shared";
+import { FederationRemoteBackendClient } from "../federation/federation-backend-bridge";
 import { FederatedSearchService } from "../federation/federated-search-service";
+import { FederationRpcEndpoint } from "../federation/federation-rpc";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function thread(
   id: string,
@@ -297,12 +304,12 @@ describe("FederatedSearchService", () => {
       backend: "codex",
       archived: false,
       filter: "collector",
-    });
+    }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
     expect(listThreads).toHaveBeenNthCalledWith(2, {
       backend: "codex",
       archived: true,
       filter: "collector",
-    });
+    }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
   });
 
   it("reports totalCount and truncation before slicing the result page", async () => {
@@ -400,5 +407,36 @@ describe("FederatedSearchService", () => {
       ],
       searchedInstances: [],
     });
+  });
+
+  it("terminates the underlying peer RPC at the search deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const sent: FederationProtocolEnvelope[] = [];
+    const endpoint = new FederationRpcEndpoint({
+      localInstanceId: "client_one",
+      remoteInstanceId: "child_hung",
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      peerTimeoutMs: 25,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "child_hung",
+        label: "Hung Peer",
+        backend: new FederationRemoteBackendClient(endpoint),
+      }],
+    });
+
+    const search = service.search({ query: "timeout" });
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(search).resolves.toMatchObject({
+      failures: [{ instanceId: "child_hung" }],
+    });
+    expect(sent[0]).toMatchObject({ deadlineAt: 1_025 });
+    expect(
+      (endpoint as unknown as { pending: Map<string, unknown> }).pending.size,
+    ).toBe(0);
   });
 });

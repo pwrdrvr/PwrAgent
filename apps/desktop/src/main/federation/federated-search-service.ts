@@ -11,7 +11,10 @@ import {
   buildThreadIdentityKey,
 } from "@pwragent/shared";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
-import { hasFederationErrorCode } from "./federation-rpc";
+import {
+  hasFederationErrorCode,
+  type FederationRpcRequestOptions,
+} from "./federation-rpc";
 
 export type FederatedSearchPeer = {
   instanceId: FederationInstanceId;
@@ -60,9 +63,10 @@ export class FederatedSearchService {
         ? []
         : [this.searchLocal(query, request)]),
       ...this.options.peers().map(async (peer) => {
+        const rpcOptions = { deadlineAt: Date.now() + peerTimeoutMs };
         try {
           const peerResults = await withTimeout(
-            this.searchPeer(peer, query, request),
+            this.searchPeer(peer, query, request, rpcOptions),
             peerTimeoutMs,
             `Federated search timed out after ${Math.round(peerTimeoutMs / 1000)}s.`,
           );
@@ -143,11 +147,13 @@ export class FederatedSearchService {
     peer: FederatedSearchPeer,
     query: string,
     request: FederatedSearchRequest,
+    rpcOptions: FederationRpcRequestOptions,
   ): Promise<FederatedSearchResponse["results"]> {
     const resolved = await this.resolveExactThreadId(
       peer.backend,
       query,
       request,
+      rpcOptions,
     );
     if (resolved !== undefined) {
       return resolved
@@ -168,6 +174,7 @@ export class FederatedSearchService {
       peer.backend,
       query,
       request,
+      rpcOptions,
     );
     return threads.map((thread) => ({
       ref: buildFederatedThreadRef({
@@ -186,6 +193,7 @@ export class FederatedSearchService {
     backendOperations: FederatedSearchPeer["backend"],
     query: string,
     request: FederatedSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<AppServerThreadSummary | null | undefined> {
     if (
       !backendOperations.resolveThread
@@ -194,12 +202,15 @@ export class FederatedSearchService {
       return undefined;
     }
     try {
-      const response = await backendOperations.resolveThread({
+      const resolveRequest = {
         ...(request.backend && request.backend !== "all"
           ? { backend: request.backend }
           : {}),
         threadId: query,
-      });
+      };
+      const response = rpcOptions
+        ? await backendOperations.resolveThread(resolveRequest, rpcOptions)
+        : await backendOperations.resolveThread(resolveRequest);
       if (
         response.thread
         && matchesFederatedSearchFilters(response.thread, request)
@@ -220,6 +231,7 @@ export class FederatedSearchService {
       backendOperations,
       "",
       request,
+      rpcOptions,
     );
     return threads.find((thread) => thread.id === query) ?? null;
   }
@@ -229,13 +241,18 @@ async function listFederatedSearchThreads(
   backendOperations: FederatedSearchPeer["backend"],
   query: string,
   request: FederatedSearchRequest,
+  rpcOptions?: FederationRpcRequestOptions,
 ): Promise<AppServerThreadSummary[]> {
-  const list = async (archived: boolean) =>
-    await backendOperations.listThreads({
+  const list = async (archived: boolean) => {
+    const listRequest = {
       backend: request.backend === "all" ? undefined : request.backend,
       archived,
       ...(query ? { filter: query } : {}),
-    });
+    };
+    return rpcOptions
+      ? await backendOperations.listThreads(listRequest, rpcOptions)
+      : await backendOperations.listThreads(listRequest);
+  };
   const responses: AppServerListThreadsResponse[] = [await list(false)];
   if (request.includeArchived) {
     responses.push(await list(true));
