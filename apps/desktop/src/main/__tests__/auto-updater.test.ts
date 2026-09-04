@@ -37,8 +37,13 @@ const autoUpdaterMock = {
   setFeedURL: setFeedURLMock,
 };
 
+// The version of the binary doing the reading. It is what an unpinned
+// selection resolves from, so a test that exercises inference has to be able
+// to move it.
+const appVersionMock = vi.fn(() => "1.0.0-beta.7");
+
 vi.mock("electron", () => ({
-  app: { getVersion: () => "1.0.0-beta.7", isPackaged: false },
+  app: { getVersion: () => appVersionMock(), isPackaged: false },
   BrowserWindow: {
     getAllWindows: vi.fn(() => [
       {
@@ -65,11 +70,20 @@ vi.mock("electron-updater", () => ({
   },
 }));
 
+const updateSelectionSourceMock = vi.fn<() => string | undefined>(
+  () => "user",
+);
+
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopConfigStore: vi.fn(() => ({
     read: vi.fn(() => ({
       channel: resolveUpdateChannelMock(),
       train: resolveUpdateTrainMock(),
+      // These tests state the slot the operator is on, so they default to a
+      // pin. Without it the stored pair goes back through the version
+      // inference and a test that says "on Beta Prerelease" would silently
+      // be testing whatever `app.getVersion()` infers instead.
+      selectionSource: updateSelectionSourceMock(),
     })),
     subscribe: subscribeConfigStoreMock,
   })),
@@ -209,6 +223,10 @@ describe("auto updater", () => {
     resolveUpdateChannelMock.mockReturnValue("latest");
     resolveUpdateTrainMock.mockReset();
     resolveUpdateTrainMock.mockReturnValue("stable");
+    updateSelectionSourceMock.mockReset();
+    updateSelectionSourceMock.mockReturnValue("user");
+    appVersionMock.mockReset();
+    appVersionMock.mockReturnValue("1.0.0-beta.7");
     updateDomainListeners.clear();
     subscribeConfigStoreMock.mockClear();
     logInfoMock.mockReset();
@@ -482,6 +500,66 @@ describe("auto updater", () => {
       version: "1.1.0-alpha.2",
     });
     expect(autoUpdaterMock.allowDowngrade).toBe(false);
+  });
+
+  it("follows the running build's feed when the stored selection is a guess", async () => {
+    // The feed and the Settings snapshot must resolve through the SAME rule.
+    // They used to each carry a copy, and the copy here still read a legacy
+    // half pair as a deliberate Stable pin: Settings showed Beta Prerelease
+    // on a 1.1.0-alpha install while this path polled Stable Latest forever.
+    // The exact config an older build left behind: `channel` alone, because
+    // `channel` shipped before `train` did.
+    resolveUpdateChannelMock.mockReturnValue("latest");
+    resolveUpdateTrainMock.mockReturnValue(undefined);
+    updateSelectionSourceMock.mockReturnValue(undefined);
+    appVersionMock.mockReturnValue("1.1.0-alpha.7");
+    autoUpdaterMock.currentVersion = { version: "1.1.0-alpha.7" };
+    mockGitHubReleases([
+      githubRelease("v1.1.0-alpha.9", { prerelease: true }),
+      githubRelease("v1.0.3"),
+    ]);
+    checkForUpdatesMock.mockResolvedValue({
+      updateInfo: { version: "1.1.0-alpha.9" },
+    });
+    const updater = await importAutoUpdater();
+
+    await updater.checkForAppUpdatesNow("manual");
+
+    // Read as a pin, the half pair would resolve to Stable Latest and this
+    // alpha install would be offered v1.0.3 forever. Re-inferred from the
+    // running binary it follows the alpha feed it came from.
+    expect(logInfoMock).toHaveBeenCalledWith(
+      "configured auto-update channel",
+      expect.objectContaining({
+        updateChannel: "prerelease",
+        updateTrain: "beta",
+      }),
+    );
+    expect(autoUpdaterMock.allowPrerelease).toBe(true);
+  });
+
+  it("honors a pinned selection over the running build's own feed", async () => {
+    // The mirror of the case above: an alpha binary whose operator picked
+    // Stable stays on Stable, because the pin is on disk to say so.
+    resolveUpdateChannelMock.mockReturnValue("latest");
+    resolveUpdateTrainMock.mockReturnValue("stable");
+    updateSelectionSourceMock.mockReturnValue("user");
+    appVersionMock.mockReturnValue("1.1.0-alpha.7");
+    mockGitHubReleases([
+      githubRelease("v1.1.0-alpha.9", { prerelease: true }),
+      githubRelease("v1.0.3"),
+    ]);
+    const updater = await importAutoUpdater();
+
+    await updater.checkForAppUpdatesNow("manual");
+
+    expect(logInfoMock).toHaveBeenCalledWith(
+      "configured auto-update channel",
+      expect.objectContaining({
+        updateChannel: "latest",
+        updateTrain: "stable",
+      }),
+    );
   });
 
   it("names the missing manifest instead of dumping the raw HttpError", async () => {

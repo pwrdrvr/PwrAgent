@@ -485,7 +485,15 @@ export function GeneralSettings(props: {
                 : undefined
             }
             error={updateTrain.error ?? updateChannel.error}
-            source={sourceBadge(updateTrain)}
+            source={
+              // One field now covers both axes, so it reports whichever axis
+              // the config actually supplied. Reading only the train badge
+              // showed "default" for a pin whose train fell back, disagreeing
+              // with the section chip directly above it.
+              updateTrain.source === "config"
+                ? sourceBadge(updateTrain)
+                : sourceBadge(updateChannel)
+            }
             actions={
               <SettingsPendingIndicator
                 pending={updateSelectionPending.pending}

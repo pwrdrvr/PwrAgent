@@ -19,8 +19,9 @@ import type {
 import {
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_UPDATE_TRAIN_DEFAULT,
-  inferDesktopUpdateSelection,
+  resolveDesktopUpdateSelection,
   type DesktopUpdateChannel,
+  type DesktopUpdateSelection,
   type DesktopUpdateTrain,
 } from "@pwragent/shared";
 import { getMainLogger } from "./log";
@@ -119,18 +120,16 @@ function currentUpdateTrain(): DesktopUpdateTrain {
   }
 }
 
-function currentUpdateSelection(): {
-  channel: DesktopUpdateChannel;
-  train: DesktopUpdateTrain;
-} {
-  const updates = getDesktopConfigStore().read("updates");
-  if (updates.channel === undefined && updates.train === undefined) {
-    return inferDesktopUpdateSelection(app.getVersion());
-  }
-  return {
-    channel: updates.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
-    train: updates.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
-  };
+// The feed resolves through the SAME function as the Settings snapshot.
+// This used to carry its own copy of the rule, and a copy is how the two
+// come apart: fixing the half-pair case in the settings service alone left
+// Settings showing Beta Prerelease on a 1.1.0-alpha install while this
+// function still answered Stable Latest and polled that feed forever.
+function currentUpdateSelection(): DesktopUpdateSelection {
+  return resolveDesktopUpdateSelection(
+    getDesktopConfigStore().read("updates"),
+    app.getVersion(),
+  );
 }
 
 function updateSelectionKey(
@@ -240,6 +239,13 @@ function summarizeUpdateError(err: unknown): string {
   // Both suffixes are appended to the same single line as the message, so a
   // plain first-line cut is not enough to drop them.
   const head = raw.split("\n")[0].split(" Headers: ")[0].trim();
+  // A thrown `new Error()` carries an empty message, and returning it would
+  // render "Update check failed:" with nothing after the colon. This is the
+  // one choke point every update error passes through, so the fallback
+  // belongs here rather than at each call site.
+  if (head.length === 0) {
+    return "The update check failed without reporting a reason.";
+  }
   if (head.length <= UPDATE_ERROR_MESSAGE_MAX) {
     return head;
   }
@@ -263,7 +269,10 @@ function describeUpdateCheckFailure(
     tag?: string;
   },
 ): string {
-  const raw = err instanceof Error ? err.message : String(err);
+  // Trimmed before matching: `summarizeUpdateError` trims and this must
+  // agree with it, or a message that arrives with a leading newline falls
+  // through to the raw-text branch this function exists to avoid.
+  const raw = (err instanceof Error ? err.message : String(err)).trim();
   const missingManifest = /^Cannot find channel "([^"]+)" update info/.exec(
     raw,
   )?.[1];
@@ -1049,7 +1058,13 @@ export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVe
       },
     };
   } catch (err) {
-    // Rendered inside a release slot tile, which has room for a sentence.
+    // Rendered inside a release slot tile, which has room for a sentence —
+    // so the log has to keep the rest. Without this the summary destroys the
+    // only copy of a long GitHub error instead of relocating it, which the
+    // other two `summarizeUpdateError` call sites are careful not to do.
+    log.warn("failed to read app update release versions", {
+      message: err instanceof Error ? err.message : String(err),
+    });
     const unavailable = { unavailableReason: summarizeUpdateError(err) };
     return {
       fetchedAt: Date.now(),

@@ -51,17 +51,27 @@ const SLOT_SUB: Record<`${DesktopUpdateTrain}:${DesktopUpdateChannel}`, string> 
     "beta:prerelease": "Newest alpha off main. May not install.",
   };
 
-/** Render and arrow-walk order, derived from the shared axis lists so the
- *  headers, the tiles, and the keyboard walk can never disagree about the
- *  grid's shape. */
-const SLOT_ORDER: ReadonlyArray<{
-  train: DesktopUpdateTrain;
-  channel: DesktopUpdateChannel;
-}> = DESKTOP_UPDATE_TRAINS.flatMap((train) =>
-  DESKTOP_UPDATE_CHANNELS.map((channel) => ({ train, channel })),
-);
-
+/** Grid shape, derived from the shared axis lists so the headers, the tiles,
+ *  and the arrow-key walk can never disagree about it: trains are rows,
+ *  tracks are columns, in the order those lists declare. */
 const COLUMNS = DESKTOP_UPDATE_CHANNELS.length;
+const SLOT_COUNT = DESKTOP_UPDATE_TRAINS.length * COLUMNS;
+
+/** Flat position of a slot in that grid. One definition, used by the render
+ *  loop, the selected/tabbable test, and the ref array — recovering it with a
+ *  `findIndex` per tile per render made those agree by coincidence rather
+ *  than by construction. Returns -1 for a pair on neither axis list. */
+function slotIndex(
+  train: DesktopUpdateTrain,
+  channel: DesktopUpdateChannel,
+): number {
+  const row = DESKTOP_UPDATE_TRAINS.indexOf(train);
+  const column = DESKTOP_UPDATE_CHANNELS.indexOf(channel);
+  if (row < 0 || column < 0) {
+    return -1;
+  }
+  return row * COLUMNS + column;
+}
 
 /** Release tags carry a leading `v`; `AppMetadata.applicationVersion` does
  *  not, so the "Installed" chip compares the cores. */
@@ -166,12 +176,14 @@ export function ReleaseSlotMatrix(props: {
   }) => Promise<unknown>;
 }) {
   const slotRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const selectedIndex = Math.max(
-    0,
-    SLOT_ORDER.findIndex(
-      (slot) => slot.train === props.train && slot.channel === props.channel,
-    ),
-  );
+  // -1 when the pair names no published slot — a peer instance on a build
+  // that added a train, or a hand-edited config that slipped past validation.
+  // Left as -1 deliberately: painting slot 0 as Selected would show the
+  // operator a pin they never made, and put the only tabbable tile on the
+  // wrong slot. No tile is checked, and the first tile carries the tab stop
+  // so the control stays reachable.
+  const selectedIndex = slotIndex(props.train, props.channel);
+  const tabbableIndex = selectedIndex >= 0 ? selectedIndex : 0;
 
   // Roving tabindex plus arrow keys — the radiogroup contract, which the
   // pane's `SegmentedControl` leaves to native tab order because its
@@ -196,8 +208,9 @@ export function ReleaseSlotMatrix(props: {
           return;
         }
         event.preventDefault();
-        const count = SLOT_ORDER.length;
-        slotRefs.current[(index + delta + count) % count]?.focus();
+        slotRefs.current[
+          (index + delta + SLOT_COUNT) % SLOT_COUNT
+        ]?.focus();
       },
     [],
   );
@@ -227,10 +240,7 @@ export function ReleaseSlotMatrix(props: {
             {TRAIN_LABEL[rowTrain]}
           </div>
           {DESKTOP_UPDATE_CHANNELS.map((slotChannel) => {
-            const index = SLOT_ORDER.findIndex(
-              (slot) =>
-                slot.train === rowTrain && slot.channel === slotChannel,
-            );
+            const index = slotIndex(rowTrain, slotChannel);
             const release = props.releaseVersions?.[rowTrain]?.[slotChannel];
             return (
               <SlotTile
@@ -247,7 +257,7 @@ export function ReleaseSlotMatrix(props: {
                 }}
                 release={release}
                 selected={index === selectedIndex}
-                tabbable={index === selectedIndex}
+                tabbable={index === tabbableIndex}
                 train={rowTrain}
                 onKeyDown={onSlotKeyDown(index)}
                 onSelect={() => {

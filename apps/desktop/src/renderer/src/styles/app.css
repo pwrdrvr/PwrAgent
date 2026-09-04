@@ -9349,11 +9349,13 @@ a.button {
   gap: 6px;
 }
 
-/* The three controls (track segmented, Restart, Check) read as one row of
-   equal-height chiclets. `stretch` sizes both buttons to the segmented
-   control, which is the tallest because its options are two-line. Status
-   text is a SIBLING of this row, never a member of it — as a member its
-   own height fed back into `stretch` and inflated the buttons. */
+/* Restart and Check read as one row of equal-height chiclets. The track
+   segmented control used to sit here too and was the tallest member, which
+   is what `stretch` was sizing the buttons against; the release slot matrix
+   replaced it and lives in its own field now, so `stretch` only equalizes
+   the two buttons against each other. Status text is a SIBLING of this row,
+   never a member of it — as a member its own height fed back into `stretch`
+   and inflated the buttons. */
 .settings-update-channel__controls {
   display: flex;
   flex-wrap: wrap;
@@ -9361,15 +9363,15 @@ a.button {
   gap: 8px;
 }
 
-/* Match the segmented control's label register (12px/650). Without this the
-   two buttons fall back to the browser-default inherited size and read a
-   full step larger than the chiclets beside them.
+/* Keep the settings label register (12px/650). Without this the two buttons
+   fall back to the browser-default inherited size and read a full step
+   larger than the rest of the pane.
 
-   Do NOT reintroduce `min-height: 0` here. `stretch` already sizes these to
-   the segmented control on a shared line, so the override bought nothing
-   there — but once the row wraps and a button lands on a line alone it has
-   nothing to stretch against, and the override collapsed it to a 16px
-   sliver. The `.button` base floor of 34px is what catches that case. */
+   Do NOT reintroduce `min-height: 0` here. It collapsed a button that had
+   nothing to stretch against to a 16px sliver — originally when the row
+   wrapped and a button landed on a line alone, and now for any button
+   whenever Restart is absent and Check is the row's only member. The
+   `.button` base floor of 34px is what catches that. */
 .settings-update-channel__button,
 .settings-update-channel__restart-button {
   font-size: 12px;

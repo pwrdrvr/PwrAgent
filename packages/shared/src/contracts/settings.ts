@@ -177,6 +177,106 @@ export function inferDesktopUpdateSelection(version: string): {
   return { channel: "prerelease", train: DESKTOP_UPDATE_TRAIN_DEFAULT };
 }
 
+/** The pair every pre-`selection_source` config landed on when nobody had
+ *  chosen: the shape the defaults shipped as, and what the old resolver
+ *  filled a missing axis with. This is a HISTORICAL FACT about files already
+ *  on disk, so it is frozen here rather than read from
+ *  `DESKTOP_UPDATE_*_DEFAULT` — moving the shipped default later must not
+ *  retroactively reclassify those files as deliberate pins and freeze that
+ *  population on Stable Latest forever. */
+const LEGACY_UNCHOSEN_UPDATE_PAIR: {
+  channel: DesktopUpdateChannel;
+  train: DesktopUpdateTrain;
+} = {
+  channel: "latest",
+  train: "stable",
+};
+
+/** Classify an `[updates]` table written before `selection_source` existed.
+ *  A complete pair that is NOT the historical unchosen pair could only have
+ *  been written by a deliberate click, and that means "leave it alone" — so
+ *  it reads as `"user"`. Everything else (no pair, a half pair, or that
+ *  pair) is indistinguishable from "never chose", so it reads as
+ *  `"inferred"` and gets re-derived from the running binary.
+ *
+ *  A half pair is the case this exists for: `channel` shipped before `train`
+ *  did, so every config written by an older build carries `channel` alone.
+ *  Reading that as a Stable pin is what offered a 1.1.0-alpha install the
+ *  last stable release forever and never told it about the newer alpha it
+ *  came from.
+ *
+ *  The one behavior change this can produce: an operator who deliberately
+ *  pinned Stable/Latest while running an alpha is moved back onto
+ *  Beta/Prerelease once. That is the same state as the bug it fixes, and
+ *  nothing on disk separates the two. Their next click writes `"user"` and
+ *  pins for good. */
+export function legacyDesktopUpdateSelectionSource(
+  channel: DesktopUpdateChannel | undefined,
+  train: DesktopUpdateTrain | undefined,
+): DesktopUpdateSelectionSource {
+  if (channel === undefined || train === undefined) {
+    return "inferred";
+  }
+  if (
+    channel === LEGACY_UNCHOSEN_UPDATE_PAIR.channel
+    && train === LEGACY_UNCHOSEN_UPDATE_PAIR.train
+  ) {
+    return "inferred";
+  }
+  return "user";
+}
+
+export type DesktopUpdateSelection = {
+  channel: DesktopUpdateChannel;
+  train: DesktopUpdateTrain;
+  selectionSource: DesktopUpdateSelectionSource;
+};
+
+/**
+ * Turn a persisted `[updates]` table plus the running binary's version into
+ * the train/track pair the app should follow.
+ *
+ * This is THE resolver — the settings snapshot and the auto-updater's feed
+ * both go through it. They must not each carry their own copy: when they did,
+ * fixing the half-pair rule in one of them left the other offering a
+ * 1.1.0-alpha install the last stable release while Settings showed Beta,
+ * which is worse than the original bug because the two now disagree.
+ *
+ * A pin is honored per axis, so a pin whose other axis did not survive the
+ * round trip (a truncated write, a hand edit that misspelled a value) keeps
+ * the axis that IS valid instead of being silently un-pinned onto the feed
+ * the binary happens to come from.
+ */
+export function resolveDesktopUpdateSelection(
+  stored:
+    | {
+        channel?: DesktopUpdateChannel;
+        train?: DesktopUpdateTrain;
+        selectionSource?: DesktopUpdateSelectionSource;
+      }
+    | undefined,
+  appVersion: string,
+): DesktopUpdateSelection {
+  const selectionSource =
+    stored?.selectionSource
+    ?? legacyDesktopUpdateSelectionSource(stored?.channel, stored?.train);
+  if (selectionSource === "user") {
+    return {
+      channel: stored?.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+      train: stored?.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
+      selectionSource: "user",
+    };
+  }
+  // An inferred selection is RE-DERIVED on every read from the version of the
+  // binary doing the reading, so installing an alpha over a stable build (or
+  // the reverse) moves the feed with it instead of stranding the install on a
+  // slot it can never advance from.
+  return {
+    ...inferDesktopUpdateSelection(appVersion),
+    selectionSource: "inferred",
+  };
+}
+
 export const DESKTOP_APPEARANCE_THEMES = ["system", "dark", "light"] as const;
 export type DesktopAppearanceTheme = (typeof DESKTOP_APPEARANCE_THEMES)[number];
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
