@@ -713,10 +713,26 @@ export class GithubGraphqlPrClient {
    * correctness — a stale chip beats a crashed sweep.
    */
   async fetchPullRequests(refs: PrRef[]): Promise<PrSummary[]> {
+    return await this.fetchPullRequestsWithBackoffPolicy(refs, false);
+  }
+
+  /**
+   * Allow the first batch through slow mode after Chromium reports that a
+   * network interface came back. The request still uses the normal retry
+   * ceiling; only a real GitHub response clears the accumulated failure state.
+   */
+  async fetchPullRequestsAfterReconnect(refs: PrRef[]): Promise<PrSummary[]> {
+    return await this.fetchPullRequestsWithBackoffPolicy(refs, true);
+  }
+
+  private async fetchPullRequestsWithBackoffPolicy(
+    refs: PrRef[],
+    bypassFailureBackoff: boolean,
+  ): Promise<PrSummary[]> {
     if (refs.length === 0) {
       return [];
     }
-    if (this.deferForFailureBackoff("PR poll")) {
+    if (!bypassFailureBackoff && this.deferForFailureBackoff("PR poll")) {
       return [];
     }
     const token = await this.resolveToken();
@@ -726,8 +742,10 @@ export class GithubGraphqlPrClient {
     }
 
     const results: PrSummary[] = [];
+    let bypassNextBatchBackoff = bypassFailureBackoff;
     for (const batch of chunk(refs, this.batchSize)) {
-      const prs = await this.fetchBatch(batch, token);
+      const prs = await this.fetchBatch(batch, token, bypassNextBatchBackoff);
+      bypassNextBatchBackoff = false;
       results.push(...prs);
     }
     return results;
@@ -996,8 +1014,15 @@ export class GithubGraphqlPrClient {
     return undefined;
   }
 
-  private async fetchBatch(refs: PrRef[], token: string): Promise<PrSummary[]> {
-    if (this.deferForFailureBackoff("PR poll batch")) {
+  private async fetchBatch(
+    refs: PrRef[],
+    token: string,
+    bypassFailureBackoff = false,
+  ): Promise<PrSummary[]> {
+    if (
+      !bypassFailureBackoff
+      && this.deferForFailureBackoff("PR poll batch")
+    ) {
       return [];
     }
     const { query, variables } = buildBatchedPrQuery(refs);

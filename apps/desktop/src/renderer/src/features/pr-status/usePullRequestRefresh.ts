@@ -104,6 +104,25 @@ export function usePullRequestRefresh(params: {
     selectedRef.current = selected;
   }, [selected]);
 
+  // Chromium owns network-change detection in Electron renderer processes.
+  // Treat `online` as permission for one main-process probe, not proof that
+  // GitHub is reachable; the scheduler deduplicates windows and keeps the
+  // request inside its existing batch/token ceilings.
+  useEffect(() => {
+    const probeAfterReconnect =
+      desktopApi?.probePullRequestPollingAfterReconnect;
+    if (!probeAfterReconnect) return;
+    const handleOnline = (): void => {
+      void probeAfterReconnect().catch(() => {
+        // Logged in main — keep the renderer silent.
+      });
+    };
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [desktopApi]);
+
   // Selection trigger + 60s ticker: collapse into a single effect keyed on
   // the selected thread's fetchable PR request. Re-running on every
   // snapshot would burn fetches needlessly — the snapshot mutates during

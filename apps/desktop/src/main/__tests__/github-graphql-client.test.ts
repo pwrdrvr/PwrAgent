@@ -622,6 +622,32 @@ describe("GithubGraphqlPrClient", () => {
     expect(request).toHaveBeenCalledTimes(12);
   });
 
+  it("allows one reconnect probe through an active failure backoff", async () => {
+    const now = 1_000_000;
+    let mode: "fail" | "succeed" = "fail";
+    const request = vi.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("connect timeout");
+      }
+      return { r0: { pullRequest: node() } };
+    });
+    const graphqlClient = client(request, { now: () => now });
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    mode = "succeed";
+    await expect(
+      graphqlClient.fetchPullRequestsAfterReconnect([refs[0]!]),
+    ).resolves.toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(5);
+
+    // The successful probe clears slow mode immediately.
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(6);
+    expect(now).toBe(1_000_000);
+  });
+
   it("returns to the initial backoff after GitHub recovers", async () => {
     let now = 1_000_000;
     let mode: "fail" | "succeed" = "fail";

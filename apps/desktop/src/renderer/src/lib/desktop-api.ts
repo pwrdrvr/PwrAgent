@@ -1092,6 +1092,8 @@ export type DesktopApi = {
   setPullRequestPollingFocus?: (
     request: SetPullRequestPollingFocusRequest
   ) => Promise<void>;
+  /** Allow one token-bounded GitHub probe after Chromium reports reconnection. */
+  probePullRequestPollingAfterReconnect?: () => Promise<void>;
   detachThreadPullRequest?: (
     request: DetachThreadPullRequestRequest
   ) => Promise<DetachThreadPullRequestResponse>;
