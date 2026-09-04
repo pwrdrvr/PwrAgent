@@ -34,6 +34,9 @@ function service(options: {
     settings,
     resolveInstallPaths: () =>
       options.installed === false ? [] : ["/Applications/PwrGit.app"],
+    // Never consult the real filesystem: whether PwrGit is installed on the
+    // machine running the suite must not decide what these tests assert.
+    exists: () => options.installed !== false,
     resolveBundledScript: () => "/Applications/PwrGit.app/Contents/Resources/pwrgit-mcp.mjs",
     resolveExecutable: () => "/Applications/PwrGit.app/Contents/MacOS/PwrGit",
     sleep: async () => undefined,
@@ -53,7 +56,6 @@ describe("PwrGitConnectionService status", () => {
         throw new Error("ECONNREFUSED");
       },
     });
-    // resolveInstallPaths returns [], so existsSync is never consulted.
     await expect(instance.readStatus()).resolves.toMatchObject({
       availability: "not_installed",
       configured: false,
