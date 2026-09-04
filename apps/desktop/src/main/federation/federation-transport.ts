@@ -15,11 +15,13 @@ import {
   FEDERATION_PROTOCOL_VERSION,
   FEDERATION_TRANSPORT_VERSION,
   filterKnownFederationCapabilities,
+  isFederationGatewayEndpointUrl,
   isFederationInstanceId,
 } from "@pwragent/shared";
 import {
   authenticateFederationReconnect,
   buildFederationGatewayAcceptedMessage,
+  buildFederationGatewayEndpointsMessage,
   buildFederationGatewayChallengeMessage,
   buildFederationProofMessage,
   completeFederationEnrollment,
@@ -214,6 +216,16 @@ type FederationSocketAcceptedMessage = {
   nonce: string;
   capabilities: FederationCapability[];
   signatureBase64: string;
+  /**
+   * The gateway's current advertised endpoints, so an enrolled client learns
+   * about a path that did not exist when its invite was minted. Optional in
+   * both directions: a gateway that predates this omits it, and a client that
+   * predates it ignores it, neither of which disturbs the accepted-message
+   * signature. Carries its own signature — see
+   * `buildFederationGatewayEndpointsMessage`.
+   */
+  gatewayEndpoints?: string[];
+  gatewayEndpointsSignatureBase64?: string;
 };
 
 type FederationSocketRejectedMessage = {
@@ -252,6 +264,12 @@ export type FederationGatewayWebSocketServerOptions = {
   gatewayInstanceId: FederationInstanceId;
   gatewayPrivateKeyPem: string;
   gatewayPublicKeyPem: string;
+  /**
+   * This gateway's current advertised endpoints, sent to each peer on accept.
+   * Read as a snapshot rather than computed here: deriving the list can spawn
+   * the Tailscale CLI, which must never sit on the accept path.
+   */
+  readAdvertisedEndpoints?: () => readonly string[];
   host: string;
   port: number;
   store: FederationStore;
@@ -673,6 +691,10 @@ export class FederationGatewayWebSocketServer {
             capabilities: decision.capabilities,
           }),
         }),
+        ...this.advertisedEndpointFields({
+          peerInstanceId: decision.peer.id,
+          nonce: challengeNonce,
+        }),
       },
       transport,
     );
@@ -735,6 +757,33 @@ export class FederationGatewayWebSocketServer {
     }
   }
 
+  /**
+   * The signed endpoint fields for an accept frame, or nothing when this
+   * gateway has no advertised list to share. Omitting the pair entirely is
+   * what an older gateway looks like on the wire, so a client treats it as
+   * "no update" and keeps the endpoints it already has.
+   */
+  private advertisedEndpointFields(params: {
+    peerInstanceId: FederationInstanceId;
+    nonce: string;
+  }): Partial<FederationSocketAcceptedMessage> {
+    const endpoints = this.options.readAdvertisedEndpoints?.() ?? [];
+    if (endpoints.length === 0) return {};
+    const gatewayEndpoints = [...endpoints];
+    return {
+      gatewayEndpoints,
+      gatewayEndpointsSignatureBase64: signFederationMessage({
+        privateKeyPem: this.options.gatewayPrivateKeyPem,
+        message: buildFederationGatewayEndpointsMessage({
+          gatewayInstanceId: this.options.gatewayInstanceId,
+          peerInstanceId: params.peerInstanceId,
+          nonce: params.nonce,
+          endpoints: gatewayEndpoints,
+        }),
+      }),
+    };
+  }
+
   private authenticate(message: FederationSocketAuthMessage, channelBinding: string) {
     if (message.gatewayInstanceId !== this.options.gatewayInstanceId) {
       return {
@@ -792,6 +841,14 @@ export class FederationGatewayWebSocketServer {
 export type FederationClientWebSocketClient = {
   sessionId: FederationSessionId;
   capabilities: FederationCapability[];
+  /**
+   * Endpoints the gateway advertised on this connect, already checked against
+   * its pinned signing key and the scheme allowlist. Empty when the gateway
+   * sent none, which a caller must read as "no update" rather than "the
+   * gateway has no endpoints" — clearing a client's list on that would strand
+   * it with nothing to dial.
+   */
+  gatewayEndpoints: string[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
   sendEnvelopeWithBackpressure?: (
     envelope: FederationProtocolEnvelope,
@@ -1064,6 +1121,15 @@ async function establishFederationClient(
     socket.close();
     throw new Error("Invalid federation auth acceptance signature");
   }
+  // Endpoints ride along under their own signature. A gateway that sends none
+  // is simply older than this field; one that sends a list it cannot prove it
+  // authored is dropped rather than fatal, because the session itself is
+  // already authenticated and the client's existing endpoints still work.
+  const advertisedEndpoints = readAdvertisedGatewayEndpoints({
+    accepted,
+    gatewayPublicKeyPem: params.gatewayPublicKeyPem,
+    peerInstanceId: params.peerInstanceId,
+  });
   // Carry the close code/reason to the runtime — dropping them made a
   // deliberate "replaced_by_new_session" eviction indistinguishable
   // from a network blip in every log and health surface. (An error is
@@ -1127,6 +1193,7 @@ async function establishFederationClient(
     // THIS build understands only after it verified, so a newer gateway
     // granting a capability we predate is ignored, not fatal.
     capabilities: knownCapabilities(accepted.capabilities),
+    gatewayEndpoints: advertisedEndpoints,
     sendEnvelope: (envelope) => {
       const byteCount = sendFrame(socket, { kind: "envelope", envelope }, transport);
       if (byteCount > 0) {
@@ -1480,6 +1547,50 @@ function isChallengeMessage(
   );
 }
 
+/**
+ * The gateway's advertised endpoints from an accept frame, verified against
+ * its pinned signing key, or an empty list when there is nothing usable.
+ *
+ * Every rejection here is silent-and-empty rather than an error: the session
+ * is already authenticated by the time this runs, so refusing to connect over
+ * a bad endpoint list would turn a cosmetic problem into an outage. An empty
+ * result means the caller keeps whatever endpoints it already had.
+ */
+function readAdvertisedGatewayEndpoints(params: {
+  accepted: FederationSocketAcceptedMessage;
+  gatewayPublicKeyPem: string;
+  peerInstanceId: FederationInstanceId;
+}): string[] {
+  const advertised = params.accepted.gatewayEndpoints;
+  const signatureBase64 = params.accepted.gatewayEndpointsSignatureBase64;
+  if (!advertised || advertised.length === 0 || !signatureBase64) return [];
+  const signatureValid = verifyFederationMessageSignature({
+    publicKeyPem: params.gatewayPublicKeyPem,
+    // Verify the list exactly as sent, before any filtering — filtering first
+    // would change the bytes the gateway signed.
+    message: buildFederationGatewayEndpointsMessage({
+      gatewayInstanceId: params.accepted.gatewayInstanceId,
+      peerInstanceId: params.peerInstanceId,
+      nonce: params.accepted.nonce,
+      endpoints: advertised,
+    }),
+    signatureBase64,
+  });
+  if (!signatureValid) {
+    log.warn("ignoring federation gateway endpoints with an invalid signature");
+    return [];
+  }
+  // A signature proves authorship, not that we are willing to dial it. The
+  // scheme allowlist is the same gate the invite path applies.
+  const allowed = advertised.filter(isFederationGatewayEndpointUrl);
+  if (allowed.length !== advertised.length) {
+    log.warn("ignoring advertised federation endpoints with an unsupported scheme", {
+      ignored: advertised.length - allowed.length,
+    });
+  }
+  return allowed;
+}
+
 function isAcceptedMessage(
   value: Partial<FederationSocketAcceptedMessage>,
 ): value is FederationSocketAcceptedMessage {
@@ -1490,6 +1601,16 @@ function isAcceptedMessage(
     typeof value.protocolVersion === "number" &&
     typeof value.nonce === "string" &&
     typeof value.signatureBase64 === "string" &&
-    isCapabilityNameList(value.capabilities)
+    isCapabilityNameList(value.capabilities) &&
+    // Both endpoint fields are optional, but a half-present pair is
+    // malformed rather than merely old, so reject it here instead of
+    // letting it reach signature verification.
+    (value.gatewayEndpoints === undefined
+      ? value.gatewayEndpointsSignatureBase64 === undefined
+      : Array.isArray(value.gatewayEndpoints)
+        && value.gatewayEndpoints.every(
+          (endpoint) => typeof endpoint === "string",
+        )
+        && typeof value.gatewayEndpointsSignatureBase64 === "string")
   );
 }

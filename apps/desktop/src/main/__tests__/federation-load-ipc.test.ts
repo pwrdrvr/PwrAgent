@@ -29,7 +29,12 @@ const runtime = {
 const createFederationWindow = vi.hoisted(() => vi.fn());
 
 vi.mock("../federation/federation-runtime", () => ({
-  getDesktopFederationRuntime: () => runtime,
+  getDesktopFederationRuntime: () => ({
+    ...runtime,
+    // Registration hands the runtime its Tailscale advertisement reader; this
+    // suite only exercises the load IPC, so accepting it is enough.
+    setTailscaleAdvertisementReader: () => undefined,
+  }),
 }));
 vi.mock("../federation/federation-tailscale", () => ({
   getFederationTailscaleService: () => ({}),

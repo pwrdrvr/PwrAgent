@@ -29,6 +29,7 @@ vi.mock("../federation/federation-transport", async (importOriginal) => ({
     return {
       sessionId: "federation-session:test",
       capabilities: [],
+      gatewayEndpoints: [],
       sendEnvelope: () => undefined,
       close: () => undefined,
     };

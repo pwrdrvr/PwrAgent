@@ -293,7 +293,10 @@ import {
   collectFederationInterfaceAddresses,
   type FederationTailscaleAdvertisement,
 } from "./federation-advertised-endpoints";
-import { orderFederationEndpointAttempts } from "./federation-endpoints";
+import {
+  orderFederationEndpointAttempts,
+  resolveFederationClientEndpoints,
+} from "./federation-endpoints";
 import {
   dialFederationSshEndpoint,
   isFederationSshEndpointUrl,
@@ -331,6 +334,12 @@ const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
 const GATEWAY_NOISE_PUBLIC_KEY_META_KEY = "federation_gateway_noise_public_key";
 const GATEWAY_LAST_ENDPOINT_META_KEY = "federation_gateway_last_endpoint";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
+/**
+ * Endpoints the gateway advertised on its last accepted connection. A cache,
+ * not config: see `resolveFederationClientEndpoints` for why this cannot live
+ * in `federation.gatewayEndpoints`.
+ */
+const GATEWAY_LEARNED_ENDPOINTS_META_KEY = "federation_gateway_learned_endpoints";
 const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
@@ -797,6 +806,20 @@ export class DesktopFederationRuntime {
   private instanceNotes?: string;
   private localHostInfo?: FederationHostInfo;
   private listenUrl?: string;
+  /**
+   * This gateway's advertised endpoints, as last derived. Held as a snapshot
+   * because the accept path is synchronous and must never wait on a CLI spawn.
+   */
+  private advertisedEndpointSnapshot: readonly string[] = [];
+  /**
+   * Injected rather than imported: the Tailscale service calls back into this
+   * runtime to verify the listener, so importing it here would close a
+   * dependency cycle. `mintInvite` takes the same thunk per call; this one is
+   * for the runtime's own background refresh.
+   */
+  private readTailscaleAdvertisement?: () => Promise<
+    FederationTailscaleAdvertisement | undefined
+  >;
   private gatewayUrl?: string;
   private gatewayInstanceId?: FederationInstanceId;
   private configuredEndpoints: string[] = [];
@@ -1110,6 +1133,7 @@ export class DesktopFederationRuntime {
     this.server = undefined;
     this.router = undefined;
     this.listenUrl = undefined;
+    this.advertisedEndpointSnapshot = [];
     this.gatewayUrl = undefined;
     this.gatewayInstanceId = undefined;
     this.configuredEndpoints = [];
@@ -1241,6 +1265,7 @@ export class DesktopFederationRuntime {
     // forgotten. Leaving them behind would keep a dual-mode instance dialing
     // the forgotten gateway with no pins left to satisfy it.
     stateDb.setMeta(GATEWAY_LAST_ENDPOINT_META_KEY, "");
+    stateDb.setMeta(GATEWAY_LEARNED_ENDPOINTS_META_KEY, "");
     const settingsService = getDesktopSettingsService();
     const mode = this.readRuntimeConfig().mode;
     if (mode === "client" || mode === "disabled") {
@@ -1596,6 +1621,47 @@ export class DesktopFederationRuntime {
     return fallbackUrl ? [fallbackUrl] : [];
   }
 
+  /**
+   * Register the Tailscale advertisement reader. Called once by the IPC layer,
+   * which owns the Tailscale service and can import it without a cycle.
+   */
+  setTailscaleAdvertisementReader(
+    read: () => Promise<FederationTailscaleAdvertisement | undefined>,
+  ): void {
+    this.readTailscaleAdvertisement = read;
+  }
+
+  /**
+   * Re-derive `advertisedEndpointSnapshot` for the running gateway.
+   *
+   * Deliberately the same resolution the invite path uses — an operator's
+   * pinned list wins, otherwise the synthesized default — so a peer that
+   * enrolls today and a peer that reconnects tomorrow are told the same thing.
+   * Failure leaves the previous snapshot in place and logs: a gateway that
+   * cannot describe its own endpoints should keep serving with the ones it had,
+   * and sending nothing is already the "no update" signal on the wire.
+   */
+  private async refreshAdvertisedEndpointSnapshot(
+    config: FederationRuntimeConfig,
+  ): Promise<void> {
+    try {
+      const pinned = config.advertisedEndpoints;
+      this.advertisedEndpointSnapshot =
+        pinned.length > 0
+          ? [...pinned]
+          : await this.defaultAdvertisedEndpoints(
+              config,
+              this.readTailscaleAdvertisement,
+            );
+    } catch (error) {
+      log.warn("could not derive advertised federation endpoints", {
+        error: redactFederationDiagnostic(
+          error instanceof Error ? error.message : String(error),
+        ),
+      });
+    }
+  }
+
   async importInvite(invite: string): Promise<{
     accepted: boolean;
     gatewayInstanceId: FederationInstanceId;
@@ -1612,6 +1678,7 @@ export class DesktopFederationRuntime {
     );
     // A new gateway identity invalidates any endpoint memory from before.
     stateDb.setMeta(GATEWAY_LAST_ENDPOINT_META_KEY, "");
+    stateDb.setMeta(GATEWAY_LEARNED_ENDPOINTS_META_KEY, "");
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, payload.token);
     stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, String(Date.now()));
     // Importing on a listening instance must not silently kill its
@@ -2614,6 +2681,7 @@ export class DesktopFederationRuntime {
         port: config.listenPort,
         store: this.store(),
         noiseStatic,
+        readAdvertisedEndpoints: () => this.advertisedEndpointSnapshot,
         onConnection: (connection) => this.registerGatewayConnection(connection),
         onDisconnect: (connection) => this.unregisterGatewayConnection(connection),
         onPeerReplaced: (info) => {
@@ -2637,6 +2705,10 @@ export class DesktopFederationRuntime {
           return;
         }
         this.listenUrl = started.url;
+        // Endpoints are derived once per gateway start rather than per accept:
+        // the derivation can spawn the Tailscale CLI, and every config edit
+        // restarts the runtime anyway, so this is the natural refresh point.
+        void this.refreshAdvertisedEndpointSnapshot(config);
         log.info("federation gateway listening", { url: started.url });
       } catch (error) {
         this.gatewayListenerError = redactFederationDiagnostic(
@@ -2651,7 +2723,10 @@ export class DesktopFederationRuntime {
     }
 
     if (mode === "client" || mode === "dual") {
-      const configured = config.gatewayEndpoints;
+      const configured = resolveFederationClientEndpoints({
+        configured: config.gatewayEndpoints,
+        learned: this.readLearnedEndpoints(),
+      });
       // Last line of defense before anything is dialed: the config file is
       // hand-editable and may predate the scheme allowlist.
       const endpoints = configured.filter(isFederationGatewayEndpointUrl);
@@ -2993,6 +3068,7 @@ export class DesktopFederationRuntime {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
     this.markEndpointConnected(gatewayUrl);
+    this.recordLearnedEndpoints(client.gatewayEndpoints);
     // Backoff is reset by session *durability*, not by the mere fact that a
     // handshake succeeded — otherwise a gateway that accepts and immediately
     // drops (restart loop, eviction) pins reconnects at 1 Hz forever, spawning
@@ -3001,6 +3077,64 @@ export class DesktopFederationRuntime {
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
     log.info("federation client connected", { gatewayUrl });
+  }
+
+  /** Endpoints cached from the gateway's last accepted connection. */
+  private readLearnedEndpoints(): string[] {
+    const raw = getAppStateDb().getMeta(GATEWAY_LEARNED_ENDPOINTS_META_KEY);
+    if (!raw) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (endpoint): endpoint is string => typeof endpoint === "string",
+      );
+    } catch {
+      // A cache is never worth failing a connect over.
+      return [];
+    }
+  }
+
+  /**
+   * Adopt the endpoints the gateway just advertised.
+   *
+   * Applied to the live dial list rather than through config, so the session
+   * that taught us survives — writing the `federation` config section restarts
+   * this runtime. An empty list means the gateway said nothing (it predates
+   * the field, or has no advertised endpoints to share) and must be read as
+   * "no update"; treating it as "no endpoints" would strand a client that has
+   * only ever learned where its gateway lives.
+   *
+   * The store is written only on an actual change, which keeps a steady-state
+   * reconnect at zero sqlite commits.
+   */
+  private recordLearnedEndpoints(advertised?: readonly string[]): void {
+    // Absent reads the same as empty. A transport that predates this field —
+    // or any alternate client implementation — must not fail a connect it has
+    // already authenticated just because a cache refresh found nothing.
+    if (!advertised || advertised.length === 0) return;
+    const learned = [...advertised];
+    const previous = this.readLearnedEndpoints();
+    const unchanged =
+      previous.length === learned.length
+      && previous.every((endpoint, index) => endpoint === learned[index]);
+    if (!unchanged) {
+      getAppStateDb().setMeta(
+        GATEWAY_LEARNED_ENDPOINTS_META_KEY,
+        JSON.stringify(learned),
+      );
+      log.info("federation gateway advertised updated endpoints", {
+        count: learned.length,
+      });
+    }
+    // Recompute even when the cache was already current: a restart reads the
+    // store, but this instance may have started before the gateway had any
+    // endpoints to advertise.
+    const resolved = resolveFederationClientEndpoints({
+      configured: this.readRuntimeConfig().gatewayEndpoints,
+      learned,
+    }).filter(isFederationGatewayEndpointUrl);
+    if (resolved.length > 0) this.configuredEndpoints = resolved;
   }
 
   // Only a fully authenticated session ever updates the last-good endpoint

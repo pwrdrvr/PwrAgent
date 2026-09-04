@@ -423,3 +423,37 @@ export function buildFederationGatewayAcceptedMessage(params: {
     sessionId: params.sessionId,
   });
 }
+
+/**
+ * Proof that the pinned gateway key authored this endpoint list.
+ *
+ * Signed separately from `auth.accepted` rather than folded into it, because
+ * both directions demand an exact `FEDERATION_PROTOCOL_VERSION` match: adding
+ * a field to the accepted message would change the bytes every existing build
+ * signs and verifies, so a laptop that updated before its gateway did would
+ * fail every handshake on a signature mismatch. As its own optional field with
+ * its own signature, an older peer on either side simply omits or ignores it
+ * and keeps the endpoints it already has.
+ *
+ * Signing it at all matters even though a wrong endpoint can never reach a
+ * different gateway — identity is pinned per endpoint. What an unsigned list
+ * buys an attacker is denial: replace it with six addresses that blackhole and
+ * every reconnect cycle burns a full connect timeout on each one. Binding to
+ * the session nonce stops the list being replayed from an earlier connect.
+ */
+export function buildFederationGatewayEndpointsMessage(params: {
+  gatewayInstanceId: FederationInstanceId;
+  peerInstanceId: FederationInstanceId;
+  nonce: string;
+  endpoints: readonly string[];
+}): string {
+  return JSON.stringify({
+    // Order carries the durability ranking the gateway chose, so unlike
+    // capabilities this list is signed as-sent rather than sorted.
+    endpoints: [...params.endpoints],
+    gatewayInstanceId: params.gatewayInstanceId,
+    nonce: params.nonce,
+    peerInstanceId: params.peerInstanceId,
+    purpose: "gateway_endpoints",
+  });
+}

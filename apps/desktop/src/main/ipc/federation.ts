@@ -79,6 +79,12 @@ function peerAllowsEventClass(
 }
 
 export function registerFederationIpcHandlers(): void {
+  // The runtime derives its own advertised endpoints when the gateway starts,
+  // and needs the tailnet name to do it. It cannot import the Tailscale
+  // service (that module calls back into the runtime), so hand it the reader.
+  getDesktopFederationRuntime().setTailscaleAdvertisementReader(
+    readInviteTailscaleAdvertisement,
+  );
   ipcMain.removeHandler(FEDERATION_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_HEALTH_CHANNEL);
   ipcMain.removeHandler(FEDERATION_READ_INSTANCE_LOAD_CHANNEL);

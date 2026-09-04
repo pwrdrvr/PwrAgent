@@ -12,6 +12,7 @@ import {
 import {
   buildFederationGatewayAcceptedMessage,
   buildFederationGatewayChallengeMessage,
+  buildFederationGatewayEndpointsMessage,
   buildFederationProofMessage,
   createFederationEnrollmentInvite,
 } from "../federation/federation-enrollment";
@@ -486,6 +487,170 @@ describe("federation transport", () => {
       status: "connected",
       capabilities: ["thread_navigation"],
     });
+    client.close();
+  });
+
+  it("carries the gateway's advertised endpoints under its own signature", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-advertised-endpoints",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    const advertised = [
+      "ws://gateway.tailnet.ts.net:47830",
+      "ws://192.168.1.20:47830",
+    ];
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      readAdvertisedEndpoints: () => advertised,
+    });
+    const { url } = await server.start();
+
+    const client = await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_endpoints",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["thread_navigation"],
+      inviteToken: invite.token,
+      label: "Endpoint Client",
+      role: "client",
+    });
+
+    // Order is preserved: it carries the gateway's durability ranking.
+    expect(client.gatewayEndpoints).toEqual(advertised);
+    client.close();
+  });
+
+  it("drops advertised endpoints signed by the wrong key without failing the session", async () => {
+    // The accept frame is signed by the real pinned gateway key, so the
+    // session authenticates normally. Only the endpoint list carries a forged
+    // proof — the shape a tampered or injected dial list would take. It must
+    // be discarded without taking the session down with it, because the
+    // caller's existing endpoints still work.
+    const attackerKeyPair = generateFederationIdentityKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const nonce = "challenge:endpoint-forgery";
+    rawServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    rawServer.on("connection", (socket) => {
+      socket.send(JSON.stringify({
+        kind: "auth.challenge",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        protocolVersion: 1,
+        nonce,
+        signatureBase64: signFederationMessage({
+          privateKeyPem: gatewayKeyPair.privateKeyPem,
+          message: buildFederationGatewayChallengeMessage({
+            gatewayInstanceId: "gateway_one",
+            gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+            protocolVersion: 1,
+            nonce,
+          }),
+        }),
+      }));
+      socket.once("message", () => {
+        const sessionId = "federation-session:endpoint-forgery";
+        const capabilities = ["remote_window"] as const;
+        const gatewayEndpoints = ["ws://attacker.example:47830"];
+        socket.send(JSON.stringify({
+          kind: "auth.accepted",
+          gatewayInstanceId: "gateway_one",
+          sessionId,
+          protocolVersion: 1,
+          nonce,
+          capabilities,
+          signatureBase64: signFederationMessage({
+            privateKeyPem: gatewayKeyPair.privateKeyPem,
+            message: buildFederationGatewayAcceptedMessage({
+              gatewayInstanceId: "gateway_one",
+              peerInstanceId: "client_one",
+              sessionId,
+              protocolVersion: 1,
+              nonce,
+              capabilities,
+            }),
+          }),
+          gatewayEndpoints,
+          gatewayEndpointsSignatureBase64: signFederationMessage({
+            privateKeyPem: attackerKeyPair.privateKeyPem,
+            message: buildFederationGatewayEndpointsMessage({
+              gatewayInstanceId: "gateway_one",
+              peerInstanceId: "client_one",
+              nonce,
+              endpoints: gatewayEndpoints,
+            }),
+          }),
+        }));
+      });
+    });
+    const url = await websocketServerUrl(rawServer);
+
+    const client = await connectFederationClient({
+      url,
+      mode: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+    });
+
+    expect(client.sessionId).toBe("federation-session:endpoint-forgery");
+    expect(client.gatewayEndpoints).toEqual([]);
+    client.close();
+  });
+
+  it("reports no advertised endpoints for a gateway that sends none", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-no-advertised-endpoints",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    // No readAdvertisedEndpoints at all: the shape of a gateway that predates
+    // the field. The handshake must be undisturbed, because the accepted
+    // message both sides sign is byte-identical either way.
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+    });
+    const { url } = await server.start();
+
+    const client = await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_no_endpoints",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["thread_navigation"],
+      inviteToken: invite.token,
+      label: "Legacy Gateway Client",
+      role: "client",
+    });
+
+    expect(client.sessionId).toBeTruthy();
+    expect(client.gatewayEndpoints).toEqual([]);
     client.close();
   });
 
