@@ -90,6 +90,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "federated-navigation-search-projection": {
+    "commits": 0,
+    "note": "one owner-side bounded navigation search projection",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "idle-hour-runtime-leases": {
     "commits": 0,
     "note": "one idle hour: PID-owned messaging and federation leases",

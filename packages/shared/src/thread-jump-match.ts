@@ -108,3 +108,28 @@ export function threadMatchesQuery(
     (directory.label ?? "").toLowerCase().includes(needle),
   );
 }
+
+/**
+ * Apply the shared Cmd+K match and ordering rules to a navigation collection.
+ * Owners use this before returning bounded Federation search results, while
+ * viewers use it to merge results from multiple peers without semantic drift.
+ */
+export function rankThreadJumpMatches(
+  threads: readonly NavigationThreadSummary[],
+  query: string,
+): NavigationThreadSummary[] {
+  return threads
+    .filter((thread) => threadMatchesQuery(thread, query))
+    .sort((left, right) => {
+      const exactPrPriority =
+        Number(threadHasExactPrNumberMatch(right, query))
+        - Number(threadHasExactPrNumberMatch(left, query));
+      if (exactPrPriority !== 0) {
+        return exactPrPriority;
+      }
+      return (
+        (right.updatedAt ?? right.createdAt ?? 0)
+        - (left.updatedAt ?? left.createdAt ?? 0)
+      );
+    });
+}

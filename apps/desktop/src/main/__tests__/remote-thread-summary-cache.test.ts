@@ -102,6 +102,98 @@ function pin(params: {
 }
 
 describe("RemoteThreadSummaryCache — searchForJump", () => {
+  it("asks each peer for bounded matches instead of fetching its full snapshot", async () => {
+    const fetchSnapshot = vi.fn(async () => snapshotOf([]));
+    const searchPeer = vi.fn(async () => [
+      stampedThread({
+        instanceId: "peer-a",
+        threadId: "t1",
+        title: "Matching thread",
+      }),
+    ]);
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    const response = await cache.searchForJump({ query: "match", limit: 3 });
+
+    expect(response.results.map((thread) => thread.id)).toEqual(["t1"]);
+    expect(searchPeer).toHaveBeenCalledWith(
+      remoteTarget("peer-a"),
+      { query: "match", limit: 3 },
+    );
+    expect(fetchSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a full snapshot when an older peer lacks bounded search", async () => {
+    const unavailable = Object.assign(new Error("method not found"), {
+      code: "method_not_found",
+    });
+    const searchPeer = vi.fn(async () => {
+      throw unavailable;
+    });
+    const fetchSnapshot = vi.fn(async () =>
+      snapshotOf([
+        stampedThread({
+          instanceId: "peer-a",
+          threadId: "legacy-match",
+          title: "Legacy match",
+        }),
+      ]),
+    );
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    const response = await cache.searchForJump({ query: "match" });
+
+    expect(response.results.map((thread) => thread.id)).toEqual([
+      "legacy-match",
+    ]);
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older peer's fallback inside the original peer deadline", async () => {
+    vi.useFakeTimers();
+    const unavailable = Object.assign(new Error("method not found"), {
+      code: "method_not_found",
+    });
+    const searchPeer = vi.fn(() =>
+      new Promise<NavigationThreadSummary[]>((_, reject) => {
+        setTimeout(() => reject(unavailable), 80);
+      }),
+    );
+    const fetchSnapshot = vi.fn(() => new Promise<NavigationSnapshot>(() => {}));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+      peerTimeoutMs: 100,
+    });
+
+    try {
+      const pending = cache.searchForJump({ query: "match" });
+      await vi.advanceTimersByTimeAsync(80);
+      expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(pending).resolves.toEqual({ results: [] });
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("matches remote threads by PR number, title, and branch with local parity", async () => {
     const threads = [
       stampedThread({

@@ -148,6 +148,7 @@ import {
   type ReorderThreadPinsRequest,
   type ReorderThreadPinsResponse,
   type NavigationSnapshot,
+  type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
@@ -300,6 +301,28 @@ import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 import { federationReconnectDelayMs } from "./federation-reconnect-policy";
 
 const log = getMainLogger("pwragent:federation-runtime");
+
+export function navigationWireResponseThreadCount(
+  response: NavigationSnapshot | NavigationSnapshotTransportResponse,
+): number {
+  if ("threads" in response) {
+    return response.threads.length;
+  }
+  switch (response.kind) {
+    case "full":
+      return response.snapshot.threads.length;
+    case "delta":
+      return response.upsertedThreads.length;
+    case "changes":
+      return response.changes.reduce(
+        (count, change) => count + change.upsertedThreads.length,
+        0,
+      );
+    case "unchanged":
+      return 0;
+  }
+}
+
 const INSTANCE_ID_META_KEY = "federation_instance_id";
 const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
@@ -1881,11 +1904,21 @@ export class DesktopFederationRuntime {
         "navigation_snapshot_deltas",
       )
     ) {
+      const startedAt = Date.now();
+      const legacyResponse = await backend.getNavigationSnapshot(
+        snapshotRequest,
+      );
+      this.logRemoteNavigationWireResponse({
+        target,
+        startedAt,
+        response: legacyResponse,
+        selection: "legacy-all",
+      });
       return await this.stampRemoteNavigationSnapshot(
         target,
         projectNavigationSnapshot(
           normalizeNavigationSnapshotThreadKeys(
-            await backend.getNavigationSnapshot(snapshotRequest),
+            legacyResponse,
           ),
           snapshotRequest,
         ),
@@ -1916,6 +1949,7 @@ export class DesktopFederationRuntime {
       cacheable && cachedTransport?.selectionKey === selectionKey
         ? cachedTransport.state
         : undefined;
+    let startedAt = Date.now();
     let transportResponse = await backend.getNavigationSnapshotTransport({
       transport: {
         protocol: 1,
@@ -1924,6 +1958,12 @@ export class DesktopFederationRuntime {
           ? { baseRevision: previousTransportState.revision }
           : {}),
       },
+    });
+    this.logRemoteNavigationWireResponse({
+      target,
+      startedAt,
+      response: transportResponse,
+      selection: selection.kind,
     });
     if ("threads" in transportResponse) {
       return await this.stampRemoteNavigationSnapshot(
@@ -1939,8 +1979,15 @@ export class DesktopFederationRuntime {
       transportResponse,
     );
     if (!nextTransportState) {
+      startedAt = Date.now();
       transportResponse = await backend.getNavigationSnapshotTransport({
         transport: { protocol: 1, selection },
+      });
+      this.logRemoteNavigationWireResponse({
+        target,
+        startedAt,
+        response: transportResponse,
+        selection: selection.kind,
       });
       if ("threads" in transportResponse) {
         return await this.stampRemoteNavigationSnapshot(
@@ -1974,6 +2021,40 @@ export class DesktopFederationRuntime {
     return await this.stampRemoteNavigationSnapshot(target, response);
   }
 
+  private logRemoteNavigationWireResponse(params: {
+    target: FederationRemoteTarget;
+    startedAt: number;
+    response: NavigationSnapshot | NavigationSnapshotTransportResponse;
+    selection: string;
+  }): void {
+    const durationMs = Date.now() - params.startedAt;
+    const responseKind = "threads" in params.response
+      ? "legacy-full"
+      : params.response.kind;
+    const threadCount = navigationWireResponseThreadCount(params.response);
+    // Exact size requires serialization. Avoid adding that work to ordinary
+    // small responses; a large collection or an already-slow response earns
+    // the diagnostic cost.
+    if (durationMs < 1_000 && threadCount < 500) {
+      return;
+    }
+    const responseBytes = Buffer.byteLength(
+      JSON.stringify(params.response),
+      "utf8",
+    );
+    if (durationMs < 1_000 && responseBytes < 512 * 1024) {
+      return;
+    }
+    log.info("remote navigation wire response was slow or large", {
+      durationMs,
+      instanceId: params.target.instanceId,
+      responseBytes,
+      responseKind,
+      selection: params.selection,
+      threadCount,
+    });
+  }
+
   private remotePeerAdvertisesCapability(
     instanceId: FederationInstanceId,
     capability: FederationCapability,
@@ -1996,6 +2077,33 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget,
     response: NavigationSnapshot,
   ): Promise<NavigationSnapshot> {
+    const stamped = this.stampRemoteNavigationThreads(target, response.threads);
+    return {
+      ...response,
+      federationTarget: target,
+      unchanged: false,
+      threads: stamped.threads,
+      inboxThreadKeys: response.inboxThreadKeys.map(
+        (threadKey) =>
+          stamped.threadKeyBySourceKey.get(threadKey) ?? threadKey,
+      ),
+      directories: response.directories.map((directory) => ({
+        ...directory,
+        threadKeys: directory.threadKeys.map(
+          (threadKey) =>
+            stamped.threadKeyBySourceKey.get(threadKey) ?? threadKey,
+        ),
+      })),
+    };
+  }
+
+  private stampRemoteNavigationThreads(
+    target: FederationRemoteTarget,
+    responseThreads: readonly NavigationThreadSummary[],
+  ): {
+    threads: NavigationThreadSummary[];
+    threadKeyBySourceKey: Map<string, string>;
+  } {
     // visiblePeers reads the app-state db (local instance id); during
     // early boot or in store-injected test harnesses that db may be
     // absent — fall back to the bare store record (mirrors the menu's
@@ -2020,8 +2128,8 @@ export class DesktopFederationRuntime {
       visiblePeer,
     );
     const peerStatus = visiblePeer?.status ?? peer?.status;
-    const stampedThreadKeyBySourceKey = new Map<string, string>();
-    const threads = response.threads.map((thread) => {
+    const threadKeyBySourceKey = new Map<string, string>();
+    const threads = responseThreads.map((thread) => {
       const sourceKey = thread.federation?.ref
         ? federatedThreadIdentityKey(thread.federation.ref)
         : buildThreadIdentityKey(thread.source, thread.id);
@@ -2045,7 +2153,7 @@ export class DesktopFederationRuntime {
         instanceId: ownerInstanceId,
         threadId: thread.id,
       });
-      stampedThreadKeyBySourceKey.set(
+      threadKeyBySourceKey.set(
         sourceKey,
         federatedThreadIdentityKey(ref),
       );
@@ -2066,21 +2174,7 @@ export class DesktopFederationRuntime {
         },
       };
     });
-    return {
-      ...response,
-      federationTarget: target,
-      unchanged: false,
-      threads,
-      inboxThreadKeys: response.inboxThreadKeys.map(
-        (threadKey) => stampedThreadKeyBySourceKey.get(threadKey) ?? threadKey,
-      ),
-      directories: response.directories.map((directory) => ({
-        ...directory,
-        threadKeys: directory.threadKeys.map(
-          (threadKey) => stampedThreadKeyBySourceKey.get(threadKey) ?? threadKey,
-        ),
-      })),
-    };
+    return { threads, threadKeyBySourceKey };
   }
 
   /**
@@ -2107,16 +2201,67 @@ export class DesktopFederationRuntime {
   }
 
   /**
-   * Shared cache of stamped peer navigation summaries, serving the ⌘K
-   * federated jump search and the pinned-remote-thread snapshot merge.
-   * Snapshot-based (not `listThreads`) so remote rows carry PR chips and
-   * the shared `threadMatchesQuery` gives local/remote matching parity.
+   * Stamped peer navigation summaries for bounded Cmd+K search, its
+   * older-peer snapshot fallback, and the pinned-remote-thread merge.
+   * Navigation-based (not `listThreads`) so remote rows carry PR chips and
+   * share local matching semantics without sending a full snapshot per query.
    */
   remoteThreadSummaries(): RemoteThreadSummaryCache {
     this.remoteThreadSummaryCache ??= new RemoteThreadSummaryCache({
       peers: () => this.connectedPeerTargets(),
       fetchSnapshot: (target, selection) =>
         this.remoteNavigationSnapshot(target, {}, selection),
+      searchPeer: async (target, request) => {
+        const startedAt = Date.now();
+        const backend = this.remoteBackend(target);
+        if (!backend.searchNavigationThreads) {
+          const unavailable = new Error(
+            "Remote peer does not support bounded navigation search.",
+          ) as Error & { code?: string };
+          unavailable.code = "method_not_found";
+          throw unavailable;
+        }
+        try {
+          const response = await backend.searchNavigationThreads(request);
+          const durationMs = Date.now() - startedAt;
+          if (durationMs >= 1_000) {
+            const responseBytes = Buffer.byteLength(
+              JSON.stringify(response),
+              "utf8",
+            );
+            log.info("remote bounded navigation search was slow", {
+              durationMs,
+              instanceId: target.instanceId,
+              queryLength: request.query.length,
+              responseBytes,
+              resultCount: response.results.length,
+            });
+          }
+          return this.stampRemoteNavigationThreads(
+            target,
+            response.results,
+          ).threads;
+        } catch (error) {
+          const durationMs = Date.now() - startedAt;
+          const code =
+            typeof error === "object"
+            && error !== null
+            && "code" in error
+            && typeof error.code === "string"
+              ? error.code
+              : undefined;
+          if (code !== "method_not_found" || durationMs >= 1_000) {
+            log.warn("remote bounded navigation search failed", {
+              code,
+              durationMs,
+              error: error instanceof Error ? error.message : String(error),
+              instanceId: target.instanceId,
+              queryLength: request.query.length,
+            });
+          }
+          throw error;
+        }
+      },
       fetchArchivedThreads: async (target, backend) =>
         (
           await this.remoteBackend(target).listThreads({
@@ -4748,10 +4893,13 @@ async function mountRemoteParentForLocalChild(
 }
 
 function localBackendOperations(): FederationBackendOperations {
+  const messagingBridge = new DesktopMessagingBackendBridge();
   return {
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
-      return await new DesktopMessagingBackendBridge()
-        .getNavigationSnapshot(request);
+      return await messagingBridge.getNavigationSnapshot(request);
+    },
+    async searchNavigationThreads(request) {
+      return await messagingBridge.searchNavigationThreads(request);
     },
     async listThreads(
       request: AppServerListThreadsRequest = {},
