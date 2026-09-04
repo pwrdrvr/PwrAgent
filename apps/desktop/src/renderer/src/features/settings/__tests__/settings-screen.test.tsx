@@ -216,6 +216,7 @@ function createSnapshot(
     updates: {
       channel: { value: "latest", source: "default" },
       train: { value: "stable", source: "default" },
+      selectionSource: "inferred",
     },
     integratedTerminal: {
       windowsShell: { value: "auto", source: "default" },
@@ -1012,10 +1013,9 @@ describe("SettingsScreen", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Updates" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Latest/ })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    expect(
+      await screen.findByRole("radio", { name: "Stable Latest — v1.0.0" }),
+    ).toHaveAttribute("aria-checked", "true");
     expect(
       screen.getByRole("switch", {
         name: "Confirm quit when threads or terminals are active",
@@ -1140,11 +1140,15 @@ describe("SettingsScreen", () => {
     });
 
     expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Stable/ })).toHaveAttribute(
-      "aria-checked",
-      "true",
+    expect(
+      screen.getByRole("radio", { name: "Stable Latest — v1.0.0" }),
+    ).toHaveAttribute("aria-checked", "true");
+    // One tile, both axes — the two-control shape needed two clicks and two
+    // writes to reach a slot, and each write had to re-send the axis the
+    // operator had not touched.
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Beta Latest — v1.1.0-beta.2" }),
     );
-    fireEvent.click(screen.getByRole("radio", { name: /Beta/ }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         updates: {
@@ -1153,7 +1157,9 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    fireEvent.click(screen.getByRole("radio", { name: /Prerelease/ }));
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Stable Prerelease — v1.0.0-beta.7" }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         updates: {
@@ -6619,6 +6625,7 @@ describe("SettingsScreen", () => {
         updates: {
           channel: { value: "latest", source: "config" },
           train: { value: "stable", source: "config" },
+          selectionSource: "user",
         },
       }),
     );
@@ -6677,6 +6684,7 @@ describe("SettingsScreen", () => {
         updates: {
           channel: { value: "prerelease", source: "config" },
           train: { value: "stable", source: "default" },
+          selectionSource: "user",
         },
       }),
     );
@@ -6964,12 +6972,13 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps an inferred Beta train when the operator picks Latest", async () => {
+  it("pins both axes from one tile click, and reports each slot's own version", async () => {
     const settings = createSettingsState(
       createSnapshot({
         updates: {
           channel: { value: "prerelease", source: "default" },
           train: { value: "beta", source: "default" },
+          selectionSource: "inferred",
         },
       }),
     );
@@ -6995,11 +7004,32 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByRole("radio", { name: /Beta/ })).toHaveAttribute(
-      "aria-checked",
-      "true",
+    // Every slot states its own version. The two-control shape could not:
+    // with the track control on Prerelease, the Stable button labelled
+    // itself from `stable.latest` and the track buttons from the selected
+    // train, so no reading of the pane showed all four at once.
+    expect(
+      await screen.findByRole("radio", { name: "Beta Prerelease — v1.1.0-alpha.7" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      screen.getByRole("radio", { name: "Beta Latest — v1.1.0-beta.2" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: "Stable Latest — v1.0.1" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: "Stable Prerelease — v1.0.1" }),
+    ).toBeInTheDocument();
+
+    // While the selection is inferred the pane says so; a click pins it and
+    // main derives `selection_source` from the patch naming both axes.
+    expect(
+      screen.getByText("Following the build you installed. Pick a slot to pin it."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Beta Latest — v1.1.0-beta.2" }),
     );
-    fireEvent.click(screen.getByRole("radio", { name: /Latest/ }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         updates: {

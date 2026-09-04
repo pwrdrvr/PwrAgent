@@ -554,6 +554,11 @@ describe("desktopSettingsPatchToEdits — updates", () => {
         path: ["updates", "channel"],
         value: "prerelease",
       },
+      {
+        op: "set",
+        path: ["updates", "selection_source"],
+        value: "user",
+      },
     ]);
   });
 
@@ -569,6 +574,11 @@ describe("desktopSettingsPatchToEdits — updates", () => {
         op: "set",
         path: ["updates", "channel"],
         value: "latest",
+      },
+      {
+        op: "set",
+        path: ["updates", "selection_source"],
+        value: "user",
       },
     ]);
   });
@@ -586,6 +596,11 @@ describe("desktopSettingsPatchToEdits — updates", () => {
         path: ["updates", "train"],
         value: "beta",
       },
+      {
+        op: "set",
+        path: ["updates", "selection_source"],
+        value: "user",
+      },
     ]);
   });
 
@@ -602,7 +617,32 @@ describe("desktopSettingsPatchToEdits — updates", () => {
         path: ["updates", "train"],
         value: "stable",
       },
+      {
+        op: "set",
+        path: ["updates", "selection_source"],
+        value: "user",
+      },
     ]);
+  });
+
+  it("derives the pin marker once for a patch naming both axes", () => {
+    // `selection_source` is main-owned: it is absent from the patch type and
+    // derived here, so no renderer can pin — or un-pin — a selection nobody
+    // picked, and no call site can persist a slot the next read would
+    // silently re-infer away.
+    expect(
+      desktopSettingsPatchToEdits({
+        updates: { channel: "prerelease", train: "beta" },
+      }),
+    ).toEqual([
+      { op: "set", path: ["updates", "channel"], value: "prerelease" },
+      { op: "set", path: ["updates", "train"], value: "beta" },
+      { op: "set", path: ["updates", "selection_source"], value: "user" },
+    ]);
+  });
+
+  it("writes no pin marker for a patch that names neither axis", () => {
+    expect(desktopSettingsPatchToEdits({ updates: {} })).toEqual([]);
   });
 });
 

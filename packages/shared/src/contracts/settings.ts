@@ -72,6 +72,41 @@ export type DesktopUpdateTrain = (typeof DESKTOP_UPDATE_TRAINS)[number];
 
 export const DESKTOP_UPDATE_TRAIN_DEFAULT: DesktopUpdateTrain = "stable";
 
+export const DESKTOP_UPDATE_SELECTION_SOURCES = ["inferred", "user"] as const;
+
+/**
+ * Where the persisted train/track pair came from.
+ *
+ * `"inferred"` means nobody has picked a slot yet, so the pair is derived
+ * from the RUNNING BINARY's version on every settings read — install an
+ * alpha and you follow the alpha feed, install a stable build and you
+ * follow Stable Latest. `"user"` means somebody picked a slot in Settings
+ * and the pair is pinned until they pick another one.
+ *
+ * Without this flag the two states are indistinguishable on disk, and a
+ * pre-`train` config carrying only `channel = "latest"` read as a
+ * deliberate Stable pin. That is what stranded 1.1.0-alpha installs on the
+ * Stable Latest feed: PwrAgent offered them the last stable release and
+ * never mentioned the newer alpha their own binary came from.
+ *
+ * Main-owned. It is not part of `DesktopSettingsConfigPatch`, and the write
+ * path derives it from whether a patch named either axis.
+ */
+export type DesktopUpdateSelectionSource =
+  (typeof DESKTOP_UPDATE_SELECTION_SOURCES)[number];
+
+export const DESKTOP_UPDATE_SELECTION_SOURCE_DEFAULT: DesktopUpdateSelectionSource =
+  "inferred";
+
+export function isDesktopUpdateSelectionSource(
+  value: unknown,
+): value is DesktopUpdateSelectionSource {
+  return (
+    typeof value === "string"
+    && (DESKTOP_UPDATE_SELECTION_SOURCES as readonly string[]).includes(value)
+  );
+}
+
 // Last 1.0 core that used `-beta.N` as the Stable prerelease line. Builds
 // at this core stay on Stable so a website Beta download cannot be confused
 // with `v1.0.0-beta.50`.
@@ -95,10 +130,18 @@ function parseDesktopUpdateVersion(
 }
 
 /**
- * Map a desktop app version onto the Settings update train/track.
- * Used only when both `updates.train` and `updates.channel` are unset so a
- * GitHub or website download of Beta/Prerelease follows that feed. A
- * pre-train config that only set `channel` stays on Stable.
+ * Map an installed desktop app version onto the Settings update
+ * train/track, so a GitHub or website download follows the feed it came
+ * from. This is the whole rule for a selection whose
+ * {@link DesktopUpdateSelectionSource} is still `"inferred"`: an `-alpha`
+ * binary is evidence of Beta/Prerelease, a `-beta` binary is evidence of
+ * Beta/Latest, an `-rc` / `-prerelease` binary is evidence of
+ * Stable/Prerelease, and a plain release means Stable/Latest. Once an
+ * operator picks a slot in Settings the source flips to `"user"` and this
+ * function is no longer consulted.
+ *
+ * `v1.0.0-beta.N` is the one exception: those tags were the STABLE
+ * prerelease line before the trains split, so they stay on Stable.
  */
 export function inferDesktopUpdateSelection(version: string): {
   channel: DesktopUpdateChannel;
@@ -132,6 +175,106 @@ export function inferDesktopUpdateSelection(version: string): {
     return { channel: "latest", train: "beta" };
   }
   return { channel: "prerelease", train: DESKTOP_UPDATE_TRAIN_DEFAULT };
+}
+
+/** The pair every pre-`selection_source` config landed on when nobody had
+ *  chosen: the shape the defaults shipped as, and what the old resolver
+ *  filled a missing axis with. This is a HISTORICAL FACT about files already
+ *  on disk, so it is frozen here rather than read from
+ *  `DESKTOP_UPDATE_*_DEFAULT` — moving the shipped default later must not
+ *  retroactively reclassify those files as deliberate pins and freeze that
+ *  population on Stable Latest forever. */
+const LEGACY_UNCHOSEN_UPDATE_PAIR: {
+  channel: DesktopUpdateChannel;
+  train: DesktopUpdateTrain;
+} = {
+  channel: "latest",
+  train: "stable",
+};
+
+/** Classify an `[updates]` table written before `selection_source` existed.
+ *  A complete pair that is NOT the historical unchosen pair could only have
+ *  been written by a deliberate click, and that means "leave it alone" — so
+ *  it reads as `"user"`. Everything else (no pair, a half pair, or that
+ *  pair) is indistinguishable from "never chose", so it reads as
+ *  `"inferred"` and gets re-derived from the running binary.
+ *
+ *  A half pair is the case this exists for: `channel` shipped before `train`
+ *  did, so every config written by an older build carries `channel` alone.
+ *  Reading that as a Stable pin is what offered a 1.1.0-alpha install the
+ *  last stable release forever and never told it about the newer alpha it
+ *  came from.
+ *
+ *  The one behavior change this can produce: an operator who deliberately
+ *  pinned Stable/Latest while running an alpha is moved back onto
+ *  Beta/Prerelease once. That is the same state as the bug it fixes, and
+ *  nothing on disk separates the two. Their next click writes `"user"` and
+ *  pins for good. */
+export function legacyDesktopUpdateSelectionSource(
+  channel: DesktopUpdateChannel | undefined,
+  train: DesktopUpdateTrain | undefined,
+): DesktopUpdateSelectionSource {
+  if (channel === undefined || train === undefined) {
+    return "inferred";
+  }
+  if (
+    channel === LEGACY_UNCHOSEN_UPDATE_PAIR.channel
+    && train === LEGACY_UNCHOSEN_UPDATE_PAIR.train
+  ) {
+    return "inferred";
+  }
+  return "user";
+}
+
+export type DesktopUpdateSelection = {
+  channel: DesktopUpdateChannel;
+  train: DesktopUpdateTrain;
+  selectionSource: DesktopUpdateSelectionSource;
+};
+
+/**
+ * Turn a persisted `[updates]` table plus the running binary's version into
+ * the train/track pair the app should follow.
+ *
+ * This is THE resolver — the settings snapshot and the auto-updater's feed
+ * both go through it. They must not each carry their own copy: when they did,
+ * fixing the half-pair rule in one of them left the other offering a
+ * 1.1.0-alpha install the last stable release while Settings showed Beta,
+ * which is worse than the original bug because the two now disagree.
+ *
+ * A pin is honored per axis, so a pin whose other axis did not survive the
+ * round trip (a truncated write, a hand edit that misspelled a value) keeps
+ * the axis that IS valid instead of being silently un-pinned onto the feed
+ * the binary happens to come from.
+ */
+export function resolveDesktopUpdateSelection(
+  stored:
+    | {
+        channel?: DesktopUpdateChannel;
+        train?: DesktopUpdateTrain;
+        selectionSource?: DesktopUpdateSelectionSource;
+      }
+    | undefined,
+  appVersion: string,
+): DesktopUpdateSelection {
+  const selectionSource =
+    stored?.selectionSource
+    ?? legacyDesktopUpdateSelectionSource(stored?.channel, stored?.train);
+  if (selectionSource === "user") {
+    return {
+      channel: stored?.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+      train: stored?.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
+      selectionSource: "user",
+    };
+  }
+  // An inferred selection is RE-DERIVED on every read from the version of the
+  // binary doing the reading, so installing an alpha over a stable build (or
+  // the reverse) moves the feed with it instead of stranding the install on a
+  // slot it can never advance from.
+  return {
+    ...inferDesktopUpdateSelection(appVersion),
+    selectionSource: "inferred",
+  };
 }
 
 export const DESKTOP_APPEARANCE_THEMES = ["system", "dark", "light"] as const;
@@ -495,6 +638,12 @@ export type DesktopImageUploadSettingsSnapshot = {
 export type DesktopUpdateSettingsSnapshot = {
   channel: DesktopSettingsValue<DesktopUpdateChannel>;
   train: DesktopSettingsValue<DesktopUpdateTrain>;
+  /** Whether the pair above is a pin or a guess. A bare scalar rather than
+   *  a `DesktopSettingsValue`: it has no provenance of its own to report —
+   *  it IS the provenance, and main derives it on every read. The renderer
+   *  uses it to say "following the build you installed" only while that
+   *  claim is still true. */
+  selectionSource: DesktopUpdateSelectionSource;
 };
 
 export type DesktopIntegratedTerminalSettingsSnapshot = {
@@ -1160,6 +1309,12 @@ export type DesktopSettingsConfigPatch = {
   imageUploads?: {
     pastedImageMaxPatches?: number;
   };
+  /** Only the two selectable axes. `selectionSource` is main-owned derived
+   *  state: the write path sets it to `"user"` whenever a patch names
+   *  either axis, so a renderer can neither forget to send it nor forge
+   *  it. Leaving it off the patch type is what enforces that — the TOML
+   *  writer only emits the keys it names explicitly, so an extra field on
+   *  a patch object reaches no file. */
   updates?: {
     channel?: DesktopUpdateChannel;
     train?: DesktopUpdateTrain;

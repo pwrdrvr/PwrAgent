@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { DesktopSettingsSnapshot } from "../settings";
 import {
+  DESKTOP_UPDATE_SELECTION_SOURCE_DEFAULT,
   inferDesktopUpdateSelection,
   isDesktopChatReplyComposer,
+  isDesktopUpdateSelectionSource,
+  legacyDesktopUpdateSelectionSource,
+  resolveDesktopUpdateSelection,
 } from "../settings";
 
 describe("desktop settings contracts", () => {
@@ -147,6 +151,7 @@ describe("desktop settings contracts", () => {
       updates: {
         channel: { value: "latest", source: "default" },
         train: { value: "stable", source: "default" },
+        selectionSource: "inferred",
       },
       integratedTerminal: {
         windowsShell: { value: "auto", source: "default" },
@@ -475,5 +480,83 @@ describe("inferDesktopUpdateSelection", () => {
       train: "stable",
       channel: "latest",
     });
+  });
+});
+
+describe("isDesktopUpdateSelectionSource", () => {
+  it("accepts only the two derived sources", () => {
+    expect(isDesktopUpdateSelectionSource("inferred")).toBe(true);
+    expect(isDesktopUpdateSelectionSource("user")).toBe(true);
+    // The guard is what a hand-edited config passes through, so anything
+    // else must re-derive rather than be trusted as a pin.
+    expect(isDesktopUpdateSelectionSource("User")).toBe(false);
+    expect(isDesktopUpdateSelectionSource("config")).toBe(false);
+    expect(isDesktopUpdateSelectionSource(undefined)).toBe(false);
+    expect(isDesktopUpdateSelectionSource(true)).toBe(false);
+  });
+
+  it("defaults to inferring from the running binary", () => {
+    expect(DESKTOP_UPDATE_SELECTION_SOURCE_DEFAULT).toBe("inferred");
+  });
+});
+
+describe("resolveDesktopUpdateSelection", () => {
+  const ALPHA = "1.1.0-alpha.7";
+
+  it("re-derives an inferred selection from the running binary", () => {
+    expect(
+      resolveDesktopUpdateSelection({ selectionSource: "inferred" }, ALPHA),
+    ).toEqual({ channel: "prerelease", train: "beta", selectionSource: "inferred" });
+    expect(resolveDesktopUpdateSelection(undefined, ALPHA)).toEqual({
+      channel: "prerelease",
+      train: "beta",
+      selectionSource: "inferred",
+    });
+  });
+
+  it("re-derives a legacy half pair rather than reading it as a Stable pin", () => {
+    // `channel` shipped before `train` did, so this is what every config
+    // written by an older build looks like. Reading it as a pin is what
+    // stranded alpha installs on the last stable release.
+    expect(resolveDesktopUpdateSelection({ channel: "latest" }, ALPHA)).toEqual({
+      channel: "prerelease",
+      train: "beta",
+      selectionSource: "inferred",
+    });
+  });
+
+  it("re-derives the historical unchosen pair", () => {
+    expect(
+      resolveDesktopUpdateSelection({ channel: "latest", train: "stable" }, ALPHA),
+    ).toEqual({ channel: "prerelease", train: "beta", selectionSource: "inferred" });
+  });
+
+  it("honors a legacy complete non-default pair as a pin", () => {
+    expect(
+      resolveDesktopUpdateSelection({ channel: "latest", train: "beta" }, "1.0.3"),
+    ).toEqual({ channel: "latest", train: "beta", selectionSource: "user" });
+  });
+
+  it("honors an explicit pin per axis when one axis is missing", () => {
+    // Re-inferring the whole pair would discard the axis that IS valid and
+    // move a deliberate Stable pin onto the alpha feed.
+    expect(
+      resolveDesktopUpdateSelection(
+        { train: "stable", selectionSource: "user" },
+        ALPHA,
+      ),
+    ).toEqual({ channel: "latest", train: "stable", selectionSource: "user" });
+  });
+});
+
+describe("legacyDesktopUpdateSelectionSource", () => {
+  it("treats anything short of a complete non-default pair as unchosen", () => {
+    expect(legacyDesktopUpdateSelectionSource(undefined, undefined)).toBe("inferred");
+    expect(legacyDesktopUpdateSelectionSource("prerelease", undefined)).toBe("inferred");
+    expect(legacyDesktopUpdateSelectionSource(undefined, "beta")).toBe("inferred");
+    expect(legacyDesktopUpdateSelectionSource("latest", "stable")).toBe("inferred");
+    expect(legacyDesktopUpdateSelectionSource("prerelease", "stable")).toBe("user");
+    expect(legacyDesktopUpdateSelectionSource("latest", "beta")).toBe("user");
+    expect(legacyDesktopUpdateSelectionSource("prerelease", "beta")).toBe("user");
   });
 });

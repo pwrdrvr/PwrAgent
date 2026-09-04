@@ -32,6 +32,8 @@ import type {
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
   DesktopUpdateChannel,
+  DesktopUpdateSelectionSource,
+  DesktopUpdateSettingsSnapshot,
   DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
@@ -58,9 +60,7 @@ import {
   DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
-  DESKTOP_UPDATE_CHANNEL_DEFAULT,
-  DESKTOP_UPDATE_TRAIN_DEFAULT,
-  inferDesktopUpdateSelection,
+  resolveDesktopUpdateSelection,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
   MANAGED_GROK_BUILD_CHANNEL_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
@@ -2964,33 +2964,31 @@ export class DesktopSettingsService {
       ?? "";
   }
 
+  /** Provenance wrapper over the shared resolver — the resolution rule
+   *  itself lives in `resolveDesktopUpdateSelection` so this and the
+   *  auto-updater's feed cannot drift apart. An axis reads as `"config"`
+   *  only when the file supplied it AND the pair is a pin: a value the
+   *  resolver re-derived is not something the config chose. */
   private resolveUpdateSelection(updates?: {
     channel?: DesktopUpdateChannel;
     train?: DesktopUpdateTrain;
-  }): {
-    channel: DesktopSettingsValue<DesktopUpdateChannel>;
-    train: DesktopSettingsValue<DesktopUpdateTrain>;
-  } {
-    // Infer the version-derived pair only when neither key exists. A
-    // pre-train config with only `channel = "prerelease"` must stay on
-    // Stable so installing a 1.1.0-beta binary does not silently move
-    // that operator onto Beta Prerelease / alphas.
-    if (updates?.channel === undefined && updates?.train === undefined) {
-      const inferred = inferDesktopUpdateSelection(this.currentAppVersion());
-      return {
-        channel: { value: inferred.channel, source: "default" },
-        train: { value: inferred.train, source: "default" },
-      };
-    }
+    selectionSource?: DesktopUpdateSelectionSource;
+  }): DesktopUpdateSettingsSnapshot {
+    const resolved = resolveDesktopUpdateSelection(
+      updates,
+      this.currentAppVersion(),
+    );
+    const pinned = resolved.selectionSource === "user";
     return {
       channel: {
-        value: updates.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
-        source: updates.channel === undefined ? "default" : "config",
+        value: resolved.channel,
+        source: pinned && updates?.channel !== undefined ? "config" : "default",
       },
       train: {
-        value: updates.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
-        source: updates.train === undefined ? "default" : "config",
+        value: resolved.train,
+        source: pinned && updates?.train !== undefined ? "config" : "default",
       },
+      selectionSource: resolved.selectionSource,
     };
   }
 

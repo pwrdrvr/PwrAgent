@@ -37,8 +37,13 @@ const autoUpdaterMock = {
   setFeedURL: setFeedURLMock,
 };
 
+// The version of the binary doing the reading. It is what an unpinned
+// selection resolves from, so a test that exercises inference has to be able
+// to move it.
+const appVersionMock = vi.fn(() => "1.0.0-beta.7");
+
 vi.mock("electron", () => ({
-  app: { getVersion: () => "1.0.0-beta.7", isPackaged: false },
+  app: { getVersion: () => appVersionMock(), isPackaged: false },
   BrowserWindow: {
     getAllWindows: vi.fn(() => [
       {
@@ -65,11 +70,20 @@ vi.mock("electron-updater", () => ({
   },
 }));
 
+const updateSelectionSourceMock = vi.fn<() => string | undefined>(
+  () => "user",
+);
+
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopConfigStore: vi.fn(() => ({
     read: vi.fn(() => ({
       channel: resolveUpdateChannelMock(),
       train: resolveUpdateTrainMock(),
+      // These tests state the slot the operator is on, so they default to a
+      // pin. Without it the stored pair goes back through the version
+      // inference and a test that says "on Beta Prerelease" would silently
+      // be testing whatever `app.getVersion()` infers instead.
+      selectionSource: updateSelectionSourceMock(),
     })),
     subscribe: subscribeConfigStoreMock,
   })),
@@ -209,6 +223,10 @@ describe("auto updater", () => {
     resolveUpdateChannelMock.mockReturnValue("latest");
     resolveUpdateTrainMock.mockReset();
     resolveUpdateTrainMock.mockReturnValue("stable");
+    updateSelectionSourceMock.mockReset();
+    updateSelectionSourceMock.mockReturnValue("user");
+    appVersionMock.mockReset();
+    appVersionMock.mockReturnValue("1.0.0-beta.7");
     updateDomainListeners.clear();
     subscribeConfigStoreMock.mockClear();
     logInfoMock.mockReset();
@@ -482,6 +500,124 @@ describe("auto updater", () => {
       version: "1.1.0-alpha.2",
     });
     expect(autoUpdaterMock.allowDowngrade).toBe(false);
+  });
+
+  it("follows the running build's feed when the stored selection is a guess", async () => {
+    // The feed and the Settings snapshot must resolve through the SAME rule.
+    // They used to each carry a copy, and the copy here still read a legacy
+    // half pair as a deliberate Stable pin: Settings showed Beta Prerelease
+    // on a 1.1.0-alpha install while this path polled Stable Latest forever.
+    // The exact config an older build left behind: `channel` alone, because
+    // `channel` shipped before `train` did.
+    resolveUpdateChannelMock.mockReturnValue("latest");
+    resolveUpdateTrainMock.mockReturnValue(undefined);
+    updateSelectionSourceMock.mockReturnValue(undefined);
+    appVersionMock.mockReturnValue("1.1.0-alpha.7");
+    autoUpdaterMock.currentVersion = { version: "1.1.0-alpha.7" };
+    mockGitHubReleases([
+      githubRelease("v1.1.0-alpha.9", { prerelease: true }),
+      githubRelease("v1.0.3"),
+    ]);
+    checkForUpdatesMock.mockResolvedValue({
+      updateInfo: { version: "1.1.0-alpha.9" },
+    });
+    const updater = await importAutoUpdater();
+
+    await updater.checkForAppUpdatesNow("manual");
+
+    // Read as a pin, the half pair would resolve to Stable Latest and this
+    // alpha install would be offered v1.0.3 forever. Re-inferred from the
+    // running binary it follows the alpha feed it came from.
+    expect(logInfoMock).toHaveBeenCalledWith(
+      "configured auto-update channel",
+      expect.objectContaining({
+        updateChannel: "prerelease",
+        updateTrain: "beta",
+      }),
+    );
+    expect(autoUpdaterMock.allowPrerelease).toBe(true);
+  });
+
+  it("honors a pinned selection over the running build's own feed", async () => {
+    // The mirror of the case above: an alpha binary whose operator picked
+    // Stable stays on Stable, because the pin is on disk to say so.
+    resolveUpdateChannelMock.mockReturnValue("latest");
+    resolveUpdateTrainMock.mockReturnValue("stable");
+    updateSelectionSourceMock.mockReturnValue("user");
+    appVersionMock.mockReturnValue("1.1.0-alpha.7");
+    mockGitHubReleases([
+      githubRelease("v1.1.0-alpha.9", { prerelease: true }),
+      githubRelease("v1.0.3"),
+    ]);
+    const updater = await importAutoUpdater();
+
+    await updater.checkForAppUpdatesNow("manual");
+
+    expect(logInfoMock).toHaveBeenCalledWith(
+      "configured auto-update channel",
+      expect.objectContaining({
+        updateChannel: "latest",
+        updateTrain: "stable",
+      }),
+    );
+  });
+
+  it("names the missing manifest instead of dumping the raw HttpError", async () => {
+    // electron-updater reports a 404 on the channel file as one multi-KB
+    // string — request URL, every response header, a stack of packaged file
+    // paths — and Settings rendered it verbatim. It is also not a transport
+    // failure: the GitHub release exists and the release matrix shows its
+    // version, but this platform has nothing installable in that slot.
+    resolveUpdateTrainMock.mockReturnValue("beta");
+    resolveUpdateChannelMock.mockReturnValue("prerelease");
+    mockGitHubReleases([githubRelease("v1.1.0-alpha.2", { prerelease: true })]);
+    autoUpdaterMock.currentVersion = { version: "1.1.0-alpha.1" };
+    checkForUpdatesMock.mockRejectedValue(
+      new Error(
+        'Cannot find channel "latest.yml" update info: HttpError: 404 "method: GET url:'
+        + " https://github.com/pwrdrvr/PwrAgent/releases/download/v1.1.0-alpha.2/latest.yml"
+        + '\n\nPlease double check that your authentication token is correct."'
+        + ' Headers: { "cache-control": "no-cache", "content-encoding": "gzip" }'
+        + " at createHttpError (C:\\Users\\x\\httpExecutor.js:53:12)",
+      ),
+    );
+    const updater = await importAutoUpdater();
+
+    await expect(updater.checkForAppUpdatesNow("manual")).resolves.toEqual({
+      status: "error",
+      message:
+        "The Beta Prerelease release (v1.1.0-alpha.2) publishes no latest.yml"
+        + " for this platform, so there is nothing to install from it yet.",
+    });
+    // The whole error still reaches the log — diagnosing a feed failure from
+    // the reported sentence alone would be worse than having no summary.
+    expect(logWarnMock).toHaveBeenCalledWith(
+      "checkForUpdates failed",
+      expect.objectContaining({
+        message: expect.stringContaining("Headers: {"),
+        updateChannel: "prerelease",
+        updateTrain: "beta",
+      }),
+    );
+  });
+
+  it("truncates any other update failure to one line", async () => {
+    mockGitHubReleases([githubRelease("v1.0.0-beta.8")]);
+    checkForUpdatesMock.mockRejectedValue(
+      new Error(
+        `HttpError: 500 ${"very long body ".repeat(40)}`
+        + '\nHeaders: { "server": "github.com" }',
+      ),
+    );
+    const updater = await importAutoUpdater();
+
+    const result = await updater.checkForAppUpdatesNow("manual");
+    expect(result.status).toBe("error");
+    const message = result.status === "error" ? result.message : "";
+    expect(message.length).toBeLessThanOrEqual(200);
+    expect(message.startsWith("HttpError: 500 very long body")).toBe(true);
+    expect(message.endsWith("…")).toBe(true);
+    expect(message).not.toContain("Headers");
   });
 
   it("does not treat an unreadable release tag as a switch back", async () => {

@@ -646,21 +646,11 @@ function SettingsSectionBody(props: {
             general: { pdfAnalysisEnabled },
           });
         }}
-        onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
-          await props.settings.writeConfig({
-            updates: {
-              channel,
-              train: props.snapshot.updates.train.value,
-            },
-          });
-        }}
-        onUpdateTrainChange={async (train: DesktopUpdateTrain) => {
-          await props.settings.writeConfig({
-            updates: {
-              train,
-              channel: props.snapshot.updates.channel.value,
-            },
-          });
+        onUpdateSelectionChange={async (updates: {
+          channel: DesktopUpdateChannel;
+          train: DesktopUpdateTrain;
+        }) => {
+          await props.settings.writeConfig({ updates });
         }}
         onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
           await props.settings.writeConfig({

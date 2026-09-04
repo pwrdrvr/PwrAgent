@@ -9349,11 +9349,13 @@ a.button {
   gap: 6px;
 }
 
-/* The three controls (track segmented, Restart, Check) read as one row of
-   equal-height chiclets. `stretch` sizes both buttons to the segmented
-   control, which is the tallest because its options are two-line. Status
-   text is a SIBLING of this row, never a member of it — as a member its
-   own height fed back into `stretch` and inflated the buttons. */
+/* Restart and Check read as one row of equal-height chiclets. The track
+   segmented control used to sit here too and was the tallest member, which
+   is what `stretch` was sizing the buttons against; the release slot matrix
+   replaced it and lives in its own field now, so `stretch` only equalizes
+   the two buttons against each other. Status text is a SIBLING of this row,
+   never a member of it — as a member its own height fed back into `stretch`
+   and inflated the buttons. */
 .settings-update-channel__controls {
   display: flex;
   flex-wrap: wrap;
@@ -9361,15 +9363,15 @@ a.button {
   gap: 8px;
 }
 
-/* Match the segmented control's label register (12px/650). Without this the
-   two buttons fall back to the browser-default inherited size and read a
-   full step larger than the chiclets beside them.
+/* Keep the settings label register (12px/650). Without this the two buttons
+   fall back to the browser-default inherited size and read a full step
+   larger than the rest of the pane.
 
-   Do NOT reintroduce `min-height: 0` here. `stretch` already sizes these to
-   the segmented control on a shared line, so the override bought nothing
-   there — but once the row wraps and a button lands on a line alone it has
-   nothing to stretch against, and the override collapsed it to a 16px
-   sliver. The `.button` base floor of 34px is what catches that case. */
+   Do NOT reintroduce `min-height: 0` here. It collapsed a button that had
+   nothing to stretch against to a 16px sliver — originally when the row
+   wrapped and a button landed on a line alone, and now for any button
+   whenever Restart is absent and Check is the row's only member. The
+   `.button` base floor of 34px is what catches that. */
 .settings-update-channel__button,
 .settings-update-channel__restart-button {
   font-size: 12px;
@@ -9401,6 +9403,145 @@ a.button {
 
 .settings-update-channel__result--error {
   color: var(--danger-text);
+}
+
+/* Release slot matrix — all four published slots at once, trains as rows and
+   tracks as columns. It replaced two segmented controls that could only label
+   themselves with the slot the OTHER control was on, so a populated
+   Beta Prerelease read as "Beta — Unavailable" whenever the track control sat
+   on Latest. Every tile now carries its own version, selected or not. */
+.settings-release-slots {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+}
+
+.settings-release-slots__colhdr,
+.settings-release-slots__rowhdr {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.settings-release-slots__colhdr {
+  padding-left: 2px;
+}
+
+/* The train name is a row label, not a column kicker — it reads as a word
+   beside the tiles rather than as another eyebrow above them. */
+.settings-release-slots__rowhdr {
+  color: var(--text-secondary);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.settings-release-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.settings-release-slot:hover {
+  border-color: var(--accent-border);
+}
+
+/* The matrix is a roving-tabindex radiogroup: arrow keys move focus between
+   tiles WITHOUT selecting, because picking a slot rewrites which build the
+   app installs. Without a focus ring distinct from `.is-selected` there is
+   no way to see which tile Space would commit. */
+.settings-release-slot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-release-slot.is-selected {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.settings-release-slot:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.settings-release-slot__version {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.settings-release-slot.is-selected .settings-release-slot__version {
+  color: var(--accent-bright);
+}
+
+/* An empty slot is prose, not a version — the mono face would read as a tag
+   the operator could go look for. */
+.settings-release-slot__version.is-empty {
+  color: var(--text-muted);
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.settings-release-slot__sub {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.settings-release-slot__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.settings-release-slot__chip {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.settings-release-slot__chip.is-selected {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.settings-release-slot__chip.is-installed {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
 }
 
 .settings-section__description {

@@ -184,6 +184,8 @@ describe("DesktopSettingsService", () => {
         "",
         "[updates]",
         'channel = "prerelease"',
+        'train = "stable"',
+        'selection_source = "user"',
         "",
         "[federation]",
         'mode = "gateway"',
@@ -288,8 +290,9 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.updates.train).toEqual({
       value: "stable",
-      source: "default",
+      source: "config",
     });
+    expect(snapshot.updates.selectionSource).toBe("user");
     expect(snapshot.federation).toMatchObject({
       mode: { value: "gateway", source: "config" },
       listenHost: { value: "127.0.0.1", source: "config" },
@@ -521,6 +524,7 @@ describe("DesktopSettingsService", () => {
     });
 
     const snapshot = await service.readSettingsProjection();
+    expect(snapshot.updates.selectionSource).toBe("inferred");
     expect(snapshot.updates.train).toEqual({
       value: "beta",
       source: "default",
@@ -533,7 +537,12 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveUpdateChannel()).toBe("prerelease");
   });
 
-  it("keeps a legacy prerelease config on the Stable train", async () => {
+  it("re-infers a legacy half-pair config from the running build", async () => {
+    // `channel` shipped before `train` did, so every config written by an
+    // older build carries `channel` alone. Reading that half pair as a
+    // deliberate Stable pin is what offered a 1.1.0-alpha install the last
+    // stable release forever and never told it about the newer alpha its own
+    // binary came from. A half pair is indistinguishable from "never chose".
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(
@@ -548,16 +557,136 @@ describe("DesktopSettingsService", () => {
     });
 
     const snapshot = await service.readSettingsProjection();
-    expect(snapshot.updates.channel).toEqual({
-      value: "prerelease",
-      source: "config",
-    });
+    expect(snapshot.updates.selectionSource).toBe("inferred");
     expect(snapshot.updates.train).toEqual({
-      value: "stable",
+      value: "beta",
       source: "default",
     });
-    expect(service.resolveUpdateTrain()).toBe("stable");
-    expect(service.resolveUpdateChannel()).toBe("prerelease");
+    expect(snapshot.updates.channel).toEqual({
+      value: "latest",
+      source: "default",
+    });
+    expect(service.resolveUpdateTrain()).toBe("beta");
+    expect(service.resolveUpdateChannel()).toBe("latest");
+  });
+
+  it("honors a legacy complete non-default pair as an existing pin", async () => {
+    // A complete pair that is not the historical unchosen pair could only
+    // have been written by a deliberate click, so it survives the migration
+    // without a `selection_source` key to prove it.
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      ["[updates]", 'channel = "latest"', 'train = "beta"', ""].join("\n"),
+    );
+    const service = new DesktopSettingsService({
+      appVersion: "1.0.3",
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettingsProjection();
+    expect(snapshot.updates.selectionSource).toBe("user");
+    expect(snapshot.updates.train).toEqual({ value: "beta", source: "config" });
+    expect(snapshot.updates.channel).toEqual({
+      value: "latest",
+      source: "config",
+    });
+  });
+
+  it("re-infers a legacy config holding only the shipped default pair", async () => {
+    // Stable/Latest is what every pre-`selection_source` config landed on
+    // when nobody had chosen, so it carries no evidence of a choice.
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      ["[updates]", 'channel = "latest"', 'train = "stable"', ""].join("\n"),
+    );
+    const service = new DesktopSettingsService({
+      appVersion: "1.1.0-alpha.7",
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettingsProjection();
+    expect(snapshot.updates.selectionSource).toBe("inferred");
+    expect(snapshot.updates.train.value).toBe("beta");
+    expect(snapshot.updates.channel.value).toBe("prerelease");
+  });
+
+  it("pins the pair once the operator picks a slot, and follows the binary until then", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const options = {
+      appVersion: "1.1.0-alpha.7",
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    };
+    const service = new DesktopSettingsService(options);
+
+    expect((await service.readSettingsProjection()).updates.selectionSource)
+      .toBe("inferred");
+
+    await service.writeConfigPatchTargeted({
+      updates: { channel: "latest", train: "stable" },
+    });
+
+    // `selection_source` is derived by the write path, not sent by the
+    // caller — naming either axis is what makes the pair a pin.
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      'selection_source = "user"',
+    );
+    const pinned = await service.readSettingsProjection();
+    expect(pinned.updates.selectionSource).toBe("user");
+    expect(pinned.updates.train).toEqual({ value: "stable", source: "config" });
+    expect(pinned.updates.channel).toEqual({
+      value: "latest",
+      source: "config",
+    });
+
+    // The pin survives a reopen on the same alpha binary — the whole point
+    // of persisting it is that inference no longer runs.
+    const reopened = new DesktopSettingsService(options);
+    expect(reopened.resolveUpdateTrain()).toBe("stable");
+    expect(reopened.resolveUpdateChannel()).toBe("latest");
+  });
+
+  it("keeps a pin whose other axis did not survive the round trip", async () => {
+    // Re-inferring the whole pair on a half-written pin would discard the
+    // axis that IS valid and silently un-pin the selection.
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[updates]",
+        'train = "stable"',
+        'selection_source = "user"',
+        "",
+      ].join("\n"),
+    );
+    const service = new DesktopSettingsService({
+      appVersion: "1.1.0-alpha.7",
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettingsProjection();
+    expect(snapshot.updates.selectionSource).toBe("user");
+    expect(snapshot.updates.train).toEqual({
+      value: "stable",
+      source: "config",
+    });
+    expect(snapshot.updates.channel).toEqual({
+      value: "latest",
+      source: "default",
+    });
   });
 
   it("keeps an explicit Stable choice on a Beta binary", async () => {
