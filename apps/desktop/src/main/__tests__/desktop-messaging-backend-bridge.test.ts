@@ -261,6 +261,52 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(readDirectoryStatuses).not.toHaveBeenCalled();
   });
 
+  it("caches a read-only owner projection for bounded navigation search", async () => {
+    const listedThreads: AppServerThreadSummary[] = [
+      {
+        id: "thread-alpha",
+        title: "Alpha federation work",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        updatedAt: 2_000,
+      },
+      {
+        id: "thread-beta",
+        title: "Beta federation work",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        updatedAt: 1_000,
+      },
+    ];
+    const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      listThreads: vi.fn(async () => listedThreads),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+    const reconcileCallsBefore = reconcileNavigationSnapshot.mock.calls.length;
+
+    await expect(bridge.searchNavigationThreads({ query: "alpha" }))
+      .resolves.toMatchObject({ results: [{ id: "thread-alpha" }] });
+    await expect(bridge.searchNavigationThreads({ query: "beta" }))
+      .resolves.toMatchObject({ results: [{ id: "thread-beta" }] });
+
+    expect(registry.listThreads).toHaveBeenCalledTimes(1);
+    expect(reconcileNavigationSnapshot).toHaveBeenCalledTimes(
+      reconcileCallsBefore + 1,
+    );
+    expect(reconcileNavigationSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
+      backend: "all",
+      partial: true,
+      threads: listedThreads,
+    });
+  });
+
   it("returns a broad snapshot before its stale directory batch finishes", async () => {
     reconcileNavigationSnapshot.mockResolvedValueOnce({
       backend: "all",

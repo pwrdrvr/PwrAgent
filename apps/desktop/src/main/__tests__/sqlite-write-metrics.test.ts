@@ -63,6 +63,32 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("keeps partial navigation search reconciliation read-only", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-search",
+      title: "Federation search result",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      updatedAt: 1_000,
+    };
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.reconcileNavigationSnapshot({
+        backend: "all",
+        fetchedAt: 1_000,
+        partial: true,
+        threads: [thread],
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "one owner-side bounded navigation search projection",
+      scenario: "federated-navigation-search-projection",
+      writes,
+    });
+  });
+
   it("attributes commits and rows to the table that took them", async () => {
     await store.upsertThreadToolInvocation({
       invocation: buildInvocation("tool-1"),

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.0-alpha.2 - 2026-09-03
+
+- Token Miser - Added a one-click managed runtime, release-safety gate, evaluation controls, a Pricing-rail summary, and per-model spend attribution. Improved accounting and recovery across compaction, active turns, and profile changes.
+- Messaging - Added Discord response-mode controls and thread-as-reply routing, plus Slack agent sessions and a create-from-manifest install wizard. Removed an up-to-15-second Discord inbound-to-turn delay by deferring channel and server metadata enrichment, so inbound turn start time no longer grows with the desktop thread count.
+- Star Map - Restores workspace layouts, supports image attachments and slash commands in chat cards, exposes attention and sub-agent state in the map, and adds off-screen navigation arrows for large workspaces.
+- Agent Operations - Added sub-agent ownership lenses, clearer review project and pull-request provenance, selected-Git controls, and visible signer information for agent tools.
+- Grok Build - Names the managed build channel in Settings and lets operators check for and apply runtime updates with signature-rejection feedback.
+- Pricing - Breaks spending down by model instead of only provider, with more accurate GPT-5.6 Sol pricing and clearer cost and replay-savings summaries.
+- Desktop Reliability - Preserved composer mentions and launch prompts, retained active work with its transcript turn, recovered mounted remote threads after reconnection, and reduced unnecessary Git and navigation work.
+- Windows Downloads - Added a stable signed Windows installer alias and checksum support, making the latest Windows installer easier to link and verify.
+- Minor - Improved Settings navigation and save feedback, provider hub screens, accessible list structure, cross-theme provider icons, and compact UI density.
+
 ## v1.1.0-alpha.1 - 2026-08-20
 
 This is the first 1.1 release, and it is an alpha on the Beta channel's

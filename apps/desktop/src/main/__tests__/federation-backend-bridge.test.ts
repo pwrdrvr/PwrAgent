@@ -8,7 +8,10 @@ import type {
   NavigationThreadSummary,
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import {
+  buildFederatedThreadRef,
+  rankThreadJumpMatches,
+} from "@pwragent/shared";
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -560,6 +563,128 @@ describe("federation backend bridge", () => {
         }],
       },
     });
+  });
+
+  it("filters and bounds jump-search navigation rows before crossing the wire", async () => {
+    const threads = Array.from({ length: 1_200 }, (_, index) => ({
+      id: `thread-${index}`,
+      title: `Unrelated ${index}`,
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      source: "codex" as const,
+      inbox: { inInbox: false },
+      createdAt: index,
+      updatedAt: index,
+      ...(index === 553
+        ? {
+            prs: [{
+              provider: "github.com",
+              number: 553,
+              org: "pwrdrvr",
+              repo: "PwrAgent",
+              state: "pending" as const,
+              url: "https://github.com/pwrdrvr/PwrAgent/pull/553",
+            }],
+          }
+        : {}),
+    } satisfies NavigationThreadSummary));
+    const backend = {
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: 1_000,
+        unchanged: false,
+        threads,
+        inboxThreadKeys: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+      searchNavigationThreads: vi.fn(async (request) => ({
+        results: rankThreadJumpMatches(threads, request.query).slice(
+          0,
+          request.limit ?? 8,
+        ),
+      })),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "jump-search",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.searchNavigationThreads,
+        params: { query: "553", limit: 8 },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(replies[0]).toMatchObject({
+      kind: "response",
+      result: {
+        results: [{ id: "thread-553" }],
+      },
+    });
+    expect(JSON.stringify(replies[0]).length).toBeLessThan(
+      JSON.stringify(threads).length / 100,
+    );
+    expect(backend.searchNavigationThreads).toHaveBeenCalledWith({
+      query: "553",
+      limit: 8,
+    });
+    expect(backend.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reports bounded search as unsupported without building a full snapshot", async () => {
+    const backend = {
+      getNavigationSnapshot: vi.fn(),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "jump-search-unsupported",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.searchNavigationThreads,
+        params: { query: "553", limit: 8 },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(replies[0]).toMatchObject({
+      kind: "error",
+      error: { code: "method_not_found" },
+    });
+    expect(backend.getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("sends unchanged and sparse navigation responses instead of full Federation payloads", async () => {

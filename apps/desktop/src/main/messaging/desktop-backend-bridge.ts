@@ -19,6 +19,8 @@ import type {
   FederationEventSubscription,
   FederationHealthStatus,
   FederationInstanceId,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
   FederationRemoteTarget,
   FederationTarget,
   FederationThreadSelection,
@@ -65,6 +67,7 @@ import {
   buildThreadIdentityKey,
   buildFederatedThreadRef,
   isRemoteFederationTarget,
+  rankThreadJumpMatches,
 } from "@pwragent/shared";
 import type {
   MessagingBackendBridge,
@@ -110,10 +113,17 @@ export type DesktopMessagingFederationBridge = {
 };
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
+  private static readonly navigationSearchCacheTtlMs = 15_000;
+
   private readonly assistantImageResolutions = new Map<
     string,
     Promise<MessagingImagePart[]>
   >();
+  private navigationSearchCache?: {
+    expiresAt: number;
+    threads: NavigationThreadSummary[];
+  };
+  private navigationSearchInFlight?: Promise<NavigationThreadSummary[]>;
 
   constructor(
     private readonly registry: DesktopBackendRegistry = getDesktopBackendRegistry(),
@@ -423,6 +433,72 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ...availableRemoteSnapshots.flatMap((remote) => remote.inboxThreadKeys),
       ],
     };
+  }
+
+  /**
+   * Serve owner-side Cmd+K matching from a short-lived, read-only projection.
+   * A full navigation reconciliation persists its baseline, which is correct
+   * for navigation refreshes but would turn every debounced search query into
+   * a SQLite commit. The partial projection reads overlays without updating
+   * them, and the cache preserves the former 15-second remote-search cadence.
+   */
+  async searchNavigationThreads(
+    request: FederationJumpSearchRequest,
+  ): Promise<FederationJumpSearchResponse> {
+    const query = request.query.trim();
+    if (!query) {
+      return { results: [] };
+    }
+    const limit = Math.max(1, Math.min(request.limit ?? 8, 50));
+    const threads = await this.navigationThreadsForSearch();
+    return {
+      results: rankThreadJumpMatches(threads, query).slice(0, limit),
+    };
+  }
+
+  private async navigationThreadsForSearch(): Promise<NavigationThreadSummary[]> {
+    const now = Date.now();
+    if (this.navigationSearchCache && this.navigationSearchCache.expiresAt > now) {
+      return this.navigationSearchCache.threads;
+    }
+    if (this.navigationSearchInFlight) {
+      return await this.navigationSearchInFlight;
+    }
+
+    const pending = (async () => {
+      const listedThreads = await this.registry.listThreads({
+        callerReason: "messaging-navigation-snapshot",
+      });
+      const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
+        backend: "all",
+        fetchedAt: Date.now(),
+        messagingBindingsByThreadKey:
+          await buildMessagingBindingsByThreadKey(listedThreads),
+        partial: true,
+        queuedExecutionModesByThreadKey:
+          this.registry.getQueuedExecutionModesSnapshot(),
+        queuedTurnsByThreadKey: this.registry.getQueuedTurnsSnapshot(),
+        threads: listedThreads,
+        workspaceRoots: resolveScratchProjectsRoots(),
+      });
+      return await this.registry.canonicalizeNavigationThreadPullRequests(
+        snapshot.threads,
+      );
+    })();
+    this.navigationSearchInFlight = pending;
+    try {
+      const threads = await pending;
+      this.navigationSearchCache = {
+        expiresAt:
+          Date.now() + DesktopMessagingBackendBridge.navigationSearchCacheTtlMs,
+        threads,
+      };
+      return threads;
+    } finally {
+      if (this.navigationSearchInFlight === pending) {
+        this.navigationSearchInFlight = undefined;
+      }
+    }
   }
 
   async resolveThreadTarget(request: {

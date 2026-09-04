@@ -212,12 +212,46 @@ export type BackendRateLimitSummary = {
   windowMinutes?: number;
 };
 
+/**
+ * Which channel published the provider runtime PwrAgent is talking to.
+ * `vendor` is the provider's own release; `pwragent` is a build PwrAgent
+ * downloads, verifies and installs itself.
+ *
+ * Two products can answer to one provider name — an OpenAI Codex release and a
+ * `-pwragent` Codex build carry different version strings and different
+ * release pages — so a surface that cannot tell them apart ends up describing
+ * one in the other's terms.
+ */
+export type BackendRuntimeBuildChannel = "vendor" | "pwragent";
+
+export type BackendRuntimeBuild = {
+  channel: BackendRuntimeBuildChannel;
+  /** Who publishes this channel's builds, e.g. `OpenAI` or `PwrDrvr`. */
+  publisher: string;
+};
+
 export type BackendSummary = {
   kind: AppServerBackendKind;
   source?: BackendSourceKind;
   label: string;
   available: boolean;
+  /**
+   * This backend is unavailable only because the one permitted startup
+   * discovery has not published a selection yet. A surface that decides
+   * whether the profile has any usable provider must keep that decision
+   * pending instead of reading `available: false` as "not configured" — the
+   * durable last-known-good it is derived from is legitimately empty on a cold
+   * profile and for the whole window between process start and first
+   * discovery. Never set alongside `available: true`.
+   */
+  discoveryPending?: boolean;
   acp?: BackendAcpSummary;
+  /**
+   * Provenance of the executable serving this backend. Absent until PwrAgent
+   * has resolved one — never guessed, because "vendor" is a claim about a
+   * specific binary, not a default.
+   */
+  runtimeBuild?: BackendRuntimeBuild;
   account?: BackendAccountSummary;
   rateLimits?: BackendRateLimitSummary[];
   serverName?: string;

@@ -99,6 +99,7 @@ import {
   type AddRemoteThreadPinRequest,
   type AddRemoteThreadPinResponse,
   type FederatedThreadRef,
+  type FederationJumpSearchProgress,
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
   type RemoveRemoteThreadPinRequest,
@@ -246,6 +247,7 @@ import {
   NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
+  FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
@@ -6473,10 +6475,11 @@ class DesktopAppServerService {
 
   async jumpSearchRemoteThreads(
     request: FederationJumpSearchRequest,
+    onProgress?: (progress: FederationJumpSearchProgress) => void,
   ): Promise<FederationJumpSearchResponse> {
     return await getDesktopFederationRuntime()
       .remoteThreadSummaries()
-      .searchForJump(request);
+      .searchForJump(request, onProgress);
   }
 
   async setThreadParent(
@@ -7981,10 +7984,24 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     FEDERATION_JUMP_SEARCH_CHANNEL,
     async (
-      _event,
+      event,
+      requestId: number,
       request: FederationJumpSearchRequest,
     ): Promise<FederationJumpSearchResponse> => {
-      return await appServerService.jumpSearchRemoteThreads(request);
+      return await appServerService.jumpSearchRemoteThreads(
+        request,
+        (progress) => {
+          // Search progress belongs to this invoke, not the global window
+          // event bus. The request id disambiguates overlapping searches in
+          // the same renderer; event.sender keeps it out of every other one.
+          if (!event.sender?.isDestroyed?.()) {
+            event.sender?.send?.(FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL, {
+              requestId,
+              progress,
+            });
+          }
+        },
+      );
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_PARENT_CHANNEL);

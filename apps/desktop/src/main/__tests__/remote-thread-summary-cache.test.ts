@@ -102,6 +102,98 @@ function pin(params: {
 }
 
 describe("RemoteThreadSummaryCache — searchForJump", () => {
+  it("asks each peer for bounded matches instead of fetching its full snapshot", async () => {
+    const fetchSnapshot = vi.fn(async () => snapshotOf([]));
+    const searchPeer = vi.fn(async () => [
+      stampedThread({
+        instanceId: "peer-a",
+        threadId: "t1",
+        title: "Matching thread",
+      }),
+    ]);
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    const response = await cache.searchForJump({ query: "match", limit: 3 });
+
+    expect(response.results.map((thread) => thread.id)).toEqual(["t1"]);
+    expect(searchPeer).toHaveBeenCalledWith(
+      remoteTarget("peer-a"),
+      { query: "match", limit: 3 },
+    );
+    expect(fetchSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a full snapshot when an older peer lacks bounded search", async () => {
+    const unavailable = Object.assign(new Error("method not found"), {
+      code: "method_not_found",
+    });
+    const searchPeer = vi.fn(async () => {
+      throw unavailable;
+    });
+    const fetchSnapshot = vi.fn(async () =>
+      snapshotOf([
+        stampedThread({
+          instanceId: "peer-a",
+          threadId: "legacy-match",
+          title: "Legacy match",
+        }),
+      ]),
+    );
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    const response = await cache.searchForJump({ query: "match" });
+
+    expect(response.results.map((thread) => thread.id)).toEqual([
+      "legacy-match",
+    ]);
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older peer's fallback inside the original peer deadline", async () => {
+    vi.useFakeTimers();
+    const unavailable = Object.assign(new Error("method not found"), {
+      code: "method_not_found",
+    });
+    const searchPeer = vi.fn(() =>
+      new Promise<NavigationThreadSummary[]>((_, reject) => {
+        setTimeout(() => reject(unavailable), 80);
+      }),
+    );
+    const fetchSnapshot = vi.fn(() => new Promise<NavigationSnapshot>(() => {}));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+      peerTimeoutMs: 100,
+    });
+
+    try {
+      const pending = cache.searchForJump({ query: "match" });
+      await vi.advanceTimersByTimeAsync(80);
+      expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(pending).resolves.toEqual({ results: [] });
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("matches remote threads by PR number, title, and branch with local parity", async () => {
     const threads = [
       stampedThread({
@@ -149,6 +241,153 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
 
     const response = await cache.searchForJump({ query: "match", limit: 1 });
     expect(response.results.map((thread) => thread.id)).toEqual(["new"]);
+  });
+
+  it("publishes a fast peer before a slow peer settles", async () => {
+    let resolveSlow:
+      | ((threads: NavigationThreadSummary[]) => void)
+      | undefined;
+    const searchPeer = vi.fn(async (target: FederationRemoteTarget) => {
+      if (target.instanceId === "peer-slow") {
+        return await new Promise<NavigationThreadSummary[]>((resolve) => {
+          resolveSlow = resolve;
+        });
+      }
+      return [
+        stampedThread({
+          instanceId: "peer-fast",
+          threadId: "fast",
+          title: "match fast",
+          updatedAt: 1,
+        }),
+      ];
+    });
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-slow"), peer("peer-fast")],
+      fetchSnapshot: async () => snapshotOf([]),
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+    const onProgress = vi.fn();
+
+    const pending = cache.searchForJump(
+      { query: "match" },
+      onProgress,
+    );
+
+    await vi.waitFor(() => expect(onProgress).toHaveBeenCalledTimes(1));
+    expect(onProgress).toHaveBeenLastCalledWith({
+      results: [expect.objectContaining({ id: "fast" })],
+      completedPeerCount: 1,
+      totalPeerCount: 2,
+      complete: false,
+    });
+
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveSlow?.([
+      stampedThread({
+        instanceId: "peer-slow",
+        threadId: "slow",
+        title: "match slow",
+        updatedAt: 2,
+      }),
+    ]);
+    await expect(pending).resolves.toMatchObject({
+      results: [{ id: "slow" }, { id: "fast" }],
+    });
+    expect(onProgress).toHaveBeenLastCalledWith({
+      results: [
+        expect.objectContaining({ id: "slow" }),
+        expect.objectContaining({ id: "fast" }),
+      ],
+      completedPeerCount: 2,
+      totalPeerCount: 2,
+      complete: true,
+    });
+  });
+
+  it("keeps successful peer results when another peer fails", async () => {
+    let rejectFailed: ((error: Error) => void) | undefined;
+    const searchPeer = vi.fn(async (target: FederationRemoteTarget) => {
+      if (target.instanceId === "peer-error") {
+        return await new Promise<NavigationThreadSummary[]>((_, reject) => {
+          rejectFailed = reject;
+        });
+      }
+      return [
+        stampedThread({
+          instanceId: "peer-fast",
+          threadId: "fast",
+          title: "match fast",
+        }),
+      ];
+    });
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-error"), peer("peer-fast")],
+      fetchSnapshot: async () => snapshotOf([]),
+      searchPeer,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+    const onProgress = vi.fn();
+    const pending = cache.searchForJump({ query: "match" }, onProgress);
+
+    await vi.waitFor(() => expect(onProgress).toHaveBeenCalledTimes(1));
+    rejectFailed?.(new Error("peer unavailable"));
+
+    await expect(pending).resolves.toMatchObject({
+      results: [{ id: "fast" }],
+    });
+    expect(onProgress).toHaveBeenLastCalledWith({
+      results: [expect.objectContaining({ id: "fast" })],
+      completedPeerCount: 2,
+      totalPeerCount: 2,
+      complete: true,
+    });
+  });
+
+  it("deduplicates globally before applying the result limit", async () => {
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      searchPeer: async () => [
+        stampedThread({
+          instanceId: "peer-a",
+          threadId: "duplicate",
+          title: "match old",
+          updatedAt: 1,
+        }),
+        stampedThread({
+          instanceId: "peer-a",
+          threadId: "duplicate",
+          title: "match new",
+          updatedAt: 2,
+        }),
+        stampedThread({
+          instanceId: "peer-a",
+          threadId: "unique",
+          title: "match unique",
+          updatedAt: 0,
+        }),
+      ],
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    const response = await cache.searchForJump({ query: "match", limit: 2 });
+
+    expect(response.results.map((thread) => thread.id)).toEqual([
+      "duplicate",
+      "unique",
+    ]);
+    expect(response.results[0].title).toBe("match new");
   });
 
   it("ranks an exact attached PR ahead of newer substring matches", async () => {
@@ -316,9 +555,16 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
       peerStatus: () => ({}),
       peerTimeoutMs: 20,
     });
+    const onProgress = vi.fn();
 
-    const response = await cache.searchForJump({ query: "match" });
+    const response = await cache.searchForJump({ query: "match" }, onProgress);
     expect(response.results.map((thread) => thread.id)).toEqual(["t1"]);
+    expect(onProgress).toHaveBeenLastCalledWith({
+      results: [expect.objectContaining({ id: "t1" })],
+      completedPeerCount: 2,
+      totalPeerCount: 2,
+      complete: true,
+    });
   });
 
   it("ignores peers without the thread_navigation capability", async () => {

@@ -10,6 +10,22 @@ function entries(count: number): string[] {
   return Array.from({ length: count }, (_, index) => `e${index}`);
 }
 
+type MessageEntry = {
+  id: string;
+  role: "assistant" | "user";
+  text: string;
+  type: "message";
+};
+
+function assistantEntries(count: number): MessageEntry[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `assistant-${index}`,
+    role: "assistant",
+    text: `Assistant entry ${index}`,
+    type: "message",
+  }));
+}
+
 const SERVER_HAS_MORE = {
   supportsPagination: true,
   hasPreviousPage: true,
@@ -48,6 +64,90 @@ describe("useTranscriptWindow", () => {
     expect(result.current.visibleEntries).toHaveLength(3);
     expect(result.current.hiddenCount).toBe(0);
     expect(result.current.hasMoreHistory).toBe(false);
+  });
+
+  it("keeps the latest user prompt visible when one long turn crosses the render limit", () => {
+    const prompt: MessageEntry = {
+      id: "user-prompt",
+      role: "user",
+      text: "Investigate the noisy canary error logs.",
+      type: "message",
+    };
+    const { result } = renderHook(() =>
+      useTranscriptWindow({
+        entries: [
+          prompt,
+          ...assistantEntries(DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT),
+        ],
+        onLoadOlder: vi.fn(),
+        threadKey: "long-first-turn",
+      }),
+    );
+
+    expect(
+      result.current.visibleEntries.filter((entry) => entry.role === "user"),
+    ).toEqual([prompt]);
+    expect(result.current.contiguousStartEntry?.id).toBe("assistant-0");
+    expect(result.current.visibleEntries.at(-1)?.id).toBe("assistant-39");
+  });
+
+  it("pins only the newest copy when optimistic and authoritative prompts precede the window", () => {
+    const promptText = "Investigate the noisy canary error logs.";
+    const optimisticPrompt: MessageEntry = {
+      id: "optimistic-launchpad-thread-1",
+      role: "user",
+      text: promptText,
+      type: "message",
+    };
+    const authoritativePrompt: MessageEntry = {
+      id: "authoritative-user-message",
+      role: "user",
+      text: promptText,
+      type: "message",
+    };
+    const { result } = renderHook(() =>
+      useTranscriptWindow({
+        entries: [
+          optimisticPrompt,
+          authoritativePrompt,
+          ...assistantEntries(DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT),
+        ],
+        onLoadOlder: vi.fn(),
+        threadKey: "reconciled-first-turn",
+      }),
+    );
+
+    expect(
+      result.current.visibleEntries.filter((entry) => entry.role === "user"),
+    ).toEqual([authoritativePrompt]);
+  });
+
+  it("reports the moving contiguous boundary behind a pinned prompt", () => {
+    const prompt: MessageEntry = {
+      id: "user-prompt",
+      role: "user",
+      text: "Investigate the noisy canary error logs.",
+      type: "message",
+    };
+    const transcriptEntries = [prompt, ...assistantEntries(100)];
+    const { result, rerender } = renderHook(
+      ({ limit }) =>
+        useTranscriptWindow({
+          entries: transcriptEntries,
+          limit,
+          onLoadOlder: vi.fn(),
+          threadKey: "expanding-first-turn",
+        }),
+      { initialProps: { limit: 40 } },
+    );
+
+    expect(result.current.visibleEntries[0]).toBe(prompt);
+    expect(result.current.contiguousStartEntry?.id).toBe("assistant-60");
+
+    rerender({ limit: 90 });
+
+    expect(result.current.visibleEntries[0]).toBe(prompt);
+    expect(result.current.contiguousStartEntry?.id).toBe("assistant-10");
   });
 
   it("claims a previous page while entries are held back locally", () => {
@@ -117,6 +217,41 @@ describe("useTranscriptWindow", () => {
     expect(onLimitChange).toHaveBeenCalledWith(
       DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT + THREAD_HISTORY_PAGE_LIMIT,
     );
+  });
+
+  it("reserves server-page capacity for the prompt pinned outside the limit", async () => {
+    const onLoadOlder = vi.fn();
+    const onLimitChange = vi.fn();
+    const { result } = renderHook(() =>
+      useTranscriptWindow({
+        entries: [
+          {
+            id: "user-prompt",
+            role: "user",
+            text: "Investigate the noisy canary error logs.",
+            type: "message",
+          } satisfies MessageEntry,
+          ...assistantEntries(90),
+        ],
+        limit: 90,
+        onLimitChange,
+        onLoadOlder,
+        pagination: SERVER_HAS_MORE,
+        threadKey: "server-page-after-pinned-prompt",
+      }),
+    );
+
+    expect(result.current.hiddenCount).toBe(0);
+    expect(result.current.visibleEntries).toHaveLength(91);
+
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    expect(onLimitChange).toHaveBeenCalledWith(
+      90 + THREAD_HISTORY_PAGE_LIMIT + 1,
+    );
+    expect(onLoadOlder).toHaveBeenCalledTimes(1);
   });
 
   it("owns the limit itself when nobody else does", async () => {

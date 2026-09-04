@@ -3313,6 +3313,74 @@ Implementation notes remain in a readable bubble.`;
     expect(list.scrollTop).toBe(240);
   });
 
+  it("preserves the reader position when entries expand behind a pinned prompt", () => {
+    const prompt = {
+      type: "message" as const,
+      id: "message-prompt",
+      role: "user" as const,
+      text: "Prompt pinned outside the contiguous window",
+    };
+    const lastMessage = {
+      type: "message" as const,
+      id: "message-last",
+      role: "assistant" as const,
+      text: "Newest response",
+    };
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          prompt,
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Old contiguous boundary",
+          },
+          lastMessage,
+        ]}
+        loading={false}
+        loadingMore={false}
+        prependAnchorId="message-2"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 80;
+    fireEvent.scroll(list);
+
+    scrollHeight = 640;
+
+    rerender(
+      <TranscriptList
+        entries={[
+          prompt,
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "New contiguous boundary",
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Old contiguous boundary",
+          },
+          lastMessage,
+        ]}
+        loading={false}
+        loadingMore={false}
+        prependAnchorId="message-1"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(240);
+  });
+
   it("shows the jump-to-latest control only when the newest entry is below the viewport", () => {
     render(
       <TranscriptList

@@ -48,6 +48,7 @@ import type {
   BackendAcpRuntimeCapabilities,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
+  BackendSummary,
   BackendModelOption,
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
@@ -92,6 +93,7 @@ import type {
   CodexServerCapabilities,
 } from "../codex-app-server/client";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
+import { managedCodexRoot } from "../codex-build-channel";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
@@ -1771,6 +1773,7 @@ class MockBackendClient {
           version?: string;
         };
         methods?: string[];
+        userAgent?: string;
       };
       initializeError?: Error;
       serverCapabilities?: CodexServerCapabilities;
@@ -6258,6 +6261,180 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("prefers the running App Server's version over the next launch's", async () => {
+    // The two disagree while a managed switch is pending: the connection is
+    // still answering from the old build while resolution already names the
+    // one a fresh launch would pick. The running server owns its own version.
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: {
+          methods: ["thread/list"],
+          userAgent: "pwragent-desktop/0.149.1 (Mac OS 26.6.2; arm64) unknown",
+        },
+      }),
+      overlayStore: createOverlayStoreMock(),
+      resolveCodexRuntimeCommand: async () => ({
+        command: path.join("/opt", "homebrew", "bin", "codex"),
+        version: "0.150.0",
+      }),
+    });
+
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends[0]).toMatchObject({ serverVersion: "0.149.1" });
+
+    await registry.close();
+  });
+
+  it("re-describes the cached runtime when the managed build turns over", async () => {
+    // Nothing else invalidates the cached summary on this path, so without the
+    // re-description the panel keeps naming the replaced build.
+    let notify:
+      | ((change: ManagedCodexSelectionChange) => Promise<unknown> | unknown)
+      | undefined;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
+      overlayStore: createOverlayStoreMock(),
+      resolveCodexRuntimeCommand: async () => ({
+        command: path.join(
+          managedCodexRoot(),
+          "versions",
+          "pwragent-v0.149.0-pwragent.2",
+          "codex",
+        ),
+        version: "0.149.0-pwragent.2",
+      }),
+      watchManagedCodexRuntime: (listener) => {
+        notify = listener;
+        return () => {};
+      },
+    });
+
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    expect(
+      (await registry.listBackends({ includeUnavailable: true })).backends[0],
+    ).toMatchObject({
+      runtimeBuild: { channel: "pwragent", publisher: "PwrDrvr" },
+      serverVersion: "0.149.0-pwragent.2",
+    });
+
+    await notify?.({ enabled: false, reason: "availability" });
+
+    // No managed runtime left: the fields go quiet rather than naming a
+    // publisher nothing has resolved yet.
+    const afterDisable =
+      (await registry.listBackends({ includeUnavailable: true })).backends[0];
+    expect(afterDisable.runtimeBuild).toBeUndefined();
+    expect(afterDisable.serverVersion).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it.each([
+    {
+      command: path.join("/opt", "homebrew", "bin", "codex"),
+      provenance: "an OpenAI release",
+      runtimeBuild: { channel: "vendor", publisher: "OpenAI" },
+      version: "0.149.1",
+    },
+    {
+      command: path.join(
+        managedCodexRoot(),
+        "versions",
+        "pwragent-v0.149.0-pwragent.2",
+        "codex",
+      ),
+      provenance: "a PwrDrvr build",
+      runtimeBuild: { channel: "pwragent", publisher: "PwrDrvr" },
+      version: "0.149.0-pwragent.2",
+    },
+  ])(
+    "reports the running Codex version and names it $provenance",
+    async ({ command, runtimeBuild, version }) => {
+      const tempRoot = await mkdtemp(
+        path.join(os.tmpdir(), "pwragent-codex-runtime-build-"),
+      );
+      const configStore = new DesktopConfigStore({
+        configPath: path.join(tempRoot, "config.toml"),
+      });
+      configStore.recordProviderDiscovery("codex", {
+        candidates: [{ command, source: "path", version }],
+        selectedCommand: command,
+        selectedVersion: version,
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({
+          initializeResult: {
+            methods: ["thread/list"],
+            // `initialize` carries no server version of its own — only the
+            // `userAgent`, whose first token names the client and the version
+            // of the App Server answering it.
+            userAgent: `pwragent/${version} (Mac OS 26.6.2; arm64) unknown`,
+          },
+        }),
+        configStore,
+        overlayStore: createOverlayStoreMock(),
+      });
+
+      await registry.refreshProvidersAtStartup(
+        issueProviderDiscoveryPermit("startup"),
+      );
+      const response = await registry.listBackends({ includeUnavailable: true });
+
+      expect(response.backends[0]).toMatchObject({
+        kind: "codex",
+        runtimeBuild,
+        serverVersion: version,
+      });
+
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    },
+  );
+
+  it("names a managed Codex build discovery never recorded", async () => {
+    // A profile on the PwrAgent channel reaches the App Server through the
+    // managed runtime without a provider observation ever being written, so
+    // the durable projection cannot answer who built the running Codex.
+    const command = path.join(
+      managedCodexRoot(),
+      "versions",
+      "pwragent-v0.149.0-pwragent.2",
+      "codex",
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
+      overlayStore: createOverlayStoreMock(),
+      resolveCodexRuntimeCommand: async () => ({
+        command,
+        version: "0.149.0-pwragent.2",
+      }),
+    });
+
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends[0]).toMatchObject({
+      kind: "codex",
+      runtimeBuild: { channel: "pwragent", publisher: "PwrDrvr" },
+      serverVersion: "0.149.0-pwragent.2",
+    });
+
+    await registry.close();
+  });
+
   it("delegates Codex project trust to the Codex client", async () => {
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({
@@ -6463,6 +6640,87 @@ describe("DesktopBackendRegistry", () => {
         }),
       ]),
     );
+
+    await registry.close();
+  });
+
+  it("marks the durable Codex summary pending while startup discovery runs", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      resolveCodexDiscoveryPending: () => true,
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    // "Not selected yet" and "not configured" both read as `available: false`
+    // here, and a startup surface that cannot tell them apart sends a working
+    // profile through provider setup. Only the pending flag separates them.
+    expect(
+      response.backends.find((backend) => backend.kind === "codex"),
+    ).toMatchObject({
+      available: false,
+      discoveryPending: true,
+    });
+
+    await registry.close();
+  });
+
+  it("keeps a cached Codex summary pending while discovery is outstanding", async () => {
+    let pending = true;
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      resolveCodexDiscoveryPending: () => pending,
+    });
+    const internals = registry as unknown as {
+      codexBackendSummary?: BackendSummary;
+    };
+
+    // What a Settings "Re-check" or `completeOnboardingCodexBootstrap` caches
+    // when it lands mid-discovery. `discoverCodexBackend` writes no pending
+    // flag, and a failing summary is invalidated only by a provider
+    // fingerprint change, so returning it verbatim made the renderer read a
+    // mid-discovery cache as a settled "no provider" for the whole process.
+    const {
+      discoveryPending: _unflagged,
+      ...cachedSummary
+    } = (await registry.listBackends({ includeUnavailable: true })).backends
+      .find((backend) => backend.kind === "codex") as BackendSummary;
+    internals.codexBackendSummary = cachedSummary;
+
+    const whilePending = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(whilePending).toMatchObject({ discoveryPending: true });
+
+    pending = false;
+    const afterAnswer = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(afterAnswer).not.toHaveProperty("discoveryPending");
+
+    await registry.close();
+  });
+
+  it("leaves the Codex summary unpending once discovery has answered", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      resolveCodexDiscoveryPending: () => false,
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(
+      response.backends.find((backend) => backend.kind === "codex"),
+    ).toMatchObject({ available: false });
+    expect(
+      response.backends.find((backend) => backend.kind === "codex"),
+    ).not.toHaveProperty("discoveryPending");
 
     await registry.close();
   });

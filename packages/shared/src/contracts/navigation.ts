@@ -1577,6 +1577,16 @@ export type FederationJumpSearchResponse = {
   results: NavigationThreadSummary[];
 };
 
+/** Cumulative Cmd+K results after one more connected peer settles. */
+export type FederationJumpSearchProgress = FederationJumpSearchResponse & {
+  /** Peers that have replied, failed, or reached their existing deadline. */
+  completedPeerCount: number;
+  /** Navigation-capable peers included in this search request. */
+  totalPeerCount: number;
+  /** True once every included peer has settled. */
+  complete: boolean;
+};
+
 export type SetThreadAgentRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;

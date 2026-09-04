@@ -3673,10 +3673,13 @@ describe("Composer", () => {
     const remoteOption = await within(listbox).findByRole("option", {
       name: /#Remote fix/,
     });
-    expect(jumpSearchRemoteThreads).toHaveBeenCalledWith({
-      query: "Remote",
-      limit: 8,
-    });
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledWith(
+      {
+        query: "Remote",
+        limit: 8,
+      },
+      expect.any(Function),
+    );
     expect(within(listbox).getByText("Other instances")).toBeInTheDocument();
     expect(within(remoteOption).getByLabelText("Runs on Laptop"))
       .toBeInTheDocument();
@@ -3744,10 +3747,13 @@ describe("Composer", () => {
     expect(await screen.findByText("Searching other instances…"))
       .toBeInTheDocument();
     await waitFor(() => {
-      expect(jumpSearchRemoteThreads).toHaveBeenCalledWith({
-        query: "Remote",
-        limit: 8,
-      });
+      expect(jumpSearchRemoteThreads).toHaveBeenCalledWith(
+        {
+          query: "Remote",
+          limit: 8,
+        },
+        expect.any(Function),
+      );
     });
 
     fireEvent.keyDown(textbox, { key: "Enter" });

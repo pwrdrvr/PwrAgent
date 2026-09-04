@@ -1,6 +1,7 @@
 import type {
   CelestialIconId,
   FederationCapability,
+  FederationJumpSearchProgress,
   FederationJumpSearchRequest,
   FederationJumpSearchResponse,
   FederationPeerSummary,
@@ -12,9 +13,10 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
-  threadHasExactPrNumberMatch,
-  threadMatchesQuery,
+  federatedThreadIdentityKey,
+  rankThreadJumpMatches,
 } from "@pwragent/shared";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { ThreadInfoStore } from "../app-server/thread-info-store";
 
 export type RemoteThreadSummaryPeer = {
@@ -51,17 +53,19 @@ export type ResolvedRemotePins = {
 };
 
 /**
- * Peer navigation snapshots are the only remote summary shape that carries
- * PR chips (the owner merges its overlay `prs` before serving), so both the
- * ⌘K jump search and the pinned-thread merge read through this cache rather
- * than `listThreads`. The TTL keeps keystroke-debounced jump queries and
- * back-to-back snapshot merges from re-fetching full snapshots per call.
+ * Peer navigation summaries are the only remote row shape that carries PR
+ * chips (the owner merges its overlay `prs` before serving). Pinned-thread
+ * merges and the older-peer Cmd+K fallback read full snapshots through this
+ * cache; current peers filter and bound Cmd+K rows on the owner. The TTL keeps
+ * compatibility searches and back-to-back pin merges from re-fetching full
+ * snapshots per call.
  */
 const REMOTE_SNAPSHOT_TTL_MS = 15_000;
 /** Mirrors the federated-search per-peer deadline. */
 const REMOTE_SNAPSHOT_PEER_TIMEOUT_MS = 10_000;
 const DEFAULT_JUMP_SEARCH_LIMIT = 8;
 const MAX_JUMP_SEARCH_LIMIT = 50;
+const JUMP_SEARCH_PEER_CONCURRENCY = 8;
 
 function threadSelection(
   refs: ReadonlyArray<Pick<RemoteThreadPin["ref"], "backend" | "threadId">>,
@@ -177,6 +181,14 @@ export class RemoteThreadSummaryCache {
         target: FederationRemoteTarget,
         selection: FederationThreadSelection,
       ) => Promise<NavigationSnapshot>;
+      /**
+       * Bounded owner-side Cmd+K search. Older peers reject the new method;
+       * those alone fall back to the full-snapshot compatibility path.
+       */
+      searchPeer?: (
+        target: FederationRemoteTarget,
+        request: FederationJumpSearchRequest,
+      ) => Promise<NavigationThreadSummary[]>;
       /** Archived threads for one backend on a connected peer. */
       fetchArchivedThreads: (
         target: FederationRemoteTarget,
@@ -250,6 +262,7 @@ export class RemoteThreadSummaryCache {
 
   async searchForJump(
     request: FederationJumpSearchRequest,
+    onProgress?: (progress: FederationJumpSearchProgress) => void,
   ): Promise<FederationJumpSearchResponse> {
     const query = request.query.trim();
     if (!query) {
@@ -259,38 +272,62 @@ export class RemoteThreadSummaryCache {
       1,
       Math.min(request.limit ?? DEFAULT_JUMP_SEARCH_LIMIT, MAX_JUMP_SEARCH_LIMIT),
     );
-    const groups = await Promise.all(
-      this.navigationPeers().map(async (peer) => {
+    const peers = this.navigationPeers();
+    const groups = new Map<string, NavigationThreadSummary[]>();
+    let completedPeerCount = 0;
+
+    const publishProgress = (): FederationJumpSearchResponse => {
+      const response = {
+        results: rankUniqueThreadJumpMatches(
+          [...groups.values()].flat(),
+          query,
+          limit,
+        ),
+      };
+      onProgress?.({
+        ...response,
+        completedPeerCount,
+        totalPeerCount: peers.length,
+        complete: completedPeerCount === peers.length,
+      });
+      return response;
+    };
+
+    if (peers.length === 0) {
+      return publishProgress();
+    }
+
+    const concurrency = Math.min(JUMP_SEARCH_PEER_CONCURRENCY, peers.length);
+    const searches = new IterableMapper(
+      peers,
+      async (peer) => {
         try {
-          return await this.threadsForPeer(
-            peer.target,
-            { kind: "all" },
-            "jump-search",
-          );
+          return {
+            instanceId: peer.target.instanceId,
+            results: await this.searchPeerForJump(peer.target, { query, limit }),
+          };
         } catch {
           // ⌘K is a jump surface, not a diagnostics surface: a slow or
           // failing peer contributes nothing rather than an error row.
-          return [];
+          return {
+            instanceId: peer.target.instanceId,
+            results: [],
+          };
         }
-      }),
+      },
+      {
+        concurrency,
+        maxUnread: concurrency,
+      },
     );
-    const results = groups
-      .flat()
-      .filter((thread) => threadMatchesQuery(thread, query))
-      .sort((left, right) => {
-        const exactPrPriority =
-          Number(threadHasExactPrNumberMatch(right, query))
-          - Number(threadHasExactPrNumberMatch(left, query));
-        if (exactPrPriority !== 0) {
-          return exactPrPriority;
-        }
-        return (
-          (right.updatedAt ?? right.createdAt ?? 0)
-          - (left.updatedAt ?? left.createdAt ?? 0)
-        );
-      })
-      .slice(0, limit);
-    return { results };
+
+    let response: FederationJumpSearchResponse = { results: [] };
+    for await (const group of searches) {
+      groups.set(group.instanceId, group.results);
+      completedPeerCount += 1;
+      response = publishProgress();
+    }
+    return response;
   }
 
   /**
@@ -786,10 +823,39 @@ export class RemoteThreadSummaryCache {
       .filter((peer) => peer.capabilities.includes("thread_navigation"));
   }
 
+  private async searchPeerForJump(
+    target: FederationRemoteTarget,
+    request: FederationJumpSearchRequest,
+  ): Promise<NavigationThreadSummary[]> {
+    const timeoutMs =
+      this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
+    const deadlineAt = Date.now() + timeoutMs;
+    if (this.options.searchPeer) {
+      try {
+        return await withTimeout(
+          this.options.searchPeer(target, request),
+          timeoutMs,
+          `Remote thread search timed out after ${Math.round(timeoutMs / 1000)}s.`,
+        );
+      } catch (error) {
+        if (!hasFederationErrorCode(error, "method_not_found")) {
+          throw error;
+        }
+      }
+    }
+    return await this.threadsForPeer(
+      target,
+      { kind: "all" },
+      "jump-search",
+      deadlineAt,
+    );
+  }
+
   private async threadsForPeer(
     target: FederationRemoteTarget,
     selection: FederationThreadSelection,
     interestKey: string,
+    deadlineAt?: number,
   ): Promise<NavigationThreadSummary[]> {
     const now = this.options.now?.() ?? Date.now();
     const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
@@ -813,31 +879,41 @@ export class RemoteThreadSummaryCache {
       pending?.generation === generation
       && selectionIncludes(pending.selection, selection)
     ) {
-      return await pending.promise;
+      return await this.awaitPeerSnapshot(
+        pending.promise,
+        deadlineAt,
+      );
     }
     if (pending?.generation === generation) {
       try {
-        await pending.promise;
+        await this.awaitPeerSnapshot(pending.promise, deadlineAt);
       } catch {
         // The next read below gets its own attempt for the wider/different
         // collection; an unrelated sparse failure must not answer it.
       }
-      return await this.threadsForPeer(target, selection, interestKey);
+      return await this.threadsForPeer(
+        target,
+        selection,
+        interestKey,
+        deadlineAt,
+      );
     }
     // Reserved before the fetch, not after it: a snapshot that starts first and
     // finishes last must not overwrite the names a later refresh already
     // recorded.
     const nameObservationSequence = this.reserveThreadNameObservation();
     const promise = (async () => {
-      const timeoutMs =
-        this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
-      const snapshot = await withTimeout(
+      const snapshot = await this.awaitPeerSnapshot(
         this.options.fetchSnapshot(target, selection),
-        timeoutMs,
-        `Remote thread summaries timed out after ${Math.round(timeoutMs / 1000)}s.`,
+        deadlineAt,
       );
       if (this.generationFor(target.instanceId) !== generation) {
-        return await this.threadsForPeer(target, selection, interestKey);
+        return await this.threadsForPeer(
+          target,
+          selection,
+          interestKey,
+          deadlineAt,
+        );
       }
       const threads = snapshot.threads;
       this.cache.set(target.instanceId, {
@@ -871,6 +947,23 @@ export class RemoteThreadSummaryCache {
         this.inFlight.delete(target.instanceId);
       }
     }
+  }
+
+  private async awaitPeerSnapshot<T>(
+    promise: Promise<T>,
+    deadlineAt?: number,
+  ): Promise<T> {
+    const defaultTimeoutMs =
+      this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
+    const timeoutMs = deadlineAt === undefined
+      ? defaultTimeoutMs
+      : Math.max(0, deadlineAt - Date.now());
+    const message =
+      `Remote thread summaries timed out after ${Math.round(defaultTimeoutMs / 1000)}s.`;
+    if (timeoutMs <= 0) {
+      throw new Error(message);
+    }
+    return await withTimeout(promise, timeoutMs, message);
   }
 
   private async archivedThreadKeysForPeer(
@@ -984,4 +1077,33 @@ function withTimeout<T>(
       },
     );
   });
+}
+
+function hasFederationErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === code
+  );
+}
+
+function rankUniqueThreadJumpMatches(
+  threads: readonly NavigationThreadSummary[],
+  query: string,
+  limit: number,
+): NavigationThreadSummary[] {
+  const seen = new Set<string>();
+  return rankThreadJumpMatches(threads, query)
+    .filter((thread) => {
+      const key = thread.federation?.ref
+        ? federatedThreadIdentityKey(thread.federation.ref)
+        : buildThreadIdentityKey(thread.source, thread.id);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
 }

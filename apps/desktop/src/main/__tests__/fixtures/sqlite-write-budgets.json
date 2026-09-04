@@ -90,6 +90,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "federated-navigation-search-projection": {
+    "commits": 0,
+    "note": "one owner-side bounded navigation search projection",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "held-scheduled-action-retry": {
     "commits": 3,
     "note": "one operator-triggered held retry: claim, queue admission, and successful turn start; no timer or automatic retry",
