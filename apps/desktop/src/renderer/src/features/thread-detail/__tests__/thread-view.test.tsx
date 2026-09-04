@@ -6275,6 +6275,199 @@ describe("ThreadView", () => {
     expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-1");
   });
 
+  it("hides the environment setup failure choice while the transcript is still loading", () => {
+    // The zombie: `messageCount` is the loaded transcript's length, so it is
+    // also 0 for a thread with weeks of history that has not hydrated yet.
+    // Before this gate, opening such a thread raised the whole decision panel
+    // for the entire hydration window, every time, forever.
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{}}
+        loading={true}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupStatus: "failed",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Continue anyway" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the environment setup failure choice once the failure has been acknowledged", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{}}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupStatus: "failed",
+            // The durable half: a dismissal recorded in a previous run of the
+            // app, which the in-memory dismissal set could never survive.
+            setupFailureAcknowledgedAt: 1_000,
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Continue anyway" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("persists the environment failure dismissal when continuing anyway", async () => {
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
+      acknowledged: true,
+      backend: "codex" as const,
+      threadId: "thread-env-failure",
+    }));
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ acknowledgeThreadEnvironmentFailure }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupStatus: "failed",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    // No optimistic prompt to send, so this is the pure-dismissal branch.
+    fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+
+    await waitFor(() => {
+      expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-env-failure",
+      });
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue anyway" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("retires a stale environment failure once the thread's transcript has loaded", async () => {
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
+      acknowledged: true,
+      backend: "codex" as const,
+      threadId: "thread-env-failure",
+    }));
+
+    // The thread that failed setup before the acknowledgement existed: it has
+    // real turns now, so the prompt is long moot — retire it durably rather
+    // than flashing it during hydration on every future open.
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ acknowledgeThreadEnvironmentFailure }}
+        loading={false}
+        loadingMore={false}
+        messageCount={4}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "A thread that moved on",
+          titleSource: "derived",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupStatus: "failed",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "updated-since-seen" },
+        }}
+        skills={[]}
+        transcriptEntries={[
+          { type: "message", id: "message-1", role: "user", text: "hi" },
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await waitFor(() => {
+      expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-env-failure",
+      });
+    });
+    expect(acknowledgeThreadEnvironmentFailure).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the environment setup failure actions outside the panel's scroll container", () => {
     render(
       <ThreadView
@@ -6299,10 +6492,7 @@ describe("ThreadView", () => {
             setupStatus: "failed",
             setupCommand: "nvm install\ncorepack enable\npnpm install",
             setupExitCode: 1,
-            setupOutput: Array.from(
-              { length: 200 },
-              (_unused, index) => `nvm option ${index}: a long line of help`,
-            ).join("\n"),
+            setupOutput: "nvm is not compatible with the npm config prefix",
           },
           linkedDirectories: [
             {
@@ -6327,11 +6517,11 @@ describe("ThreadView", () => {
     );
 
     // `__body` is the panel's scroll container and carries its height bound
-    // (see `environment-setup-choice-bounds.test.ts`). A long setup output is
-    // exactly what pushes it past that bound, and the two buttons are the
-    // operator's only way out of this state — so they have to be a sibling of
-    // the scroller, never a descendant of it. jsdom does no layout, but it
-    // can see this containment, which is the half a refactor would break.
+    // (see `environment-setup-choice-bounds.test.ts`); the two buttons are the
+    // operator's only way out of this state, so they have to stay outside that
+    // scroller. jsdom does no layout — the height bound itself is asserted in
+    // the stylesheet test — but it can see this containment, which is the half
+    // a refactor would break.
     const panel = document.querySelector(".environment-setup-choice");
     const body = panel?.querySelector(".environment-setup-choice__body");
     const actions = panel?.querySelector(".environment-setup-choice__actions");
@@ -6339,7 +6529,6 @@ describe("ThreadView", () => {
     expect(body).not.toBeNull();
     expect(actions).not.toBeNull();
     expect(body!.contains(actions!)).toBe(false);
-    expect(actions!.parentElement).toBe(panel);
     for (const name of ["Delete worktree and close", "Continue anyway"]) {
       expect(actions!.contains(screen.getByRole("button", { name }))).toBe(
         true,

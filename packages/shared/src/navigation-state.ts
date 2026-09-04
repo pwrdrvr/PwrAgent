@@ -535,6 +535,8 @@ export function buildNavigationSnapshotHash(params: {
             setupOutput: thread.codexEnvironmentRuntime.setupOutput ?? null,
             setupExitCode: thread.codexEnvironmentRuntime.setupExitCode ?? null,
             setupDurationMs: thread.codexEnvironmentRuntime.setupDurationMs ?? null,
+            setupFailureAcknowledgedAt:
+              thread.codexEnvironmentRuntime.setupFailureAcknowledgedAt ?? null,
             actions: (thread.codexEnvironmentRuntime.actions ?? []).map(
               (action) => ({
                 id: action.id,

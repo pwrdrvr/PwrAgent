@@ -463,9 +463,19 @@ function EnvironmentSetupFailureChoice(props: {
     Boolean(props.command?.trim()) ||
     Boolean(trimmedOutput) ||
     typeof props.exitCode === "number";
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // The body is the panel's scroll container, and the Continue failure renders
+  // at the top of it. An operator who scrolled down to read the tail of the
+  // output before clicking would otherwise get the error off-screen and a
+  // re-enabled button with no visible feedback.
+  useEffect(() => {
+    if (props.error) {
+      bodyRef.current?.scrollTo({ top: 0 });
+    }
+  }, [props.error]);
   return (
     <section className="environment-setup-choice" aria-label={label}>
-      <div className="environment-setup-choice__body">
+      <div className="environment-setup-choice__body" ref={bodyRef}>
         <div className="environment-setup-choice__heading">
           <p className="eyebrow">{label}</p>
           <h3>{props.environmentName}</h3>
@@ -1320,6 +1330,12 @@ export function ThreadView(props: ThreadViewProps) {
     useState<string>();
   const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
     useState<Set<string>>(() => new Set());
+  // Thread keys this window has already written an environment-failure
+  // acknowledgement for. The overlay write is idempotent, but the navigation
+  // snapshot this window holds keeps the pre-write runtime until it refreshes,
+  // so without this the backfill below would re-send on every render pass that
+  // moves one of its inputs.
+  const environmentFailureAcknowledgedRef = useRef<Set<string>>(new Set());
   const [setupFailureArchiving, setSetupFailureArchiving] = useState(false);
   const [setupFailureContinuing, setSetupFailureContinuing] = useState(false);
   const [setupFailureContinueError, setSetupFailureContinueError] =
@@ -1903,6 +1919,19 @@ export function ThreadView(props: ThreadViewProps) {
     .reverse()
     .find((run) => run.status === "failed");
   const selectedThreadActionFailed = Boolean(selectedThreadLatestFailedActionRun);
+  // `setupStatus: "failed"` and a failed action run are permanent history; the
+  // prompt they raise is not. This is the record of the operator having
+  // answered it. Setup runs once, at thread creation, so any acknowledgement
+  // covers the setup phase; an action that failed *after* the acknowledgement
+  // is a new failure and raises the prompt again.
+  const selectedThreadEnvironmentFailureAcknowledgedAt =
+    selectedThread?.codexEnvironmentRuntime?.setupFailureAcknowledgedAt;
+  const selectedThreadEnvironmentFailureAcknowledged =
+    typeof selectedThreadEnvironmentFailureAcknowledgedAt === "number"
+    && (!selectedThreadActionFailed
+      || (selectedThreadLatestFailedActionRun?.exitedAt
+        ?? selectedThreadLatestFailedActionRun?.startedAt
+        ?? 0) <= selectedThreadEnvironmentFailureAcknowledgedAt);
   const selectedThreadWorktree = selectedThread?.linkedDirectories.find(
     (directory) =>
       directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
@@ -1915,13 +1944,88 @@ export function ThreadView(props: ThreadViewProps) {
     selectedThread &&
       selectedThreadKey &&
       (props.messageCount === 0 || hasOnlyOptimisticLaunchpadMessage) &&
+      // `messageCount` is the loaded transcript's length, so it also reads 0
+      // for a thread whose history has not arrived yet. Without this the
+      // prompt reappeared for the whole hydration window every time an old
+      // failed-setup thread was opened, then vanished when the transcript
+      // landed — a decision prompt for a decision made weeks ago.
+      !props.loading &&
       !props.activeTurnId &&
       (selectedThreadSetupFailed || selectedThreadActionFailed) &&
+      !selectedThreadEnvironmentFailureAcknowledged &&
       !setupFailureDismissedThreadKeys.has(selectedThreadKey),
   );
   const selectedThreadEnvironmentFailurePhase = selectedThreadActionFailed
     ? "action"
     : "setup";
+  // Retire a failure the thread has already moved past. This covers the
+  // threads that failed before the acknowledgement existed, and the operator
+  // who answered the prompt by quitting the app rather than by clicking: once
+  // the transcript has loaded and holds real turns, the decision is long made,
+  // so record it instead of raising the prompt again on the next launch. Only
+  // a loaded transcript counts — `messageCount` is 0 during hydration too.
+  const selectedThreadEnvironmentFailureStale = Boolean(
+    selectedThread
+      && selectedThreadKey
+      && (selectedThreadSetupFailed || selectedThreadActionFailed)
+      && !selectedThreadEnvironmentFailureAcknowledged
+      && !props.loading
+      && props.messageCount > 0
+      && !hasOnlyOptimisticLaunchpadMessage,
+  );
+  const acknowledgeThreadEnvironmentFailure =
+    props.desktopApi?.acknowledgeThreadEnvironmentFailure;
+  // Named apart from `selectedThreadBackend` above, which is the backend
+  // *descriptor* from props.backends, not the thread's own backend kind.
+  const selectedThreadBackendKind = selectedThread?.source;
+  const selectedThreadId = selectedThread?.id;
+  useEffect(() => {
+    if (
+      !selectedThreadEnvironmentFailureStale
+      || !selectedThreadKey
+      || !selectedThreadId
+      || !selectedThreadBackendKind
+      || !acknowledgeThreadEnvironmentFailure
+      || environmentFailureAcknowledgedRef.current.has(selectedThreadKey)
+    ) {
+      return;
+    }
+    environmentFailureAcknowledgedRef.current.add(selectedThreadKey);
+    void acknowledgeThreadEnvironmentFailure({
+      backend: selectedThreadBackendKind,
+      threadId: selectedThreadId,
+    }).catch(() => undefined);
+  }, [
+    acknowledgeThreadEnvironmentFailure,
+    selectedThreadBackendKind,
+    selectedThreadEnvironmentFailureStale,
+    selectedThreadId,
+    selectedThreadKey,
+  ]);
+  /**
+   * Retire the environment-failure prompt for this thread, in this window and
+   * durably. The in-memory set alone did not survive an app restart — or a
+   * ThreadView unmount — so the prompt came back on a thread whose failure the
+   * operator had already answered.
+   */
+  const dismissEnvironmentFailureChoice = (threadKey: string): void => {
+    setSetupFailureDismissedThreadKeys((current) => {
+      const next = new Set(current);
+      next.add(threadKey);
+      return next;
+    });
+    if (!selectedThread || environmentFailureAcknowledgedRef.current.has(threadKey)) {
+      return;
+    }
+    environmentFailureAcknowledgedRef.current.add(threadKey);
+    void props.desktopApi?.acknowledgeThreadEnvironmentFailure?.({
+      backend: selectedThread.source,
+      threadId: selectedThread.id,
+    })
+      // The prompt is already gone from this window; a failed write only means
+      // it can appear once more on a later launch, which is not worth a notice.
+      .catch(() => undefined);
+  };
   const continueAfterSetupFailure = async (): Promise<void> => {
     if (!selectedThread || !selectedThreadKey) {
       return;
@@ -1931,11 +2035,7 @@ export function ThreadView(props: ThreadViewProps) {
       selectedThread.optimisticUserMessage,
     );
     if (input.length === 0 || !props.desktopApi?.startTurn) {
-      setSetupFailureDismissedThreadKeys((current) => {
-        const next = new Set(current);
-        next.add(selectedThreadKey);
-        return next;
-      });
+      dismissEnvironmentFailureChoice(selectedThreadKey);
       return;
     }
 
@@ -1958,11 +2058,7 @@ export function ThreadView(props: ThreadViewProps) {
           : undefined,
       });
       props.onActiveTurnIdChange?.(response.turnId);
-      setSetupFailureDismissedThreadKeys((current) => {
-        const next = new Set(current);
-        next.add(selectedThreadKey);
-        return next;
-      });
+      dismissEnvironmentFailureChoice(selectedThreadKey);
       await props.onRefreshNavigation?.();
     } catch (error) {
       props.onPendingStatusChange?.(undefined);
