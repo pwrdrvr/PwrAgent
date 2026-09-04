@@ -368,6 +368,7 @@ import {
   CodexAppServerClient,
   DEFAULT_CODEX_THREAD_TITLE_MODEL,
   extractRateLimitSummaries,
+  formatRateLimitWindowName,
   type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
 } from "../codex-app-server/client";
@@ -5593,11 +5594,11 @@ function mergeRateLimitSummary(
   current: BackendRateLimitSummary,
   update: BackendRateLimitSummary,
 ): BackendRateLimitSummary {
-  return {
+  const merged: BackendRateLimitSummary = {
     ...current,
     ...(update.limitId !== undefined ? { limitId: update.limitId } : {}),
     ...(update.limitName !== undefined
-      ? { name: update.name, limitName: update.limitName }
+      ? { limitName: update.limitName }
       : {}),
     ...(update.windowKey !== undefined ? { windowKey: update.windowKey } : {}),
     ...(update.remaining !== undefined ? { remaining: update.remaining } : {}),
@@ -5612,6 +5613,17 @@ function mergeRateLimitSummary(
       ? { windowMinutes: update.windowMinutes }
       : {}),
   };
+  if (merged.windowKey === "primary" || merged.windowKey === "secondary") {
+    merged.name = formatRateLimitWindowName({
+      limitId: merged.limitId,
+      limitName: merged.limitName,
+      windowKey: merged.windowKey,
+      windowMinutes: merged.windowMinutes,
+    });
+  } else if (update.limitName !== undefined) {
+    merged.name = update.name;
+  }
+  return merged;
 }
 
 type ModelSettings = {
@@ -7778,6 +7790,7 @@ export class DesktopBackendRegistry {
     "read" | "subscribe"
   >;
   private codexBackendSummary?: BackendSummary;
+  private codexRateLimitsNotificationVersion = 0;
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
   private providerRuntimeInvalidationPromise?: Promise<void>;
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
@@ -22303,7 +22316,7 @@ export class DesktopBackendRegistry {
           backend === "codex"
           && notification.method === "account/rateLimits/updated"
         ) {
-          this.updateCachedCodexRateLimits(notification.params.rateLimits);
+          await this.updateCachedCodexRateLimits(notification.params.rateLimits);
         }
         if (
           backend === "codex" &&
@@ -24005,12 +24018,45 @@ export class DesktopBackendRegistry {
     });
   }
 
-  private updateCachedCodexRateLimits(value: unknown): void {
+  private async updateCachedCodexRateLimits(value: unknown): Promise<void> {
+    const rateLimits = extractRateLimitSummaries(value);
+    if (rateLimits.length === 0) {
+      return;
+    }
+    const notificationVersion = ++this.codexRateLimitsNotificationVersion;
     if (!this.codexBackendSummary) {
       return;
     }
-    const rateLimits = extractRateLimitSummaries(value);
-    if (rateLimits.length === 0) {
+    if (rateLimits.some((limit) => !limit.limitId?.trim())) {
+      let refetchedRateLimits: BackendRateLimitSummary[];
+      try {
+        refetchedRateLimits = await readClientRateLimits(this.codexClient);
+      } catch (error) {
+        backendRegistryLog.warn(
+          "Codex rate-limit refetch after sparse notification failed",
+          { error: error instanceof Error ? error.message : String(error) },
+        );
+        return;
+      }
+      if (
+        notificationVersion !== this.codexRateLimitsNotificationVersion
+        || refetchedRateLimits.length === 0
+      ) {
+        return;
+      }
+      const currentRateLimits = this.codexBackendSummary.rateLimits ?? [];
+      if (
+        isDeepStrictEqual(
+          [...currentRateLimits].sort(compareRateLimitSummaries),
+          [...refetchedRateLimits].sort(compareRateLimitSummaries),
+        )
+      ) {
+        return;
+      }
+      this.codexBackendSummary = {
+        ...this.codexBackendSummary,
+        rateLimits: refetchedRateLimits,
+      };
       return;
     }
     const currentRateLimits = this.codexBackendSummary.rateLimits ?? [];
@@ -24066,6 +24112,7 @@ export class DesktopBackendRegistry {
   ): Promise<BackendSummary> {
     assertProviderDiscoveryPermit(permit);
     const previousSummary = this.readCodexBackendSummary();
+    const rateLimitsNotificationVersion = this.codexRateLimitsNotificationVersion;
     const { lastKnownGood } = this.readCodexProvider();
     const [
       initializeResult,
@@ -24123,6 +24170,15 @@ export class DesktopBackendRegistry {
       capabilities.startReview = true;
     }
 
+    const discoveredRateLimits =
+      rateLimitsResult.status === "fulfilled"
+        ? rateLimitsResult.value
+        : undefined;
+    const rateLimits =
+      rateLimitsNotificationVersion !== this.codexRateLimitsNotificationVersion
+      && this.codexBackendSummary
+        ? this.codexBackendSummary.rateLimits
+        : discoveredRateLimits;
     const summary: BackendSummary = {
       kind: "codex",
       label: BACKEND_LABELS.codex,
@@ -24132,10 +24188,7 @@ export class DesktopBackendRegistry {
         isMeaningfulAccountSummary(accountResult.value)
           ? accountResult.value
           : undefined,
-      rateLimits:
-        rateLimitsResult.status === "fulfilled"
-          ? rateLimitsResult.value
-          : undefined,
+      rateLimits,
       serverName: successful[0]?.serverInfo?.name,
       // Today's `initialize` carries no `serverInfo` at all; the App Server's
       // version reaches us inside the `userAgent` it does report. The resolved

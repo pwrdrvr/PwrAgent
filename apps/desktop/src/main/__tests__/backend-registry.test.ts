@@ -1733,6 +1733,7 @@ class MockBackendClient {
   initializeCallCount = 0;
   listModelsCallCount = 0;
   readServerCapabilitiesCallCount = 0;
+  readRateLimitsCallCount = 0;
   steerTurnCallCount = 0;
   setThreadPermissionsCallCount = 0;
   lastListModelsDiagnostics?: {
@@ -1795,6 +1796,7 @@ class MockBackendClient {
       modelListErrors?: Error[];
       account?: BackendAccountSummary;
       rateLimits?: BackendRateLimitSummary[];
+      rateLimitReads?: BackendRateLimitSummary[][];
       listThreadsError?: Error;
       listThreadsDelay?: Promise<unknown>;
       respectThreadTitleFilter?: boolean;
@@ -1975,7 +1977,8 @@ class MockBackendClient {
   }
 
   async readRateLimits(): Promise<BackendRateLimitSummary[]> {
-    return this.options.rateLimits ?? [];
+    this.readRateLimitsCallCount += 1;
+    return this.options.rateLimitReads?.shift() ?? this.options.rateLimits ?? [];
   }
 
   onNotification(
@@ -6328,7 +6331,7 @@ describe("DesktopBackendRegistry", () => {
       params: {
         rateLimits: {
           limitId: "codex",
-          limitName: null,
+          limitName: "Codex",
           primary: {
             usedPercent,
             windowDurationMins: null,
@@ -6391,6 +6394,162 @@ describe("DesktopBackendRegistry", () => {
     expect(unchangedSummary).toBe(updatedSummary);
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("refetches Codex rate limits when a sparse notification omits its family ID", async () => {
+    const initialRateLimits: BackendRateLimitSummary[] = [
+      {
+        name: "5h limit",
+        limitId: "codex",
+        limitName: "Codex",
+        windowKey: "primary",
+        usedPercent: 77,
+        remaining: 23,
+        windowMinutes: 300,
+      },
+      {
+        name: "Weekly limit",
+        limitId: "codex",
+        limitName: "Codex",
+        windowKey: "secondary",
+        usedPercent: 9,
+        remaining: 91,
+        windowMinutes: 10_080,
+      },
+    ];
+    const refetchedRateLimits: BackendRateLimitSummary[] = [
+      {
+        ...initialRateLimits[0],
+        usedPercent: 85,
+        remaining: 15,
+      },
+      initialRateLimits[1],
+    ];
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+      },
+      rateLimitReads: [initialRateLimits, refetchedRateLimits],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    await codexClient.emit({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: null,
+          limitName: "Codex",
+          primary: {
+            usedPercent: 85,
+            windowDurationMins: null,
+            resetsAt: null,
+          },
+          secondary: null,
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
+        },
+      },
+    });
+
+    const summary = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends[0];
+    expect(codexClient.readRateLimitsCallCount).toBe(2);
+    expect(summary.rateLimits).toEqual(refetchedRateLimits);
+    expect(summary.rateLimits).toHaveLength(2);
+    expect(summary.rateLimits).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Primary limit" }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
+  it("preserves notification rate limits when concurrent discovery finishes later", async () => {
+    const discoveryRelease = createDeferred<void>();
+    let blockRuntimeResolution = false;
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+      },
+      rateLimits: [
+        {
+          name: "5h limit",
+          limitId: "codex",
+          limitName: "Codex",
+          windowKey: "primary",
+          usedPercent: 77,
+          remaining: 23,
+          windowMinutes: 300,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      resolveCodexRuntimeCommand: async () => {
+        if (blockRuntimeResolution) {
+          await discoveryRelease.promise;
+        }
+        return {
+          command: path.join("/opt", "homebrew", "bin", "codex"),
+          version: "1.0.0",
+        };
+      },
+    });
+
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    blockRuntimeResolution = true;
+    const discovery = discoverCodexBackendForTest(registry);
+    await vi.waitFor(() => {
+      expect(codexClient.readRateLimitsCallCount).toBe(2);
+    });
+    await codexClient.emit({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: null,
+          primary: {
+            usedPercent: 85,
+            windowDurationMins: null,
+            resetsAt: null,
+          },
+          secondary: null,
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
+        },
+      },
+    });
+    discoveryRelease.resolve();
+    await discovery;
+
+    const summary = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends[0];
+    expect(summary.rateLimits).toEqual([
+      expect.objectContaining({
+        name: "5h limit",
+        limitId: "codex",
+        usedPercent: 85,
+        remaining: 15,
+      }),
+    ]);
+
     await registry.close();
   });
 

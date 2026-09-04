@@ -1454,7 +1454,7 @@ function findFirstNestedValue(value: unknown, keys: string[], depth = 0): unknow
   return undefined;
 }
 
-function formatRateLimitWindowName(params: {
+export function formatRateLimitWindowName(params: {
   limitId?: string;
   limitName?: string;
   windowKey: "primary" | "secondary";
