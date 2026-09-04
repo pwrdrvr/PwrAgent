@@ -30769,45 +30769,6 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async resolveHandoffGroupParentThreadRef(params: {
-    backend: AppServerBackendKind;
-    sourceOverlay: ThreadOverlayState;
-    sourceThreadId: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string }> {
-    const directParentThreadId = params.sourceOverlay.parentThreadId?.trim();
-    if (!directParentThreadId) {
-      return { backend: params.backend, threadId: params.sourceThreadId };
-    }
-
-    let parentThreadId = directParentThreadId;
-    let parentBackend =
-      params.sourceOverlay.parentThreadBackend ?? params.backend;
-    const directParentBackend = parentBackend;
-    const seen = new Set([
-      buildThreadIdentityKey(params.backend, params.sourceThreadId),
-    ]);
-    let parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
-    while (!seen.has(parentKey)) {
-      seen.add(parentKey);
-      const parentOverlay = await this.overlayStore.getThreadOverlayState({
-        backend: parentBackend,
-        threadId: parentThreadId,
-      });
-      const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
-      if (!nextParentThreadId) {
-        return { backend: parentBackend, threadId: parentThreadId };
-      }
-      parentThreadId = nextParentThreadId;
-      parentBackend = parentOverlay?.parentThreadBackend ?? parentBackend;
-      parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
-    }
-
-    return {
-      backend: directParentBackend,
-      threadId: directParentThreadId,
-    };
-  }
-
   private startPendingThreadWorkspaceMove(
     move: PendingThreadWorkspaceMoveSummary,
   ): PendingThreadWorkspaceMoveSummary {
@@ -32629,13 +32590,15 @@ export class DesktopBackendRegistry {
         return threadOrchestrationFailure("invalid_arguments", message);
       }
     }
+    // A handoff's child belongs to the thread that created it. This used to
+    // walk the source's parent chain to its root and adopt the child there,
+    // which made the child a *sibling* of its own creator — and when that root
+    // was a peer's thread, or otherwise not a row in this directory, the child
+    // had nothing to nest under and landed loose in the list. Depth is the
+    // renderer's problem to present, not a reason to record the wrong parent.
     const groupedParentThread =
       groupingMode === "subthread"
-        ? await this.resolveHandoffGroupParentThreadRef({
-            backend: sourceBackend,
-            sourceOverlay,
-            sourceThreadId,
-          })
+        ? { backend: sourceBackend, threadId: sourceThreadId }
         : undefined;
     const groupedParentThreadId = groupedParentThread?.threadId;
     const groupedParentBackend = groupedParentThread?.backend;
@@ -32726,11 +32689,11 @@ export class DesktopBackendRegistry {
           backend: groupedParentBackend ?? backend,
           threadId: groupedParentThreadId,
         });
+        // The source owns this tray, so it never appears in its own order —
+        // `insertSubthreadIdAfter` prepends, putting the newest child directly
+        // under the thread that created it.
         const nextOrder = insertSubthreadIdAfter(
-          groupedParentThreadId === sourceThreadId ||
-          parentOverlay?.subthreadOrder?.includes(sourceThreadId)
-            ? (parentOverlay?.subthreadOrder ?? [])
-            : [...(parentOverlay?.subthreadOrder ?? []), sourceThreadId],
+          parentOverlay?.subthreadOrder ?? [],
           sourceThreadId,
           threadId,
         );

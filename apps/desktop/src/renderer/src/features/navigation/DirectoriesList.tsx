@@ -24,7 +24,6 @@ import {
   moveDirectoryKey,
   moveThreadKey,
   resolveThreadParentKey,
-  sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
   ChevronDownIcon,
@@ -194,6 +193,7 @@ const POINTER_DRAG_ACTIVATION_PX = 4;
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: ExpandedDirectoryThreadRenderModel = {
   cappedUnpinnedThreads: [],
   childThreadsByParentKey: new Map(),
+  directChildKeysByParentKey: new Map(),
   directoryPinnedThreads: [],
   directoryThreadsCollapsed: false,
   directoryUnpinnedThreadCount: 0,
@@ -1141,10 +1141,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
       .join(", ");
     const expandedThreadModel =
       threadModel.expanded ?? EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
-    const { childThreadsByParentKey } = expandedThreadModel;
+    const { childThreadsByParentKey, directChildKeysByParentKey } =
+      expandedThreadModel;
     const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
       const parentKey = threadSummaryIdentityKey(parent);
-      const children = sortSubthreadSummaries(parent, childThreadsByParentKey.get(parentKey) ?? []);
+      // Already depth-first ordered by the render model. Re-sorting here by
+      // this row's `subthreadOrder` would rank its grandchildren as unlisted
+      // and scatter them away from the sub-threads that own them.
+      const children = childThreadsByParentKey.get(parentKey) ?? [];
+      const directChildKeys = directChildKeysByParentKey.get(parentKey) ?? [];
       const nativeSubAgentCount = parent.codexNativeSubAgents?.length ?? 0;
       const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
       if (
@@ -1157,12 +1162,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // Wire drag-to-reorder, mirroring RecentsList — see the dedicated
       // `draggedSubthreadKey` state for why it stays isolated from the
       // directory / pinned-thread drag.
-      const childOrderKeys = children.map((child) =>
-        threadSummaryIdentityKey(child),
-      );
+      const directChildKeySet = new Set(directChildKeys);
       const reorderable =
         threadSupportsFederationCapability(parent, "thread_grouping")
-        && children.length > 1
+        && directChildKeys.length > 1
         && Boolean(props.onUpdateSubthreadOrder);
       return (
         // `listitem` box because this list is a SIBLING of its parent row
@@ -1194,7 +1197,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 compact
-                draggable={reorderable}
+                draggable={reorderable && directChildKeySet.has(childKey)}
                 includeLinkedDirectories
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
@@ -1221,6 +1224,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   if (
                     !draggedThread
                     || draggedSubthreadKey === childKey
+                    || !directChildKeySet.has(childKey)
                     || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
                   ) {
                     event.dataTransfer.dropEffect = "none";
@@ -1254,12 +1258,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     : undefined;
                   if (
                     !draggedThread
+                    || !directChildKeySet.has(childKey)
                     || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
                   ) {
                     return;
                   }
+                  // `subthreadOrder` names this row's own children, so a
+                  // reorder moves keys within that list — never the flattened
+                  // tray, which also carries rows owned by those children.
                   const nextKeys = moveThreadKey(
-                    childOrderKeys,
+                    directChildKeys,
                     draggedKey,
                     childKey,
                     getDropIndicatorPosition(event),

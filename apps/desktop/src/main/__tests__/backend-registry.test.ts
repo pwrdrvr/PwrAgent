@@ -31127,7 +31127,7 @@ script = "printf setup"
     await rm(root, { recursive: true, force: true });
   });
 
-  it("groups handoffs from a persisted grandchild under the root parent", async () => {
+  it("groups a handoff from a persisted grandchild under its own source", async () => {
     const rootDirectory = {
       id: expectedDir("/repo/app"),
       kind: "local" as const,
@@ -31233,7 +31233,7 @@ script = "printf setup"
     );
     expect(payload).toMatchObject({
       threadId: "thread-1",
-      groupedUnderThreadId: "root-thread",
+      groupedUnderThreadId: "source-grandchild",
       origin: {
         sourceThreadId: "source-grandchild",
       },
@@ -31244,7 +31244,17 @@ script = "printf setup"
         threadId: "thread-1",
       }),
     ).resolves.toMatchObject({
-      parentThreadId: "root-thread",
+      parentThreadId: "source-grandchild",
+    });
+    // The source owns its own tray, so the new child lands there — and the
+    // root's order is left exactly as the operator arranged it.
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "source-grandchild",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["thread-1"],
     });
     await expect(
       overlayStore.getThreadOverlayState({
@@ -31252,12 +31262,7 @@ script = "printf setup"
         threadId: "root-thread",
       }),
     ).resolves.toMatchObject({
-      subthreadOrder: [
-        "older-child",
-        "intermediate-child",
-        "source-grandchild",
-        "thread-1",
-      ],
+      subthreadOrder: ["older-child", "intermediate-child"],
     });
 
     await registry.close();

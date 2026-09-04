@@ -22,7 +22,20 @@ export const DIRECTORY_UNPINNED_THREAD_CAP = 10;
 
 export type ExpandedDirectoryThreadRenderModel = {
   cappedUnpinnedThreads: NavigationThreadSummary[];
+  /**
+   * Rendered row key to the whole descendant subtree it displays, depth-first
+   * and already ordered. Consumers render this list as-is; re-sorting it by
+   * the tray owner's `subthreadOrder` would scatter grandchildren away from
+   * their parents, because that order only names direct children.
+   */
   childThreadsByParentKey: Map<string, NavigationThreadSummary[]>;
+  /**
+   * Rendered row key to the ordered keys of its *direct* children — the only
+   * rows a tray reorder may move, because `subthreadOrder` is stored per
+   * parent. Writing a whole flattened tray back would list grandchildren as
+   * children of the row they merely render under.
+   */
+  directChildKeysByParentKey: Map<string, string[]>;
   directoryPinnedThreads: NavigationThreadSummary[];
   directoryThreadsCollapsed: boolean;
   directoryUnpinnedThreadCount: number;
@@ -132,66 +145,82 @@ export function buildDirectoryThreadRenderModel(params: {
         ...cappedUnpinnedThreads,
         ...(unpinnedExpanded ? overflowUnpinnedThreads : []),
       ];
-  const renderedParentKeys = new Set(
-    [...topLevelPinnedThreads, ...visibleUnpinnedThreads].map((thread) =>
-      threadSummaryIdentityKey(thread),
-    ),
-  );
-  // A pinned sub-thread must never be swallowed by a parent that does not
-  // render. The collapse hides every unpinned row, and a group parent that
-  // aged out of the navigation window is in no directory at all, so nesting
-  // alone would drop a row the directory still reports as pinned — including
-  // the visibility pin the main process appends at creation time. Give it a
-  // top-level pinned row instead.
-  const promotedPinnedChildren = childThreadCandidates.filter(
-    (candidate) =>
-      isPinnedThread(candidate.thread)
-      && !renderedParentKeys.has(candidate.parentKey),
-  );
+  const childrenByParentKey = new Map<string, NavigationThreadSummary[]>();
+  for (const { parentKey, thread } of childThreadCandidates) {
+    const siblings = childrenByParentKey.get(parentKey) ?? [];
+    siblings.push(thread);
+    childrenByParentKey.set(parentKey, siblings);
+  }
+  // One tray per rendered row, holding that row's whole descendant subtree in
+  // depth-first order. Sub-threads nest at their true depth in the data; only
+  // the view is one level deep, and depth-first keeps a sub-thread immediately
+  // after the thread that created it — the same trade
+  // `groupCodexNativeSubAgents` makes for native workers. Collapsing the
+  // relationship itself instead would leave a grandchild pointing at a row it
+  // does not belong to.
+  const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
+  const directChildKeysByParentKey = new Map<string, string[]>();
+  const placedThreadKeys = new Set<string>();
+  const collectSubtree = (
+    trayKey: string,
+    parent: NavigationThreadSummary,
+    parentKey: string,
+  ): void => {
+    const children = sortSubthreadSummaries(
+      parent,
+      childrenByParentKey.get(parentKey) ?? [],
+    );
+    if (parentKey === trayKey) {
+      directChildKeysByParentKey.set(
+        trayKey,
+        children.map((child) => threadSummaryIdentityKey(child)),
+      );
+    }
+    for (const child of children) {
+      const childKey = threadSummaryIdentityKey(child);
+      // A cycle in the stored parent links, or a thread already placed under
+      // an earlier tray, must not render twice or recurse forever.
+      if (placedThreadKeys.has(childKey)) continue;
+      placedThreadKeys.add(childKey);
+      const tray = childThreadsByParentKey.get(trayKey) ?? [];
+      tray.push(child);
+      childThreadsByParentKey.set(trayKey, tray);
+      collectSubtree(trayKey, child, childKey);
+    }
+  };
+  for (const thread of [...topLevelPinnedThreads, ...visibleUnpinnedThreads]) {
+    const threadKey = threadSummaryIdentityKey(thread);
+    placedThreadKeys.add(threadKey);
+    collectSubtree(threadKey, thread, threadKey);
+  }
+  // A pinned sub-thread must never be swallowed by an ancestor that does not
+  // render. The collapse hides every unpinned row, so a pin under one of them
+  // would otherwise drop a row the directory still reports as pinned —
+  // including the visibility pin the main process appends at creation time.
+  // Give it a top-level pinned row, and let its own subtree follow it there.
+  const promotedPinnedChildren: NavigationThreadSummary[] = [];
+  for (const { thread } of childThreadCandidates) {
+    const threadKey = threadSummaryIdentityKey(thread);
+    if (placedThreadKeys.has(threadKey) || !isPinnedThread(thread)) continue;
+    placedThreadKeys.add(threadKey);
+    promotedPinnedChildren.push(thread);
+    collectSubtree(threadKey, thread, threadKey);
+  }
   const directoryPinnedThreads =
     promotedPinnedChildren.length === 0
       ? topLevelPinnedThreads
-      : [
-          ...topLevelPinnedThreads,
-          ...promotedPinnedChildren.map((candidate) => candidate.thread),
-        ];
+      : [...topLevelPinnedThreads, ...promotedPinnedChildren];
   directoryPinnedThreads.sort(comparePinnedThreads);
-  const promotedThreadKeys = new Set(
-    promotedPinnedChildren.map((candidate) =>
-      threadSummaryIdentityKey(candidate.thread),
-    ),
-  );
-  for (const threadKey of promotedThreadKeys) {
-    renderedParentKeys.add(threadKey);
-  }
-  const childThreadsByParentKey = new Map<
-    string,
-    NavigationThreadSummary[]
-  >();
-  for (const { parentKey, thread } of childThreadCandidates) {
-    if (!renderedParentKeys.has(parentKey)) continue;
-    // A promotion already gave this row its own top-level place. Nesting it
-    // under a parent that a later promotion made visible would render it
-    // twice.
-    if (promotedThreadKeys.has(threadSummaryIdentityKey(thread))) continue;
-    const children = childThreadsByParentKey.get(parentKey) ?? [];
-    children.push(thread);
-    childThreadsByParentKey.set(parentKey, children);
-  }
   const selectionOrder = [
     ...directoryPinnedThreads,
     ...visibleUnpinnedThreads,
   ].flatMap((thread) => {
     const threadKey = threadSummaryIdentityKey(thread);
-    const children = sortSubthreadSummaries(
-      thread,
-      childThreadsByParentKey.get(threadKey) ?? [],
-    );
     return [
       threadKey,
       ...(thread.subthreadsCollapsed
         ? []
-        : children.map((child) =>
+        : (childThreadsByParentKey.get(threadKey) ?? []).map((child) =>
             threadSummaryIdentityKey(child),
           )),
     ];
@@ -204,6 +233,7 @@ export function buildDirectoryThreadRenderModel(params: {
     expanded: {
       cappedUnpinnedThreads,
       childThreadsByParentKey,
+      directChildKeysByParentKey,
       directoryPinnedThreads,
       directoryThreadsCollapsed,
       directoryUnpinnedThreadCount,
