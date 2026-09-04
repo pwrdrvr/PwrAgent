@@ -17,6 +17,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  buildAppendPinRank,
   buildThreadUrl,
   comparePinnedDirectories,
   comparePinnedThreads,
@@ -128,6 +129,23 @@ function hydrateHoverStableSidebarSnapshot(
       threadSummaryIdentityKey(thread),
     ),
   );
+  /**
+   * Where a row that was not in the frozen snapshot joins the pinned section.
+   * A newly created thread arrives already pinned when its directory's
+   * unpinned section is collapsed — that pin is the only thing keeping it out
+   * of the hidden section, so dropping it would hide a thread an agent or a
+   * peer just created. Re-ranking it below every frozen pin keeps the hover
+   * contract intact: the row lands at the bottom and nothing the pointer is
+   * aimed at moves. Computed on demand, because most frames bring no new
+   * pinned row at all.
+   */
+  let appendedPinRankCache: string | undefined;
+  const appendedPinRank = (): string => {
+    appendedPinRankCache ??= buildAppendPinRank(
+      frozen.threads.map((frozenThread) => frozenThread.pinnedRank),
+    );
+    return appendedPinRankCache;
+  };
 
   return {
     directories: [
@@ -186,7 +204,9 @@ function hydrateHoverStableSidebarSnapshot(
           parentThreadInstanceId: undefined,
           pinnedRank: options?.refreshThreadPinRanks
             ? thread.pinnedRank
-            : undefined,
+            : thread.pinnedRank
+              ? appendedPinRank()
+              : undefined,
         })),
     ],
   };

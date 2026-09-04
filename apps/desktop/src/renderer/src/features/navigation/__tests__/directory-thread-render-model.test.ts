@@ -123,4 +123,231 @@ describe("large directory thread render model", () => {
     expect(model.expanded?.overflowUnpinnedThreads).toHaveLength(97);
     expect(model.expanded?.selectionOrder).toHaveLength(10);
   });
+
+  it("gives a pinned subthread its own row when its parent stays collapsed", () => {
+    const hiddenParent = {
+      id: "hidden-parent",
+      title: "Hidden parent",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    } as NavigationThreadSummary;
+    const pinnedAnchor = {
+      id: "pinned-anchor",
+      title: "Pinned anchor",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      pinnedRank: "1024",
+    } as NavigationThreadSummary;
+    const pinnedChild = {
+      id: "pinned-child",
+      title: "Pinned child",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadBackend: "codex",
+      parentThreadId: "hidden-parent",
+      pinnedRank: "2048",
+    } as NavigationThreadSummary;
+    const model = buildDirectoryThreadRenderModel({
+      directory: {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [
+          "codex:pinned-anchor",
+          "codex:hidden-parent",
+          "codex:pinned-child",
+        ],
+        needsAttentionCount: 0,
+        directoryThreadsCollapsed: true,
+      },
+      expanded: true,
+      threadsByKey: new Map([
+        ["codex:pinned-anchor", pinnedAnchor],
+        ["codex:hidden-parent", hiddenParent],
+        ["codex:pinned-child", pinnedChild],
+      ]),
+    });
+
+    expect(model.expanded?.directoryThreadsCollapsed).toBe(true);
+    expect(
+      model.expanded?.directoryPinnedThreads.map((thread) => thread.id),
+    ).toEqual(["pinned-anchor", "pinned-child"]);
+    expect(model.expanded?.childThreadsByParentKey.size).toBe(0);
+    expect(model.expanded?.selectionOrder).toEqual([
+      "codex:pinned-anchor",
+      "codex:pinned-child",
+    ]);
+  });
+
+  it("keeps an unpinned subthread nested under its rendered parent", () => {
+    const parent = {
+      id: "parent",
+      title: "Parent",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      pinnedRank: "1024",
+    } as NavigationThreadSummary;
+    const child = {
+      id: "child",
+      title: "Child",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadBackend: "codex",
+      parentThreadId: "parent",
+      pinnedRank: "2048",
+    } as NavigationThreadSummary;
+    const model = buildDirectoryThreadRenderModel({
+      directory: {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: ["codex:parent", "codex:child"],
+        needsAttentionCount: 0,
+        directoryThreadsCollapsed: true,
+      },
+      expanded: true,
+      threadsByKey: new Map([
+        ["codex:parent", parent],
+        ["codex:child", child],
+      ]),
+    });
+
+    expect(
+      model.expanded?.directoryPinnedThreads.map((thread) => thread.id),
+    ).toEqual(["parent"]);
+    expect(model.expanded?.childThreadsByParentKey.get("codex:parent")).toEqual([
+      child,
+    ]);
+    expect(model.expanded?.selectionOrder).toEqual([
+      "codex:parent",
+      "codex:child",
+    ]);
+  });
+
+  it("renders a grandchild in its top-level ancestor's tray, after its parent", () => {
+    const makeThread = (
+      id: string,
+      extra: Partial<NavigationThreadSummary> = {},
+    ) => ({
+      id,
+      title: id,
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      ...extra,
+    }) as NavigationThreadSummary;
+    const root = makeThread("root", { subthreadOrder: ["child-a", "child-b"] });
+    const childA = makeThread("child-a", {
+      parentThreadBackend: "codex",
+      parentThreadId: "root",
+      subthreadOrder: ["grandchild"],
+    });
+    const grandchild = makeThread("grandchild", {
+      parentThreadBackend: "codex",
+      parentThreadId: "child-a",
+    });
+    const childB = makeThread("child-b", {
+      parentThreadBackend: "codex",
+      parentThreadId: "root",
+    });
+    const model = buildDirectoryThreadRenderModel({
+      directory: {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [
+          "codex:root",
+          "codex:child-b",
+          "codex:grandchild",
+          "codex:child-a",
+        ],
+        needsAttentionCount: 0,
+      },
+      expanded: true,
+      threadsByKey: new Map([
+        ["codex:root", root],
+        ["codex:child-a", childA],
+        ["codex:grandchild", grandchild],
+        ["codex:child-b", childB],
+      ]),
+    });
+
+    // Depth-first: the grandchild follows the sub-thread that owns it, not the
+    // end of the tray, and no row is dropped for being two levels deep.
+    expect(
+      model.expanded?.childThreadsByParentKey
+        .get("codex:root")
+        ?.map((thread) => thread.id),
+    ).toEqual(["child-a", "grandchild", "child-b"]);
+    // Only `root`'s own children may be reordered — `subthreadOrder` on `root`
+    // must never come to name a thread that belongs to `child-a`.
+    expect(model.expanded?.directChildKeysByParentKey.get("codex:root")).toEqual([
+      "codex:child-a",
+      "codex:child-b",
+    ]);
+    expect(model.expanded?.selectionOrder).toEqual([
+      "codex:root",
+      "codex:child-a",
+      "codex:grandchild",
+      "codex:child-b",
+    ]);
+  });
+
+  it("does not recurse forever on a parent-link cycle", () => {
+    const left = {
+      id: "left",
+      title: "Left",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadBackend: "codex",
+      parentThreadId: "right",
+    } as NavigationThreadSummary;
+    const right = {
+      id: "right",
+      title: "Right",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadBackend: "codex",
+      parentThreadId: "left",
+      pinnedRank: "1024",
+    } as NavigationThreadSummary;
+    const model = buildDirectoryThreadRenderModel({
+      directory: {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: ["codex:left", "codex:right"],
+        needsAttentionCount: 0,
+      },
+      expanded: true,
+      threadsByKey: new Map([
+        ["codex:left", left],
+        ["codex:right", right],
+      ]),
+    });
+
+    expect(model.expanded?.selectionOrder).toEqual([
+      "codex:right",
+      "codex:left",
+    ]);
+  });
 });

@@ -703,6 +703,88 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
+  it("shows an agent-created pinned thread arriving under a resting pointer", () => {
+    const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
+    const pinnedBravo = { ...bravo, pinnedRank: "2048" };
+    const collapsedDirectory = {
+      ...directory,
+      directoryThreadsCollapsed: true,
+    };
+    const view = render(renderSidebar({
+      browseMode: "directories",
+      directories: [collapsedDirectory],
+      selectedItemKey: "codex:alpha",
+      threads: [pinnedAlpha, pinnedBravo],
+    }));
+    fireEvent.pointerOver(threadRow("Alpha thread"), { pointerType: "mouse" });
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+
+    // Nothing the operator did creates this row: a handoff, a messaging reply,
+    // or a peer made it while the pointer merely rested on the list. The pin
+    // appended by creation is what keeps it out of the hidden section.
+    view.rerender(renderSidebar({
+      browseMode: "directories",
+      directories: [{
+        ...collapsedDirectory,
+        threadKeys: [...collapsedDirectory.threadKeys, "codex:charlie"],
+      }],
+      selectedItemKey: "codex:alpha",
+      threads: [
+        pinnedAlpha,
+        pinnedBravo,
+        { ...charlie, pinnedRank: "3072" },
+      ],
+    }));
+
+    expect(threadTitles()).toEqual([
+      "Alpha thread",
+      "Bravo thread",
+      "Charlie thread",
+    ]);
+  });
+
+  it("appends an agent-created pin below the frozen pins, never above them", () => {
+    const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
+    const pinnedBravo = { ...bravo, pinnedRank: "2048" };
+    const view = render(renderSidebar({
+      browseMode: "directories",
+      directories: [directory],
+      selectedItemKey: "codex:alpha",
+      threads: [pinnedAlpha, pinnedBravo],
+    }));
+    fireEvent.pointerOver(threadRow("Bravo thread"), { pointerType: "mouse" });
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+
+    // A rank that sorts into the middle of the list — a viewer-owned remote
+    // pin, say — must still land at the bottom while the pointer rests, or the
+    // row under it moves out from under the click.
+    view.rerender(renderSidebar({
+      browseMode: "directories",
+      directories: [{
+        ...directory,
+        threadKeys: [...directory.threadKeys, "codex:charlie"],
+      }],
+      selectedItemKey: "codex:alpha",
+      threads: [
+        pinnedAlpha,
+        pinnedBravo,
+        { ...charlie, pinnedRank: "1536" },
+      ],
+    }));
+
+    expect(threadTitles()).toEqual([
+      "Alpha thread",
+      "Bravo thread",
+      "Charlie thread",
+    ]);
+    leaveThreadBrowser();
+    expect(threadTitles()).toEqual([
+      "Alpha thread",
+      "Charlie thread",
+      "Bravo thread",
+    ]);
+  });
+
   it("shows a newly created pinned thread while Directory threads are collapsed", () => {
     const onOpenLaunchpad = vi.fn(async () => undefined);
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };

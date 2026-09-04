@@ -5646,6 +5646,12 @@ type CreatedThreadDirectoryVisibility = Pick<
 > & {
   directoryThreadsCollapsed: boolean;
   hasPinnedTopLevelThread: boolean;
+  /**
+   * Identity keys of this directory's pinned threads. A pinned row always
+   * renders, so it is the only parent that can carry a new child through a
+   * collapse without a pin of the child's own.
+   */
+  pinnedThreadKeys: ReadonlySet<string>;
 };
 
 let threadListCacheSequence = 0;
@@ -9561,22 +9567,30 @@ export class DesktopBackendRegistry {
       .map((thread) => thread.pinnedRank)
       .filter((rank): rank is string => Boolean(rank));
     this.createdThreadDirectoryVisibility = new Map(
-      snapshot.directories.map((directory) => [
-        directory.key,
-        {
-          key: directory.key,
-          kind: directory.kind,
-          path: directory.path,
-          directoryThreadsCollapsed:
-            directory.directoryThreadsCollapsed === true,
-          hasPinnedTopLevelThread: directory.threadKeys.some((threadKey) => {
-            const thread = threadsByKey.get(threadKey);
-            return Boolean(
-              thread && !thread.parentThreadId && thread.pinnedRank,
-            );
-          }),
-        },
-      ]),
+      snapshot.directories.map((directory) => {
+        let hasPinnedTopLevelThread = false;
+        const pinnedThreadKeys = new Set<string>();
+        for (const threadKey of directory.threadKeys) {
+          const thread = threadsByKey.get(threadKey);
+          if (!thread?.pinnedRank) continue;
+          pinnedThreadKeys.add(threadKey);
+          if (!thread.parentThreadId) {
+            hasPinnedTopLevelThread = true;
+          }
+        }
+        return [
+          directory.key,
+          {
+            key: directory.key,
+            kind: directory.kind,
+            path: directory.path,
+            directoryThreadsCollapsed:
+              directory.directoryThreadsCollapsed === true,
+            hasPinnedTopLevelThread,
+            pinnedThreadKeys,
+          },
+        ];
+      }),
     );
     this.navigationDirectoriesByKey = new Map(
       snapshot.directories.map((directory) => [directory.key, directory]),
@@ -13726,10 +13740,10 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Keep a newly created top-level thread visible when its directory's
-   * unpinned section is collapsed. This runs after parent and directory
-   * relationships are persisted so every creation surface shares the same
-   * policy and a child of an already-visible parent is never pinned itself.
+   * Keep a newly created thread visible when its directory's unpinned section
+   * is collapsed. This runs after parent and directory relationships are
+   * persisted so every creation surface shares the same policy and a child of
+   * an already-visible parent is never pinned itself.
    */
   private resolveCreatedThreadDirectoryVisibility(params: {
     directoryKey?: string;
@@ -13788,17 +13802,32 @@ export class DesktopBackendRegistry {
     directoryKey?: string;
     cwd?: string;
     linkedDirectories?: LinkedDirectorySummary[];
+    parentThreadBackend?: AppServerBackendKind;
     parentThreadId?: string;
     threadId: string;
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
-    if (params.parentThreadId?.trim()) {
-      return {};
-    }
-
     const directory = this.resolveCreatedThreadDirectoryVisibility(params);
     if (
       !directory?.directoryThreadsCollapsed
       || !directory.hasPinnedTopLevelThread
+    ) {
+      return {};
+    }
+
+    // A sub-thread rides its parent's row, so it needs no pin of its own —
+    // but only when that parent is a pinned row in this very directory. The
+    // collapse hides every unpinned row, and a group parent that aged out of
+    // the navigation window is in no directory at all, so a child of either
+    // would otherwise be created straight into the hidden section.
+    const parentThreadId = params.parentThreadId?.trim();
+    if (
+      parentThreadId
+      && directory.pinnedThreadKeys.has(
+        buildThreadIdentityKey(
+          params.parentThreadBackend ?? params.backend,
+          parentThreadId,
+        ),
+      )
     ) {
       return {};
     }
@@ -14329,6 +14358,7 @@ export class DesktopBackendRegistry {
         resolvedLinkedDirectories?.length
           ? resolvedLinkedDirectories
           : buildLocalLinkedDirectory(cwd),
+      parentThreadBackend,
       parentThreadId,
       threadId: result.threadId,
     });
@@ -14684,6 +14714,7 @@ export class DesktopBackendRegistry {
       backend,
       cwd,
       linkedDirectories,
+      parentThreadBackend: request.parentThreadBackend,
       parentThreadId: request.parentThreadId,
       threadId: result.threadId,
     });
@@ -30738,45 +30769,6 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async resolveHandoffGroupParentThreadRef(params: {
-    backend: AppServerBackendKind;
-    sourceOverlay: ThreadOverlayState;
-    sourceThreadId: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string }> {
-    const directParentThreadId = params.sourceOverlay.parentThreadId?.trim();
-    if (!directParentThreadId) {
-      return { backend: params.backend, threadId: params.sourceThreadId };
-    }
-
-    let parentThreadId = directParentThreadId;
-    let parentBackend =
-      params.sourceOverlay.parentThreadBackend ?? params.backend;
-    const directParentBackend = parentBackend;
-    const seen = new Set([
-      buildThreadIdentityKey(params.backend, params.sourceThreadId),
-    ]);
-    let parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
-    while (!seen.has(parentKey)) {
-      seen.add(parentKey);
-      const parentOverlay = await this.overlayStore.getThreadOverlayState({
-        backend: parentBackend,
-        threadId: parentThreadId,
-      });
-      const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
-      if (!nextParentThreadId) {
-        return { backend: parentBackend, threadId: parentThreadId };
-      }
-      parentThreadId = nextParentThreadId;
-      parentBackend = parentOverlay?.parentThreadBackend ?? parentBackend;
-      parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
-    }
-
-    return {
-      backend: directParentBackend,
-      threadId: directParentThreadId,
-    };
-  }
-
   private startPendingThreadWorkspaceMove(
     move: PendingThreadWorkspaceMoveSummary,
   ): PendingThreadWorkspaceMoveSummary {
@@ -32598,13 +32590,15 @@ export class DesktopBackendRegistry {
         return threadOrchestrationFailure("invalid_arguments", message);
       }
     }
+    // A handoff's child belongs to the thread that created it. This used to
+    // walk the source's parent chain to its root and adopt the child there,
+    // which made the child a *sibling* of its own creator — and when that root
+    // was a peer's thread, or otherwise not a row in this directory, the child
+    // had nothing to nest under and landed loose in the list. Depth is the
+    // renderer's problem to present, not a reason to record the wrong parent.
     const groupedParentThread =
       groupingMode === "subthread"
-        ? await this.resolveHandoffGroupParentThreadRef({
-            backend: sourceBackend,
-            sourceOverlay,
-            sourceThreadId,
-          })
+        ? { backend: sourceBackend, threadId: sourceThreadId }
         : undefined;
     const groupedParentThreadId = groupedParentThread?.threadId;
     const groupedParentBackend = groupedParentThread?.backend;
@@ -32695,11 +32689,11 @@ export class DesktopBackendRegistry {
           backend: groupedParentBackend ?? backend,
           threadId: groupedParentThreadId,
         });
+        // The source owns this tray, so it never appears in its own order —
+        // `insertSubthreadIdAfter` prepends, putting the newest child directly
+        // under the thread that created it.
         const nextOrder = insertSubthreadIdAfter(
-          groupedParentThreadId === sourceThreadId ||
-          parentOverlay?.subthreadOrder?.includes(sourceThreadId)
-            ? (parentOverlay?.subthreadOrder ?? [])
-            : [...(parentOverlay?.subthreadOrder ?? []), sourceThreadId],
+          parentOverlay?.subthreadOrder ?? [],
           sourceThreadId,
           threadId,
         );
