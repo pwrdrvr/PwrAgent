@@ -424,6 +424,7 @@ describe("GithubGraphqlPrClient", () => {
     request: (query: string, variables: Record<string, string | number>) => Promise<unknown>,
     options: {
       batchSize?: number;
+      now?: () => number;
       onRepositoryAccess?: (event: GithubRepositoryAccessEvent) => void;
     } = {},
   ): GithubGraphqlPrClient {
@@ -588,6 +589,72 @@ describe("GithubGraphqlPrClient", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(prs).toHaveLength(1);
+  });
+
+  it("backs every GitHub poll off after repeated transport failures", async () => {
+    let now = 1_000_000;
+    const request = vi.fn(async () => {
+      throw new Error("connect timeout");
+    });
+    const graphqlClient = client(request, { now: () => now });
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    // Branch discovery shares the same client and must respect the outage
+    // detected by status polling rather than starting another retry storm.
+    await graphqlClient.fetchPullRequestsForBranches([
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "main" },
+    ]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    now += 60_000;
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(8);
+
+    // A second failed cycle doubles the quiet period.
+    now += 60_000;
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(8);
+
+    now += 60_000;
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(12);
+  });
+
+  it("returns to the initial backoff after GitHub recovers", async () => {
+    let now = 1_000_000;
+    let mode: "fail" | "succeed" = "fail";
+    const request = vi.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("connect timeout");
+      }
+      return { r0: { pullRequest: node() } };
+    });
+    const graphqlClient = client(request, { now: () => now });
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    now += 60_000;
+    mode = "succeed";
+    await expect(graphqlClient.fetchPullRequests([refs[0]!]))
+      .resolves.toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(5);
+
+    mode = "fail";
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(9);
+
+    now += 59_999;
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(9);
+
+    now += 1;
+    mode = "succeed";
+    await expect(graphqlClient.fetchPullRequests([refs[0]!]))
+      .resolves.toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(10);
   });
 
   it("gives up on a batch without throwing, so one bad batch cannot kill a sweep", async () => {
