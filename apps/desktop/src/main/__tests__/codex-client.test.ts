@@ -2350,6 +2350,11 @@ describe("CodexAppServerClient", () => {
     MockTransport.modelListResult = {
       data: [
         {
+          id: "gpt-6-astra",
+          displayName: "GPT-6 Astra",
+          supportsReasoning: true,
+        },
+        {
           id: "gpt-5.6-terra",
           displayName: "GPT-5.6-Terra",
           defaultReasoningEffort: "medium",
@@ -2424,6 +2429,12 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(client.listModels()).resolves.toEqual([
+      {
+        id: "gpt-6-astra",
+        label: "GPT-6-Astra",
+        current: undefined,
+        supportsReasoning: true,
+      },
       {
         id: "gpt-5.6-sol",
         label: "GPT-5.6-Sol",
@@ -2506,6 +2517,16 @@ describe("CodexAppServerClient", () => {
   it("derives Fast support from Codex model service tiers", async () => {
     MockTransport.modelListResult = createModelListResponse([
       createCodexModel({
+        id: "gpt-6-astra",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low", description: "Fast responses" },
+          { reasoningEffort: "medium", description: "Balanced" },
+          { reasoningEffort: "high", description: "Deep reasoning" },
+          { reasoningEffort: "xhigh", description: "Extra high" },
+          { reasoningEffort: "max", description: "Maximum reasoning" },
+        ],
+      }),
+      createCodexModel({
         id: "gpt-5.6-sol",
         serviceTiers: [
           {
@@ -2561,6 +2582,7 @@ describe("CodexAppServerClient", () => {
         supportsFast: model.supportsFast,
       })),
     ).toEqual([
+      { id: "gpt-6-astra", supportsFast: false },
       { id: "gpt-5.6-sol", supportsFast: true },
       { id: "gpt-5.6-terra", supportsFast: true },
       { id: "gpt-5.6-luna", supportsFast: true },

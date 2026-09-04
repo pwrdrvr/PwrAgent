@@ -226,6 +226,7 @@ const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["conf
 const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
   "features.default_mode_request_user_input";
 const SUPPORTED_CODEX_MODEL_ORDER = [
+  "gpt-6-astra",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",

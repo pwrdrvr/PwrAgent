@@ -226,6 +226,7 @@ type PricingCatalogEntry = {
   effectiveTo?: number;
   inputUsdPerMillion: number;
   maximumInputTokens?: number;
+  minimumInputTokens?: number;
   model: string;
   outputUsdPerMillion: number;
   outputTokensIncludeReasoning?: boolean;
@@ -268,6 +269,9 @@ const OPENAI_GPT56_REPRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 30);
 // https://developers.openai.com/api/docs/models/gpt-5.6-sol
 const OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION = "2026-08-21";
 const OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM = Date.UTC(2026, 7, 21);
+// https://developers.openai.com/api/docs/models/gpt-6-astra
+const OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION = "2026-09-04";
+const OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 8, 4);
 const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
 const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
 const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-27";
@@ -295,6 +299,39 @@ const QWEN_PRICING_CATALOG_VERSION = "2026-07-15";
 const QWEN37_PLUS_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 4, 26);
 
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  // The usage schema cannot distinguish cache writes from ordinary uncached
+  // input. Keep cache-write charges outside the estimate instead of applying
+  // the higher write rate to every uncached token.
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
+    model: "gpt-6-astra",
+    displayModel: "GPT-6 Astra",
+    displayTier: "Standard (<=272K input)",
+    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputUsdPerMillion: 10,
+    cachedInputUsdPerMillion: 1,
+    outputUsdPerMillion: 50,
+    maximumInputTokens: 272_000,
+    rateBandId: "input-lte-272k",
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
+    model: "gpt-6-astra",
+    displayModel: "GPT-6 Astra",
+    displayTier: "Standard (>272K input)",
+    effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputUsdPerMillion: 20,
+    cachedInputUsdPerMillion: 2,
+    outputUsdPerMillion: 75,
+    minimumInputTokens: 272_001,
+    rateBandId: "input-gt-272k",
+  },
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
     catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
@@ -1137,8 +1174,14 @@ function pricingEntryMatchesInputTokens(
   inputTokens: number,
 ): boolean {
   return (
-    entry.maximumInputTokens === undefined
-    || inputTokens <= entry.maximumInputTokens
+    (
+      entry.minimumInputTokens === undefined
+      || inputTokens >= entry.minimumInputTokens
+    )
+    && (
+      entry.maximumInputTokens === undefined
+      || inputTokens <= entry.maximumInputTokens
+    )
   );
 }
 

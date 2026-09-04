@@ -6212,6 +6212,12 @@ describe("DesktopBackendRegistry", () => {
         launchpadOptions: {
           models: [
             {
+              id: "gpt-6-astra",
+              label: "GPT-6-Astra",
+              supportsReasoning: true,
+              supportsFast: true,
+            },
+            {
               id: "gpt-5.6-sol",
               label: "GPT-5.6-Sol",
               supportsReasoning: true,
@@ -15011,8 +15017,8 @@ script = "echo setup"
 
     expect(codexClient.listModelsCallCount).toBe(2);
     expect(response.backends[0]?.launchpadOptions?.models?.[0]).toMatchObject({
-      id: "gpt-5.6-sol",
-      label: "GPT-5.6-Sol",
+      id: "gpt-6-astra",
+      label: "GPT-6-Astra",
     });
     expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.4");
 

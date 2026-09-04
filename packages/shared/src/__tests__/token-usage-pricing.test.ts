@@ -337,6 +337,71 @@ describe("token usage pricing", () => {
     }
   });
 
+  it("prices GPT-6 Astra at the short-context boundary", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cachedInputTokens: 72_000,
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      uncachedInputTokens: 200_000,
+    });
+
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-09-04",
+      displayName: "GPT-6 Astra Standard (<=272K input)",
+      inputUsdPerMillion: 10,
+      cachedInputUsdPerMillion: 1,
+      outputUsdPerMillion: 50,
+      rateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      serviceTier: "standard",
+      uncachedInputCostMicros: 2_000_000,
+      cachedInputCostMicros: 72_000,
+      outputCostMicros: 5_000_000,
+      totalCostMicros: 7_072_000,
+    });
+  });
+
+  it("prices GPT-6 Astra above 272K input at the long-context rates", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cachedInputTokens: 72_001,
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      uncachedInputTokens: 200_000,
+    });
+
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-09-04",
+      displayName: "GPT-6 Astra Standard (>272K input)",
+      inputUsdPerMillion: 20,
+      cachedInputUsdPerMillion: 2,
+      outputUsdPerMillion: 75,
+      rateId: "openai:2026-09-04:gpt-6-astra:standard:input-gt-272k",
+      serviceTier: "standard",
+      uncachedInputCostMicros: 4_000_000,
+      cachedInputCostMicros: 144_002,
+      outputCostMicros: 7_500_000,
+      totalCostMicros: 11_644_002,
+    });
+  });
+
+  it("keeps unsupported GPT-6 Astra pricing modes unpriced", () => {
+    const usage = {
+      cachedInputTokens: 1_000,
+      model: "gpt-6-astra",
+      outputTokens: 1_000,
+      uncachedInputTokens: 1_000,
+    };
+
+    expect(
+      estimateOpenAiTokenUsageCost({ ...usage, fastMode: true }),
+    ).toBeUndefined();
+    expect(
+      estimateOpenAiTokenUsageCost({ ...usage, serviceTier: "flex" }),
+    ).toBeUndefined();
+    expect(estimateOpenAiCodexCreditUsage(usage)).toBeUndefined();
+  });
+
   it("does not price GPT-5.6 usage before its catalog effective date", () => {
     expect(
       estimateOpenAiTokenUsageCost({
