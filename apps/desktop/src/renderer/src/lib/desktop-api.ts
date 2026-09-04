@@ -146,6 +146,7 @@ import type {
   AddRemoteThreadPinRequest,
   AddRemoteThreadPinResponse,
   FederationJumpSearchRequest,
+  FederationJumpSearchProgress,
   FederationJumpSearchResponse,
   RemoveRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
@@ -1041,7 +1042,8 @@ export type DesktopApi = {
   ) => Promise<SetRemoteThreadLocalPinResponse>;
   /** ⌘K federated jump search across connected peers. */
   jumpSearchRemoteThreads?: (
-    request: FederationJumpSearchRequest
+    request: FederationJumpSearchRequest,
+    onProgress?: (progress: FederationJumpSearchProgress) => void,
   ) => Promise<FederationJumpSearchResponse>;
   setThreadParent?: (
     request: SetThreadParentRequest

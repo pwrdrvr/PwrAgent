@@ -9,6 +9,8 @@ import type {
   AppServerListThreadsRequest,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  FederationJumpSearchProgress,
+  FederationJumpSearchRequest,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
@@ -113,7 +115,12 @@ const federationMock = vi.hoisted(() => {
         archived: [],
       }),
     ),
-    searchForJump: vi.fn(async () => ({ results: [] })),
+    searchForJump: vi.fn(
+      async (
+        _request: FederationJumpSearchRequest,
+        _onProgress?: (progress: FederationJumpSearchProgress) => void,
+      ) => ({ results: [] }),
+    ),
     threadFromPeer: vi.fn(async (): Promise<unknown> => undefined),
     rememberThreadNames: vi.fn(),
     reserveThreadNameObservation: vi.fn(() => (nextThreadNameObservation += 1)),
@@ -1206,6 +1213,10 @@ describe("app server ipc", () => {
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
     federationMock.runtime.ungroupRemoteChildrenOfArchivedThread.mockClear();
     federationMock.remoteThreadSummaries.invalidate.mockClear();
+    federationMock.remoteThreadSummaries.searchForJump.mockReset();
+    federationMock.remoteThreadSummaries.searchForJump.mockResolvedValue({
+      results: [],
+    });
     listRemoteThreadPins.mockReset();
     listRemoteThreadPins.mockResolvedValue([]);
     updateRemoteThreadPinSnapshots.mockClear();
@@ -1328,6 +1339,51 @@ describe("app server ipc", () => {
     await disposeAppServerIpcHandlers();
 
     expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
+  });
+
+  it("delivers jump-search progress only to the invoking renderer and request", async () => {
+    const {
+      FEDERATION_JUMP_SEARCH_CHANNEL,
+      FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
+    } = await import("../../shared/ipc");
+    const searchForJump = federationMock.remoteThreadSummaries.searchForJump;
+    searchForJump.mockImplementation(async (request, onProgress) => {
+      onProgress?.({
+        results: [],
+        completedPeerCount: 1,
+        totalPeerCount: 2,
+        complete: false,
+      });
+      return { results: [] };
+    });
+    const firstSend = vi.fn();
+    const secondSend = vi.fn();
+    const firstSender = { isDestroyed: () => false, send: firstSend };
+    const secondSender = { isDestroyed: () => false, send: secondSend };
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(FEDERATION_JUMP_SEARCH_CHANNEL);
+
+    await Promise.all([
+      handler?.(
+        { sender: firstSender },
+        41,
+        { query: "first", limit: 8 },
+      ),
+      handler?.(
+        { sender: secondSender },
+        73,
+        { query: "second", limit: 8 },
+      ),
+    ]);
+
+    expect(firstSend).toHaveBeenCalledExactlyOnceWith(
+      FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
+      expect.objectContaining({ requestId: 41 }),
+    );
+    expect(secondSend).toHaveBeenCalledExactlyOnceWith(
+      FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
+      expect.objectContaining({ requestId: 73 }),
+    );
   });
 
   it("invalidates the GraphQL token during an auth recheck", async () => {

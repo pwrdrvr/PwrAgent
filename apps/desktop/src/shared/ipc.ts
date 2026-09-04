@@ -183,6 +183,8 @@ export const NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL =
 export const NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL =
   "navigation:set-remote-thread-local-pin";
 export const FEDERATION_JUMP_SEARCH_CHANNEL = "federation:jump-search";
+export const FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL =
+  "federation:jump-search-progress";
 export const NAVIGATION_SET_THREAD_PARENT_CHANNEL =
   "navigation:set-thread-parent";
 export const NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL =
