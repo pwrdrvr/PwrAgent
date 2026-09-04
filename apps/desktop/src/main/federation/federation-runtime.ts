@@ -337,6 +337,7 @@ const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
 const FEDERATION_STAR_MAP_ARRANGEMENT_METHOD = "federation.starMapArrangement";
 const FEDERATION_EVENT_SUBSCRIPTION_METHOD = "federation.eventSubscription";
 const FEDERATION_EVENT_RELAY_MAX_HOPS = 4;
+const REMOTE_NAVIGATION_SELECTION_CACHE_LIMIT = 8;
 const CELESTIAL_ICON_ASSIGNMENTS_META_KEY =
   "federation_celestial_icon_assignments";
 /**
@@ -805,11 +806,8 @@ export class DesktopFederationRuntime {
   >();
   private readonly rpcByPeer = new Map<FederationInstanceId, FederationRpcEndpoint>();
   private readonly remoteNavigationTransportByPeer = new Map<
-    string,
-    {
-      selectionKey: string;
-      state: NavigationSnapshotTransportState;
-    }
+    FederationInstanceId,
+    Map<string, NavigationSnapshotTransportState>
   >();
   private ownedNavigationSnapshotTransport?: NavigationSnapshotTransport;
   private readonly turnInputAttachmentReceiver =
@@ -1940,17 +1938,10 @@ export class DesktopFederationRuntime {
         : desiredThreadSelection ?? selectionOverride ?? { kind: "all" };
     const selection = transportSelectionFor(threadSelection);
     const selectionKey = federationThreadSelectionKey(threadSelection);
-    const cacheable =
-      desiredThreadSelection !== undefined
-        ? selectionKey === federationThreadSelectionKey(desiredThreadSelection)
-        : selectionOverride === undefined;
-    const cachedTransport = this.remoteNavigationTransportByPeer.get(
+    const previousTransportState = this.remoteNavigationTransportStateFor(
       target.instanceId,
+      selectionKey,
     );
-    const previousTransportState =
-      cacheable && cachedTransport?.selectionKey === selectionKey
-        ? cachedTransport.state
-        : undefined;
     let startedAt = Date.now();
     let transportResponse = await backend.getNavigationSnapshotTransport({
       transport: {
@@ -2010,17 +2001,47 @@ export class DesktopFederationRuntime {
         "Federation navigation snapshot transport did not provide a recoverable baseline.",
       );
     }
-    if (cacheable) {
-      this.remoteNavigationTransportByPeer.set(target.instanceId, {
-        selectionKey,
-        state: nextTransportState,
-      });
-    }
+    this.cacheRemoteNavigationTransportState(
+      target.instanceId,
+      selectionKey,
+      nextTransportState,
+    );
     const response = projectNavigationSnapshot(
       normalizeNavigationSnapshotThreadKeys(nextTransportState.snapshot),
       snapshotRequest,
     );
     return await this.stampRemoteNavigationSnapshot(target, response);
+  }
+
+  private remoteNavigationTransportStateFor(
+    peerId: FederationInstanceId,
+    selectionKey: string,
+  ): NavigationSnapshotTransportState | undefined {
+    const selections = this.remoteNavigationTransportByPeer.get(peerId);
+    const state = selections?.get(selectionKey);
+    if (!state || !selections) return undefined;
+    selections.delete(selectionKey);
+    selections.set(selectionKey, state);
+    return state;
+  }
+
+  private cacheRemoteNavigationTransportState(
+    peerId: FederationInstanceId,
+    selectionKey: string,
+    state: NavigationSnapshotTransportState,
+  ): void {
+    let selections = this.remoteNavigationTransportByPeer.get(peerId);
+    if (!selections) {
+      selections = new Map();
+      this.remoteNavigationTransportByPeer.set(peerId, selections);
+    }
+    selections.delete(selectionKey);
+    selections.set(selectionKey, state);
+    if (selections.size <= REMOTE_NAVIGATION_SELECTION_CACHE_LIMIT) return;
+    const leastRecentlyUsedSelection = selections.keys().next().value;
+    if (leastRecentlyUsedSelection !== undefined) {
+      selections.delete(leastRecentlyUsedSelection);
+    }
   }
 
   private logRemoteNavigationWireResponse(params: {
@@ -3077,6 +3098,10 @@ export class DesktopFederationRuntime {
   }
 
   private registerGatewayConnection(connection: FederationGatewayConnection): void {
+    // A live socket can be replaced without a disconnected status transition.
+    // Transport revisions are scoped to the remote process lifetime, so a
+    // replacement must not reuse any selection state from the prior session.
+    this.clearRemoteNavigationTransportForPeer(connection.peerId);
     this.router?.registerConnection({
       peerId: connection.peerId,
       capabilities: connection.capabilities,
@@ -4522,6 +4547,7 @@ export class DesktopFederationRuntime {
     // leave a still-fresh cache marked degraded, and the reconnect refresh
     // has no reason to retry it until another navigation event arrives.
     this.remoteThreadSummaryCache?.invalidate(instanceId);
+    this.clearRemoteNavigationTransportForPeer(instanceId);
     if (status === "connected") {
       // Hooked to the status TRANSITION (this method already de-dupes
       // repeats) rather than to a specific enrollment call site, so every
