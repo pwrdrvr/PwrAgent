@@ -1526,6 +1526,15 @@ const DEFAULT_REASONING_EFFORT = "medium";
 
 const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
+    id: "gpt-6-astra",
+    label: "GPT-6-Astra",
+    defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+    reasoningEfforts: OPENAI_GPT56_REASONING_EFFORTS,
+    supportsReasoning: true,
+    supportsFast: true,
+    supportsSteering: true,
+  },
+  {
     id: "gpt-5.6-sol",
     label: "GPT-5.6-Sol",
     defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
@@ -4023,7 +4032,11 @@ function inferSupportsReasoning(
     return id.includes("reasoning");
   }
 
-  return id.startsWith("gpt-5") || id.startsWith("o");
+  return (
+    id.startsWith("gpt-5")
+    || id.startsWith("gpt-6")
+    || id.startsWith("o")
+  );
 }
 
 function inferSupportsFast(
