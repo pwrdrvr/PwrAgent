@@ -1271,11 +1271,13 @@ function sendFrame(
 ): number {
   if (socket.readyState !== WebSocket.OPEN) return 0;
   const payload = encodeFederationSocketPayload(message);
-  const wire = transport ? transport.encrypt(payload) : payload;
-  if (wire.byteLength > maxFrameBytes) {
+  const wireByteLength = transport
+    ? transport.encryptedByteLength(payload.byteLength)
+    : payload.byteLength;
+  if (wireByteLength > maxFrameBytes) {
     const envelope = message.kind === "envelope" ? message.envelope : undefined;
     log.error("federation frame exceeds configured send limit", {
-      byteCount: wire.byteLength,
+      byteCount: wireByteLength,
       envelopeKind: envelope?.kind,
       maxFrameBytes,
       messageKind: message.kind,
@@ -1283,15 +1285,15 @@ function sendFrame(
       sourceInstanceId: envelope?.sourceInstanceId,
       targetInstanceId: envelope?.targetInstanceId,
     });
-    throw new FederationFrameTooLargeError(wire.byteLength, maxFrameBytes);
+    throw new FederationFrameTooLargeError(wireByteLength, maxFrameBytes);
   }
   const envelope = message.kind === "envelope" ? message.envelope : undefined;
   if (
-    wire.byteLength >= FEDERATION_LARGE_FRAME_LOG_BYTES
+    wireByteLength >= FEDERATION_LARGE_FRAME_LOG_BYTES
     && envelope?.kind !== "blob_chunk"
   ) {
     log.info("large federation frame queued for send", {
-      byteCount: wire.byteLength,
+      byteCount: wireByteLength,
       envelopeKind: envelope?.kind,
       maxFrameBytes,
       messageKind: message.kind,
@@ -1300,6 +1302,7 @@ function sendFrame(
       targetInstanceId: envelope?.targetInstanceId,
     });
   }
+  const wire = transport ? transport.encrypt(payload) : payload;
   socket.send(wire);
   return wire.byteLength;
 }

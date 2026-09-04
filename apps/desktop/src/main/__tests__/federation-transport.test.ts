@@ -1307,6 +1307,8 @@ describe("federation transport liveness", () => {
   });
 
   it("rejects an oversized client envelope before sending it", async () => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({
       store,
@@ -1323,6 +1325,7 @@ describe("federation transport liveness", () => {
       host: "127.0.0.1",
       port: 0,
       store,
+      noiseStatic: gatewayNoise,
       onEnvelope: (envelope) => received.push(envelope),
     });
     const { url } = await server.start();
@@ -1339,6 +1342,8 @@ describe("federation transport liveness", () => {
       label: "Client",
       role: "client",
       maxFrameBytes: 64 * 1024,
+      noiseStatic: clientNoise,
+      gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
     });
     const envelope = (id: string, payload: unknown): FederationProtocolEnvelope => ({
       id,
@@ -1360,6 +1365,8 @@ describe("federation transport liveness", () => {
   });
 
   it("rejects an oversized gateway envelope before sending it", async () => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({
       store,
@@ -1378,12 +1385,13 @@ describe("federation transport liveness", () => {
       port: 0,
       store,
       maxFrameBytes: 64 * 1024,
+      noiseStatic: gatewayNoise,
       onConnection: (connection) => {
         gatewayConnection = connection;
       },
     });
     const { url } = await server.start();
-    const client = await connectFederationClient({
+    const _client = await connectFederationClient({
       url,
       mode: "enroll",
       gatewayInstanceId: "gateway_one",
@@ -1395,6 +1403,8 @@ describe("federation transport liveness", () => {
       inviteToken: invite.token,
       label: "Client",
       role: "client",
+      noiseStatic: clientNoise,
+      gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
       onEnvelope: (envelope) => received.push(envelope),
     });
     await expect.poll(() => gatewayConnection).toBeDefined();
