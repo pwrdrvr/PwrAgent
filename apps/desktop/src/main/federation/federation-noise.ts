@@ -50,6 +50,8 @@ export type NoiseKeyPair = {
 export type NoiseRole = "initiator" | "responder";
 
 export type NoiseTransport = {
+  /** Exact ciphertext size without consuming the outbound nonce. */
+  encryptedByteLength(plaintextByteLength: number): number;
   /** Encrypt an outbound transport frame (AEAD, monotonic nonce). */
   encrypt(plaintext: Buffer): Buffer;
   /** Decrypt an inbound transport frame; throws on tamper/replay. */
@@ -366,6 +368,7 @@ export class NoiseIKHandshake {
     const handshakeHash = Buffer.from(this.sym.hash);
     return {
       handshakeHash,
+      encryptedByteLength: (plaintextByteLength) => plaintextByteLength + TAGLEN,
       encrypt: (plaintext) => send.encryptWithAd(Buffer.alloc(0), plaintext),
       decrypt: (ciphertext) => recv.decryptWithAd(Buffer.alloc(0), ciphertext),
     };

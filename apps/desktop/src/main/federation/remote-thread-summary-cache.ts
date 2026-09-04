@@ -18,7 +18,10 @@ import {
 } from "@pwragent/shared";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { ThreadInfoStore } from "../app-server/thread-info-store";
-import { hasFederationErrorCode } from "./federation-rpc";
+import {
+  hasFederationErrorCode,
+  type FederationRpcRequestOptions,
+} from "./federation-rpc";
 
 export type RemoteThreadSummaryPeer = {
   target: FederationRemoteTarget;
@@ -181,6 +184,7 @@ export class RemoteThreadSummaryCache {
       fetchSnapshot: (
         target: FederationRemoteTarget,
         selection: FederationThreadSelection,
+        rpcOptions?: FederationRpcRequestOptions,
       ) => Promise<NavigationSnapshot>;
       /**
        * Bounded owner-side Cmd+K search. Older peers reject the new method;
@@ -189,6 +193,7 @@ export class RemoteThreadSummaryCache {
       searchPeer?: (
         target: FederationRemoteTarget,
         request: FederationJumpSearchRequest,
+        rpcOptions?: FederationRpcRequestOptions,
       ) => Promise<NavigationThreadSummary[]>;
       /** Archived threads for one backend on a connected peer. */
       fetchArchivedThreads: (
@@ -834,7 +839,7 @@ export class RemoteThreadSummaryCache {
     if (this.options.searchPeer) {
       try {
         return await withTimeout(
-          this.options.searchPeer(target, request),
+          this.options.searchPeer(target, request, { deadlineAt }),
           timeoutMs,
           `Remote thread search timed out after ${Math.round(timeoutMs / 1000)}s.`,
         );
@@ -904,8 +909,11 @@ export class RemoteThreadSummaryCache {
     // recorded.
     const nameObservationSequence = this.reserveThreadNameObservation();
     const promise = (async () => {
+      const rpcOptions = deadlineAt !== undefined ? { deadlineAt } : undefined;
       const snapshot = await this.awaitPeerSnapshot(
-        this.options.fetchSnapshot(target, selection),
+        rpcOptions
+          ? this.options.fetchSnapshot(target, selection, rpcOptions)
+          : this.options.fetchSnapshot(target, selection),
         deadlineAt,
       );
       if (this.generationFor(target.instanceId) !== generation) {

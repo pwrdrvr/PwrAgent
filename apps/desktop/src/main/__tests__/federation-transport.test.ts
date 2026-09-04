@@ -32,6 +32,7 @@ import {
   FederationGatewayWebSocketServer,
   FederationSocketKeepalive,
   waitForFederationSendCapacity,
+  type FederationGatewayConnection,
   type FederationKeepaliveSocket,
 } from "../federation/federation-transport";
 import { StateDb } from "../state/state-db";
@@ -1303,6 +1304,129 @@ describe("federation transport liveness", () => {
     client.sendEnvelope(envelope({ blob: "x".repeat(128 * 1024) }));
     await expect.poll(() => closeCount, { timeout: 5_000 }).toBe(1);
     expect(received).toHaveLength(1);
+  });
+
+  it("rejects an oversized client envelope before sending it", async () => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-client-send-limit",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    const received: FederationProtocolEnvelope[] = [];
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      noiseStatic: gatewayNoise,
+      onEnvelope: (envelope) => received.push(envelope),
+    });
+    const { url } = await server.start();
+    const client = await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+      inviteToken: invite.token,
+      label: "Client",
+      role: "client",
+      maxFrameBytes: 64 * 1024,
+      noiseStatic: clientNoise,
+      gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
+    });
+    const envelope = (id: string, payload: unknown): FederationProtocolEnvelope => ({
+      id,
+      kind: "request",
+      method: "backend.listThreads",
+      params: payload,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_000,
+    });
+
+    expect(() => client.sendEnvelope(
+      envelope("request-too-large", { blob: "x".repeat(128 * 1024) }),
+    )).toThrow(/exceeds.*frame.*limit/i);
+    client.sendEnvelope(envelope("request-small", { note: "small" }));
+    await expect.poll(() => received.length, { timeout: 5_000 }).toBe(1);
+    expect(received[0]?.id).toBe("request-small");
+  });
+
+  it("rejects an oversized gateway envelope before sending it", async () => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-gateway-send-limit",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    let gatewayConnection: FederationGatewayConnection | undefined;
+    const received: FederationProtocolEnvelope[] = [];
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      maxFrameBytes: 64 * 1024,
+      noiseStatic: gatewayNoise,
+      onConnection: (connection) => {
+        gatewayConnection = connection;
+      },
+    });
+    const { url } = await server.start();
+    const _client = await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+      inviteToken: invite.token,
+      label: "Client",
+      role: "client",
+      noiseStatic: clientNoise,
+      gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
+      onEnvelope: (envelope) => received.push(envelope),
+    });
+    await expect.poll(() => gatewayConnection).toBeDefined();
+    const envelope = (id: string, payload: unknown): FederationProtocolEnvelope => ({
+      id,
+      kind: "request",
+      method: "backend.listThreads",
+      params: payload,
+      protocolVersion: 1,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "client_one",
+      createdAt: 1_000,
+    });
+
+    expect(() => gatewayConnection?.sendEnvelope(
+      envelope("request-too-large", { blob: "x".repeat(128 * 1024) }),
+    )).toThrow(/exceeds.*frame.*limit/i);
+    gatewayConnection?.sendEnvelope(
+      envelope("request-small", { note: "small" }),
+    );
+    await expect.poll(() => received.length, { timeout: 5_000 }).toBe(1);
+    expect(received[0]?.id).toBe("request-small");
   });
 
   it("terminates the client side when a gateway stops answering keepalive probes", async () => {

@@ -14,6 +14,15 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+export type FederationRpcRequestOptions = {
+  /**
+   * Absolute wall-clock deadline shared by every RPC attempt in one logical
+   * operation. This prevents compatibility fallbacks from restarting a full
+   * timeout after the first request consumes most of the caller's budget.
+   */
+  deadlineAt?: number;
+};
+
 export function hasFederationErrorCode(
   error: unknown,
   code: string,
@@ -43,9 +52,19 @@ export class FederationRpcEndpoint {
     method: string;
     params: unknown;
     timeoutMs?: number;
+    deadlineAt?: number;
   }): Promise<Result> {
     const id = `federation-request:${randomUUID()}`;
-    const timeoutMs = params.timeoutMs ?? this.options.defaultTimeoutMs ?? 30_000;
+    const now = this.now();
+    const deadlineAt =
+      params.deadlineAt
+      ?? now + (params.timeoutMs ?? this.options.defaultTimeoutMs ?? 30_000);
+    const timeoutMs = deadlineAt - now;
+    if (timeoutMs <= 0) {
+      return Promise.reject(
+        new Error(`Federation request timed out: ${params.method}`),
+      );
+    }
     const envelope: FederationRequestEnvelope = {
       id,
       kind: "request",
@@ -54,8 +73,8 @@ export class FederationRpcEndpoint {
       protocolVersion: FEDERATION_PROTOCOL_VERSION,
       sourceInstanceId: this.options.localInstanceId,
       targetInstanceId: this.options.remoteInstanceId,
-      createdAt: this.now(),
-      deadlineAt: this.now() + timeoutMs,
+      createdAt: now,
+      deadlineAt,
     };
 
     const promise = new Promise<Result>((resolve, reject) => {

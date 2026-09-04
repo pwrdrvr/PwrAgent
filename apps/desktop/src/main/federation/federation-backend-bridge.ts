@@ -157,7 +157,10 @@ import {
 } from "@pwragent/shared";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import type { FederationRouter } from "./federation-router";
-import type { FederationRpcEndpoint } from "./federation-rpc";
+import type {
+  FederationRpcEndpoint,
+  FederationRpcRequestOptions,
+} from "./federation-rpc";
 import {
   fitNormalizedReplayWithinByteBudget,
   pageNormalizedReplay,
@@ -560,6 +563,7 @@ export function additionalFederationBackendCapabilities(
 export type FederationBackendOperations = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationSnapshot>;
   /**
    * Optional for test doubles and non-desktop adapters. When absent, the RPC
@@ -568,11 +572,16 @@ export type FederationBackendOperations = {
    */
   searchNavigationThreads?(
     request: FederationJumpSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<FederationJumpSearchResponse>;
   listThreads(
     request?: AppServerListThreadsRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<AppServerListThreadsResponse>;
-  resolveThread(request: ResolveThreadRequest): Promise<ResolveThreadResponse>;
+  resolveThread(
+    request: ResolveThreadRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ResolveThreadResponse>;
   resolveThreadAdmissionState?(request: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -1535,50 +1544,60 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationSnapshot> {
     return normalizeNavigationSnapshotThreadKeys(
       await this.rpc.request<NavigationSnapshot>({
         method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
         params: request,
+        ...rpcOptions,
       }),
     );
   }
 
   async getNavigationSnapshotTransport(
     request: GetNavigationSnapshotTransportRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationSnapshot | NavigationSnapshotTransportResponse> {
     return await this.rpc.request<
       NavigationSnapshot | NavigationSnapshotTransportResponse
     >({
       method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
       params: request,
+      ...rpcOptions,
     });
   }
 
   async searchNavigationThreads(
     request: FederationJumpSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<FederationJumpSearchResponse> {
     return await this.rpc.request<FederationJumpSearchResponse>({
       method: FEDERATION_BACKEND_METHODS.searchNavigationThreads,
       params: request,
+      ...rpcOptions,
     });
   }
 
   async listThreads(
     request: AppServerListThreadsRequest = {},
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<AppServerListThreadsResponse> {
     return await this.rpc.request<AppServerListThreadsResponse>({
       method: FEDERATION_BACKEND_METHODS.listThreads,
       params: request,
+      ...rpcOptions,
     });
   }
 
   async resolveThread(
     request: ResolveThreadRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<ResolveThreadResponse> {
     return await this.rpc.request<ResolveThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.resolveThread,
       params: request,
+      ...rpcOptions,
     });
   }
 

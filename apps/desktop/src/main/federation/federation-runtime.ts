@@ -125,6 +125,7 @@ import {
   type DesktopFederationMode,
   type HandoffThreadWorkspaceRequest,
   type GetNavigationSnapshotRequest,
+  type GetNavigationSnapshotTransportRequest,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
   type InterruptTurnRequest,
@@ -271,7 +272,10 @@ import {
   type FederationRemotePtyOperations,
 } from "./federation-pty-service";
 import { FederationRouter } from "./federation-router";
-import { FederationRpcEndpoint } from "./federation-rpc";
+import {
+  FederationRpcEndpoint,
+  type FederationRpcRequestOptions,
+} from "./federation-rpc";
 import {
   FederationPeerUnavailableError,
 } from "./federation-peer-unavailable-error";
@@ -1891,6 +1895,7 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget,
     request: Pick<GetNavigationSnapshotRequest, "backend" | "filter">,
     selectionOverride?: FederationThreadSelection,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationSnapshot> {
     const backend = this.remoteBackend(target);
     const snapshotRequest = {
@@ -1905,9 +1910,9 @@ export class DesktopFederationRuntime {
       )
     ) {
       const startedAt = Date.now();
-      const legacyResponse = await backend.getNavigationSnapshot(
-        snapshotRequest,
-      );
+      const legacyResponse = rpcOptions
+        ? await backend.getNavigationSnapshot(snapshotRequest, rpcOptions)
+        : await backend.getNavigationSnapshot(snapshotRequest);
       this.logRemoteNavigationWireResponse({
         target,
         startedAt,
@@ -1943,7 +1948,7 @@ export class DesktopFederationRuntime {
       selectionKey,
     );
     let startedAt = Date.now();
-    let transportResponse = await backend.getNavigationSnapshotTransport({
+    const transportRequest: GetNavigationSnapshotTransportRequest = {
       transport: {
         protocol: 1,
         selection,
@@ -1951,7 +1956,13 @@ export class DesktopFederationRuntime {
           ? { baseRevision: previousTransportState.revision }
           : {}),
       },
-    });
+    };
+    let transportResponse = rpcOptions
+      ? await backend.getNavigationSnapshotTransport(
+          transportRequest,
+          rpcOptions,
+        )
+      : await backend.getNavigationSnapshotTransport(transportRequest);
     this.logRemoteNavigationWireResponse({
       target,
       startedAt,
@@ -1973,9 +1984,15 @@ export class DesktopFederationRuntime {
     );
     if (!nextTransportState) {
       startedAt = Date.now();
-      transportResponse = await backend.getNavigationSnapshotTransport({
+      const baselineRequest: GetNavigationSnapshotTransportRequest = {
         transport: { protocol: 1, selection },
-      });
+      };
+      transportResponse = rpcOptions
+        ? await backend.getNavigationSnapshotTransport(
+            baselineRequest,
+            rpcOptions,
+          )
+        : await backend.getNavigationSnapshotTransport(baselineRequest);
       this.logRemoteNavigationWireResponse({
         target,
         startedAt,
@@ -2232,9 +2249,9 @@ export class DesktopFederationRuntime {
   remoteThreadSummaries(): RemoteThreadSummaryCache {
     this.remoteThreadSummaryCache ??= new RemoteThreadSummaryCache({
       peers: () => this.connectedPeerTargets(),
-      fetchSnapshot: (target, selection) =>
-        this.remoteNavigationSnapshot(target, {}, selection),
-      searchPeer: async (target, request) => {
+      fetchSnapshot: (target, selection, rpcOptions) =>
+        this.remoteNavigationSnapshot(target, {}, selection, rpcOptions),
+      searchPeer: async (target, request, rpcOptions) => {
         const startedAt = Date.now();
         const backend = this.remoteBackend(target);
         if (!backend.searchNavigationThreads) {
@@ -2245,7 +2262,9 @@ export class DesktopFederationRuntime {
           throw unavailable;
         }
         try {
-          const response = await backend.searchNavigationThreads(request);
+          const response = rpcOptions
+            ? await backend.searchNavigationThreads(request, rpcOptions)
+            : await backend.searchNavigationThreads(request);
           const durationMs = Date.now() - startedAt;
           if (durationMs >= 1_000) {
             const responseBytes = Buffer.byteLength(

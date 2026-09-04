@@ -125,6 +125,7 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     expect(searchPeer).toHaveBeenCalledWith(
       remoteTarget("peer-a"),
       { query: "match", limit: 3 },
+      { deadlineAt: expect.any(Number) },
     );
     expect(fetchSnapshot).not.toHaveBeenCalled();
   });
@@ -183,8 +184,18 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
 
     try {
       const pending = cache.searchForJump({ query: "match" });
+      const searchCall = searchPeer.mock.calls[0] as unknown as [
+        unknown,
+        unknown,
+        { deadlineAt: number },
+      ];
+      const deadlineAt = searchCall[2].deadlineAt;
       await vi.advanceTimersByTimeAsync(80);
-      expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+      expect(fetchSnapshot).toHaveBeenCalledWith(
+        remoteTarget("peer-a"),
+        { kind: "all" },
+        { deadlineAt },
+      );
 
       await vi.advanceTimersByTimeAsync(20);
       await expect(pending).resolves.toEqual({ results: [] });

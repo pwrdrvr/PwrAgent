@@ -139,7 +139,13 @@ describe("Noise_IK_25519_AESGCM_SHA256", () => {
     const gatewayChannel = responder.split();
 
     const message = Buffer.from("startTurn: rm -rf nothing", "utf8");
+    expect(clientChannel.encryptedByteLength(message.byteLength)).toBe(
+      message.byteLength + 16,
+    );
     const onWire = clientChannel.encrypt(message);
+    expect(onWire.byteLength).toBe(
+      clientChannel.encryptedByteLength(message.byteLength),
+    );
     expect(onWire.equals(message)).toBe(false); // ciphertext != plaintext
     expect(gatewayChannel.decrypt(onWire).toString("utf8")).toBe(
       message.toString("utf8"),
