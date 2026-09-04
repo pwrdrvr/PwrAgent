@@ -48,6 +48,12 @@ import {
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  linuxUpdateChannelFile,
+  MAC_UPDATE_CHANNEL_FILE,
+  requireUpdateChannelFile,
+  WINDOWS_UPDATE_CHANNEL_FILE,
+} from "./update-channel-files.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -278,36 +284,6 @@ function currentLinuxBuilderArch() {
   return arch;
 }
 
-// electron-updater asks the feed for one fixed channel file name per platform:
-// `latest.yml` on Windows, `latest-linux.yml` on Linux x64, and
-// `latest-linux-<arch>.yml` on every other Linux arch (Provider
-// #getChannelFilePrefix in electron-updater 6.8.9). The name stays `latest`
-// even for a prerelease version: electron-builder derives a channel from the
-// version's prerelease tag only for the `generic` publish provider, and
-// electron-builder.yml publishes through `github`. Verified against
-// electron-builder 26.15.7 at version 1.1.0-alpha.2 — the deb, nsis, and mac
-// targets each wrote a `latest*.yml`, never an `alpha*.yml`.
-const WINDOWS_UPDATE_MANIFEST = "latest.yml";
-
-function linuxUpdateManifestName(arch) {
-  return arch === "x64" ? "latest-linux.yml" : `latest-linux-${arch}.yml`;
-}
-
-// electron-builder writes the channel file as a side effect of packaging, not
-// of publishing, so a `--publish=never` build still produces one. A missing
-// file means the running app would fetch a 404 from the release feed and every
-// update check on that platform would fail, so fail the build instead.
-function requireUpdateManifest(distDir, name) {
-  const manifestPath = join(distDir, name);
-  if (!existsSync(manifestPath)) {
-    throw new Error(
-      `electron-updater channel file ${name} is missing from ${distDir}. `
-      + "Auto-update cannot resolve an update without it.",
-    );
-  }
-  return manifestPath;
-}
-
 function findLinuxUnpackedDir(distDir) {
   const candidates = readdirSync(distDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && /^linux(?:-.+)?-unpacked$/.test(entry.name))
@@ -397,15 +373,13 @@ function writeWindowsChecksums(distDir) {
   return checksumPath;
 }
 
-function publishLinuxArtifacts(distDir) {
+function publishLinuxArtifacts(distDir, channelFile) {
   const tag = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME;
   if (!tag) {
     throw new Error("RELEASE_TAG or GITHUB_REF_NAME is required to publish Linux artifacts");
   }
   const artifacts = linuxDebArtifacts(distDir).map((artifact) => artifact.name);
   const checksum = "SHA256SUMS";
-  const manifest = linuxUpdateManifestName(currentLinuxBuilderArch());
-  requireUpdateManifest(distDir, manifest);
   runChecked(
     "gh",
     [
@@ -413,7 +387,7 @@ function publishLinuxArtifacts(distDir) {
       "upload",
       tag,
       ...artifacts,
-      manifest,
+      channelFile,
       checksum,
       "--repo",
       "pwrdrvr/PwrAgent",
@@ -1033,8 +1007,10 @@ if (win) {
   const checksumPath = writeWindowsChecksums(dist);
   console.log(`  checksum: ${checksumPath}`);
 
-  step("verify Windows update manifest");
-  console.log(`  manifest: ${requireUpdateManifest(dist, WINDOWS_UPDATE_MANIFEST)}`);
+  step("verify Windows update channel file");
+  console.log(
+    `  channel file: ${requireUpdateChannelFile(dist, WINDOWS_UPDATE_CHANNEL_FILE)}`,
+  );
 
   step("done");
   console.log(`  artifacts: ${dist}`);
@@ -1063,14 +1039,13 @@ if (linux) {
   const checksumPath = writeLinuxChecksums(dist);
   console.log(`  checksum: ${checksumPath}`);
 
-  step("verify Linux update manifest");
-  console.log(
-    `  manifest: ${requireUpdateManifest(dist, linuxUpdateManifestName(currentLinuxBuilderArch()))}`,
-  );
+  step("verify Linux update channel file");
+  const channelFile = linuxUpdateChannelFile(currentLinuxBuilderArch());
+  console.log(`  channel file: ${requireUpdateChannelFile(dist, channelFile)}`);
 
   if (publish) {
     step("publish Linux artifacts");
-    publishLinuxArtifacts(dist);
+    publishLinuxArtifacts(dist, channelFile);
   }
 
   step("done");
@@ -1173,8 +1148,8 @@ runChecked("lipo", [
 step("verify packaged asar contents");
 runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
 
-step("verify macOS update manifest");
-console.log(`  manifest: ${requireUpdateManifest(dist, "latest-mac.yml")}`);
+step("verify macOS update channel file");
+console.log(`  channel file: ${requireUpdateChannelFile(dist, MAC_UPDATE_CHANNEL_FILE)}`);
 
 step("done");
 console.log(`  artifacts: ${dist}`);

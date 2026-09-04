@@ -350,15 +350,23 @@ status with the release's `Pre-release` flag instead. Do not set
 `publish.channel` — that would rename the published files away from the names
 the installed builds ask for.
 
+[`apps/desktop/scripts/update-channel-files.mjs`](../apps/desktop/scripts/update-channel-files.mjs)
+holds the names. `release.mjs` imports them for its packaging checks and the
+release workflow runs the same file as a CLI for its publication checks, so the
+two cannot drift. Neither signing job checks out the repository — each gets an
+explicit allowlist of scripts — so that module is listed in the macOS `Archive
+signing input` step and in `scripts/release/archive-windows-signing-input.ps1`.
+
 Three checks guard this, so a dropped asset fails the release instead of
 shipping a broken updater:
 
 - `release.mjs` fails each platform's packaging step if the channel file is
   absent from `dist/`.
-- `Verify updater channel files` fails the publication job if any of the four
-  is missing from the downloaded artifacts or declares the wrong version.
-- The publication step re-reads the created release and fails if any of the
-  four did not upload.
+- `Verify updater channel files` (`verify-staged`) fails the publication job if
+  any of the four is missing from the downloaded artifacts, declares a version
+  other than the tag's, or names an installer that is not staged beside it.
+- The publication step re-reads the created release (`verify-published`) and
+  fails if any of the four did not upload.
 
 ---
 

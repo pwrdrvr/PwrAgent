@@ -73,6 +73,7 @@ jobs:
             pnpm-workspace.yaml \
             apps/desktop/release-stage \
             apps/desktop/scripts/release.mjs \
+            apps/desktop/scripts/update-channel-files.mjs \
             apps/desktop/scripts/verify-asar-contents.mjs \
             apps/desktop/scripts/asar-entry-paths.mjs \
             apps/desktop/node_modules \
@@ -434,35 +435,21 @@ jobs:
       - name: Name Windows checksum manifest
         run: mv windows-dist/SHA256SUMS windows-dist/PwrAgent-windows-SHA256SUMS
 
-      # electron-updater resolves an update by fetching exactly one of these
-      # names from the release's download directory, so a release that is
-      # missing one serves a 404 to every update check on that platform. The
-      # names carry no prerelease suffix: electron-builder derives a channel
-      # from the version's prerelease tag only for the `generic` publish
-      # provider, and electron-builder.yml publishes through `github`.
+      # electron-updater resolves an update by fetching exactly one file name
+      # from the release's download directory, so a release that is missing one
+      # serves a 404 to every update check on that platform. The names come from
+      # the module release.mjs imports for its own packaging checks, so the two
+      # cannot drift.
       - name: Verify updater channel files
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#v}"
-          for channel_file in \
-            mac-dist/latest-mac.yml \
-            windows-dist/latest.yml \
-            linux-dist/latest-linux.yml \
-            linux-dist/latest-linux-arm64.yml
-          do
-            if [ ! -s "$channel_file" ]; then
-              echo "::error::Missing updater channel file $channel_file" >&2
-              exit 1
-            fi
-            declared="$(sed -n 's/^version: *//p' "$channel_file" | head -n 1)"
-            if [ "$declared" != "$version" ]; then
-              echo "::error::$channel_file declares version '$declared', expected '$version'" >&2
-              exit 1
-            fi
-            echo "ok: $channel_file ($declared)"
-          done
+          RELEASE_TAG="${RELEASE_TAG:?}"
+          node apps/desktop/scripts/update-channel-files.mjs \
+            verify-staged \
+            --version "${RELEASE_TAG#v}" \
+            mac-dist windows-dist linux-dist
 
       - name: Create release and publish all platform assets
         env:
@@ -513,19 +500,13 @@ jobs:
           # An asset that failed to upload leaves the release looking complete
           # while auto-update stays broken on that platform, which is exactly
           # how latest.yml went missing from every release up to v1.1.0-alpha.2.
-          uploaded="$(gh release view "$RELEASE_TAG" \
+          gh release view "$RELEASE_TAG" \
             --repo pwrdrvr/PwrAgent \
             --json assets \
-            --jq '[.assets[] | select(.state != "deleted") | .name] | join(" ")')"
-          for channel_file in latest-mac.yml latest.yml latest-linux.yml latest-linux-arm64.yml; do
-            case " $uploaded " in
-              *" $channel_file "*) ;;
-              *)
-                echo "::error::Release $RELEASE_TAG is missing updater channel file $channel_file" >&2
-                exit 1
-                ;;
-            esac
-          done
+            --jq '.assets[] | select(.state != "deleted") | .name' \
+            > "$RUNNER_TEMP/release-asset-names.txt"
+          node apps/desktop/scripts/update-channel-files.mjs \
+            verify-published "$RUNNER_TEMP/release-asset-names.txt"
 
       - name: Upload assembled release artifacts (debug retention)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

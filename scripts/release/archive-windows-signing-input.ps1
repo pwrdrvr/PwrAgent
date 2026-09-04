@@ -16,9 +16,14 @@ if (Test-Path -LiteralPath $workspaceLinkRoot) {
   throw "Windows release-stage must not contain $workspaceLinkRoot; archive only the hoisted signing input."
 }
 
+# The signing job gets this allowlist instead of a checkout, so every module
+# release.mjs imports has to be listed here as well as in the macOS `Archive
+# signing input` step. verify-asar-contents.mjs imports asar-entry-paths.mjs;
+# release.mjs imports update-channel-files.mjs.
 $paths = @(
   "apps/desktop/release-stage",
   "apps/desktop/scripts/release.mjs",
+  "apps/desktop/scripts/update-channel-files.mjs",
   "apps/desktop/scripts/verify-asar-contents.mjs",
   "apps/desktop/scripts/asar-entry-paths.mjs",
   "scripts/release/install-trusted-signing.ps1"
