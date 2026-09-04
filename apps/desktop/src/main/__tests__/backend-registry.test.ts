@@ -6261,6 +6261,103 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("updates cached Codex rate limits from notifications without rewriting unchanged state", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+      },
+      rateLimits: [
+        {
+          name: "Weekly limit",
+          limitId: "codex",
+          usedPercent: 77,
+          remaining: 23,
+          resetAt: 1_788_748_108_000,
+          windowSeconds: 604_800,
+          windowMinutes: 10_080,
+        },
+        {
+          name: "GPT-5.3-Codex-Spark Weekly limit",
+          limitId: "codex_bengalfox",
+          usedPercent: 0,
+          remaining: 100,
+          resetAt: 1_789_090_523_000,
+          windowSeconds: 604_800,
+          windowMinutes: 10_080,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+    const initialSummary = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends[0];
+    let summarySeenByListener: BackendSummary | undefined;
+    const unsubscribe = registry.onEvent(async (event) => {
+      if (event.notification.method !== "account/rateLimits/updated") {
+        return;
+      }
+      summarySeenByListener = (
+        await registry.listBackends({ includeUnavailable: true })
+      ).backends[0];
+    });
+    const notification: AppServerNotification = {
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          planType: "pro",
+          primary: {
+            usedPercent: 85,
+            windowDurationMins: 10_080,
+            resetsAt: 1_788_748_108,
+          },
+          secondary: null,
+        },
+      },
+    };
+
+    await codexClient.emit(notification);
+
+    const updatedSummary = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends[0];
+    expect(updatedSummary).not.toBe(initialSummary);
+    expect(summarySeenByListener).toBe(updatedSummary);
+    expect(updatedSummary?.rateLimits).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Weekly limit",
+          limitId: "codex",
+          usedPercent: 85,
+          remaining: 15,
+        }),
+        expect.objectContaining({
+          name: "GPT-5.3-Codex-Spark Weekly limit",
+          limitId: "codex_bengalfox",
+          remaining: 100,
+        }),
+      ]),
+    );
+
+    await codexClient.emit(notification);
+
+    const unchangedSummary = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends[0];
+    expect(unchangedSummary).toBe(updatedSummary);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("prefers the running App Server's version over the next launch's", async () => {
     // The two disagree while a managed switch is pending: the connection is
     // still answering from the old build while resolution already names the

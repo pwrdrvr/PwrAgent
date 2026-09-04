@@ -1483,7 +1483,9 @@ function formatRateLimitWindowName(params: {
   return `${rawName ?? rawId} ${windowLabel}`.trim();
 }
 
-function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
+export function extractRateLimitSummaries(
+  value: unknown,
+): BackendRateLimitSummary[] {
   const out = new Map<string, BackendRateLimitSummary>();
   const addWindow = (
     windowValue: unknown,

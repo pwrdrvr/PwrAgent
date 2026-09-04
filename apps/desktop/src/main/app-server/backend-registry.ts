@@ -7,7 +7,7 @@ import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
   ThreadForkParams as CodexThreadForkParams,
@@ -367,6 +367,7 @@ import {
 import {
   CodexAppServerClient,
   DEFAULT_CODEX_THREAD_TITLE_MODEL,
+  extractRateLimitSummaries,
   type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
 } from "../codex-app-server/client";
@@ -5572,6 +5573,17 @@ async function readClientRateLimits(client: BackendClient): Promise<BackendRateL
     return [];
   }
   return await client.readRateLimits();
+}
+
+function rateLimitSummaryKey(limit: BackendRateLimitSummary): string {
+  return `${limit.limitId ?? ""}\u0000${limit.name}`;
+}
+
+function compareRateLimitSummaries(
+  left: BackendRateLimitSummary,
+  right: BackendRateLimitSummary,
+): number {
+  return rateLimitSummaryKey(left).localeCompare(rateLimitSummaryKey(right));
 }
 
 type ModelSettings = {
@@ -22260,6 +22272,12 @@ export class DesktopBackendRegistry {
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
         if (
+          backend === "codex"
+          && notification.method === "account/rateLimits/updated"
+        ) {
+          this.updateCachedCodexRateLimits(notification.params.rateLimits);
+        }
+        if (
           backend === "codex" &&
           notification.method === "thread/codexSettings/observed"
         ) {
@@ -23957,6 +23975,39 @@ export class DesktopBackendRegistry {
       ],
       ...(available ? {} : { unavailableReason }),
     });
+  }
+
+  private updateCachedCodexRateLimits(value: unknown): void {
+    if (!this.codexBackendSummary) {
+      return;
+    }
+    const rateLimits = extractRateLimitSummaries(value);
+    if (rateLimits.length === 0) {
+      return;
+    }
+    const currentRateLimits = this.codexBackendSummary.rateLimits ?? [];
+    const replacedLimitIds = new Set(
+      rateLimits.flatMap((limit) => limit.limitId ? [limit.limitId] : []),
+    );
+    const replacedNames = new Set(rateLimits.map((limit) => limit.name));
+    const retainedRateLimits = currentRateLimits.filter(
+      (limit) =>
+        !(limit.limitId && replacedLimitIds.has(limit.limitId))
+        && !replacedNames.has(limit.name),
+    );
+    const mergedRateLimits = [...retainedRateLimits, ...rateLimits];
+    if (
+      isDeepStrictEqual(
+        [...currentRateLimits].sort(compareRateLimitSummaries),
+        [...mergedRateLimits].sort(compareRateLimitSummaries),
+      )
+    ) {
+      return;
+    }
+    this.codexBackendSummary = {
+      ...this.codexBackendSummary,
+      rateLimits: mergedRateLimits,
+    };
   }
 
   /**
