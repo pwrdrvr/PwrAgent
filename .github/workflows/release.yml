@@ -73,6 +73,7 @@ jobs:
             pnpm-workspace.yaml \
             apps/desktop/release-stage \
             apps/desktop/scripts/release.mjs \
+            apps/desktop/scripts/update-channel-files.mjs \
             apps/desktop/scripts/verify-asar-contents.mjs \
             apps/desktop/scripts/asar-entry-paths.mjs \
             apps/desktop/node_modules \
@@ -209,11 +210,17 @@ jobs:
           PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --linux --no-publish
 
+      # `latest-linux.yml` (x64) and `latest-linux-arm64.yml` (arm64) are the
+      # channel files electron-updater fetches from the release feed. The two
+      # matrix legs write different names, so `merge-multiple` in the
+      # publication job cannot collide them.
       - name: Upload Linux package artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: linux-deb-${{ matrix.deb_arch }}
-          path: apps/desktop/release-stage/dist/*.deb
+          path: |
+            apps/desktop/release-stage/dist/*.deb
+            apps/desktop/release-stage/dist/latest-linux*.yml
           retention-days: 7
 
   windows-prepare:
@@ -362,6 +369,10 @@ jobs:
           Add-Content -LiteralPath $manifest -Value "$digest  $aliasName`n" -NoNewline -Encoding ascii
           Write-Host "alias: $aliasPath"
 
+      # `latest.yml` is the channel file electron-updater fetches on Windows.
+      # It keeps naming the versioned installer, not the stable-name alias
+      # above: the alias is a download convenience, while update resolution and
+      # delta downloads go through the versioned file and its .blockmap.
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -369,6 +380,7 @@ jobs:
           path: |
             apps/desktop/release-stage/dist/*.exe
             apps/desktop/release-stage/dist/*.exe.blockmap
+            apps/desktop/release-stage/dist/latest.yml
             apps/desktop/release-stage/dist/SHA256SUMS
           retention-days: 7
 
@@ -423,6 +435,22 @@ jobs:
       - name: Name Windows checksum manifest
         run: mv windows-dist/SHA256SUMS windows-dist/PwrAgent-windows-SHA256SUMS
 
+      # electron-updater resolves an update by fetching exactly one file name
+      # from the release's download directory, so a release that is missing one
+      # serves a 404 to every update check on that platform. The names come from
+      # the module release.mjs imports for its own packaging checks, so the two
+      # cannot drift.
+      - name: Verify updater channel files
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${RELEASE_TAG:?}"
+          node apps/desktop/scripts/update-channel-files.mjs \
+            verify-staged \
+            --version "${RELEASE_TAG#v}" \
+            mac-dist windows-dist linux-dist
+
       - name: Create release and publish all platform assets
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
@@ -457,6 +485,7 @@ jobs:
             mac-dist/* \
             windows-dist/* \
             linux-dist/*.deb \
+            linux-dist/latest-linux*.yml \
             linux-dist/SHA256SUMS
 
           is_prerelease="$(gh release view "$RELEASE_TAG" \
@@ -468,6 +497,17 @@ jobs:
             exit 1
           fi
 
+          # An asset that failed to upload leaves the release looking complete
+          # while auto-update stays broken on that platform, which is exactly
+          # how latest.yml went missing from every release up to v1.1.0-alpha.2.
+          gh release view "$RELEASE_TAG" \
+            --repo pwrdrvr/PwrAgent \
+            --json assets \
+            --jq '.assets[] | select(.state != "deleted") | .name' \
+            > "$RUNNER_TEMP/release-asset-names.txt"
+          node apps/desktop/scripts/update-channel-files.mjs \
+            verify-published "$RUNNER_TEMP/release-asset-names.txt"
+
       - name: Upload assembled release artifacts (debug retention)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ !cancelled() }}
@@ -478,6 +518,7 @@ jobs:
             mac-dist/*
             windows-dist/*
             linux-dist/*.deb
+            linux-dist/latest-linux*.yml
             linux-dist/SHA256SUMS
           retention-days: 30
 

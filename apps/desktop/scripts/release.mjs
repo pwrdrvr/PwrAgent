@@ -48,6 +48,12 @@ import {
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  linuxUpdateChannelFile,
+  MAC_UPDATE_CHANNEL_FILE,
+  requireUpdateChannelFile,
+  WINDOWS_UPDATE_CHANNEL_FILE,
+} from "./update-channel-files.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -367,7 +373,7 @@ function writeWindowsChecksums(distDir) {
   return checksumPath;
 }
 
-function publishLinuxArtifacts(distDir) {
+function publishLinuxArtifacts(distDir, channelFile) {
   const tag = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME;
   if (!tag) {
     throw new Error("RELEASE_TAG or GITHUB_REF_NAME is required to publish Linux artifacts");
@@ -376,7 +382,17 @@ function publishLinuxArtifacts(distDir) {
   const checksum = "SHA256SUMS";
   runChecked(
     "gh",
-    ["release", "upload", tag, ...artifacts, checksum, "--repo", "pwrdrvr/PwrAgent", "--clobber"],
+    [
+      "release",
+      "upload",
+      tag,
+      ...artifacts,
+      channelFile,
+      checksum,
+      "--repo",
+      "pwrdrvr/PwrAgent",
+      "--clobber",
+    ],
     { cwd: distDir },
   );
 }
@@ -991,6 +1007,11 @@ if (win) {
   const checksumPath = writeWindowsChecksums(dist);
   console.log(`  checksum: ${checksumPath}`);
 
+  step("verify Windows update channel file");
+  console.log(
+    `  channel file: ${requireUpdateChannelFile(dist, WINDOWS_UPDATE_CHANNEL_FILE)}`,
+  );
+
   step("done");
   console.log(`  artifacts: ${dist}`);
   process.exit(0);
@@ -1018,9 +1039,13 @@ if (linux) {
   const checksumPath = writeLinuxChecksums(dist);
   console.log(`  checksum: ${checksumPath}`);
 
+  step("verify Linux update channel file");
+  const channelFile = linuxUpdateChannelFile(currentLinuxBuilderArch());
+  console.log(`  channel file: ${requireUpdateChannelFile(dist, channelFile)}`);
+
   if (publish) {
     step("publish Linux artifacts");
-    publishLinuxArtifacts(dist);
+    publishLinuxArtifacts(dist, channelFile);
   }
 
   step("done");
@@ -1122,6 +1147,9 @@ runChecked("lipo", [
 
 step("verify packaged asar contents");
 runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
+
+step("verify macOS update channel file");
+console.log(`  channel file: ${requireUpdateChannelFile(dist, MAC_UPDATE_CHANNEL_FILE)}`);
 
 step("done");
 console.log(`  artifacts: ${dist}`);
