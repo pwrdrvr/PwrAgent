@@ -687,6 +687,74 @@ describe("federation backend bridge", () => {
     expect(backend.getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
+  it("routes generic search filters to a bounded owner response", async () => {
+    const match = {
+      id: "thread-553",
+      title: "Collector result",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      source: "codex" as const,
+      projectKey: "PwrSuiteLab",
+      updatedAt: 5_000,
+    };
+    const listThreads = vi.fn();
+    const searchFederatedThreads = vi.fn(async () => ({
+      threads: [match],
+      totalCount: 1_200,
+      truncated: true,
+    }));
+    const backend = {
+      getNavigationSnapshot: vi.fn(),
+      listThreads,
+      searchFederatedThreads,
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["federated_search"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+    const request = {
+      query: "collector",
+      backend: "codex" as const,
+      includeArchived: true,
+      projectKeys: ["PwrSuiteLab"],
+      updatedAfter: 4_000,
+      updatedBefore: 6_000,
+      limit: 10,
+    };
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "generic-search",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.searchFederatedThreads,
+        params: request,
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(replies[0]).toMatchObject({
+      kind: "response",
+      result: {
+        threads: [{ id: "thread-553" }],
+        totalCount: 1_200,
+        truncated: true,
+      },
+    });
+    expect(searchFederatedThreads).toHaveBeenCalledWith(request);
+    expect(listThreads).not.toHaveBeenCalled();
+  });
+
   it("sends unchanged and sparse navigation responses instead of full Federation payloads", async () => {
     const buildThread = (index: number): NavigationThreadSummary => ({
       id: `thread-${index}`,

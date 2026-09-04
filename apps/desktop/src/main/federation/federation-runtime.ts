@@ -4979,6 +4979,9 @@ function localBackendOperations(): FederationBackendOperations {
     async searchNavigationThreads(request) {
       return await messagingBridge.searchNavigationThreads(request);
     },
+    async searchFederatedThreads(request) {
+      return await messagingBridge.searchFederatedThreads(request);
+    },
     async listThreads(
       request: AppServerListThreadsRequest = {},
     ): Promise<AppServerListThreadsResponse> {

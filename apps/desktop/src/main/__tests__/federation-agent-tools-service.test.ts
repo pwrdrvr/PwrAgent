@@ -1180,10 +1180,11 @@ describe("federation agent tools service", () => {
           },
         ],
         remoteBackend: (() => ({
-          listThreads: async () => ({
-            backend: "all",
-            fetchedAt: 10,
+          listThreads: vi.fn(),
+          searchFederatedThreads: async () => ({
             threads: [remoteThread],
+            totalCount: 1,
+            truncated: false,
           }),
         })) as never,
       }),
@@ -1255,6 +1256,20 @@ describe("federation agent tools service", () => {
         },
       ],
     }));
+    const remoteSearchThreads = vi.fn(async () => ({
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Recorder crash investigation",
+          source: "codex" as const,
+          linkedDirectories: [],
+          createdAt: 1,
+          updatedAt: 3,
+        },
+      ],
+      totalCount: 1,
+      truncated: false,
+    }));
     const handler = createFederationAgentToolsHandler({
       // Never let unit tests mint a machine-id in the real PwrAgent root.
       collectHostInfo: async () => localHostInfo,
@@ -1268,7 +1283,10 @@ describe("federation agent tools service", () => {
             capabilities: ["federated_search"],
           },
         ],
-        remoteBackend: (() => ({ listThreads: remoteListThreads })) as never,
+        remoteBackend: (() => ({
+          listThreads: remoteListThreads,
+          searchFederatedThreads: remoteSearchThreads,
+        })) as never,
       }),
     });
 
@@ -1296,7 +1314,8 @@ describe("federation agent tools service", () => {
     const localData = (
       localOnly as { ok: true; data: SearchFederationThreadsResult }
     ).data;
-    expect(remoteListThreads).toHaveBeenCalledTimes(1);
+    expect(remoteSearchThreads).toHaveBeenCalledTimes(1);
+    expect(remoteListThreads).not.toHaveBeenCalled();
     expect(localData.results.map((entry) => entry.threadId)).toEqual([
       "thread-local",
     ]);
@@ -1332,10 +1351,11 @@ describe("federation agent tools service", () => {
           },
         ],
         remoteBackend: (() => ({
-          listThreads: async () => ({
-            backend: "all",
-            fetchedAt: 10,
+          listThreads: vi.fn(),
+          searchFederatedThreads: async () => ({
             threads: [],
+            totalCount: 0,
+            truncated: false,
           }),
         })) as never,
       }),

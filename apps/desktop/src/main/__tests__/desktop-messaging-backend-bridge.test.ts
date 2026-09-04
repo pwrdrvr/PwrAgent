@@ -307,6 +307,89 @@ describe("DesktopMessagingBackendBridge", () => {
     });
   });
 
+  it("filters and bounds generic search on the owner without reconciliation", async () => {
+    const listThreads = vi.fn(async (request?: { archived?: boolean }) =>
+      request?.archived
+        ? [
+            {
+              id: "archived-newer",
+              title: "Collector result",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              projectKey: "PwrSuiteLab",
+              archivedAt: 6_000,
+              updatedAt: 5_500,
+            },
+            {
+              id: "archived-older",
+              title: "Collector result",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              projectKey: "PwrSuiteLab",
+              archivedAt: 5_000,
+              updatedAt: 4_500,
+            },
+          ]
+        : [
+            ...Array.from({ length: 1_200 }, (_, index) => ({
+              id: `active-match-${index}`,
+              title: "Collector result",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              projectKey: "PwrSuiteLab",
+              updatedAt: 5_000,
+            })),
+            {
+              id: "wrong-project",
+              title: "Collector result",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              projectKey: "OtherProject",
+              updatedAt: 5_000,
+            },
+          ]);
+    const registry = { listThreads } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+    const reconcileCallsBefore = reconcileNavigationSnapshot.mock.calls.length;
+
+    await expect(bridge.searchFederatedThreads({
+      query: "collector",
+      backend: "codex",
+      includeArchived: true,
+      projectKeys: ["PwrSuiteLab"],
+      updatedAfter: 4_000,
+      updatedBefore: 6_000,
+      limit: 1,
+    })).resolves.toMatchObject({
+      threads: [{ id: "archived-newer" }],
+      totalCount: 1_202,
+      truncated: true,
+    });
+    expect(listThreads).toHaveBeenNthCalledWith(1, {
+      backend: "codex",
+      archived: false,
+      callerReason: "federation-thread-search",
+      enrichDirectories: false,
+      filter: "collector",
+      skipArchivedMetadataRefresh: true,
+    });
+    expect(listThreads).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      archived: true,
+      callerReason: "federation-thread-search",
+      enrichDirectories: false,
+      filter: "collector",
+      skipArchivedMetadataRefresh: true,
+    });
+    expect(reconcileNavigationSnapshot).toHaveBeenCalledTimes(
+      reconcileCallsBefore,
+    );
+  });
+
   it("returns a broad snapshot before its stale directory batch finishes", async () => {
     reconcileNavigationSnapshot.mockResolvedValueOnce({
       backend: "all",

@@ -5,6 +5,8 @@ import type {
   FederatedSearchResponse,
   FederationInstanceId,
   FederationPeerSummary,
+  FederationThreadSearchRequest,
+  FederationThreadSearchResponse,
 } from "@pwragent/shared";
 import {
   buildFederatedThreadRef,
@@ -20,14 +22,31 @@ export type FederatedSearchPeer = {
   instanceId: FederationInstanceId;
   label: string;
   status?: FederationPeerSummary["status"];
-  backend: Pick<FederationBackendOperations, "listThreads">
+  backend: Pick<
+    Required<FederationBackendOperations>,
+    "listThreads" | "searchFederatedThreads"
+  >
     & Partial<Pick<FederationBackendOperations, "resolveThread">>;
 };
 
 export type FederatedSearchLocalBackend = Pick<
   FederationBackendOperations,
   "listThreads"
+> & Partial<Pick<
+  FederationBackendOperations,
+  "resolveThread" | "searchFederatedThreads"
+>>;
+
+type FederatedSearchResolvableBackend = Pick<
+  FederationBackendOperations,
+  "listThreads"
 > & Partial<Pick<FederationBackendOperations, "resolveThread">>;
+
+type FederatedSearchResultPage = {
+  results: FederatedSearchResponse["results"];
+  totalCount: number;
+  truncated: boolean;
+};
 
 /**
  * Per-peer deadline for a search fan-out. Much tighter than the 30s RPC
@@ -73,7 +92,8 @@ export class FederatedSearchService {
           searchedInstances.push({
             instanceId: peer.instanceId,
             instanceLabel: peer.label,
-            resultCount: peerResults.length,
+            resultCount: peerResults.totalCount,
+            ...(peerResults.truncated ? { truncated: true } : {}),
           });
           return peerResults;
         } catch (error) {
@@ -82,24 +102,37 @@ export class FederatedSearchService {
             instanceLabel: peer.label,
             error: error instanceof Error ? error.message : String(error),
           });
-          return [];
+          return {
+            results: [],
+            totalCount: 0,
+            truncated: false,
+          };
         }
       }),
     ]);
     const matches = resultGroups
-      .flat()
+      .flatMap((group) => group.results)
       .sort((left, right) => {
         if (right.score !== left.score) return right.score - left.score;
-        return (right.thread.updatedAt ?? 0) - (left.thread.updatedAt ?? 0);
+        return (
+          (right.thread.updatedAt ?? right.thread.createdAt ?? 0)
+          - (left.thread.updatedAt ?? left.thread.createdAt ?? 0)
+        );
       });
     const results = matches.slice(0, limit);
+    const totalCount = resultGroups.reduce(
+      (count, group) => count + group.totalCount,
+      0,
+    );
 
     return {
       query,
       searchedAt,
       results,
-      totalCount: matches.length,
-      truncated: matches.length > limit,
+      totalCount,
+      truncated:
+        totalCount > limit
+        || resultGroups.some((group) => group.truncated),
       failures,
       searchedInstances,
     };
@@ -108,14 +141,14 @@ export class FederatedSearchService {
   private async searchLocal(
     query: string,
     request: FederatedSearchRequest,
-  ): Promise<FederatedSearchResponse["results"]> {
+  ): Promise<FederatedSearchResultPage> {
     const resolved = await this.resolveExactThreadId(
       this.options.local,
       query,
       request,
     );
     if (resolved !== undefined) {
-      return resolved
+      const results = resolved
         ? [{
             ref: buildFederatedThreadRef({
               backend: resolved.source,
@@ -126,21 +159,34 @@ export class FederatedSearchService {
             score: scoreThread(resolved, query),
           }]
         : [];
+      return {
+        results,
+        totalCount: results.length,
+        truncated: false,
+      };
     }
-    const threads = await listFederatedSearchThreads(
-      this.options.local,
-      query,
-      request,
-    );
-    return threads.map((thread) => ({
-      ref: buildFederatedThreadRef({
-        backend: thread.source,
-        threadId: thread.id,
-      }),
-      thread,
-      instanceLabel: "This Mac",
-      score: scoreThread(thread, query),
-    }));
+    const ownerResult = this.options.local.searchFederatedThreads
+      ? await this.options.local.searchFederatedThreads(
+          buildOwnerSearchRequest(query, request),
+        )
+      : await searchFederatedThreadsOnOwner(
+          this.options.local,
+          buildOwnerSearchRequest(query, request),
+        );
+    const ownerResponse = normalizeExactOwnerSearchResponse(ownerResult, query);
+    return {
+      results: ownerResponse.threads.map((thread) => ({
+        ref: buildFederatedThreadRef({
+          backend: thread.source,
+          threadId: thread.id,
+        }),
+        thread,
+        instanceLabel: "This Mac",
+        score: scoreThread(thread, query),
+      })),
+      totalCount: ownerResponse.totalCount,
+      truncated: ownerResponse.truncated,
+    };
   }
 
   private async searchPeer(
@@ -148,7 +194,7 @@ export class FederatedSearchService {
     query: string,
     request: FederatedSearchRequest,
     rpcOptions: FederationRpcRequestOptions,
-  ): Promise<FederatedSearchResponse["results"]> {
+  ): Promise<FederatedSearchResultPage> {
     const resolved = await this.resolveExactThreadId(
       peer.backend,
       query,
@@ -156,7 +202,7 @@ export class FederatedSearchService {
       rpcOptions,
     );
     if (resolved !== undefined) {
-      return resolved
+      const results = resolved
         ? [{
             ref: buildFederatedThreadRef({
               backend: resolved.source,
@@ -169,28 +215,63 @@ export class FederatedSearchService {
             score: scoreThread(resolved, query),
           }]
         : [];
+      return {
+        results,
+        totalCount: results.length,
+        truncated: false,
+      };
     }
-    const threads = await listFederatedSearchThreads(
-      peer.backend,
-      query,
-      request,
-      rpcOptions,
-    );
-    return threads.map((thread) => ({
-      ref: buildFederatedThreadRef({
-        backend: thread.source,
-        instanceId: peer.instanceId,
-        threadId: thread.id,
-      }),
-      thread,
-      instanceLabel: peer.label,
-      peerStatus: peer.status,
-      score: scoreThread(thread, query),
-    }));
+    let ownerResponse: FederationThreadSearchResponse;
+    try {
+      ownerResponse = await peer.backend.searchFederatedThreads(
+        buildOwnerSearchRequest(query, request),
+        rpcOptions,
+      );
+    } catch (error) {
+      if (!hasFederationErrorCode(error, "method_not_found")) {
+        throw error;
+      }
+      if (looksLikeExactThreadId(query)) {
+        const legacyThreads = await listFederatedSearchThreads(
+          peer.backend,
+          "",
+          request,
+          rpcOptions,
+        );
+        const exact = legacyThreads.find((thread) => thread.id === query);
+        ownerResponse = {
+          threads: exact ? [exact] : [],
+          totalCount: exact ? 1 : 0,
+          truncated: false,
+        };
+      } else {
+        ownerResponse = await searchFederatedThreadsOnOwner(
+          peer.backend,
+          buildOwnerSearchRequest(query, request),
+          rpcOptions,
+        );
+      }
+    }
+    ownerResponse = normalizeExactOwnerSearchResponse(ownerResponse, query);
+    return {
+      results: ownerResponse.threads.map((thread) => ({
+        ref: buildFederatedThreadRef({
+          backend: thread.source,
+          instanceId: peer.instanceId,
+          threadId: thread.id,
+        }),
+        thread,
+        instanceLabel: peer.label,
+        peerStatus: peer.status,
+        score: scoreThread(thread, query),
+      })),
+      totalCount: ownerResponse.totalCount,
+      truncated: ownerResponse.truncated,
+    };
   }
 
   private async resolveExactThreadId(
-    backendOperations: FederatedSearchPeer["backend"],
+    backendOperations: FederatedSearchResolvableBackend,
     query: string,
     request: FederatedSearchRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -224,21 +305,73 @@ export class FederatedSearchService {
       if (!hasFederationErrorCode(error, "method_not_found")) {
         throw error;
       }
-      // Mixed-version peers may not expose the exact lookup RPC yet. Fall
-      // through to exact list scans rather than using fuzzy UUID filtering.
+      // Continue through bounded owner search. Only method_not_found from that
+      // newer RPC may select the raw-list compatibility path.
     }
-    const threads = await listFederatedSearchThreads(
-      backendOperations,
-      "",
-      request,
-      rpcOptions,
-    );
-    return threads.find((thread) => thread.id === query) ?? null;
+    return undefined;
   }
 }
 
+function buildOwnerSearchRequest(
+  query: string,
+  request: FederatedSearchRequest,
+): FederationThreadSearchRequest {
+  return {
+    query,
+    limit: Math.max(1, Math.min(request.limit ?? 50, 200)),
+    ...(request.backend !== undefined ? { backend: request.backend } : {}),
+    ...(request.includeArchived !== undefined
+      ? { includeArchived: request.includeArchived }
+      : {}),
+    ...(request.projectKeys !== undefined
+      ? { projectKeys: request.projectKeys }
+      : {}),
+    ...(request.updatedAfter !== undefined
+      ? { updatedAfter: request.updatedAfter }
+      : {}),
+    ...(request.updatedBefore !== undefined
+      ? { updatedBefore: request.updatedBefore }
+      : {}),
+  };
+}
+
+function normalizeExactOwnerSearchResponse(
+  response: FederationThreadSearchResponse,
+  query: string,
+): FederationThreadSearchResponse {
+  if (!looksLikeExactThreadId(query)) {
+    return response;
+  }
+  const exact = response.threads.find((thread) => thread.id === query);
+  return {
+    threads: exact ? [exact] : [],
+    totalCount: exact ? 1 : 0,
+    truncated: false,
+  };
+}
+
+export async function searchFederatedThreadsOnOwner(
+  backendOperations: Pick<FederationBackendOperations, "listThreads">,
+  request: FederationThreadSearchRequest,
+  rpcOptions?: FederationRpcRequestOptions,
+): Promise<FederationThreadSearchResponse> {
+  const limit = Math.max(1, Math.min(request.limit, 200));
+  const threads = await listFederatedSearchThreads(
+    backendOperations,
+    request.query,
+    request,
+    rpcOptions,
+  );
+  threads.sort(compareFederatedSearchThreads(request.query));
+  return {
+    threads: threads.slice(0, limit),
+    totalCount: threads.length,
+    truncated: threads.length > limit,
+  };
+}
+
 async function listFederatedSearchThreads(
-  backendOperations: FederatedSearchPeer["backend"],
+  backendOperations: Pick<FederationBackendOperations, "listThreads">,
   query: string,
   request: FederatedSearchRequest,
   rpcOptions?: FederationRpcRequestOptions,
@@ -337,4 +470,18 @@ function scoreThread(thread: AppServerThreadSummary, query: string): number {
   if (summary.includes(normalized)) score += 100;
   if (directories.includes(normalized)) score += 50;
   return score;
+}
+
+function compareFederatedSearchThreads(query: string) {
+  return (
+    left: AppServerThreadSummary,
+    right: AppServerThreadSummary,
+  ): number => {
+    const scoreDifference = scoreThread(right, query) - scoreThread(left, query);
+    if (scoreDifference !== 0) return scoreDifference;
+    return (
+      (right.updatedAt ?? right.createdAt ?? 0)
+      - (left.updatedAt ?? left.createdAt ?? 0)
+    );
+  };
 }
