@@ -5576,7 +5576,10 @@ async function readClientRateLimits(client: BackendClient): Promise<BackendRateL
 }
 
 function rateLimitSummaryKey(limit: BackendRateLimitSummary): string {
-  return `${limit.limitId ?? ""}\u0000${limit.name}`;
+  return [
+    limit.limitId ?? "",
+    limit.windowKey ?? limit.name,
+  ].join("\u0000");
 }
 
 function compareRateLimitSummaries(
@@ -5584,6 +5587,31 @@ function compareRateLimitSummaries(
   right: BackendRateLimitSummary,
 ): number {
   return rateLimitSummaryKey(left).localeCompare(rateLimitSummaryKey(right));
+}
+
+function mergeRateLimitSummary(
+  current: BackendRateLimitSummary,
+  update: BackendRateLimitSummary,
+): BackendRateLimitSummary {
+  return {
+    ...current,
+    ...(update.limitId !== undefined ? { limitId: update.limitId } : {}),
+    ...(update.limitName !== undefined
+      ? { name: update.name, limitName: update.limitName }
+      : {}),
+    ...(update.windowKey !== undefined ? { windowKey: update.windowKey } : {}),
+    ...(update.remaining !== undefined ? { remaining: update.remaining } : {}),
+    ...(update.limit !== undefined ? { limit: update.limit } : {}),
+    ...(update.used !== undefined ? { used: update.used } : {}),
+    ...(update.usedPercent !== undefined ? { usedPercent: update.usedPercent } : {}),
+    ...(update.resetAt !== undefined ? { resetAt: update.resetAt } : {}),
+    ...(update.windowSeconds !== undefined
+      ? { windowSeconds: update.windowSeconds }
+      : {}),
+    ...(update.windowMinutes !== undefined
+      ? { windowMinutes: update.windowMinutes }
+      : {}),
+  };
 }
 
 type ModelSettings = {
@@ -23986,16 +24014,19 @@ export class DesktopBackendRegistry {
       return;
     }
     const currentRateLimits = this.codexBackendSummary.rateLimits ?? [];
-    const replacedLimitIds = new Set(
-      rateLimits.flatMap((limit) => limit.limitId ? [limit.limitId] : []),
+    const updatesByKey = new Map(
+      rateLimits.map((limit) => [rateLimitSummaryKey(limit), limit]),
     );
-    const replacedNames = new Set(rateLimits.map((limit) => limit.name));
-    const retainedRateLimits = currentRateLimits.filter(
-      (limit) =>
-        !(limit.limitId && replacedLimitIds.has(limit.limitId))
-        && !replacedNames.has(limit.name),
-    );
-    const mergedRateLimits = [...retainedRateLimits, ...rateLimits];
+    const mergedRateLimits = currentRateLimits.map((current) => {
+      const key = rateLimitSummaryKey(current);
+      const update = updatesByKey.get(key);
+      if (!update) {
+        return current;
+      }
+      updatesByKey.delete(key);
+      return mergeRateLimitSummary(current, update);
+    });
+    mergedRateLimits.push(...updatesByKey.values());
     if (
       isDeepStrictEqual(
         [...currentRateLimits].sort(compareRateLimitSummaries),

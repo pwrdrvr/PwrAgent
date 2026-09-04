@@ -6269,17 +6269,32 @@ describe("DesktopBackendRegistry", () => {
       },
       rateLimits: [
         {
-          name: "Weekly limit",
+          name: "5h limit",
           limitId: "codex",
+          limitName: "Codex",
+          windowKey: "primary",
           usedPercent: 77,
           remaining: 23,
           resetAt: 1_788_748_108_000,
+          windowSeconds: 18_000,
+          windowMinutes: 300,
+        },
+        {
+          name: "Weekly limit",
+          limitId: "codex",
+          limitName: "Codex",
+          windowKey: "secondary",
+          usedPercent: 9,
+          remaining: 91,
+          resetAt: 1_788_888_108_000,
           windowSeconds: 604_800,
           windowMinutes: 10_080,
         },
         {
           name: "GPT-5.3-Codex-Spark Weekly limit",
           limitId: "codex_bengalfox",
+          limitName: "GPT-5.3-Codex-Spark",
+          windowKey: "secondary",
           usedPercent: 0,
           remaining: 100,
           resetAt: 1_789_090_523_000,
@@ -6308,23 +6323,34 @@ describe("DesktopBackendRegistry", () => {
         await registry.listBackends({ includeUnavailable: true })
       ).backends[0];
     });
-    const notification: AppServerNotification = {
+    const buildNotification = (usedPercent: number): AppServerNotification => ({
       method: "account/rateLimits/updated",
       params: {
         rateLimits: {
           limitId: "codex",
-          planType: "pro",
+          limitName: null,
           primary: {
-            usedPercent: 85,
-            windowDurationMins: 10_080,
-            resetsAt: 1_788_748_108,
+            usedPercent,
+            windowDurationMins: null,
+            resetsAt: null,
           },
           secondary: null,
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
         },
       },
-    };
+    });
 
-    await codexClient.emit(notification);
+    await codexClient.emit(buildNotification(77));
+
+    const initiallyUnchangedSummary = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends[0];
+    expect(initiallyUnchangedSummary).toBe(initialSummary);
+
+    await codexClient.emit(buildNotification(85));
 
     const updatedSummary = (
       await registry.listBackends({ includeUnavailable: true })
@@ -6334,10 +6360,20 @@ describe("DesktopBackendRegistry", () => {
     expect(updatedSummary?.rateLimits).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "Weekly limit",
+          name: "5h limit",
           limitId: "codex",
+          windowKey: "primary",
           usedPercent: 85,
           remaining: 15,
+          resetAt: 1_788_748_108_000,
+          windowMinutes: 300,
+        }),
+        expect.objectContaining({
+          name: "Weekly limit",
+          limitId: "codex",
+          windowKey: "secondary",
+          usedPercent: 9,
+          remaining: 91,
         }),
         expect.objectContaining({
           name: "GPT-5.3-Codex-Spark Weekly limit",
@@ -6347,7 +6383,7 @@ describe("DesktopBackendRegistry", () => {
       ]),
     );
 
-    await codexClient.emit(notification);
+    await codexClient.emit(buildNotification(85));
 
     const unchangedSummary = (
       await registry.listBackends({ includeUnavailable: true })

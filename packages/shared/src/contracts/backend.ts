@@ -203,6 +203,10 @@ export type BackendAccountSummary = {
 export type BackendRateLimitSummary = {
   name: string;
   limitId?: string;
+  /** Provider label retained so a sparse update cannot erase it. */
+  limitName?: string;
+  /** Provider slot used to merge sparse rolling updates with a full snapshot. */
+  windowKey?: "primary" | "secondary" | "individual";
   remaining?: number;
   limit?: number;
   used?: number;

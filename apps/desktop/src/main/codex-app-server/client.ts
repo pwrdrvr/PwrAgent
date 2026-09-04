@@ -1511,6 +1511,8 @@ export function extractRateLimitSummaries(
     out.set(name, {
       name,
       limitId: params.limitId,
+      limitName: params.limitName,
+      windowKey: params.windowKey,
       usedPercent,
       remaining:
         typeof usedPercent === "number" ? Math.max(0, Math.round(100 - usedPercent)) : undefined,
@@ -1548,6 +1550,8 @@ export function extractRateLimitSummaries(
     out.set(name, {
       name,
       limitId: params.limitId,
+      limitName: params.limitName,
+      windowKey: "individual",
       limit,
       used,
       remaining:
@@ -1629,6 +1633,8 @@ export function extractRateLimitSummaries(
       out.set(name, {
         name,
         limitId: existing?.limitId,
+        limitName: existing?.limitName,
+        windowKey: existing?.windowKey,
         remaining: remaining ?? existing?.remaining,
         limit: limit ?? existing?.limit,
         used: used ?? existing?.used,
