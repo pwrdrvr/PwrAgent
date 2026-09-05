@@ -1,0 +1,82 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test } from "@playwright/test";
+import type { ReadFederationActivityResponse } from "@pwragent/shared";
+import { FederationActivityLedger } from "../src/main/federation/federation-activity-ledger";
+import { launchElectronApp } from "./fixtures/electron-app";
+
+const specDir = path.dirname(fileURLToPath(import.meta.url));
+function activityFixture(): ReadFederationActivityResponse {
+  const now = Date.UTC(2026, 8, 5, 12);
+  const ledger = new FederationActivityLedger(now - 3_600_000);
+  for (let index = 0; index < 360; index += 1) {
+    for (const direction of ["sent", "received"] as const) {
+      ledger.record({
+        at: now - 3_590_000 + index * 10_000,
+        peerId: "pwr_fixture_gateway", localInstanceId: "pwr_fixture_local", direction,
+        dataByteCount: (direction === "sent" ? 8_000 : 4_000) + Math.round(Math.abs(Math.sin(index / 3)) * 12_000),
+        byteCount: (direction === "sent" ? 3_000 : 1_000) + Math.round(Math.abs(Math.sin(index / 3)) * 6_000),
+        envelope: { kind: direction === "sent" ? "request" : "response",
+          sourceInstanceId: direction === "sent" ? "pwr_fixture_local" : "pwr_fixture_remote",
+          targetInstanceId: direction === "sent" ? "pwr_fixture_remote" : "pwr_fixture_local" },
+      });
+    }
+  }
+  return {
+    activity: ledger.snapshot(now), configuredMode: "dual", running: true,
+    health: { enabled: true, role: "dual", status: "connected", peers: [] },
+  };
+}
+
+for (const theme of ["dark", "light"] as const) {
+  test(`Federation hover activity and detachable window (${theme})`, async ({}, testInfo) => {
+    const app = await launchElectronApp({
+      fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
+      appearance: { theme },
+    });
+    try {
+      // Contrived numeric fixture only; the real native window, preload and UI are exercised.
+      await app.electronApp.evaluate(({ ipcMain }, snapshot) => {
+        ipcMain.removeHandler("federation:read-activity");
+        ipcMain.handle("federation:read-activity", () => snapshot);
+      }, activityFixture());
+      await app.window.emulateMedia({ reducedMotion: "reduce" });
+      const trigger = app.window.getByRole("button", { name: "Open Star Map", exact: true });
+      await trigger.hover();
+      const panel = app.window.getByRole("dialog", { name: "Federation activity", exact: true });
+      await expect(panel.getByText("Running · connected")).toBeVisible();
+      const popoverAudit = await new AxeBuilder({ page: app.window })
+        .setLegacyMode(true)
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+      expect(popoverAudit.violations).toEqual([]);
+      await panel.screenshot({ path: testInfo.outputPath(`federation-popover-${theme}.png`) });
+      const opened = app.electronApp.waitForEvent("window", {
+        predicate: (page) => page !== app.window,
+      });
+      await panel.getByRole("button", { name: "Open Federation Activity", exact: true }).click();
+      const activity = await opened;
+      await activity.emulateMedia({ reducedMotion: "reduce" });
+      await expect(activity.getByText("Running · connected")).toBeVisible();
+      await expect(activity.getByRole("img", { name: /Data and wire rates/ })).toBeVisible();
+      const topmost = activity.getByRole("checkbox", { name: "Always on top", exact: true });
+      await topmost.click();
+      await expect(topmost).toBeChecked();
+      await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().find((window) => window.getTitle() === "Federation Activity")?.isAlwaysOnTop(),
+      )).toBe(true);
+      await topmost.click();
+      await expect(topmost).not.toBeChecked();
+      await expect.poll(() => app.electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().find((window) => window.getTitle() === "Federation Activity")?.isAlwaysOnTop(),
+      )).toBe(false);
+      const audit = await new AxeBuilder({ page: activity })
+        .setLegacyMode(true)
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+      expect(audit.violations).toEqual([]);
+      await activity.screenshot({ path: testInfo.outputPath(`federation-activity-${theme}.png`) });
+      await activity.close();
+      await expect(trigger).toBeVisible();
+    } finally { await app.close(); }
+  });
+}

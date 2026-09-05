@@ -344,6 +344,8 @@ import type {
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
+  ReadFederationActivityRequest,
+  ReadFederationActivityResponse,
   ReadFederationHealthRequest,
   ReadFederationHealthResponse,
   ReadFederationInstanceLoadRequest,
@@ -588,6 +590,10 @@ import {
   PATH_OPEN_CHANNEL,
   PATH_REVEAL_CHANNEL,
   BACKEND_LIST_CHANNEL,
+  FEDERATION_READ_ACTIVITY_CHANNEL,
+  FEDERATION_SET_ENABLED_CHANNEL,
+  FEDERATION_OPEN_ACTIVITY_CHANNEL,
+  FEDERATION_ACTIVITY_TOPMOST_CHANNEL,
   FEDERATION_GET_HEALTH_CHANNEL,
   FEDERATION_READ_INSTANCE_LOAD_CHANNEL,
   FEDERATION_GET_DIAGNOSTICS_CHANNEL,
@@ -1070,6 +1076,14 @@ const desktopApi = Object.freeze({
     request: OpenFederationWindowRequest,
   ): Promise<OpenFederationWindowResponse> =>
     await ipcRenderer.invoke(FEDERATION_OPEN_WINDOW_CHANNEL, request),
+  readFederationActivity: async (request?: ReadFederationActivityRequest): Promise<ReadFederationActivityResponse> =>
+    await ipcRenderer.invoke(FEDERATION_READ_ACTIVITY_CHANNEL, request),
+  setFederationEnabled: async (enabled: boolean): Promise<ReadFederationActivityResponse> =>
+    await ipcRenderer.invoke(FEDERATION_SET_ENABLED_CHANNEL, enabled),
+  openFederationActivity: async (): Promise<void> =>
+    await ipcRenderer.invoke(FEDERATION_OPEN_ACTIVITY_CHANNEL),
+  setFederationActivityTopmost: async (enabled: boolean): Promise<boolean> =>
+    await ipcRenderer.invoke(FEDERATION_ACTIVITY_TOPMOST_CHANNEL, enabled),
   readFederationHealth: async (
     request?: ReadFederationHealthRequest,
   ): Promise<ReadFederationHealthResponse> =>

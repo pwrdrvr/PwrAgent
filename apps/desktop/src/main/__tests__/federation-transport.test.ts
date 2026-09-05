@@ -206,6 +206,7 @@ describe("federation transport", () => {
   });
 
   it("carries attachment bytes in the binary blob frame instead of JSON", async () => {
+    const transfers: Array<{ direction: "sent" | "received"; dataByteCount: number; byteCount: number }> = [];
     const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({
       store,
@@ -223,6 +224,7 @@ describe("federation transport", () => {
         port: 0,
         store,
         onEnvelope: resolve,
+        onEnvelopeTransfer: (info) => transfers.push(info),
       });
     });
     const { url } = await server!.start();
@@ -238,10 +240,11 @@ describe("federation transport", () => {
       inviteToken: invite.token,
       label: "Client",
       role: "client",
+      onEnvelopeTransfer: (info) => transfers.push(info),
     });
     const bytes = Buffer.from([0, 1, 2, 0xff]);
 
-    client.sendEnvelope({
+    await client.sendEnvelopeWithBackpressure!({
       id: "blob-1",
       kind: "blob_chunk",
       protocolVersion: 1,
@@ -263,19 +266,32 @@ describe("federation transport", () => {
       transferId: "transfer-1",
       data: bytes,
     });
+    const expectedBytes = federationTransportCodecForTest.encodeEnvelope(await received).byteLength;
+    expect(transfers).toHaveLength(2);
+    expect(transfers.map(({ direction, dataByteCount, byteCount }) => ({ direction, dataByteCount, byteCount })))
+      .toEqual([
+        { direction: "sent", dataByteCount: expectedBytes, byteCount: expectedBytes },
+        { direction: "received", dataByteCount: expectedBytes, byteCount: expectedBytes },
+      ]);
     client.close();
   });
 
-  it("reports envelope wire bytes to both ends' transfer taps", async () => {
+  it.each([false, true])("reports exact data and encoded bytes at both ends (Noise: %s)", async (encrypted) => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
     const gatewayTransfers: Array<{
       peerId: string;
       direction: "sent" | "received";
       byteCount: number;
+      dataByteCount: number;
+      envelope: FederationProtocolEnvelope;
     }> = [];
     const clientTransfers: Array<{
       direction: "sent" | "received";
       byteCount: number;
+      dataByteCount: number;
+      envelope: FederationProtocolEnvelope;
     }> = [];
     const invite = createFederationEnrollmentInvite({
       store,
@@ -288,6 +304,7 @@ describe("federation transport", () => {
       gatewayInstanceId: "gateway_one",
       gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      noiseStatic: encrypted ? gatewayNoise : undefined,
       host: "127.0.0.1",
       port: 0,
       store,
@@ -310,6 +327,8 @@ describe("federation transport", () => {
     const reply = new Promise<FederationProtocolEnvelope>((resolve) => {
       void connectFederationClient({
         url,
+        noiseStatic: encrypted ? clientNoise : undefined,
+        gatewayNoisePublicKey: encrypted ? gatewayNoise.publicKeyRaw : undefined,
         mode: "enroll",
         gatewayInstanceId: "gateway_one",
         gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
@@ -362,6 +381,12 @@ describe("federation transport", () => {
     expect(clientReceived.byteCount).toBe(gatewaySent.byteCount);
     expect(clientSent.byteCount).toBeGreaterThan(0);
     expect(gatewaySent.byteCount).toBeGreaterThan(0);
+    for (const transfer of [...gatewayTransfers, ...clientTransfers]) {
+      expect(transfer.dataByteCount).toBe(Buffer.byteLength(JSON.stringify({
+        kind: "envelope", envelope: transfer.envelope,
+      }), "utf8"));
+      expect(transfer.byteCount).toBe(transfer.dataByteCount + (encrypted ? 16 : 0));
+    }
   });
 
   it("evicts a duplicated peer id with close code 4001 and audits the replacement", async () => {

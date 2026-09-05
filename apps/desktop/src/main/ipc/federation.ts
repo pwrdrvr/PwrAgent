@@ -1,5 +1,6 @@
-import { ipcMain } from "electron";
+import { BrowserWindow, ipcMain } from "electron";
 import type {
+  ReadFederationActivityRequest,
   ConfigureFederationTailscaleRequest,
   ConfigureFederationTailscaleResponse,
   FederationPinDisposition,
@@ -35,6 +36,10 @@ import {
   isFederationPinDisposition,
 } from "@pwragent/shared";
 import {
+  FEDERATION_READ_ACTIVITY_CHANNEL,
+  FEDERATION_SET_ENABLED_CHANNEL,
+  FEDERATION_OPEN_ACTIVITY_CHANNEL,
+  FEDERATION_ACTIVITY_TOPMOST_CHANNEL,
   FEDERATION_GET_HEALTH_CHANNEL,
   FEDERATION_GET_DIAGNOSTICS_CHANNEL,
   FEDERATION_READ_INSTANCE_LOAD_CHANNEL,
@@ -49,6 +54,11 @@ import {
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
 } from "../../shared/ipc";
+import {
+  showFederationActivityWindow,
+  setFederationActivityTopmost,
+} from "../federation-activity-window";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   federationTailscaleAdvertisementFromStatus,
@@ -78,7 +88,51 @@ function peerAllowsEventClass(
   }
 }
 
+let previousEnabledMode: "client" | "gateway" | "dual" | undefined;
+let activityToggle: Promise<unknown> = Promise.resolve();
+
 export function registerFederationIpcHandlers(): void {
+  for (const channel of [
+    FEDERATION_READ_ACTIVITY_CHANNEL,
+    FEDERATION_SET_ENABLED_CHANNEL,
+    FEDERATION_OPEN_ACTIVITY_CHANNEL,
+    FEDERATION_ACTIVITY_TOPMOST_CHANNEL,
+  ]) {
+    ipcMain.removeHandler(channel);
+  }
+  ipcMain.handle(FEDERATION_READ_ACTIVITY_CHANNEL, (_event, request?: ReadFederationActivityRequest) =>
+    getDesktopFederationRuntime().activity({
+      includeHistory: request?.includeHistory !== false,
+      historyPeerId: typeof request?.historyPeerId === "string"
+        ? request.historyPeerId.slice(0, 256)
+        : undefined,
+      historyView: request?.historyView === "logical" ? "logical" : "physical",
+    }));
+  ipcMain.handle(FEDERATION_OPEN_ACTIVITY_CHANNEL, (event) => {
+    showFederationActivityWindow({
+      sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+    });
+  });
+  ipcMain.handle(FEDERATION_ACTIVITY_TOPMOST_CHANNEL, (event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Expected a boolean.");
+    return setFederationActivityTopmost(event.sender.id, enabled);
+  });
+  ipcMain.handle(FEDERATION_SET_ENABLED_CHANNEL, (_event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Expected a boolean.");
+    const change = activityToggle.catch(() => undefined).then(async () => {
+      const service = getDesktopSettingsService();
+      const current = service.readFederationConfig();
+      if (current.mode !== "disabled") previousEnabledMode = current.mode;
+      const resumeMode = previousEnabledMode
+        ?? (current.gatewayUrl || current.gatewayEndpoints?.length ? "client" : "gateway");
+      const mode = enabled ? resumeMode : "disabled";
+      await service.writeConfigPatchTargeted({ federation: { mode } });
+      await getDesktopFederationRuntime().restart();
+      return getDesktopFederationRuntime().activity();
+    });
+    activityToggle = change;
+    return change;
+  });
   ipcMain.removeHandler(FEDERATION_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_HEALTH_CHANNEL);
   ipcMain.removeHandler(FEDERATION_READ_INSTANCE_LOAD_CHANNEL);

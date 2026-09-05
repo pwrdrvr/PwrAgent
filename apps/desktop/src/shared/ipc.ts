@@ -1,3 +1,7 @@
+export const FEDERATION_READ_ACTIVITY_CHANNEL = "federation:read-activity";
+export const FEDERATION_SET_ENABLED_CHANNEL = "federation:set-enabled";
+export const FEDERATION_OPEN_ACTIVITY_CHANNEL = "federation:open-activity";
+export const FEDERATION_ACTIVITY_TOPMOST_CHANNEL = "federation:activity-topmost";
 export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const THREAD_SEARCH_CHANNEL = "thread-search:search";
 export const FEDERATION_OPEN_WINDOW_CHANNEL = "federation:open-window";

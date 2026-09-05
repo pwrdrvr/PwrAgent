@@ -42,6 +42,11 @@ export class FederationTransferLedger {
       stats.envelopesReceived += 1;
     }
     stats.lastActivityAt = at;
+    // Health's legacy per-peer counters are bounded as well. The activity
+    // ledger separately retains all process totals, including overflow peers.
+    if (!this.byPeer.has(params.peerId) && this.byPeer.size >= 128) {
+      this.byPeer.delete(this.byPeer.keys().next().value!);
+    }
     this.byPeer.set(params.peerId, stats);
   }
 
