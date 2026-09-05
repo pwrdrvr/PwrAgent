@@ -25909,7 +25909,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("leaves multi-request Astra turn aggregates above 272K unpriced", async () => {
+  it("prices each Astra request before aggregating a multi-request turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
     });
@@ -25928,25 +25928,101 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
 
     for (const cumulativeInputTokens of [200_000, 400_000]) {
+      for (let emission = 0; emission < 2; emission += 1) {
+        await codexClient.emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 200_000,
+                cache_write_input_tokens: 10_000,
+                cached_input_tokens: 100_000,
+                output_tokens: 10_000,
+                reasoning_output_tokens: 0,
+                total_tokens: 210_000,
+              },
+              total_token_usage: {
+                input_tokens: cumulativeInputTokens,
+                cache_write_input_tokens: cumulativeInputTokens / 20,
+                cached_input_tokens: cumulativeInputTokens / 2,
+                output_tokens: cumulativeInputTokens / 20,
+                reasoning_output_tokens: 0,
+                total_tokens: cumulativeInputTokens * 1.05,
+              },
+            },
+          },
+        });
+      }
+    }
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      cacheWriteInputCostMicros: 250_000,
+      cacheWriteInputTokens: 20_000,
+      cachedInputTokens: 200_000,
+      cachedInputCostMicros: 200_000,
+      inputTokens: 400_000,
+      outputCostMicros: 1_000_000,
+      priceStatus: "priced",
+      pricingBasis: "request-components",
+      pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      totalCostMicros: 3_250_000,
+      uncachedInputCostMicros: 1_800_000,
+      uncachedInputTokens: 200_000,
+    });
+
+    await registry.close();
+  });
+
+  it("sums mixed Astra short- and long-context request rates exactly", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-6-astra",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const requests = [
+      { cached: 100_000, input: 200_000, totalInput: 200_000 },
+      { cached: 100_000, input: 300_000, totalInput: 500_000 },
+    ];
+
+    for (const request of requests) {
       await codexClient.emit({
         method: "thread/tokenUsage/updated",
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
           tokenUsage: {
-            last_token_usage: {
-              input_tokens: 200_000,
-              cached_input_tokens: 100_000,
-              output_tokens: 10_000,
-              reasoning_output_tokens: 0,
-              total_tokens: 210_000,
+            last: {
+              cachedInputTokens: request.cached,
+              inputTokens: request.input,
+              outputTokens: 10_000,
+              reasoningOutputTokens: 0,
+              totalTokens: request.input + 10_000,
             },
-            total_token_usage: {
-              input_tokens: cumulativeInputTokens,
-              cached_input_tokens: cumulativeInputTokens / 2,
-              output_tokens: cumulativeInputTokens / 20,
-              reasoning_output_tokens: 0,
-              total_tokens: cumulativeInputTokens * 1.05,
+            total: {
+              cachedInputTokens: request.totalInput === 200_000 ? 100_000 : 200_000,
+              inputTokens: request.totalInput,
+              outputTokens: request.totalInput === 200_000 ? 10_000 : 20_000,
+              reasoningOutputTokens: 0,
+              totalTokens: request.totalInput === 200_000 ? 210_000 : 520_000,
             },
           },
         },
@@ -25960,12 +26036,17 @@ command = "pnpm dev"
 
     expect(pricing.lines).toHaveLength(1);
     expect(pricing.lines[0]).toMatchObject({
-      cachedInputTokens: 200_000,
-      inputTokens: 400_000,
-      priceStatus: "unpriced",
-      totalCostMicros: 0,
-      uncachedInputTokens: 200_000,
+      cachedInputCostMicros: 300_000,
+      inputTokens: 500_000,
+      outputCostMicros: 1_250_000,
+      priceStatus: "priced",
+      pricingBasis: "request-components",
+      pricingCatalogId: "openai-api",
+      pricingCatalogVersion: "2026-09-04",
+      totalCostMicros: 6_550_000,
+      uncachedInputCostMicros: 5_000_000,
     });
+    expect(pricing.lines[0]?.pricingRateId).toBeUndefined();
 
     await registry.close();
   });

@@ -78,7 +78,7 @@ import {
   normalizeThreadIdentityKey,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
-  resolveOpenAiPricingServiceTier,
+  resolveTokenUsagePriceUnavailableReason,
 } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
 import type {
@@ -1535,12 +1535,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             settings_source,
             settings_confidence,
             input_tokens,
+            cache_write_input_tokens,
             cached_input_tokens,
             uncached_input_tokens,
             output_tokens,
             reasoning_output_tokens,
             total_tokens,
             cumulative_input_tokens,
+            cumulative_cache_write_input_tokens,
             cumulative_cached_input_tokens,
             cumulative_uncached_input_tokens,
             cumulative_output_tokens,
@@ -1551,8 +1553,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             currency,
             pricing_catalog_id,
             pricing_catalog_version,
+            pricing_basis,
             pricing_rate_id,
             uncached_input_cost_micros,
+            cache_write_input_cost_micros,
             cached_input_cost_micros,
             output_cost_micros,
             total_cost_micros,
@@ -1584,12 +1588,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             @settingsSource,
             @settingsConfidence,
             @inputTokens,
+            @cacheWriteInputTokens,
             @cachedInputTokens,
             @uncachedInputTokens,
             @outputTokens,
             @reasoningOutputTokens,
             @totalTokens,
             @cumulativeInputTokens,
+            @cumulativeCacheWriteInputTokens,
             @cumulativeCachedInputTokens,
             @cumulativeUncachedInputTokens,
             @cumulativeOutputTokens,
@@ -1600,8 +1606,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             @currency,
             @pricingCatalogId,
             @pricingCatalogVersion,
+            @pricingBasis,
             @pricingRateId,
             @uncachedInputCostMicros,
+            @cacheWriteInputCostMicros,
             @cachedInputCostMicros,
             @outputCostMicros,
             @totalCostMicros,
@@ -1633,12 +1641,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             settings_source = excluded.settings_source,
             settings_confidence = excluded.settings_confidence,
             input_tokens = excluded.input_tokens,
+            cache_write_input_tokens = excluded.cache_write_input_tokens,
             cached_input_tokens = excluded.cached_input_tokens,
             uncached_input_tokens = excluded.uncached_input_tokens,
             output_tokens = excluded.output_tokens,
             reasoning_output_tokens = excluded.reasoning_output_tokens,
             total_tokens = excluded.total_tokens,
             cumulative_input_tokens = excluded.cumulative_input_tokens,
+            cumulative_cache_write_input_tokens = excluded.cumulative_cache_write_input_tokens,
             cumulative_cached_input_tokens = excluded.cumulative_cached_input_tokens,
             cumulative_uncached_input_tokens = excluded.cumulative_uncached_input_tokens,
             cumulative_output_tokens = excluded.cumulative_output_tokens,
@@ -1649,8 +1659,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             currency = excluded.currency,
             pricing_catalog_id = excluded.pricing_catalog_id,
             pricing_catalog_version = excluded.pricing_catalog_version,
+            pricing_basis = excluded.pricing_basis,
             pricing_rate_id = excluded.pricing_rate_id,
             uncached_input_cost_micros = excluded.uncached_input_cost_micros,
+            cache_write_input_cost_micros = excluded.cache_write_input_cost_micros,
             cached_input_cost_micros = excluded.cached_input_cost_micros,
             output_cost_micros = excluded.output_cost_micros,
             total_cost_micros = excluded.total_cost_micros,
@@ -1854,6 +1866,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
          pricing_catalog_version = @pricingCatalogVersion,
          pricing_rate_id = @pricingRateId,
          uncached_input_cost_micros = @uncachedInputCostMicros,
+         cache_write_input_cost_micros = @cacheWriteInputCostMicros,
          cached_input_cost_micros = @cachedInputCostMicros,
          output_cost_micros = @outputCostMicros,
          provider = @provider,
@@ -1893,6 +1906,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     this.stateDb.raw.transaction(() => {
       for (const { existing, repaired } of repairs) {
         updateLine.run({
+          cacheWriteInputCostMicros:
+            repaired.cacheWriteInputCostMicros ?? 0,
           cachedInputCostMicros: repaired.cachedInputCostMicros,
           currency: repaired.currency,
           outputCostMicros: repaired.outputCostMicros,
@@ -6911,12 +6926,14 @@ type ThreadUsageLineRow = {
   settings_source: ThreadUsageLineRecord["settingsSource"] | null;
   settings_confidence: ThreadUsageLineRecord["settingsConfidence"] | null;
   input_tokens: number;
+  cache_write_input_tokens: number;
   cached_input_tokens: number;
   uncached_input_tokens: number;
   output_tokens: number;
   reasoning_output_tokens: number;
   total_tokens: number;
   cumulative_input_tokens: number | null;
+  cumulative_cache_write_input_tokens: number | null;
   cumulative_cached_input_tokens: number | null;
   cumulative_uncached_input_tokens: number | null;
   cumulative_output_tokens: number | null;
@@ -6927,8 +6944,10 @@ type ThreadUsageLineRow = {
   currency: string;
   pricing_catalog_id: string | null;
   pricing_catalog_version: string | null;
+  pricing_basis: ThreadUsageLineRecord["pricingBasis"] | null;
   pricing_rate_id: string | null;
   uncached_input_cost_micros: number;
+  cache_write_input_cost_micros: number;
   cached_input_cost_micros: number;
   output_cost_micros: number;
   total_cost_micros: number;
@@ -7173,6 +7192,10 @@ function normalizeThreadUsageLine(
 ): ThreadUsageLineRecord {
   const inputTokens = clampTokenCount(line.inputTokens);
   const cachedInputTokens = Math.min(inputTokens, clampTokenCount(line.cachedInputTokens));
+  const cacheWriteInputTokens = Math.min(
+    Math.max(0, inputTokens - cachedInputTokens),
+    clampTokenCount(line.cacheWriteInputTokens),
+  );
   const uncachedInputTokens = Math.max(
     0,
     line.uncachedInputTokens ?? inputTokens - cachedInputTokens,
@@ -7185,12 +7208,20 @@ function normalizeThreadUsageLine(
       : inputTokens + outputTokens + reasoningOutputTokens;
   return {
     ...line,
+    cacheWriteInputTokens,
     cachedInputTokens,
     completedAt: line.completedAt,
     createdAt: line.createdAt || updatedAt,
     currency: line.currency || "USD",
     ...(line.cumulativeCachedInputTokens !== undefined
       ? { cumulativeCachedInputTokens: clampTokenCount(line.cumulativeCachedInputTokens) }
+      : {}),
+    ...(line.cumulativeCacheWriteInputTokens !== undefined
+      ? {
+          cumulativeCacheWriteInputTokens: clampTokenCount(
+            line.cumulativeCacheWriteInputTokens,
+          ),
+        }
       : {}),
     ...(line.cumulativeInputTokens !== undefined
       ? { cumulativeInputTokens: clampTokenCount(line.cumulativeInputTokens) }
@@ -7317,6 +7348,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
     } = line;
     return {
       ...forkBaseLine,
+      cacheWriteInputCostMicros: 0,
       cachedInputCostMicros: 0,
       outputCostMicros: 0,
       priceStatus: "priced",
@@ -7324,9 +7356,16 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
       uncachedInputCostMicros: 0,
     };
   }
+  // This line already contains the sum of individually priced requests. Its
+  // aggregate token count may span multiple context bands, so applying one
+  // catalog entry to the whole row would destroy the exact cost.
+  if (line.pricingBasis === "request-components") {
+    return line;
+  }
 
   const cost = estimateTokenUsageCost({
     at: line.createdAt,
+    cacheWriteInputTokens: line.cacheWriteInputTokens,
     cachedInputTokens: line.cachedInputTokens,
     fastMode: line.fastMode,
     inputTokenScope: line.scope === "latest-request" ? "request" : "aggregate",
@@ -7336,18 +7375,19 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
     serviceTier: line.serviceTier,
     uncachedInputTokens: line.uncachedInputTokens,
   });
-  const pricingServiceTier = resolveOpenAiPricingServiceTier({
-    fastMode: line.fastMode,
-    serviceTier: line.serviceTier,
-  });
   const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
     cost
       ? undefined
-      : !line.model
-        ? "missing-model"
-        : pricingServiceTier === undefined
-          ? "unsupported-service-tier"
-          : "missing-rate";
+      : resolveTokenUsagePriceUnavailableReason({
+          at: line.createdAt,
+          cachedInputTokens: line.cachedInputTokens,
+          fastMode: line.fastMode,
+          inputTokenScope:
+            line.scope === "latest-request" ? "request" : "aggregate",
+          model: line.model,
+          serviceTier: line.serviceTier,
+          uncachedInputTokens: line.uncachedInputTokens,
+        });
   const {
     priceUnavailableReason: _discardedPriceUnavailableReason,
     pricingCatalogId: _discardedPricingCatalogId,
@@ -7358,6 +7398,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
 
   return {
     ...baseLine,
+    cacheWriteInputCostMicros: cost?.cacheWriteInputCostMicros ?? 0,
     cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
     currency: cost?.currency ?? line.currency,
     outputCostMicros: cost?.outputCostMicros ?? 0,
@@ -7382,11 +7423,15 @@ function clampTokenCount(value: number | undefined): number {
 function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string, unknown> {
   return {
     backend: line.backend,
+    cacheWriteInputCostMicros: line.cacheWriteInputCostMicros ?? 0,
+    cacheWriteInputTokens: line.cacheWriteInputTokens ?? 0,
     cachedInputCostMicros: line.cachedInputCostMicros,
     cachedInputTokens: line.cachedInputTokens,
     completedAt: line.completedAt ?? null,
     createdAt: line.createdAt,
     cumulativeCachedInputTokens: line.cumulativeCachedInputTokens ?? null,
+    cumulativeCacheWriteInputTokens:
+      line.cumulativeCacheWriteInputTokens ?? null,
     cumulativeInputTokens: line.cumulativeInputTokens ?? null,
     cumulativeOutputTokens: line.cumulativeOutputTokens ?? null,
     cumulativeReasoningOutputTokens: line.cumulativeReasoningOutputTokens ?? null,
@@ -7418,6 +7463,7 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     provider: line.provider,
     pricingCatalogId: line.pricingCatalogId ?? null,
     pricingCatalogVersion: line.pricingCatalogVersion ?? null,
+    pricingBasis: line.pricingBasis ?? null,
     pricingRateId: line.pricingRateId ?? null,
     reasoningEffort: line.reasoningEffort ?? null,
     reasoningOutputTokens: line.reasoningOutputTokens,
@@ -7512,12 +7558,20 @@ function toThreadToolInvocationAlertRowParams(
 function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord {
   return {
     backend: row.backend,
+    cacheWriteInputCostMicros: row.cache_write_input_cost_micros,
+    cacheWriteInputTokens: row.cache_write_input_tokens,
     cachedInputCostMicros: row.cached_input_cost_micros,
     cachedInputTokens: row.cached_input_tokens,
     ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
     createdAt: row.created_at,
     ...(row.cumulative_cached_input_tokens !== null
       ? { cumulativeCachedInputTokens: row.cumulative_cached_input_tokens }
+      : {}),
+    ...(row.cumulative_cache_write_input_tokens !== null
+      ? {
+          cumulativeCacheWriteInputTokens:
+            row.cumulative_cache_write_input_tokens,
+        }
       : {}),
     ...(row.cumulative_input_tokens !== null
       ? { cumulativeInputTokens: row.cumulative_input_tokens }
@@ -7574,6 +7628,7 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
     ...(row.pricing_catalog_version
       ? { pricingCatalogVersion: row.pricing_catalog_version }
       : {}),
+    ...(row.pricing_basis ? { pricingBasis: row.pricing_basis } : {}),
     ...(row.pricing_rate_id ? { pricingRateId: row.pricing_rate_id } : {}),
     ...(row.reasoning_effort ? { reasoningEffort: row.reasoning_effort } : {}),
     reasoningOutputTokens: row.reasoning_output_tokens,

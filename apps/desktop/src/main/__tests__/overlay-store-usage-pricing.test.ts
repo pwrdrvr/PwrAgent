@@ -52,6 +52,50 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     ]);
   });
 
+  it("round-trips request-component pricing for a mixed-band Astra turn", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cacheWriteInputCostMicros: 375_000,
+        cacheWriteInputTokens: 20_000,
+        cachedInputCostMicros: 300_000,
+        cachedInputTokens: 200_000,
+        createdAt: Date.UTC(2026, 8, 5),
+        inputTokens: 500_000,
+        model: "gpt-6-astra",
+        outputCostMicros: 1_250_000,
+        outputTokens: 20_000,
+        pricingBasis: "request-components",
+        pricingCatalogVersion: "2026-09-04",
+        pricingRateId: undefined,
+        reasoningOutputTokens: 0,
+        totalCostMicros: 6_625_000,
+        totalTokens: 520_000,
+        uncachedInputCostMicros: 4_700_000,
+        uncachedInputTokens: 300_000,
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      cacheWriteInputCostMicros: 375_000,
+      cacheWriteInputTokens: 20_000,
+      cachedInputCostMicros: 300_000,
+      priceStatus: "priced",
+      pricingBasis: "request-components",
+      totalCostMicros: 6_625_000,
+      uncachedInputCostMicros: 4_700_000,
+    });
+    expect(pricing.lines[0]?.pricingRateId).toBeUndefined();
+    expect(pricing.summaries[0]).toMatchObject({
+      totalCostMicros: 6_625_000,
+      unpricedUsageLineCount: 0,
+    });
+  });
+
   it("does not rewrite a finalized usage line model when thread settings change later", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
@@ -782,6 +826,40 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       totalCostMicros: 0,
       unpricedUsageLineCount: 1,
       usageLineCount: 1,
+    });
+  });
+
+  it("labels aggregate Astra usage as missing a request breakdown", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        cachedInputCostMicros: 0,
+        cachedInputTokens: 100_000,
+        createdAt: Date.UTC(2026, 8, 5),
+        inputTokens: 300_000,
+        model: "gpt-6-astra",
+        outputCostMicros: 0,
+        outputTokens: 10_000,
+        priceStatus: "unpriced",
+        pricingCatalogId: undefined,
+        pricingCatalogVersion: undefined,
+        pricingRateId: undefined,
+        reasoningOutputTokens: 0,
+        scope: "turn",
+        totalCostMicros: 0,
+        totalTokens: 310_000,
+        uncachedInputCostMicros: 0,
+        uncachedInputTokens: 200_000,
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "unpriced",
+      priceUnavailableReason: "insufficient-token-breakdown",
     });
   });
 

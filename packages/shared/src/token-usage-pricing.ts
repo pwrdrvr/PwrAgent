@@ -13,6 +13,8 @@ export type TokenUsagePriceUnavailableReason =
   | "insufficient-token-breakdown";
 
 export type ThreadUsageTokenBreakdown = {
+  // Provider-reported subset of uncached input that populated a prompt cache.
+  cacheWriteInputTokens?: number;
   cachedInputTokens?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -47,12 +49,17 @@ export type ThreadUsageLineStatus = "pending" | "finalized" | "superseded";
 
 export type ThreadUsageLineRecord = {
   backend: string;
+  // Cache-write cost is separate from uncachedInputCostMicros; the tokens are
+  // still a subset of uncachedInputTokens.
+  cacheWriteInputCostMicros?: number;
+  cacheWriteInputTokens?: number;
   cachedInputCostMicros: number;
   cachedInputTokens: number;
   completedAt?: number;
   createdAt: number;
   currency: string;
   cumulativeCachedInputTokens?: number;
+  cumulativeCacheWriteInputTokens?: number;
   cumulativeInputTokens?: number;
   cumulativeOutputTokens?: number;
   cumulativeReasoningOutputTokens?: number;
@@ -86,6 +93,7 @@ export type ThreadUsageLineRecord = {
   provider: string;
   pricingCatalogId?: string;
   pricingCatalogVersion?: string;
+  pricingBasis?: "aggregate" | "request-components";
   pricingRateId?: string;
   reasoningEffort?: string;
   reasoningOutputTokens: number;
@@ -109,6 +117,7 @@ export type ThreadUsageLineRecord = {
   // persisted before this field existed). The renderer treats `false` as a
   // historical summary instead of guessing from raw token counts.
   turnUsageAttributed?: boolean;
+  // Cost of regular uncached input after removing cache-write tokens.
   uncachedInputCostMicros: number;
   uncachedInputTokens: number;
   usageLineId: string;
@@ -145,6 +154,8 @@ export type ThreadSpendAlert = {
 };
 
 export type TokenUsagePricingCatalogRate = {
+  cacheWriteInputMicrosPerMillion?: number;
+  cacheWriteInputUsdPerMillion?: number;
   cachedInputMicrosPerMillion: number;
   cachedInputUsdPerMillion: number;
   catalogId: string;
@@ -166,6 +177,9 @@ export type TokenUsagePricingCatalogRate = {
 };
 
 export type TokenUsageCostEstimate = {
+  cacheWriteInputCostMicros: number;
+  cacheWriteInputUsd: number;
+  cacheWriteInputUsdPerMillion?: number;
   cachedInputCostMicros: number;
   cachedInputUsd: number;
   cachedInputUsdPerMillion: number;
@@ -219,6 +233,7 @@ export type TokenUsageCreditEstimate = {
 
 type PricingCatalogEntry = {
   aliases?: readonly string[];
+  cacheWriteInputUsdPerMillion?: number;
   cachedInputUsdPerMillion: number;
   catalogId: string;
   catalogVersion: string;
@@ -302,9 +317,8 @@ const QWEN_PRICING_CATALOG_VERSION = "2026-07-15";
 const QWEN37_PLUS_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 4, 26);
 
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
-  // The usage schema cannot distinguish cache writes from ordinary uncached
-  // input. Keep cache-write charges outside the estimate instead of applying
-  // the higher write rate to every uncached token.
+  // Codex App Server reports cache-write tokens separately. They remain a
+  // subset of uncached input tokens and are charged at the write rate below.
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
     catalogVersion: OPENAI_GPT6_ASTRA_PRICING_CATALOG_VERSION,
@@ -314,6 +328,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 12.5,
     inputUsdPerMillion: 10,
     cachedInputUsdPerMillion: 1,
     outputUsdPerMillion: 50,
@@ -331,6 +346,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "standard",
+    cacheWriteInputUsdPerMillion: 25,
     inputUsdPerMillion: 20,
     cachedInputUsdPerMillion: 2,
     outputUsdPerMillion: 75,
@@ -347,6 +363,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "priority",
+    cacheWriteInputUsdPerMillion: 25,
     inputUsdPerMillion: 20,
     cachedInputUsdPerMillion: 2,
     outputUsdPerMillion: 100,
@@ -362,6 +379,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     effectiveFrom: OPENAI_GPT6_ASTRA_PRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "priority",
+    cacheWriteInputUsdPerMillion: 50,
     inputUsdPerMillion: 40,
     cachedInputUsdPerMillion: 4,
     outputUsdPerMillion: 150,
@@ -852,6 +870,7 @@ export function listTokenUsagePricingRates(): TokenUsagePricingCatalogRate[] {
 }
 
 export function estimateOpenAiTokenUsageCost(params: {
+  cacheWriteInputTokens?: number;
   cachedInputTokens: number;
   at?: number;
   fastMode?: boolean;
@@ -867,6 +886,7 @@ export function estimateOpenAiTokenUsageCost(params: {
 }
 
 export function estimateTokenUsageCost(params: {
+  cacheWriteInputTokens?: number;
   cachedInputTokens: number;
   at?: number;
   fastMode?: boolean;
@@ -883,6 +903,7 @@ export function estimateTokenUsageCost(params: {
 
 function estimateTokenUsageCostFromCatalog(
   params: {
+    cacheWriteInputTokens?: number;
     cachedInputTokens: number;
     at?: number;
     fastMode?: boolean;
@@ -927,6 +948,17 @@ function estimateTokenUsageCostFromCatalog(
     return undefined;
   }
 
+  const cacheWriteInputTokens = Math.max(0, params.cacheWriteInputTokens ?? 0);
+  if (
+    cacheWriteInputTokens > params.uncachedInputTokens
+    || (
+      cacheWriteInputTokens > 0
+      && entry.cacheWriteInputUsdPerMillion === undefined
+    )
+  ) {
+    return undefined;
+  }
+
   const standardEntry = catalog.find(
     (candidate) =>
       candidate.model === entry.model
@@ -940,8 +972,12 @@ function estimateTokenUsageCostFromCatalog(
       ),
   );
   const uncachedInputCostMicros = calculateTokenCostMicros(
-    params.uncachedInputTokens,
+    params.uncachedInputTokens - cacheWriteInputTokens,
     entry.inputUsdPerMillion,
+  );
+  const cacheWriteInputCostMicros = calculateTokenCostMicros(
+    cacheWriteInputTokens,
+    entry.cacheWriteInputUsdPerMillion ?? 0,
   );
   const cachedInputCostMicros = calculateTokenCostMicros(
     params.cachedInputTokens,
@@ -959,12 +995,21 @@ function estimateTokenUsageCostFromCatalog(
     entry.outputUsdPerMillion,
   );
   const totalCostMicros =
-    uncachedInputCostMicros + cachedInputCostMicros + outputCostMicros;
+    uncachedInputCostMicros
+    + cacheWriteInputCostMicros
+    + cachedInputCostMicros
+    + outputCostMicros;
   const uncachedInputUsd = microsToCurrencyUnits(uncachedInputCostMicros);
+  const cacheWriteInputUsd = microsToCurrencyUnits(cacheWriteInputCostMicros);
   const cachedInputUsd = microsToCurrencyUnits(cachedInputCostMicros);
   const outputUsd = microsToCurrencyUnits(outputCostMicros);
 
   return {
+    cacheWriteInputCostMicros,
+    cacheWriteInputUsd,
+    ...(entry.cacheWriteInputUsdPerMillion !== undefined
+      ? { cacheWriteInputUsdPerMillion: entry.cacheWriteInputUsdPerMillion }
+      : {}),
     cachedInputCostMicros,
     cachedInputUsd,
     cachedInputUsdPerMillion: entry.cachedInputUsdPerMillion,
@@ -1094,6 +1139,53 @@ export function resolveOpenAiPricingServiceTier(params: {
   return params.fastMode === true ? "priority" : "standard";
 }
 
+export function resolveTokenUsagePriceUnavailableReason(params: {
+  at?: number;
+  cachedInputTokens: number;
+  fastMode?: boolean;
+  inputTokenScope?: TokenUsagePricingInputScope;
+  model?: string;
+  serviceTier?: string;
+  uncachedInputTokens: number;
+}): TokenUsagePriceUnavailableReason {
+  const model = params.model?.trim();
+  if (!model) {
+    return "missing-model";
+  }
+
+  const inputTokens = params.cachedInputTokens + params.uncachedInputTokens;
+  const matchingEntries = TOKEN_USAGE_PRICING_CATALOG.filter(
+    (candidate) =>
+      pricingEntryMatchesModel(candidate, model)
+      && pricingEntryAppliesAt(candidate, params.at)
+      // A request scope answers only whether the token count belongs in this
+      // entry's numeric band. The caller's actual scope is checked below.
+      && pricingEntryMatchesInputTokens(candidate, inputTokens, "request"),
+  );
+  const provider = matchingEntries[0]?.provider;
+  const serviceTier =
+    provider === "xai" || provider === "qwen"
+      ? resolveStandardOnlyPricingServiceTier(params.serviceTier)
+      : resolveOpenAiPricingServiceTier({
+          fastMode: params.fastMode,
+          serviceTier: params.serviceTier,
+        });
+  if (serviceTier === undefined) {
+    return "unsupported-service-tier";
+  }
+
+  const entry = matchingEntries.find(
+    (candidate) => candidate.serviceTier === serviceTier,
+  );
+  if (
+    entry?.requiresRequestInputTokens
+    && params.inputTokenScope !== "request"
+  ) {
+    return "insufficient-token-breakdown";
+  }
+  return "missing-rate";
+}
+
 function resolveStandardOnlyPricingServiceTier(
   serviceTier: string | undefined,
 ): TokenUsagePricingServiceTier | undefined {
@@ -1173,6 +1265,14 @@ function tokenUsageRateMultiplier(
 
 function toPublicRate(entry: PricingCatalogEntry): TokenUsagePricingCatalogRate {
   return {
+    ...(entry.cacheWriteInputUsdPerMillion !== undefined
+      ? {
+          cacheWriteInputMicrosPerMillion: dollarsToMicros(
+            entry.cacheWriteInputUsdPerMillion,
+          ),
+          cacheWriteInputUsdPerMillion: entry.cacheWriteInputUsdPerMillion,
+        }
+      : {}),
     cachedInputMicrosPerMillion: dollarsToMicros(entry.cachedInputUsdPerMillion),
     cachedInputUsdPerMillion: entry.cachedInputUsdPerMillion,
     catalogId: entry.catalogId,

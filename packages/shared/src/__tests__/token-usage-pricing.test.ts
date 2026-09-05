@@ -6,6 +6,7 @@ import {
   listOpenAiTokenUsagePricingRates,
   listTokenUsagePricingRates,
   resolveOpenAiPricingServiceTier,
+  resolveTokenUsagePriceUnavailableReason,
 } from "../token-usage-pricing";
 
 describe("token usage pricing", () => {
@@ -386,6 +387,40 @@ describe("token usage pricing", () => {
     });
   });
 
+  it("prices and lists GPT-6 Astra cache writes", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cacheWriteInputTokens: 20_000,
+      cachedInputTokens: 72_001,
+      inputTokenScope: "request",
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      uncachedInputTokens: 200_000,
+    });
+    const cacheWriteRates = listOpenAiTokenUsagePricingRates()
+      .filter((rate) => rate.model === "gpt-6-astra")
+      .map((rate) => [rate.serviceTier, rate.cacheWriteInputUsdPerMillion]);
+
+    expect(cost).toMatchObject({
+      cacheWriteInputCostMicros: 500_000,
+      cacheWriteInputUsd: 0.5,
+      cacheWriteInputUsdPerMillion: 25,
+      totalCostMicros: 11_744_002,
+      uncachedInputCostMicros: 3_600_000,
+    });
+    expect(cacheWriteRates).toEqual([
+      ["standard", 12.5],
+      ["standard", 25],
+      ["priority", 25],
+      ["priority", 50],
+    ]);
+    expect(
+      listOpenAiTokenUsagePricingRates().find(
+        (rate) => rate.rateId.endsWith(":standard:input-gt-272k"),
+      )?.cacheWriteInputMicrosPerMillion,
+    ).toBe(25_000_000);
+  });
+
   it("prices GPT-6 Astra Fast usage in both context bands", () => {
     const shortContext = estimateOpenAiTokenUsageCost({
       at: Date.UTC(2026, 8, 4),
@@ -435,6 +470,16 @@ describe("token usage pricing", () => {
         uncachedInputTokens: 200_000,
       }),
     ).toBeUndefined();
+    expect(
+      resolveTokenUsagePriceUnavailableReason({
+        at: Date.UTC(2026, 8, 4),
+        cachedInputTokens: 72_001,
+        inputTokenScope: "aggregate",
+        model: "gpt-6-astra",
+        serviceTier: "standard",
+        uncachedInputTokens: 200_000,
+      }),
+    ).toBe("insufficient-token-breakdown");
   });
 
   it("keeps unsupported GPT-6 Astra billing modes unpriced", () => {

@@ -5536,6 +5536,7 @@ describe("CodexAppServerClient", () => {
             info: {
               last_token_usage: {
                 input_tokens: 272_001,
+                cache_write_input_tokens: 20_000,
                 cached_input_tokens: 72_001,
                 output_tokens: 100_000,
                 reasoning_output_tokens: 0,
@@ -5560,12 +5561,22 @@ describe("CodexAppServerClient", () => {
     );
 
     expect(usage?.type === "activity" ? usage.usageLine : undefined).toMatchObject({
+      cacheWriteInputCostMicros: 500_000,
+      cacheWriteInputTokens: 20_000,
       cachedInputCostMicros: 144_002,
       priceStatus: "priced",
       pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-gt-272k",
-      totalCostMicros: 11_644_002,
-      uncachedInputCostMicros: 4_000_000,
+      totalCostMicros: 11_744_002,
+      uncachedInputCostMicros: 3_600_000,
     });
+    expect(usage?.type === "activity" ? usage.summary : undefined).toContain(
+      "20,000 cache writes",
+    );
+    expect(
+      usage?.type === "activity"
+        ? usage.details.map((detail) => detail.label)
+        : [],
+    ).toContain("Cache write cost: 20,000 tokens at $25.00/M = $0.50");
 
     await client.close();
   });

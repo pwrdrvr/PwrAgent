@@ -11,6 +11,7 @@ import {
   isToolManagedWorktreePath,
   parseCodexTurnErrorMessage,
   resolveOpenAiPricingServiceTier,
+  resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
@@ -3269,6 +3270,7 @@ function formatElapsedMs(elapsedMs: number): string {
 }
 
 type TokenUsageBreakdown = {
+  cacheWriteInputTokens?: number;
   cachedInputTokens?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -3295,6 +3297,11 @@ function readTokenUsageBreakdown(
 ): TokenUsageBreakdown | undefined {
   const explicitTotal = pickNumber(record, ["totalTokens", "total_tokens"]);
   const inputTokens = pickNumber(record, ["inputTokens", "input_tokens"]);
+  const cacheWriteInputTokens = pickNumber(record, [
+    "cacheWriteInputTokens",
+    "cache_write_input_tokens",
+    "cache_write_tokens",
+  ]);
   const cachedInputTokens = pickNumber(record, [
     "cachedInputTokens",
     "cached_input_tokens",
@@ -3311,6 +3318,7 @@ function readTokenUsageBreakdown(
   if (
     totalTokens === undefined &&
     inputTokens === undefined &&
+    cacheWriteInputTokens === undefined &&
     cachedInputTokens === undefined &&
     outputTokens === undefined &&
     reasoningOutputTokens === undefined
@@ -3319,6 +3327,7 @@ function readTokenUsageBreakdown(
   }
 
   return {
+    cacheWriteInputTokens,
     cachedInputTokens,
     inputTokens,
     outputTokens,
@@ -3485,6 +3494,11 @@ function summarizeTokenUsageActivity(
   const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
   const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const cacheWriteInputTokens = Math.min(
+    uncachedInputTokens,
+    Math.max(0, tokens.cacheWriteInputTokens ?? 0),
+  );
+  const regularInputTokens = uncachedInputTokens - cacheWriteInputTokens;
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
   const billedOutputTokens = outputTokens + reasoningOutputTokens;
@@ -3493,6 +3507,7 @@ function summarizeTokenUsageActivity(
     pricingContext
   );
   const cost = estimateTokenUsageCost({
+    cacheWriteInputTokens,
     cachedInputTokens,
     at: createdAt,
     fastMode: resolvedPricingContext.fastMode,
@@ -3506,6 +3521,9 @@ function summarizeTokenUsageActivity(
   const idSuffix = typeof createdAt === "number" ? Math.round(createdAt) : "unknown";
   const summaryParts = [
     `${formatTokenCount(uncachedInputTokens)} uncached in`,
+    cacheWriteInputTokens > 0
+      ? `${formatTokenCount(cacheWriteInputTokens)} cache writes`
+      : undefined,
     `${formatTokenCount(cachedInputTokens)} cached`,
     reasoningOutputTokens > 0
       ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
@@ -3520,18 +3538,26 @@ function summarizeTokenUsageActivity(
   const sourceItemId =
     pickString(record, ["id", "itemId", "item_id", "callId", "call_id"]) ??
     `${idSuffix}`;
-  const pricingServiceTier = resolveOpenAiPricingServiceTier(resolvedPricingContext);
   const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
     cost
       ? undefined
-      : !resolvedPricingContext.model
-        ? "missing-model"
-        : pricingServiceTier === undefined
-          ? "unsupported-service-tier"
-          : "missing-rate";
+      : resolveTokenUsagePriceUnavailableReason({
+          at: createdAt,
+          cachedInputTokens,
+          fastMode: resolvedPricingContext.fastMode,
+          inputTokenScope: scope === "latest-request" ? "request" : "aggregate",
+          model: resolvedPricingContext.model,
+          serviceTier: resolvedPricingContext.serviceTier,
+          uncachedInputTokens,
+        });
+  const pricingServiceTier = resolveOpenAiPricingServiceTier(
+    resolvedPricingContext,
+  );
   const usageLine: ThreadUsageLineRecord | undefined = threadId
     ? {
         backend: "codex",
+        cacheWriteInputCostMicros: cost?.cacheWriteInputCostMicros ?? 0,
+        cacheWriteInputTokens,
         cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
         cachedInputTokens,
         ...(typeof turn?.completedAt === "number" ? { completedAt: turn.completedAt } : {}),
@@ -3607,7 +3633,7 @@ function summarizeTokenUsageActivity(
         id: `token-usage-${idSuffix}-uncached-input-cost`,
         kind: "read",
         label: `Uncached input cost: ${formatTokenCount(
-          uncachedInputTokens
+          regularInputTokens
         )} tokens at ${formatTokenUsageUsdPerMillion(
           cost.inputUsdPerMillion
         )}/M${formatTokenUsageStandardRateSuffix(
@@ -3640,14 +3666,29 @@ function summarizeTokenUsageActivity(
           cost.standardOutputRateMultiplier
         )} = ${formatTokenUsageUsd(cost.outputUsd)}`,
         status: "completed",
-      },
-      {
-        id: `token-usage-${idSuffix}-cost`,
-        kind: "read",
-        label: `Cost: ${formatTokenUsageUsd(cost.totalUsd)} list price for ${cost.displayName}`,
-        status: "completed",
       }
     );
+    if (
+      cacheWriteInputTokens > 0
+      && cost.cacheWriteInputUsdPerMillion !== undefined
+    ) {
+      details.push({
+        id: `token-usage-${idSuffix}-cache-write-input-cost`,
+        kind: "read",
+        label: `Cache write cost: ${formatTokenCount(
+          cacheWriteInputTokens
+        )} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.cacheWriteInputUsdPerMillion
+        )}/M = ${formatTokenUsageUsd(cost.cacheWriteInputUsd)}`,
+        status: "completed",
+      });
+    }
+    details.push({
+      id: `token-usage-${idSuffix}-cost`,
+      kind: "read",
+      label: `Cost: ${formatTokenUsageUsd(cost.totalUsd)} list price for ${cost.displayName}`,
+      status: "completed",
+    });
   } else if (resolvedPricingContext.model) {
     details.push({
       id: `token-usage-${idSuffix}-cost-unavailable`,
