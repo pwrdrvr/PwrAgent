@@ -455,7 +455,10 @@ describe("Codex stream notices", () => {
     "reports recovery on %s for the affected turn only", (method) => {
       let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
       state = appNoticeReducer(state, retry({ threadId: "thread-b" }));
-      state = appNoticeReducer(state, event(method, { delta: "back online" }));
+      state = appNoticeReducer(state, event(method, {
+        delta: "back online",
+        ...(method === "turn/completed" ? { turn: { status: "completed" } } : {}),
+      }));
       expect(state.durable).toHaveLength(1);
       expect(state.durable[0]?.threadLink?.threadId).toBe("thread-b");
       expect(state.transient[0]).toMatchObject({
@@ -463,6 +466,28 @@ describe("Codex stream notices", () => {
         autoDismiss: true,
         tone: "success",
       });
+    },
+  );
+
+  it.each(["interrupted", "cancelled", "failed"])(
+    "dismisses a retry on %s completion without reporting recovery", (status) => {
+      let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+      state = appNoticeReducer(state, retry({ threadId: "thread-b" }));
+      state = appNoticeReducer(state, event("turn/completed", {
+        turn: { id: "turn-1", status },
+      }));
+      expect(state.durable).toHaveLength(1);
+      expect(state.durable[0]?.threadLink?.threadId).toBe("thread-b");
+      expect(state.transient).toEqual([]);
+    },
+  );
+
+  it.each([undefined, "inProgress", "unknown"])(
+    "does not infer recovery from completion status %s", (status) => {
+      const state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+      expect(appNoticeReducer(state, event("turn/completed", {
+        turn: { status },
+      }))).toBe(state);
     },
   );
 
@@ -491,7 +516,7 @@ describe("Codex stream notices", () => {
   it("isolates peers with identical thread and turn IDs", () => {
     let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
     state = appNoticeReducer(state, { ...retry(), instanceId: "peer-a" });
-    state = appNoticeReducer(state, event("turn/completed"));
+    state = appNoticeReducer(state, event("turn/completed", { turn: { status: "completed" } }));
     expect(state.durable).toHaveLength(1);
     expect(state.durable[0]?.threadLink?.instanceId).toBe("peer-a");
   });

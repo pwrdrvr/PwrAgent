@@ -80,6 +80,18 @@ export function resolveCodexStreamNotice(
   if (method === "turn/failed" || method === "turn/cancelled") {
     return { dismissId: id };
   }
+  if (method === "turn/completed") {
+    const turn = params.turn && typeof params.turn === "object"
+      ? params.turn as Record<string, unknown>
+      : undefined;
+    const status = readText(turn?.status);
+    // Codex also uses turn/completed for interrupted turns. Only an
+    // explicitly successful terminal status establishes recovery.
+    if (status === "interrupted" || status === "cancelled" || status === "failed") {
+      return { dismissId: id };
+    }
+    if (status !== "completed") return undefined;
+  }
   // A running local command can emit output while the model is unreachable.
   // Only new model text or successful completion establishes recovery.
   if (MODEL_PROGRESS_METHODS.has(method) && !readText(params.delta)) return undefined;
