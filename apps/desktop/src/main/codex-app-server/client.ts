@@ -1454,7 +1454,7 @@ function findFirstNestedValue(value: unknown, keys: string[], depth = 0): unknow
   return undefined;
 }
 
-function formatRateLimitWindowName(params: {
+export function formatRateLimitWindowName(params: {
   limitId?: string;
   limitName?: string;
   windowKey: "primary" | "secondary";
@@ -1483,7 +1483,9 @@ function formatRateLimitWindowName(params: {
   return `${rawName ?? rawId} ${windowLabel}`.trim();
 }
 
-function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
+export function extractRateLimitSummaries(
+  value: unknown,
+): BackendRateLimitSummary[] {
   const out = new Map<string, BackendRateLimitSummary>();
   const addWindow = (
     windowValue: unknown,
@@ -1509,6 +1511,8 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
     out.set(name, {
       name,
       limitId: params.limitId,
+      limitName: params.limitName,
+      windowKey: params.windowKey,
       usedPercent,
       remaining:
         typeof usedPercent === "number" ? Math.max(0, Math.round(100 - usedPercent)) : undefined,
@@ -1546,6 +1550,8 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
     out.set(name, {
       name,
       limitId: params.limitId,
+      limitName: params.limitName,
+      windowKey: "individual",
       limit,
       used,
       remaining:
@@ -1627,6 +1633,8 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
       out.set(name, {
         name,
         limitId: existing?.limitId,
+        limitName: existing?.limitName,
+        windowKey: existing?.windowKey,
         remaining: remaining ?? existing?.remaining,
         limit: limit ?? existing?.limit,
         used: used ?? existing?.used,

@@ -19,6 +19,12 @@ describe("backend status formatting", () => {
         { name: "GPT-5.3-Codex-Spark 5h limit", usedPercent: 2 },
         { name: "5h limit", usedPercent: 26 },
         { name: "Individual limit", usedPercent: 4 },
+        {
+          name: "gpt-reserve Weekly limit",
+          limitId: "base_model_inference",
+          limitName: "gpt-reserve",
+          usedPercent: 0,
+        },
         { name: "other limit", usedPercent: 50 },
       ],
     };

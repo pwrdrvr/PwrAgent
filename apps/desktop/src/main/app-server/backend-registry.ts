@@ -7,7 +7,7 @@ import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
   ThreadForkParams as CodexThreadForkParams,
@@ -368,6 +368,8 @@ import {
 import {
   CodexAppServerClient,
   DEFAULT_CODEX_THREAD_TITLE_MODEL,
+  extractRateLimitSummaries,
+  formatRateLimitWindowName,
   type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
 } from "../codex-app-server/client";
@@ -639,6 +641,7 @@ const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 // changes, so this window can cover ordinary foreground idle time while
 // background polling catches external Codex changes on a slower cadence.
 const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
+const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
@@ -5575,6 +5578,66 @@ async function readClientRateLimits(client: BackendClient): Promise<BackendRateL
   return await client.readRateLimits();
 }
 
+function rateLimitSummaryKey(limit: BackendRateLimitSummary): string {
+  return [
+    limit.limitId ?? "",
+    limit.windowKey ?? limit.name,
+  ].join("\u0000");
+}
+
+function compareRateLimitSummaries(
+  left: BackendRateLimitSummary,
+  right: BackendRateLimitSummary,
+): number {
+  return rateLimitSummaryKey(left).localeCompare(rateLimitSummaryKey(right));
+}
+
+function rateLimitSummariesEqual(
+  left: BackendRateLimitSummary[],
+  right: BackendRateLimitSummary[],
+): boolean {
+  return isDeepStrictEqual(
+    [...left].sort(compareRateLimitSummaries),
+    [...right].sort(compareRateLimitSummaries),
+  );
+}
+
+function mergeRateLimitSummary(
+  current: BackendRateLimitSummary,
+  update: BackendRateLimitSummary,
+): BackendRateLimitSummary {
+  const merged: BackendRateLimitSummary = {
+    ...current,
+    ...(update.limitId !== undefined ? { limitId: update.limitId } : {}),
+    ...(update.limitName !== undefined
+      ? { limitName: update.limitName }
+      : {}),
+    ...(update.windowKey !== undefined ? { windowKey: update.windowKey } : {}),
+    ...(update.remaining !== undefined ? { remaining: update.remaining } : {}),
+    ...(update.limit !== undefined ? { limit: update.limit } : {}),
+    ...(update.used !== undefined ? { used: update.used } : {}),
+    ...(update.usedPercent !== undefined ? { usedPercent: update.usedPercent } : {}),
+    ...(update.resetAt !== undefined ? { resetAt: update.resetAt } : {}),
+    ...(update.windowSeconds !== undefined
+      ? { windowSeconds: update.windowSeconds }
+      : {}),
+    ...(update.windowMinutes !== undefined
+      ? { windowMinutes: update.windowMinutes }
+      : {}),
+  };
+  if (merged.windowKey === "primary" || merged.windowKey === "secondary") {
+    merged.name = formatRateLimitWindowName({
+      limitId: merged.limitId,
+      limitName: merged.limitName,
+      windowKey: merged.windowKey,
+      windowMinutes: merged.windowMinutes,
+    });
+  } else if (update.limitName !== undefined) {
+    merged.name = update.name;
+  }
+  return merged;
+}
+
 type ModelSettings = {
   model?: string;
   reasoningEffort?: string;
@@ -7739,6 +7802,17 @@ export class DesktopBackendRegistry {
     "read" | "subscribe"
   >;
   private codexBackendSummary?: BackendSummary;
+  private codexBackendGeneration = 0;
+  private codexRateLimitBroadcastTimer?: ReturnType<typeof setTimeout>;
+  private codexRateLimitLastBroadcastAt?: number;
+  private codexRateLimitNotificationWork?: Promise<boolean>;
+  private pendingCodexRateLimitBroadcast?: AgentEvent;
+  private pendingCodexRateLimits?: {
+    backendGeneration: number;
+    notificationVersion: number;
+    rateLimits: BackendRateLimitSummary[];
+  };
+  private codexRateLimitsNotificationVersion = 0;
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
   private providerRuntimeInvalidationPromise?: Promise<void>;
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
@@ -9886,7 +9960,15 @@ export class DesktopBackendRegistry {
     // not to discover or launch its replacement. The reconnectable client
     // resolves the new command only when the next permitted discovery or
     // ordinary provider operation initializes it.
+    this.codexBackendGeneration += 1;
     this.codexBackendSummary = undefined;
+    this.pendingCodexRateLimits = undefined;
+    this.pendingCodexRateLimitBroadcast = undefined;
+    this.codexRateLimitLastBroadcastAt = undefined;
+    if (this.codexRateLimitBroadcastTimer) {
+      clearTimeout(this.codexRateLimitBroadcastTimer);
+      this.codexRateLimitBroadcastTimer = undefined;
+    }
     this.modelCatalog.invalidate("codex");
     this.codexRuntimeRestartPending = true;
     await this.maybeRestartCodexForManagedRuntimeChange();
@@ -21170,6 +21252,11 @@ export class DesktopBackendRegistry {
       clearTimeout(this.missingCodexThreadEvaluationTimer);
       this.missingCodexThreadEvaluationTimer = undefined;
     }
+    if (this.codexRateLimitBroadcastTimer) {
+      clearTimeout(this.codexRateLimitBroadcastTimer);
+      this.codexRateLimitBroadcastTimer = undefined;
+    }
+    this.pendingCodexRateLimitBroadcast = undefined;
     await this.missingCodexThreadEvaluation;
     // Live usage and command output may each have one bounded window sitting
     // in memory. `closed` prevents either drain from re-arming its timer; the
@@ -22321,6 +22408,27 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        if (
+          backend === "codex"
+          && notification.method === "account/rateLimits/updated"
+        ) {
+          const updateWork = this.updateCachedCodexRateLimits(
+            notification.params.rateLimits,
+          );
+          this.codexRateLimitNotificationWork = updateWork;
+          const changed = await updateWork.finally(() => {
+            if (this.codexRateLimitNotificationWork === updateWork) {
+              this.codexRateLimitNotificationWork = undefined;
+            }
+          });
+          if (changed) {
+            await this.scheduleCodexRateLimitBroadcast({
+              backend,
+              notification,
+            });
+          }
+          return;
+        }
         if (
           backend === "codex" &&
           notification.method === "thread/codexSettings/observed"
@@ -24021,6 +24129,139 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private async updateCachedCodexRateLimits(value: unknown): Promise<boolean> {
+    const rateLimits = extractRateLimitSummaries(value);
+    if (rateLimits.length === 0) {
+      return false;
+    }
+    const notificationVersion = ++this.codexRateLimitsNotificationVersion;
+    const backendGeneration = this.codexBackendGeneration;
+    const currentSummary = this.codexBackendSummary;
+    const currentRateLimits = currentSummary?.rateLimits ?? [];
+    const currentKeys = new Set(currentRateLimits.map(rateLimitSummaryKey));
+    if (
+      !currentSummary
+      || rateLimits.some(
+        (limit) =>
+          !limit.limitId?.trim()
+          || !currentKeys.has(rateLimitSummaryKey(limit)),
+      )
+    ) {
+      return await this.refetchCodexRateLimitsForNotification({
+        backendGeneration,
+        notificationVersion,
+      });
+    }
+    const updatesByKey = new Map(
+      rateLimits.map((limit) => [rateLimitSummaryKey(limit), limit]),
+    );
+    const mergedRateLimits = currentRateLimits.map((current) => {
+      const key = rateLimitSummaryKey(current);
+      const update = updatesByKey.get(key);
+      if (!update) {
+        return current;
+      }
+      updatesByKey.delete(key);
+      return mergeRateLimitSummary(current, update);
+    });
+    if (rateLimitSummariesEqual(currentRateLimits, mergedRateLimits)) {
+      return false;
+    }
+    this.codexBackendSummary = {
+      ...currentSummary,
+      rateLimits: mergedRateLimits,
+    };
+    if (
+      this.pendingCodexRateLimits?.backendGeneration === backendGeneration
+      && this.pendingCodexRateLimits.notificationVersion <= notificationVersion
+    ) {
+      this.pendingCodexRateLimits = undefined;
+    }
+    return true;
+  }
+
+  private async refetchCodexRateLimitsForNotification(params: {
+    backendGeneration: number;
+    notificationVersion: number;
+  }): Promise<boolean> {
+    let refetchedRateLimits: BackendRateLimitSummary[];
+    try {
+      refetchedRateLimits = await readClientRateLimits(this.codexClient);
+    } catch (error) {
+      backendRegistryLog.warn(
+        "Codex rate-limit refetch after sparse notification failed",
+        { error: error instanceof Error ? error.message : String(error) },
+      );
+      return false;
+    }
+    if (
+      this.closed
+      || params.backendGeneration !== this.codexBackendGeneration
+      || params.notificationVersion !== this.codexRateLimitsNotificationVersion
+      || refetchedRateLimits.length === 0
+    ) {
+      return false;
+    }
+    const currentSummary = this.codexBackendSummary;
+    if (!currentSummary) {
+      this.pendingCodexRateLimits = {
+        backendGeneration: params.backendGeneration,
+        notificationVersion: params.notificationVersion,
+        rateLimits: refetchedRateLimits,
+      };
+      return false;
+    }
+    const currentRateLimits = currentSummary.rateLimits ?? [];
+    if (rateLimitSummariesEqual(currentRateLimits, refetchedRateLimits)) {
+      return false;
+    }
+    this.codexBackendSummary = {
+      ...currentSummary,
+      rateLimits: refetchedRateLimits,
+    };
+    this.pendingCodexRateLimits = undefined;
+    return true;
+  }
+
+  private async scheduleCodexRateLimitBroadcast(event: AgentEvent): Promise<void> {
+    const now = Date.now();
+    this.pendingCodexRateLimitBroadcast = event;
+    const elapsed = this.codexRateLimitLastBroadcastAt === undefined
+      ? CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS
+      : now - this.codexRateLimitLastBroadcastAt;
+    if (elapsed >= CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS) {
+      if (this.codexRateLimitBroadcastTimer) {
+        clearTimeout(this.codexRateLimitBroadcastTimer);
+        this.codexRateLimitBroadcastTimer = undefined;
+      }
+      await this.flushPendingCodexRateLimitBroadcast(now);
+      return;
+    }
+    if (this.codexRateLimitBroadcastTimer) {
+      return;
+    }
+    this.codexRateLimitBroadcastTimer = setTimeout(() => {
+      this.codexRateLimitBroadcastTimer = undefined;
+      void this.flushPendingCodexRateLimitBroadcast().catch((error) => {
+        backendRegistryLog.error("Codex rate-limit broadcast failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS - elapsed);
+  }
+
+  private async flushPendingCodexRateLimitBroadcast(
+    broadcastAt = Date.now(),
+  ): Promise<void> {
+    const event = this.pendingCodexRateLimitBroadcast;
+    this.pendingCodexRateLimitBroadcast = undefined;
+    if (!event || this.closed) {
+      return;
+    }
+    this.codexRateLimitLastBroadcastAt = broadcastAt;
+    await this.emitToListeners(event);
+  }
+
   /**
    * Stamp `discoveryPending` onto a Codex summary that is unavailable only
    * because discovery has not answered yet.
@@ -24046,6 +24287,8 @@ export class DesktopBackendRegistry {
   ): Promise<BackendSummary> {
     assertProviderDiscoveryPermit(permit);
     const previousSummary = this.readCodexBackendSummary();
+    const backendGeneration = this.codexBackendGeneration;
+    const rateLimitsNotificationVersion = this.codexRateLimitsNotificationVersion;
     const { lastKnownGood } = this.readCodexProvider();
     const [
       initializeResult,
@@ -24060,6 +24303,21 @@ export class DesktopBackendRegistry {
       readClientRateLimits(this.codexClient),
       this.resolveCodexRuntimeCommandFn?.(),
     ]);
+    if (backendGeneration !== this.codexBackendGeneration) {
+      return this.readCodexBackendSummary();
+    }
+    let settledRateLimitsNotificationVersion = rateLimitsNotificationVersion;
+    while (
+      settledRateLimitsNotificationVersion
+      !== this.codexRateLimitsNotificationVersion
+    ) {
+      const observedVersion = this.codexRateLimitsNotificationVersion;
+      await this.codexRateLimitNotificationWork;
+      if (backendGeneration !== this.codexBackendGeneration) {
+        return this.readCodexBackendSummary();
+      }
+      settledRateLimitsNotificationVersion = observedVersion;
+    }
     // Resolution rejects when nothing is selected yet; the durable observation
     // is then the only thing left that can name a command.
     const runtimeCommand =
@@ -24103,6 +24361,22 @@ export class DesktopBackendRegistry {
       capabilities.startReview = true;
     }
 
+    const discoveredRateLimits =
+      rateLimitsResult.status === "fulfilled"
+        ? rateLimitsResult.value
+        : undefined;
+    const pendingRateLimits =
+      this.pendingCodexRateLimits?.backendGeneration === backendGeneration
+      && this.pendingCodexRateLimits.notificationVersion
+        > rateLimitsNotificationVersion
+        ? this.pendingCodexRateLimits.rateLimits
+        : undefined;
+    const rateLimits =
+      rateLimitsNotificationVersion !== this.codexRateLimitsNotificationVersion
+        ? pendingRateLimits
+          ?? this.codexBackendSummary?.rateLimits
+          ?? discoveredRateLimits
+        : discoveredRateLimits;
     const summary: BackendSummary = {
       kind: "codex",
       label: BACKEND_LABELS.codex,
@@ -24112,10 +24386,7 @@ export class DesktopBackendRegistry {
         isMeaningfulAccountSummary(accountResult.value)
           ? accountResult.value
           : undefined,
-      rateLimits:
-        rateLimitsResult.status === "fulfilled"
-          ? rateLimitsResult.value
-          : undefined,
+      rateLimits,
       serverName: successful[0]?.serverInfo?.name,
       // Today's `initialize` carries no `serverInfo` at all; the App Server's
       // version reaches us inside the `userAgent` it does report. The resolved
@@ -24159,6 +24430,9 @@ export class DesktopBackendRegistry {
       unavailableReason: available ? undefined : unavailableReason || "Codex unavailable",
     };
     this.codexBackendSummary = summary;
+    if (this.pendingCodexRateLimits?.backendGeneration === backendGeneration) {
+      this.pendingCodexRateLimits = undefined;
+    }
     return summary;
   }
 
@@ -37482,10 +37756,12 @@ export class DesktopBackendRegistry {
   /**
    * Fan an event out to subscribers without running any of `emit`'s recording
    * stages. Only for events that are a *view* of something already recorded —
-   * a managed review's forwarded activity is the sole caller. Running those
-   * through `emit` would re-execute the whole pipeline against the parent
-   * thread id, which double-counts tool accounting (a sqlite write per item)
-   * and pollutes the file-change approval-context cache.
+   * managed-review forwarding and coalesced rate-limit cache broadcasts use
+   * this path. Running managed-review views through `emit` would re-execute
+   * the whole pipeline against the parent thread id, which double-counts tool
+   * accounting (a sqlite write per item) and pollutes the file-change
+   * approval-context cache. Rate-limit broadcasts have no thread recording
+   * semantics and likewise belong only at the listener boundary.
    */
   private async emitToListeners(event: AgentEvent): Promise<void> {
     for (const listener of this.eventListeners) {

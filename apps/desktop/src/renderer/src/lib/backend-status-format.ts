@@ -34,6 +34,9 @@ export function selectVisibleRateLimits(
       if (backend.kind !== "codex") {
         return true;
       }
+      if (isHiddenCodexRateLimit(limit)) {
+        return false;
+      }
       const { label } = splitRateLimitName(limit.name);
       return label === "5h limit"
         || label === "Weekly limit"
@@ -111,6 +114,12 @@ function formatWholeNumber(value: number): string {
 
 function isSparkRateLimit(limit: BackendRateLimitSummary): boolean {
   return isSparkName(limit.limitId) || isSparkName(limit.name);
+}
+
+function isHiddenCodexRateLimit(limit: BackendRateLimitSummary): boolean {
+  return limit.limitId?.toLowerCase() === "base_model_inference"
+    || limit.limitName?.toLowerCase() === "gpt-reserve"
+    || limit.name.toLowerCase().startsWith("gpt-reserve ");
 }
 
 function isSparkName(value: string | undefined): boolean {

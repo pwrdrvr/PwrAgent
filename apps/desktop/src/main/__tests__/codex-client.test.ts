@@ -2677,6 +2677,7 @@ describe("CodexAppServerClient", () => {
       {
         name: "Individual limit",
         limitId: "codex",
+        windowKey: "individual",
         limit: 100000,
         used: 3500.4,
         remaining: 96499.6,
