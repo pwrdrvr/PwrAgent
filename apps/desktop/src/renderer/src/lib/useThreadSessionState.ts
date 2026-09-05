@@ -6168,10 +6168,13 @@ export function useThreadSessionState(params: {
               expectOwnUpdate: true,
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
-              optimisticEntries: current.optimisticEntries.filter(
-                (entry) =>
-                  entry.type !== "review" ||
-                  !reviewEntriesMatch(reviewEntry, entry)
+              // The live item replaces the placeholder, but a thread/read
+              // snapshot can still omit it. Retain it until hydration returns
+              // a matching review; pruneOptimisticEntries then retires it.
+              // Merge only the pending entries here, never the full transcript.
+              optimisticEntries: mergeTranscriptEntries(
+                current.optimisticEntries,
+                [reviewEntry],
               ),
               response: nextResponse,
             };
