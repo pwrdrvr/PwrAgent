@@ -446,6 +446,17 @@ describe("StateDb", () => {
       "thread_usage_lines",
       "thread_usage_turns",
     ]);
+    const usageLineColumns = stateDb.raw
+      .prepare("PRAGMA table_info(thread_usage_lines)")
+      .all() as Array<{ name: string }>;
+    expect(usageLineColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "cache_write_input_cost_micros",
+        "cache_write_input_tokens",
+        "cumulative_cache_write_input_tokens",
+        "pricing_basis",
+      ]),
+    );
   });
 
   it("creates thread tool accounting tables", () => {

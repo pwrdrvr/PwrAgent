@@ -364,6 +364,7 @@ function buildLiveCommandDetail(
 }
 
 type TokenUsageBreakdown = {
+  cacheWriteInputTokens?: number;
   cachedInputTokens?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -398,12 +399,19 @@ export function buildTokenUsageActivityEntry(params: {
   const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
   const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const cacheWriteInputTokens = Math.min(
+    uncachedInputTokens,
+    Math.max(0, tokens.cacheWriteInputTokens ?? 0),
+  );
+  const regularInputTokens = uncachedInputTokens - cacheWriteInputTokens;
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
   const cost = estimateTokenUsageCost({
     at: params.pricingAt,
+    cacheWriteInputTokens,
     cachedInputTokens,
     fastMode: params.fastMode,
+    inputTokenScope: scope === "latest-request" ? "request" : "aggregate",
     model: params.model,
     outputTokens,
     reasoningOutputTokens,
@@ -415,6 +423,9 @@ export function buildTokenUsageActivityEntry(params: {
     : outputTokens + reasoningOutputTokens;
   const summaryParts = [
     `${formatTokenCount(uncachedInputTokens)} uncached in`,
+    cacheWriteInputTokens > 0
+      ? `${formatTokenCount(cacheWriteInputTokens)} cache writes`
+      : undefined,
     `${formatTokenCount(cachedInputTokens)} cached`,
     reasoningOutputTokens > 0
       ? `${formatTokenCount(outputTokens)} out (${formatTokenCount(reasoningOutputTokens)} reasoning)`
@@ -451,7 +462,7 @@ export function buildTokenUsageActivityEntry(params: {
         id: `${params.id}-uncached-input-cost`,
         kind: "read",
         label: `Uncached input cost: ${formatTokenCount(
-          uncachedInputTokens,
+          regularInputTokens,
         )} tokens at ${formatTokenUsageUsdPerMillion(
           cost.inputUsdPerMillion,
         )}/M${formatTokenUsageStandardRateSuffix(
@@ -486,6 +497,21 @@ export function buildTokenUsageActivityEntry(params: {
         status: "completed",
       },
     );
+    if (
+      cacheWriteInputTokens > 0
+      && cost.cacheWriteInputUsdPerMillion !== undefined
+    ) {
+      details.push({
+        id: `${params.id}-cache-write-input-cost`,
+        kind: "read",
+        label: `Cache write cost: ${formatTokenCount(
+          cacheWriteInputTokens,
+        )} tokens at ${formatTokenUsageUsdPerMillion(
+          cost.cacheWriteInputUsdPerMillion,
+        )}/M = ${formatTokenUsageUsd(cost.cacheWriteInputUsd)}`,
+        status: "completed",
+      });
+    }
     details.push({
       id: `${params.id}-cost`,
       kind: "read",
@@ -536,6 +562,7 @@ export function buildTurnUsageActivityEntryFromLine(params: {
     summaryPrefix: "Turn usage",
     tokenUsage: {
       total: {
+        cacheWriteInputTokens: line.cacheWriteInputTokens,
         cachedInputTokens: line.cachedInputTokens,
         inputTokens: line.inputTokens,
         outputTokens: line.outputTokens,
@@ -551,6 +578,9 @@ export function buildTurnUsageActivityEntryFromLine(params: {
 
   const summaryParts = [
     `${formatTokenCount(line.uncachedInputTokens)} uncached in`,
+    (line.cacheWriteInputTokens ?? 0) > 0
+      ? `${formatTokenCount(line.cacheWriteInputTokens ?? 0)} cache writes`
+      : undefined,
     `${formatTokenCount(line.cachedInputTokens)} cached`,
     line.reasoningOutputTokens > 0
       ? `${formatTokenCount(line.outputTokens)} out (${formatTokenCount(
@@ -563,31 +593,38 @@ export function buildTurnUsageActivityEntryFromLine(params: {
   ].filter((part): part is string => Boolean(part));
   const exactCostsByDetailId = new Map([
     [`${id}-uncached-input-cost`, line.uncachedInputCostMicros],
+    [`${id}-cache-write-input-cost`, line.cacheWriteInputCostMicros ?? 0],
     [`${id}-cached-input-cost`, line.cachedInputCostMicros],
     [`${id}-output-cost`, line.outputCostMicros],
   ]);
-  const details = entry.details.map((detail) => {
-    const exactCostMicros = exactCostsByDetailId.get(detail.id);
-    if (exactCostMicros !== undefined && detail.label.includes(" = ")) {
-      return {
-        ...detail,
-        label: detail.label.replace(
-          / = [^=]+$/,
-          ` = ${formatTokenUsageMicrosAsUsd(exactCostMicros)}`,
-        ),
-      };
-    }
-    if (detail.id === `${id}-cost`) {
-      return {
-        ...detail,
-        label: detail.label.replace(
-          /^Cost: .*? list price/,
-          `Cost: ${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} list price`,
-        ),
-      };
-    }
-    return detail;
-  });
+  const details = entry.details
+    .filter(
+      (detail) =>
+        line.priceStatus !== "priced"
+        || detail.id !== `${id}-cost-unavailable`,
+    )
+    .map((detail) => {
+      const exactCostMicros = exactCostsByDetailId.get(detail.id);
+      if (exactCostMicros !== undefined && detail.label.includes(" = ")) {
+        return {
+          ...detail,
+          label: detail.label.replace(
+            / = [^=]+$/,
+            ` = ${formatTokenUsageMicrosAsUsd(exactCostMicros)}`,
+          ),
+        };
+      }
+      if (detail.id === `${id}-cost`) {
+        return {
+          ...detail,
+          label: detail.label.replace(
+            /^Cost: .*? list price/,
+            `Cost: ${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} list price`,
+          ),
+        };
+      }
+      return detail;
+    });
   if (
     line.priceStatus === "priced"
     && !details.some((detail) => detail.id === `${id}-cost`)
@@ -668,6 +705,11 @@ function normalizeTokenUsage(tokenUsage: unknown): NormalizedTokenUsage | undefi
 function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
   const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
   const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
+  const cacheWriteInputTokens = readFiniteNumber(record, [
+    "cacheWriteInputTokens",
+    "cache_write_input_tokens",
+    "cache_write_tokens",
+  ]);
   const cachedInputTokens = readFiniteNumber(record, [
     "cachedInputTokens",
     "cached_input_tokens",
@@ -684,6 +726,7 @@ function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdow
   if (
     totalTokens === undefined &&
     inputTokens === undefined &&
+    cacheWriteInputTokens === undefined &&
     cachedInputTokens === undefined &&
     outputTokens === undefined &&
     reasoningOutputTokens === undefined
@@ -692,6 +735,7 @@ function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdow
   }
 
   return {
+    cacheWriteInputTokens,
     cachedInputTokens,
     inputTokens,
     outputTokens,

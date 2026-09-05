@@ -1,5 +1,6 @@
 import {
   estimateTokenUsageCost,
+  resolveTokenUsagePriceUnavailableReason,
   type ThreadUsageLineRecord,
 } from "./token-usage-pricing";
 
@@ -230,7 +231,17 @@ function buildEstimatedHistoricalGapLine(params: {
     + params.gapTokens.outputTokens
     + params.gapTokens.reasoningOutputTokens;
   const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
-    cost ? undefined : params.anchorLine.model ? "missing-rate" : "missing-model";
+    cost
+      ? undefined
+      : resolveTokenUsagePriceUnavailableReason({
+          at: params.anchorLine.createdAt,
+          cachedInputTokens: params.gapTokens.cachedInputTokens,
+          fastMode: false,
+          inputTokenScope: "aggregate",
+          model: params.anchorLine.model,
+          serviceTier: "standard",
+          uncachedInputTokens: params.gapTokens.uncachedInputTokens,
+        });
 
   return {
     backend: params.anchorLine.backend,

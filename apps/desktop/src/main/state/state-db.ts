@@ -5,7 +5,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import {
   encodeLegacyThreadIdentityKey,
   estimateTokenUsageCost,
-  resolveOpenAiPricingServiceTier,
+  resolveTokenUsagePriceUnavailableReason,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 57;
+export const CURRENT_STATE_DB_USER_VERSION = 58;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -828,12 +828,14 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   settings_source            TEXT,
   settings_confidence        TEXT,
   input_tokens               INTEGER NOT NULL,
+  cache_write_input_tokens   INTEGER NOT NULL DEFAULT 0,
   cached_input_tokens        INTEGER NOT NULL,
   uncached_input_tokens      INTEGER NOT NULL,
   output_tokens              INTEGER NOT NULL,
   reasoning_output_tokens    INTEGER NOT NULL,
   total_tokens               INTEGER NOT NULL,
   cumulative_input_tokens    INTEGER,
+  cumulative_cache_write_input_tokens INTEGER,
   cumulative_cached_input_tokens INTEGER,
   cumulative_uncached_input_tokens INTEGER,
   cumulative_output_tokens   INTEGER,
@@ -844,8 +846,10 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   currency                   TEXT NOT NULL,
   pricing_catalog_id         TEXT,
   pricing_catalog_version    TEXT,
+  pricing_basis              TEXT,
   pricing_rate_id            TEXT,
   uncached_input_cost_micros INTEGER NOT NULL,
+  cache_write_input_cost_micros INTEGER NOT NULL DEFAULT 0,
   cached_input_cost_micros   INTEGER NOT NULL,
   output_cost_micros         INTEGER NOT NULL,
   total_cost_micros          INTEGER NOT NULL,
@@ -1641,8 +1645,14 @@ export class StateDb {
           if (!freshDatabase) {
             repairMisclassifiedHandoffSubAgents(db);
           }
-          db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+          db.pragma("user_version = 57");
         }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 58) {
+        db.transaction(() => {
+          ensureThreadUsageRequestPricingColumns(db);
+          db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+        })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
@@ -2319,6 +2329,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
     ensureThreadUsagePricingCumulativeColumns(db);
+    ensureThreadUsageRequestPricingColumns(db);
     ensureThreadUsagePricingIndexes(db);
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
     ensureThreadToolIncidentExplorerSchema(db);
@@ -2664,6 +2675,37 @@ function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): 
   }
 }
 
+function ensureThreadUsageRequestPricingColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_lines")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "cache_write_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cache_write_input_tokens INTEGER NOT NULL DEFAULT 0",
+    },
+    {
+      name: "cumulative_cache_write_input_tokens",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cumulative_cache_write_input_tokens INTEGER",
+    },
+    {
+      name: "cache_write_input_cost_micros",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN cache_write_input_cost_micros INTEGER NOT NULL DEFAULT 0",
+    },
+    {
+      name: "pricing_basis",
+      sql: "ALTER TABLE thread_usage_lines ADD COLUMN pricing_basis TEXT",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_lines", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
 // DEPRECATED (see issue #947): observed context-replay tally on the usage line.
 // Kept only to dual-write the columns so older locally-run builds keep working
 // during the transition to thread_usage_turns. Remove with the dual-write.
@@ -2947,12 +2989,14 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
   ) {
     return;
   }
+  ensureThreadUsageRequestPricingColumns(db);
 
   const now = Date.now();
   const rows = db
     .prepare(
       `SELECT
          usage_line_id,
+         cache_write_input_tokens,
          cached_input_tokens,
          created_at,
          currency,
@@ -2960,15 +3004,18 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
          model,
          output_tokens,
          price_status,
+         pricing_basis,
          provider,
          reasoning_output_tokens,
          service_tier,
+         scope,
          uncached_input_tokens
        FROM thread_usage_lines
        WHERE provider IN ('openai', 'qwen', 'xai')
          AND scope != 'fork-baseline'`,
     )
     .all() as Array<{
+      cache_write_input_tokens: number;
       cached_input_tokens: number;
       created_at: number;
       currency: string;
@@ -2976,9 +3023,11 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
       model: string | null;
       output_tokens: number;
       price_status: string;
+      pricing_basis: ThreadUsageLineRecord["pricingBasis"] | null;
       provider: string;
       reasoning_output_tokens: number;
       service_tier: string | null;
+      scope: ThreadUsageLineRecord["scope"];
       uncached_input_tokens: number;
       usage_line_id: string;
     }>;
@@ -2992,6 +3041,7 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
        pricing_catalog_version = @pricingCatalogVersion,
        pricing_rate_id = @pricingRateId,
        uncached_input_cost_micros = @uncachedInputCostMicros,
+       cache_write_input_cost_micros = @cacheWriteInputCostMicros,
        cached_input_cost_micros = @cachedInputCostMicros,
        output_cost_micros = @outputCostMicros,
        provider = @provider,
@@ -3001,10 +3051,15 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
   );
 
   for (const row of rows) {
+    if (row.pricing_basis === "request-components") {
+      continue;
+    }
     const cost = estimateTokenUsageCost({
       at: row.created_at,
+      cacheWriteInputTokens: row.cache_write_input_tokens,
       cachedInputTokens: row.cached_input_tokens,
       fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+      inputTokenScope: row.scope === "latest-request" ? "request" : "aggregate",
       model: row.model ?? undefined,
       outputTokens: row.output_tokens,
       reasoningOutputTokens: row.reasoning_output_tokens,
@@ -3015,20 +3070,21 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
       continue;
     }
 
-    const pricingServiceTier = resolveOpenAiPricingServiceTier({
-      fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
-      serviceTier: row.service_tier ?? undefined,
-    });
     const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | null =
       cost
         ? null
-        : !row.model
-          ? "missing-model"
-          : pricingServiceTier === undefined
-            ? "unsupported-service-tier"
-            : "missing-rate";
+        : resolveTokenUsagePriceUnavailableReason({
+            at: row.created_at,
+            cachedInputTokens: row.cached_input_tokens,
+            fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+            inputTokenScope: row.scope === "latest-request" ? "request" : "aggregate",
+            model: row.model ?? undefined,
+            serviceTier: row.service_tier ?? undefined,
+            uncachedInputTokens: row.uncached_input_tokens,
+          });
 
     updateLine.run({
+      cacheWriteInputCostMicros: cost?.cacheWriteInputCostMicros ?? 0,
       cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
       currency: cost?.currency ?? row.currency,
       outputCostMicros: cost?.outputCostMicros ?? 0,
@@ -3213,18 +3269,18 @@ function repairCodexTurnUsageFromCumulativeSnapshots(
       serviceTier: row.service_tier ?? undefined,
       uncachedInputTokens,
     });
-    const pricingServiceTier = resolveOpenAiPricingServiceTier({
-      fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
-      serviceTier: row.service_tier ?? undefined,
-    });
     const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | null =
       cost
         ? null
-        : !row.model
-          ? "missing-model"
-          : pricingServiceTier === undefined
-            ? "unsupported-service-tier"
-            : "missing-rate";
+        : resolveTokenUsagePriceUnavailableReason({
+            at: row.created_at,
+            cachedInputTokens,
+            fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+            inputTokenScope: "aggregate",
+            model: row.model ?? undefined,
+            serviceTier: row.service_tier ?? undefined,
+            uncachedInputTokens,
+          });
     updateLine.run({
       cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
       cachedInputTokens,

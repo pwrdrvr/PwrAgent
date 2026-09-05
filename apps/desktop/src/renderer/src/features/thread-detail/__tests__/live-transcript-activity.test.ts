@@ -4,6 +4,7 @@ import {
   buildLiveToolDetails,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
+  buildTurnUsageActivityEntryFromLine,
   mergeActivityDetails,
   mergeCommandDetail,
   summarizeLiveActivity,
@@ -571,6 +572,47 @@ describe("buildTokenUsageActivityEntry", () => {
       "Output cost: 199 tokens at $30.00/M = $0.006",
       "Cost: $0.11 list price for GPT-5.5 Standard",
     ]);
+  });
+
+  it("uses an exact request-component total for a mixed-band Astra turn", () => {
+    const entry = buildTurnUsageActivityEntryFromLine({
+      line: {
+        backend: "codex",
+        cacheWriteInputCostMicros: 375_000,
+        cacheWriteInputTokens: 20_000,
+        cachedInputCostMicros: 300_000,
+        cachedInputTokens: 200_000,
+        createdAt: Date.UTC(2026, 8, 5),
+        currency: "USD",
+        inputTokens: 500_000,
+        model: "gpt-6-astra",
+        outputCostMicros: 1_250_000,
+        outputTokens: 20_000,
+        priceStatus: "priced",
+        pricingBasis: "request-components",
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        scope: "turn",
+        serviceTier: "standard",
+        source: "live",
+        status: "finalized",
+        threadId: "thread-1",
+        totalCostMicros: 6_625_000,
+        totalTokens: 520_000,
+        turnId: "turn-1",
+        uncachedInputCostMicros: 4_700_000,
+        uncachedInputTokens: 300_000,
+        usageLineId: "codex:thread-1:turn-1:turn",
+      },
+      turn: { id: "turn-1", status: "completed" },
+    });
+
+    expect(entry?.summary).toContain("20,000 cache writes");
+    expect(entry?.summary).toContain("$6.63 list price");
+    expect(entry?.details.map((detail) => detail.label)).not.toContainEqual(
+      expect.stringContaining("Cost unavailable"),
+    );
+    expect(entry?.details.at(-1)?.label).toBe("Cost: $6.63 list price");
   });
 
   it("prices the Grok ACP build model alias without double-billing reasoning", () => {

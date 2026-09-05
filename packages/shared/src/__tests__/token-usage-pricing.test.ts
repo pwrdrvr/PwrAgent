@@ -6,6 +6,7 @@ import {
   listOpenAiTokenUsagePricingRates,
   listTokenUsagePricingRates,
   resolveOpenAiPricingServiceTier,
+  resolveTokenUsagePriceUnavailableReason,
 } from "../token-usage-pricing";
 
 describe("token usage pricing", () => {
@@ -335,6 +336,164 @@ describe("token usage pricing", () => {
         totalCostMicros,
       });
     }
+  });
+
+  it("prices GPT-6 Astra at the short-context boundary", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cachedInputTokens: 72_000,
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      uncachedInputTokens: 200_000,
+    });
+
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-09-04",
+      displayName: "GPT-6 Astra Standard (<=272K input)",
+      inputUsdPerMillion: 10,
+      cachedInputUsdPerMillion: 1,
+      outputUsdPerMillion: 50,
+      rateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      serviceTier: "standard",
+      uncachedInputCostMicros: 2_000_000,
+      cachedInputCostMicros: 72_000,
+      outputCostMicros: 5_000_000,
+      totalCostMicros: 7_072_000,
+    });
+  });
+
+  it("prices GPT-6 Astra above 272K input at the long-context rates", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cachedInputTokens: 72_001,
+      inputTokenScope: "request",
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      uncachedInputTokens: 200_000,
+    });
+
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-09-04",
+      displayName: "GPT-6 Astra Standard (>272K input)",
+      inputUsdPerMillion: 20,
+      cachedInputUsdPerMillion: 2,
+      outputUsdPerMillion: 75,
+      rateId: "openai:2026-09-04:gpt-6-astra:standard:input-gt-272k",
+      serviceTier: "standard",
+      uncachedInputCostMicros: 4_000_000,
+      cachedInputCostMicros: 144_002,
+      outputCostMicros: 7_500_000,
+      totalCostMicros: 11_644_002,
+    });
+  });
+
+  it("prices and lists GPT-6 Astra cache writes", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cacheWriteInputTokens: 20_000,
+      cachedInputTokens: 72_001,
+      inputTokenScope: "request",
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      uncachedInputTokens: 200_000,
+    });
+    const cacheWriteRates = listOpenAiTokenUsagePricingRates()
+      .filter((rate) => rate.model === "gpt-6-astra")
+      .map((rate) => [rate.serviceTier, rate.cacheWriteInputUsdPerMillion]);
+
+    expect(cost).toMatchObject({
+      cacheWriteInputCostMicros: 500_000,
+      cacheWriteInputUsd: 0.5,
+      cacheWriteInputUsdPerMillion: 25,
+      totalCostMicros: 11_744_002,
+      uncachedInputCostMicros: 3_600_000,
+    });
+    expect(cacheWriteRates).toEqual([
+      ["standard", 12.5],
+      ["standard", 25],
+      ["priority", 25],
+      ["priority", 50],
+    ]);
+    expect(
+      listOpenAiTokenUsagePricingRates().find(
+        (rate) => rate.rateId.endsWith(":standard:input-gt-272k"),
+      )?.cacheWriteInputMicrosPerMillion,
+    ).toBe(25_000_000);
+  });
+
+  it("prices GPT-6 Astra Fast usage in both context bands", () => {
+    const shortContext = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cachedInputTokens: 72_000,
+      fastMode: true,
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      uncachedInputTokens: 200_000,
+    });
+    const longContext = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 4),
+      cachedInputTokens: 72_001,
+      inputTokenScope: "request",
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      serviceTier: "priority",
+      uncachedInputTokens: 200_000,
+    });
+
+    expect(shortContext).toMatchObject({
+      displayName: "GPT-6 Astra Fast (<=272K input)",
+      inputUsdPerMillion: 20,
+      cachedInputUsdPerMillion: 2,
+      outputUsdPerMillion: 100,
+      rateId: "openai:2026-09-04:gpt-6-astra:priority:input-lte-272k",
+      serviceTier: "priority",
+      totalCostMicros: 14_144_000,
+    });
+    expect(longContext).toMatchObject({
+      displayName: "GPT-6 Astra Fast (>272K input)",
+      inputUsdPerMillion: 40,
+      cachedInputUsdPerMillion: 4,
+      outputUsdPerMillion: 150,
+      rateId: "openai:2026-09-04:gpt-6-astra:priority:input-gt-272k",
+      serviceTier: "priority",
+      totalCostMicros: 23_288_004,
+    });
+  });
+
+  it("leaves ambiguous multi-request Astra aggregates unpriced", () => {
+    expect(
+      estimateOpenAiTokenUsageCost({
+        at: Date.UTC(2026, 8, 4),
+        cachedInputTokens: 72_001,
+        model: "gpt-6-astra",
+        outputTokens: 100_000,
+        uncachedInputTokens: 200_000,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveTokenUsagePriceUnavailableReason({
+        at: Date.UTC(2026, 8, 4),
+        cachedInputTokens: 72_001,
+        inputTokenScope: "aggregate",
+        model: "gpt-6-astra",
+        serviceTier: "standard",
+        uncachedInputTokens: 200_000,
+      }),
+    ).toBe("insufficient-token-breakdown");
+  });
+
+  it("keeps unsupported GPT-6 Astra billing modes unpriced", () => {
+    const usage = {
+      cachedInputTokens: 1_000,
+      model: "gpt-6-astra",
+      outputTokens: 1_000,
+      uncachedInputTokens: 1_000,
+    };
+
+    expect(
+      estimateOpenAiTokenUsageCost({ ...usage, serviceTier: "flex" }),
+    ).toBeUndefined();
+    expect(estimateOpenAiCodexCreditUsage(usage)).toBeUndefined();
   });
 
   it("does not price GPT-5.6 usage before its catalog effective date", () => {

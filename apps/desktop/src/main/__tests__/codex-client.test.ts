@@ -2350,6 +2350,11 @@ describe("CodexAppServerClient", () => {
     MockTransport.modelListResult = {
       data: [
         {
+          id: "gpt-6-astra",
+          displayName: "GPT-6 Astra",
+          supportsReasoning: true,
+        },
+        {
           id: "gpt-5.6-terra",
           displayName: "GPT-5.6-Terra",
           defaultReasoningEffort: "medium",
@@ -2424,6 +2429,12 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(client.listModels()).resolves.toEqual([
+      {
+        id: "gpt-6-astra",
+        label: "GPT-6-Astra",
+        current: undefined,
+        supportsReasoning: true,
+      },
       {
         id: "gpt-5.6-sol",
         label: "GPT-5.6-Sol",
@@ -2506,6 +2517,16 @@ describe("CodexAppServerClient", () => {
   it("derives Fast support from Codex model service tiers", async () => {
     MockTransport.modelListResult = createModelListResponse([
       createCodexModel({
+        id: "gpt-6-astra",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low", description: "Fast responses" },
+          { reasoningEffort: "medium", description: "Balanced" },
+          { reasoningEffort: "high", description: "Deep reasoning" },
+          { reasoningEffort: "xhigh", description: "Extra high" },
+          { reasoningEffort: "max", description: "Maximum reasoning" },
+        ],
+      }),
+      createCodexModel({
         id: "gpt-5.6-sol",
         serviceTiers: [
           {
@@ -2561,6 +2582,7 @@ describe("CodexAppServerClient", () => {
         supportsFast: model.supportsFast,
       })),
     ).toEqual([
+      { id: "gpt-6-astra", supportsFast: false },
       { id: "gpt-5.6-sol", supportsFast: true },
       { id: "gpt-5.6-terra", supportsFast: true },
       { id: "gpt-5.6-luna", supportsFast: true },
@@ -5491,6 +5513,71 @@ describe("CodexAppServerClient", () => {
       priceStatus: "priced",
       reasoningEffort: "high",
     });
+
+    await client.close();
+  });
+
+  it("prices a single Astra request above 272K at the long-context rate", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-astra-long-request", {
+      events: [
+        {
+          type: "turn_context",
+          timestamp: "2026-09-04T12:00:00.000Z",
+          payload: {
+            turn_id: "turn-1",
+            model: "gpt-6-astra",
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-09-04T12:00:10.000Z",
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: {
+                input_tokens: 272_001,
+                cache_write_input_tokens: 20_000,
+                cached_input_tokens: 72_001,
+                output_tokens: 100_000,
+                reasoning_output_tokens: 0,
+                total_tokens: 372_001,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-astra-long-request",
+    });
+    const usage = replay.entries.find(
+      (entry) => entry.type === "activity" && entry.usageLine,
+    );
+
+    expect(usage?.type === "activity" ? usage.usageLine : undefined).toMatchObject({
+      cacheWriteInputCostMicros: 500_000,
+      cacheWriteInputTokens: 20_000,
+      cachedInputCostMicros: 144_002,
+      priceStatus: "priced",
+      pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-gt-272k",
+      totalCostMicros: 11_744_002,
+      uncachedInputCostMicros: 3_600_000,
+    });
+    expect(usage?.type === "activity" ? usage.summary : undefined).toContain(
+      "20,000 cache writes",
+    );
+    expect(
+      usage?.type === "activity"
+        ? usage.details.map((detail) => detail.label)
+        : [],
+    ).toContain("Cache write cost: 20,000 tokens at $25.00/M = $0.50");
 
     await client.close();
   });
