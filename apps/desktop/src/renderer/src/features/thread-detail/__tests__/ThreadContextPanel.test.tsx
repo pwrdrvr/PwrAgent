@@ -1033,6 +1033,30 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
   });
 
+  it("keeps a failed turn's price and shows its usage-limit error on the pricing card", () => {
+    const line = buildMonitorLine({
+      scope: "turn", source: "live", sourceItemId: undefined,
+      turnId: "failed-turn", usageLineId: "failed-turn-usage",
+      model: "gpt-6-astra", totalCostMicros: 3_200_000,
+      pricingBasis: "request-components",
+    });
+    renderPanel({
+      activeTab: "pricing", pinned: true, threadPricingSummaryEnabled: true,
+      thread: {
+        ...baseThread,
+        turnFailureLog: [{
+          id: "failure-1", turnId: "failed-turn",
+          error: "Usage limit reached. Try again later.", occurredAt: 1_800_000_001_000,
+        }],
+      },
+      pricing: { lines: [line], summaries: [] },
+    });
+    const card = screen.getByText("$3.20 list price this turn").closest(".pricing-usage-row")!;
+    expect(within(card as HTMLElement).getByText("Failed")).toBeInTheDocument();
+    expect(within(card as HTMLElement).getByText("Usage limit reached. Try again later.")).toBeInTheDocument();
+    expect(within(card as HTMLElement).queryByText(/Unpriced/)).not.toBeInTheDocument();
+  });
+
   it("renders cached pricing totals and per-turn model settings", () => {
     const summary: ThreadPricingSummary = {
       backend: "codex",

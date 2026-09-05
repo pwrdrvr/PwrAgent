@@ -26604,6 +26604,81 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it.each(["failed", "interrupted", "completed"])(
+    "keeps request pricing through a context estimate and %s terminal", async (status) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/read"] },
+      });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex", threadId: "thread-1", executionMode: "default",
+            extraLinkedDirectories: [], model: "gpt-6-astra", serviceTier: "standard",
+          },
+        },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const total = {
+        input_tokens: 400_000, cached_input_tokens: 200_000,
+        output_tokens: 20_000, reasoning_output_tokens: 0, total_tokens: 420_000,
+      };
+      for (const input of [200_000, 400_000]) {
+        await codexClient.emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1", turnId: "turn-1",
+            tokenUsage: {
+              total_token_usage: {
+                input_tokens: input, cached_input_tokens: input / 2,
+                output_tokens: input / 20, reasoning_output_tokens: 0,
+                total_tokens: input * 1.05,
+              },
+              last_token_usage: {
+                input_tokens: 200_000, cached_input_tokens: 100_000,
+                output_tokens: 10_000, reasoning_output_tokens: 0, total_tokens: 210_000,
+              },
+            },
+          },
+        });
+      }
+      const before = await overlayStore.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+      expect(before.lines[0]?.priceStatus).toBe("priced");
+      expect(before.lines[0]?.totalCostMicros).toBeGreaterThan(0);
+      // Codex recompute_token_usage publishes a context estimate in last,
+      // without changing the cumulative billed usage. Rate-limit updates
+      // may repeat that same snapshot.
+      for (let i = 0; i < 2; i += 1) {
+        await codexClient.emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1", turnId: "turn-1",
+            tokenUsage: {
+              total_token_usage: total,
+              last_token_usage: {
+                input_tokens: 0, cached_input_tokens: 0, output_tokens: 0,
+                reasoning_output_tokens: 0, total_tokens: 160_000,
+              },
+            },
+          },
+        });
+      }
+      await codexClient.emit({
+        method: status === "failed" ? "turn/failed" : "turn/completed",
+        params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status, error: status === "failed" ? { message: "Usage limit reached" } : undefined },
+        },
+      } as AppServerNotification);
+      const after = await overlayStore.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+      expect(after.lines[0]).toMatchObject({
+        priceStatus: "priced", pricingBasis: "request-components",
+        inputTokens: 400_000, cachedInputTokens: 200_000, outputTokens: 20_000,
+        totalCostMicros: before.lines[0]!.totalCostMicros,
+      });
+      await registry.close();
+    },
+  );
+
   it("prices each Astra request before aggregating a multi-request turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },

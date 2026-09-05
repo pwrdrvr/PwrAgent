@@ -5,6 +5,7 @@ import type {
   ThreadSubAgentSummary,
   ThreadTokenMiserAccounting,
   ThreadTokenMiserInterceptionAccounting,
+  ThreadTurnFailure,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -72,6 +73,7 @@ type PricingPanelProps = {
   subAgents?: ThreadSubAgentSummary[];
   tokenMiserAccounting?: ThreadTokenMiserAccounting;
   threadReasoningEffort?: string;
+  turnFailures?: readonly ThreadTurnFailure[];
 };
 
 type PricingDisplayOptions = {
@@ -296,6 +298,9 @@ export function PricingPanel(props: PricingPanelProps) {
       ? (gateLinesByTurn.get(line.turnId) ?? [])
       : [];
     const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
+    const turnFailure = !isActive && line.scope === "turn"
+      ? props.turnFailures?.find((failure) => failure.turnId === line.turnId)
+      : undefined;
     const usageTitle = formatUsageLineTitle(line, subAgent);
     const showUsageTitle = usageTitle !== "Turn usage";
     const reasoningEffort =
@@ -333,6 +338,8 @@ export function PricingPanel(props: PricingPanelProps) {
           <div className="pricing-usage-row__controls">
             {isActive ? (
               <RailStatusChip tone="active">Running</RailStatusChip>
+            ) : turnFailure ? (
+              <RailStatusChip tone="error" alert>Failed</RailStatusChip>
             ) : null}
             <PricingUsageActions
               line={line}
@@ -357,6 +364,7 @@ export function PricingPanel(props: PricingPanelProps) {
         {usageLineEstimate ? (
           <p className="pricing-usage-row__cost">{usageLineEstimate}</p>
         ) : null}
+        {turnFailure ? <p className="rail-card__error">{turnFailure.error}</p> : null}
         <p className="rail-card__usage">
           {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
           {formatTokenCount(line.cachedInputTokens)} cached ·{" "}

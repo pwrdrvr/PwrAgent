@@ -7312,6 +7312,41 @@ function mergeThreadUsageLineForUpsert(
     ),
   };
 
+  // A refresh can retain all measured tokens but lack the request breakdown
+  // used to price them (for example after a restart). Do not erase that exact
+  // price with an unpriceable aggregate. Changed usage or settings must still
+  // be priced afresh; retaining the old cost there would hide unpriced work.
+  if (
+    merged.priceStatus === "unpriced"
+    && existing.priceStatus === "priced"
+    && existing.pricingBasis === "request-components"
+    && merged.provider === existing.provider
+    && merged.currency === existing.currency
+    && merged.model === existing.model
+    && merged.serviceTier === existing.serviceTier
+    && merged.fastMode === existing.fastMode
+    && merged.inputTokens === existing.inputTokens
+    && merged.uncachedInputTokens === existing.uncachedInputTokens
+    && merged.cachedInputTokens === existing.cachedInputTokens
+    && (merged.cacheWriteInputTokens ?? 0) === (existing.cacheWriteInputTokens ?? 0)
+    && merged.outputTokens === existing.outputTokens
+    && merged.reasoningOutputTokens === existing.reasoningOutputTokens
+  ) {
+    return {
+      ...merged,
+      cacheWriteInputCostMicros: existing.cacheWriteInputCostMicros,
+      cachedInputCostMicros: existing.cachedInputCostMicros,
+      outputCostMicros: existing.outputCostMicros,
+      priceStatus: existing.priceStatus,
+      priceUnavailableReason: undefined,
+      pricingBasis: existing.pricingBasis,
+      pricingCatalogId: existing.pricingCatalogId,
+      pricingCatalogVersion: existing.pricingCatalogVersion,
+      pricingRateId: existing.pricingRateId,
+      totalCostMicros: existing.totalCostMicros,
+      uncachedInputCostMicros: existing.uncachedInputCostMicros,
+    };
+  }
   return repriceTokenUsageLine(merged);
 }
 
