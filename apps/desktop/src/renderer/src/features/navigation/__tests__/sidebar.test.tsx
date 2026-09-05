@@ -2071,6 +2071,13 @@ describe("Sidebar", () => {
             },
             rateLimits: [
               {
+                name: "Credits",
+                limitId: "credits",
+                windowKey: "credits",
+                hasCredits: true,
+                remaining: 100,
+              },
+              {
                 name: "5h limit",
                 remaining: 85,
                 limit: 100,
@@ -2136,6 +2143,7 @@ describe("Sidebar", () => {
     expect(tooltip).toHaveTextContent("Codex profile: work3");
     expect(tooltip).toHaveTextContent("Codex account: work@example.com");
     expect(tooltip).toHaveTextContent("Plan: pro");
+    expect(tooltip).toHaveTextContent("Credits: $100");
     expect(tooltip).toHaveTextContent("5h limit");
     expect(tooltip).toHaveTextContent("85% left");
     expect(tooltip).toHaveTextContent("Weekly limit: 60% left");

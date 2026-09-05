@@ -96,6 +96,53 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it.each(["unchanged", "tokens", "settings"])(
+    "preserves observed request prices only for equivalent aggregate refreshes (%s)",
+    async (change) => {
+      const unchanged = change === "unchanged";
+      const line = buildUsageLine({
+        source: "live", scope: "turn", status: "pending",
+        createdAt: Date.UTC(2026, 8, 5), model: "gpt-6-astra",
+        inputTokens: 400_000, uncachedInputTokens: 200_000,
+        cachedInputTokens: 200_000, outputTokens: 20_000,
+        reasoningOutputTokens: 0, totalTokens: 420_000,
+        totalCostMicros: 3_200_000, uncachedInputCostMicros: 2_000_000,
+        cachedInputCostMicros: 200_000, outputCostMicros: 1_000_000,
+        pricingBasis: "request-components", pricingCatalogVersion: "2026-09-04",
+        pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      });
+      await store.upsertThreadUsageLine({ line });
+      await store.upsertThreadUsageLine({ line: {
+        ...line,
+        completedAt: line.createdAt + 60_000,
+        status: "finalized",
+        pricingBasis: undefined, pricingRateId: undefined,
+        priceStatus: "unpriced", priceUnavailableReason: "insufficient-token-breakdown",
+        totalCostMicros: 0, cachedInputCostMicros: 0,
+        uncachedInputCostMicros: 0, outputCostMicros: 0,
+        ...(change === "tokens" ? { outputTokens: 21_000, totalTokens: 421_000 } : {}),
+        ...(change === "settings" ? { serviceTier: "unsupported" } : {}),
+      } });
+      const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+      expect(pricing.lines[0]).toMatchObject({
+        completedAt: line.createdAt + 60_000,
+        status: "finalized",
+        priceStatus: unchanged ? "priced" : "unpriced",
+        totalCostMicros: unchanged ? line.totalCostMicros : 0,
+      });
+      if (unchanged) {
+        expect(pricing.lines[0]).toMatchObject({
+          pricingBasis: "request-components",
+          cachedInputCostMicros: 200_000,
+          uncachedInputCostMicros: 2_000_000,
+          outputCostMicros: 1_000_000,
+        });
+        expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+        expect(pricing.summaries[0]?.totalCostMicros).toBe(line.totalCostMicros);
+      }
+    },
+  );
+
   it("does not rewrite a finalized usage line model when thread settings change later", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

@@ -256,7 +256,7 @@
   --transcript-text-size: 14px;
 }
 
-/* ===========================================================================
+/* ====================================================================
    THEMING — Light theme overrides
 
    Default :root above carries the Dark theme values (Tangerine Terminal on
@@ -472,7 +472,7 @@
   background: var(--bg-sidebar);
 }
 
-/* ===========================================================================
+/* ====================================================================
    DENSITY — Compact vs. Mission Control
 
    Density is a separate axis from theme. Mission Control is the default
@@ -545,7 +545,7 @@
    densities in the inter-card spacing pass — the densities now differ
    only in which chips render.) */
 
-/* ===========================================================================
+/* ====================================================================
    TEXT SIZE — user-adjustable per-surface scales
 
    The text-size appearance axes (sidebar titles, transcript body),
@@ -2228,7 +2228,7 @@ textarea,
   line-height: 1.4;
 }
 
-/* ============================================================
+/* =====================================================
    MESSAGING ACTIVITY WINDOW — its own dedicated BrowserWindow (NOT a
    settings section, NOT an in-window overlay). The window opens via
    `desktopApi.openMessagingActivityWindow()` → main process spawns a
@@ -8667,7 +8667,7 @@ a.button {
   padding: 20px 24px 24px;
 }
 
-/* ============================================================
+/* =====================================================
    SETTINGS PANES — design alignment (PwrAgent v2)
    ============================================================ */
 
@@ -27503,7 +27503,7 @@ button.pricing-token-miser__folded:focus-visible {
   line-height: 1.45;
 }
 
-/* ============================================================
+/* =====================================================
    LIVE RUN STRIP
    A compact disclosure row for transient run state above the composer, used
    today by the active sub-agents group (ActiveSubAgentsStrip.tsx).
@@ -28374,7 +28374,7 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--button-text);
 }
 
-/* ============================================================
+/* =====================================================
    Composer pickers — shared popover language
 
    The project picker, the branch picker, and the "+" reference
@@ -28846,9 +28846,9 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-panel-hover);
 }
 
-/* ===========================================================
+/* ====================================================
    Project picker (issue #223)
-   ===========================================================
+   ====================================================
    Shares the visual language of `.composer-dropdown` so the
    project pill reads as a peer of the workspace / model / branch
    pickers in the launchpad row. The dashed border on the empty
@@ -31184,7 +31184,7 @@ button.pricing-token-miser__folded:focus-visible {
   }
 }
 
-/* ============================================================
+/* =====================================================
    FIRST-RUN ONBOARDING WIZARD
    Surfaces feat(onboarding) issue #467. Tokens map back to the
    design pass in docs/design/onboarding-wizard-v1/. Visual rules
@@ -32360,7 +32360,7 @@ button.pricing-token-miser__folded:focus-visible {
   border: 0;
 }
 
-/* ============================================================
+/* =====================================================
    ONBOARDING WIZARD — Step 2b: Name codex profiles
    ============================================================ */
 .onboarding-wizard__profile-list {
@@ -32490,7 +32490,7 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--text-secondary);
 }
 
-/* ============================================================
+/* =====================================================
    ONBOARDING WIZARD — Step 3c: Per-provider inline setup
    ============================================================ */
 .onboarding-wizard__provider-setup {
@@ -32866,7 +32866,7 @@ button.pricing-token-miser__folded:focus-visible {
   word-break: break-word;
 }
 
-/* ============================================================
+/* =====================================================
    ONBOARDING WIZARD — AI provider requirements
    Pre-rail prerequisite check shown before Welcome. Uses the
    --narrow width (same as Welcome / Done). Provider tabs keep four
@@ -33849,3 +33849,21 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-activity__totals td { white-space: nowrap; }
 
 .federation-activity__sizes { margin-top: 18px; }
+
+.queued-message-inspector {
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px;
+  color: var(--text-primary);
+  font-size: var(--transcript-text-size);
+}
+
+.queued-message-inspector:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+.turn-input-content img {
+  max-width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+}

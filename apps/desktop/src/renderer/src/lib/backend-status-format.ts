@@ -29,13 +29,21 @@ export function formatBackendAccountText(
 export function selectVisibleRateLimits(
   backend: Pick<BackendSummary, "kind" | "rateLimits">,
 ): BackendRateLimitSummary[] {
-  return [...(backend.rateLimits ?? [])]
+  const limits = backend.rateLimits ?? [];
+  const showLunaReserve = backend.kind === "codex"
+    && isPrimaryCodexPlanExhausted(limits);
+  return [...limits]
     .filter((limit) => {
       if (backend.kind !== "codex") {
         return true;
       }
-      if (isHiddenCodexRateLimit(limit)) {
-        return false;
+      if (isReserveRateLimit(limit)) {
+        // Luna Reserve is a post-limit fallback. Hide it until the included
+        // Codex 5h or weekly window is exhausted.
+        return showLunaReserve;
+      }
+      if (isCreditsRateLimit(limit)) {
+        return isVisibleCreditsLimit(limit);
       }
       const { label } = splitRateLimitName(limit.name);
       return label === "5h limit"
@@ -58,8 +66,15 @@ export function selectVisibleRateLimits(
 }
 
 export function formatRateLimitLine(limit: BackendRateLimitSummary): string {
+  if (isCreditsRateLimit(limit)) {
+    return formatCreditsLine(limit);
+  }
   const { label } = splitRateLimitName(limit.name);
-  const displayLabel = isSparkRateLimit(limit) ? `Spark ${label}` : label;
+  const displayLabel = isReserveRateLimit(limit)
+    ? "Luna Reserve"
+    : isSparkRateLimit(limit)
+      ? `Spark ${label}`
+      : label;
   const resetText = formatRateLimitReset(limit.resetAt);
   const suffix = resetText ? `, resets ${resetText}` : "";
   if (
@@ -116,10 +131,71 @@ function isSparkRateLimit(limit: BackendRateLimitSummary): boolean {
   return isSparkName(limit.limitId) || isSparkName(limit.name);
 }
 
-function isHiddenCodexRateLimit(limit: BackendRateLimitSummary): boolean {
+function isCreditsRateLimit(limit: BackendRateLimitSummary): boolean {
+  return limit.windowKey === "credits"
+    || limit.limitId?.toLowerCase() === "credits"
+    || limit.name === "Credits";
+}
+
+function isVisibleCreditsLimit(limit: BackendRateLimitSummary): boolean {
+  return limit.unlimited === true || limit.hasCredits === true;
+}
+
+function formatCreditsLine(limit: BackendRateLimitSummary): string {
+  if (limit.unlimited) {
+    return "Credits: unlimited";
+  }
+  if (typeof limit.remaining === "number" && limit.remaining > 0) {
+    return `Credits: ${formatUsdBalance(limit.remaining)}`;
+  }
+  if (limit.hasCredits) {
+    return "Credits: available";
+  }
+  return "Credits: $0";
+}
+
+function formatUsdBalance(value: number): string {
+  const cents = Math.round(value * 100);
+  const dollars = cents / 100;
+  if (cents % 100 === 0) {
+    return `$${dollars.toLocaleString()}`;
+  }
+  return `$${dollars.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function isReserveRateLimit(limit: BackendRateLimitSummary): boolean {
   return limit.limitId?.toLowerCase() === "base_model_inference"
     || limit.limitName?.toLowerCase() === "gpt-reserve"
     || limit.name.toLowerCase().startsWith("gpt-reserve ");
+}
+
+function isPrimaryCodexPlanWindow(limit: BackendRateLimitSummary): boolean {
+  if (isSparkRateLimit(limit) || isReserveRateLimit(limit)) {
+    return false;
+  }
+  const { label } = splitRateLimitName(limit.name);
+  return label === "5h limit" || label === "Weekly limit";
+}
+
+function isRateLimitExhausted(limit: BackendRateLimitSummary): boolean {
+  if (typeof limit.usedPercent === "number" && Number.isFinite(limit.usedPercent)) {
+    return limit.usedPercent >= 100;
+  }
+  if (typeof limit.remaining === "number" && Number.isFinite(limit.remaining)) {
+    return limit.remaining <= 0;
+  }
+  return false;
+}
+
+function isPrimaryCodexPlanExhausted(
+  limits: readonly BackendRateLimitSummary[],
+): boolean {
+  return limits.some(
+    (limit) => isPrimaryCodexPlanWindow(limit) && isRateLimitExhausted(limit),
+  );
 }
 
 function isSparkName(value: string | undefined): boolean {
@@ -127,7 +203,13 @@ function isSparkName(value: string | undefined): boolean {
 }
 
 function rateLimitFamilyOrder(limit: BackendRateLimitSummary): number {
-  return isSparkRateLimit(limit) ? 1 : 0;
+  if (isCreditsRateLimit(limit)) {
+    return 0;
+  }
+  if (isReserveRateLimit(limit)) {
+    return 2;
+  }
+  return isSparkRateLimit(limit) ? 3 : 1;
 }
 
 function formatRateLimitReset(resetAt: number | undefined): string | undefined {

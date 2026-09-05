@@ -1,3 +1,4 @@
+import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import {
@@ -6412,6 +6413,109 @@ describe("DesktopBackendRegistry", () => {
     expect(rateLimitEventCount).toBe(1);
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("replaces a credits balance when a later snapshot omits the amount", async () => {
+    const creditsLimit: BackendRateLimitSummary = {
+      name: "Credits",
+      limitId: "credits",
+      windowKey: "credits",
+      hasCredits: true,
+      unlimited: false,
+      remaining: 100,
+    };
+    const fiveHourLimit: BackendRateLimitSummary = {
+      name: "5h limit",
+      limitId: "codex",
+      limitName: "Codex",
+      windowKey: "primary",
+      usedPercent: 77,
+      remaining: 23,
+      windowMinutes: 300,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+      },
+      rateLimits: [fiveHourLimit, creditsLimit],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+
+    await codexClient.emit({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: {
+            usedPercent: 77,
+            windowDurationMins: 300,
+            resetsAt: null,
+          },
+          secondary: null,
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
+        },
+      },
+    });
+
+    expect(
+      (await registry.listBackends({ includeUnavailable: true })).backends[0]
+        ?.rateLimits,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Credits",
+          remaining: 100,
+          hasCredits: true,
+        }),
+      ]),
+    );
+
+    await codexClient.emit({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: {
+            usedPercent: 77,
+            windowDurationMins: 300,
+            resetsAt: null,
+          },
+          secondary: null,
+          individualLimit: null,
+          credits: {
+            hasCredits: true,
+            unlimited: false,
+            balance: null,
+          },
+          planType: null,
+          rateLimitReachedType: null,
+        },
+      },
+    });
+
+    const credits = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends[0]?.rateLimits?.find((limit) => limit.name === "Credits");
+    expect(credits).toMatchObject({
+      name: "Credits",
+      hasCredits: true,
+      unlimited: false,
+    });
+    expect(credits?.remaining).toBeUndefined();
+
     await registry.close();
   });
 
@@ -26501,6 +26605,81 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it.each(["failed", "interrupted", "completed"])(
+    "keeps request pricing through a context estimate and %s terminal", async (status) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/read"] },
+      });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex", threadId: "thread-1", executionMode: "default",
+            extraLinkedDirectories: [], model: "gpt-6-astra", serviceTier: "standard",
+          },
+        },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const total = {
+        input_tokens: 400_000, cached_input_tokens: 200_000,
+        output_tokens: 20_000, reasoning_output_tokens: 0, total_tokens: 420_000,
+      };
+      for (const input of [200_000, 400_000]) {
+        await codexClient.emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1", turnId: "turn-1",
+            tokenUsage: {
+              total_token_usage: {
+                input_tokens: input, cached_input_tokens: input / 2,
+                output_tokens: input / 20, reasoning_output_tokens: 0,
+                total_tokens: input * 1.05,
+              },
+              last_token_usage: {
+                input_tokens: 200_000, cached_input_tokens: 100_000,
+                output_tokens: 10_000, reasoning_output_tokens: 0, total_tokens: 210_000,
+              },
+            },
+          },
+        });
+      }
+      const before = await overlayStore.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+      expect(before.lines[0]?.priceStatus).toBe("priced");
+      expect(before.lines[0]?.totalCostMicros).toBeGreaterThan(0);
+      // Codex recompute_token_usage publishes a context estimate in last,
+      // without changing the cumulative billed usage. Rate-limit updates
+      // may repeat that same snapshot.
+      for (let i = 0; i < 2; i += 1) {
+        await codexClient.emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1", turnId: "turn-1",
+            tokenUsage: {
+              total_token_usage: total,
+              last_token_usage: {
+                input_tokens: 0, cached_input_tokens: 0, output_tokens: 0,
+                reasoning_output_tokens: 0, total_tokens: 160_000,
+              },
+            },
+          },
+        });
+      }
+      await codexClient.emit({
+        method: status === "failed" ? "turn/failed" : "turn/completed",
+        params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status, error: status === "failed" ? { message: "Usage limit reached" } : undefined },
+        },
+      } as AppServerNotification);
+      const after = await overlayStore.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+      expect(after.lines[0]).toMatchObject({
+        priceStatus: "priced", pricingBasis: "request-components",
+        inputTokens: 400_000, cachedInputTokens: 200_000, outputTokens: 20_000,
+        totalCostMicros: before.lines[0]!.totalCostMicros,
+      });
+      await registry.close();
+    },
+  );
+
   it("prices each Astra request before aggregating a multi-request turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
@@ -35491,6 +35670,89 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("does not let correspondence status persistence failures alter the recipient FIFO", async () => {
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    vi.spyOn(correspondenceStore, "update").mockImplementation(() => { throw new Error("Fixture disk failure"); });
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await expect(registry.submitHeldTurn({
+      backend: "codex", threadId: "recipient", queueEntryId: "held-durable", input: [{ type: "text", text: "Keep this message" }], holdReason: "Fixture hold",
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender", messageId: "correspondence:fixture" } },
+    })).resolves.toMatchObject({ status: "queued" });
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]).toHaveLength(1);
+    expect(registry.cancelQueuedTurnWithDisposition("held-durable").cancelled).toBe(true);
+  });
+
+  it.each(["codex", "acp:grok"] as const)("reads the authoritative %s FIFO without changing ownership or order", async (backend) => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const input: AppServerTurnInputItem[] = [{ type: "text", text: "First paragraph Ω\n\n" + "long ".repeat(200) }, { type: "file", name: "notes.txt", mimeType: "text/plain", data: "AQID" }];
+    await registry.submitHeldTurn({ backend, threadId: "recipient", queueEntryId: "held-one", input, holdReason: "Fixture hold" });
+    await registry.submitTurn({ backend, threadId: "recipient", queueEntryId: "held-two", input: [{ type: "text", text: "Next" }] });
+    const content = await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "held-one" });
+    expect(content.input).toEqual(input);
+    content.input.splice(0);
+    expect((await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "held-one" })).input).toEqual(input);
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(backend, "recipient")]?.map((entry) => entry.queueEntryId)).toEqual(["held-one", "held-two"]);
+  });
+
+  it("keeps cross-thread queue content lossless and persists sender correspondence through cancellation and reload", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "correspondence-test-"));
+    onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+    const correspondenceStore = new ThreadCorrespondenceStore(directory);
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: ["sender", "recipient"].map((id) => ({
+        id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [],
+      })),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    for (const threadId of ["sender", "recipient"]) {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId, turnId: `active:${threadId}`, turn: { id: `active:${threadId}` } },
+      } });
+    }
+    const prompt = `# Coordination 漢字 🛰️\n\n${"A long **markdown** paragraph. ".repeat(100)}\n\nFinal paragraph: Ω preserved.  `;
+    const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: "sender", turnId: "active:sender", callId: "correspondence-call", requestId: "correspondence-call",
+      namespace: "pwragent", tool: "send_message_to_thread", arguments: { backend: "codex", threadId: "recipient", prompt },
+    } } as AppServerPendingRequestNotification);
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+    expect(payload.queueStatus).toBe("queued");
+    const summary = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]![0]!;
+    expect(summary.displayText.length).toBeLessThan(prompt.length);
+    const request = { backend: "codex" as const, threadId: "recipient", queueEntryId: payload.queueEntryId };
+    const content = await registry.readQueuedTurn(request);
+    expect(content.input).toEqual([{ type: "text", text: prompt }]);
+    expect(events).toContainEqual(expect.objectContaining({ notification: expect.objectContaining({
+      method: "item/completed", params: expect.objectContaining({ threadId: "sender", item: expect.objectContaining({ text: expect.stringContaining(prompt) }) }),
+    }) }));
+    expect(content.messageOrigin?.sourceThread).toMatchObject({ threadId: "sender", messageId: expect.stringMatching(/^correspondence:/) });
+    await expect(registry.readQueuedTurn({ ...request, threadId: "sender" })).rejects.toThrow("no longer waiting");
+    const image = { type: "image" as const, name: "diagram.png", url: "data:image/png;base64,AQID" };
+    registry.updateQueuedTurnInput(payload.queueEntryId, [...content.input, image]);
+    expect(registry.cancelQueuedTurnWithDisposition(payload.queueEntryId, "Edit", content.contentHash).disposition).toBe("content_changed");
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]).toHaveLength(1);
+    const updated = await registry.readQueuedTurn(request);
+    expect(updated.input.at(-1)).toEqual(image);
+    const replay = await registry.readThread({ backend: "codex", threadId: "sender", viewOnly: true });
+    const breadcrumb = replay.replay.messages.find((message) => message.id === content.messageOrigin?.sourceThread?.messageId);
+    expect(breadcrumb?.text).toContain(prompt);
+    expect(breadcrumb?.text).toContain("Queued (last confirmed)");
+    expect(breadcrumb?.text).toContain("pwragent://thread/recipient");
+    expect(registry.cancelQueuedTurnWithDisposition(payload.queueEntryId, "Operator cancellation", updated.contentHash).cancelled).toBe(true);
+    const emptyReplay = { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } };
+    const restored = new ThreadCorrespondenceStore(directory).appendToReplay({ backend: "codex", threadId: "sender" }, emptyReplay);
+    expect(restored.messages[0]?.text).toContain("**Cancelled**");
+    expect(restored.messages[0]?.text).toContain(prompt);
+    expect(restored.entries).toHaveLength(1);
+    await expect(registry.readQueuedTurn(request)).rejects.toThrow("no longer waiting");
+  });
+
   it("sends a follow-up prompt to another thread from an active turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -35622,6 +35884,7 @@ script = "printf setup"
                 backend: "codex",
                 threadId: "parent-thread",
                 title: "M4 runner-host conversion preflight",
+          messageId: expect.stringMatching(/^correspondence:/),
               },
             },
           },
@@ -35638,6 +35901,7 @@ script = "printf setup"
           backend: "codex",
           threadId: "parent-thread",
           title: "M4 runner-host conversion preflight",
+          messageId: expect.stringMatching(/^correspondence:/),
         },
       },
     });
@@ -36960,6 +37224,7 @@ script = "printf setup"
           backend: "codex",
           threadId: "parent-thread",
           title: "M4 runner-host conversion preflight",
+          messageId: expect.stringMatching(/^correspondence:/),
         },
       },
       executionMode: undefined,

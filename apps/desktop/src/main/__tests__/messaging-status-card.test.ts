@@ -442,6 +442,13 @@ describe("buildBindingStatusIntent", () => {
             used: 3500.4,
             usedPercent: 4,
           },
+          {
+            name: "Credits",
+            limitId: "credits",
+            windowKey: "credits",
+            hasCredits: true,
+            remaining: 100,
+          },
         ],
       },
       createdAt: 1000,
@@ -450,7 +457,7 @@ describe("buildBindingStatusIntent", () => {
     });
 
     expect(intent.text).toContain(
-      "Rate limits: 5h limit: 95% left, resets 6:02 PM; Weekly limit: 73% left, resets Jun 10; Individual limit: 3,500/100,000 used, 96% left; Spark 5h limit: 100% left, resets 7:20 PM; Spark Weekly limit: 100% left, resets Jun 12",
+      "Rate limits: Credits: $100; 5h limit: 95% left, resets 6:02 PM; Weekly limit: 73% left, resets Jun 10; Individual limit: 3,500/100,000 used, 96% left; Spark 5h limit: 100% left, resets 7:20 PM; Spark Weekly limit: 100% left, resets Jun 12",
     );
     expect(intent.text).not.toContain("GPT-5.3-Codex-Spark");
     expect(intent.text).not.toContain("95 remaining");

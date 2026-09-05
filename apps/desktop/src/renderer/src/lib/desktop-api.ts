@@ -47,6 +47,8 @@ import type {
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  ReadQueuedTurnRequest,
+  ReadQueuedTurnResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
   ReleaseQueuedTurnRequest,
@@ -736,6 +738,9 @@ export type DesktopApi = {
     request: RemoveCodexMcpServerRequest,
   ) => Promise<RemoveCodexMcpServerResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
+  readQueuedTurn?: (
+    request: ReadQueuedTurnRequest,
+  ) => Promise<ReadQueuedTurnResponse>;
   cancelQueuedTurn?: (
     request: CancelQueuedTurnRequest,
   ) => Promise<CancelQueuedTurnResponse>;

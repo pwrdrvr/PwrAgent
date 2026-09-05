@@ -685,7 +685,7 @@ function renderMessageSegment(params: {
   );
 }
 
-function TranscriptImageTile(props: {
+export function TranscriptImageTile(props: {
   desktopApi?: Pick<DesktopApi, "copyText">;
   imagePart: AppServerThreadImagePart;
   imageNumber: number;

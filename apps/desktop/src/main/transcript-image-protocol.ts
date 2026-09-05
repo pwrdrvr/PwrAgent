@@ -181,14 +181,22 @@ export function rewriteTranscriptImageUrlsForRenderer(
   );
 }
 
+/** Only owner-local and signed media need routing through the owning peer. */
+export function rewriteFederatedTranscriptImageUrlForRenderer(
+  url: string,
+  instanceId: FederationInstanceId,
+): string {
+  return isFederationOwnerImageUrl(url)
+    ? toFederatedTranscriptImageProtocolUrl(instanceId, url)
+    : url;
+}
+
 export function rewriteFederatedTranscriptImageUrlsForRenderer(
   response: AppServerReadThreadResponse,
   instanceId: FederationInstanceId,
 ): AppServerReadThreadResponse {
   return rewriteTranscriptImageUrls(response, (url) =>
-    isFederationOwnerImageUrl(url)
-      ? toFederatedTranscriptImageProtocolUrl(instanceId, url)
-      : undefined,
+    rewriteFederatedTranscriptImageUrlForRenderer(url, instanceId),
   );
 }
 
@@ -1051,7 +1059,7 @@ function rewriteTranscriptMessageImageUrls<T extends AppServerThreadMessage>(
       return part;
     }
     const url = rewriteUrl(part.url);
-    if (!url) {
+    if (!url || url === part.url) {
       return part;
     }
     changed = true;

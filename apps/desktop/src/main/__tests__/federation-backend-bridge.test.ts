@@ -1109,6 +1109,7 @@ describe("federation backend bridge", () => {
         },
       })),
       startTurn: vi.fn(),
+      readQueuedTurn: vi.fn(),
       cancelQueuedTurn: vi.fn(async ({ queueEntryId }) => ({
         queueEntryId,
         cancelled: true,
@@ -3305,6 +3306,7 @@ describe("federation backend bridge", () => {
       startThread: vi.fn(),
       forkThread: vi.fn(),
       startTurn: vi.fn(),
+      readQueuedTurn: vi.fn(async () => ({ queueEntryId: "queue-full", contentHash: "hash", input: [{ type: "text" as const, text: "# Full Ω\n\n" + "rich content ".repeat(100) }] })),
       cancelQueuedTurn: vi.fn(),
       releaseQueuedTurn: vi.fn(),
       startReview: vi.fn(),
@@ -3423,6 +3425,18 @@ describe("federation backend bridge", () => {
         celestialIcon: "moon",
       }),
     });
+
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "read-queued-request", kind: "request", method: FEDERATION_BACKEND_METHODS.readQueuedTurn,
+        params: { backend: "codex", threadId: "thread-1", queueEntryId: "queue-full", forEdit: true },
+        protocolVersion: 1, sourceInstanceId: "gateway_one", targetInstanceId: "client_one", createdAt: 1_000,
+      },
+    });
+    expect(backend.readQueuedTurn).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", queueEntryId: "queue-full", forEdit: true });
+    const queuedReply = replies.pop();
+    expect(JSON.stringify(queuedReply)).toContain("rich content ".repeat(100));
 
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
@@ -3693,6 +3707,7 @@ describe("federation backend bridge", () => {
         startThread: vi.fn(),
         forkThread: vi.fn(),
         startTurn: vi.fn(),
+        readQueuedTurn: vi.fn(),
         cancelQueuedTurn: vi.fn(),
         releaseQueuedTurn: vi.fn(),
         startReview: vi.fn(),

@@ -534,6 +534,8 @@ export type AppServerThreadMessageOriginKind =
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
   sourceThread?: {
+    /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
+    messageId?: string;
     backend: AppServerBackendKind;
     /** Durable owner identity when the source thread belongs to another instance. */
     instanceId?: FederationInstanceId;
@@ -1479,6 +1481,23 @@ export type AppServerMcpElicitationRequestNotification = {
 };
 
 export type AppServerNotification =
+  | {
+      method: "error";
+      params: {
+        threadId: string;
+        turnId: string;
+        willRetry: boolean;
+        error: {
+          message: string;
+          codexErrorInfo?: unknown;
+          additionalDetails?: string | null;
+        };
+      };
+    }
+  | {
+      method: "warning";
+      params: { threadId?: string | null; message: string };
+    }
   | {
       method: "turn/started";
       params: {
