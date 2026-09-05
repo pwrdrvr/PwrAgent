@@ -1480,6 +1480,23 @@ export type AppServerMcpElicitationRequestNotification = {
 
 export type AppServerNotification =
   | {
+      method: "error";
+      params: {
+        threadId: string;
+        turnId: string;
+        willRetry: boolean;
+        error: {
+          message: string;
+          codexErrorInfo?: unknown;
+          additionalDetails?: string | null;
+        };
+      };
+    }
+  | {
+      method: "warning";
+      params: { threadId?: string | null; message: string };
+    }
+  | {
       method: "turn/started";
       params: {
         threadId: string;

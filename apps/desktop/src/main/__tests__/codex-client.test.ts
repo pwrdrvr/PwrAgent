@@ -7147,6 +7147,40 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("forwards structured reconnect details and fallback warnings to UI subscribers", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    await client.getInitializeResult();
+    const notifications: unknown[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    const expected = [
+      {
+        method: "error",
+        params: {
+          threadId: "thread-2", turnId: "turn-1", willRetry: true,
+          error: {
+            message: "Reconnecting... 2/5",
+            codexErrorInfo: { httpConnectionFailed: { httpStatusCode: null } },
+            additionalDetails: "websocket connection closed",
+          },
+        },
+      },
+      {
+        method: "warning",
+        params: { threadId: "thread-2", message: "Falling back from WebSockets to HTTPS transport." },
+      },
+    ];
+    for (const notification of expected) {
+      MockTransport.instances.at(-1)!.emitInbound({ jsonrpc: "2.0", ...notification });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(notifications).toEqual(expected);
+    await client.close();
+  });
+
   it("does not log a Codex error notification as an unknown notification", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

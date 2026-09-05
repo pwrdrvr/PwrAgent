@@ -1009,6 +1009,46 @@ describe("App", () => {
     expect(screen.getByText("3 of 3")).toBeInTheDocument();
   });
 
+  it("shows Codex retries for background threads and reports recovery", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all", fetchedAt: Date.now(), unchanged: false,
+          inboxThreadKeys: [], threads: [], directories: [],
+          launchpadDefaults: { backend: "codex", executionMode: "default" },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+        readSettings: async () => await new Promise<never>(() => {}),
+      },
+    });
+    render(<App />);
+    await waitFor(() => expect(listeners.size).toBeGreaterThan(0));
+    const emit = (notification: AgentEvent["notification"]) => act(() => {
+      for (const listener of listeners) listener({ backend: "codex", notification });
+    });
+    for (const threadId of ["thread-a", "thread-b", "thread-c"]) {
+      emit({ method: "error", params: {
+        threadId, turnId: "turn-1", willRetry: true,
+        error: { message: "Reconnecting... waiting for network" },
+      } });
+    }
+    expect(screen.getByText("Codex is retrying")).toBeInTheDocument();
+    expect(screen.getByText("1 of 3")).toBeInTheDocument();
+    expect(screen.getByText("Reconnecting... waiting for network")).toBeInTheDocument();
+    emit({ method: "item/agentMessage/delta", params: {
+      threadId: "thread-a", turnId: "turn-1", itemId: "message-1", delta: "Resumed output",
+    } });
+    expect(screen.getByText("Codex resumed")).toBeInTheDocument();
+    expect(screen.getByText("Codex is retrying")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2")).toBeInTheDocument();
+  });
+
   it("opens the incident explorer from a replay-risk notice", async () => {
     const agentEventListeners = new Set<(event: AgentEvent) => void>();
     const openToolOutputIncidentExplorerWindow = vi.fn(async () => ({

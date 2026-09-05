@@ -405,3 +405,100 @@ function costNotice(params: {
     title: params.title,
   } as AppNoticeToastNotice;
 }
+
+
+describe("Codex stream notices", () => {
+  const event = (method: string, params: Record<string, unknown> = {}) => ({
+    type: "codex-stream-event" as const,
+    notification: {
+      method,
+      params: { threadId: "thread-a", turnId: "turn-1", ...params },
+    },
+    threadLabel: "Fix connectivity",
+  });
+  const retry = (params: Record<string, unknown> = {}) => event("error", {
+    willRetry: true,
+    error: { message: "Reconnecting... 2/5", additionalDetails: "stream disconnected" },
+    ...params,
+  });
+
+  it("keeps three affected threads visible and updates retry attempts in place", () => {
+    let state = INITIAL_APP_NOTICE_STATE;
+    for (const threadId of ["thread-a", "thread-b", "thread-c"]) {
+      state = appNoticeReducer(state, retry({ threadId }));
+    }
+    state = appNoticeReducer(state, retry({ error: { message: "Reconnecting... 3/5" } }));
+    expect(state.durable).toHaveLength(3);
+    expect(state.durable[0]).toMatchObject({
+      title: "Codex is retrying",
+      message: "Reconnecting... 3/5",
+      autoDismiss: false,
+      tone: "warning",
+      threadLink: { threadId: "thread-a" },
+    });
+  });
+
+  it("shows details and keeps retrying through local tool output and unrelated turns", () => {
+    const state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+    expect(state.durable[0]?.message).toContain("stream disconnected");
+    for (const notification of [
+      event("item/commandExecution/outputDelta"),
+      event("item/completed"),
+      event("thread/status/changed", { status: { type: "active" } }),
+      event("item/agentMessage/delta", { turnId: "old-turn", delta: "text" }),
+    ]) {
+      expect(appNoticeReducer(state, notification)).toBe(state);
+    }
+  });
+
+  it.each(["item/agentMessage/delta", "item/reasoning/textDelta", "turn/completed"])(
+    "reports recovery on %s for the affected turn only", (method) => {
+      let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+      state = appNoticeReducer(state, retry({ threadId: "thread-b" }));
+      state = appNoticeReducer(state, event(method, { delta: "back online" }));
+      expect(state.durable).toHaveLength(1);
+      expect(state.durable[0]?.threadLink?.threadId).toBe("thread-b");
+      expect(state.transient[0]).toMatchObject({
+        title: method === "turn/completed" ? "Codex turn completed" : "Codex resumed",
+        autoDismiss: true,
+        tone: "success",
+      });
+    },
+  );
+
+  it("replaces retrying with an error when retries stop, then retires it for the durable failure", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+    state = appNoticeReducer(state, event("error", {
+      willRetry: false, error: { message: "retry limit exceeded" },
+    }));
+    expect(state.durable).toHaveLength(1);
+    expect(state.durable[0]).toMatchObject({ title: "Codex error", tone: "error" });
+    state = appNoticeReducer(state, event("turn/failed"));
+    expect(state.durable).toEqual([]);
+    expect(state.transient).toEqual([]);
+  });
+
+  it("surfaces transport fallback warnings without claiming the turn failed", () => {
+    const state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, event("warning", {
+      turnId: undefined, message: "Falling back from WebSockets to HTTPS transport.",
+    }));
+    expect(state.durable).toEqual([]);
+    expect(state.transient[0]).toMatchObject({
+      title: "Codex warning", tone: "warning", autoDismiss: true,
+    });
+  });
+
+  it("isolates peers with identical thread and turn IDs", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+    state = appNoticeReducer(state, { ...retry(), instanceId: "peer-a" });
+    state = appNoticeReducer(state, event("turn/completed"));
+    expect(state.durable).toHaveLength(1);
+    expect(state.durable[0]?.threadLink?.instanceId).toBe("peer-a");
+  });
+
+  it("ignores malformed error payloads and does not invent recovery without an incident", () => {
+    for (const notification of [event("error"), event("warning"), event("turn/completed")]) {
+      expect(appNoticeReducer(INITIAL_APP_NOTICE_STATE, notification)).toBe(INITIAL_APP_NOTICE_STATE);
+    }
+  });
+});

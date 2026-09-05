@@ -117,6 +117,7 @@ import {
   NO_STARTUP_BACKEND_NOTICE_ID,
 } from "./features/notifications/provider-startup-notice";
 import { QuitBlockerQueueToast } from "./features/notifications/QuitBlockerQueueToast";
+import { isCodexStreamNoticeMethod } from "./features/notifications/codex-stream-notice";
 import {
   appNoticeReducer,
   INITIAL_APP_NOTICE_STATE,
@@ -851,6 +852,21 @@ function DesktopAppShell(props: {
       const instanceId = event.federationTarget?.scope === "remote"
         ? event.federationTarget.instanceId
         : undefined;
+      if (
+        event.backend === "codex"
+        && isCodexStreamNoticeMethod(event.notification.method)
+      ) {
+        const params = event.notification.params as Record<string, unknown>;
+        dispatchAppNotice({
+          type: "codex-stream-event",
+          notification: { method: event.notification.method, params },
+          ...(instanceId ? { instanceId } : {}),
+          threadLabel: labelForThread(
+            "codex",
+            typeof params.threadId === "string" ? params.threadId : undefined,
+          ),
+        });
+      }
       if (event.notification.method === "thread/pricing/updated") {
         const params = event.notification.params;
         const spendAlerts = params.triggeredSpendAlerts as
