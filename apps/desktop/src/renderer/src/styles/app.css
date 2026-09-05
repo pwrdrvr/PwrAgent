@@ -33811,7 +33811,9 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 /* Federation monitor reuses the activity-window chrome and MSG hover panel. */
-.federation-status-control { position: relative; }
+/* The Star Map trigger already owns its 24px hit target. Reusing MSG's
+   wrapper must not add its padding or shift the existing title-bar controls. */
+.federation-status-control { position: relative; padding: 0; }
 .federation-status-control__details { padding: 10px; overflow-wrap: anywhere; }
 .federation-status-control__details p { margin: 6px 0; }
 .federation-activity { max-width: 1000px; margin: 0 auto; padding: 16px; font-size: 13px; }

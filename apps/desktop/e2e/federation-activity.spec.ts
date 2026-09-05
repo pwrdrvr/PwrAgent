@@ -43,6 +43,17 @@ for (const theme of ["dark", "light"] as const) {
       }, activityFixture());
       await app.window.emulateMedia({ reducedMotion: "reduce" });
       const trigger = app.window.getByRole("button", { name: "Open Star Map", exact: true });
+      await expect(trigger).toBeVisible();
+      expect(await trigger.evaluate((button) => {
+        const control = button.getBoundingClientRect();
+        const wrapper = button.parentElement!.getBoundingClientRect();
+        return {
+          width: wrapper.width - control.width,
+          height: wrapper.height - control.height,
+          left: wrapper.left - control.left,
+          top: wrapper.top - control.top,
+        };
+      })).toEqual({ width: 0, height: 0, left: 0, top: 0 });
       await trigger.hover();
       const panel = app.window.getByRole("dialog", { name: "Federation activity", exact: true });
       await expect(panel.getByText("Running · connected")).toBeVisible();
