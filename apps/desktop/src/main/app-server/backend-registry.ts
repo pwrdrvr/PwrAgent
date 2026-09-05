@@ -31784,8 +31784,19 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.args.approvalPolicy,
         sandbox: request.args.sandbox,
       };
+      // The provider listing is the same local ownership evidence used by
+      // navigation. A remembered peer is only a fallback: two PwrAgent
+      // profiles can share one harness profile and see the same thread UUID.
+      // An explicitly addressed instance still selects that remote target.
+      if (!instanceId) {
+        try {
+          localThread = await this.resolveThread({ backend, threadId });
+        } catch (error) {
+          localResolutionError = error;
+        }
+      }
       const rememberedRemoteTurn =
-        includeRemote && this.federatedThreadMessageHandler
+        !localThread && includeRemote && this.federatedThreadMessageHandler
         ? await this.federatedThreadMessageHandler({
             ...remoteRequest,
             ...(instanceId
@@ -31800,11 +31811,6 @@ export class DesktopBackendRegistry {
       } else if (instanceId) {
         throw new Error(`Thread not found: ${threadId}`);
       } else {
-        try {
-          localThread = await this.resolveThread({ backend, threadId });
-        } catch (error) {
-          localResolutionError = error;
-        }
         if (localThread) {
           const submitted = await this.submitTurn({
             backend,
@@ -32122,8 +32128,13 @@ export class DesktopBackendRegistry {
             idempotentReplay?: boolean;
           }
         | undefined;
+      // Match send and inspection routing: resolve through our provider
+      // before consulting remembered federation ownership.
+      const localThread = !instanceId
+        ? await this.resolveThread({ backend, threadId }).catch(() => undefined)
+        : undefined;
       const rememberedRemote =
-        includeRemote && this.federatedThreadControlHandler
+        !localThread && includeRemote && this.federatedThreadControlHandler
           ? await this.federatedThreadControlHandler({
               ...remoteRequest,
               ...(instanceId
@@ -32145,12 +32156,6 @@ export class DesktopBackendRegistry {
           { backend, instanceId, threadId },
         );
       } else {
-        let localThread: AppServerThreadSummary | undefined;
-        try {
-          localThread = await this.resolveThread({ backend, threadId });
-        } catch {
-          localThread = undefined;
-        }
         if (localThread) {
           const backendSummary = (
             await this.listBackends({ includeUnavailable: true })

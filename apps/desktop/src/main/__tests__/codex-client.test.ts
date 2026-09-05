@@ -10908,6 +10908,30 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each([undefined, []])("preserves an active-writer conflict without attempting turn/start (tools: %s)", async (dynamicTools) => {
+    const message = "thread shared-thread already has an active writer";
+    MockTransport.threadResumeError = { code: -32600, message };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    try {
+      await expect(client.startTurn({
+        threadId: "shared-thread",
+        input: [{ type: "text", text: "Continue through the local harness." }],
+        dynamicTools,
+      })).rejects.toThrow(message);
+      const methods = MockTransport.instances.at(-1)!.sentMessages
+        .map((message) => JSON.parse(message).method);
+      expect(methods).toContain("thread/resume");
+      expect(methods).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("still emits the per-turn permission overrides on turn/start when thread/resume fails", async () => {
     // The defense-in-depth behavior: thread/resume primes codex's
     // per-thread profile, but if it fails (rare race or transient

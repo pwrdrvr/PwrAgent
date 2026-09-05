@@ -8669,6 +8669,13 @@ export class CodexAppServerClient {
       resumeResult = params.dynamicTools !== undefined
         ? await resume
         : await resume.catch((error: unknown) => {
+            // A shared Codex profile can be readable here while another
+            // app-server holds its writer. turn/start cannot claim that
+            // thread and would mask the conflict with "thread not found".
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.toLowerCase().includes("already has an active writer")) {
+              throw error;
+            }
             codexClientLog.warn("thread/resume failed before turn/start", {
               threadId: params.threadId,
               requestedApprovalPolicy: params.approvalPolicy ?? null,
