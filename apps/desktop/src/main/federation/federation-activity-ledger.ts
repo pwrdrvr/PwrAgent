@@ -1,3 +1,4 @@
+import { FederationSizeStatistics } from "./federation-size-statistics";
 import type {
   ReadFederationActivityRequest,
   FederationActivityCounts,
@@ -26,9 +27,18 @@ function add(target: FederationActivityTotals, source: FederationActivityTotals)
 }
 class Series {
   readonly lifetime = totals();
+  private readonly sizes = {
+    sent: { requests: new FederationSizeStatistics(), responses: new FederationSizeStatistics() },
+    received: { requests: new FederationSizeStatistics(), responses: new FederationSizeStatistics() },
+  };
   readonly buckets = new Map<number, FederationActivityTotals>();
   record(at: number, delta: FederationActivityTotals) {
     add(this.lifetime, delta);
+    for (const direction of ["sent", "received"] as const) {
+      const value = delta[direction];
+      if (value.requests) this.sizes[direction].requests.record(value.dataBytes);
+      if (value.responses) this.sizes[direction].responses.record(value.dataBytes);
+    }
     const bucket = this.buckets.get(at) ?? totals();
     add(bucket, delta);
     this.buckets.set(at, bucket);
@@ -58,7 +68,13 @@ class Series {
       if (time > at - 60) add(windows["1m"], bucket);
       if (includeHistory) add(history[Math.floor((time - first) / 10)].totals, bucket);
     }
-    return { lifetime: structuredClone(this.lifetime), windows, history };
+    return {
+      lifetime: structuredClone(this.lifetime), windows, history,
+      sizes: {
+        sent: { requests: this.sizes.sent.requests.snapshot(), responses: this.sizes.sent.responses.snapshot() },
+        received: { requests: this.sizes.received.requests.snapshot(), responses: this.sizes.received.responses.snapshot() },
+      },
+    };
   }
 }
 
@@ -91,8 +107,8 @@ export class FederationActivityLedger {
     envelope: Pick<FederationProtocolEnvelope, "kind" | "sourceInstanceId" | "targetInstanceId">;
     at?: number;
   }) {
-    if (!Number.isFinite(info.byteCount) || info.byteCount < 0
-      || !Number.isFinite(info.dataByteCount) || info.dataByteCount < 0) return;
+    if (!Number.isSafeInteger(info.byteCount) || info.byteCount < 0
+      || !Number.isSafeInteger(info.dataByteCount) || info.dataByteCount < 0) return;
     const second = Math.max(this.lastSecond, Math.floor((info.at ?? Date.now()) / SECOND));
     this.lastSecond = second;
     const delta = totals();

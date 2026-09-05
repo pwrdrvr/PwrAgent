@@ -12,6 +12,10 @@ const totals = (): FederationActivityTotals => ({
 });
 function fixture(): ReadFederationActivityResponse {
   const series = {
+    sizes: {
+      sent: { requests: { count: 0 }, responses: { count: 0 } },
+      received: { requests: { count: 0 }, responses: { count: 0 } },
+    },
     lifetime: totals(), windows: { "1m": totals(), "5m": totals(), "10m": totals(), "1h": totals() },
     history: Array.from({ length: 360 }, (_, index) => ({ at: index * 10_000, totals: totals() })),
   };
@@ -137,6 +141,23 @@ describe("Federation activity surfaces", () => {
     expect(within(row).getAllByRole("cell").map((cell) => cell.textContent?.trim()))
       .toEqual(["50 MB", "1 GB", "2 GB", "50 GB"]);
     expect(within(row).getByText("50 MB")).toHaveAttribute("title", "50,000,000 bytes");
+  });
+
+  it("shows lifetime request/response size statistics without time-bucket columns", async () => {
+    const snapshot = fixture();
+    snapshot.activity.physical.sizes.received.responses = {
+      count: 5, averageBytes: 10_000_800, p50Bytes: 1_000, minBytes: 1_000, maxBytes: 50_000_000,
+    };
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => snapshot }} />);
+    const table = within(await screen.findByRole("table", { name: "Lifetime request/response sizes · uncompressed" }));
+    expect(table.getAllByRole("columnheader").map((cell) => cell.textContent))
+      .toEqual(["Traffic", "Samples", "Avg", "p50 ≈", "Min", "Max"]);
+    expect(within(table.getByRole("row", { name: /Received responses/ })).getAllByRole("cell").map((cell) => cell.textContent))
+      .toEqual(["5", "10 MB", "1 KB", "1 KB", "50 MB"]);
+    expect(within(table.getByRole("row", { name: /Sent requests/ })).getAllByRole("cell").map((cell) => cell.textContent))
+      .toEqual(["0", "—", "—", "—", "—"]);
+    fireEvent.change(screen.getByLabelText("Chart window"), { target: { value: "10m" } });
+    expect(table.getByText("50 MB")).toBeInTheDocument();
   });
 
 });

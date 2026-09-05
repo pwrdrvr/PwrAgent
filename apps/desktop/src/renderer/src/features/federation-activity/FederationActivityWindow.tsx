@@ -37,6 +37,33 @@ function Totals({ series }: { series: FederationActivitySeries }) {
   </div>;
 }
 
+function PayloadSizes({ series }: { series: FederationActivitySeries }) {
+  return <div className="federation-activity__tables">
+    <table className="federation-activity__totals federation-activity__sizes">
+      <caption>Lifetime request/response sizes · uncompressed</caption>
+      <thead><tr><th scope="col">Traffic</th><th scope="col">Samples</th>
+        <th scope="col">Avg</th>
+        <th scope="col" title="Estimated nearest-rank median; logarithmic buckets within about 1.1%">p50 ≈</th>
+        <th scope="col">Min</th><th scope="col">Max</th>
+      </tr></thead>
+      <tbody>{(["requests", "responses"] as const).flatMap((kind) =>
+        (["sent", "received"] as const).map((direction) => {
+          const stats = series.sizes[direction][kind];
+          return <tr key={`${direction}-${kind}`}>
+            <th scope="row">{direction === "sent" ? "Sent" : "Received"} {kind}</th>
+            <td>{number(stats.count)}</td>
+            {[stats.averageBytes, stats.p50Bytes, stats.minBytes, stats.maxBytes].map((value, index) =>
+              <td key={index} title={value === undefined ? "No samples" : `${number(value)} bytes`}>
+                {value === undefined ? "—" : formatTrafficBytes(value)}
+              </td>)}
+          </tr>;
+        }))}</tbody>
+    </table>
+    <p className="federation-activity__muted">Across this process lifetime for the selected traffic view.
+      Responses include errors. p50 is an estimate within about 1.1%; no payloads are retained.</p>
+  </div>;
+}
+
 export function FederationRateChart({ history, period, bytes }: {
   history: FederationActivitySeries["history"]; period: Period; bytes: boolean;
 }) {
@@ -142,6 +169,7 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
       <FederationRateChart history={series.history} period={period} bytes />
       <FederationRateChart history={series.history} period={period} bytes={false} />
       <Totals series={series} />
+      <PayloadSizes series={series} />
     </> : <p>No endpoint traffic recorded.</p>}
     {snapshot ? <p className="federation-activity__muted">Process totals since {new Date(snapshot.activity.since).toLocaleString()}.
       Rolling totals have one-second resolution; charts show ten-second averages for up to one hour.</p> : null}

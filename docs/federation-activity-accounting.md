@@ -92,6 +92,27 @@ writes. The monitor's added SQLite commit and WAL budget is **0 commits and
 0 MB/day**, independent of event volume. User toggles use the existing settings
 write and runtime restart boundary; monitoring does not persist anything.
 
+## Lifetime request/response size statistics
+
+Each physical or logical series also exposes sample count, average, p50, minimum
+and maximum uncompressed envelope size for sent/received requests and responses.
+Responses include error envelopes; notifications and blob chunks do not enter
+these distributions. These statistics span the process lifetime, survive rolling
+expiry and reconnects, and follow the same per-peer/relay attribution as totals.
+They do not depend on the selected chart window.
+
+Count, sum and extrema are accumulated from all observations. Average is
+sample-weighted. p50 uses the nearest-rank definition and is explicitly displayed
+as an estimate: a fixed logarithmic histogram has 32 bins per power of two, with
+midpoint relative error below 1.1%. Observed extrema bound the estimate. Empty
+distributions show no size values instead of implying a zero-byte response.
+
+Each populated distribution uses 1,698 numeric histogram bins (13,584 bytes),
+covering all nonnegative safe-integer byte sizes. With at most four distributions
+per series and 67 series, histogram storage is bounded to 3,640,512 bytes. It is
+allocated lazily and does not grow with event count. No payloads or per-event size
+lists are retained, and this adds no SQLite writes.
+
 ## UI and runtime ownership
 
 The Star Map trigger opens its existing map on click. Hover or keyboard focus

@@ -129,4 +129,28 @@ describe("Federation activity ledger", () => {
     expect(inspect(ledger, { depth: 12 }).length).toBeLessThan(10_000);
   });
 
+  it("tracks lifetime uncompressed sizes by direction and kind using the same attribution rules", () => {
+    const ledger = new FederationActivityLedger(0);
+    ledger.record({ ...base, dataByteCount: 1_000, byteCount: 100 });
+    ledger.record({ ...base, dataByteCount: 3_000, byteCount: 100 });
+    for (const kind of ["response", "error"] as const) {
+      ledger.record({ ...base, direction: "received", dataByteCount: 50_000_000, byteCount: 500,
+        envelope: { kind, sourceInstanceId: "remote", targetInstanceId: "local" } });
+    }
+    ledger.record({ ...base, dataByteCount: 500_000, envelope: { ...base.envelope, kind: "notification" } });
+    // Relayed response: visible physically, excluded from this gateway's logical endpoint view.
+    ledger.record({ ...base, direction: "received", dataByteCount: 100, envelope: {
+      kind: "response", sourceInstanceId: "transit", targetInstanceId: "elsewhere",
+    } });
+    const snapshot = ledger.snapshot(10_000_000);
+    expect(snapshot.physical.windows["1h"].sent.requests).toBe(0);
+    expect(snapshot.physical.sizes.sent.requests).toMatchObject({ count: 2, averageBytes: 2_000, minBytes: 1_000, maxBytes: 3_000 });
+    expect(snapshot.physical.sizes.sent.responses).toEqual({ count: 0 });
+    expect(snapshot.physical.sizes.received.responses.count).toBe(3);
+    expect(snapshot.logical[0].series.sizes.received.responses).toEqual({
+      count: 2, averageBytes: 50_000_000, p50Bytes: 50_000_000, minBytes: 50_000_000, maxBytes: 50_000_000,
+    });
+    expect(snapshot.peers[0].series.sizes).toEqual(snapshot.physical.sizes);
+  });
+
 });
