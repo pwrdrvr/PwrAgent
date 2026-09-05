@@ -15,6 +15,8 @@ import type {
   AgentEvent,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  ReadQueuedTurnRequest,
+  ReadQueuedTurnResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
   ReleaseQueuedTurnRequest,
@@ -323,6 +325,7 @@ function authenticateMessageOrigin(params: {
         ? { celestialIcon: sourceInstance.celestialIcon }
         : {}),
       threadId: sourceThread.threadId,
+      ...(sourceThread.messageId ? { messageId: sourceThread.messageId } : {}),
       ...(sourceThread.title ? { title: sourceThread.title } : {}),
     },
   };
@@ -383,6 +386,7 @@ export const FEDERATION_BACKEND_METHODS = {
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
+  readQueuedTurn: "backend.readQueuedTurn",
   cancelQueuedTurn: "backend.cancelQueuedTurn",
   releaseQueuedTurn: "backend.releaseQueuedTurn",
   startReview: "backend.startReview",
@@ -485,6 +489,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.readQueuedTurn]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.releaseQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startReview]: "turn_control",
@@ -641,6 +646,9 @@ export type FederationBackendOperations = {
     >,
   ): Promise<ForkThreadResponse>;
   startTurn(request: FederationStartTurnRequest): Promise<StartTurnResponse>;
+  readQueuedTurn(
+    request: ReadQueuedTurnRequest,
+  ): Promise<ReadQueuedTurnResponse>;
   cancelQueuedTurn(
     request: CancelQueuedTurnRequest,
   ): Promise<CancelQueuedTurnResponse>;
@@ -1106,6 +1114,13 @@ export function registerFederationBackendHandlers(params: {
         ...(messageOrigin ? { messageOrigin } : {}),
       });
     },
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.readQueuedTurn,
+    async (envelope) =>
+      await params.backend.readQueuedTurn(
+        envelope.params as ReadQueuedTurnRequest,
+      ),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
@@ -1803,6 +1818,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async startReview(request: StartReviewRequest): Promise<StartReviewResponse> {
     return await this.rpc.request<StartReviewResponse>({
       method: FEDERATION_BACKEND_METHODS.startReview,
+      params: request,
+    });
+  }
+
+  async readQueuedTurn(
+    request: ReadQueuedTurnRequest,
+  ): Promise<ReadQueuedTurnResponse> {
+    return await this.rpc.request<ReadQueuedTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.readQueuedTurn,
       params: request,
     });
   }

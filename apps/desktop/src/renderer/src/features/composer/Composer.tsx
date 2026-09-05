@@ -1,3 +1,5 @@
+import { QueuedMessageInspector } from "./QueuedMessageInspector";
+import { restoreQueuedMessage } from "./queued-message-content";
 import {
   Fragment,
   type ReactNode,
@@ -1408,7 +1410,7 @@ function appendFileReferenceMarkdown(
   if (fileRefs.length === 0) {
     return text;
   }
-  const referenceBlock = fileRefs
+  const referenceBlock = fileRefs.filter((fileRef) => !fileRef.originalInput)
     .map((fileRef) =>
       buildDirectoryReferenceMarkdown({
         label: fileRef.label,
@@ -1416,7 +1418,7 @@ function appendFileReferenceMarkdown(
       }),
     )
     .join("\n");
-  return text ? `${text}\n\n${referenceBlock}` : referenceBlock;
+  return referenceBlock ? (text ? `${text}\n\n${referenceBlock}` : referenceBlock) : text;
 }
 
 /**
@@ -1514,7 +1516,7 @@ function buildLocalFileInputs(
   };
 
   for (const fileRef of fileRefs) {
-    add(fileRef.label, fileRef.path);
+    if (!fileRef.originalInput) add(fileRef.label, fileRef.path);
   }
   for (const token of skillTokens) {
     if (
@@ -4178,9 +4180,27 @@ export function Composer(props: ComposerProps) {
       setQueuedTurnsState(nextQueuedTurns);
     }
   };
+  const readQueuedMessage = async (queued: QueuedTurnDraft, forEdit = false) => {
+    if (queued.queueEntryId) {
+      if (!props.desktopApi?.readQueuedTurn || !props.thread) {
+        throw new Error("Full queued message content is unavailable. The message remains queued.");
+      }
+      return await props.desktopApi.readQueuedTurn({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        queueEntryId: queued.queueEntryId,
+        forEdit,
+        federationTarget: props.thread.federation?.ref.target ?? readRendererFederationTarget(),
+      });
+    }
+    const payload = await buildQueuedTurnPayload(queued);
+    return { queueEntryId: queued.id, contentHash: "", input: payload.input };
+  };
+
   const cancelServerManagedQueuedTurn = async (
     queued: QueuedTurnDraft,
     scopeKey = composerScopeKey,
+    expectedContentHash?: string,
   ): Promise<"cancelled" | "already_admitted" | "failed"> => {
     const reportError = (message: string): void => {
       if (activeComposerScopeKeyRef.current === scopeKey) {
@@ -4218,6 +4238,7 @@ export function Composer(props: ComposerProps) {
       const response = await props.desktopApi.cancelQueuedTurn({
         ...(federationTarget ? { federationTarget } : {}),
         queueEntryId: queued.queueEntryId,
+        expectedContentHash,
       });
       if (!response.cancelled) {
         if (response.disposition === "already_admitted") {
@@ -4234,7 +4255,9 @@ export function Composer(props: ComposerProps) {
           }
           return "already_admitted";
         }
-        reportError("The queued turn is no longer waiting.");
+        reportError(response.disposition === "content_changed"
+          ? "The queued message changed. Open it again before editing."
+          : "The queued turn is no longer waiting.");
         return "failed";
       }
       return "cancelled";
@@ -6176,11 +6199,12 @@ export function Composer(props: ComposerProps) {
       }));
       const input: AppServerTurnInputItem[] = [
         ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
-        ...attachments.map((attachment) => ({
+        ...attachments.map((attachment) => attachment.originalInput ?? ({
           type: "image" as const,
           name: attachment.name,
           url: attachment.url,
         })),
+        ...fileRefs.flatMap((attachment) => attachment.originalInput ? [attachment.originalInput] : []),
         ...buildLocalFileInputs(
           fileRefs,
           localReferenceTokens,
@@ -7433,9 +7457,21 @@ export function Composer(props: ComposerProps) {
     if (!expectedTurnId) {
       return;
     }
+    let contentHash: string | undefined;
+    if (queued.queueEntryId && !queued.input) {
+      try {
+        const content = await readQueuedMessage(queued, true);
+        queued = restoreQueuedMessage(queued, content);
+        contentHash = content.contentHash;
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
     const cancellation = await cancelServerManagedQueuedTurn(
       queued,
       expectedScopeKey,
+      contentHash,
     );
     if (cancellation !== "cancelled") {
       return;
@@ -10424,6 +10460,7 @@ export function Composer(props: ComposerProps) {
               <span className="composer__queued-text">
                 {formatDraftPreview(queued)}
               </span>
+              <QueuedMessageInspector load={() => readQueuedMessage(queued)} desktopApi={props.desktopApi} />
               {queued.errorMessage ? (
                 <span className="composer__queued-error">
                   {queued.errorMessage}
@@ -10496,7 +10533,7 @@ export function Composer(props: ComposerProps) {
                 disabled={queued.backendQueuePending}
                 type="button"
                 onClick={() => {
-                  const editQueuedTurn = (): void => {
+                  const editQueuedTurn = (editable = queued): void => {
                     removeQueuedTurnInScope(queuedScopeKey, queued);
                     if (activeComposerScopeKeyRef.current !== queuedScopeKey) {
                       const currentDraft = draftStore.get(queuedScopeKey);
@@ -10507,17 +10544,21 @@ export function Composer(props: ComposerProps) {
                         draftStore.pushDraft(queuedScopeKey, currentDraft);
                       }
                       saveComposerDraftSnapshot(queuedScopeKey, {
-                        draft: queued.text,
+                        draft: editable.text,
                         editorDocument: undefined,
-                        imageAttachments: queued.imageAttachments,
-                        fileAttachments: queued.fileAttachments,
+                        imageAttachments: editable.imageAttachments,
+                        fileAttachments: editable.fileAttachments,
                         skillTokens: [],
                       });
                       return;
                     }
-                    setComposerDraftFromCanonical(queued.text);
-                    setImageAttachments(queued.imageAttachments);
-                    setFileAttachments(queued.fileAttachments);
+                    const currentDraft = latestDraftSnapshotRef.current.snapshot;
+                    if (hasComposerDraftSnapshotContent(currentDraft)) {
+                      draftStore.pushDraft(queuedScopeKey, currentDraft);
+                    }
+                    setComposerDraftFromCanonical(editable.text);
+                    setImageAttachments(editable.imageAttachments);
+                    setFileAttachments(editable.fileAttachments);
                     setScheduledDraftSendAt(scheduledSendAt);
                     setScheduleArmed(true);
                     requestAnimationFrame(() => inputRef.current?.focus());
@@ -10527,14 +10568,25 @@ export function Composer(props: ComposerProps) {
                     return;
                   }
                   void (async () => {
+                    let editable: QueuedTurnDraft;
+                    let contentHash: string;
+                    try {
+                      const content = await readQueuedMessage(queued, true);
+                      contentHash = content.contentHash;
+                      editable = restoreQueuedMessage(queued, content);
+                    } catch (error) {
+                      setSendError(error instanceof Error ? error.message : String(error));
+                      return;
+                    }
                     const cancellation = await cancelServerManagedQueuedTurn(
                       queued,
                       queuedScopeKey,
+                      contentHash,
                     );
                     if (cancellation !== "cancelled") {
                       return;
                     }
-                    editQueuedTurn();
+                    editQueuedTurn(editable);
                   })();
                 }}
               >

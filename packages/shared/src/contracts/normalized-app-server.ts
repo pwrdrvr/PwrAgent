@@ -534,6 +534,8 @@ export type AppServerThreadMessageOriginKind =
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
   sourceThread?: {
+    /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
+    messageId?: string;
     backend: AppServerBackendKind;
     /** Durable owner identity when the source thread belongs to another instance. */
     instanceId?: FederationInstanceId;

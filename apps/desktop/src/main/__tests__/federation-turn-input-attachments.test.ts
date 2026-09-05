@@ -18,6 +18,8 @@ import type {
 import { imageInputFileRoot } from "../app-server/image-input-files";
 import {
   stageTurnInputAttachment,
+  portableTurnInputAttachments,
+  stageQueuedFileInputs,
   TURN_INPUT_ATTACHMENT_MAX_AGE_MS,
   turnInputAttachmentRoot,
 } from "../app-server/turn-input-attachment-files";
@@ -42,6 +44,36 @@ afterEach(async () => {
 });
 
 describe("federation turn input attachments", () => {
+  it("stages recovered file bytes before draft persistence and preserves empty files", async () => {
+    await createTestRoot();
+    const input = await stageQueuedFileInputs([
+      { type: "file", name: "notes.txt", mimeType: "text/plain", data: "AQID" },
+      { type: "file", name: "empty.txt", mimeType: "text/plain", data: "" },
+    ]);
+    expect(input.every((item) => item.type === "localFile")).toBe(true);
+    expect(JSON.stringify(input)).not.toContain('"data"');
+    for (const [index, item] of input.entries()) {
+      if (item.type !== "localFile") throw new Error("Expected staged file");
+      expect(await readFile(item.path)).toEqual(index === 0 ? Buffer.from([1, 2, 3]) : Buffer.alloc(0));
+    }
+  });
+
+  it("recovers owner-local queued attachments and round-trips their bytes through the existing upload seam", async () => {
+    await createTestRoot();
+    const image = await stageTurnInputAttachment({ type: "localImage", name: "diagram.png", data: Buffer.from([1, 2, 3]) });
+    const file = await stageTurnInputAttachment({ type: "localFile", name: "notes.txt", mimeType: "text/plain", data: Buffer.from("Unicode Ω\n\nsecond paragraph") });
+    const portable = await portableTurnInputAttachments([{ type: "text", text: "# Full prompt" }, image, file]);
+    expect(portable).toEqual([
+      { type: "text", text: "# Full prompt" },
+      { type: "image", name: "diagram.png", url: "data:image/png;base64,AQID" },
+      expect.objectContaining({ type: "file", name: "notes.txt", data: Buffer.from("Unicode Ω\n\nsecond paragraph").toString("base64") }),
+    ]);
+    const envelopes: FederationBlobChunkEnvelope[] = [];
+    await prepareOutgoingFederationTurnInput({ input: portable, localInstanceId: "viewer", targetInstanceId: "owner", sendEnvelope: collectBlobChunks(envelopes) });
+    expect(envelopes.map((envelope) => envelope.data)).toEqual([Buffer.from([1, 2, 3]), Buffer.from("Unicode Ω\n\nsecond paragraph")]);
+    await expect(portableTurnInputAttachments([{ type: "localFile", path: "/missing/queued-attachment.txt" }])).rejects.toThrow();
+  });
+
   it("stages data URLs and existing PwrAgent image inputs before binary upload", async () => {
     const root = await createTestRoot();
     const existingBytes = Buffer.from([9, 8, 7, 6]);

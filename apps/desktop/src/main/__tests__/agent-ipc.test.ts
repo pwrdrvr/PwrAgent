@@ -1013,6 +1013,7 @@ describe("agent ipc", () => {
     expect(registry.cancelQueuedTurnWithDisposition).toHaveBeenCalledWith(
       "queue-2",
       "Cancelled from the desktop composer.",
+      undefined,
     );
     expect(
       await handlers.get(AGENT_RELEASE_QUEUED_TURN_CHANNEL)?.({}, {

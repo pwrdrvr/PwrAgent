@@ -33809,3 +33809,21 @@ button.pricing-token-miser__folded:focus-visible {
 .star-map-satellite-card__body .context-rail {
   max-width: 100%;
 }
+
+.queued-message-inspector {
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px;
+  color: var(--text-primary);
+  font-size: var(--transcript-text-size);
+}
+
+.queued-message-inspector:focus-visible {
+  outline: 1px solid var(--focus-ring);
+}
+
+.turn-input-content img {
+  max-width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+}

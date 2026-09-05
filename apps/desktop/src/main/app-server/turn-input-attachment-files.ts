@@ -225,6 +225,42 @@ function filePathFromUrl(value: string): string | undefined {
   }
 }
 
+/** Keep recovered file bytes in the existing PwrAgent attachment store, not draft SQLite. */
+export async function stageQueuedFileInputs(
+  input: AppServerTurnInputItem[],
+): Promise<AppServerTurnInputItem[]> {
+  return await Promise.all(input.map(async (item): Promise<AppServerTurnInputItem> => {
+    if (item.type !== "file") return item;
+    const data = item.data === "" ? Buffer.alloc(0) : decodeBase64(item.data);
+    if (!data) throw new Error("The queued file attachment could not be decoded. The message remains queued.");
+    const staged = await stageTurnInputAttachment({ type: "localFile", data, name: item.name, mimeType: item.mimeType });
+    return { ...staged, ...(item.pdfRenderProfile ? { pdfRenderProfile: item.pdfRenderProfile } : {}) };
+  }));
+}
+
+/** Recover attachment bytes on their owner before a federated viewer edits them. */
+export async function portableTurnInputAttachments(
+  input: AppServerTurnInputItem[],
+  options?: { privateStorageRoots?: readonly string[] },
+): Promise<AppServerTurnInputItem[]> {
+  return await Promise.all(input.map(async (item): Promise<AppServerTurnInputItem> => {
+    if (item.type !== "localImage" && item.type !== "localFile") return item;
+    const staged = await stageLocalTurnInputAttachment(item, options);
+    const data = await readFile(staged.path);
+    const name = item.name ?? path.basename(item.path);
+    if (item.type === "localFile") {
+      return { type: "file", name, mimeType: item.mimeType ?? "application/octet-stream", data: data.toString("base64"), sizeBytes: data.length, ...(item.pdfRenderProfile ? { pdfRenderProfile: item.pdfRenderProfile } : {}) };
+    }
+    const imageMimeTypes: Record<string, string> = {
+      ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+      ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif",
+    };
+    const mimeType = imageMimeTypes[path.extname(item.path).toLowerCase()];
+    if (!mimeType) throw new Error("The queued image cannot be transferred in this format. The message remains queued.");
+    return { type: "image", name, url: `data:${mimeType};base64,${data.toString("base64")}` };
+  }));
+}
+
 export function isStagedTurnInputAttachmentPath(filePath: string): boolean {
   const relative = path.relative(
     path.resolve(turnInputAttachmentRoot()),

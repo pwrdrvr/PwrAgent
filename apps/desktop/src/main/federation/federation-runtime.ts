@@ -1,3 +1,4 @@
+import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
@@ -5313,12 +5314,16 @@ function localBackendOperations(): FederationBackendOperations {
     ): Promise<StartReviewResponse> {
       return await getDesktopBackendRegistry().startReview(request);
     },
+    async readQueuedTurn(request: ReadQueuedTurnRequest): Promise<ReadQueuedTurnResponse> {
+      return getDesktopBackendRegistry().readQueuedTurn(request, request.forEdit === true);
+    },
     async cancelQueuedTurn(
       request: CancelQueuedTurnRequest,
     ): Promise<CancelQueuedTurnResponse> {
       return getDesktopBackendRegistry().cancelQueuedTurnWithDisposition(
         request.queueEntryId,
         "Cancelled from a federated desktop composer.",
+        request.expectedContentHash,
       );
     },
     async releaseQueuedTurn(

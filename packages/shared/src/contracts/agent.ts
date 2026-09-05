@@ -5,6 +5,7 @@ import type {
   AppServerNotification,
   AppServerThreadActivityEntry,
   AppServerThreadMessageOrigin,
+  AppServerThreadImagePart,
   LinkedDirectorySummary,
   ThreadExecutionMode,
   AppServerReviewDelivery,
@@ -272,7 +273,26 @@ export type StartTurnResponse = {
   queueEntryCreatedAt?: number;
 };
 
+export type ReadQueuedTurnRequest = {
+  /** Recover portable attachment bytes before moving a peer-owned entry to a draft. */
+  forEdit?: boolean;
+  federationTarget?: FederationTarget;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  queueEntryId: string;
+};
+
+export type ReadQueuedTurnResponse = {
+  imageParts?: AppServerThreadImagePart[];
+  contentHash: string;
+  queueEntryId: string;
+  input: AppServerTurnInputItem[];
+  messageOrigin?: AppServerThreadMessageOrigin;
+};
+
 export type CancelQueuedTurnRequest = {
+  /** Refuse editing if the authoritative input changed since inspection. */
+  expectedContentHash?: string;
   federationTarget?: FederationTarget;
   queueEntryId: string;
 };
@@ -284,7 +304,7 @@ export type CancelQueuedTurnResponse = {
    * Owner-authoritative lifecycle result. Optional so a newer viewer remains
    * compatible with peers that only return the legacy boolean.
    */
-  disposition?: "cancelled" | "already_admitted" | "not_found";
+  disposition?: "cancelled" | "already_admitted" | "not_found" | "content_changed";
   turnId?: string;
 };
 

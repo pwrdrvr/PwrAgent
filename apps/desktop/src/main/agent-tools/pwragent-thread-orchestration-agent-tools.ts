@@ -695,7 +695,7 @@ function normalizeSendMessageToThreadArgs(
   const backend = readTrimmedString(args.backend);
   const threadId = readTrimmedString(args.threadId);
   const instanceId = readTrimmedString(args.instanceId);
-  const prompt = readTrimmedString(args.prompt);
+  const prompt = typeof args.prompt === "string" && args.prompt.trim() ? args.prompt : undefined;
   if (!backend || !threadId || !prompt) {
     return undefined;
   }

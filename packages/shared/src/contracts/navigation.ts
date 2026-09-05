@@ -1,3 +1,4 @@
+import type { AppServerTurnInputItem } from "./normalized-app-server";
 import type {
   AcpBackendId,
   AppServerBackendScope,
@@ -886,6 +887,7 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
 };
 
 export type NavigationLaunchpadImageAttachment = {
+  originalInput?: Extract<AppServerTurnInputItem, { type: "image" | "localImage" }>;
   id: string;
   height?: number;
   name: string;
@@ -902,6 +904,7 @@ export type NavigationLaunchpadImageAttachment = {
  * `[@label](~/path)` reference the agent reads itself.
  */
 export type NavigationLaunchpadFileAttachment = {
+  originalInput?: Extract<AppServerTurnInputItem, { type: "file" | "localFile" }>;
   id: string;
   /** Display label, normally the file's basename. */
   label: string;

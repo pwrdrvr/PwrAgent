@@ -18,6 +18,8 @@ import type {
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  ReadQueuedTurnRequest,
+  ReadQueuedTurnResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
   ReleaseQueuedTurnRequest,
@@ -459,6 +461,7 @@ import type {
   RevealQuitBlockerResponse,
 } from "../shared/quit-blockers";
 import {
+  AGENT_READ_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
@@ -1610,6 +1613,10 @@ const desktopApi = Object.freeze({
     request: StartTurnRequest
   ): Promise<StartTurnResponse> =>
     await ipcRenderer.invoke(AGENT_START_TURN_CHANNEL, request),
+  readQueuedTurn: async (
+    request: ReadQueuedTurnRequest,
+  ): Promise<ReadQueuedTurnResponse> =>
+    await ipcRenderer.invoke(AGENT_READ_QUEUED_TURN_CHANNEL, request),
   cancelQueuedTurn: async (
     request: CancelQueuedTurnRequest,
   ): Promise<CancelQueuedTurnResponse> =>

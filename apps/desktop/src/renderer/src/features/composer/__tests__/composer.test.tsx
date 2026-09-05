@@ -6981,6 +6981,7 @@ describe("Composer", () => {
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        readQueuedTurn: async () => ({ queueEntryId: "queue-entry-1", contentHash: "hash", input: [{ type: "text" as const, text: "First queued reply" }] }),
         cancelQueuedTurn,
         onAgentEvent: () => () => undefined,
         startTurn,
@@ -7028,12 +7029,58 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
         queueEntryId: "queue-entry-1",
+        expectedContentHash: "hash",
       });
       expect(screen.getByLabelText("Reply")).toHaveValue("First queued reply");
       expect(screen.getByLabelText("Queued message")).toHaveTextContent(
         "Second queued reply",
       );
     });
+  });
+
+  it("inspects and edits mirrored long markdown from authoritative queue input", async () => {
+    const draftStore = createComposerDraftStore();
+    const prompt = `# Full message 漢字\n\n${"Paragraph **bold** Ω. ".repeat(80)}\n\nTail beyond preview.`;
+    const input = [
+      { type: "text" as const, text: prompt },
+      { type: "image" as const, name: "diagram.png", url: "data:image/png;base64,AQID" },
+      { type: "file" as const, name: "notes.txt", mimeType: "text/plain", data: "aGVsbG8=" },
+    ];
+    draftStore.setQueuedTurns("thread:codex:thread-1", [{ id: "mirror", queueEntryId: "owner-entry", text: "tiny preview…", imageAttachments: [], fileAttachments: [] }]);
+    const readQueuedTurn = vi.fn().mockRejectedValueOnce(new Error("Owner unavailable"))
+      .mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "content-hash", input });
+    const cancelQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
+    const startTurn = vi.fn().mockResolvedValue({ backend: "codex", threadId: "thread-1", turnId: "new-queue", queueStatus: "queued", queueEntryId: "new-queue" });
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ readQueuedTurn, cancelQueuedTurn, startTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await screen.findByText("Owner unavailable");
+    expect(cancelQueuedTurn).not.toHaveBeenCalled();
+    expect(draftStore.getQueuedTurns("thread:codex:thread-1")).toHaveLength(1);
+    const inspect = screen.getByRole("button", { name: "View full message" });
+    expect(inspect).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(inspect);
+    await screen.findByRole("heading", { name: "Full message 漢字" });
+    expect(screen.getByRole("region", { name: "Full queued message" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByText("Tail beyond preview.")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "diagram.png" })).toBeInTheDocument();
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
+    const expandImage = screen.getByRole("button", { name: /Expand transcript image/ });
+    expandImage.focus();
+    expect(expandImage).toHaveFocus();
+    fireEvent.click(expandImage);
+    expect(screen.getByRole("dialog", { name: "Expanded image" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Expanded image" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveValue(prompt));
+    expect(cancelQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({ queueEntryId: "owner-entry", expectedContentHash: "content-hash" }));
+    expect(readQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "thread-1" }));
+    expect(draftStore.getQueuedTurns("thread:codex:thread-1")).toHaveLength(0);
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    await waitFor(() => expect(startTurn).toHaveBeenCalled());
+    expect(startTurn.mock.calls[0]?.[0].input).toEqual(input);
   });
 
   it("cancels the owning peer's queued turn before remote steering", async () => {
