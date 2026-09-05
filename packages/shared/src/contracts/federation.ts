@@ -843,7 +843,7 @@ export type FederationActivityTotals = {
 };
 export type FederationActivitySeries = {
   lifetime: FederationActivityTotals;
-  windows: Record<"1m" | "5m" | "1h", FederationActivityTotals>;
+  windows: Record<"1m" | "5m" | "10m" | "1h", FederationActivityTotals>;
   history: Array<{ at: number; totals: FederationActivityTotals }>;
 };
 export type FederationActivitySnapshot = {

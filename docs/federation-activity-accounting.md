@@ -71,10 +71,12 @@ Broadcast fanout counts endpoint deliveries, not unique broadcast IDs.
 ## Retention and cost
 
 The ledger retains one-second buckets for at most one hour and process-lifetime
-counters. Rolling windows use the last 60/300/3600 second buckets including the
+counters. Rolling windows use the last 60/300/600/3600 second buckets including the
 current second; expiry is quantized to one second. Charts aggregate these into
-360 ten-second bins, including idle zero bins. Process-lifetime selection keeps
-the last hour of rate history while displaying lifetime totals.
+360 ten-second bins, including idle zero bins. Sent and received tables show Last 1m, Last 10m, Last 1h and Total side by side,
+independent of the chart range. The five-minute aggregate remains available in
+IPC. Byte displays use decimal KB/MB/GB/TB (1 KB = 1,000 bytes), automatically
+scaled per value; exact byte counts remain available in cell tooltips and IPC.
 
 Physical and logical peer maps each keep at most 32 distinct named peers plus an
 **Other peers** overflow aggregate. Peer IDs are bounded to 120 characters;

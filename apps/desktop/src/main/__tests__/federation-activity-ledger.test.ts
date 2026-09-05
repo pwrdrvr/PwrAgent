@@ -68,6 +68,8 @@ describe("Federation activity ledger", () => {
     expect(ledger.snapshot(61_000).physical.windows["1m"].sent.requests).toBe(0);
     expect(ledger.snapshot(300_000).physical.windows["5m"].sent.requests).toBe(1);
     expect(ledger.snapshot(301_000).physical.windows["5m"].sent.requests).toBe(0);
+    expect(ledger.snapshot(600_000).physical.windows["10m"].sent.requests).toBe(1);
+    expect(ledger.snapshot(601_000).physical.windows["10m"].sent.requests).toBe(0);
     const expired = ledger.snapshot(3_601_000);
     expect(expired.physical.windows["1h"].sent.requests).toBe(0);
     expect(expired.physical.lifetime.sent.requests).toBe(1);

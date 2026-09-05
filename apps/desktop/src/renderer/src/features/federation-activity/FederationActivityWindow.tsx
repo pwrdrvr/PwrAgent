@@ -1,30 +1,47 @@
 import { useEffect, useId, useState } from "react";
-import type { FederationActivitySeries, FederationActivityTotals } from "@pwragent/shared";
+import type { FederationActivitySeries } from "@pwragent/shared";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import { formatTrafficBytes, trafficByteUnit } from "./format-traffic-bytes";
 import { federationRuntimeLabel, useFederationActivity } from "./useFederationActivity";
 
-type Period = "1m" | "5m" | "1h" | "lifetime";
-const PERIODS: Period[] = ["1m", "5m", "1h", "lifetime"];
+type Period = "1m" | "10m" | "1h";
+const PERIODS: Period[] = ["1m", "10m", "1h"];
 const number = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 const fields = [
   ["requests", "Requests"], ["responses", "Responses (including errors)"],
   ["notifications", "Notifications"], ["other", "Other envelopes (including blobs)"],
-  ["dataBytes", "Data · uncompressed B"], ["wireBytes", "Wire · encoded B"],
+  ["dataBytes", "Data · uncompressed"], ["wireBytes", "Wire · encoded"],
 ] as const;
 
-function Totals({ value }: { value: FederationActivityTotals }) {
-  return <table className="federation-activity__totals">
-    <thead><tr><th scope="col">Traffic</th><th scope="col">Sent</th><th scope="col">Received</th></tr></thead>
-    <tbody>{fields.map(([key, label]) => <tr key={key}><th scope="row">{label}</th>
-      <td>{number(value.sent[key])}</td><td>{number(value.received[key])}</td></tr>)}</tbody>
-  </table>;
+function Totals({ series }: { series: FederationActivitySeries }) {
+  const periods = [series.windows["1m"], series.windows["10m"], series.windows["1h"], series.lifetime];
+  return <div className="federation-activity__tables">
+    {(["sent", "received"] as const).map((direction) => (
+      <table className="federation-activity__totals" key={direction}>
+        <caption>{direction === "sent" ? "Sent traffic" : "Received traffic"}</caption>
+        <thead><tr><th scope="col">Traffic</th>
+          <th scope="col">Last 1m</th><th scope="col">Last 10m</th>
+          <th scope="col">Last 1h</th><th scope="col">Total</th>
+        </tr></thead>
+        <tbody>{fields.map(([key, label]) => <tr key={key}><th scope="row">{label}</th>
+          {periods.map((period, index) => {
+            const value = period[direction][key];
+            const bytes = key === "dataBytes" || key === "wireBytes";
+            return <td key={index} title={bytes ? `${number(value)} bytes` : undefined}>
+              {bytes ? formatTrafficBytes(value) : number(value)}
+            </td>;
+          })}
+        </tr>)}</tbody>
+      </table>
+    ))}
+  </div>;
 }
 
 export function FederationRateChart({ history, period, bytes }: {
   history: FederationActivitySeries["history"]; period: Period; bytes: boolean;
 }) {
   const id = useId();
-  const length = period === "1m" ? 6 : period === "5m" ? 30 : 360;
+  const length = period === "1m" ? 6 : period === "10m" ? 60 : 360;
   const points = history.slice(-length);
   const lines = bytes ? [
     { direction: "sent", field: "wireBytes", label: "Sent wire", dashed: false },
@@ -41,25 +58,26 @@ export function FederationRateChart({ history, period, bytes }: {
       : value[line.field]) / 10;
   }));
   const max = Math.max(0, ...values.flat()) || 1;
-  const exponent = bytes ? Math.min(3, Math.max(0, Math.floor(Math.log(max) / Math.log(1024)))) : 0;
-  const scale = 1024 ** exponent;
-  const unit = bytes ? ["B/s", "KiB/s", "MiB/s", "GiB/s"][exponent] : "envelopes/s";
+  const byteUnit = trafficByteUnit(max);
+  const scale = bytes ? byteUnit.scale : 1;
+  const unit = bytes ? `${byteUnit.unit}/s` : "envelopes/s";
+  const axisNumber = (value: number) => value.toLocaleString(undefined, { maximumSignificantDigits: 3 });
   return <figure className="federation-activity__chart">
     <figcaption>{bytes ? "Data and wire rate" : "Envelope rate"} · {unit}</figcaption>
     <svg viewBox="0 0 640 165" role="img" aria-labelledby={`${id}-title ${id}-description`}>
       <title id={`${id}-title`}>{bytes ? "Data and wire" : "Envelope"} rates, {unit}</title>
-      <desc id={`${id}-description`}>Ten-second averages. Peak {number(max / scale)} {unit}. Sent uses the accent line,
+      <desc id={`${id}-description`}>Ten-second averages. Peak {axisNumber(max / scale)} {unit}. Sent uses the accent line,
         received uses the neutral line. Dashed lines show uncompressed data.</desc>
       <text x="87" y="12" textAnchor="end">{unit}</text>
       {[0, 0.5, 1].map((fraction) => <g key={fraction}>
         <line x1="95" x2="630" y1={130 - fraction * 110} y2={130 - fraction * 110} className="federation-activity__grid" />
-        <text x="87" y={134 - fraction * 110} textAnchor="end">{number(max * fraction / scale)}</text>
+        <text x="87" y={134 - fraction * 110} textAnchor="end">{axisNumber(max * fraction / scale)}</text>
       </g>)}
       {lines.map((line, index) => <polyline key={line.label}
         className={`federation-activity__line federation-activity__line--${line.direction}`}
         strokeDasharray={line.dashed ? "5 4" : undefined}
         points={values[index].map((value, point) => `${95 + point * 535 / Math.max(1, points.length - 1)},${130 - value / max * 110}`).join(" ")} />)}
-      <text x="95" y="155">{period === "lifetime" ? "1h" : period} ago</text>
+      <text x="95" y="155">{period} ago</text>
       <text x="630" y="155" textAnchor="end">Now</text>
     </svg>
     <div className="federation-activity__legend">{lines.map((line) => <span key={line.label}
@@ -80,7 +98,6 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
   });
   const peers = snapshot ? view === "physical" ? snapshot.activity.peers : snapshot.activity.logical : [];
   const series = peerId ? peers.find((peer) => peer.peerId === peerId)?.series : snapshot?.activity.physical;
-  const value = period === "lifetime" ? series?.lifetime : series?.windows[period];
   const labelFor = (id: string) => snapshot?.health.peers.find((peer) => peer.id === id)?.label || id;
   return <div className="federation-activity">
     <div className="federation-activity__toolbar">
@@ -114,8 +131,8 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
         {view === "physical" ? <option value="">All physical connections</option> : <option value="" disabled>Select an endpoint</option>}
         {peers.map((peer) => <option value={peer.peerId} key={peer.peerId}>{labelFor(peer.peerId)}</option>)}
       </select></label>
-      <label>Period <select value={period} onChange={(event) => setPeriod(event.target.value as Period)}>
-        {PERIODS.map((value) => <option key={value} value={value}>{value === "lifetime" ? "Process lifetime" : value}</option>)}
+      <label>Chart window <select value={period} onChange={(event) => setPeriod(event.target.value as Period)}>
+        {PERIODS.map((value) => <option key={value} value={value}>{value}</option>)}
       </select></label>
     </div>
     <p className="federation-activity__muted">{view === "physical"
@@ -124,7 +141,7 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
     {series && (view === "physical" || peerId) ? <>
       <FederationRateChart history={series.history} period={period} bytes />
       <FederationRateChart history={series.history} period={period} bytes={false} />
-      {value ? <Totals value={value} /> : null}
+      <Totals series={series} />
     </> : <p>No endpoint traffic recorded.</p>}
     {snapshot ? <p className="federation-activity__muted">Process totals since {new Date(snapshot.activity.since).toLocaleString()}.
       Rolling totals have one-second resolution; charts show ten-second averages for up to one hour.</p> : null}

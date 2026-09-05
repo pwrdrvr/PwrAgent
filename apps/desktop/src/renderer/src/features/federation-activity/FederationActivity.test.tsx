@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FederationActivityTotals, ReadFederationActivityResponse } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -12,7 +12,7 @@ const totals = (): FederationActivityTotals => ({
 });
 function fixture(): ReadFederationActivityResponse {
   const series = {
-    lifetime: totals(), windows: { "1m": totals(), "5m": totals(), "1h": totals() },
+    lifetime: totals(), windows: { "1m": totals(), "5m": totals(), "10m": totals(), "1h": totals() },
     history: Array.from({ length: 360 }, (_, index) => ({ at: index * 10_000, totals: totals() })),
   };
   return {
@@ -89,12 +89,17 @@ describe("Federation activity surfaces", () => {
     const api: DesktopApi = { readFederationActivity, setFederationActivityTopmost };
     render(<FederationActivityScreen desktopApi={api} />);
     await screen.findByText("Running · connected");
-    expect(screen.getByText("200")).toBeInTheDocument();
+    expect(screen.getByText("0.2")).toBeInTheDocument();
     expect(screen.getByText("2.4")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Sent" })).toBeInTheDocument();
-    for (const period of ["1m", "5m", "1h", "lifetime"]) {
-      fireEvent.change(screen.getByLabelText("Period"), { target: { value: period } });
-      expect(screen.getByLabelText("Period")).toHaveValue(period);
+    for (const name of ["Sent traffic", "Received traffic"]) {
+      const table = within(screen.getByRole("table", { name }));
+      for (const column of ["Last 1m", "Last 10m", "Last 1h", "Total"]) {
+        expect(table.getByRole("columnheader", { name: column })).toBeInTheDocument();
+      }
+    }
+    for (const period of ["1m", "10m", "1h"]) {
+      fireEvent.change(screen.getByLabelText("Chart window"), { target: { value: period } });
+      expect(screen.getByLabelText("Chart window")).toHaveValue(period);
     }
     fireEvent.change(screen.getByLabelText("Attribution"), { target: { value: "logical" } });
     await waitFor(() => expect(readFederationActivity).toHaveBeenLastCalledWith({
@@ -116,4 +121,22 @@ describe("Federation activity surfaces", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Config is read-only");
     expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
   });
+  it("shows recent bursts beside lifetime totals regardless of chart range", async () => {
+    const snapshot = fixture();
+    const series = snapshot.activity.physical;
+    series.windows["1m"].received.wireBytes = 50_000_000;
+    series.windows["10m"].received.wireBytes = 1_000_000_000;
+    series.windows["1h"].received.wireBytes = 2_000_000_000;
+    series.lifetime.received.wireBytes = 50_000_000_000;
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => snapshot }} />);
+    const table = within(await screen.findByRole("table", { name: "Received traffic" }));
+    const row = table.getByRole("row", { name: /Wire · encoded/ });
+    expect(within(row).getAllByRole("cell").map((cell) => cell.textContent?.trim()))
+      .toEqual(["50 MB", "1 GB", "2 GB", "50 GB"]);
+    fireEvent.change(screen.getByLabelText("Chart window"), { target: { value: "1h" } });
+    expect(within(row).getAllByRole("cell").map((cell) => cell.textContent?.trim()))
+      .toEqual(["50 MB", "1 GB", "2 GB", "50 GB"]);
+    expect(within(row).getByText("50 MB")).toHaveAttribute("title", "50,000,000 bytes");
+  });
+
 });

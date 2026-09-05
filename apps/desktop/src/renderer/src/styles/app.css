@@ -33842,3 +33842,8 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-activity__totals th:first-child { text-align: left; }
 .federation-activity__boundaries { margin-top: 16px; color: var(--text-secondary); line-height: 1.5; }
 .federation-activity__boundaries summary { cursor: pointer; color: var(--text-primary); }
+
+.federation-activity__tables { overflow-x: auto; }
+.federation-activity__totals + .federation-activity__totals { margin-top: 18px; }
+.federation-activity__totals caption { text-align: left; font-weight: 600; padding: 8px; }
+.federation-activity__totals td { white-space: nowrap; }

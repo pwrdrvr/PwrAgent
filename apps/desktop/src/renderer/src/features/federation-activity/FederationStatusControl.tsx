@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatTrafficBytes } from "./format-traffic-bytes";
 import { StarMapIcon } from "../../icons/StarMapIcon";
 import { federationRuntimeLabel, useFederationActivity } from "./useFederationActivity";
 
@@ -73,8 +74,8 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
                   {snapshot.health.leaseHolder.processId ? ` · PID ${snapshot.health.leaseHolder.processId}` : ""}
                   {snapshot.health.leaseHolder.cwdHint ? ` · ${snapshot.health.leaseHolder.cwdHint}` : ""}</p> : null}
                 {snapshot.health.unavailableReason ? <p>{snapshot.health.unavailableReason}</p> : null}
-                <p>Last minute: {snapshot.activity.physical.windows["1m"].sent.wireBytes.toLocaleString()} B sent
-                  {" · "}{snapshot.activity.physical.windows["1m"].received.wireBytes.toLocaleString()} B received</p>
+                <p>Last minute: {formatTrafficBytes(snapshot.activity.physical.windows["1m"].sent.wireBytes)} sent
+                  {" · "}{formatTrafficBytes(snapshot.activity.physical.windows["1m"].received.wireBytes)} received</p>
                 <p className="federation-activity__muted">Encoded envelope bytes on physical connections</p>
               </div>
             ) : null}

@@ -42,7 +42,7 @@ class Series {
   }
   snapshot(at: number, includeHistory: boolean): FederationActivitySeries {
     this.expire(at);
-    const windows = { "1m": totals(), "5m": totals(), "1h": totals() };
+    const windows = { "1m": totals(), "5m": totals(), "10m": totals(), "1h": totals() };
     const history: FederationActivitySeries["history"] = [];
     const first = at - HOUR + 1;
     // Ten-second chart bins, with rolling totals evaluated at second boundaries.
@@ -53,6 +53,7 @@ class Series {
     }
     for (const [time, bucket] of this.buckets) {
       add(windows["1h"], bucket);
+      if (time > at - 600) add(windows["10m"], bucket);
       if (time > at - 300) add(windows["5m"], bucket);
       if (time > at - 60) add(windows["1m"], bucket);
       if (includeHistory) add(history[Math.floor((time - first) / 10)].totals, bucket);
