@@ -5824,6 +5824,8 @@ function mergeRateLimitSummary(
     ...(update.limit !== undefined ? { limit: update.limit } : {}),
     ...(update.used !== undefined ? { used: update.used } : {}),
     ...(update.usedPercent !== undefined ? { usedPercent: update.usedPercent } : {}),
+    ...(update.hasCredits !== undefined ? { hasCredits: update.hasCredits } : {}),
+    ...(update.unlimited !== undefined ? { unlimited: update.unlimited } : {}),
     ...(update.resetAt !== undefined ? { resetAt: update.resetAt } : {}),
     ...(update.windowSeconds !== undefined
       ? { windowSeconds: update.windowSeconds }

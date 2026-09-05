@@ -38,6 +38,75 @@ describe("backend status formatting", () => {
     ]);
   });
 
+  it("shows Luna Reserve after the included 5h window is exhausted", () => {
+    const backend: Pick<BackendSummary, "kind" | "rateLimits"> = {
+      kind: "codex",
+      rateLimits: [
+        { name: "5h limit", usedPercent: 100 },
+        { name: "Weekly limit", usedPercent: 39 },
+        {
+          name: "gpt-reserve Weekly limit",
+          limitId: "base_model_inference",
+          limitName: "gpt-reserve",
+          usedPercent: 0,
+        },
+        { name: "GPT-5.3-Codex-Spark 5h limit", usedPercent: 2 },
+      ],
+    };
+
+    expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
+      "5h limit",
+      "Weekly limit",
+      "gpt-reserve Weekly limit",
+      "GPT-5.3-Codex-Spark 5h limit",
+    ]);
+  });
+
+  it("shows Luna Reserve after the included weekly window is exhausted", () => {
+    const backend: Pick<BackendSummary, "kind" | "rateLimits"> = {
+      kind: "codex",
+      rateLimits: [
+        { name: "5h limit", usedPercent: 26 },
+        { name: "Weekly limit", remaining: 0 },
+        {
+          name: "gpt-reserve Weekly limit",
+          limitId: "base_model_inference",
+          limitName: "gpt-reserve",
+          usedPercent: 12,
+        },
+      ],
+    };
+
+    expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
+      "5h limit",
+      "Weekly limit",
+      "gpt-reserve Weekly limit",
+    ]);
+  });
+
+  it("does not treat an exhausted Spark window as primary-plan exhaustion", () => {
+    const backend: Pick<BackendSummary, "kind" | "rateLimits"> = {
+      kind: "codex",
+      rateLimits: [
+        { name: "5h limit", usedPercent: 26 },
+        { name: "Weekly limit", usedPercent: 39 },
+        { name: "GPT-5.3-Codex-Spark 5h limit", usedPercent: 100 },
+        {
+          name: "gpt-reserve Weekly limit",
+          limitId: "base_model_inference",
+          limitName: "gpt-reserve",
+          usedPercent: 0,
+        },
+      ],
+    };
+
+    expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
+      "5h limit",
+      "Weekly limit",
+      "GPT-5.3-Codex-Spark 5h limit",
+    ]);
+  });
+
   it("keeps provider-defined Grok rate limits visible", () => {
     const backend: Pick<BackendSummary, "kind" | "rateLimits"> = {
       kind: "acp:grok",
@@ -88,5 +157,91 @@ describe("backend status formatting", () => {
         usedPercent: 4,
       }),
     ).toBe("Individual limit: 3,500/100,000 used, 96% left");
+  });
+
+  it("labels the gpt-reserve bucket as Luna Reserve", () => {
+    expect(
+      formatRateLimitLine({
+        name: "gpt-reserve Weekly limit",
+        limitId: "base_model_inference",
+        limitName: "gpt-reserve",
+        usedPercent: 0,
+      }),
+    ).toBe("Luna Reserve: 100% left");
+  });
+
+  it("shows the Codex account credits balance ahead of plan windows", () => {
+    const backend: Pick<BackendSummary, "kind" | "rateLimits"> = {
+      kind: "codex",
+      rateLimits: [
+        { name: "5h limit", usedPercent: 100 },
+        { name: "Weekly limit", usedPercent: 100 },
+        {
+          name: "Credits",
+          limitId: "credits",
+          windowKey: "credits",
+          hasCredits: true,
+          remaining: 100,
+        },
+        {
+          name: "gpt-reserve Weekly limit",
+          limitId: "base_model_inference",
+          limitName: "gpt-reserve",
+          usedPercent: 0,
+        },
+      ],
+    };
+
+    expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
+      "Credits",
+      "5h limit",
+      "Weekly limit",
+      "gpt-reserve Weekly limit",
+    ]);
+  });
+
+  it("hides a credits row that the protocol marked as empty", () => {
+    const backend: Pick<BackendSummary, "kind" | "rateLimits"> = {
+      kind: "codex",
+      rateLimits: [
+        { name: "5h limit", usedPercent: 26 },
+        {
+          name: "Credits",
+          limitId: "credits",
+          windowKey: "credits",
+          hasCredits: false,
+          unlimited: false,
+        },
+      ],
+    };
+
+    expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
+      "5h limit",
+    ]);
+  });
+
+  it("formats a dollar credits balance, unlimited credits, and a hidden amount", () => {
+    expect(
+      formatRateLimitLine({
+        name: "Credits",
+        windowKey: "credits",
+        hasCredits: true,
+        remaining: 100,
+      }),
+    ).toBe("Credits: $100");
+    expect(
+      formatRateLimitLine({
+        name: "Credits",
+        windowKey: "credits",
+        unlimited: true,
+      }),
+    ).toBe("Credits: unlimited");
+    expect(
+      formatRateLimitLine({
+        name: "Credits",
+        windowKey: "credits",
+        hasCredits: true,
+      }),
+    ).toBe("Credits: available");
   });
 });

@@ -206,7 +206,7 @@ export type BackendRateLimitSummary = {
   /** Provider label retained so a sparse update cannot erase it. */
   limitName?: string;
   /** Provider slot used to merge sparse rolling updates with a full snapshot. */
-  windowKey?: "primary" | "secondary" | "individual";
+  windowKey?: "primary" | "secondary" | "individual" | "credits";
   remaining?: number;
   limit?: number;
   used?: number;
@@ -214,6 +214,16 @@ export type BackendRateLimitSummary = {
   resetAt?: number;
   windowSeconds?: number;
   windowMinutes?: number;
+  /**
+   * Codex CreditsSnapshot.hasCredits. Set only on the account credits row.
+   * Sparse updates omit this object rather than clearing a previously observed
+   * balance, so a false value is an explicit "no credits" observation.
+   */
+  hasCredits?: boolean;
+  /**
+   * Codex CreditsSnapshot.unlimited. Set only on the account credits row.
+   */
+  unlimited?: boolean;
 };
 
 /**

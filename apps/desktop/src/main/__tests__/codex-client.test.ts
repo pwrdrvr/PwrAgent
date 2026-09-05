@@ -2709,6 +2709,66 @@ describe("CodexAppServerClient", () => {
     ]);
   });
 
+  it("normalizes the Codex account credits snapshot as a Credits row", async () => {
+    MockTransport.rateLimitsResult = {
+      rateLimits: {
+        limitId: "codex",
+        primary: {
+          usedPercent: 100,
+          windowDurationMins: 300,
+        },
+        secondary: {
+          usedPercent: 100,
+          windowDurationMins: 10_080,
+        },
+        credits: {
+          hasCredits: true,
+          unlimited: false,
+          balance: "100.00",
+        },
+      },
+      rateLimitResetCredits: {
+        availableCount: 1,
+        credits: [
+          {
+            id: "reset-1",
+            resetType: "codexRateLimits",
+            status: "available",
+          },
+        ],
+      },
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.readRateLimits()).resolves.toEqual([
+      expect.objectContaining({
+        name: "5h limit",
+        limitId: "codex",
+        windowKey: "primary",
+        usedPercent: 100,
+        remaining: 0,
+        windowMinutes: 300,
+      }),
+      expect.objectContaining({
+        name: "Credits",
+        limitId: "credits",
+        windowKey: "credits",
+        hasCredits: true,
+        unlimited: false,
+        remaining: 100,
+      }),
+      expect.objectContaining({
+        name: "Weekly limit",
+        limitId: "codex",
+        windowKey: "secondary",
+        usedPercent: 100,
+        remaining: 0,
+        windowMinutes: 10_080,
+      }),
+    ]);
+  });
+
   it("reads account-wide token usage through the app-server protocol", async () => {
     MockTransport.accountUsageResult = {
       summary: { lifetimeTokens: 1234 },
