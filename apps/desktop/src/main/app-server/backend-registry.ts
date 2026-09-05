@@ -30,7 +30,7 @@ import {
   estimateTokenUsageCost,
   formatTokenUsageUsd,
   isToolManagedWorktreePath,
-  resolveOpenAiPricingServiceTier,
+  resolveTokenUsagePriceUnavailableReason,
   shortenDerivedThreadTitle,
   type AgentEvent,
   type ArchiveWorktreeRequest,
@@ -2989,6 +2989,7 @@ function buildTaskMonitorRecoveryPrompt(params: {
 }
 
 type TaskMonitorTokenUsageBreakdown = {
+  cacheWriteInputTokens?: number;
   cachedInputTokens?: number;
   inputTokens?: number;
   uncachedInputTokens?: number;
@@ -3170,6 +3171,10 @@ function buildTaskMonitorUsageSnapshot(params: {
   const cachedInputTokens = Math.max(0, tokens.cachedInputTokens ?? 0);
   const inputTokens = Math.max(0, tokens.inputTokens ?? 0);
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const cacheWriteInputTokens = Math.min(
+    uncachedInputTokens,
+    Math.max(0, tokens.cacheWriteInputTokens ?? 0),
+  );
   const outputTokens = Math.max(0, tokens.outputTokens ?? 0);
   const reasoningOutputTokens = Math.max(0, tokens.reasoningOutputTokens ?? 0);
   const totalTokens = Math.max(
@@ -3177,6 +3182,7 @@ function buildTaskMonitorUsageSnapshot(params: {
     tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
   );
   const cost = estimateTaskMonitorUsageCost({
+    cacheWriteInputTokens,
     cachedInputTokens,
     fastMode: params.fastMode,
     model: params.model,
@@ -3206,6 +3212,9 @@ function buildTaskMonitorUsageSnapshot(params: {
     ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
     summary,
     tokenUsage: {
+      ...(tokens.cacheWriteInputTokens !== undefined
+        ? { cacheWriteInputTokens }
+        : {}),
       cachedInputTokens,
       inputTokens,
       outputTokens,
@@ -3287,6 +3296,91 @@ function readTaskMonitorTokenUsageRecords(
   return undefined;
 }
 
+function addTaskMonitorTokenUsage(
+  first: TaskMonitorTokenUsageBreakdown,
+  second: TaskMonitorTokenUsageBreakdown,
+): TaskMonitorTokenUsageBreakdown | undefined {
+  const result: TaskMonitorTokenUsageBreakdown = {};
+  for (const key of [
+    "cacheWriteInputTokens",
+    "cachedInputTokens",
+    "inputTokens",
+    "uncachedInputTokens",
+    "outputTokens",
+    "reasoningOutputTokens",
+    "totalTokens",
+  ] as const) {
+    const firstValue = first[key];
+    const secondValue = second[key];
+    if (typeof firstValue === "number" || typeof secondValue === "number") {
+      result[key] = (firstValue ?? 0) + (secondValue ?? 0);
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function taskMonitorTokenUsageEqual(
+  first: TaskMonitorTokenUsageBreakdown | undefined,
+  second: TaskMonitorTokenUsageBreakdown | undefined,
+): boolean {
+  if (!first || !second) {
+    return false;
+  }
+  return (
+    first.cacheWriteInputTokens === second.cacheWriteInputTokens
+    && first.cachedInputTokens === second.cachedInputTokens
+    && first.inputTokens === second.inputTokens
+    && first.uncachedInputTokens === second.uncachedInputTokens
+    && first.outputTokens === second.outputTokens
+    && first.reasoningOutputTokens === second.reasoningOutputTokens
+    && first.totalTokens === second.totalTokens
+  );
+}
+
+function foldLiveThreadRequestUsage(params: {
+  current: LiveThreadRequestUsage | undefined;
+  tokenUsage: unknown;
+}): LiveThreadRequestUsage | undefined {
+  const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
+  const latestUsage = records?.latestUsage;
+  const cumulativeInputTokens = records?.totalUsage?.inputTokens;
+  if (
+    !latestUsage
+    || typeof cumulativeInputTokens !== "number"
+    || !Number.isFinite(cumulativeInputTokens)
+  ) {
+    return params.current;
+  }
+
+  const normalizedCumulativeInputTokens = Math.max(0, cumulativeInputTokens);
+  if (
+    params.current
+    && normalizedCumulativeInputTokens < params.current.cumulativeInputTokens
+  ) {
+    return params.current;
+  }
+  if (
+    params.current
+    && normalizedCumulativeInputTokens === params.current.cumulativeInputTokens
+  ) {
+    const priorRequest = params.current.requests.at(-1);
+    if (taskMonitorTokenUsageEqual(priorRequest, latestUsage)) {
+      return params.current;
+    }
+    return {
+      cumulativeInputTokens: normalizedCumulativeInputTokens,
+      requests: [
+        ...params.current.requests.slice(0, -1),
+        latestUsage,
+      ],
+    };
+  }
+  return {
+    cumulativeInputTokens: normalizedCumulativeInputTokens,
+    requests: [...(params.current?.requests ?? []), latestUsage],
+  };
+}
+
 function readTaskMonitorTokenBreakdownFromUnknown(
   value: unknown,
 ): TaskMonitorTokenUsageBreakdown | undefined {
@@ -3299,6 +3393,12 @@ function readTaskMonitorTokenBreakdown(
 ): TaskMonitorTokenUsageBreakdown | undefined {
   const explicitTotal = readTaskMonitorNumber(record, "totalTokens", "total_tokens");
   const inputTokens = readTaskMonitorNumber(record, "inputTokens", "input_tokens");
+  const cacheWriteInputTokens = readTaskMonitorNumber(
+    record,
+    "cacheWriteInputTokens",
+    "cache_write_input_tokens",
+    "cache_write_tokens",
+  );
   const cachedInputTokens = readTaskMonitorNumber(
     record,
     "cachedInputTokens",
@@ -3316,6 +3416,7 @@ function readTaskMonitorTokenBreakdown(
   if (
     totalTokens === undefined &&
     inputTokens === undefined &&
+    cacheWriteInputTokens === undefined &&
     cachedInputTokens === undefined &&
     outputTokens === undefined &&
     reasoningOutputTokens === undefined
@@ -3323,6 +3424,7 @@ function readTaskMonitorTokenBreakdown(
     return undefined;
   }
   return {
+    cacheWriteInputTokens,
     cachedInputTokens,
     inputTokens,
     outputTokens,
@@ -3337,6 +3439,7 @@ function subtractTaskMonitorTokenUsage(
 ): TaskMonitorTokenUsageBreakdown | undefined {
   const result: TaskMonitorTokenUsageBreakdown = {};
   for (const key of [
+    "cacheWriteInputTokens",
     "cachedInputTokens",
     "inputTokens",
     "uncachedInputTokens",
@@ -3361,6 +3464,10 @@ function normalizeTaskMonitorPricingTokens(
     inputTokens,
     Math.max(0, tokens.cachedInputTokens ?? 0),
   );
+  const cacheWriteInputTokens = Math.min(
+    Math.max(0, inputTokens - cachedInputTokens),
+    Math.max(0, tokens.cacheWriteInputTokens ?? 0),
+  );
   const uncachedInputTokens = Math.max(
     0,
     tokens.uncachedInputTokens ?? inputTokens - cachedInputTokens,
@@ -3372,12 +3479,110 @@ function normalizeTaskMonitorPricingTokens(
     tokens.totalTokens ?? inputTokens + outputTokens + reasoningOutputTokens,
   );
   return {
+    cacheWriteInputTokens,
     cachedInputTokens,
     inputTokens,
     outputTokens,
     reasoningOutputTokens,
     totalTokens,
     uncachedInputTokens,
+  };
+}
+
+function estimateRequestComponentsCost(params: {
+  at?: number;
+  fastMode?: boolean;
+  model?: string;
+  requests: readonly TaskMonitorTokenUsageBreakdown[];
+  serviceTier?: string;
+  turnTokenUsage: TaskMonitorTokenUsageBreakdown;
+}): RequestComponentsCost | undefined {
+  if (params.requests.length === 0) {
+    return undefined;
+  }
+  const requestTotal = params.requests.reduce<TaskMonitorTokenUsageBreakdown>(
+    (total, request) => addTaskMonitorTokenUsage(total, request) ?? total,
+    {},
+  );
+  const normalizedRequestTotal = normalizeTaskMonitorPricingTokens(requestTotal);
+  const normalizedTurnTotal = normalizeTaskMonitorPricingTokens(
+    params.turnTokenUsage,
+  );
+  if (
+    normalizedRequestTotal.cacheWriteInputTokens
+      !== normalizedTurnTotal.cacheWriteInputTokens
+    || normalizedRequestTotal.cachedInputTokens
+      !== normalizedTurnTotal.cachedInputTokens
+    || normalizedRequestTotal.inputTokens !== normalizedTurnTotal.inputTokens
+    || normalizedRequestTotal.outputTokens !== normalizedTurnTotal.outputTokens
+    || normalizedRequestTotal.reasoningOutputTokens
+      !== normalizedTurnTotal.reasoningOutputTokens
+  ) {
+    return undefined;
+  }
+
+  const costs = params.requests.map((request) => {
+    const tokens = normalizeTaskMonitorPricingTokens(request);
+    return estimateTokenUsageCost({
+      at: params.at,
+      cacheWriteInputTokens: tokens.cacheWriteInputTokens,
+      cachedInputTokens: tokens.cachedInputTokens,
+      fastMode: params.fastMode,
+      inputTokenScope: "request",
+      model: params.model,
+      outputTokens: tokens.outputTokens,
+      reasoningOutputTokens: tokens.reasoningOutputTokens,
+      serviceTier: params.serviceTier,
+      uncachedInputTokens: tokens.uncachedInputTokens,
+    });
+  });
+  if (costs.some((cost) => cost === undefined)) {
+    return undefined;
+  }
+  const priced = costs.filter(
+    (cost): cost is NonNullable<typeof cost> => cost !== undefined,
+  );
+  const first = priced[0]!;
+  if (
+    priced.some(
+      (cost) =>
+        cost.catalogId !== first.catalogId
+        || cost.catalogVersion !== first.catalogVersion
+        || cost.currency !== first.currency
+        || cost.provider !== first.provider
+        || cost.serviceTier !== first.serviceTier,
+    )
+  ) {
+    return undefined;
+  }
+  const rateIds = new Set(priced.map((cost) => cost.rateId));
+  return {
+    cacheWriteInputCostMicros: priced.reduce(
+      (total, cost) => total + cost.cacheWriteInputCostMicros,
+      0,
+    ),
+    cachedInputCostMicros: priced.reduce(
+      (total, cost) => total + cost.cachedInputCostMicros,
+      0,
+    ),
+    catalogId: first.catalogId,
+    catalogVersion: first.catalogVersion,
+    currency: first.currency,
+    outputCostMicros: priced.reduce(
+      (total, cost) => total + cost.outputCostMicros,
+      0,
+    ),
+    provider: first.provider,
+    ...(rateIds.size === 1 ? { rateId: first.rateId } : {}),
+    serviceTier: first.serviceTier,
+    totalCostMicros: priced.reduce(
+      (total, cost) => total + cost.totalCostMicros,
+      0,
+    ),
+    uncachedInputCostMicros: priced.reduce(
+      (total, cost) => total + cost.uncachedInputCostMicros,
+      0,
+    ),
   };
 }
 
@@ -3395,6 +3600,7 @@ function readTaskMonitorNumber(
 }
 
 function estimateTaskMonitorUsageCost(params: {
+  cacheWriteInputTokens?: number;
   cachedInputTokens: number;
   fastMode?: boolean;
   model?: string;
@@ -3448,6 +3654,10 @@ function buildTaskMonitorUsageLine(params: {
     inputTokens,
     Math.max(0, tokenUsage.cachedInputTokens ?? 0),
   );
+  const cacheWriteInputTokens = Math.min(
+    Math.max(0, inputTokens - cachedInputTokens),
+    Math.max(0, tokenUsage.cacheWriteInputTokens ?? 0),
+  );
   const uncachedInputTokens = Math.max(
     0,
     tokenUsage.uncachedInputTokens ?? inputTokens - cachedInputTokens,
@@ -3460,6 +3670,7 @@ function buildTaskMonitorUsageLine(params: {
   );
   const model = params.model ?? params.usage.model ?? params.usage.cost?.model;
   const cost = estimateTokenUsageCost({
+    cacheWriteInputTokens,
     cachedInputTokens,
     fastMode: params.fastMode,
     model,
@@ -3468,21 +3679,21 @@ function buildTaskMonitorUsageLine(params: {
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
-  const pricingServiceTier = resolveOpenAiPricingServiceTier({
-    fastMode: params.fastMode,
-    serviceTier: params.serviceTier,
-  });
   const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
     cost
       ? undefined
-      : !model
-        ? "missing-model"
-        : pricingServiceTier === undefined
-          ? "unsupported-service-tier"
-          : "missing-rate";
+      : resolveTokenUsagePriceUnavailableReason({
+          cachedInputTokens,
+          fastMode: params.fastMode,
+          model,
+          serviceTier: params.serviceTier,
+          uncachedInputTokens,
+        });
 
   return {
     backend: params.backend,
+    cacheWriteInputCostMicros: cost?.cacheWriteInputCostMicros ?? 0,
+    cacheWriteInputTokens,
     cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
     cachedInputTokens,
     createdAt: Date.now(),
@@ -3656,6 +3867,7 @@ function buildLiveThreadUsageLine(params: {
   fastMode?: boolean;
   model?: string;
   observedReplays?: ObservedContextReplayTally;
+  requestTokenUsages?: readonly TaskMonitorTokenUsageBreakdown[];
   serviceTier?: string;
   startedAt?: number;
   threadId: string;
@@ -3668,6 +3880,7 @@ function buildLiveThreadUsageLine(params: {
   }
 
   const {
+    cacheWriteInputTokens,
     cachedInputTokens,
     inputTokens,
     outputTokens,
@@ -3678,7 +3891,20 @@ function buildLiveThreadUsageLine(params: {
   const cumulativeTokens = params.cumulativeTokenUsage
     ? normalizeTaskMonitorPricingTokens(params.cumulativeTokenUsage)
     : undefined;
-  const cost = estimateTokenUsageCost({
+  const createdAt = params.createdAt ?? params.completedAt ?? Date.now();
+  const requestComponentsCost = params.requestTokenUsages
+    ? estimateRequestComponentsCost({
+        at: createdAt,
+        fastMode: params.fastMode,
+        model: params.model,
+        requests: params.requestTokenUsages,
+        serviceTier: params.serviceTier,
+        turnTokenUsage: tokens,
+      })
+    : undefined;
+  const cost = requestComponentsCost ?? estimateTokenUsageCost({
+    at: createdAt,
+    cacheWriteInputTokens,
     cachedInputTokens,
     fastMode: params.fastMode,
     model: params.model,
@@ -3687,29 +3913,31 @@ function buildLiveThreadUsageLine(params: {
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
-  const pricingServiceTier = resolveOpenAiPricingServiceTier({
-    fastMode: params.fastMode,
-    serviceTier: params.serviceTier,
-  });
   const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | undefined =
     cost
       ? undefined
-      : !params.model
-        ? "missing-model"
-        : pricingServiceTier === undefined
-          ? "unsupported-service-tier"
-          : "missing-rate";
+      : resolveTokenUsagePriceUnavailableReason({
+          cachedInputTokens,
+          fastMode: params.fastMode,
+          model: params.model,
+          serviceTier: params.serviceTier,
+          uncachedInputTokens,
+        });
 
   return {
     backend: params.backend,
+    cacheWriteInputCostMicros: cost?.cacheWriteInputCostMicros ?? 0,
+    cacheWriteInputTokens,
     cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
     cachedInputTokens,
     ...(typeof params.completedAt === "number" ? { completedAt: params.completedAt } : {}),
-    createdAt: params.createdAt ?? params.completedAt ?? Date.now(),
+    createdAt,
     currency: cost?.currency ?? "USD",
     ...(cumulativeTokens
       ? {
           cumulativeCachedInputTokens: cumulativeTokens.cachedInputTokens,
+          cumulativeCacheWriteInputTokens:
+            cumulativeTokens.cacheWriteInputTokens,
           cumulativeInputTokens: cumulativeTokens.inputTokens,
           cumulativeOutputTokens: cumulativeTokens.outputTokens,
           cumulativeReasoningOutputTokens: cumulativeTokens.reasoningOutputTokens,
@@ -3737,6 +3965,7 @@ function buildLiveThreadUsageLine(params: {
     provider: cost?.provider ?? fallbackUsageProvider(params.backend),
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
+    ...(requestComponentsCost ? { pricingBasis: "request-components" as const } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
     reasoningOutputTokens,
     scope: "turn",
@@ -3787,6 +4016,7 @@ function buildForkBaselineUsageLine(params: {
   usageTiming: { completedAt?: number; createdAt?: number; startedAt?: number };
 }): ThreadUsageLineRecord | undefined {
   const {
+    cacheWriteInputTokens,
     cachedInputTokens,
     inputTokens,
     outputTokens,
@@ -3811,6 +4041,8 @@ function buildForkBaselineUsageLine(params: {
     Date.now();
   return {
     backend: params.backend,
+    cacheWriteInputCostMicros: 0,
+    cacheWriteInputTokens,
     cachedInputCostMicros: 0,
     cachedInputTokens,
     createdAt: Math.max(0, anchorAt - 1),
@@ -5587,6 +5819,25 @@ function buildCodexInvalidIdRecoveryCooldownMessage(
   );
 }
 
+type LiveThreadRequestUsage = {
+  cumulativeInputTokens: number;
+  requests: TaskMonitorTokenUsageBreakdown[];
+};
+
+type RequestComponentsCost = {
+  cacheWriteInputCostMicros: number;
+  cachedInputCostMicros: number;
+  catalogId: string;
+  catalogVersion: string;
+  currency: "USD";
+  outputCostMicros: number;
+  provider: string;
+  rateId?: string;
+  serviceTier: string;
+  totalCostMicros: number;
+  uncachedInputCostMicros: number;
+};
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -5690,6 +5941,7 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
+  private readonly liveThreadRequestUsage = new Map<string, LiveThreadRequestUsage>();
   private readonly liveThreadUsageBaselines = new Map<
     string,
     TaskMonitorTokenUsageBreakdown
@@ -15846,6 +16098,33 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private observeLiveThreadRequestUsage(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    tokenUsage: unknown;
+    turnId?: string;
+  }): readonly TaskMonitorTokenUsageBreakdown[] | undefined {
+    if (!params.turnId) {
+      return undefined;
+    }
+    const key = [
+      params.backend,
+      params.threadId,
+      params.turnId,
+      "live-token-usage",
+    ].join(":");
+    const folded = foldLiveThreadRequestUsage({
+      current: this.liveThreadRequestUsage.get(key),
+      tokenUsage: params.tokenUsage,
+    });
+    if (!folded) {
+      return undefined;
+    }
+    this.liveThreadRequestUsage.set(key, folded);
+    return folded.requests;
+  }
+
+
   private deriveLiveThreadTokenUsage(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -16153,6 +16432,12 @@ export class DesktopBackendRegistry {
     const fastMode =
       readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"]) ??
       overlay?.fastMode;
+    const requestTokenUsages = this.observeLiveThreadRequestUsage({
+      backend: event.backend,
+      threadId,
+      tokenUsage,
+      turnId: notification.params.turnId ?? undefined,
+    });
     const derivedUsage = this.deriveLiveThreadTokenUsage({
       backend: event.backend,
       threadId,
@@ -16177,6 +16462,7 @@ export class DesktopBackendRegistry {
       fastMode,
       model,
       observedReplays,
+      requestTokenUsages,
       serviceTier,
       threadId,
       tokenUsage: derivedUsage.turnTokenUsage,
@@ -23510,6 +23796,13 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromStartedNotification(notification);
+      const requestUsagePrefix = [event.backend, notification.params.threadId, ""].join(":");
+      const currentRequestUsageKey = `${requestUsagePrefix}${turnId}:live-token-usage`;
+      for (const key of this.liveThreadRequestUsage.keys()) {
+        if (key.startsWith(requestUsagePrefix) && key !== currentRequestUsageKey) {
+          this.liveThreadRequestUsage.delete(key);
+        }
+      }
       if (!isAcpBackendId(event.backend)) {
         this.schedulePendingThreadTitleGenerationFromLifecycle({
           backend: event.backend,

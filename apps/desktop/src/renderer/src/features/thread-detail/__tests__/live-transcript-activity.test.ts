@@ -348,6 +348,29 @@ describe("buildTokenUsageActivityEntry", () => {
     ]);
   });
 
+  it("includes Astra cache-write costs in a request usage entry", () => {
+    const entry = buildTokenUsageActivityEntry({
+      id: "astra-request",
+      model: "gpt-6-astra",
+      tokenUsage: {
+        last: {
+          inputTokens: 200_000,
+          cacheWriteInputTokens: 10_000,
+          cachedInputTokens: 100_000,
+          outputTokens: 10_000,
+          reasoningOutputTokens: 0,
+          totalTokens: 210_000,
+        },
+      },
+    });
+
+    expect(entry?.summary).toContain("10,000 cache writes");
+    expect(entry?.summary).toContain("$1.63 list price");
+    expect(entry?.details.map((detail) => detail.label)).toContain(
+      "Cache write cost: 10,000 tokens at $12.50/M = $0.13",
+    );
+  });
+
   it("prices the Grok ACP build model alias without double-billing reasoning", () => {
     const entry = buildTokenUsageActivityEntry({
       id: "usage-grok-45",
