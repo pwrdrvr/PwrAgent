@@ -708,6 +708,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             subAgents={props.thread.subAgents}
             tokenMiserAccounting={props.toolAccounting?.tokenMiser}
             threadReasoningEffort={props.thread.reasoningEffort}
+            turnFailures={props.thread.turnFailureLog}
           />
         );
       case "tool-calls": {

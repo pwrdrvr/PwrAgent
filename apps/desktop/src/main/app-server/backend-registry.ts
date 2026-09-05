@@ -4185,6 +4185,19 @@ function foldLiveThreadRequestUsage(params: {
     && normalizedCumulativeInputTokens === params.current.cumulativeInputTokens
   ) {
     const priorRequest = params.current.requests.at(-1);
+    const latestTokens = normalizeTaskMonitorPricingTokens(latestUsage);
+    // Codex recomputes context size using an empty last-request breakdown
+    // while retaining cumulative billed usage. Rate-limit notifications can
+    // repeat it. It is not a correction to the last measured model request.
+    if (
+      latestTokens.inputTokens === 0
+      && latestTokens.cachedInputTokens === 0
+      && latestTokens.cacheWriteInputTokens === 0
+      && latestTokens.outputTokens === 0
+      && latestTokens.reasoningOutputTokens === 0
+    ) {
+      return params.current;
+    }
     if (taskMonitorTokenUsageEqual(priorRequest, latestUsage)) {
       return params.current;
     }
