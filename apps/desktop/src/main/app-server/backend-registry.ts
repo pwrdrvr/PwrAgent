@@ -1,3 +1,5 @@
+import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
+import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { rememberBoundedMap } from "../bounded-map";
 import { app } from "electron";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -611,7 +613,11 @@ import {
 } from "./thread-turn-queue";
 import { materializeLocalImageInputs } from "./image-input-files";
 import { enrichLocalFileInputs } from "./local-file-input";
-import { stageTurnInputAttachmentsForRetention } from "./turn-input-attachment-files";
+import {
+  portableTurnInputAttachments,
+  stageQueuedFileInputs,
+  stageTurnInputAttachmentsForRetention,
+} from "./turn-input-attachment-files";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import {
   PdfAttachmentStore,
@@ -8065,6 +8071,7 @@ export class DesktopBackendRegistry {
   private codexRateLimitsNotificationVersion = 0;
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
   private providerRuntimeInvalidationPromise?: Promise<void>;
+  private readonly correspondenceStore: ThreadCorrespondenceStore;
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkingStateService: GitWorkingStateService;
@@ -8736,6 +8743,7 @@ export class DesktopBackendRegistry {
   constructor(options?: {
     codexClient?: BackendClient;
     overlayStore?: BackendRegistryOverlayStoreLike;
+    correspondenceStore?: ThreadCorrespondenceStore;
     gitDirectoryService?: GitDirectoryService;
     gitWorkingStateService?: GitWorkingStateService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
@@ -8864,6 +8872,10 @@ export class DesktopBackendRegistry {
     const settingsService = createsLiveCodexClient
       ? getDesktopSettingsService()
       : undefined;
+    this.correspondenceStore = options?.correspondenceStore
+      ?? new ThreadCorrespondenceStore(isAppStateInitialized()
+        ? resolveActiveProfilePath("state/thread-correspondence")
+        : undefined);
     const tokenMiserStateDir =
       createsLiveCodexClient && isAppStateInitialized()
         ? resolveActiveProfilePath("state/token-miser")
@@ -10060,9 +10072,58 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private updateCorrespondenceStatus(
+    ...args: Parameters<ThreadCorrespondenceStore["update"]>
+  ): void {
+    try {
+      this.correspondenceStore.update(...args);
+      const [source, id] = args;
+      const message = this.correspondenceStore.message(source, id);
+      if (message) {
+        void this.emit({
+          backend: source.backend,
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: source.threadId,
+              item: {
+                id: message.id,
+                type: "agentMessage",
+                text: message.text,
+                content: message.parts,
+                origin: message.origin,
+              },
+            },
+          },
+        }).catch((error) => {
+          backendRegistryLog.error("Could not publish cross-thread delivery state", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    } catch (error) {
+      // Status persistence must not turn an already-admitted backend turn into
+      // a failed submission or prevent the recipient FIFO from advancing.
+      backendRegistryLog.error("Could not persist cross-thread delivery state", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async emitTurnQueueLifecycle(
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
+    const source = event.entry.messageOrigin?.sourceThread;
+    if (
+      source?.messageId
+      && event.type !== "terminal"
+    ) {
+      this.updateCorrespondenceStatus(source, source.messageId, {
+        state: event.type === "blocked" ? "held" : event.type,
+        queueEntryId: event.entry.id,
+        ...(event.type === "started" ? { turnId: event.turnId } : {}),
+      });
+    }
     const baseParams = {
       threadId: event.entry.threadId,
       queueEntryId: event.entry.id,
@@ -13505,6 +13566,12 @@ export class DesktopBackendRegistry {
       const response = await this.readAcpThread(request, backend);
       return {
         ...response,
+        replay: request.includeTurns === false || request.before
+          ? response.replay
+          : this.correspondenceStore.appendToReplay(
+              { backend, threadId: request.threadId },
+              response.replay,
+            ),
         readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       };
     }
@@ -13692,7 +13759,12 @@ export class DesktopBackendRegistry {
       ...(replayWithReviewMetadata.threadStatus
         ? { threadStatus: replayWithReviewMetadata.threadStatus }
         : {}),
-      replay: replayWithReviewMetadata,
+      replay: request.includeTurns === false || request.before
+        ? replayWithReviewMetadata
+        : this.correspondenceStore.appendToReplay(
+            { backend, threadId: request.threadId },
+            replayWithReviewMetadata,
+          ),
     };
   }
 
@@ -15113,6 +15185,40 @@ export class DesktopBackendRegistry {
     });
   }
 
+  async readQueuedTurn(
+    request: ReadQueuedTurnRequest,
+    portable = false,
+  ): Promise<ReadQueuedTurnResponse> {
+    const entry = this.threadTurnQueue.getQueuedEntries(request)
+      .find((candidate) => candidate.id === request.queueEntryId);
+    if (!entry) throw new Error("The queued message is no longer waiting.");
+    return {
+      queueEntryId: entry.id,
+      contentHash: createHash("sha256").update(JSON.stringify(entry.input)).digest("hex"),
+      input: portable
+        ? await portableTurnInputAttachments(structuredClone(entry.input), {
+            privateStorageRoots: this.localFilePrivateStorageRoots,
+          })
+        : request.forEdit
+        ? await stageQueuedFileInputs(structuredClone(entry.input))
+        : structuredClone(entry.input),
+      imageParts: entry.input.flatMap((item): AppServerThreadImagePart[] => {
+        if (item.type === "image") {
+          return [{ type: "image", url: item.url, alt: item.name }];
+        }
+        if (item.type === "localImage") {
+          return [{
+            type: "image",
+            url: toTranscriptImageProtocolUrl(pathToFileURL(item.path).toString()),
+            alt: item.name,
+          }];
+        }
+        return [];
+      }),
+      ...(entry.messageOrigin ? { messageOrigin: structuredClone(entry.messageOrigin) } : {}),
+    };
+  }
+
   cancelQueuedTurn(entryId: string, reason?: string): boolean {
     return Boolean(this.threadTurnQueue.cancelEntry(entryId, reason));
   }
@@ -15120,7 +15226,14 @@ export class DesktopBackendRegistry {
   cancelQueuedTurnWithDisposition(
     entryId: string,
     reason?: string,
+    expectedContentHash?: string,
   ): CancelQueuedTurnResponse {
+    if (expectedContentHash) {
+      const entry = this.threadTurnQueue.getAllQueuedEntries().find((entry) => entry.id === entryId);
+      if (entry && createHash("sha256").update(JSON.stringify(entry.input)).digest("hex") !== expectedContentHash) {
+        return { queueEntryId: entryId, cancelled: false, disposition: "content_changed" };
+      }
+    }
     const result = this.threadTurnQueue.cancelEntryWithDisposition(
       entryId,
       reason,
@@ -32265,8 +32378,8 @@ export class DesktopBackendRegistry {
     const threadId = request.args.threadId.trim();
     const instanceId = request.args.instanceId?.trim();
     const includeRemote = request.args.includeRemote !== false;
-    const prompt = request.args.prompt.trim();
-    if (!threadId || !prompt) {
+    const prompt = request.args.prompt;
+    if (!threadId || !prompt.trim()) {
       return threadOrchestrationFailure(
         "invalid_arguments",
         "send_message_to_thread requires non-empty threadId and prompt strings.",
@@ -32289,6 +32402,8 @@ export class DesktopBackendRegistry {
       );
     }
 
+    const correspondenceId = `correspondence:${randomUUID()}`;
+    const source = { backend: request.context.backend, threadId: request.context.threadId };
     try {
       const settings = {
         ...(request.args.executionMode
@@ -32320,6 +32435,17 @@ export class DesktopBackendRegistry {
       const messageOrigin = await this.buildAgentMessageOrigin({
         backend: request.context.backend,
         threadId: request.context.threadId,
+      });
+      if (messageOrigin.sourceThread) {
+        messageOrigin.sourceThread = { ...messageOrigin.sourceThread, messageId: correspondenceId };
+      }
+      this.correspondenceStore.record({
+        id: correspondenceId,
+        source,
+        destination: { backend, threadId, ...(instanceId ? { instanceId } : {}) },
+        input,
+        createdAt: Date.now(),
+        state: "sending",
       });
       let targetTitle: string | undefined;
       let targetInstanceId: string | undefined;
@@ -32429,6 +32555,12 @@ export class DesktopBackendRegistry {
         ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
         threadId: turn.threadId,
       };
+      this.updateCorrespondenceStatus(source, correspondenceId, {
+        state: turn.queueStatus === "queued" ? "queued" : "started",
+        destination: { ...threadLinkRef, title: targetTitle },
+        queueEntryId: turn.queueEntryId,
+        ...(turn.queueStatus === "queued" ? {} : { turnId: turn.turnId }),
+      }, true);
       const messageId = turn.queueStatus === "queued"
         ? undefined
         : buildTurnUserMessageOriginId(turn.turnId);

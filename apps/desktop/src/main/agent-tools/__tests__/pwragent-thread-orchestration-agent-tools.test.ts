@@ -545,7 +545,7 @@ describe("pwragent thread orchestration agent tools", () => {
     });
   });
 
-  it("normalizes send_message_to_thread args and dispatches with caller context", async () => {
+  it("normalizes send_message_to_thread identifiers while preserving prompt content and caller context", async () => {
     const handler = vi.fn(async () => ({
       ok: true as const,
       data: {
@@ -596,7 +596,7 @@ describe("pwragent thread orchestration agent tools", () => {
         threadId: "target-thread",
         instanceId: "pwr_studio",
         includeRemote: true,
-        prompt: "Check CI",
+        prompt: " Check CI ",
         model: "gpt-5.5",
         fastMode: true,
       },

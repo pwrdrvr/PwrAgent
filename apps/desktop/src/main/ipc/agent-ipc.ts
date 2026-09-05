@@ -1,3 +1,6 @@
+import { stageQueuedFileInputs } from "../app-server/turn-input-attachment-files";
+import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
+import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import {
@@ -96,6 +99,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import {
+  AGENT_READ_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
@@ -630,6 +634,34 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_READ_QUEUED_TURN_CHANNEL);
+  ipcMain.handle(
+    AGENT_READ_QUEUED_TURN_CHANNEL,
+    async (
+      _event,
+      request: ReadQueuedTurnRequest,
+    ): Promise<ReadQueuedTurnResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        const { federationTarget, ...remoteRequest } = request;
+        const response = await getDesktopFederationRuntime()
+          .remoteBackend(federationTarget)
+          .readQueuedTurn(remoteRequest);
+        return {
+          ...response,
+          input: request.forEdit ? await stageQueuedFileInputs(response.input) : response.input,
+          imageParts: response.imageParts?.map((image) => ({
+            ...image,
+            url: rewriteFederatedTranscriptImageUrlForRenderer(image.url, federationTarget.instanceId),
+          })),
+        };
+      }
+      return registry.readQueuedTurn(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_CANCEL_QUEUED_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_CANCEL_QUEUED_TURN_CHANNEL,
@@ -649,6 +681,7 @@ export function registerAgentIpcHandlers(): void {
       return registry.cancelQueuedTurnWithDisposition(
         request.queueEntryId,
         "Cancelled from the desktop composer.",
+        request.expectedContentHash,
       );
     },
   );
