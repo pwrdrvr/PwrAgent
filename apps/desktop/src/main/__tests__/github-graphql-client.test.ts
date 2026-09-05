@@ -637,6 +637,7 @@ describe("GithubGraphqlPrClient", () => {
     expect(request).toHaveBeenCalledTimes(4);
 
     mode = "succeed";
+    expect(graphqlClient.noteNetworkReconnect()).toBe(true);
     await expect(
       graphqlClient.fetchPullRequestsAfterReconnect([refs[0]!]),
     ).resolves.toHaveLength(1);
@@ -646,6 +647,53 @@ describe("GithubGraphqlPrClient", () => {
     await graphqlClient.fetchPullRequests([refs[0]!]);
     expect(request).toHaveBeenCalledTimes(6);
     expect(now).toBe(1_000_000);
+  });
+
+  it("preserves reconnect recovery for the next foreground branch lookup", async () => {
+    const now = 1_000_000;
+    let mode: "fail" | "succeed" = "fail";
+    const request = vi.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("connect timeout");
+      }
+      return { r0: { pullRequests: { nodes: [] } } };
+    });
+    const graphqlClient = client(request, { now: () => now });
+    const branchRefs = [
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "main" },
+    ];
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    // This is the scheduler-disabled / no-known-PR path: the online signal
+    // arrives, but no background status batch exists to consume it.
+    expect(graphqlClient.noteNetworkReconnect()).toBe(true);
+    mode = "succeed";
+    const result = await graphqlClient.fetchPullRequestsForBranches(branchRefs);
+
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(result.has("pwrdrvr/pwragent#main")).toBe(true);
+  });
+
+  it("deduplicates reconnect permits and lets only one request consume one", async () => {
+    let now = 1_000_000;
+    const request = vi.fn(async () => {
+      throw new Error("connect timeout");
+    });
+    const graphqlClient = client(request, { now: () => now });
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(graphqlClient.noteNetworkReconnect()).toBe(true);
+    expect(graphqlClient.noteNetworkReconnect()).toBe(false);
+
+    await graphqlClient.fetchPullRequestsAfterReconnect([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(8);
+    await graphqlClient.fetchPullRequestsAfterReconnect([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(8);
+
+    now += 30_000;
+    expect(graphqlClient.noteNetworkReconnect()).toBe(true);
   });
 
   it("returns to the initial backoff after GitHub recovers", async () => {

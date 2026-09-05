@@ -5111,6 +5111,11 @@ class DesktopAppServerService {
   }
 
   async probePullRequestPollingAfterReconnect(): Promise<void> {
+    // Arm the shared client even when background polling is disabled or has no
+    // eligible target; the next foreground lookup can consume the bypass.
+    if (!this.getPrGraphqlClient().noteNetworkReconnect()) {
+      return;
+    }
     await this.prPollingScheduler?.probeAfterNetworkReconnect();
   }
 

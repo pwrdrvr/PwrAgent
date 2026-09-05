@@ -53,6 +53,8 @@ const MAX_BACKOFF_MS = 60_000;
 const FAILURE_BACKOFF_BASE_MS = 60_000;
 /** Keep probing occasionally so recovery is discovered without user action. */
 const MAX_FAILURE_BACKOFF_MS = 15 * 60_000;
+/** Collapse duplicate Chromium online events from multiple renderer windows. */
+export const GITHUB_RECONNECT_DEDUP_MS = 30_000;
 /** How long a minted `gh auth token` stays fresh in memory. */
 const TOKEN_TTL_MS = 5 * 60_000;
 
@@ -684,6 +686,8 @@ export class GithubGraphqlPrClient {
   private tokenCache: { token: string; fetchedAt: number } | undefined;
   private consecutiveRetryableFailures = 0;
   private failureBackoffUntil = 0;
+  private reconnectBypassAvailable = false;
+  private lastNetworkReconnectAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: GithubGraphqlPrClientOptions = {}) {
     this.requestOverride = options.request;
@@ -701,6 +705,20 @@ export class GithubGraphqlPrClient {
   /** Force the next request to re-mint a token (e.g. after `gh auth login`). */
   invalidateToken(): void {
     this.tokenCache = undefined;
+  }
+
+  /**
+   * Preserve one slow-mode bypass for whichever GitHub lookup runs next.
+   * Returns false when another renderer already reported the same transition.
+   */
+  noteNetworkReconnect(): boolean {
+    const now = this.now();
+    if (now - this.lastNetworkReconnectAt < GITHUB_RECONNECT_DEDUP_MS) {
+      return false;
+    }
+    this.lastNetworkReconnectAt = now;
+    this.reconnectBypassAvailable = true;
+    return true;
   }
 
   /**
@@ -727,9 +745,13 @@ export class GithubGraphqlPrClient {
 
   private async fetchPullRequestsWithBackoffPolicy(
     refs: PrRef[],
-    bypassFailureBackoff: boolean,
+    requireReconnectBypass: boolean,
   ): Promise<PrSummary[]> {
     if (refs.length === 0) {
+      return [];
+    }
+    const bypassFailureBackoff = this.consumeReconnectBypass();
+    if (requireReconnectBypass && !bypassFailureBackoff) {
       return [];
     }
     if (!bypassFailureBackoff && this.deferForFailureBackoff("PR poll")) {
@@ -737,6 +759,7 @@ export class GithubGraphqlPrClient {
     }
     const token = await this.resolveToken();
     if (!token) {
+      this.reconnectBypassAvailable ||= bypassFailureBackoff;
       graphqlLog.debug("skipping PR poll: no GitHub token from gh");
       return [];
     }
@@ -768,22 +791,30 @@ export class GithubGraphqlPrClient {
     if (refs.length === 0) {
       return results;
     }
-    if (this.deferForFailureBackoff("branch PR lookup")) {
+    const bypassFailureBackoff = this.consumeReconnectBypass();
+    if (
+      !bypassFailureBackoff
+      && this.deferForFailureBackoff("branch PR lookup")
+    ) {
       return results;
     }
     const token = await this.resolveToken();
     if (!token) {
+      this.reconnectBypassAvailable ||= bypassFailureBackoff;
       graphqlLog.debug("skipping branch PR lookup: no GitHub token from gh");
       return results;
     }
 
+    let bypassNextBatchBackoff = bypassFailureBackoff;
     for (const batch of chunk(refs, this.batchSize)) {
       const data = await this.runBatchQuery(
         buildBranchPrQuery(batch),
         token,
         batch.length,
         batch,
+        bypassNextBatchBackoff,
       );
+      bypassNextBatchBackoff = false;
       if (!data) {
         continue;
       }
@@ -968,8 +999,12 @@ export class GithubGraphqlPrClient {
     token: string,
     refCount: number,
     repositoryRefs?: Array<Pick<BranchRef, "owner" | "repo" | "branch">>,
+    bypassFailureBackoff = false,
   ): Promise<Record<string, unknown> | undefined> {
-    if (this.deferForFailureBackoff("PR batch")) {
+    if (
+      !bypassFailureBackoff
+      && this.deferForFailureBackoff("PR batch")
+    ) {
       return undefined;
     }
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
@@ -1118,6 +1153,14 @@ export class GithubGraphqlPrClient {
     return true;
   }
 
+  private consumeReconnectBypass(): boolean {
+    if (!this.reconnectBypassAvailable) {
+      return false;
+    }
+    this.reconnectBypassAvailable = false;
+    return true;
+  }
+
   private recordRequestCompletion(
     retryDelay: number | null,
   ): { backoffMs: number; consecutiveFailures: number } | undefined {
@@ -1143,6 +1186,7 @@ export class GithubGraphqlPrClient {
   }
 
   private recordRequestSuccess(): void {
+    this.reconnectBypassAvailable = false;
     if (this.consecutiveRetryableFailures === 0) {
       return;
     }

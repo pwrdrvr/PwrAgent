@@ -1,7 +1,10 @@
 import type { PrSummary } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import type { PrRef } from "./github-graphql-client";
-import { parsePrRefFromUrl } from "./github-graphql-client";
+import {
+  GITHUB_RECONNECT_DEDUP_MS,
+  parsePrRefFromUrl,
+} from "./github-graphql-client";
 import { isTerminalPullRequest } from "./pr-derivations";
 
 const schedulerLog = getMainLogger("pwragent:pr-poller");
@@ -73,8 +76,6 @@ const HIDDEN_WINDOW_CADENCE_MULTIPLIER = 4;
 
 const TICK_INTERVAL_MS = 15_000;
 const BATCH_SIZE = 40;
-/** Collapse duplicate Chromium online events from multiple renderer windows. */
-const RECONNECT_PROBE_DEDUP_MS = 30_000;
 /**
  * Cap requests per tick. Bounds concurrency by construction (the batches below
  * this cap run together) and spreads a large backlog across ticks instead of
@@ -220,7 +221,7 @@ export class PrPollingScheduler {
    */
   async probeAfterNetworkReconnect(): Promise<void> {
     const now = this.now();
-    if (now - this.lastReconnectProbeAt < RECONNECT_PROBE_DEDUP_MS) {
+    if (now - this.lastReconnectProbeAt < GITHUB_RECONNECT_DEDUP_MS) {
       return;
     }
     this.lastReconnectProbeAt = now;
