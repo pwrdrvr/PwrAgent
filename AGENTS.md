@@ -249,6 +249,15 @@
 - Do not change the first-party license without an explicit PwrDrvr LLC policy change.
 - Do not remove license disclosures without an explicit PwrDrvr LLC policy change.
 
+### macOS app icon — ship the Icon Composer `.icon`; actool derives the `.icns`
+
+- `mac.icon` in `apps/desktop/electron-builder.yml` points at `build/icon.icon`, an Icon Composer package, and nothing in this repo hand-builds a `.icns`. electron-builder (26.15+, pinned) compiles it with Xcode 26's `actool` into `Contents/Resources/Assets.car` + `CFBundleIconName` (what macOS 26 draws) and derives the legacy `Contents/Resources/icon.icns` + `CFBundleIconFile` (macOS 15 and earlier) from the same source. Each OS reads the format designed for it.
+- Why this is an invariant: macOS 26 auto-normalizes a legacy `.icns` it is handed *instead of* a `.icon`, and how it does so changed between 26.6.1 and 26.6.2. A `.icns` padded to Apple's 824-in-1024 template (#1918 here — the right shape for macOS 15) came out on a light plate in the Dock, Finder, and the DMG window on 26.6.2 for PwrSnap and PwrGit. With the `.icon` present the `.icns` is never opened on macOS 26. Ghostty (MIT) ships exactly this pair.
+- Regenerate with `pnpm --filter @pwragent/desktop generate:macos-app-icon`. `build/icon.png` — the 512px full-bleed master, also shipped as the `pwragent-app-icon.png` resource and used as the Windows/Linux source — stays the authored artwork. The script derives `build/icon.icon/` (the mark lifted off the tile as a transparent layer; the tile gradient is the package `fill`) and `build/icon-macos.png` (padded — the development Dock icon `src/main/index.ts` paints literally) from it. Do not add a `.icns` back, and do not point `mac.icon` at one.
+- The build machine must have Xcode 26+ selected; electron-builder hard-fails on `actool` < 26. Both macOS jobs in `.github/workflows/release.yml` run a "Select Xcode 26" step. Keep it ahead of `pnpm test` so the actool compile test in `apps/desktop/scripts/app-icon.test.mjs` runs instead of skips.
+- `actool` resolves `--app-icon Icon` by the package basename. Fed `build/icon.icon` directly it exits 0 and silently writes no `.icns`. electron-builder copies the package to `Icon.icon` first; do the same if you compile by hand, and check the output for the `.icns`.
+- Verify an icon change by rendering `NSWorkspace.shared.icon(forFile:)` on the newest macOS you ship to and measuring the opaque bounds. The recipe, measurements, and the Ghostty comparison are in PwrSnap's `docs/solutions/2026-09-05-macos-26-legacy-icon-light-plate.md` (pwrdrvr/PwrSnap#563). A clean result on an older point release or on the GitHub runner proves nothing for this class.
+
 ### Third-party dependency licenses
 
 - Three scripts cover licensing. They check different things.

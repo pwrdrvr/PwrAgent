@@ -49,6 +49,28 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm typecheck
 
+      # electron-builder compiles build/icon.icon (Icon Composer) with actool,
+      # which needs Xcode 26+. The macos-15 image defaults to Xcode 16.4 but
+      # ships several 26.x — select the newest and fail here, readably, rather
+      # than mid-package. Selecting it before the unit tests also lets the
+      # actool compile test in apps/desktop/scripts/app-icon.test.mjs run
+      # instead of skip.
+      - name: Select Xcode 26 for the app-icon compile
+        run: |
+          set -euo pipefail
+          xcode="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [ -z "$xcode" ]; then
+            echo "::error::no /Applications/Xcode_26*.app on this runner image; build/icon.icon cannot be compiled" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          actool_version="$(xcrun actool --version | python3 -c 'import plistlib, sys; print(plistlib.load(sys.stdin.buffer)["com.apple.actool.version"]["short-bundle-version"])')"
+          echo "xcode-select -> $xcode (actool $actool_version)"
+          if [ "${actool_version%%.*}" -lt 26 ]; then
+            echo "::error::actool $actool_version is older than 26; build/icon.icon cannot be compiled" >&2
+            exit 1
+          fi
+
       - name: Test (unit)
         run: pnpm test
 
@@ -119,6 +141,24 @@ jobs:
 
       - name: Expand signing input
         run: tar -xzf .release-input/desktop-release-signing-input.tgz
+
+      # Same selection as the prepare job: electron-builder runs actool here
+      # to compile build/icon.icon, and the image's default Xcode 16.4 cannot.
+      - name: Select Xcode 26 for the app-icon compile
+        run: |
+          set -euo pipefail
+          xcode="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [ -z "$xcode" ]; then
+            echo "::error::no /Applications/Xcode_26*.app on this runner image; build/icon.icon cannot be compiled" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          actool_version="$(xcrun actool --version | python3 -c 'import plistlib, sys; print(plistlib.load(sys.stdin.buffer)["com.apple.actool.version"]["short-bundle-version"])')"
+          echo "xcode-select -> $xcode (actool $actool_version)"
+          if [ "${actool_version%%.*}" -lt 26 ]; then
+            echo "::error::actool $actool_version is older than 26; build/icon.icon cannot be compiled" >&2
+            exit 1
+          fi
 
       - name: Sign, notarize, package macOS
         env:
