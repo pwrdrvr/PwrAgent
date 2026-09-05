@@ -387,24 +387,29 @@ function selectStatusRateLimits(
   if (!limits || limits.length === 0) {
     return undefined;
   }
-  return [...limits].sort((left, right) => {
-    const leftName = splitRateLimitName(left.name);
-    const rightName = splitRateLimitName(right.name);
-    const leftFamilyOrder = isSparkRateLimit(left) ? 1 : 0;
-    const rightFamilyOrder = isSparkRateLimit(right) ? 1 : 0;
-    if (leftFamilyOrder !== rightFamilyOrder) {
-      return leftFamilyOrder - rightFamilyOrder;
-    }
-    if (leftName.labelOrder !== rightName.labelOrder) {
-      return leftName.labelOrder - rightName.labelOrder;
-    }
-    return left.name.localeCompare(right.name);
-  });
+  return [...limits]
+    .filter((limit) => !isCreditsRateLimit(limit) || isVisibleCreditsLimit(limit))
+    .sort((left, right) => {
+      const leftName = splitRateLimitName(left.name);
+      const rightName = splitRateLimitName(right.name);
+      const leftFamilyOrder = rateLimitFamilyOrder(left);
+      const rightFamilyOrder = rateLimitFamilyOrder(right);
+      if (leftFamilyOrder !== rightFamilyOrder) {
+        return leftFamilyOrder - rightFamilyOrder;
+      }
+      if (leftName.labelOrder !== rightName.labelOrder) {
+        return leftName.labelOrder - rightName.labelOrder;
+      }
+      return left.name.localeCompare(right.name);
+    });
 }
 
 function formatBackendRateLimit(
   rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
 ): string | undefined {
+  if (isCreditsRateLimit(rateLimit)) {
+    return formatCreditsLine(rateLimit);
+  }
   const { label } = splitRateLimitName(rateLimit.name);
   const displayLabel = isSparkRateLimit(rateLimit) ? `Spark ${label}` : label;
   const resetText = formatRateLimitReset(rateLimit.resetAt);
@@ -479,6 +484,56 @@ function isSparkRateLimit(
 ): boolean {
   return isSparkRateLimitName(rateLimit.limitId) ||
     isSparkRateLimitName(rateLimit.name);
+}
+
+function isCreditsRateLimit(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+): boolean {
+  return rateLimit.windowKey === "credits"
+    || rateLimit.limitId?.toLowerCase() === "credits"
+    || rateLimit.name === "Credits";
+}
+
+function isVisibleCreditsLimit(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+): boolean {
+  return rateLimit.unlimited === true || rateLimit.hasCredits === true;
+}
+
+function rateLimitFamilyOrder(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+): number {
+  if (isCreditsRateLimit(rateLimit)) {
+    return 0;
+  }
+  return isSparkRateLimit(rateLimit) ? 2 : 1;
+}
+
+function formatCreditsLine(
+  rateLimit: NonNullable<BackendSummary["rateLimits"]>[number],
+): string {
+  if (rateLimit.unlimited) {
+    return "Credits: unlimited";
+  }
+  if (typeof rateLimit.remaining === "number" && rateLimit.remaining > 0) {
+    return `Credits: ${formatUsdBalance(rateLimit.remaining)}`;
+  }
+  if (rateLimit.hasCredits) {
+    return "Credits: available";
+  }
+  return "Credits: $0";
+}
+
+function formatUsdBalance(value: number): string {
+  const cents = Math.round(value * 100);
+  const dollars = cents / 100;
+  if (cents % 100 === 0) {
+    return `$${dollars.toLocaleString()}`;
+  }
+  return `$${dollars.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function isSparkRateLimitName(value: string | undefined): boolean {

@@ -1485,10 +1485,24 @@ export function formatRateLimitWindowName(params: {
   return `${rawName ?? rawId} ${windowLabel}`.trim();
 }
 
+const CREDITS_RATE_LIMIT_NAME = "Credits";
+const CREDITS_RATE_LIMIT_ID = "credits";
+
 export function extractRateLimitSummaries(
   value: unknown,
 ): BackendRateLimitSummary[] {
   const out = new Map<string, BackendRateLimitSummary>();
+  const addCredits = (snapshot: Record<string, unknown>): void => {
+    const credits = extractCreditsRateLimit(snapshot);
+    if (!credits) {
+      return;
+    }
+    const existing = out.get(CREDITS_RATE_LIMIT_NAME);
+    out.set(
+      CREDITS_RATE_LIMIT_NAME,
+      existing ? preferCreditsRateLimit(existing, credits) : credits,
+    );
+  };
   const addWindow = (
     windowValue: unknown,
     params: { limitId?: string; limitName?: string; windowKey: "primary" | "secondary" }
@@ -1575,7 +1589,7 @@ export function extractRateLimitSummaries(
     if (!record) {
       return;
     }
-    if ("primary" in record || "secondary" in record) {
+    if ("primary" in record || "secondary" in record || "credits" in record) {
       const limitId = pickString(record, ["limitId", "limit_id", "id"]);
       const limitName = pickString(record, ["limitName", "limit_name", "name", "label"]);
       addWindow(record.primary, { limitId, limitName, windowKey: "primary" });
@@ -1584,6 +1598,7 @@ export function extractRateLimitSummaries(
         limitId,
         limitName,
       });
+      addCredits(record);
     }
     const byLimitId = asRecord(record.rateLimitsByLimitId ?? record.rate_limits_by_limit_id);
     if (byLimitId) {
@@ -1599,6 +1614,7 @@ export function extractRateLimitSummaries(
           snapshotRecord.individualLimit ?? snapshotRecord.individual_limit,
           { limitId, limitName },
         );
+        addCredits(snapshotRecord);
       }
     }
     const remaining = pickFiniteNumber(record, [
@@ -1663,6 +1679,66 @@ export function extractRateLimitSummaries(
   };
   visit(value);
   return [...out.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function extractCreditsRateLimit(
+  snapshot: Record<string, unknown>,
+): BackendRateLimitSummary | undefined {
+  const credits = asRecord(snapshot.credits);
+  if (!credits) {
+    return undefined;
+  }
+  const hasCredits = pickBoolean(credits, ["hasCredits", "has_credits"]);
+  const unlimited = pickBoolean(credits, ["unlimited"]);
+  if (hasCredits === undefined && unlimited === undefined) {
+    // Reset-credit ledgers also use a `credits` array/object. Account balance
+    // snapshots always carry the boolean flags from CreditsSnapshot.
+    return undefined;
+  }
+  return {
+    name: CREDITS_RATE_LIMIT_NAME,
+    limitId: CREDITS_RATE_LIMIT_ID,
+    windowKey: "credits",
+    hasCredits: hasCredits === true,
+    unlimited: unlimited === true,
+    remaining: parseCreditBalance(pickString(credits, ["balance"])),
+  };
+}
+
+function preferCreditsRateLimit(
+  current: BackendRateLimitSummary,
+  next: BackendRateLimitSummary,
+): BackendRateLimitSummary {
+  if (next.unlimited && !current.unlimited) {
+    return next;
+  }
+  if (current.unlimited && !next.unlimited) {
+    return current;
+  }
+  const currentRemaining = current.remaining ?? Number.NEGATIVE_INFINITY;
+  const nextRemaining = next.remaining ?? Number.NEGATIVE_INFINITY;
+  if (nextRemaining !== currentRemaining) {
+    return nextRemaining > currentRemaining ? next : current;
+  }
+  if (next.hasCredits && !current.hasCredits) {
+    return next;
+  }
+  return current;
+}
+
+function parseCreditBalance(raw: string | undefined): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const trimmed = raw.replace(/^\$/, "").replace(/,/g, "").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
 }
 
 function extractAccountSummary(value: unknown): BackendAccountSummary {

@@ -6415,6 +6415,109 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("replaces a credits balance when a later snapshot omits the amount", async () => {
+    const creditsLimit: BackendRateLimitSummary = {
+      name: "Credits",
+      limitId: "credits",
+      windowKey: "credits",
+      hasCredits: true,
+      unlimited: false,
+      remaining: 100,
+    };
+    const fiveHourLimit: BackendRateLimitSummary = {
+      name: "5h limit",
+      limitId: "codex",
+      limitName: "Codex",
+      windowKey: "primary",
+      usedPercent: 77,
+      remaining: 23,
+      windowMinutes: 300,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+      },
+      rateLimits: [fiveHourLimit, creditsLimit],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.refreshProvidersAtStartup(
+      issueProviderDiscoveryPermit("startup"),
+    );
+
+    await codexClient.emit({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: {
+            usedPercent: 77,
+            windowDurationMins: 300,
+            resetsAt: null,
+          },
+          secondary: null,
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
+        },
+      },
+    });
+
+    expect(
+      (await registry.listBackends({ includeUnavailable: true })).backends[0]
+        ?.rateLimits,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Credits",
+          remaining: 100,
+          hasCredits: true,
+        }),
+      ]),
+    );
+
+    await codexClient.emit({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: {
+            usedPercent: 77,
+            windowDurationMins: 300,
+            resetsAt: null,
+          },
+          secondary: null,
+          individualLimit: null,
+          credits: {
+            hasCredits: true,
+            unlimited: false,
+            balance: null,
+          },
+          planType: null,
+          rateLimitReachedType: null,
+        },
+      },
+    });
+
+    const credits = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends[0]?.rateLimits?.find((limit) => limit.name === "Credits");
+    expect(credits).toMatchObject({
+      name: "Credits",
+      hasCredits: true,
+      unlimited: false,
+    });
+    expect(credits?.remaining).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("coalesces changed Codex rate-limit broadcasts into a 20-second window", async () => {
     vi.useFakeTimers();
     const codexClient = new MockBackendClient({

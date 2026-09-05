@@ -5824,6 +5824,8 @@ function mergeRateLimitSummary(
     ...(update.limit !== undefined ? { limit: update.limit } : {}),
     ...(update.used !== undefined ? { used: update.used } : {}),
     ...(update.usedPercent !== undefined ? { usedPercent: update.usedPercent } : {}),
+    ...(update.hasCredits !== undefined ? { hasCredits: update.hasCredits } : {}),
+    ...(update.unlimited !== undefined ? { unlimited: update.unlimited } : {}),
     ...(update.resetAt !== undefined ? { resetAt: update.resetAt } : {}),
     ...(update.windowSeconds !== undefined
       ? { windowSeconds: update.windowSeconds }
@@ -5832,6 +5834,15 @@ function mergeRateLimitSummary(
       ? { windowMinutes: update.windowMinutes }
       : {}),
   };
+  if (update.windowKey === "credits") {
+    // A present CreditsSnapshot replaces its balance. Sparse updates omit the
+    // entire credits row when they have no new observation, not remaining.
+    if (update.remaining === undefined) {
+      delete merged.remaining;
+    } else {
+      merged.remaining = update.remaining;
+    }
+  }
   if (merged.windowKey === "primary" || merged.windowKey === "secondary") {
     merged.name = formatRateLimitWindowName({
       limitId: merged.limitId,
