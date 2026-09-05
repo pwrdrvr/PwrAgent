@@ -35700,6 +35700,10 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    const federatedControl = vi.fn(async () => {
+      throw new PwrAgentFederatedThreadMessageError("peer_unavailable", "Remembered peer is offline.");
+    });
+    registry.setFederatedThreadControlHandler(federatedControl);
     await discoverCodexBackendForTest(registry);
     for (const [threadId, turnId] of [
       ["target-thread", "target-turn"],
@@ -35815,6 +35819,7 @@ script = "printf setup"
     });
     expect(codexClient.interruptTurnCallCount).toBe(1);
 
+    expect(federatedControl).not.toHaveBeenCalled();
     await registry.close();
   });
 
@@ -37099,73 +37104,98 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("routes a remembered remote owner before a colliding local thread", async () => {
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start"] },
-      threads: [{
-        source: "codex",
-        id: "shared-thread-id",
-        title: "Local collision",
-        titleSource: "explicit",
-        linkedDirectories: [],
-      }],
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock(),
-      threadTitleGenerationService: null,
-    });
-    const federatedSend = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "shared-thread-id",
-      turnId: "remote-turn-1",
-      title: "Remembered remote thread",
-      instanceId: "pwr_studio",
-      instanceLabel: "Studio Mac",
-    }));
-    registry.setFederatedThreadMessageHandler(federatedSend);
-    await registry.publishLocalEvent({
-      backend: "codex",
-      notification: {
-        method: "turn/started",
-        params: {
-          threadId: "parent-thread",
-          turnId: "turn-1",
-          turn: { id: "turn-1" },
-        },
-      },
-    });
-
-    const response = await callRegistryMcpTool({
-      registry,
-      backend: "codex",
-      threadId: "parent-thread",
-      turnId: "turn-1",
-      tool: "send_message_to_thread",
-      args: {
+  it.each(["connected", "disconnected", "explicit", "writer-conflict"])(
+    "prefers the local harness over a %s remembered owner unless explicitly addressed",
+    async (owner) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        ...(owner === "writer-conflict"
+          ? { startTurnError: new Error("thread shared-thread-id already has an active writer") }
+          : {}),
+        threads: [{
+          source: "codex",
+          id: "shared-thread-id",
+          title: "Shared Codex profile thread",
+          titleSource: "explicit",
+          linkedDirectories: [],
+        }],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        threadTitleGenerationService: null,
+      });
+      const federatedSend = vi.fn(async () => {
+        if (owner === "disconnected") {
+          throw new PwrAgentFederatedThreadMessageError("peer_unavailable", "Peer is offline.");
+        }
+        return {
+          backend: "codex" as const,
+          threadId: "shared-thread-id",
+          turnId: "remote-turn-1",
+          title: "Remembered remote thread",
+          instanceId: "pwr_studio",
+          instanceLabel: "Studio Mac",
+        };
+      });
+      registry.setFederatedThreadMessageHandler(federatedSend);
+      await registry.publishLocalEvent({
         backend: "codex",
-        threadId: "shared-thread-id",
-        prompt: "Continue on the remembered owner.",
-      },
-    });
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "parent-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
 
-    expect(response).toMatchObject({
-      structuredContent: {
-        instanceId: "pwr_studio",
-        threadId: "shared-thread-id",
-        turnId: "remote-turn-1",
-      },
-    });
-    expect(codexClient.startTurnCallCount).toBe(0);
-    expect(federatedSend).toHaveBeenCalledOnce();
-    expect(federatedSend).toHaveBeenCalledWith(expect.objectContaining({
-      backend: "codex",
-      threadId: "shared-thread-id",
-      resolutionMode: "remembered_only",
-    }));
+      const response = await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        tool: "send_message_to_thread",
+        args: {
+          backend: "codex",
+          threadId: "shared-thread-id",
+          prompt: "Continue on the resolved thread.",
+          ...(owner === "explicit" ? { instanceId: "pwr_studio" } : {}),
+        },
+      });
 
-    await registry.close();
-  });
+      if (owner === "writer-conflict") {
+        expect(response).toMatchObject({
+          isError: true,
+          structuredContent: {
+            message: expect.stringContaining("already has an active writer"),
+          },
+        });
+        expect(codexClient.startTurnCallCount).toBe(1);
+        expect(federatedSend).not.toHaveBeenCalled();
+        await registry.close();
+        return;
+      }
+
+      expect(response).toMatchObject({
+        structuredContent: {
+          threadId: "shared-thread-id",
+          ...(owner === "explicit" ? { instanceId: "pwr_studio", turnId: "remote-turn-1" } : {}),
+        },
+      });
+      if (owner === "explicit") {
+        expect(codexClient.startTurnCallCount).toBe(0);
+        expect(federatedSend).toHaveBeenCalledOnce();
+      } else {
+        expect(response.structuredContent).not.toHaveProperty("instanceId");
+        expect(codexClient.startTurnCallCount).toBe(1);
+        expect(federatedSend).not.toHaveBeenCalled();
+      }
+
+      await registry.close();
+    },
+  );
 
   it("returns peer_unavailable for an addressed remote owner without a local turn attempt", async () => {
     const codexClient = new MockBackendClient({
