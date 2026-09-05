@@ -12453,7 +12453,7 @@ describe("useThreadSessionState", () => {
             params: {
               threadId: "thread-1",
               turnId: "review-turn",
-              turn: { id: "review-turn", status: "completed" },
+              turn: { id: "review-turn", status: "completed", output: [] },
             },
           },
         });
