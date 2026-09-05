@@ -1,3 +1,7 @@
+import {
+  resolveCodexStreamNotice,
+  type CodexStreamSignal,
+} from "./codex-stream-notice";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import {
   resolveBackendErrorNotice,
@@ -10,6 +14,7 @@ export type AppNoticeState = {
 };
 
 export type AppNoticeAction =
+  | ({ type: "codex-stream-event" } & CodexStreamSignal)
   | { type: "show"; notice: AppNoticeToastNotice }
   | { type: "backend-error"; signal: BackendErrorSignal }
   | { type: "dismiss"; id: string }
@@ -24,6 +29,17 @@ export function appNoticeReducer(
   state: AppNoticeState,
   action: AppNoticeAction,
 ): AppNoticeState {
+  if (action.type === "codex-stream-event") {
+    const result = resolveCodexStreamNotice(action, [
+      ...state.durable,
+      ...state.transient,
+    ]);
+    if (!result) return state;
+    return appNoticeReducer(state, "notice" in result
+      ? { type: "show", notice: result.notice }
+      : { type: "dismiss", id: result.dismissId });
+  }
+
   if (action.type === "show") {
     return showNotice(state, action.notice);
   }
