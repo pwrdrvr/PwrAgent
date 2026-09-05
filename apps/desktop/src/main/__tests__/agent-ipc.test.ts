@@ -178,6 +178,7 @@ const registry = {
 
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    readQueuedTurn: vi.fn(),
     listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [] })),
     startThread: vi.fn(async (request: StartThreadRequest) => ({
       backend: request.backend,
@@ -868,6 +869,37 @@ describe("agent ipc", () => {
     });
 
     disposeAgentIpcHandlers();
+  });
+
+  it("preserves directly renderable queued images from a federation peer", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_READ_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");
+    const { toTranscriptImageProtocolUrl, toFederatedTranscriptImageProtocolUrl } = await import("../transcript-image-protocol");
+    const ownerUrl = toTranscriptImageProtocolUrl("file:///tmp/fixture.png");
+    const imageParts = [
+      { type: "image", url: "data:image/png;base64,AQID", alt: "Inline diagram" },
+      { type: "image", url: "https://example.com/fixture.png", alt: "Hosted diagram" },
+      { type: "image", url: ownerUrl, alt: "Owner diagram" },
+    ];
+    const response = { queueEntryId: "queue-1", contentHash: "hash", input: [], imageParts };
+    federationMock.remoteBackend.readQueuedTurn.mockResolvedValueOnce(response);
+    registerAgentIpcHandlers();
+    try {
+      const request = { backend: "codex", threadId: "thread-1", queueEntryId: "queue-1" };
+      const result = await handlers.get(AGENT_READ_QUEUED_TURN_CHANNEL)?.({}, {
+        ...request, federationTarget: { scope: "remote", instanceId: "peer-1" },
+      });
+      expect(federationMock.remoteBackend.readQueuedTurn).toHaveBeenCalledWith(request);
+      expect(result).toEqual({
+        ...response,
+        imageParts: [
+          imageParts[0], imageParts[1],
+          { ...imageParts[2], url: toFederatedTranscriptImageProtocolUrl("peer-1", ownerUrl) },
+        ],
+      });
+    } finally {
+      disposeAgentIpcHandlers();
+    }
   });
 
   it("loads backend summaries from the selected federation peer", async () => {

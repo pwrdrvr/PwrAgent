@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
-import type { AppServerThreadReplay } from "@pwragent/shared";
+import type { AppServerThreadMessageEntry, AppServerThreadReplay } from "@pwragent/shared";
 import { ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
 
 const emptyReplay: AppServerThreadReplay = {
@@ -44,6 +44,43 @@ describe("PwrAgent correspondence persistence", () => {
     expect(replay.messages[0]?.text).toContain("Tail.");
     expect(replay.messages[0]?.parts).toContainEqual({ type: "image", url: "data:image/png;base64,AQID", alt: "diagram.png" });
     expect(store.appendToReplay(message.source, replay).entries).toHaveLength(1);
+  });
+
+  it("merges historical correspondence chronologically after reload without reordering provider entries", () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-correspondence-"));
+    onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+    const store = new ThreadCorrespondenceStore(directory);
+    const message = record();
+    // Arrival order need not match creation order.
+    store.record({ ...message, id: "later-send", createdAt: 3_000 });
+    store.record(message);
+    store.update(message.source, message.id, { state: "cancelled" });
+    const providerMessages: AppServerThreadMessageEntry[] = [
+      { type: "message", id: "first-user", role: "user", text: "First", createdAt: 500 },
+      { type: "message", id: "first-response", role: "assistant", text: "Response", createdAt: 1_000 },
+      { type: "message", id: "next-user", role: "user", text: "Next", turn: { id: "next-turn", startedAt: 2_000 } },
+      { type: "message", id: "next-response", role: "assistant", text: "Response", createdAt: 4_000 },
+    ];
+    const replay: AppServerThreadReplay = {
+      ...emptyReplay,
+      entries: [
+        ...providerMessages.slice(0, 2),
+        { type: "activity", id: "undated-activity", summary: "Work", details: [] },
+        ...providerMessages.slice(2),
+      ],
+      messages: providerMessages.map(({ turn: _turn, ...entry }) => entry),
+    };
+    const restored = new ThreadCorrespondenceStore(directory);
+    const merged = restored.appendToReplay(message.source, replay);
+    expect(merged.entries.map((entry) => entry.id)).toEqual([
+      "first-user", "first-response", "undated-activity", message.id,
+      "next-user", "later-send", "next-response",
+    ]);
+    expect(merged.messages.map((entry) => entry.id)).toEqual([
+      "first-user", "first-response", message.id, "next-user", "later-send", "next-response",
+    ]);
+    expect(merged.messages.find((entry) => entry.id === message.id)?.text).toContain("**Cancelled**");
+    expect(restored.appendToReplay(message.source, merged)).toEqual(merged);
   });
 
   it("does not let a peer with the same thread id update local correspondence", () => {

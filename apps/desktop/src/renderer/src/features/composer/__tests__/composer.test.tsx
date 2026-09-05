@@ -7083,6 +7083,29 @@ describe("Composer", () => {
     expect(startTurn.mock.calls[0]?.[0].input).toEqual(input);
   });
 
+  it("deduplicates restored queue attachments against hydrated file references", async () => {
+    const draftStore = createComposerDraftStore();
+    const prompt = "Review [@report.pdf](/tmp/report.pdf) and [@notes.txt](/tmp/notes.txt)";
+    const input = [
+      { type: "text" as const, text: prompt },
+      { type: "localFile" as const, name: "Authoritative report", path: "/tmp/report.pdf", mimeType: "application/pdf", sizeBytes: 42 },
+      { type: "localFile" as const, name: "Authoritative notes", path: "/tmp/notes.txt", mimeType: "text/plain", sizeBytes: 12 },
+    ];
+    draftStore.setQueuedTurns("thread:codex:thread-1", [{ id: "mirror", queueEntryId: "owner-entry", text: "preview…", imageAttachments: [], fileAttachments: [] }]);
+    const readQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "hash", input });
+    const cancelQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
+    const startTurn = vi.fn().mockResolvedValue({ backend: "codex", threadId: "thread-1", turnId: "new-queue", queueStatus: "queued", queueEntryId: "new-queue" });
+    const inspectPdfReferencePaths = vi.fn(async () => ({ filePaths: ["/tmp/report.pdf", "/tmp/notes.txt"], pdfPaths: [] }));
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ readQueuedTurn, cancelQueuedTurn, startTurn, inspectPdfReferencePaths, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveValue("Review  and "));
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    await waitFor(() => expect(startTurn).toHaveBeenCalled());
+    expect(startTurn.mock.calls[0]?.[0].input).toEqual(input);
+  });
+
   it("cancels the owning peer's queued turn before remote steering", async () => {
     const federationTarget = {
       scope: "remote" as const,

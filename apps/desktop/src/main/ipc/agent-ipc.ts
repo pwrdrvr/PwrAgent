@@ -1,5 +1,5 @@
 import { stageQueuedFileInputs } from "../app-server/turn-input-attachment-files";
-import { toFederatedTranscriptImageProtocolUrl } from "../transcript-image-protocol";
+import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
@@ -654,7 +654,7 @@ export function registerAgentIpcHandlers(): void {
           input: request.forEdit ? await stageQueuedFileInputs(response.input) : response.input,
           imageParts: response.imageParts?.map((image) => ({
             ...image,
-            url: toFederatedTranscriptImageProtocolUrl(federationTarget.instanceId, image.url),
+            url: rewriteFederatedTranscriptImageUrlForRenderer(image.url, federationTarget.instanceId),
           })),
         };
       }

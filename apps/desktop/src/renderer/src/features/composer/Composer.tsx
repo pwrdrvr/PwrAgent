@@ -6197,7 +6197,7 @@ export function Composer(props: ComposerProps) {
         url: attachment.url,
         alt: formatPastedImageAlt(attachment, index),
       }));
-      const input: AppServerTurnInputItem[] = [
+      const input = mergeDerivedLocalFileInputs([
         ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
         ...attachments.map((attachment) => attachment.originalInput ?? ({
           type: "image" as const,
@@ -6205,12 +6205,11 @@ export function Composer(props: ComposerProps) {
           url: attachment.url,
         })),
         ...fileRefs.flatMap((attachment) => attachment.originalInput ? [attachment.originalInput] : []),
-        ...buildLocalFileInputs(
-          fileRefs,
-          localReferenceTokens,
-          resolvedInspection.filePaths,
-        ),
-      ];
+      ], buildLocalFileInputs(
+        fileRefs,
+        localReferenceTokens,
+        resolvedInspection.filePaths,
+      ));
 
       return { displayText, imageParts, input };
     };

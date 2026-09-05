@@ -5,6 +5,8 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type {
   AppServerBackendKind,
+  AppServerThreadMessage,
+  AppServerThreadEntry,
   AppServerThreadMessageEntry,
   AppServerThreadReplay,
   AppServerTurnInputItem,
@@ -24,6 +26,28 @@ export type CorrespondenceRecord = {
 };
 type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId">>;
 type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
+
+/** Keep provider order, including undated activities; insert before the next
+ * strictly newer timestamp. Ties retain provider order before correspondence. */
+function mergeCorrespondence<T extends { id: string }>(
+  entries: T[],
+  messages: AppServerThreadMessageEntry[],
+  timestamp: (entry: T) => number | undefined,
+): (T | AppServerThreadMessageEntry)[] {
+  const ids = new Set(messages.map((message) => message.id));
+  const merged: (T | AppServerThreadMessageEntry)[] = [];
+  let index = 0;
+  for (const entry of entries) {
+    if (ids.has(entry.id)) continue;
+    const createdAt = timestamp(entry);
+    while (index < messages.length && createdAt !== undefined && messages[index]!.createdAt! < createdAt) {
+      merged.push(messages[index++]!);
+    }
+    merged.push(entry);
+  }
+  merged.push(...messages.slice(index));
+  return merged;
+}
 
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
 export class ThreadCorrespondenceStore {
@@ -97,6 +121,7 @@ export class ThreadCorrespondenceStore {
     const stored = this.load(source);
     const selected = onlyId ? stored.get(onlyId) : undefined;
     const records = onlyId ? (selected ? [selected] : []) : [...stored.values()];
+    records.sort((left, right) => left.createdAt - right.createdAt);
     const messages: AppServerThreadMessageEntry[] = records.map((record) => {
       const destination = buildThreadMarkdownLink({ ...record.destination, ...(record.turnId ? { messageId: `user:${record.turnId}` } : {}) });
       const state = {
@@ -129,11 +154,15 @@ export class ThreadCorrespondenceStore {
         ],
       };
     });
-    const ids = new Set(messages.map((message) => message.id));
+    const timestamp = (entry: AppServerThreadEntry) => entry.createdAt ?? entry.turn?.startedAt;
+    // The compact message list omits turn metadata; use the corresponding
+    // replay entry's timestamp so both views place messages consistently.
+    const entryTimestamps = new Map(replay.entries.map((entry) => [entry.id, timestamp(entry)]));
     return {
       ...replay,
-      entries: [...replay.entries.filter((entry) => !ids.has(entry.id)), ...messages],
-      messages: [...replay.messages.filter((message) => !ids.has(message.id)), ...messages],
+      entries: mergeCorrespondence(replay.entries, messages, timestamp),
+      messages: mergeCorrespondence<AppServerThreadMessage>(replay.messages, messages,
+        (message) => message.createdAt ?? entryTimestamps.get(message.id)),
     };
   }
 }
