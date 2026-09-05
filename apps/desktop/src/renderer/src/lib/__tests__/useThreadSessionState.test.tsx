@@ -12373,6 +12373,114 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it.each([false, true])(
+    "retains live review cards through lagging refreshes (pagination: %s)",
+    async (supportsPagination) => {
+      let agentEventHandler:
+        | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+        | undefined;
+      let hydratedEntries: AppServerThreadEntry[] = [];
+      const desktopApi: DesktopApi = {
+        onAgentEvent: (listener) => {
+          agentEventHandler = listener;
+          return () => undefined;
+        },
+        readThread: async ({ backend, threadId }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: hydratedEntries,
+            messages: [],
+            pagination: { supportsPagination, hasPreviousPage: false },
+          },
+        }),
+      };
+      const { result } = renderHook(() => useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      }));
+      await waitForThreadHydration(result);
+
+      act(() => {
+        result.current.addOptimisticReviewEntry("Review changes against main");
+      });
+      expect(result.current.entries).toHaveLength(1);
+      const emitReview = (type: "enteredReviewMode" | "exitedReviewMode") => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "review-turn",
+              item: {
+                id: type,
+                type,
+                createdAt: type === "enteredReviewMode" ? 2_000 : 3_000,
+                review: type === "enteredReviewMode"
+                  ? "Review changes against main"
+                  : "No findings.",
+              },
+            },
+          },
+        });
+      };
+      act(() => emitReview("enteredReviewMode"));
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "enteredReviewMode",
+      ]);
+
+      // The live notification has replaced the optimistic placeholder, but
+      // thread/read has not caught up. Repeated reads must not erase the card.
+      for (let refresh = 0; refresh < 2; refresh += 1) {
+        await act(async () => { await result.current.reload(); });
+        expect(result.current.entries.map((entry) => entry.id)).toEqual([
+          "enteredReviewMode",
+        ]);
+      }
+
+      act(() => emitReview("exitedReviewMode"));
+      const liveEntries = result.current.entries;
+      expect(liveEntries.map((entry) => entry.id)).toEqual([
+        "enteredReviewMode", "exitedReviewMode",
+      ]);
+      act(() => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "review-turn",
+              turn: { id: "review-turn", status: "completed", output: [] },
+            },
+          },
+        });
+      });
+      await act(async () => { await result.current.reload(); });
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "enteredReviewMode", "exitedReviewMode",
+      ]);
+      expect(result.current.threadBusy).toBe(false);
+
+      // Authoritative replay can use different IDs. It must supersede the
+      // retained live entries without leaving duplicate or stale cards.
+      hydratedEntries = liveEntries.map((entry) => ({
+        ...entry,
+        id: `hydrated-${entry.id}`,
+        turn: { id: "review-turn", status: "completed" },
+      }));
+      await act(async () => { await result.current.reload(); });
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "hydrated-enteredReviewMode", "hydrated-exitedReviewMode",
+      ]);
+      expect(result.current.entries.every((entry) =>
+        entry.turn?.status === "completed"
+      )).toBe(true);
+    },
+  );
+
   it("keeps the review start marker when only the final review item arrives live", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
