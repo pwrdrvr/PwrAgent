@@ -733,6 +733,7 @@ describe("federation backend bridge", () => {
       sourcePeerId: "viewer_one",
       envelope: {
         id: "generic-search",
+        deadlineAt: Date.now() + 10_000,
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.searchFederatedThreads,
         params: request,
@@ -751,7 +752,9 @@ describe("federation backend bridge", () => {
         truncated: true,
       },
     });
-    expect(searchFederatedThreads).toHaveBeenCalledWith(request);
+    expect(searchFederatedThreads).toHaveBeenCalledWith(request, {
+      deadlineAt: expect.any(Number),
+    });
     expect(listThreads).not.toHaveBeenCalled();
   });
 

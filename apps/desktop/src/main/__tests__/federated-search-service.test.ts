@@ -32,13 +32,40 @@ function thread(
 }
 
 describe("FederatedSearchService", () => {
-  it("uses exact resolution for a pasted thread UUID", async () => {
+  it("returns a healthy peer when local search fails", async () => {
+    const service = new FederatedSearchService({
+      local: { listThreads: vi.fn(), searchFederatedThreads: vi.fn(async () => { throw new Error("local unavailable"); }) },
+      peers: () => [{ instanceId: "healthy", label: "Healthy", backend: {
+        listThreads: vi.fn(), searchFederatedThreads: vi.fn(async () => ({
+          threads: [thread("peer-result", "Needle", 1)], totalCount: 1, truncated: false,
+        })),
+      } }],
+    });
+    expect(await service.search({ query: "needle" })).toMatchObject({
+      results: [{ thread: { id: "peer-result" } }],
+      localSearch: { error: "local unavailable", totalCount: 0 },
+    });
+  });
+
+  it("bounds a hung local owner by the same search budget", async () => {
+    vi.useFakeTimers();
+    const service = new FederatedSearchService({ peerTimeoutMs: 25,
+      local: { listThreads: vi.fn(), searchFederatedThreads: vi.fn(() => new Promise<never>(() => {})) },
+      peers: () => [],
+    });
+    const pending = service.search({ query: "needle" });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(await pending).toMatchObject({ localSearch: { error: "Local federated search timed out." } });
+  });
+
+  it("uses the read-only bounded owner path for a pasted thread UUID", async () => {
     const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
     const localListThreads = vi.fn();
     const remoteListThreads = vi.fn();
     const service = new FederatedSearchService({
       local: {
         listThreads: localListThreads,
+        searchFederatedThreads: vi.fn(async () => ({ threads: [], totalCount: 0, truncated: false })),
         resolveThread: vi.fn(async () => ({})),
       },
       peers: () => [
@@ -47,7 +74,11 @@ describe("FederatedSearchService", () => {
           label: "Harold-Mac-Mini-M4",
           backend: {
             listThreads: remoteListThreads,
-            searchFederatedThreads: vi.fn(),
+            searchFederatedThreads: vi.fn(async () => ({
+              threads: [thread(threadId, "Thread list stays disabled after reconnect", 3_000)],
+              totalCount: 1,
+              truncated: false,
+            })),
             resolveThread: vi.fn(async () => ({
               thread: thread(
                 threadId,
@@ -75,7 +106,7 @@ describe("FederatedSearchService", () => {
     expect(remoteListThreads).not.toHaveBeenCalled();
   });
 
-  it("falls back to exact list scanning only when both search RPCs are missing", async () => {
+  it("falls back to exact list scanning only when bounded search is missing", async () => {
     const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
     const service = new FederatedSearchService({
       includeLocal: false,
@@ -163,7 +194,7 @@ describe("FederatedSearchService", () => {
     expect(listThreads).not.toHaveBeenCalled();
   });
 
-  it("does not amplify a resolve failure into full active and archive scans", async () => {
+  it("does not amplify an exact owner search failure into full active and archive scans", async () => {
     const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
     const listThreads = vi.fn();
     const service = new FederatedSearchService({
@@ -173,8 +204,7 @@ describe("FederatedSearchService", () => {
         instanceId: "pwr_broken",
         label: "Broken Mac",
         backend: {
-          searchFederatedThreads: vi.fn(),
-          resolveThread: vi.fn(async () => {
+          searchFederatedThreads: vi.fn(async () => {
             throw Object.assign(new Error("Remote handler failed"), {
               code: "handler_failed",
             });
@@ -371,12 +401,10 @@ describe("FederatedSearchService", () => {
     expect(listThreads).toHaveBeenNthCalledWith(1, {
       backend: "codex",
       archived: false,
-      filter: "collector",
     }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
     expect(listThreads).toHaveBeenNthCalledWith(2, {
       backend: "codex",
       archived: true,
-      filter: "collector",
     }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
   });
 

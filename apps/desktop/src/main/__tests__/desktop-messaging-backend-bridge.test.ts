@@ -352,7 +352,7 @@ describe("DesktopMessagingBackendBridge", () => {
               updatedAt: 5_000,
             },
           ]);
-    const registry = { listThreads } as unknown as DesktopBackendRegistry;
+    const registry = { listThreadSearchCandidates: listThreads } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);
     const reconcileCallsBefore = reconcileNavigationSnapshot.mock.calls.length;
 
@@ -372,18 +372,12 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(listThreads).toHaveBeenNthCalledWith(1, {
       backend: "codex",
       archived: false,
-      callerReason: "federation-thread-search",
-      enrichDirectories: false,
-      filter: "collector",
-      skipArchivedMetadataRefresh: true,
+      deadlineAt: undefined,
     });
     expect(listThreads).toHaveBeenNthCalledWith(2, {
       backend: "codex",
       archived: true,
-      callerReason: "federation-thread-search",
-      enrichDirectories: false,
-      filter: "collector",
-      skipArchivedMetadataRefresh: true,
+      deadlineAt: undefined,
     });
     expect(reconcileNavigationSnapshot).toHaveBeenCalledTimes(
       reconcileCallsBefore,

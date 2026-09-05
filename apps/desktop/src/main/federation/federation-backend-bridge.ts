@@ -878,6 +878,7 @@ export function registerFederationBackendHandlers(params: {
         }
         return await params.backend.searchFederatedThreads(
           envelope.params as FederationThreadSearchRequest,
+          { deadlineAt: envelope.deadlineAt },
         );
       },
     );

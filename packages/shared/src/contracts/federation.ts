@@ -648,6 +648,8 @@ export type FederatedSearchResponse = {
   totalCount: number;
   truncated: boolean;
   failures: FederatedSearchPeerFailure[];
+  /** Local owner metadata before the global page is sliced. */
+  localSearch?: { totalCount: number; truncated: boolean; error?: string };
   /** Peers that were queried successfully, so the UI can disclose scope. */
   searchedInstances?: FederatedSearchInstanceSummary[];
 };

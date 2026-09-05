@@ -466,17 +466,15 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
    */
   async searchFederatedThreads(
     request: FederationThreadSearchRequest,
+    rpcOptions?: { deadlineAt?: number },
   ): Promise<FederationThreadSearchResponse> {
     return await searchFederatedThreadsOnOwner(
       {
         listThreads: async (listRequest = {}) => {
-          const threads = await this.registry.listThreads({
+          const threads = await this.registry.listThreadSearchCandidates({
             backend: listRequest.backend,
             archived: listRequest.archived,
-            callerReason: "federation-thread-search",
-            enrichDirectories: false,
-            filter: listRequest.filter,
-            skipArchivedMetadataRefresh: true,
+            deadlineAt: rpcOptions?.deadlineAt,
           });
           return {
             backend: listRequest.backend ?? "all",
@@ -486,6 +484,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         },
       },
       request,
+      rpcOptions,
     );
   }
 

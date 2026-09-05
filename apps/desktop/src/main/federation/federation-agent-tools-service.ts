@@ -151,7 +151,6 @@ export function createFederationAgentToolsHandler(
         runtime(),
         request.args,
         collectHostInfo,
-        options.targetStore,
       );
     } catch (error) {
       return failure(
@@ -532,7 +531,6 @@ async function searchFederationThreads(
   runtime: DesktopFederationRuntime,
   args: SearchFederationThreadsToolArgs,
   collectHostInfo: () => Promise<FederationHostInfo>,
-  targetStore: RemoteThreadTargetStore | undefined,
 ): Promise<PwrAgentFederationResponse> {
   const scope = args.scope ?? "all";
   const health = await runtime.health();
@@ -603,35 +601,34 @@ async function searchFederationThreads(
       };
     },
   );
-  await Promise.all(
-    results
-      .filter((entry) => !entry.isLocal)
-      .map(async (entry) => await rememberTarget(targetStore, {
-        instanceId: entry.instanceId,
-        instanceLabel: entry.instanceLabel,
-        backend: entry.backend,
-        threadId: entry.threadId,
-      })),
-  );
-  const localResultCount = results.filter((entry) => entry.isLocal).length;
+  // Search links carry the owner identity. Persist routing knowledge when a
+  // thread is acted on, not once per result on every search.
   const result: SearchFederationThreadsResult = {
     query: response.query,
     results,
     totalCount: response.totalCount,
     truncated: response.truncated,
     searchedInstances: [
-      ...(includeLocal && localId
+      ...(includeLocal && localId && !response.localSearch?.error
         ? [
             {
               instanceId: localId,
               instanceLabel: local.label,
-              resultCount: localResultCount,
+              resultCount: response.localSearch?.totalCount ?? 0,
+              ...(response.localSearch?.truncated ? { truncated: true } : {}),
             },
           ]
         : []),
       ...response.searchedInstances ?? [],
     ],
-    failures: response.failures,
+    failures: [
+      ...response.failures,
+      ...(response.localSearch?.error ? [{
+        instanceId: localId ?? "local",
+        instanceLabel: local.label,
+        error: response.localSearch.error,
+      }] : []),
+    ],
   };
   return ok(result);
 }

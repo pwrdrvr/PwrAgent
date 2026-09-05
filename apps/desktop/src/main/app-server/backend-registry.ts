@@ -648,6 +648,7 @@ const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 // background polling catches external Codex changes on a slower cadence.
 const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
 const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
+const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
@@ -745,6 +746,7 @@ type BackendClient = {
       limit?: number;
       maxPages?: number;
       skipArchivedMetadataRefresh?: boolean;
+      deadlineAt?: number;
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
@@ -10343,6 +10345,99 @@ export class DesktopBackendRegistry {
         `backend-registry.${method} is forbidden in bootstrap mode`,
       );
     }
+  }
+
+  /** Read-only candidates for generic search. Never run navigation/list maintenance. */
+  async listThreadSearchCandidates(params: {
+    backend?: AppServerBackendKind;
+    archived?: boolean;
+    deadlineAt?: number;
+  }): Promise<AppServerThreadSummary[]> {
+    const checkDeadline = () => {
+      if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
+        throw new Error("Federated search deadline expired.");
+      }
+    };
+    checkDeadline();
+    if (this.isBootstrapModeFn()) return [];
+    // Share a completed inventory across query prefixes, not one full provider
+    // walk per keystroke. Use the existing event invalidation, but keep this
+    // read-only projection separate from maintenance-bearing list cache entries.
+    const cacheKey = JSON.stringify({
+      backend: params.backend ?? "all",
+      archived: params.archived === true,
+      readOnlySearch: true,
+    });
+    const cached = this.threadListCache.get(cacheKey);
+    if (cached?.threads && (cached.expiresAt ?? 0) > Date.now()) {
+      return cached.threads;
+    }
+    // An event during the read must prevent publishing the old projection.
+    // Do not share an in-flight request whose deadline belongs to another caller.
+    const pending: ThreadListCacheState = {};
+    this.threadListCache.set(cacheKey, pending);
+    const threads: AppServerThreadSummary[] = [];
+    if (
+      (!params.backend || params.backend === "codex")
+      && !this.isCodexBootstrapDeferredFn()
+    ) {
+      // Provider text filters do not cover IDs, overlay names or project paths.
+      // Match the complete metadata projection on the owner, after this read.
+      const codexThreads = await this.codexClient.listThreads({
+        archived: params.archived,
+        enrichDirectories: false,
+        skipArchivedMetadataRefresh: true,
+        deadlineAt: params.deadlineAt,
+      }, {
+        callerReason: "federation-thread-search",
+        ownerId: this.threadListCacheOwnerId,
+      });
+      threads.push(...this.withPendingStartedThreads("codex", codexThreads, params));
+    }
+    checkDeadline();
+    const acpBackends = params.backend
+      ? (isAcpBackendId(params.backend) ? [params.backend] : [])
+      : (await this.acpBackend.listAvailableAgents()).map((agent) => agent.backendId);
+    for (const backend of acpBackends) {
+      checkDeadline();
+      threads.push(...this.acpBackend.listSessions(backend, { archived: params.archived })
+        .map((session) => this.acpBackend.sessionToThreadSummary(session)));
+    }
+    const result: AppServerThreadSummary[] = [];
+    for (const thread of threads) {
+      checkDeadline();
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: thread.source,
+        threadId: thread.id,
+      });
+      if (overlay?.archiveTombstonedAt !== undefined) continue;
+      const cwd = resolveThreadWorkspaceCwd(thread, overlay?.extraLinkedDirectories ?? []);
+      const cachedDirectory = overlay?.acpWorktreeDirectory && overlay.acpWorktreeDirectory.cwd === cwd
+        ? overlay.acpWorktreeDirectory.directory
+        : undefined;
+      const projected = this.withObservedThreadName({
+        ...thread,
+        executionMode: overlay?.executionMode ?? thread.executionMode,
+        model: overlay?.model ?? thread.model,
+        reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
+        serviceTier: overlay?.serviceTier ?? thread.serviceTier,
+        fastMode: overlay?.fastMode ?? thread.fastMode,
+        linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity([
+          ...thread.linkedDirectories,
+          ...(overlay?.extraLinkedDirectories ?? []),
+          ...(cachedDirectory ? [cachedDirectory] : []),
+        ]),
+      });
+      result.push(projected);
+    }
+    checkDeadline();
+    if (this.threadListCache.get(cacheKey) === pending) {
+      this.threadListCache.set(cacheKey, {
+        threads: result,
+        expiresAt: Date.now() + THREAD_SEARCH_REUSE_WINDOW_MS,
+      });
+    }
+    return result;
   }
 
   async listThreads(params: {

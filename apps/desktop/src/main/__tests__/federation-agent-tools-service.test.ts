@@ -1169,7 +1169,7 @@ describe("federation agent tools service", () => {
           listThreads: async () => ({
             backend: "all",
             fetchedAt: 10,
-            threads: [localThread],
+            threads: Array.from({ length: 100 }, (_, index) => ({ ...localThread, id: `local-${index}` })),
           }),
         })) as never,
         connectedPeerTargets: () => [
@@ -1193,20 +1193,13 @@ describe("federation agent tools service", () => {
     const response = await handler({
       operation: "search_federation_threads",
       context,
-      args: { query: "recorder crash" },
+      args: { query: "recorder crash", limit: 1 },
     });
 
     const data = (response as { ok: true; data: SearchFederationThreadsResult })
       .data;
-    expect(data.results).toHaveLength(2);
-    const local = data.results.find((entry) => entry.isLocal);
+    expect(data.results).toHaveLength(1);
     const remote = data.results.find((entry) => !entry.isLocal);
-    expect(local).toMatchObject({
-      instanceId: "pwr_local",
-      instanceLabel: "Local Mac",
-      threadId: "thread-local",
-    });
-    expect(local?.threadLink).toContain("pwragent://thread/thread-local");
     expect(remote).toMatchObject({
       instanceId: "pwr_studio",
       instanceLabel: "Studio Mac",
@@ -1215,14 +1208,9 @@ describe("federation agent tools service", () => {
     expect(remote?.threadLink).toContain(
       "instanceId=pwr_studio",
     );
-    expect(rememberRemoteThreadTarget).toHaveBeenCalledWith({
-      instanceId: "pwr_studio",
-      instanceLabel: "Studio Mac",
-      backend: "codex",
-      threadId: "thread-remote",
-    });
+    expect(rememberRemoteThreadTarget).not.toHaveBeenCalled();
     expect(data.searchedInstances).toEqual([
-      { instanceId: "pwr_local", instanceLabel: "Local Mac", resultCount: 1 },
+      { instanceId: "pwr_local", instanceLabel: "Local Mac", resultCount: 100, truncated: true },
       { instanceId: "pwr_studio", instanceLabel: "Studio Mac", resultCount: 1 },
     ]);
   });
