@@ -10430,6 +10430,7 @@ export function Composer(props: ComposerProps) {
           <div
             className={[
               "composer__queued",
+              "composer__queued--message",
               scheduledSendAt ? "composer__queued--scheduled" : "",
               queued.errorMessage || queued.manualReleaseRequired
                 ? "composer__queued--failed"
@@ -10459,7 +10460,6 @@ export function Composer(props: ComposerProps) {
               <span className="composer__queued-text">
                 {formatDraftPreview(queued)}
               </span>
-              <QueuedMessageInspector load={() => readQueuedMessage(queued)} desktopApi={props.desktopApi} />
               {queued.errorMessage ? (
                 <span className="composer__queued-error">
                   {queued.errorMessage}
@@ -10472,7 +10472,10 @@ export function Composer(props: ComposerProps) {
               ) : null}
             </div>
             <QueuedImageAttachments attachments={queued.imageAttachments} />
-            <div className="composer__queued-actions">
+            <QueuedMessageInspector
+              load={() => readQueuedMessage(queued)}
+              desktopApi={props.desktopApi}
+            >
               {queued.manualReleaseRequired && index === 0 ? (
                 <button
                   className="composer__secondary-action"
@@ -10613,7 +10616,7 @@ export function Composer(props: ComposerProps) {
               >
                 Delete
               </button>
-            </div>
+            </QueuedMessageInspector>
           </div>
         );
       })}

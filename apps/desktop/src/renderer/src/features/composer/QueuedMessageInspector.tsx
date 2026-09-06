@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import type { ReadQueuedTurnResponse } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TurnInputContent } from "../thread-detail/TurnInputContent";
@@ -6,6 +6,7 @@ import { TurnInputContent } from "../thread-detail/TurnInputContent";
 export function QueuedMessageInspector(props: {
   load: () => Promise<ReadQueuedTurnResponse>;
   desktopApi?: DesktopApi;
+  children?: ReactNode;
 }) {
   const regionId = useId();
   const [content, setContent] = useState<ReadQueuedTurnResponse>();
@@ -26,16 +27,19 @@ export function QueuedMessageInspector(props: {
     }
   };
   return (
-    <div>
-      <button
-        className="composer__secondary-action"
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={regionId}
-        onClick={() => expanded ? setExpanded(false) : void open()}
-      >
-        {expanded ? "Hide message" : "View full message"}
-      </button>
+    <div className="queued-message-inspector-shell">
+      <div className="queued-message-inspector-toolbar">
+        <button
+          className="composer__secondary-action"
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={regionId}
+          onClick={() => expanded ? setExpanded(false) : void open()}
+        >
+          {expanded ? "Hide message" : "View full message"}
+        </button>
+        <div className="composer__queued-actions">{props.children}</div>
+      </div>
       {expanded ? (
         <div
           id={regionId}
