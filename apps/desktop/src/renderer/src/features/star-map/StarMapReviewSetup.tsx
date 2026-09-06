@@ -15,6 +15,9 @@ import {
 } from "@pwragent/shared";
 
 type ReviewTargetChoice = AppServerReviewTarget["type"];
+type ReviewDirectory = Pick<NavigationDirectorySummary, "key" | "path"> & {
+  gitStatus?: Partial<NonNullable<NavigationDirectorySummary["gitStatus"]>>;
+};
 
 export type StarMapReviewRequest = {
   cwd?: string;
@@ -23,7 +26,7 @@ export type StarMapReviewRequest = {
 
 type StarMapReviewSetupProps = {
   busy: boolean;
-  directories: readonly NavigationDirectorySummary[];
+  directories: readonly ReviewDirectory[];
   error?: string;
   onCancel: () => void;
   onSubmit: (request: StarMapReviewRequest) => void;
@@ -98,10 +101,10 @@ function workspaceMatches(left?: string, right?: string): boolean {
 }
 
 function findReviewDirectory(
-  directories: readonly NavigationDirectorySummary[],
+  directories: readonly ReviewDirectory[],
   thread: NavigationThreadSummary,
   workspaceCwd?: string,
-): NavigationDirectorySummary | undefined {
+): ReviewDirectory | undefined {
   const linkedDirectory = thread.linkedDirectories.find((directory) =>
     workspaceMatches(directory.worktreePath, workspaceCwd)
     || workspaceMatches(directory.path, workspaceCwd)

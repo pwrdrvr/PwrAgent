@@ -14,6 +14,8 @@ import type {
   CelestialIconId,
   DesktopSettingsSnapshot,
   NavigationThreadSummary,
+  NavigationQueryRequest,
+  NavigationQueryPage,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
@@ -2068,9 +2070,56 @@ describe("StarMapChatCard mentions", () => {
     ],
   };
 
+  function mentionPage(request: NavigationQueryRequest, population = SNAPSHOT): NavigationQueryPage {
+    return {
+      protocol: 2,
+      queryKey: JSON.stringify(request.query),
+      generation: "fixture",
+      ownerEpoch: "fixture",
+      countsRevision: "fixture",
+      coverage: { state: "complete" },
+      counts: { total: population.threads.length, active: 0, unread: 0, review: 0 },
+      complete: true,
+      directories: request.query.kind === "directory-index"
+        ? population.directories.map((directory) => ({
+            key: directory.key,
+            kind: "directory",
+            label: directory.label,
+            path: directory.path,
+            latestUpdatedAt: directory.latestUpdatedAt,
+            counts: { total: 0, active: 0, unread: 0, review: 0 },
+            pinnedRootCount: 0,
+            unpinnedRootCount: 0,
+            launchpadPresent: false,
+          }))
+        : [],
+      entries: request.query.kind === "directory-index" ? [] : population.threads.map((thread) => ({
+        row: {
+          ref: { backend: thread.source, threadId: thread.id },
+          rowRevision: "fixture",
+          id: thread.id,
+          source: thread.source,
+          title: thread.title,
+          titleSource: thread.titleSource,
+          linkedDirectories: thread.linkedDirectories,
+          inbox: thread.inbox,
+          prs: thread.prs,
+          gitBranch: thread.gitBranch,
+          ordinaryChildCount: 0,
+          nativeSubAgentGroupPresent: false,
+          queueCount: 0,
+          queueState: "unknown",
+        },
+        orderKey: thread.id,
+        placement: { kind: "root" },
+      })),
+    };
+  }
+
   function mentionApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
     return buildApi({
-      getNavigationSnapshot: vi.fn(async () => SNAPSHOT),
+      getNavigationSnapshot: vi.fn(() => { throw new Error("Deprecated collection read"); }),
+      getNavigationQueryPage: vi.fn(async (request) => mentionPage(request)),
       listSkills: vi.fn(async () => ({
         backend: "codex",
         fetchedAt: 1,
@@ -2128,7 +2177,7 @@ describe("StarMapChatCard mentions", () => {
     });
   });
 
-  it("settles a whole picker session on one snapshot fetch", async () => {
+  it("requests bounded owner matches for each picker query", async () => {
     // Load-bearing, and not only for caching: the sources memo changes
     // identity when the fetch lands, which re-runs the effect that asked
     // for it. Without the cache's staleness guard that is a fetch loop,
@@ -2141,14 +2190,15 @@ describe("StarMapChatCard mentions", () => {
       fireEvent.change(composer(), { target: { value } });
       await screen.findByRole("option");
     }
-    expect(desktopApi.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(desktopApi.getNavigationSnapshot).not.toHaveBeenCalled();
+    await waitFor(() => expect(desktopApi.getNavigationQueryPage).toHaveBeenCalledTimes(6));
   });
 
   it("refreshes a fresh mention cache after project registration", async () => {
     let notifyNavigationChanged: (() => void) | undefined;
-    const getNavigationSnapshot = vi.fn()
-      .mockResolvedValueOnce(SNAPSHOT)
-      .mockResolvedValueOnce({
+    let registered = false;
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) =>
+      mentionPage(request, !registered ? SNAPSHOT : {
         ...SNAPSHOT,
         directories: [
           ...SNAPSHOT.directories,
@@ -2160,7 +2210,7 @@ describe("StarMapChatCard mentions", () => {
             path: "/Users/dev/new-project",
           },
         ],
-      });
+      }));
     const onNavigationMentionSourcesChanged = vi.fn(
       (callback: () => void) => {
         notifyNavigationChanged = callback;
@@ -2168,7 +2218,7 @@ describe("StarMapChatCard mentions", () => {
       },
     );
     const desktopApi = mentionApi({
-      getNavigationSnapshot,
+      getNavigationQueryPage,
       onNavigationMentionSourcesChanged,
     });
     renderCard({ desktopApi, thread: localThread() });
@@ -2179,10 +2229,9 @@ describe("StarMapChatCard mentions", () => {
     expect((await screen.findByRole("option")).textContent).toContain("app");
     fireEvent.change(composer(), { target: { value: "check " } });
 
+    registered = true;
     act(() => notifyNavigationChanged?.());
-    await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-    });
+    expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
     fireEvent.change(composer(), { target: { value: "check @new" } });
 
     await waitFor(() => {

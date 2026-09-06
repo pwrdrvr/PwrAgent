@@ -1617,6 +1617,7 @@ export type NavigationDirectoryRow = {
 export type NavigationQuery =
   | {
       kind: "directory-index";
+      filter?: string;
     }
   | {
       kind: "lens";

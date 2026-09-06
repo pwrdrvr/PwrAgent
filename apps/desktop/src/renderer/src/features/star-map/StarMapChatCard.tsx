@@ -492,6 +492,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       currentThreadKey: buildThreadIdentityKey(thread.source, thread.id),
       directories: navigationSources.directories,
       ensureNavigationLoaded,
+      releaseNavigationLoaded: navigationSources.release,
+      navigationLoading: navigationSources.loading,
+      navigationSettledQuery: navigationSources.settledQuery,
       ensureSkillsLoaded: () => {
         void ensureSkillsLoaded();
       },
@@ -503,6 +506,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       desktopApi,
       ensureSkillsLoaded,
       navigationSources.directories,
+      navigationSources.release,
+      navigationSources.loading,
+      navigationSources.settledQuery,
       ensureNavigationLoaded,
       navigationSources.threads,
       supportsReview,
@@ -777,7 +783,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         if (text.trim().toLowerCase() === "/review") {
           setReviewError(undefined);
           setReviewSetupOpen(true);
-          ensureNavigationLoaded();
+          ensureNavigationLoaded(thread.linkedDirectories[0]?.path);
           return true;
         }
         try {

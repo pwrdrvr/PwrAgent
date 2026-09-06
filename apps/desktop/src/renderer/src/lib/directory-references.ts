@@ -46,7 +46,11 @@ export function findDirectoryReferenceTrigger(
 
 const CANDIDATE_LIMIT = 10;
 
-function isReferenceable(directory: NavigationDirectorySummary): boolean {
+type ReferenceDirectory = Pick<NavigationDirectorySummary,
+  "key" | "kind" | "label" | "path" | "latestUpdatedAt"
+>;
+
+function isReferenceable(directory: ReferenceDirectory): boolean {
   // Same exclusion as the project picker's `isPickable`, plus a real
   // filesystem path requirement — a reference is only useful when there
   // is a path to insert into the draft.
@@ -60,10 +64,10 @@ function isReferenceable(directory: NavigationDirectorySummary): boolean {
  * its top 10 recents), the query searches the full tracked set so an
  * older project is still reachable by name.
  */
-export function filterDirectoryReferenceCandidates(
-  directories: NavigationDirectorySummary[],
+export function filterDirectoryReferenceCandidates<T extends ReferenceDirectory>(
+  directories: T[],
   query: string,
-): NavigationDirectorySummary[] {
+): T[] {
   const trimmed = query.trim().toLowerCase();
   return directories
     .filter(isReferenceable)

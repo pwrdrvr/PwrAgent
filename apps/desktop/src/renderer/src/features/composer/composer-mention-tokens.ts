@@ -1,7 +1,7 @@
 import type {
   AppServerSkillSummary,
   NavigationDirectorySummary,
-  NavigationThreadSummary,
+  ThreadJumpCandidate,
   PrSummary,
 } from "@pwragent/shared";
 import {
@@ -125,7 +125,7 @@ export function createComposerPullRequestToken(
 }
 
 export function resolveThreadSummaryReference(
-  thread: NavigationThreadSummary,
+  thread: ThreadJumpCandidate,
 ): ResolvedThreadLink {
   const federationTarget = thread.federation?.ref.target;
   return {

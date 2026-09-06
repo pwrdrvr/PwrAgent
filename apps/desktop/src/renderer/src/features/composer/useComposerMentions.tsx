@@ -12,7 +12,7 @@ import { flushSync } from "react-dom";
 import type {
   AppServerSkillSummary,
   NavigationDirectorySummary,
-  NavigationThreadSummary,
+  ThreadJumpCandidate,
 } from "@pwragent/shared";
 import { FolderIcon, PullRequestIcon, ThreadIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -84,9 +84,14 @@ export type ComposerMentionSources = {
    */
   currentThreadKey?: string;
   /** Tracked directories behind `@`. */
-  directories?: readonly NavigationDirectorySummary[];
+  directories?: readonly Pick<NavigationDirectorySummary,
+    "key" | "kind" | "label" | "path" | "latestUpdatedAt"
+  >[];
   /** Called when `@` or `#` opens a popover. */
-  ensureNavigationLoaded?: () => void;
+  ensureNavigationLoaded?: (query?: string) => void;
+  releaseNavigationLoaded?: () => void;
+  navigationLoading?: boolean;
+  navigationSettledQuery?: string;
   /** Called when `$` or `/` opens a popover. */
   ensureSkillsLoaded?: () => void;
   /**
@@ -97,7 +102,7 @@ export type ComposerMentionSources = {
   /** Skills behind `$`. Thread-scoped, so the host owns this fetch. */
   skills?: readonly AppServerSkillSummary[];
   /** Local threads (and, through them, pull requests) behind `#`. */
-  threads?: readonly NavigationThreadSummary[];
+  threads?: readonly ThreadJumpCandidate[];
 };
 
 /** A draft and its chips, together — the pair a failed send must restore. */
@@ -139,7 +144,7 @@ type MentionKind = "commands" | "directories" | "hash" | "skills";
 const NO_COMMANDS: readonly ComposerSlashCommand[] = [];
 const NO_DIRECTORIES: readonly NavigationDirectorySummary[] = [];
 const NO_SKILLS: readonly AppServerSkillSummary[] = [];
-const NO_THREADS: readonly NavigationThreadSummary[] = [];
+const NO_THREADS: readonly ThreadJumpCandidate[] = [];
 
 /**
  * Mention and command autocomplete for a compact composer.
@@ -282,10 +287,11 @@ export function useComposerMentions(params: {
         : buildHashReferenceOptions({
             currentThreadKey: sources?.currentThreadKey,
             localThreads: threads,
+            localOwnerMatched: sources?.navigationSettledQuery === hashQuery.trim().toLowerCase(),
             query: hashQuery,
             remoteThreads,
           }),
-    [hashQuery, remoteThreads, sources?.currentThreadKey, threads],
+    [hashQuery, remoteThreads, sources?.currentThreadKey, sources?.navigationSettledQuery, threads],
   );
 
   // Same precedence the full composer uses. A trigger with no candidates
@@ -349,14 +355,20 @@ export function useComposerMentions(params: {
   const navigationTriggered = Boolean(directoryTrigger || rawHashTrigger);
   const ensureSkillsLoaded = sources?.ensureSkillsLoaded;
   const ensureNavigationLoaded = sources?.ensureNavigationLoaded;
+  const releaseNavigationLoaded = sources?.releaseNavigationLoaded;
+  const navigationQuery = directoryQuery ?? rawHashTrigger?.query ?? "";
   // Keyed on the trigger existing, NOT on there being candidates: an empty
   // population is exactly the state a load is supposed to fix.
   useEffect(() => {
     if (skillsTriggered) ensureSkillsLoaded?.();
   }, [ensureSkillsLoaded, skillsTriggered]);
   useEffect(() => {
-    if (navigationTriggered) ensureNavigationLoaded?.();
-  }, [ensureNavigationLoaded, navigationTriggered]);
+    if (navigationTriggered) ensureNavigationLoaded?.(navigationQuery);
+  }, [ensureNavigationLoaded, navigationTriggered, navigationQuery]);
+  useEffect(() => {
+    if (!navigationTriggered) return;
+    return () => releaseNavigationLoaded?.();
+  }, [navigationTriggered, releaseNavigationLoaded]);
 
   // Have the peers answered about *this* query? `loading` is set inside the
   // search hook's effect, so for one commit after a keystroke it still
@@ -367,11 +379,15 @@ export function useComposerMentions(params: {
     || (!remoteSearchLoading
       && remoteSettledQuery === (rawHashTrigger?.query ?? "").trim());
   const rawHashQuery = rawHashTrigger?.query;
+  const localSearchSettled = sources?.navigationLoading === undefined
+    || (!sources.navigationLoading
+      && sources.navigationSettledQuery === (rawHashQuery ?? "").trim().toLowerCase());
   useEffect(() => {
     if (
       rawHashQuery === undefined
       || rawHashQuery.length < HASH_ANCHOR_COLD_QUERY_LENGTH
       || !remoteSearchSettled
+      || !localSearchSettled
       || hashOptions.length > 0
     ) {
       return;
@@ -380,7 +396,7 @@ export function useComposerMentions(params: {
     setColdHashAnchors((current) =>
       current.has(key) ? current : new Set(current).add(key),
     );
-  }, [hashOptions.length, rawHashQuery, remoteSearchSettled]);
+  }, [hashOptions.length, localSearchSettled, rawHashQuery, remoteSearchSettled]);
 
   // Cold anchors belong to one composing session: a run that matched
   // nothing must not suppress `#` in the next message.
