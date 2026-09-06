@@ -9,12 +9,15 @@ import type {
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
 
 type PendingRequest = {
+  cleanupAbort: () => void;
   reject: (error: Error) => void;
   resolve: (value: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
 };
 
 export type FederationRpcRequestOptions = {
+  /** Local demand cancellation. Never serialized into a peer envelope. */
+  signal?: AbortSignal;
   /**
    * Absolute wall-clock deadline shared by every RPC attempt in one logical
    * operation. This prevents compatibility fallbacks from restarting a full
@@ -59,7 +62,9 @@ export class FederationRpcEndpoint {
     params: unknown;
     timeoutMs?: number;
     deadlineAt?: number;
+    signal?: AbortSignal;
   }): Promise<Result> {
+    if (params.signal?.aborted) return Promise.reject(params.signal.reason);
     const id = `federation-request:${randomUUID()}`;
     const now = this.now();
     const deadlineAt =
@@ -84,22 +89,35 @@ export class FederationRpcEndpoint {
     };
 
     const promise = new Promise<Result>((resolve, reject) => {
+      const abort = (): void => {
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        pending.cleanupAbort();
+        this.pending.delete(id);
+        reject(params.signal?.reason ?? new Error("Federation request cancelled."));
+      };
+      const cleanupAbort = (): void => params.signal?.removeEventListener("abort", abort);
       const timer = setTimeout(() => {
+        cleanupAbort();
         this.pending.delete(id);
         reject(new Error(`Federation request timed out: ${params.method}`));
       }, timeoutMs);
       if (timer.unref) timer.unref();
       this.pending.set(id, {
+        cleanupAbort,
         resolve: resolve as (value: unknown) => void,
         reject,
         timer,
       });
+      params.signal?.addEventListener("abort", abort, { once: true });
     });
     try {
       this.options.sendEnvelope(envelope);
     } catch (error) {
       const pending = this.pending.get(id);
       if (pending) {
+        pending.cleanupAbort();
         clearTimeout(pending.timer);
         this.pending.delete(id);
         pending.reject(
@@ -122,6 +140,7 @@ export class FederationRpcEndpoint {
 
   rejectAll(error: Error): void {
     for (const [id, pending] of this.pending) {
+      pending.cleanupAbort();
       clearTimeout(pending.timer);
       this.pending.delete(id);
       pending.reject(error);
@@ -131,6 +150,7 @@ export class FederationRpcEndpoint {
   private resolveResponse(envelope: FederationResponseEnvelope): boolean {
     const pending = this.pending.get(envelope.requestId);
     if (!pending) return false;
+    pending.cleanupAbort();
     clearTimeout(pending.timer);
     this.pending.delete(envelope.requestId);
     pending.resolve(envelope.result);
@@ -141,6 +161,7 @@ export class FederationRpcEndpoint {
     if (!envelope.requestId) return false;
     const pending = this.pending.get(envelope.requestId);
     if (!pending) return false;
+    pending.cleanupAbort();
     clearTimeout(pending.timer);
     this.pending.delete(envelope.requestId);
     // Keep the remote's human-readable message; the bare code alone is

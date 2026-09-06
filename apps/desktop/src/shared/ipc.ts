@@ -167,6 +167,7 @@ export const MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrsnap-download";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_QUERY_PAGE_CHANNEL = "navigation:get-query-page";
+export const NAVIGATION_QUERY_RELEASE_CHANNEL = "navigation:release-query";
 export const NAVIGATION_SELECTED_DETAIL_CHANNEL =
   "navigation:get-selected-detail";
 export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
