@@ -1,7 +1,7 @@
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { StrictMode, useState, type ComponentProps } from "react";
+import { StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -34,9 +34,19 @@ import { normalizeImageFile } from "../../../lib/image-normalization";
 import { FEDERATED_THREAD_SEARCH_DEBOUNCE_MS } from "../../../lib/useFederatedThreadSearch";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
-import { Composer } from "../Composer";
+import { Composer as ProductionComposer } from "../Composer";
+import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
+
+function Composer(props: ComponentProps<typeof ProductionComposer>) {
+  const desktopApi = useMemo<DesktopApi>(() => ({
+    ...props.desktopApi,
+    getNavigationQueryPage: props.desktopApi?.getNavigationQueryPage
+      ?? (async (request) => navigationQueryFixture(request, props)),
+  }), [props.desktopApi, props.directories, props.threads]);
+  return <ProductionComposer {...props} desktopApi={desktopApi} />;
+}
 import type {
   ComposerDraftSnapshot,
   ComposerDraftStore,
@@ -2057,7 +2067,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Check @" },
     });
-    const autocomplete = screen.getByRole("listbox", { name: "Directories" });
+    const autocomplete = await screen.findByRole("listbox", { name: "Directories" });
     for (const name of ["+ Add directory…", "+ Add file…"]) {
       const action = screen.getByRole("button", { name });
       expect(within(autocomplete).queryByRole("button", { name }))
@@ -15761,7 +15771,7 @@ describe("Composer", () => {
         target: { value: "Read MARKET-4803 in @catalog" },
       });
 
-      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Directories" });
       expect(listbox.parentElement).toHaveClass("composer__autocomplete--directories");
       fireEvent.click(
         within(listbox).getByRole("option", { name: /catalog-portal/ })
@@ -15881,7 +15891,7 @@ describe("Composer", () => {
         target: { value: beforeMention },
       });
 
-      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Directories" });
       fireEvent.click(
         within(listbox).getByRole("option", { name: /grok-build/ }),
       );
@@ -16109,7 +16119,7 @@ describe("Composer", () => {
         target: { value: "Check @" },
       });
 
-      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Directories" });
       expect(within(listbox).getAllByRole("option")).toHaveLength(1);
       expect(within(listbox).queryByRole("button")).not.toBeInTheDocument();
       // Only the file action renders — this composer has no
@@ -16210,7 +16220,7 @@ describe("Composer", () => {
         target: { value: "Look in @" },
       });
 
-      screen.getByRole("listbox", { name: "Directories" });
+      await screen.findByRole("listbox", { name: "Directories" });
       await clickButton("+ Add directory…");
 
       expect(onPickDirectoryForReference).toHaveBeenCalledOnce();
@@ -20358,7 +20368,7 @@ describe("Composer", () => {
     expect(textarea).toHaveValue("$ce:pl");
   });
 
-  it("dismisses directory autocomplete with Escape after focus leaves the composer", () => {
+  it("dismisses directory autocomplete with Escape after focus leaves the composer", async () => {
     const directory: NavigationDirectorySummary = {
       key: "directory:/repo/search",
       kind: "directory",
@@ -20398,7 +20408,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Check @sea" } });
     expect(
-      screen.getByRole("listbox", { name: "Directories" })
+      await screen.findByRole("listbox", { name: "Directories" })
     ).toBeInTheDocument();
 
     const transcript = screen.getByRole("button", {

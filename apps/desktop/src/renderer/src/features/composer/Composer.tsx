@@ -219,6 +219,7 @@ import {
   type ComposerPendingSteerSnapshot,
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
+import { useComposerMentionSources } from "./useComposerMentionSources";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -4529,6 +4530,19 @@ export function Composer(props: ComposerProps) {
     !federatedHashSearchAvailable
     || (!federatedHashSearchLoading
       && federatedHashSearchSettledQuery === (rawHashReferenceQuery ?? "").trim());
+  const mentionNavigation = useComposerMentionSources({ desktopApi: props.desktopApi });
+  const mentionNavigationQuery = directoryRefTrigger?.query ?? rawHashReferenceQuery;
+  const ensureMentionNavigation = mentionNavigation.ensureLoaded;
+  const releaseMentionNavigation = mentionNavigation.release;
+  useEffect(() => {
+    if (mentionNavigationQuery === undefined) {
+      releaseMentionNavigation();
+    } else {
+      ensureMentionNavigation(mentionNavigationQuery);
+    }
+  }, [ensureMentionNavigation, mentionNavigationQuery, releaseMentionNavigation]);
+  const localHashSearchSettled = !mentionNavigation.loading
+    && mentionNavigation.settledQuery === (rawHashReferenceQuery ?? "").trim().toLowerCase();
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -4574,10 +4588,10 @@ export function Composer(props: ComposerProps) {
     }
 
     return filterDirectoryReferenceCandidates(
-      props.directories ?? [],
+      [...mentionNavigation.directories],
       directoryRefTrigger.query,
     );
-  }, [props.directories, directoryRefTrigger]);
+  }, [mentionNavigation.directories, directoryRefTrigger]);
   const filteredHashReferenceOptions = useMemo(() => {
     if (!hashReferenceTrigger) {
       return [];
@@ -4586,7 +4600,8 @@ export function Composer(props: ComposerProps) {
       currentThreadKey: props.thread
         ? buildThreadIdentityKey(props.thread.source, props.thread.id)
         : undefined,
-      localThreads: props.threads ?? [],
+      localThreads: mentionNavigation.threads,
+      localOwnerMatched: mentionNavigation.settledQuery === hashReferenceTrigger.query.trim().toLowerCase(),
       query: hashReferenceTrigger.query,
       remoteThreads: federatedHashSearchResults,
     });
@@ -4595,7 +4610,8 @@ export function Composer(props: ComposerProps) {
     hashReferenceTrigger,
     props.thread?.id,
     props.thread?.source,
-    props.threads,
+    mentionNavigation.threads,
+    mentionNavigation.settledQuery,
   ]);
   const hashReferenceCount = filteredHashReferenceOptions.length;
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
@@ -5031,6 +5047,7 @@ export function Composer(props: ComposerProps) {
       // once the federated search has answered for this exact query,
       // otherwise the anchor dies a beat before the remote rows land.
       || !federatedHashSearchSettled
+      || !localHashSearchSettled
       || filteredHashReferenceOptions.length > 0
     ) {
       return;
@@ -5042,6 +5059,7 @@ export function Composer(props: ComposerProps) {
     );
   }, [
     federatedHashSearchSettled,
+    localHashSearchSettled,
     filteredHashReferenceOptions.length,
     rawHashReferenceQuery,
   ]);

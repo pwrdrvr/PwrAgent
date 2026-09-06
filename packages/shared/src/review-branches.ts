@@ -8,7 +8,9 @@ const REVIEW_REMOTE_AGNOSTIC_BASE_BRANCH_PATTERN =
   /^(main|master|develop|development|trunk)$|^(release|releases|stable|support|maintenance)\//;
 
 export function buildReviewBranchOptions(params: {
-  directory?: NavigationDirectorySummary;
+  directory?: {
+    gitStatus?: Partial<NonNullable<NavigationDirectorySummary["gitStatus"]>>;
+  };
   thread?: NavigationThreadSummary;
 }): string[] {
   const threadCurrentBranches = [

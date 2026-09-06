@@ -13,6 +13,7 @@ import type {
 import {
   buildThreadIdentityKey,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
+  rankThreadJumpMatches,
 } from "@pwragent/shared";
 import {
   navigationAttentionIdentity,
@@ -312,7 +313,7 @@ function buildDirectoryRows(params: {
 }
 
 function normalizeQuery(query: NavigationQuery): NavigationQuery {
-  if (query.kind === "lens") {
+  if (query.kind === "lens" || query.kind === "directory-index") {
     return {
       ...query,
       ...(query.filter?.trim().toLowerCase()
@@ -421,11 +422,7 @@ function selectQueryThreads(params: {
   if (query.kind === "search") {
     const text = query.text.trim().toLowerCase();
     if (!text) return [];
-    return ordinaryThreads
-      .filter((thread) => thread.title.toLowerCase().includes(text)
-        || thread.linkedDirectories.some((directory) =>
-          directory.path.toLowerCase().includes(text)))
-      .sort(compareUpdated);
+    return rankThreadJumpMatches(ordinaryThreads, text);
   }
 
   const selected = new Map<string, NavigationThreadSummary>();
@@ -516,6 +513,10 @@ export function projectNavigationQuery(params: {
     counts: countsForThreads(countsThreads),
     directories: includeDirectories
       ? buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey })
+          .filter((directory) => query.kind !== "directory-index"
+            || !query.filter?.trim()
+            || `${directory.label}\n${directory.path ?? ""}`.toLowerCase()
+              .includes(query.filter.trim().toLowerCase()))
       : [],
     entries,
     queryKey: navigationQueryKey(params.request),
