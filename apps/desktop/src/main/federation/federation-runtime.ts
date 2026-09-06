@@ -3,6 +3,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
 import type {
+  ReadFederationActivityRequest,
+  ReadFederationActivityResponse,
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
   AgentEvent,
@@ -231,6 +233,7 @@ import {
   collectFederationHostInfo,
   collectFederationLoadStatus,
 } from "./federation-host-info";
+import { FederationActivityLedger } from "./federation-activity-ledger";
 import { FederationTransferLedger } from "./federation-transfer-ledger";
 import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
 import { hydrateFederatedThreadMessageOrigins } from "./federated-thread-origin-hydrator";
@@ -880,6 +883,7 @@ export class DesktopFederationRuntime {
    * the operator's baseline-vs-optimized comparison spans reconnects.
    */
   private readonly transferLedger = new FederationTransferLedger();
+  private readonly activityLedger = new FederationActivityLedger();
   private gatewayListenerError?: string;
 
   setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
@@ -1128,6 +1132,20 @@ export class DesktopFederationRuntime {
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
     this.gatewayListenerError = undefined;
+  }
+
+  async resetActivity(): Promise<ReadFederationActivityResponse> {
+    this.activityLedger.reset();
+    return this.activity();
+  }
+
+  async activity(request?: ReadFederationActivityRequest): Promise<ReadFederationActivityResponse> {
+    return {
+      activity: this.activityLedger.snapshot(Date.now(), request),
+      health: await this.health(),
+      configuredMode: this.readRuntimeConfig().mode,
+      running: Boolean(this.listenUrl || this.client || this.reconnectTimer),
+    };
   }
 
   async health(): Promise<FederationHealthStatus> {
@@ -2643,7 +2661,13 @@ export class DesktopFederationRuntime {
         },
         onEnvelope: (envelope, connection) =>
           void this.receiveEnvelope(envelope, connection.peerId),
-        onEnvelopeTransfer: (info) => this.transferLedger.record(info),
+        onEnvelopeTransfer: (info) => {
+          this.transferLedger.record(info);
+          this.activityLedger.record({
+            ...info,
+            localInstanceId: this.ensureLocalInstanceId(),
+          });
+        },
       });
       this.server = server;
       try {
@@ -2871,8 +2895,14 @@ export class DesktopFederationRuntime {
       host: this.localHostInfo,
       // All client traffic rides this one socket, so the counters land
       // on the gateway's row — including relayed sibling traffic.
-      onEnvelopeTransfer: (info) =>
-        this.transferLedger.record({ ...info, peerId: gatewayInstanceId }),
+      onEnvelopeTransfer: (info) => {
+        this.transferLedger.record({ ...info, peerId: gatewayInstanceId });
+        this.activityLedger.record({
+          ...info,
+          peerId: gatewayInstanceId,
+          localInstanceId: this.ensureLocalInstanceId(),
+        });
+      },
       role: "client",
       headers: cloudflareAccessEnabled
         ? {

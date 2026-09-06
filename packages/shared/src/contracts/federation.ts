@@ -827,3 +827,55 @@ export function federationTargetKey(target: FederationTarget): string {
 export function federatedThreadIdentityKey(ref: FederatedThreadRef): string {
   return `${federationTargetKey(ref.target)}:${ref.backend}:${ref.threadId}`;
 }
+
+/** Process-local envelope traffic. Bytes exclude WebSocket/TCP/TLS framing. */
+export type FederationActivityCounts = {
+  requests: number;
+  responses: number;
+  notifications: number;
+  other: number;
+  dataBytes: number;
+  wireBytes: number;
+};
+export type FederationActivityTotals = {
+  sent: FederationActivityCounts;
+  received: FederationActivityCounts;
+};
+export type FederationPayloadSizeStats = {
+  count: number;
+  averageBytes?: number;
+  /** Estimated nearest-rank median; logarithmic bucket midpoint (~1.1% error). */
+  p50Bytes?: number;
+  minBytes?: number;
+  maxBytes?: number;
+};
+export type FederationActivitySizes = Record<
+  "sent" | "received",
+  Record<"requests" | "responses", FederationPayloadSizeStats>
+>;
+export type FederationActivitySeries = {
+  sizes: FederationActivitySizes;
+  lifetime: FederationActivityTotals;
+  windows: Record<"1m" | "5m" | "10m" | "1h", FederationActivityTotals>;
+  history: Array<{ at: number; totals: FederationActivityTotals }>;
+};
+export type FederationActivitySnapshot = {
+  since: number;
+  at: number;
+  bucketMs: number;
+  physical: FederationActivitySeries;
+  peers: Array<{ peerId: string; series: FederationActivitySeries }>;
+  logical: Array<{ peerId: string; series: FederationActivitySeries }>;
+};
+export type ReadFederationActivityResponse = {
+  activity: FederationActivitySnapshot;
+  health: FederationHealthStatus;
+  configuredMode: "disabled" | "client" | "gateway" | "dual";
+  running: boolean;
+};
+
+export type ReadFederationActivityRequest = {
+  includeHistory?: boolean;
+  historyPeerId?: string;
+  historyView?: "physical" | "logical";
+};

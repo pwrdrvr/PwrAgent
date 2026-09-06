@@ -32,6 +32,7 @@ import type { FederationRemoteTarget } from "@pwragent/shared";
 
 /** Identifier for each known window kind. Keep in sync with the
  *  per-window registration sites. */
+export const WINDOW_KIND_FEDERATION_ACTIVITY = "federation-activity" as const;
 export const WINDOW_KIND_MAIN = "main" as const;
 export const WINDOW_KIND_MESSAGING_ACTIVITY = "messaging-activity" as const;
 export const WINDOW_KIND_STAR_MAP = "star-map" as const;
@@ -44,6 +45,7 @@ export const WINDOW_KIND_TOOL_OUTPUT_INCIDENT_EXPLORER =
   "tool-output-incident-explorer" as const;
 export const WINDOW_KIND_AUTOMATION_RUN = "automation-run" as const;
 export type WindowKind =
+  | typeof WINDOW_KIND_FEDERATION_ACTIVITY
   | typeof WINDOW_KIND_MAIN
   | typeof WINDOW_KIND_MESSAGING_ACTIVITY
   | typeof WINDOW_KIND_STAR_MAP

@@ -137,6 +137,8 @@ import type {
   MarkThreadSeenRequest,
   OpenFederationWindowRequest,
   OpenFederationWindowResponse,
+  ReadFederationActivityRequest,
+  ReadFederationActivityResponse,
   ReadFederationHealthRequest,
   ReadFederationHealthResponse,
   ReadFederationInstanceLoadRequest,
@@ -595,6 +597,11 @@ export type DesktopApi = {
   openFederationWindow?: (
     request: OpenFederationWindowRequest,
   ) => Promise<OpenFederationWindowResponse>;
+  readFederationActivity?: (request?: ReadFederationActivityRequest) => Promise<ReadFederationActivityResponse>;
+  resetFederationActivity?: () => Promise<ReadFederationActivityResponse>;
+  setFederationEnabled?: (enabled: boolean) => Promise<ReadFederationActivityResponse>;
+  openFederationActivity?: () => Promise<void>;
+  setFederationActivityTopmost?: (enabled: boolean) => Promise<boolean>;
   readFederationHealth?: (
     request?: ReadFederationHealthRequest,
   ) => Promise<ReadFederationHealthResponse>;

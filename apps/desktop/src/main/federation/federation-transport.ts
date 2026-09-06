@@ -304,12 +304,15 @@ export type FederationGatewayWebSocketServerOptions = {
   /**
    * Wire-byte tap for envelope frames only (handshake/auth frames and
    * WebSocket keepalives are not reported). `byteCount` is the frame's
-   * post-encryption length — what actually crossed the wire.
+   * encoded application-message length including Noise tags, excluding
+   * WebSocket headers, TCP/TLS overhead, handshake and ping/pong/close frames.
    */
   onEnvelopeTransfer?: (info: {
     peerId: FederationInstanceId;
     direction: "sent" | "received";
     byteCount: number;
+    dataByteCount: number;
+    envelope: FederationProtocolEnvelope;
   }) => void;
 };
 
@@ -597,6 +600,8 @@ export class FederationGatewayWebSocketServer {
             peerId: decision.peer.id,
             direction: "sent",
             byteCount,
+            dataByteCount: envelopeDataBytes.get(envelope)!,
+            envelope,
           });
         }
       },
@@ -612,6 +617,8 @@ export class FederationGatewayWebSocketServer {
             peerId: decision.peer.id,
             direction: "sent",
             byteCount,
+            dataByteCount: envelopeDataBytes.get(envelope)!,
+            envelope,
           });
         }
       },
@@ -748,6 +755,8 @@ export class FederationGatewayWebSocketServer {
         peerId: connection.peerId,
         direction: "received",
         byteCount: frame.byteLength,
+        dataByteCount: envelopeDataBytes.get(next.envelope)!,
+        envelope: next.envelope,
       });
       this.options.onEnvelope?.(next.envelope, connection);
     }
@@ -868,6 +877,8 @@ export async function connectFederationClient(params: {
   onEnvelopeTransfer?: (info: {
     direction: "sent" | "received";
     byteCount: number;
+    dataByteCount: number;
+    envelope: FederationProtocolEnvelope;
   }) => void;
   /**
    * Called once when the transport ends. `info` carries the WebSocket
@@ -1134,6 +1145,8 @@ async function establishFederationClient(
         params.onEnvelopeTransfer?.({
           direction: "received",
           byteCount: frame.byteLength,
+          dataByteCount: envelopeDataBytes.get(message.envelope)!,
+          envelope: message.envelope,
         });
         params.onEnvelope?.(message.envelope);
       }
@@ -1154,7 +1167,10 @@ async function establishFederationClient(
         maxFrameBytes,
       );
       if (byteCount > 0) {
-        params.onEnvelopeTransfer?.({ direction: "sent", byteCount });
+        params.onEnvelopeTransfer?.({
+          direction: "sent", byteCount,
+          dataByteCount: envelopeDataBytes.get(envelope)!, envelope,
+        });
       }
     },
     sendEnvelopeWithBackpressure: async (envelope) => {
@@ -1165,7 +1181,10 @@ async function establishFederationClient(
         maxFrameBytes,
       );
       if (byteCount > 0) {
-        params.onEnvelopeTransfer?.({ direction: "sent", byteCount });
+        params.onEnvelopeTransfer?.({
+          direction: "sent", byteCount,
+          dataByteCount: envelopeDataBytes.get(envelope)!, envelope,
+        });
       }
     },
     close: () => socket.close(),
@@ -1354,7 +1373,18 @@ function decodeFrame(
   return decodeFederationSocketPayload(payload);
 }
 
-function encodeFederationSocketPayload(
+// Weak keys never extend envelope lifetime. Capture the serialization length at
+// the codec boundary, before #1255's compression and Noise encryption. On receive
+// this runs after decompression. No second JSON serialization is necessary.
+const envelopeDataBytes = new WeakMap<FederationProtocolEnvelope, number>();
+
+function encodeFederationSocketPayload(message: FederationSocketMessage): Buffer {
+  const payload = encodeRawFederationSocketPayload(message);
+  if (message.kind === "envelope") envelopeDataBytes.set(message.envelope, payload.byteLength);
+  return payload;
+}
+
+function encodeRawFederationSocketPayload(
   message: FederationSocketMessage,
 ): Buffer {
   if (
@@ -1377,7 +1407,13 @@ function encodeFederationSocketPayload(
   return Buffer.concat([prefix, header, Buffer.from(data)]);
 }
 
-function decodeFederationSocketPayload(
+function decodeFederationSocketPayload(payload: Buffer): FederationSocketMessage | undefined {
+  const message = decodeRawFederationSocketPayload(payload);
+  if (message?.kind === "envelope") envelopeDataBytes.set(message.envelope, payload.byteLength);
+  return message;
+}
+
+function decodeRawFederationSocketPayload(
   payload: Buffer,
 ): FederationSocketMessage | undefined {
   if (

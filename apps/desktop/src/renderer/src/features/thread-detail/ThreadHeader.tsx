@@ -11,7 +11,7 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { TerminalIcon } from "../../icons/TerminalIcon";
 import { HistoryIcon } from "../../icons/HistoryIcon";
 import { SubAgentsIcon } from "../../icons/SubAgentsIcon";
-import { StarMapIcon } from "../../icons/StarMapIcon";
+import { FederationStatusControl } from "../federation-activity/FederationStatusControl";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
 import {
   HistoryNavButtons,
@@ -132,10 +132,8 @@ export function ThreadHeader(props: ThreadHeaderProps) {
       : {}),
     threadId: props.thread.id,
   });
-  const starMapTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const rewindTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const workflowBudgetTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const starMapLabel = "Open Star Map";
   // A collapsed-but-running terminal gets its own affordance: the toggle wears
   // a live dot and says so, otherwise the shell is invisible from here.
   const terminalCollapsedRunning =
@@ -340,27 +338,8 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           ) : null}
           {terminalTooltip.tooltipNode}
           {props.starMap && !isWindows ? (
-            <button
-              type="button"
-              className="thread-header__star-map-toggle"
-              aria-label={starMapLabel}
-              onClick={() => {
-                starMapTooltip.hide();
-                props.starMap?.onOpen();
-              }}
-              onMouseEnter={(event) =>
-                starMapTooltip.show(event.currentTarget, starMapLabel)
-              }
-              onMouseLeave={starMapTooltip.hide}
-              onFocus={(event) =>
-                starMapTooltip.show(event.currentTarget, starMapLabel)
-              }
-              onBlur={starMapTooltip.hide}
-            >
-              <StarMapIcon size={14} />
-            </button>
+            <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen} />
           ) : null}
-          {starMapTooltip.tooltipNode}
           <MessagingStatusBar
             desktopApi={props.desktopApi}
             onOpenActivity={props.onOpenMessagingActivity}

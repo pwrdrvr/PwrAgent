@@ -97,6 +97,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "federation-activity-monitor": {
+    "commits": 0,
+    "note": "10,000 transfers, local snapshots and reset: in-memory only; 0 MB/day added WAL",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "held-scheduled-action-retry": {
     "commits": 3,
     "note": "one operator-triggered held retry: claim, queue admission, and successful turn start; no timer or automatic retry",

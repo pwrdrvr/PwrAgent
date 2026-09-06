@@ -256,7 +256,7 @@
   --transcript-text-size: 14px;
 }
 
-/* ===========================================================================
+/* ====================================================================
    THEMING — Light theme overrides
 
    Default :root above carries the Dark theme values (Tangerine Terminal on
@@ -472,7 +472,7 @@
   background: var(--bg-sidebar);
 }
 
-/* ===========================================================================
+/* ====================================================================
    DENSITY — Compact vs. Mission Control
 
    Density is a separate axis from theme. Mission Control is the default
@@ -545,7 +545,7 @@
    densities in the inter-card spacing pass — the densities now differ
    only in which chips render.) */
 
-/* ===========================================================================
+/* ====================================================================
    TEXT SIZE — user-adjustable per-surface scales
 
    The text-size appearance axes (sidebar titles, transcript body),
@@ -2228,7 +2228,7 @@ textarea,
   line-height: 1.4;
 }
 
-/* ============================================================
+/* =====================================================
    MESSAGING ACTIVITY WINDOW — its own dedicated BrowserWindow (NOT a
    settings section, NOT an in-window overlay). The window opens via
    `desktopApi.openMessagingActivityWindow()` → main process spawns a
@@ -8667,7 +8667,7 @@ a.button {
   padding: 20px 24px 24px;
 }
 
-/* ============================================================
+/* =====================================================
    SETTINGS PANES — design alignment (PwrAgent v2)
    ============================================================ */
 
@@ -27503,7 +27503,7 @@ button.pricing-token-miser__folded:focus-visible {
   line-height: 1.45;
 }
 
-/* ============================================================
+/* =====================================================
    LIVE RUN STRIP
    A compact disclosure row for transient run state above the composer, used
    today by the active sub-agents group (ActiveSubAgentsStrip.tsx).
@@ -28374,7 +28374,7 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--button-text);
 }
 
-/* ============================================================
+/* =====================================================
    Composer pickers — shared popover language
 
    The project picker, the branch picker, and the "+" reference
@@ -28846,9 +28846,9 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-panel-hover);
 }
 
-/* ===========================================================
+/* ====================================================
    Project picker (issue #223)
-   ===========================================================
+   ====================================================
    Shares the visual language of `.composer-dropdown` so the
    project pill reads as a peer of the workspace / model / branch
    pickers in the launchpad row. The dashed border on the empty
@@ -31184,7 +31184,7 @@ button.pricing-token-miser__folded:focus-visible {
   }
 }
 
-/* ============================================================
+/* =====================================================
    FIRST-RUN ONBOARDING WIZARD
    Surfaces feat(onboarding) issue #467. Tokens map back to the
    design pass in docs/design/onboarding-wizard-v1/. Visual rules
@@ -32360,7 +32360,7 @@ button.pricing-token-miser__folded:focus-visible {
   border: 0;
 }
 
-/* ============================================================
+/* =====================================================
    ONBOARDING WIZARD — Step 2b: Name codex profiles
    ============================================================ */
 .onboarding-wizard__profile-list {
@@ -32490,7 +32490,7 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--text-secondary);
 }
 
-/* ============================================================
+/* =====================================================
    ONBOARDING WIZARD — Step 3c: Per-provider inline setup
    ============================================================ */
 .onboarding-wizard__provider-setup {
@@ -32866,7 +32866,7 @@ button.pricing-token-miser__folded:focus-visible {
   word-break: break-word;
 }
 
-/* ============================================================
+/* =====================================================
    ONBOARDING WIZARD — AI provider requirements
    Pre-rail prerequisite check shown before Welcome. Uses the
    --narrow width (same as Welcome / Done). Provider tabs keep four
@@ -33809,6 +33809,48 @@ button.pricing-token-miser__folded:focus-visible {
 .star-map-satellite-card__body .context-rail {
   max-width: 100%;
 }
+
+/* Federation monitor reuses the activity-window chrome and MSG hover panel. */
+/* The Star Map trigger already owns its 24px hit target. Reusing MSG's
+   wrapper must not add its padding or shift the existing title-bar controls. */
+.federation-status-control { position: relative; padding: 0; }
+.federation-status-control__details { padding: 10px; overflow-wrap: anywhere; }
+.federation-status-control__details p { margin: 6px 0; }
+/* This report owns its scroll area; the shared Activity chrome stays outside it. */
+.federation-activity-content { display: block; overflow: auto; }
+.federation-activity { max-width: 1000px; margin: 0 auto; padding: 16px; font-size: 13px; }
+.federation-activity__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
+.federation-activity__toolbar p { margin: 4px 0; }
+.federation-activity__toolbar label { display: flex; align-items: center; gap: 6px; }
+.federation-activity__toolbar select, .federation-activity__toolbar button:not(.settings-switch) {
+  color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border-strong);
+  border-radius: 5px; padding: 5px 8px; max-width: 260px;
+}
+.federation-activity__toolbar :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.federation-activity__muted { color: var(--text-secondary); }
+.federation-activity__chart { margin: 16px 0; }
+.federation-activity__chart figcaption { font-weight: 600; }
+.federation-activity__chart svg { display: block; width: 100%; }
+.federation-activity__chart text { fill: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.federation-activity__grid { stroke: var(--border-subtle); }
+.federation-activity__line { fill: none; stroke-width: 1.8; }
+.federation-activity__line--sent { stroke: var(--accent); }
+.federation-activity__line--received { stroke: var(--text-secondary); }
+.federation-activity__legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; }
+.federation-activity__legend--sent { color: var(--accent); }
+.federation-activity__legend--received { color: var(--text-secondary); }
+.federation-activity__totals { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.federation-activity__totals th, .federation-activity__totals td { padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); text-align: right; }
+.federation-activity__totals th:first-child { text-align: left; }
+.federation-activity__boundaries { margin-top: 16px; color: var(--text-secondary); line-height: 1.5; }
+.federation-activity__boundaries summary { cursor: pointer; color: var(--text-primary); }
+
+.federation-activity__tables { overflow-x: auto; }
+.federation-activity__totals + .federation-activity__totals { margin-top: 18px; }
+.federation-activity__totals caption { text-align: left; font-weight: 600; padding: 8px; }
+.federation-activity__totals td { white-space: nowrap; }
+
+.federation-activity__sizes { margin-top: 18px; }
 
 .queued-message-inspector {
   max-height: 320px;

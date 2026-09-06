@@ -126,6 +126,9 @@ const LicenseDocumentWindow = lazy(async () => ({
   default: (await import("./features/license/LicenseDocumentWindow"))
     .LicenseDocumentWindow,
 }));
+const FederationActivityWindow = lazy(async () => ({
+  default: (await import("./features/federation-activity/FederationActivityWindow")).FederationActivityWindow,
+}));
 const MessagingActivityWindow = lazy(async () => ({
   default: (await import("./features/messaging-activity/MessagingActivityWindow"))
     .MessagingActivityWindow,
@@ -166,6 +169,10 @@ const routes: Array<{
   match: (hash: string) => boolean;
   render: () => ReactElement;
 }> = [
+  {
+    match: (hash) => hash === "federation-activity",
+    render: () => <FederationActivityWindow />,
+  },
   {
     match: (hash) => hash === "messaging-activity",
     render: () => <MessagingActivityWindow />,

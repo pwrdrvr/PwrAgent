@@ -68,4 +68,13 @@ describe("federation transfer ledger", () => {
 
     expect(ledger.snapshot("pwr_studio")?.bytesSent).toBe(10);
   });
+  it("bounds the legacy health-only peer map", () => {
+    const ledger = new FederationTransferLedger();
+    for (let index = 0; index < 129; index += 1) {
+      ledger.record({ peerId: `peer-${index}`, direction: "sent", byteCount: 1, at: index });
+    }
+    expect(ledger.snapshot("peer-0")).toBeUndefined();
+    expect(ledger.snapshot("peer-128")?.bytesSent).toBe(1);
+  });
+
 });

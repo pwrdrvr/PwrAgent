@@ -7,7 +7,7 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
 import { NewThreadButton } from "./NewThreadButton";
 import { PanelToggleButtons } from "./PanelToggleButtons";
-import { StarMapIcon } from "../../icons/StarMapIcon";
+import { FederationStatusControl } from "../federation-activity/FederationStatusControl";
 import type { StarMapToggleControls } from "../thread-detail/ThreadHeader";
 
 export type AppTitleBarLayoutControls = {
@@ -128,14 +128,7 @@ export function AppTitleBar(props: {
             />
           ) : null}
           {props.starMap && !isFederationWindow ? (
-            <button
-              type="button"
-              aria-label="Open Star Map"
-              className="thread-header__star-map-toggle"
-              onClick={props.starMap.onOpen}
-            >
-              <StarMapIcon size={14} />
-            </button>
+            <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen} />
           ) : null}
           {props.desktopApi ? (
             <MessagingStatusBar
