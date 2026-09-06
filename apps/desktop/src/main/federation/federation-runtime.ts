@@ -1193,7 +1193,7 @@ export class DesktopFederationRuntime {
       }));
   }
 
-  private assertRemoteNavigationQueryProtocol(
+  assertRemoteNavigationQueryProtocol(
     target: FederationRemoteTarget,
   ): void {
     const peer = this.visiblePeers().find(
@@ -5581,6 +5581,7 @@ function localBackendOperations(): FederationBackendOperations {
       const overlay = await getDesktopOverlayStore().setThreadPin({
         backend,
         threadId: request.threadId,
+        pinned: request.pinned,
         pinnedRank: request.pinnedRank,
       });
       // Publish so this instance's own windows AND connected remote

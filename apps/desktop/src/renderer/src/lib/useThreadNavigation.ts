@@ -34,7 +34,6 @@ import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
   buildNavigationSnapshotTransportScopeKey,
-  buildAppendPinRank,
   buildPinnedRanks,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
@@ -7862,15 +7861,7 @@ export function useThreadNavigation(
         return;
       }
 
-      // Append above ALL existing pins (across backends), not just this
-      // thread's backend — pin order is global.
-      const pinnedRank = pinned
-        ? thread.pinnedRank ?? buildAppendPinRank(
-            (state.response?.threads ?? []).map(
-              (candidate) => candidate.pinnedRank,
-            ),
-          )
-        : undefined;
+      const pinnedRank = pinned ? thread.pinnedRank : undefined;
       const federationTarget = thread.federation?.ref.target
         ?? readRendererFederationTarget();
 
@@ -7898,7 +7889,7 @@ export function useThreadNavigation(
         ) {
           const result = await setRemoteThreadLocalPinRequest({
             ref: thread.federation.ref,
-            pinnedRank,
+            pinned,
           });
           setState((current) => ({
             ...current,
@@ -7915,7 +7906,7 @@ export function useThreadNavigation(
           backend: thread.source,
           federationTarget,
           threadId: thread.id,
-          pinnedRank,
+          pinned,
         });
         setState((current) => ({
           ...current,
@@ -7934,7 +7925,6 @@ export function useThreadNavigation(
       refresh,
       setRemoteThreadLocalPinRequest,
       setThreadPinRequest,
-      state.response?.threads,
     ],
   );
 
@@ -8299,14 +8289,7 @@ export function useThreadNavigation(
         return;
       }
 
-      const pinnedRank = pinned
-        ? directory.pinnedRank ??
-          buildAppendPinRank(
-            (state.response?.directories ?? [])
-              .filter((candidate) => candidate.kind === "directory")
-              .map((candidate) => candidate.pinnedRank),
-          )
-        : undefined;
+      const pinnedRank = pinned ? directory.pinnedRank : undefined;
 
       setState((current) => ({
         ...current,
@@ -8319,7 +8302,7 @@ export function useThreadNavigation(
       try {
         const result = await setDirectoryPinRequest({
           directoryKey: directory.key,
-          pinnedRank,
+          pinned,
         });
         setState((current) => ({
           ...current,
@@ -8332,7 +8315,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [refresh, setDirectoryPinRequest, state.response?.directories],
+    [refresh, setDirectoryPinRequest],
   );
 
   const reorderDirectoryPins = useCallback(

@@ -4800,6 +4800,7 @@ describe("Sidebar", () => {
   });
 
   it("pins a same-directory thread after a pointer drag leaves its source", async () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
     const onReorderThreadPins = vi.fn(async () => undefined);
     const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
     const pinnedThread = {
@@ -4824,6 +4825,7 @@ describe("Sidebar", () => {
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={onSetThreadPin}
         onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
         onSetDirectoryThreadsCollapsed={onSetDirectoryThreadsCollapsed}
@@ -4852,10 +4854,10 @@ describe("Sidebar", () => {
     releaseThreadPinPointer({ x: 50, y: 90 });
     fireEvent.click(directoryThreads);
 
-    expect(onReorderThreadPins).toHaveBeenCalledWith([
-      "codex:thread-updated",
-      "codex:thread-1",
-    ]);
+    expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
+    await waitFor(() => expect(onReorderThreadPins).toHaveBeenCalledWith([], {
+      key: "codex:thread-1", anchorKey: "codex:thread-updated", placement: "after",
+    }));
     expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
   });
 
@@ -4923,6 +4925,7 @@ describe("Sidebar", () => {
   });
 
   it("cancels over the source and appends after leaving an empty pin section", async () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
     const onReorderThreadPins = vi.fn(async () => undefined);
 
     const { container } = render(
@@ -4938,6 +4941,7 @@ describe("Sidebar", () => {
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={onSetThreadPin}
         onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
       />,
@@ -4991,10 +4995,12 @@ describe("Sidebar", () => {
     });
 
     releaseThreadPinPointer({ x: 50, y: 90 });
-    expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
+    expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
   it("uses the source row's live bounds after directory-list scrolling", async () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
     const onReorderThreadPins = vi.fn(async () => undefined);
 
     render(
@@ -5010,6 +5016,7 @@ describe("Sidebar", () => {
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
+        onSetThreadPin={onSetThreadPin}
         onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
       />,
@@ -5060,7 +5067,8 @@ describe("Sidebar", () => {
       expect(appendTarget).toHaveClass("is-drop-target-before");
     });
     releaseThreadPinPointer({ x: 50, y: 150 });
-    expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
+    expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
   it("keeps an escaped directory pin drag canceled through release", async () => {
@@ -6497,6 +6505,7 @@ describe("Sidebar directory pinning", () => {
   });
 
   it("pins an unpinned directory when it is dropped on the pinned divider", () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
     const onReorderDirectoryPins = vi.fn(async () => undefined);
     const pinned: NavigationDirectorySummary = {
       ...projectADirectory,
@@ -6504,7 +6513,7 @@ describe("Sidebar directory pinning", () => {
     };
 
     renderSidebar([pinned, projectBDirectory], {
-      onSetDirectoryPin: async () => undefined,
+      onSetDirectoryPin,
       onReorderDirectoryPins,
     });
 
@@ -6513,10 +6522,8 @@ describe("Sidebar directory pinning", () => {
       { dataTransfer: createDirectoryDataTransfer(projectBDirectory.key) },
     );
 
-    expect(onReorderDirectoryPins).toHaveBeenCalledWith([
-      pinned.key,
-      projectBDirectory.key,
-    ]);
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(projectBDirectory, true);
+    expect(onReorderDirectoryPins).not.toHaveBeenCalled();
   });
 
   it("reorders pinned directories when one is dropped on another pinned directory", () => {

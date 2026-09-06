@@ -65,3 +65,21 @@ it("compacts exhausted adjacent ranks without ties and rejects missing moving pi
   expect(ranks).toEqual({ first: "1024", last: "2048", next: "3072" });
   expect(() => relativePinRanks(pins, { key: "missing", direction: "up" })).toThrow("pin no longer exists");
 });
+
+it("appends owner pin intent beyond unseen local and viewer pins with one commit", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    const ref = buildFederatedThreadRef({ backend: "codex", instanceId: "peer", threadId: "same" });
+    await store.setThreadPin({ backend: "codex", threadId: "same", pinnedRank: "102400" });
+    await store.addRemoteThreadPin({ ref, instanceLabel: "Peer" });
+    expect((await store.setRemoteThreadLocalPin({ ref, pinned: true })).pinnedRank).toBe("103424");
+    const { result, writes } = await measureSqliteWrites(() => store.setThreadPin({
+      backend: "codex", threadId: "new", pinned: true,
+    }));
+    expect(result.pinnedRank).toBe("104448");
+    expectSqliteWriteBudget({ scenario: "navigation-append-thread-pin", writes,
+      note: "Owner pin intent reads compact complete ranks and writes one pin in one commit; at 100 pins/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes" });
+  } finally { db.close(); }
+});

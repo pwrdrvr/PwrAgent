@@ -6153,6 +6153,9 @@ class DesktopAppServerService {
       // it locally would only create a phantom pin on the viewer machine
       // that the next remote snapshot overwrites.
       const { federationTarget, ...remoteRequest } = request;
+      if (request.pinned !== undefined) {
+        getDesktopFederationRuntime().assertRemoteNavigationQueryProtocol(federationTarget);
+      }
       return await getDesktopFederationRuntime()
         .remoteBackend(federationTarget)
         .setThreadPin(remoteRequest);
@@ -6162,6 +6165,7 @@ class DesktopAppServerService {
     const overlay = await this.getOverlayStore().setThreadPin({
       backend,
       threadId: request.threadId,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
 
@@ -6275,6 +6279,9 @@ class DesktopAppServerService {
       && isRemoteFederationTarget(request.federationTarget)
     ) {
       const { federationTarget, ...remoteRequest } = request;
+      if (request.move) {
+        getDesktopFederationRuntime().assertRemoteNavigationQueryProtocol(federationTarget);
+      }
       const ownerPrefix = `remote:${federationTarget.instanceId}:`;
       const ownerKey = (key: string): string => key.startsWith(ownerPrefix) ? key.slice(ownerPrefix.length) : key;
       const result = await getDesktopFederationRuntime()
@@ -6604,6 +6611,7 @@ class DesktopAppServerService {
     const instanceId = validateRemoteThreadPinRef(request.ref);
     const result = await this.getOverlayStore().setRemoteThreadLocalPin({
       ref: request.ref,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
     await getDesktopBackendRegistry().publishLocalEvent({
@@ -6832,6 +6840,7 @@ class DesktopAppServerService {
 
     const overlay = await this.getOverlayStore().setDirectoryPin({
       directoryKey: request.directoryKey,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
 

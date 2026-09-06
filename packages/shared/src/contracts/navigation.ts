@@ -1854,6 +1854,8 @@ export type SetThreadPinRequest = {
   threadId: ThreadIdentifier;
   /** Rank within the pinned section. Null/undefined removes the pin. */
   pinnedRank?: string | null;
+  /** Owner appends a new pin after its complete order; false removes it. */
+  pinned?: boolean;
 };
 
 export type SetThreadPinResponse = {
@@ -1901,6 +1903,8 @@ export type SetRemoteThreadLocalPinRequest = {
   ref: FederatedThreadRef;
   /** Rank within the viewer's pinned section. Null/undefined removes it. */
   pinnedRank?: string | null;
+  /** Owner appends a new pin after its complete order; false removes it. */
+  pinned?: boolean;
 };
 
 export type SetRemoteThreadLocalPinResponse = {
@@ -2066,6 +2070,8 @@ export type SetDirectoryPinRequest = {
   directoryKey: string;
   /** Rank within the pinned section. Null/undefined removes the pin. */
   pinnedRank?: string | null;
+  /** Owner appends a new pin after its complete order; false removes it. */
+  pinned?: boolean;
 };
 
 export type SetDirectoryPinResponse = {
