@@ -3757,19 +3757,30 @@ describe("app server ipc", () => {
     });
   });
 
-  it("caps oversized transcript payload strings before readThread crosses IPC", async () => {
+  it("preserves complete transcript messages and command output across readThread IPC", async () => {
     const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
     const oversizedOutput =
       `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
       "x".repeat(80_000) +
       "protocol-tail";
 
+    const markdown = "| Contract | Regression |\n| --- | --- |\n"
+      + "| Preserve membership | Preserve every table row |\n".repeat(900)
+      + "\nFinal paragraph after the table.";
+    const messages = (["user", "assistant"] as const).map((role) => ({
+      type: "message" as const,
+      id: role,
+      role,
+      text: markdown,
+      parts: [{ type: "text" as const, text: markdown }],
+    }));
     const oversizedReadThreadResponse: AppServerReadThreadResponse = {
       backend: "codex",
       fetchedAt: 1234,
       threadId: "thread-large",
       replay: {
         entries: [
+          ...messages,
           {
             type: "activity",
             id: "activity-1",
@@ -3788,7 +3799,7 @@ describe("app server ipc", () => {
             ],
           },
         ],
-        messages: [],
+        messages,
         pagination: {
           supportsPagination: false,
           hasPreviousPage: false,
@@ -3804,7 +3815,7 @@ describe("app server ipc", () => {
       {},
       { backend: "codex", threadId: "thread-large" },
     ) as AppServerReadThreadResponse | undefined;
-    const entry = response?.replay.entries[0];
+    const entry = response?.replay.entries[2];
     const output =
       entry?.type === "activity"
         ? entry.details[0]?.command?.output ?? ""
@@ -3822,11 +3833,17 @@ describe("app server ipc", () => {
     expect(
       federationMock.runtime.hydrateThreadMessageOrigins,
     ).toHaveBeenCalledWith(oversizedReadThreadResponse);
-    expect(output.length).toBeLessThan(36_000);
-    expect(output).toContain("PwrAgent renderer boundary: truncated");
-    expect(output).toContain("$.replay.entries[0].details[0].command.output");
-    expect(output).toContain("protocol-tail");
-    expect(output).not.toContain("x".repeat(60_000));
+    expect(output === oversizedOutput).toBe(true);
+    expect(response?.replay.messages).toHaveLength(2);
+    expect(response?.replay.entries).toHaveLength(3);
+    expect(response?.replay.messages.every((message) => message.text === markdown)).toBe(true);
+    for (const message of response?.replay.entries.slice(0, 2) ?? []) {
+      expect(message.type).toBe("message");
+      if (message.type === "message") {
+        expect(message.parts?.[0]?.type).toBe("text");
+        expect(message.parts?.[0]?.type === "text" && message.parts[0].text === markdown).toBe(true);
+      }
+    }
   });
 
   it("forwards inspection-only full-accounting reads to the backend registry", async () => {

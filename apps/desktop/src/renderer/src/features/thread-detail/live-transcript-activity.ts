@@ -7,7 +7,6 @@ import {
   formatTokenUsageUsd,
   formatTokenUsageUsdPerMillion,
   resolveOpenAiPricingServiceTier,
-  truncateRendererPayloadString,
   type AppServerSource,
   type AppServerThreadActivityDetail,
   type AppServerThreadActivityEntry,
@@ -1455,10 +1454,7 @@ export function appendCommandOutputDelta(
       command: {
         displayCommand: detail.command?.displayCommand ?? detail.label,
         ...detail.command,
-        output: truncateRendererPayloadString(
-          `${detail.command?.output ?? ""}${params.delta}`,
-          "live command output",
-        ),
+        output: `${detail.command?.output ?? ""}${params.delta}`,
       },
     };
   });

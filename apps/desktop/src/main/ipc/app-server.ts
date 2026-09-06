@@ -11,7 +11,6 @@ import type {
   SqliteOverlayStore,
 } from "../state/overlay-store-sqlite";
 import {
-  sanitizeRendererPayload,
   type AgentEvent,
   type AppServerBackendKind,
   type AppServerBackendScope,
@@ -1848,9 +1847,9 @@ class DesktopAppServerService {
           }),
       },
     );
-    return sanitizeRendererPayload(
-      shapeReadThreadFileDiffsForRenderer(materialized),
-    );
+    // Transcript bodies are lossless. Character cuts can split Markdown tables,
+    // code fences, and cross-thread message arguments in the middle.
+    return shapeReadThreadFileDiffsForRenderer(materialized);
   }
 
   async analyzeThreadToolHistory(
