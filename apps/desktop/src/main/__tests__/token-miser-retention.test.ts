@@ -94,11 +94,16 @@ it("does not materialize an absent profile during startup migration and accounti
 });
 it("migrates contrived legacy content while preserving historical costs and deleting originals", async () => {
   const { store, root } = await fixture();
+  const tokenUsage = {
+    total: { inputTokens: 100, cachedInputTokens: 40, cacheWriteInputTokens: 20, outputTokens: 10, reasoningOutputTokens: 5, totalTokens: 110 },
+    last: { inputTokens: 50, cachedInputTokens: 20, cacheWriteInputTokens: 10, outputTokens: 5, reasoningOutputTokens: 2, totalTokens: 55 },
+    modelContextWindow: 128_000,
+  };
   const metadata = await store.store({ ...params, helperUsage: { model: "test", tokenUsage: { inputTokens: 10, outputTokens: 2 } } });
   await fs.rm(path.join(root, "threads"), { recursive: true, force: true });
   await fs.writeFile(path.join(root, `${metadata.objectId}.txt`), "PRIVATE_LEGACY_RAW");
   await fs.writeFile(path.join(root, `${metadata.objectId}.json`), JSON.stringify({
-    ...metadata, summary: params.summary, extraPreview: "PRIVATE_EXTRA", helperUsage: { model: "test", tokenUsage: { inputTokens: 10, outputTokens: 2, secret: "PRIVATE_USAGE" } },
+    ...metadata, summary: params.summary, extraPreview: "PRIVATE_EXTRA", helperUsage: { model: "test", tokenUsage: { ...tokenUsage, secret: "PRIVATE_USAGE" } },
   }));
   const writes = vi.spyOn(fs, "writeFile");
   try {
@@ -106,7 +111,7 @@ it("migrates contrived legacy content while preserving historical costs and dele
     expect(writes.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain("PRIVATE_");
     expect(await fs.readdir(root)).toEqual(["threads"]);
     const [restored] = await new TokenMiserStore(root).listMetadata("owner");
-    expect(restored?.helperUsage?.tokenUsage).toEqual({ inputTokens: 10, outputTokens: 2 });
+    expect(restored?.helperUsage?.tokenUsage).toEqual(tokenUsage);
     expect(restored?.originalCharacters).toBe(metadata.originalCharacters);
     writes.mockClear();
     await store.prune({ maxAgeMs: 0, maxBytes: 0 });

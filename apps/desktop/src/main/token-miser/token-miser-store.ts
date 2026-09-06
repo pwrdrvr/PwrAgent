@@ -1116,7 +1116,7 @@ function safeHelperUsage(value: TokenMiserHelperUsage): TokenMiserHelperUsage {
 function safeTokenUsage(value: unknown, depth = 0): unknown {
   if (!value || typeof value !== "object" || depth > 8) return undefined;
   const result: Record<string, unknown> = {};
-  const counts = new Set(["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningOutputTokens", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_output_tokens", "cache_read_input_tokens", "cached_tokens", "reasoning_tokens"]);
+  const counts = new Set(["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "cacheWriteInputTokens", "reasoningOutputTokens", "modelContextWindow", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_output_tokens", "cache_read_input_tokens", "cached_tokens", "reasoning_tokens"]);
   const containers = new Set(["tokenUsage", "token_usage", "info", "last", "last_token_usage", "total", "total_token_usage", "data", "payload", "usage", "result", "input_tokens_details", "output_tokens_details"]);
   for (const [key, entry] of Object.entries(value)) {
     if (counts.has(key) && typeof entry === "number" && Number.isFinite(entry) && entry >= 0) result[key] = entry;
