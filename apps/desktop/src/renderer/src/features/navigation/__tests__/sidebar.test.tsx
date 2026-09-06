@@ -7263,3 +7263,20 @@ describe("Sidebar thread pinning Move items", () => {
     ], { key: `codex:${pinnedTop.id}`, anchorKey: `codex:${pinnedBottom.id}`, placement: "after" });
   });
 });
+
+it("marks an unloaded directory through owner membership rather than a visible row allowlist", () => {
+  const onMarkDirectoriesSeen = vi.fn(async () => undefined);
+  const onMarkThreadsSeen = vi.fn(async () => undefined);
+  const directory: NavigationDirectorySummary = { key: "directory:/unloaded", kind: "directory", label: "Unloaded project",
+    path: "/unloaded", threadKeys: [], needsAttentionCount: 0 };
+  render(<Sidebar backends={[]} browseMode="directories" directories={[directory]} inboxThreads={[]} threads={[]}
+    loading={false} onBrowseModeChange={() => undefined} onCreateThread={async () => undefined}
+    onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
+    onMarkDirectoriesSeen={onMarkDirectoriesSeen} onMarkThreadsSeen={onMarkThreadsSeen} />);
+  const summary = screen.getAllByRole("button", { name: "Unloaded project" }).find((button) => button.hasAttribute("aria-expanded"));
+  expect(summary).toBeDefined();
+  fireEvent.contextMenu(summary!, { clientX: 48, clientY: 64 });
+  fireEvent.click(screen.getByRole("menuitem", { name: "Mark Read" }));
+  expect(onMarkDirectoriesSeen).toHaveBeenCalledWith([directory.key]);
+  expect(onMarkThreadsSeen).not.toHaveBeenCalled();
+});

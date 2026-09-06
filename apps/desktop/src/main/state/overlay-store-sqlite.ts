@@ -1003,6 +1003,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     seenUpdatedAt?: number;
     threadId: string;
   }): Promise<MarkThreadSeenResponse> {
+    return this.putThreadSeen(params);
+  }
+
+  /** One explicit owner action commits once, regardless of directory size. */
+  markNavigationThreadsSeen(threads: readonly {
+    backend: ThreadOverlayState["backend"]; threadId: string; seenUpdatedAt?: number;
+  }[]): number {
+    if (!threads.length) return 0;
+    const seenAt = Date.now();
+    return this.stateDb.raw.transaction(() => {
+      for (const thread of threads) this.putThreadSeen({ ...thread, seenAt });
+      return threads.length;
+    })();
+  }
+
+  private putThreadSeen(params: {
+    backend: ThreadOverlayState["backend"];
+    seenAt?: number;
+    seenUpdatedAt?: number;
+    threadId: string;
+  }): MarkThreadSeenResponse {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey);
     const seenAt = params.seenAt ?? Date.now();

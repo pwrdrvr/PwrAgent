@@ -152,3 +152,14 @@ while retaining its accepted display ranges. Replacement lifetimes use distinct
 consumer tokens so late release cannot cancel the successor. This does not claim
 that the legacy main renderer has switched or that process-wide IPC decode
 allocation accounting is complete.
+
+### Owner directory read action
+
+`markNavigationDirectorySeen` resolves directory membership and per-thread seen
+watermarks on the owner. It returns only the directory key and changed count;
+renderer rows do not authorize membership. Checking/degraded provider coverage
+and unresolved members reject before writes. The checked-in 100-thread scenario
+commits once for 100 watermark writes; an already-read directory commits zero
+times. At a conservative 4 KiB per changed row, this fixture projects about
+0.4 MB per explicit action, or 4 MB/day at ten such actions, with no idle writes.
+The owner publishes one directory invalidation after acceptance.

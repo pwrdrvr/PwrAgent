@@ -44,5 +44,11 @@ export async function loadLocalNavigationQueryIndex(params: {
       gitStatus: directoryStatusCache[directory.key]?.gitStatus,
     }),
   );
-  return { directories, threads, inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys() };
+  const providerRefresh = registry.getStartupProviderRefreshStatus?.();
+  return { directories, threads, inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
+    coverage: providerRefresh ? {
+      state: providerRefresh.state === "ready" ? "complete" : providerRefresh.state,
+      ...(providerRefresh.failedProviders ? { failedProviders: providerRefresh.failedProviders } : {}),
+    } : { state: "complete" },
+  };
 }

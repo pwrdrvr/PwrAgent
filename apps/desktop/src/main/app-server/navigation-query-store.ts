@@ -178,7 +178,7 @@ function pageBase(params: {
     generation: generation.generation,
     ownerEpoch: params.ownerEpoch,
     countsRevision: generation.completeRevision,
-    coverage: { state: "complete" },
+    coverage: generation.materialization.coverage,
     counts: generation.materialization.counts,
     ...(generation.materialization.facets ? { facets: generation.materialization.facets } : {}),
   };

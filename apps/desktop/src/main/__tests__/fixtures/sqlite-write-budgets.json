@@ -230,6 +230,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "navigation-mark-directory-seen-100-threads": {
+    "commits": 1,
+    "note": "Explicit owner directory action commits 100 watermarks in one transaction, no per-thread commits or idle writes; conservative 4 KiB/row is ~0.4 MB/action (~4 MB/day at 10 such actions)",
+    "observedWalBytes": 0,
+    "rowsChanged": 100,
+    "statements": 100
+  },
   "navigation-owner-query-reads": {
     "commits": 0,
     "note": "1,000 real overlay-backed rows, owner Attention metadata, facet counts, page continuation and repeated query: zero commits; 0 MB/day added WAL",

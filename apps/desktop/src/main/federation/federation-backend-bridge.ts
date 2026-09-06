@@ -1,3 +1,4 @@
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import {
@@ -395,6 +396,7 @@ function authenticateScheduledTurnOrigin<
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
   removeNavigationDirectory: "backend.removeNavigationDirectory",
+  markNavigationDirectorySeen: "backend.markNavigationDirectorySeen",
   getNavigationLaunchpadConfig: "backend.getNavigationLaunchpadConfig",
   getNavigationSelectedDetail: "backend.getNavigationSelectedDetail",
   getNavigationQueueProjection: "backend.getNavigationQueueProjection",
@@ -506,6 +508,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 > = {
   [FEDERATION_BACKEND_METHODS.getNavigationQueryPage]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.removeNavigationDirectory]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getNavigationQueueProjection]: "thread_detail",
@@ -625,6 +628,7 @@ export type FederationBackendOperations = {
     request: NavigationQueryRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationQueryPage>;
+  markNavigationDirectorySeen?(request: MarkNavigationDirectorySeenRequest, rpcOptions?: FederationRpcRequestOptions): Promise<MarkNavigationDirectorySeenResponse>;
   removeNavigationDirectory?(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse>;
   getNavigationLaunchpadConfig?(
     request: NavigationLaunchpadConfigRequest,
@@ -900,6 +904,10 @@ export function registerFederationBackendHandlers(params: {
         },
       ),
     );
+  }
+  if (params.backend.markNavigationDirectorySeen) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen,
+      async (envelope) => params.backend.markNavigationDirectorySeen!(envelope.params as MarkNavigationDirectorySeenRequest));
   }
   if (params.backend.removeNavigationDirectory) {
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.removeNavigationDirectory,
@@ -1794,6 +1802,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
       params: request,
       ...rpcOptions,
+    });
+  }
+
+  async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest, rpcOptions?: FederationRpcRequestOptions): Promise<MarkNavigationDirectorySeenResponse> {
+    return this.rpc.request<MarkNavigationDirectorySeenResponse>({
+      method: FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen, params: request, ...rpcOptions,
     });
   }
 

@@ -1,5 +1,6 @@
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
-import { removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -2078,6 +2079,17 @@ export class DesktopFederationRuntime {
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
     return stampRemoteNavigationQueryPage({ instanceLabel, page, target });
+  }
+
+  async remoteMarkNavigationDirectorySeen(target: FederationRemoteTarget, request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {
+    this.assertRemoteNavigationQueryProtocol(target);
+    const { federationTarget: _target, ...ownerRequest } = request;
+    try {
+      return await this.remoteBackend(target).markNavigationDirectorySeen(ownerRequest);
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) throw navigationUpgradeRequired(target.instanceId);
+      throw error;
+    }
   }
 
   async remoteRemoveNavigationDirectory(target: FederationRemoteTarget, request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> {
@@ -5412,6 +5424,9 @@ function localBackendOperations(): FederationBackendOperations {
           ? `federation:${rpcOptions.requesterInstanceId}`
           : "federation:unknown",
       });
+    },
+    async markNavigationDirectorySeen(request) {
+      return markLocalNavigationDirectorySeen(request);
     },
     async removeNavigationDirectory(request) {
       return removeLocalNavigationDirectory(request);

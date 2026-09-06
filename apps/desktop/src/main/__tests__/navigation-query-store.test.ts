@@ -440,3 +440,17 @@ it("rejects cursor and unchanged-baseline combinations with an anchor", async ()
     })).rejects.toMatchObject({ code: "navigation_invalid_request" });
   }
 });
+
+it("does not certify incomplete provider coverage as an authoritative empty population", async () => {
+  const store = new NavigationQueryStore();
+  const checking = await store.readPage({ scopeKey: "window", request: request(),
+    loadIndex: async () => ({ ...snapshot([]), coverage: { state: "checking" as const } }),
+  });
+  expect(checking.coverage.state).toBe("checking");
+  const ready = await store.readPage({ scopeKey: "window", request: request({ completeBaselineRevision: checking.countsRevision }),
+    loadIndex: async () => ({ ...snapshot([]), coverage: { state: "complete" as const } }),
+  });
+  expect(ready.coverage.state).toBe("complete");
+  expect(ready.unchanged).not.toBe(true);
+  expect(ready.countsRevision).not.toBe(checking.countsRevision);
+});
