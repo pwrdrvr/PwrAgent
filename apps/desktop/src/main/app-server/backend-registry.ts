@@ -23984,10 +23984,14 @@ export class DesktopBackendRegistry {
     ) {
       this.recordCodexVisibleThreadCount(visibleThreads.length);
     }
-    this.schedulePendingCodexWorkspaceCwdSyncs({
-      overlaysByThreadId,
-      threads: visibleThreads,
-    });
+    // Archive cleanup also lists archived threads. Reading that collection
+    // must not try to reopen their workspaces or classify them as missing.
+    if (!params.archived) {
+      this.schedulePendingCodexWorkspaceCwdSyncs({
+        overlaysByThreadId,
+        threads: visibleThreads,
+      });
+    }
     const reconciledOverlaysByThreadId =
       await this.reconcileCodexDirectoryRelationshipsFromSource({
         diagnostics,
@@ -28897,6 +28901,7 @@ export class DesktopBackendRegistry {
     await this.emitCodexMissingThreadsUpdate({
       archivedCount: result.archived.length,
       failedCount: result.failed.length,
+      failures: result.failures,
       missingCount: threadIds.length,
       profileName: this.resolveMissingCodexThreadProfileName(),
       status: "archived",
@@ -28908,9 +28913,11 @@ export class DesktopBackendRegistry {
   private async archiveMissingCodexThreads(threadIds: string[]): Promise<{
     archived: string[];
     failed: string[];
+    failures: { threadId: string; error: string }[];
   }> {
     const archived: string[] = [];
     const failed: string[] = [];
+    const failures: { threadId: string; error: string }[] = [];
     for (const threadId of threadIds) {
       this.unresolvedMissingCodexThreadIds.delete(threadId);
       try {
@@ -28921,10 +28928,12 @@ export class DesktopBackendRegistry {
         archived.push(threadId);
       } catch (error) {
         failed.push(threadId);
-        backendRegistryLog.warn("archiving a missing Codex thread failed", {
+        const failure = {
           error: error instanceof Error ? error.message : String(error),
           threadId,
-        });
+        };
+        failures.push(failure);
+        backendRegistryLog.warn("archiving a missing Codex thread failed", failure);
       }
     }
     if (archived.length > 0) {
@@ -28936,7 +28945,7 @@ export class DesktopBackendRegistry {
         failedCount: failed.length,
       });
     }
-    return { archived, failed };
+    return { archived, failed, failures };
   }
 
   /**

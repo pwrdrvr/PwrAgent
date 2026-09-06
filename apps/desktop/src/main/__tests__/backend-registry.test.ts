@@ -51013,6 +51013,70 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     }
   }
 
+  it("does not synchronize archived threads while collecting archive cleanup metadata", async () => {
+    vi.useFakeTimers();
+    const fixture = buildMissingThreadFixture({
+      missingThreadIds: ["already-archived"],
+      presentThreadIds: ["archive-target"],
+    });
+    const codexClient = new MissingThreadCodexClient(new Set(["already-archived"]), {
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: fixture.threads.filter((thread) => thread.id === "archive-target"),
+      archivedThreads: fixture.threads.filter((thread) => thread.id === "already-archived"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: fixture.overlays }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      await registry.archiveThread({ backend: "codex", threadId: "archive-target" });
+      await settleMissingCodexThreadAudit(registry);
+      expect(codexClient.updateThreadWorkspaceCallCount).toBe(0);
+      expect(codexClient.archivedThreadIds).toEqual(["archive-target"]);
+      expect(events.filter((event) =>
+        event.notification.method === "codex/missingThreads/updated",
+      )).toEqual([]);
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("includes the thread and cleanup error when automatic missing-thread archive fails", async () => {
+    vi.useFakeTimers();
+    const fixture = buildMissingThreadFixture({
+      missingThreadIds: ["thread-missing"],
+      presentThreadIds: ["a", "b", "c", "d", "e"],
+    });
+    const codexClient = new MissingThreadCodexClient(new Set(["thread-missing"]), {
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: fixture.threads,
+      archivedThreads: [],
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+    vi.spyOn(overlayStore, "setThreadArchiveTombstone").mockRejectedValue(
+      new Error("archive storage unavailable"),
+    );
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await settleMissingCodexThreadAudit(registry);
+      expect(events.find((event) =>
+        event.notification.method === "codex/missingThreads/updated",
+      )?.notification.params).toMatchObject({
+        failedCount: 1,
+        failures: [{ threadId: "thread-missing", error: "archive storage unavailable" }],
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("archives Codex threads reported missing when they are a small share of the profile", async () => {
     vi.useFakeTimers();
     try {

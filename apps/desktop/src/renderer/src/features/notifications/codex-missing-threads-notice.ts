@@ -1,17 +1,13 @@
+import type { AppServerNotification } from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 export const CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID =
   "codex-missing-threads:confirmation";
 
-export type CodexMissingThreadsSignal = {
-  status: "archived" | "confirmationRequired";
-  threadIds: string[];
-  missingCount: number;
-  totalCount: number;
-  profileName: string;
-  archivedCount?: number;
-  failedCount?: number;
-};
+export type CodexMissingThreadsSignal = Extract<
+  AppServerNotification,
+  { method: "codex/missingThreads/updated" }
+>["params"];
 
 export function formatMissingThreadShare(params: {
   missingCount: number;
@@ -48,12 +44,34 @@ export function buildCodexMissingThreadsNotice(params: {
   const { signal } = params;
   if (signal.threadIds.length === 0) return undefined;
 
+  const threadDetail = signal.threadIds.length === 1
+    ? `Thread: ${signal.threadIds[0]}`
+    : `Threads: ${signal.threadIds.slice(0, 3).join(", ")}${signal.threadIds.length > 3 ? ` (+${signal.threadIds.length - 3} more; copy notice for all IDs)` : ""}`;
+  const withDiagnostics = (notice: AppNoticeToastNotice): AppNoticeToastNotice => ({
+    ...notice,
+    detail: `${notice.detail} ${threadDetail}`,
+    copyText: [
+      notice.title,
+      notice.message,
+      notice.detail,
+      `PwrAgent profile: ${signal.profileName}`,
+      `Threads reported missing: ${signal.missingCount} of ${signal.totalCount}`,
+      "Affected Codex thread IDs:",
+      ...signal.threadIds,
+      ...(signal.failures?.length
+        ? ["Archive failures:", ...signal.failures.map((failure) =>
+            `${failure.threadId}: ${failure.error}`,
+          )]
+        : []),
+    ].filter(Boolean).join("\n"),
+  });
+
   if (signal.status === "archived") {
     const archivedCount = signal.archivedCount ?? 0;
     const failedCount = signal.failedCount ?? 0;
     if (archivedCount === 0 && failedCount === 0) return undefined;
 
-    return {
+    return withDiagnostics({
       detail: failedCount > 0
         ? `${pluralizeThreads(failedCount)} could not be archived and stayed in the sidebar.`
         : "Restore them from the Archived lens if this was not what you wanted.",
@@ -66,7 +84,7 @@ export function buildCodexMissingThreadsNotice(params: {
         : "Missing threads not archived",
       tone: failedCount > 0 ? "warning" : "neutral",
       transientSlot: "codex-missing-threads",
-    };
+    });
   }
 
   const share = formatMissingThreadShare({
@@ -74,7 +92,7 @@ export function buildCodexMissingThreadsNotice(params: {
     totalCount: signal.totalCount,
   });
 
-  return {
+  return withDiagnostics({
     actions: [
       {
         label: "Leave Everything Alone",
@@ -95,5 +113,5 @@ export function buildCodexMissingThreadsNotice(params: {
     onDismiss: params.onKeep,
     title: "Threads missing from Codex",
     tone: "warning",
-  };
+  });
 }
