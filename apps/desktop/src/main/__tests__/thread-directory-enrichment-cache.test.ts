@@ -51,6 +51,28 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+async function initializeRealGit(initOptions: string[] = []) {
+  const { execFile } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const run = (args: string[]) => new Promise<string>((resolve, reject) => {
+    execFile("git", args, { encoding: "utf8" }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+  await fs.rm(path.join(repo, ".git"), { recursive: true });
+  await run(["init", "--initial-branch=main", ...initOptions, repo]);
+  await run(["-C", repo, "config", "core.hooksPath", path.join(root, "empty-hooks")]);
+  await run(["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture"]);
+  git.mockImplementation((
+    command: string, args: string[], options: object,
+    callback: (error: Error | null, result: { stdout: string; stderr: string }) => void,
+  ) => execFile(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+    callback(error, { stdout, stderr });
+  }));
+  return run;
+}
+
 describe("directory enrichment invalidation", () => {
   it("keeps a confirmed mapping across a day of repeated reads without Git", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -233,26 +255,9 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("preserves real Git worktree mappings, branch switches and detached HEAD", async () => {
-    const { execFile } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    const run = (args: string[]) => new Promise<string>((resolve, reject) => {
-      execFile("git", args, { encoding: "utf8" }, (error, stdout) => {
-        if (error) reject(error);
-        else resolve(stdout);
-      });
-    });
-    await fs.rm(path.join(repo, ".git"), { recursive: true });
-    await run(["init", "--initial-branch=main", repo]);
-    await run(["-C", repo, "config", "core.hooksPath", path.join(root, "empty-hooks")]);
-    await run(["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture"]);
+    const run = await initializeRealGit();
     const worktree = path.join(root, "linked");
     await run(["-C", repo, "worktree", "add", "-b", "feature/fixture", worktree]);
-    git.mockImplementation((
-      command: string, args: string[], options: object,
-      callback: (error: Error | null, result: { stdout: string; stderr: string }) => void,
-    ) => execFile(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
-      callback(error, { stdout, stderr });
-    }));
     const enrich = createThreadDirectoryEnricher();
     const first = await enrich(worktree);
     const normalized = (value: string) => value.replace(/\\/g, "/");
@@ -270,5 +275,77 @@ describe("directory enrichment invalidation", () => {
     await run(["-C", worktree, "checkout", "--detach"]);
     expect((await enrich(worktree)).observedGitBranch).toBe("HEAD");
     expect(git).toHaveBeenCalledTimes(1);
+  });
+
+  it("discovers the physical repository behind a symlinked subdirectory", async () => {
+    await initializeRealGit();
+    const subdirectory = path.join(repo, "subdirectory");
+    const alias = path.join(root, "alias-to-subdirectory");
+    await fs.mkdir(subdirectory);
+    await fs.symlink(subdirectory, alias, "junction");
+    const enrich = createThreadDirectoryEnricher();
+    const first = await enrich(alias);
+    expect(first).toMatchObject({
+      observedGitBranch: "main",
+      linkedDirectories: [{ path: repo.replace(/\\/g, "/"), kind: "local" }],
+    });
+    git.mockClear();
+    expect(await enrich(alias)).toEqual(first);
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it.each(["worktree", "common"])("invalidates branch evidence for the %s reftable stack", async (stack) => {
+    const worktree = path.join(root, "linked-stack");
+    const admin = path.join(repo, ".git", "worktrees", "linked-stack");
+    await fs.mkdir(worktree);
+    await fs.mkdir(admin, { recursive: true });
+    await fs.writeFile(path.join(worktree, ".git"), `gitdir: ${admin}\n`);
+    await fs.writeFile(path.join(admin, "commondir"), "../..\n");
+    await fs.writeFile(path.join(admin, "HEAD"), "ref: refs/heads/.invalid\n");
+    const tables = path.join(stack === "worktree" ? admin : path.join(repo, ".git"), "reftable");
+    await fs.mkdir(tables);
+    await fs.writeFile(path.join(tables, "tables.list"), "first.ref\n");
+    const enrich = createThreadDirectoryEnricher();
+    const first = await enrich(worktree);
+    git.mockClear();
+    branch = "changed-stack";
+    await fs.writeFile(path.join(tables, "tables.list.lock"), "second.ref\n");
+    await fs.rename(path.join(tables, "tables.list.lock"), path.join(tables, "tables.list"));
+    expect(await enrich(worktree)).toEqual({ ...first, observedGitBranch: branch });
+    expect(git).toHaveBeenCalledTimes(1);
+  });
+
+  it.for([false, true])("refreshes real reftable branches (linked worktree: %s)", async (linked, context) => {
+    const run = await initializeRealGit(["--ref-format=reftable"]).catch((error: unknown) => {
+      // Older supported Git releases cannot construct a reftable fixture.
+      // Only that explicit capability failure skips this real-Git case.
+      if (error instanceof Error && /unknown option.*ref-format/.test(error.message)) {
+        context.skip("Installed Git does not support reftable initialization");
+      }
+      throw error;
+    });
+    const cwd = linked ? path.join(root, "reftable-linked") : repo;
+    if (linked) await run(["-C", repo, "worktree", "add", "-b", "feature/linked", cwd]);
+    const enrich = createThreadDirectoryEnricher();
+    const first = await enrich(cwd);
+    expect(first.observedGitBranch).toBe(linked ? "feature/linked" : "main");
+    const headPath = (await run([
+      "-C", cwd, "rev-parse", "--path-format=absolute", "--git-path", "HEAD",
+    ])).trim();
+    const headBefore = await fs.readFile(headPath, "utf8");
+    git.mockClear();
+    expect(await enrich(cwd)).toEqual(first);
+    expect(git).not.toHaveBeenCalled();
+    await run(["-C", cwd, "checkout", "-b", "feature/reftable-next"]);
+    expect(await fs.readFile(headPath, "utf8")).toBe(headBefore);
+    expect(await enrich(cwd)).toEqual({ ...first, observedGitBranch: "feature/reftable-next" });
+    expect(git).toHaveBeenCalledTimes(1);
+    git.mockClear();
+    await run(["-C", cwd, "checkout", "--detach"]);
+    expect((await enrich(cwd)).observedGitBranch).toBe("HEAD");
+    expect(git).toHaveBeenCalledTimes(1);
+    git.mockClear();
+    await enrich(cwd);
+    expect(git).not.toHaveBeenCalled();
   });
 });

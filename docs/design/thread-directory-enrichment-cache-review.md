@@ -89,8 +89,9 @@ is still permitted.
 - The requested directory exists, is a directory, and has the same physical
   identity and resolved path. A missing path is unresolved, not an instruction
   to archive a thread.
-- The nearest `.git` boundary is still the same. Walking ancestors detects a
-  newly initialized nested repository without a timer or watcher.
+- The nearest `.git` boundary is still the same. Walking the physical path
+  returned by `realpath` detects a newly initialized nested repository and a
+  repository containing a symlink target, without a timer or watcher.
 - A `.git` pointer, worktree admin directory, `commondir`, common directory,
   repository/worktree config or worktree backlink change invalidates the mapping.
 - Directory identity uses device, inode and birth time. Directory modification
@@ -102,6 +103,12 @@ is still permitted.
 - HEAD has a separate signature. A HEAD change with stable topology runs only
   `git rev-parse --abbrev-ref HEAD`. Git retains responsibility for branch and
   detached-HEAD interpretation; this code does not parse branch names.
+- For [Git reftable storage](https://git-scm.com/docs/reftable), HEAD is a static
+  compatibility file. The branch signature also includes the worktree and
+  common `reftable/tables.list` file identities. Stack updates and compaction
+  can therefore trigger a conservative one-command branch refresh, including
+  when a ref other than HEAD changed; they do not rediscover topology. No
+  reftable contents are read or parsed.
 - An unversioned directory requires no Git subprocess. Its next observation
   still searches for a new `.git` boundary, so `git init` is visible immediately.
 
@@ -168,7 +175,7 @@ it by adding V8 profile percentages.
 
 ## Validation of this implementation
 
-- Final focused run: 944 tests passed across the directory-cache, directory
+- Final focused run: 949 tests passed across the directory-cache, directory
   enricher, Codex client, thread-read budgets, thread-info store, backend
   registry, Git working-state service and provider snapshot store suites.
 - Full `pnpm lint` passed: SQL, Codex-storage, colors, Electron policy,
@@ -181,3 +188,16 @@ it by adding V8 profile percentages.
   report predating this change has the same stack signature. The unchanged
   normal test command subsequently passed all 944 tests. No worker-pool,
   concurrency, timeout or retry setting was changed to obtain that result.
+
+## Review follow-up: physical discovery and reftable
+
+Three real-Git regressions reproduced both review findings before the fix:
+symlink-to-subdirectory discovery, ordinary reftable checkout, and linked
+reftable worktree checkout. The reftable tests also check detached HEAD and zero
+Git commands on unchanged reads. Two synthetic stack-replacement cases cover
+both manifest locations even on older Git versions that cannot initialize
+reftable repositories; only an explicit unsupported-init-option error skips
+those real-Git reftable cases.
+
+Review validation: 949 tests across eight suites passed, including all five new
+cases on Git 2.55.0. The three real-Git cases failed against the prior code.

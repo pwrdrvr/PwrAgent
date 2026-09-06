@@ -59,7 +59,9 @@ export function createGitDirectoryObserver(): (
     const directory = await fileState(cwd);
     if (!directory?.directory) return undefined;
     const resolved = await realpath(cwd);
-    let parent = cwd;
+    // Git discovers repositories from the physical directory. Walking the
+    // alias's parents misses .git when cwd links to a repository subdirectory.
+    let parent = resolved;
     let dotGit: FileState;
     let dotGitPath: string;
     for (;;) {
@@ -93,6 +95,14 @@ export function createGitDirectoryObserver(): (
     const backlink = await fileState(path.join(gitdir, "gitdir"));
     const head = await fileState(path.join(gitdir, "HEAD"));
     if (!head || head.directory) return undefined;
+    // Reftable's HEAD is a static compatibility file. Ref updates atomically
+    // replace tables.list instead. Observe both stacks: linked worktrees own
+    // their HEAD stack while ordinary refs live in the common directory.
+    const refs = await fileState(path.join(gitdir, "reftable", "tables.list"));
+    const commonRefs = commonDir === gitdir
+      ? refs
+      : await fileState(path.join(commonDir, "reftable", "tables.list"));
+    if (refs?.directory || commonRefs?.directory) return undefined;
     return {
       repository: true,
       relationship: JSON.stringify([
@@ -100,7 +110,7 @@ export function createGitDirectoryObserver(): (
         gitdir, admin.signature, common, commonInfo.signature,
         config?.signature, worktreeConfig?.signature, backlink?.signature,
       ]),
-      head: head.signature,
+      head: JSON.stringify([head.signature, refs?.signature, commonRefs?.signature]),
     };
   };
 }
