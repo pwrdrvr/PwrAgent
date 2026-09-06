@@ -1,3 +1,5 @@
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import { removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -2076,6 +2078,17 @@ export class DesktopFederationRuntime {
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
     return stampRemoteNavigationQueryPage({ instanceLabel, page, target });
+  }
+
+  async remoteRemoveNavigationDirectory(target: FederationRemoteTarget, request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> {
+    this.assertRemoteNavigationQueryProtocol(target);
+    const { federationTarget: _target, ...ownerRequest } = request;
+    try {
+      return await this.remoteBackend(target).removeNavigationDirectory(ownerRequest);
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) throw navigationUpgradeRequired(target.instanceId);
+      throw error;
+    }
   }
 
   async remoteNavigationLaunchpadConfig(
@@ -5399,6 +5412,9 @@ function localBackendOperations(): FederationBackendOperations {
           ? `federation:${rpcOptions.requesterInstanceId}`
           : "federation:unknown",
       });
+    },
+    async removeNavigationDirectory(request) {
+      return removeLocalNavigationDirectory(request);
     },
     async getNavigationLaunchpadConfig(request) {
       return await getDesktopNavigationDetailService().readLaunchpadConfig(request);

@@ -2192,6 +2192,10 @@ export type AppServerNotification =
    * See plan: 2026-05-09-002-feat-directory-pinning-plan.md Unit F.
    */
   | {
+      method: "navigation/directory/removed";
+      params: { directoryKey: string };
+    }
+  | {
       method: "directory/pin/added";
       params: {
         directoryKey: string;

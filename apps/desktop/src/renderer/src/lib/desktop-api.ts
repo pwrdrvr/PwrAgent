@@ -1,3 +1,4 @@
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { useEffect, useState } from "react";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../../../shared/renderer-diagnostic";
@@ -843,6 +844,7 @@ export type DesktopApi = {
     consumerId?: string,
   ) => Promise<NavigationQueryPage>;
   releaseNavigationQuery?: (consumerId: string) => Promise<void>;
+  removeNavigationDirectory?: (request: RemoveNavigationDirectoryRequest) => Promise<RemoveNavigationDirectoryResponse>;
   getNavigationLaunchpadConfig?: (
     request: NavigationLaunchpadConfigRequest,
   ) => Promise<NavigationLaunchpadConfigResponse>;
