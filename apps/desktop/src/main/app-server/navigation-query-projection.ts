@@ -1,3 +1,4 @@
+import { sortSubthreadSummaries } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import type {
   NavigationCounts,
@@ -386,6 +387,7 @@ function normalizeQuery(query: NavigationQuery): NavigationQuery {
   if (query.kind === "directory") {
     return {
       ...query,
+      roots: query.roots ?? "all",
       disclosedParentThreadKeys: [
         ...new Set(query.disclosedParentThreadKeys ?? []),
       ].sort(),
@@ -504,11 +506,21 @@ function selectQueryThreads(params: {
       .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
       .filter((thread) => {
         const parent = parentIdentity(thread);
-        return !parent
-          || disclosedParents.has(buildThreadIdentityKey(parent.backend, parent.threadId));
+        if (parent) return disclosedParents.has(buildThreadIdentityKey(parent.backend, parent.threadId));
+        return query.roots === "pinned" ? thread.pinnedRank !== undefined
+          : query.roots === "unpinned" ? thread.pinnedRank === undefined : true;
       })
       .sort(compareDirectoryMembers);
   }
+  if (query.kind === "children") {
+    const parentThread = params.threadsByIdentity.get(identityKey(query.parent));
+    const children = ordinaryThreads.filter((thread) => {
+      const parent = parentIdentity(thread);
+      return parent && identityKey(parent) === identityKey(query.parent);
+    });
+    return sortSubthreadSummaries(parentThread ?? {}, children);
+  }
+
   if (query.kind === "search") {
     const text = query.text.trim().toLowerCase();
     if (!text) return [];
@@ -624,6 +636,7 @@ export function projectNavigationQuery(params: {
       ? params.index.threads.filter(isStarMapOwnerThread)
       : query.kind === "exact"
       || query.kind === "search"
+      || query.kind === "children"
       ? selectedThreads
       : params.index.threads;
   return {

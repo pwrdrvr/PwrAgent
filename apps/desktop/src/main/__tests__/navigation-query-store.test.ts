@@ -1,4 +1,4 @@
-import { stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
+import { navigationRequestForOwner, stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
 import { describe, expect, it } from "vitest";
 import type {
   NavigationQueryRequest,
@@ -389,4 +389,14 @@ it.each([undefined, "owner", "other-owner"])("stamps off-page parent ownership i
   expect(foreign.entries[0]?.placement).toEqual({ kind: "child", parent: {
     backend: "codex", threadId: "off-page-parent", ownerInstanceId: "foreign-parent-owner",
   } });
+});
+
+it("localizes exact and child identities only for the serving owner", () => {
+  const owner = { scope: "remote" as const, instanceId: "owner" };
+  const identities = [{ backend: "codex" as const, threadId: "same", ownerInstanceId: "owner" },
+    { backend: "codex" as const, threadId: "same", ownerInstanceId: "foreign" }];
+  expect(navigationRequestForOwner(request({ federationTarget: owner, query: { kind: "exact", identities } }), owner).query)
+    .toEqual({ kind: "exact", identities: [{ backend: "codex", threadId: "same" }, identities[1]] });
+  expect(navigationRequestForOwner(request({ query: { kind: "children", parent: identities[0]! } }), owner).query)
+    .toEqual({ kind: "children", parent: { backend: "codex", threadId: "same" } });
 });

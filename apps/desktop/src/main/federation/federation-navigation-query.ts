@@ -1,6 +1,8 @@
 import type {
   FederationRemoteTarget,
   NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationIdentity,
 } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
 
@@ -44,4 +46,15 @@ export function stampRemoteNavigationQueryPage(params: {
       };
     }),
   };
+}
+
+/** Only the serving owner's explicit identity becomes owner-local on the wire. */
+export function navigationRequestForOwner(request: NavigationQueryRequest, target: FederationRemoteTarget): NavigationQueryRequest {
+  const localize = (ref: NavigationIdentity): NavigationIdentity => ref.ownerInstanceId === target.instanceId
+    ? { backend: ref.backend, threadId: ref.threadId } : ref;
+  const { federationTarget: _target, ...ownerRequest } = request;
+  const query = request.query.kind === "exact"
+    ? { ...request.query, identities: request.query.identities.map(localize) }
+    : request.query.kind === "children" ? { ...request.query, parent: localize(request.query.parent) } : request.query;
+  return { ...ownerRequest, query };
 }

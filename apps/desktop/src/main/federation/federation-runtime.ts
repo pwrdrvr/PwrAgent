@@ -309,7 +309,7 @@ import {
   hasFederationErrorCode,
   type FederationRpcRequestOptions,
 } from "./federation-rpc";
-import { stampRemoteNavigationQueryPage } from "./federation-navigation-query";
+import { navigationRequestForOwner, stampRemoteNavigationQueryPage } from "./federation-navigation-query";
 import {
   FederationPeerUnavailableError,
 } from "./federation-peer-unavailable-error";
@@ -2064,7 +2064,7 @@ export class DesktopFederationRuntime {
     if (!backend.getNavigationQueryPage) {
       throw navigationUpgradeRequired(target.instanceId);
     }
-    const { federationTarget: _federationTarget, ...ownerRequest } = request;
+    const ownerRequest = navigationRequestForOwner(request, target);
     let page: NavigationQueryPage;
     try {
       page = await backend.getNavigationQueryPage(ownerRequest, rpcOptions);
