@@ -33822,7 +33822,7 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-activity__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
 .federation-activity__toolbar p { margin: 4px 0; }
 .federation-activity__toolbar label { display: flex; align-items: center; gap: 6px; }
-.federation-activity__toolbar select, .federation-activity__toolbar button {
+.federation-activity__toolbar select, .federation-activity__toolbar button:not(.settings-switch) {
   color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border-strong);
   border-radius: 5px; padding: 5px 8px; max-width: 260px;
 }

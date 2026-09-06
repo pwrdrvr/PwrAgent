@@ -23,7 +23,7 @@ export function useFederationActivity(
         const next = await desktopApi.readFederationActivity!({ includeHistory, historyPeerId, historyView });
         if (!disposed && generation === toggleGeneration.current) { setSnapshot(next); setError(undefined); }
       } catch (cause) {
-        if (!disposed) setError(cause instanceof Error ? cause.message : String(cause));
+        if (!disposed && generation === toggleGeneration.current) setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
         if (!disposed) timer = setTimeout(() => void poll(), 2_000);
       }
@@ -44,7 +44,18 @@ export function useFederationActivity(
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally { toggleGeneration.current += 1; setPending(false); }
   }, [desktopApi, pending, snapshot]);
-  return { snapshot, error, pending, toggle };
+  const reset = useCallback(async () => {
+    if (pending || !desktopApi?.resetFederationActivity) return;
+    setPending(true);
+    toggleGeneration.current += 1;
+    try {
+      setSnapshot(await desktopApi.resetFederationActivity());
+      setError(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally { toggleGeneration.current += 1; setPending(false); }
+  }, [desktopApi, pending]);
+  return { snapshot, error, pending, toggle, reset };
 }
 
 export function federationRuntimeLabel(snapshot: ReadFederationActivityResponse): string {

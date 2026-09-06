@@ -69,6 +69,7 @@ for (const theme of ["dark", "light"] as const) {
       const activity = await opened;
       await activity.emulateMedia({ reducedMotion: "reduce" });
       await expect(activity.getByText("Running · connected")).toBeVisible();
+      await expect(activity.getByRole("switch", { name: "Federation enabled" })).toHaveClass(/settings-switch/);
       await expect(activity.getByRole("img", { name: /Data and wire rates/ })).toBeVisible();
       const topmost = activity.getByRole("checkbox", { name: "Always on top", exact: true });
       await topmost.click();
@@ -100,6 +101,27 @@ for (const theme of ["dark", "light"] as const) {
       expect(await activity.evaluate(() => document.scrollingElement?.scrollTop)).toBe(0);
       await expect(sizes.getByRole("columnheader", { name: "p50 ≈", exact: true })).toBeVisible();
       await activity.screenshot({ path: testInfo.outputPath(`federation-sizes-${theme}.png`) });
+      await activity.getByRole("button", { name: "Copy Federation activity" }).click();
+      await expect(activity.getByRole("status")).toHaveText("Federation activity copied");
+      const copied = await app.electronApp.evaluate(({ clipboard }) => clipboard.readText());
+      expect(copied).toContain("Last 1m\tLast 10m\tLast 1h\tTotal");
+      expect(copied).toContain("Samples\tAvg\tp50 (approx.)\tMin\tMax");
+      // Reset still crosses the real preload/IPC bridge, with contrived returned totals.
+      await app.electronApp.evaluate(({ ipcMain }, activity) => {
+        ipcMain.removeHandler("federation:reset-activity");
+        const cleared = {
+          activity, configuredMode: "dual", running: true,
+          health: { enabled: true, role: "dual", status: "connected", peers: [] },
+        };
+        ipcMain.handle("federation:reset-activity", () => {
+          ipcMain.removeHandler("federation:read-activity");
+          ipcMain.handle("federation:read-activity", () => cleared);
+          return cleared;
+        });
+      }, new FederationActivityLedger().snapshot());
+      await activity.getByRole("button", { name: "Reset", exact: true }).click();
+      await sizes.scrollIntoViewIfNeeded();
+      await expect(sizes.getByRole("row", { name: "Sent requests 0 — — — —", exact: true })).toBeVisible();
       await activity.close();
       await expect(trigger).toBeVisible();
     } finally { await app.close(); }

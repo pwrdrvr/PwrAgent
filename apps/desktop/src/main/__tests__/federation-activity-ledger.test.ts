@@ -154,3 +154,24 @@ describe("Federation activity ledger", () => {
   });
 
 });
+
+
+it("reset clears all history, peers and size distributions and starts a fresh measurement interval", () => {
+  const ledger = new FederationActivityLedger(0);
+  ledger.record(base);
+  const previous = ledger.snapshot(1_000);
+  ledger.reset(2_000);
+  const cleared = ledger.snapshot(2_000);
+  expect(cleared.since).toBe(2_000);
+  expect(cleared.peers).toEqual([]);
+  expect(cleared.logical).toEqual([]);
+  expect(cleared.physical.lifetime.sent.requests).toBe(0);
+  expect(cleared.physical.sizes.sent.requests).toEqual({ count: 0 });
+  expect(cleared.physical.history.every((bucket) => bucket.totals.sent.dataBytes === 0)).toBe(true);
+  for (const totals of Object.values(cleared.physical.windows)) expect(totals.sent.requests).toBe(0);
+  expect(previous.physical.lifetime.sent.requests).toBe(1);
+  ledger.record({ ...base, at: 3_000, dataByteCount: 50 });
+  const next = ledger.snapshot(3_000);
+  expect(next.physical.lifetime.sent.requests).toBe(1);
+  expect(next.physical.sizes.sent.requests).toEqual({ count: 1, averageBytes: 50, p50Bytes: 50, minBytes: 50, maxBytes: 50 });
+});

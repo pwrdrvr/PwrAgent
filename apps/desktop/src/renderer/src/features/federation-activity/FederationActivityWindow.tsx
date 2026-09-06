@@ -1,4 +1,7 @@
 import { useEffect, useId, useState } from "react";
+import { CheckIcon, CopyIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
+import { formatActivityReport } from "./format-activity-report";
 import type { FederationActivitySeries } from "@pwragent/shared";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { formatTrafficBytes, trafficByteUnit } from "./format-traffic-bytes";
@@ -59,7 +62,7 @@ function PayloadSizes({ series }: { series: FederationActivitySeries }) {
           </tr>;
         }))}</tbody>
     </table>
-    <p className="federation-activity__muted">Across this process lifetime for the selected traffic view.
+    <p className="federation-activity__muted">Since start or reset for the selected traffic view.
       Responses include errors. p50 is an estimate within about 1.1%; no payloads are retained.</p>
   </div>;
 }
@@ -119,21 +122,31 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
   const [peerId, setPeerId] = useState("");
   const [topmost, setTopmost] = useState(false);
   const [topmostPending, setTopmostPending] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [copyPending, setCopyPending] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2_000);
+    return () => clearTimeout(timer);
+  }, [copied]);
   const [actionError, setActionError] = useState<string>();
-  const { snapshot, error, pending, toggle } = useFederationActivity(desktopApi, true, {
+  const { snapshot, error, pending, toggle, reset } = useFederationActivity(desktopApi, true, {
     historyPeerId: peerId || undefined, historyView: view,
   });
   const peers = snapshot ? view === "physical" ? snapshot.activity.peers : snapshot.activity.logical : [];
   const series = peerId ? peers.find((peer) => peer.peerId === peerId)?.series : snapshot?.activity.physical;
+  const enabled = Boolean(snapshot && snapshot.configuredMode !== "disabled");
   const labelFor = (id: string) => snapshot?.health.peers.find((peer) => peer.id === id)?.label || id;
   return <div className="federation-activity">
     <div className="federation-activity__toolbar">
       <div><strong>{snapshot ? federationRuntimeLabel(snapshot) : "Loading Federation activity…"}</strong>
         {snapshot ? <p>Configured {snapshot.configuredMode === "disabled" ? "off" : `on · ${snapshot.configuredMode}`}</p> : null}</div>
       <button type="button" role="switch" aria-label="Federation enabled"
-        aria-checked={Boolean(snapshot && snapshot.configuredMode !== "disabled")}
+        aria-checked={enabled}
+        className={`settings-switch messaging-status-popover__switch${enabled ? " is-on" : ""}`}
         disabled={!snapshot || pending || !desktopApi?.setFederationEnabled} onClick={() => void toggle()}>
-        Federation {snapshot?.configuredMode === "disabled" ? "off" : "on"}
+        <span className="settings-switch__track" aria-hidden="true"><span className="settings-switch__thumb" /></span>
+        <span>{enabled ? "On" : "Off"}</span>
       </button>
       <label><input type="checkbox" checked={topmost} disabled={topmostPending || !desktopApi?.setFederationActivityTopmost}
         onChange={(event) => {
@@ -143,6 +156,25 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
             setActionError(cause instanceof Error ? cause.message : String(cause));
           }).finally(() => setTopmostPending(false));
         }} /> Always on top</label>
+      <button type="button" disabled={pending || !desktopApi?.resetFederationActivity}
+        title="Clear all Federation activity totals, size statistics and history for every peer"
+        onClick={() => { setCopied(false); void reset(); }}>Reset</button>
+      <button type="button" aria-label="Copy Federation activity" title={copied ? "Copied" : "Copy selected activity view"}
+        disabled={!snapshot || !series || (view === "logical" && !peerId) || copyPending}
+        onClick={() => {
+          if (!snapshot || !series) return;
+          setCopyPending(true);
+          setActionError(undefined);
+          void copyText(formatActivityReport(series,
+            `${view === "physical" ? "Physical connections" : "Logical endpoint"}: ${peerId ? labelFor(peerId) : "All physical connections"}`,
+            snapshot.activity.since, snapshot.activity.at), desktopApi)
+            .then(() => setCopied(true))
+            .catch((cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause)))
+            .finally(() => setCopyPending(false));
+        }}>
+        {copied ? <CheckIcon size={16} aria-hidden="true" /> : <CopyIcon size={16} aria-hidden="true" />}
+      </button>
+      <span role="status" className="federation-activity__muted">{copied ? "Federation activity copied" : ""}</span>
     </div>
     {snapshot?.health.leaseHolder ? <p>Lease holder: {snapshot.health.leaseHolder.instanceId}
       {snapshot.health.leaseHolder.processId ? ` · PID ${snapshot.health.leaseHolder.processId}` : ""}
@@ -171,7 +203,7 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
       <Totals series={series} />
       <PayloadSizes series={series} />
     </> : <p>No endpoint traffic recorded.</p>}
-    {snapshot ? <p className="federation-activity__muted">Process totals since {new Date(snapshot.activity.since).toLocaleString()}.
+    {snapshot ? <p className="federation-activity__muted">Totals since {new Date(snapshot.activity.since).toLocaleString()}.
       Rolling totals have one-second resolution; charts show ten-second averages for up to one hour.</p> : null}
     <details className="federation-activity__boundaries"><summary>What is measured</summary>
       <p>Data is the serialized envelope before compression and encryption, including its protocol metadata and binary blob data.

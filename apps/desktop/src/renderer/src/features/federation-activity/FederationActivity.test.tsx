@@ -161,3 +161,57 @@ describe("Federation activity surfaces", () => {
   });
 
 });
+
+
+describe("Activity report controls", () => {
+  it("uses the standard switch and copies the selected peer with recent totals and sizes", async () => {
+    const data = fixture();
+    data.activity.peers[0].series = structuredClone(data.activity.physical);
+    data.activity.peers[0].series.lifetime.sent.requests = 987;
+    const copyText = vi.fn(async (_text: string) => {});
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => data, copyText }} />);
+    await screen.findByText("Running · connected");
+    expect(screen.getByRole("switch")).toHaveClass("settings-switch", "is-on");
+    expect(screen.getByRole("switch").querySelector(".settings-switch__thumb")).not.toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Peer" }), { target: { value: "gateway" } });
+    fireEvent.click(screen.getByRole("button", { name: "Copy Federation activity" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledTimes(1));
+    const text = copyText.mock.calls[0][0];
+    expect(text).toContain("Physical connections: gateway");
+    expect(text).toContain("Requests\t12\t12\t12\t987");
+    expect(text).toContain("2 KB (2000 bytes)");
+    expect(text).toContain("Samples\tAvg\tp50 (approx.)\tMin\tMax");
+    expect(text).toContain("Since: 1970-01-01T00:00:00.000Z");
+    expect(text).toContain("excludes WebSocket framing");
+    await screen.findByText("Federation activity copied");
+  });
+
+  it("resets immediately and ignores a read that started before reset", async () => {
+    const data = fixture();
+    const cleared = fixture();
+    cleared.activity.since = 12345;
+    cleared.activity.physical.lifetime.sent.requests = 0;
+    let finishRead!: (value: ReadFederationActivityResponse) => void;
+    const readFederationActivity = vi.fn().mockResolvedValueOnce(data)
+      .mockImplementation(() => new Promise((resolve) => { finishRead = resolve; }));
+    const resetFederationActivity = vi.fn(async () => cleared);
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity, resetFederationActivity }} />);
+    await screen.findByText("Running · connected");
+    fireEvent.change(screen.getByRole("combobox", { name: "Peer" }), { target: { value: "gateway" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    await waitFor(() => expect(resetFederationActivity).toHaveBeenCalledOnce());
+    await act(async () => finishRead(data));
+    fireEvent.change(screen.getByRole("combobox", { name: "Peer" }), { target: { value: "" } });
+    const row = within(screen.getByRole("table", { name: "Sent traffic" })).getByRole("row", { name: /^Requests / });
+    expect(within(row).getAllByRole("cell").at(-1)).toHaveTextContent("0");
+  });
+
+  it("reports reset failures and leaves existing totals intact", async () => {
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture(),
+      resetFederationActivity: async () => { throw new Error("Reset failed"); } }} />);
+    await screen.findByText("Running · connected");
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reset failed");
+    expect(screen.getByRole("table", { name: "Sent traffic" })).toHaveTextContent("12");
+  });
+});

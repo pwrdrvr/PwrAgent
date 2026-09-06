@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FEDERATION_ACTIVITY_TOPMOST_CHANNEL, FEDERATION_OPEN_ACTIVITY_CHANNEL,
-  FEDERATION_READ_ACTIVITY_CHANNEL, FEDERATION_SET_ENABLED_CHANNEL,
+  FEDERATION_READ_ACTIVITY_CHANNEL, FEDERATION_SET_ENABLED_CHANNEL, FEDERATION_RESET_ACTIVITY_CHANNEL,
 } from "../../shared/ipc";
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
-  runtime: { activity: vi.fn(), restart: vi.fn() },
+  runtime: { activity: vi.fn(), resetActivity: vi.fn(), restart: vi.fn() },
   service: { readFederationConfig: vi.fn(), writeConfigPatchTargeted: vi.fn() },
   show: vi.fn(), topmost: vi.fn(), fromWebContents: vi.fn(),
 }));
@@ -38,6 +38,14 @@ beforeEach(async () => {
 const invoke = (channel: string, request?: unknown) => mocks.handlers.get(channel)!({ sender: { id: 42 } }, request);
 
 describe("Federation Activity IPC", () => {
+  it("resets only local activity without restarting or changing configuration", async () => {
+    mocks.runtime.resetActivity.mockResolvedValue({ activity: { since: 123 } });
+    expect(await invoke(FEDERATION_RESET_ACTIVITY_CHANNEL)).toEqual({ activity: { since: 123 } });
+    expect(mocks.runtime.resetActivity).toHaveBeenCalledTimes(1);
+    expect(mocks.runtime.restart).not.toHaveBeenCalled();
+    expect(mocks.service.writeConfigPatchTargeted).not.toHaveBeenCalled();
+  });
+
   it("reads only local aggregates and forwards the selected history view", async () => {
     await invoke(FEDERATION_READ_ACTIVITY_CHANNEL, { historyPeerId: "peer", historyView: "logical" });
     expect(mocks.runtime.activity).toHaveBeenCalledWith({ includeHistory: true, historyPeerId: "peer", historyView: "logical" });

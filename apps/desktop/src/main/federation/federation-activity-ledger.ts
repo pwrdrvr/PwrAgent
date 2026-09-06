@@ -80,12 +80,19 @@ class Series {
 
 /** Numeric aggregates only: no envelope, method, request ID or payload retention. */
 export class FederationActivityLedger {
-  private readonly physical = new Series();
+  private physical = new Series();
   private readonly peers = new Map<string, Series>();
   private readonly logical = new Map<string, Series>();
   private lastSecond: number;
-  constructor(private readonly since = Date.now()) {
+  constructor(private since = Date.now()) {
     this.lastSecond = Math.floor(since / SECOND);
+  }
+  reset(at = Date.now()): void {
+    this.physical = new Series();
+    this.peers.clear();
+    this.logical.clear();
+    this.since = at;
+    this.lastSecond = Math.floor(at / SECOND);
   }
   private series(map: Map<string, Series>, peer: string) {
     // Envelope metadata is remote input. Bound retained strings as well as

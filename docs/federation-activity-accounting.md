@@ -131,3 +131,18 @@ The detached window uses existing auxiliary-window placement, security, theme,
 titlebar and appearance-broadcast helpers. Reopening focuses its singleton;
 closing it leaves the main window running. Only its own renderer may change its
 always-on-top state. Topmost is optional and resets when the window closes.
+
+
+### Operator controls
+
+The Activity window uses the shared On/Off switch. Reset clears the in-memory
+monitor for every physical connection and logical endpoint: rolling history,
+measurement-lifetime totals, peer entries, and request/response size histograms.
+The "since" timestamp starts a new measurement interval. Reset does not restart
+Federation, change configuration, reset transport health counters, or write SQLite.
+Other open activity surfaces observe the reset on their next local poll.
+
+Copy exports the selected attribution/peer as tab-separated plain text through
+the existing clipboard bridge. It includes capture and interval-start timestamps,
+all recent/total columns, size statistics, scaled and exact byte values, and the
+accounting boundaries. It excludes payloads and chart samples.

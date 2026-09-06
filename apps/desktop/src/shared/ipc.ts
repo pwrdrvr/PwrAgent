@@ -1,3 +1,4 @@
+export const FEDERATION_RESET_ACTIVITY_CHANNEL = "federation:reset-activity";
 export const FEDERATION_READ_ACTIVITY_CHANNEL = "federation:read-activity";
 export const FEDERATION_SET_ENABLED_CHANNEL = "federation:set-enabled";
 export const FEDERATION_OPEN_ACTIVITY_CHANNEL = "federation:open-activity";

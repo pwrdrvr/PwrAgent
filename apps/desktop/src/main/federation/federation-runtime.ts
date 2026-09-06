@@ -1134,6 +1134,11 @@ export class DesktopFederationRuntime {
     this.gatewayListenerError = undefined;
   }
 
+  async resetActivity(): Promise<ReadFederationActivityResponse> {
+    this.activityLedger.reset();
+    return this.activity();
+  }
+
   async activity(request?: ReadFederationActivityRequest): Promise<ReadFederationActivityResponse> {
     return {
       activity: this.activityLedger.snapshot(Date.now(), request),
