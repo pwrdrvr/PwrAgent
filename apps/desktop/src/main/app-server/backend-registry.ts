@@ -4973,6 +4973,7 @@ function toThreadReadEvaluationTokenMiser(
       ? {
           codeMode: {
             callCount: accounting.codeMode.callCount,
+            unclassifiedCellCount: accounting.codeMode.unclassifiedCellCount,
             commandCellCount: accounting.codeMode.commandCellCount,
             directCommandCellCount: accounting.codeMode.directCommandCellCount,
             dispatchClusterCount: accounting.codeMode.dispatchClusterCount,

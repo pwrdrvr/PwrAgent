@@ -551,21 +551,22 @@ export type ThreadReadEvaluationPricing = {
 };
 
 export type ThreadReadEvaluationTokenMiserCodeMode = {
+  unclassifiedCellCount?: number;
   callCount: number;
-  commandCellCount: number;
-  directCommandCellCount: number;
-  dispatchClusterCount: number;
-  multiInvocationClusterCount: number;
-  largestDispatchCluster: number;
-  nestedCommandInvocationCount: number;
-  patchCellCount: number;
-  otherCellCount: number;
-  pollingCellCount: number;
+  commandCellCount: number | null;
+  directCommandCellCount: number | null;
+  dispatchClusterCount: number | null;
+  multiInvocationClusterCount: number | null;
+  largestDispatchCluster: number | null;
+  nestedCommandInvocationCount: number | null;
+  patchCellCount: number | null;
+  otherCellCount: number | null;
+  pollingCellCount: number | null;
   directCount: number;
   summarizedCount: number;
   passThroughCount: number;
   retrievalCount: number;
-  capturedNestedInvocationCount: number;
+  capturedNestedInvocationCount: number | null;
   observationCount: number;
 };
 

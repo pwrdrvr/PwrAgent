@@ -208,7 +208,8 @@ export type TokenMiserCodeModeObservation = {
   scriptStatus: string;
   script?: string;
   retrieval: boolean;
-  capturedNestedInvocationCount: number;
+  /** Null means the runtime supplied no nested invocation capture. */
+  capturedNestedInvocationCount: number | null;
   capturedCommandInvocationCount?: number;
   capturedPollingInvocationCount?: number;
   capturedPatchInvocationCount?: number;

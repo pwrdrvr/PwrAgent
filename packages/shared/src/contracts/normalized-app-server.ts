@@ -1265,7 +1265,8 @@ export type ThreadTokenMiserCodeModeObservation = {
   scriptStatus: string;
   script?: string;
   retrieval: boolean;
-  capturedNestedInvocationCount: number;
+  /** Null means the runtime supplied no nested invocation capture. */
+  capturedNestedInvocationCount: number | null;
   capturedCommandInvocationCount?: number;
   capturedPollingInvocationCount?: number;
   capturedPatchInvocationCount?: number;
@@ -1274,21 +1275,24 @@ export type ThreadTokenMiserCodeModeObservation = {
 };
 
 export type ThreadTokenMiserCodeModeAccounting = {
+  /** Cells without nested capture; classification counts cover only captured cells. */
+  unclassifiedCellCount?: number;
   callCount: number;
-  commandCellCount: number;
-  directCommandCellCount: number;
-  dispatchClusterCount: number;
-  multiInvocationClusterCount: number;
-  largestDispatchCluster: number;
-  nestedCommandInvocationCount: number;
-  patchCellCount: number;
-  otherCellCount: number;
-  pollingCellCount: number;
+  commandCellCount: number | null;
+  directCommandCellCount: number | null;
+  dispatchClusterCount: number | null;
+  multiInvocationClusterCount: number | null;
+  largestDispatchCluster: number | null;
+  nestedCommandInvocationCount: number | null;
+  patchCellCount: number | null;
+  otherCellCount: number | null;
+  pollingCellCount: number | null;
   directCount: number;
   summarizedCount: number;
   passThroughCount: number;
   retrievalCount: number;
-  capturedNestedInvocationCount: number;
+  /** Null means the runtime supplied no nested invocation capture. */
+  capturedNestedInvocationCount: number | null;
   observations: ThreadTokenMiserCodeModeObservation[];
 };
 

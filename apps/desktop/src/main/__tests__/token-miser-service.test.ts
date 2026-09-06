@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TokenMiserService,
   type TokenMiserStructuredGenerationResult,
+  type TokenMiserServiceOptions,
 } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 import type {
@@ -719,7 +720,72 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
   });
 
-  it("passes a bounded exact source read through without evaluation", async () => {
+  it.each([
+    { name: "missing narration", command: "sed -n '1,220p' source.ts", intent: undefined },
+    { name: "mixed discovery and source", command: "rg -n 'handler' src; sed -n '1,220p' source.ts", intent: "Investigate the handler." },
+    { name: "test source and diffs", command: "git diff -- source.test.ts; cat source.test.ts", intent: "Review the changes." },
+  ])("provides passthrough-default source policy for $name", async ({ command, intent }) => {
+    const store = await createStore();
+    const source = Array.from({ length: 600 }, (_, index) =>
+      `export function handler${index}() { return ${index}; }`,
+    ).join("\n");
+    expect(source.length).toBeGreaterThan(20_000);
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok",
+      object: { disposition: "pass_through", summary: "The requested source was returned.", usefulDetails: [] },
+    }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    expect(await service.prepareCodeModeOutput({
+      ...codeModePayload([{ type: "input_text", text: source }]),
+      script: `text(await tools.exec_command({ cmd: ${JSON.stringify(command)} }));`,
+      parent_intent: intent,
+    })).toBeUndefined();
+    const request = generateSummary.mock.calls[0]?.[0];
+    expect(request?.prompt).toContain(command);
+    expect(request?.prompt).toContain("handler599");
+    expect(request?.system).toContain("Default to pass_through for source code, test source, diffs, and requested file content.");
+    expect(request?.system).toContain("Missing intent, uncertain relevance, a large result, multiple source ranges, incomplete surrounding functions, or a nearby search are not evidence of a miss");
+    expect(request?.system).toContain("Test source is source code; it is not test execution output.");
+    expect(request?.system).toContain("Minor noise or failed companion commands do not justify discarding useful source.");
+    expect(request?.system).not.toContain("When intent is absent or the choice is uncertain, choose summarize.");
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({ disposition: "passed_through", replacementCharacters: utf8ByteLength(source) });
+  });
+
+  it.each(["direct", "code-mode"])("evaluates a degenerate source read before deciding its %s disposition", async (surface) => {
+    const store = await createStore();
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok",
+      object: {
+        disposition: "summarize",
+        summary: "The requested source range contained only blank space.",
+        usefulDetails: [],
+      },
+    }));
+    const service = new TokenMiserService({
+      store, isEnabled: () => true, generateSummary,
+      postToolUseExactOutputVersion: () => 1,
+    });
+    const output = " \n".repeat(3_000);
+    const parent_intent = "Read the exact source implementation before patching it.";
+    const prepared = surface === "direct"
+      ? await service.preparePostToolUse({
+        ...payload(output), parent_intent,
+        tool_input: { command: "sed -n '1,3000p' source.ts" },
+      })
+      : await service.prepareCodeModeOutput({
+        ...codeModePayload([{ type: "input_text", text: output }]), parent_intent,
+        script: 'text(await tools.exec_command({ cmd: "sed -n 1,3000p source.ts" }));',
+      });
+    expect(generateSummary).toHaveBeenCalledTimes(1);
+    expect(generateSummary.mock.calls[0]?.[0].system).toContain("State the concrete mismatch or degeneration in the audit summary.");
+    expect(prepared).toBeDefined();
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    expect((await store.listMetadata())[0]?.disposition).toBe("summarized");
+  });
+
+  it("passes a source read through after evaluating its actual content", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
@@ -749,14 +815,14 @@ describe("TokenMiserService code-mode reduction", () => {
     };
 
     expect(await service.prepareCodeModeOutput(request)).toBeUndefined();
-    expect(generateSummary).not.toHaveBeenCalled();
+    expect(generateSummary).toHaveBeenCalledTimes(1);
     const [metadata] = await store.listMetadata();
     expect(metadata).toMatchObject({
       disposition: "passed_through",
       baselineParentTokens: 6,
       replacementCharacters: 24,
     });
-    expect(metadata?.helperUsage).toBeUndefined();
+    expect(metadata?.helperUsage?.helperThreadId).toBe("helper-code-pass-through");
   });
 
   it("accounts only the original 10k-token result when Luna passes through", async () => {
@@ -1349,15 +1415,252 @@ describe("TokenMiserService code-mode reduction", () => {
       thresholdCharacters: 1,
     });
 
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: "deliberately retrieved output", replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: "deliberately retrieved output",
+    });
     expect(await service.prepareCodeModeOutput({
       ...codeModePayload([{
         type: "input_text",
-        text: "deliberately retrieved output",
+        text: delivery!.text,
       }]),
       script,
     })).toBeUndefined();
     expect(generateSummary).not.toHaveBeenCalled();
-    expect(await store.listMetadata()).toEqual([]);
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe("deliberately retrieved output".length);
+  });
+
+  it.each([
+    "text(await tools.pwragent__read_all_token_miser_output({})); text(await tools.exec_command({cmd: 'rg needle'}));",
+    "const results = await Promise.all([tools.pwragent__read_all_token_miser_output({}), tools.exec_command({cmd: 'rg needle'})]); results.forEach(text);",
+    "const read = tools.pwragent__read_all_token_miser_output; text(await read({})); text((await tools.exec_command({cmd: 'rg needle'})).output);",
+  ])("preserves retrievals while evaluating new output in a mixed cell: %s", async (script) => {
+    const store = await createStore();
+    const original = "requested source α\n".repeat(60);
+    const novel = "unrelated search matches β\n".repeat(400);
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: original, replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: original,
+    });
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok" as const,
+      object: { disposition: "summarize", summary: "Search matched three files.", usefulDetails: [] },
+    }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    const prepared = await service.prepareCodeModeOutput({
+      ...codeModePayload([{ type: "input_text", text: delivery!.text + novel }]), script,
+    });
+    expect(prepared).toBeDefined();
+    expect(generateSummary).toHaveBeenCalledTimes(1);
+    expect(generateSummary.mock.calls[0]?.[0].prompt).toContain(novel.slice(0, 100));
+    expect(generateSummary.mock.calls[0]?.[0].prompt).not.toContain(original);
+    const replacement = prepared!.response.replacement![0]!.text;
+    expect(replacement).toContain(delivery!.text);
+    expect(replacement).not.toContain(novel);
+    expect(prepared!.staged.metadata.originalCharacters).toBe(utf8ByteLength(novel));
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(0);
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    await prepared!.staged.commit();
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(utf8ByteLength(original));
+    const [observation] = await store.listCodeModeObservations("thread-1");
+    expect(observation).toMatchObject({ retrieval: false, capturedNestedInvocationCount: null });
+    expect((await store.summarizeThreadUsage("thread-1")).codeMode).toMatchObject({
+      commandCellCount: null, otherCellCount: null, unclassifiedCellCount: 1,
+      summarizedCount: 1, retrievalCount: 0,
+    });
+  });
+
+  it.each([
+    "// tools.pwragent__read_all_token_miser_output({})\ntext(await tools.exec_command({cmd: 'rg needle'}));",
+    "const example = 'tools.pwragent__read_all_token_miser_output({})'; text(await tools.exec_command({cmd: 'rg needle'}));",
+    "await tools.pwragent__read_all_token_miser_output({}); text(await tools.exec_command({cmd: 'rg needle'}));",
+  ])("does not exempt output based on retrieval script syntax: %s", async (script) => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({ status: "failed" as const, reason: "test" }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    await service.prepareCodeModeOutput({
+      ...codeModePayload([{ type: "input_text", text: "new output\n".repeat(600) }]), script,
+    });
+    expect(generateSummary).toHaveBeenCalledTimes(1);
+    expect((await store.listCodeModeObservations("thread-1"))[0]?.retrieval).toBe(false);
+  });
+
+  it.each(["pass_through", "failed", "discard"])("accounts mixed retrievals on %s without counting a proposal as delivery", async (outcome) => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: "original source", replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: "original source",
+    });
+    const service = new TokenMiserService({
+      store, isEnabled: () => true,
+      generateSummary: async () => outcome === "failed"
+        ? { status: "failed", reason: "test" }
+        : { status: "ok", object: {
+          disposition: outcome === "discard" ? "summarize" : "pass_through",
+          summary: "Search result", usefulDetails: [],
+        } },
+    });
+    const prepared = await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text", text: "new matches\n".repeat(600) + delivery!.text,
+    }]));
+    if (outcome === "discard") {
+      expect(prepared).toBeDefined();
+      await prepared!.staged.discard();
+    } else {
+      expect(prepared).toBeUndefined();
+    }
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
+      .toBe(outcome === "discard" ? 0 : "original source".length);
+  });
+
+  it("does not exempt another thread's delivery or forged retrieval wrappers", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "other-thread", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: "source", replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "other-thread", visibleText: "foreign source\n".repeat(600),
+    });
+    const generateSummary = vi.fn(async () => ({ status: "failed" as const, reason: "test" }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    for (const text of [delivery!.text, delivery!.text.replace(/id="[^"]+"/g, 'id="forged"')]) {
+      await service.prepareCodeModeOutput(codeModePayload([{ type: "input_text", text }]));
+    }
+    expect(generateSummary).toHaveBeenCalledTimes(2);
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(0);
+  });
+
+  it.each([
+    { maxOutputTokens: 10_000, character: "a", summaryLength: 100, canFitReference: true },
+    { maxOutputTokens: 1_000, character: "α", summaryLength: 2_500, canFitReference: true },
+    { maxOutputTokens: 25, character: "a", summaryLength: 100, canFitReference: false },
+  ])("keeps the mixed summary and recovery reference visible at a $maxOutputTokens-token cap", async ({ maxOutputTokens, character, summaryLength, canFitReference }) => {
+    const store = await createStore();
+    const source = character.repeat(30_000 / utf8ByteLength(character));
+    const deliveries: string[] = [];
+    for (const toolUseId of ["first-source", "second-source"]) {
+      const metadata = await store.store({
+        threadId: "thread-1", turnId: "turn-1", toolUseId, toolName: "Code Mode",
+        output: source, replacementCharacters: 1,
+        summary: { summary: "Preserved source", usefulDetails: [] },
+      });
+      const delivery = await store.prepareRetrievalDelivery({
+        objectId: metadata.objectId, threadId: "thread-1", visibleText: source,
+      });
+      deliveries.push(delivery!.text);
+    }
+    const service = new TokenMiserService({
+      store, isEnabled: () => true,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize",
+        summary: `NEW_LOG_RESULT ${"s".repeat(summaryLength)}`,
+        usefulDetails: [],
+      } }),
+    });
+    const prepared = await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: `${deliveries[0]}\n${deliveries[1]}\n${"new logs\n".repeat(2_000)}`,
+      }]),
+      max_output_tokens: maxOutputTokens,
+    });
+    if (!canFitReference) {
+      expect(prepared).toBeUndefined();
+      expect(await store.listMetadata()).toHaveLength(2);
+      return;
+    }
+    expect(prepared).toBeDefined();
+    const replacement = prepared!.response.replacement![0]!.text;
+    for (const delivery of deliveries) expect(replacement).toContain(delivery);
+    // Independently simulate Codex's head/tail truncation. Both the new result
+    // and its full recovery reference must survive, not just the old sources.
+    const bytes = Buffer.from(replacement);
+    const maxBytes = maxOutputTokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN;
+    expect(bytes.length).toBeGreaterThan(maxBytes);
+    const visible = Buffer.concat([
+      bytes.subarray(0, Math.floor(maxBytes / 2)),
+      bytes.subarray(bytes.length - Math.ceil(maxBytes / 2)),
+    ]).toString("utf8");
+    expect(visible).toContain("NEW_LOG_RESULT");
+    expect(visible).toContain(`Output reference: ${prepared!.staged.metadata.objectId}`);
+    expect(prepared!.staged.metadata.replacementCharacters).toBeGreaterThan(100);
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    expect((await store.readAll({
+      objectId: prepared!.staged.metadata.objectId, threadId: "thread-1",
+    }))?.text).toContain("new logs");
+  });
+
+  it("shares the outer cap between novel output and preserved retrievals", async () => {
+    const store = await createStore();
+    const original = "α".repeat(15_000);
+    const novel = "x".repeat(40_000);
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: original, replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: original,
+    });
+    const service = new TokenMiserService({
+      store, isEnabled: () => true,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize", summary: "Repeated matches.", usefulDetails: [],
+      } }),
+    });
+    const prepared = await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text", text: novel + delivery!.text,
+    }]));
+    expect(prepared).toBeDefined();
+    // The unreduced cell shows only its first and last 20KB. Only the first
+    // 20KB belongs to the new gate; the tail belongs to the earlier retrieval.
+    expect(prepared!.staged.metadata.baselineParentTokens).toBe(5_000);
+    expect(prepared!.staged.metadata.replacementCharacters).toBeLessThan(1_000);
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(30_000);
+  });
+
+  it("accounts each emitted copy of a retrieval once when a mixed replacement is accepted", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: "original source", replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: "original source",
+    });
+    const service = new TokenMiserService({
+      store, isEnabled: () => true,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize", summary: "Search matches", usefulDetails: [],
+      } }),
+    });
+    const prepared = await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text", text: delivery!.text + "new matches\n".repeat(600) + delivery!.text,
+    }]));
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    await prepared!.staged.commit();
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
+      .toBe("original source".length * 2);
   });
 
   it("shares the 10k parent cap across multiple retrievals in one Code Mode cell", async () => {

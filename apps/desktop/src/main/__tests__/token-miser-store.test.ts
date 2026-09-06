@@ -163,6 +163,35 @@ describe("TokenMiserStore", () => {
     ]));
   });
 
+  it("distinguishes unavailable and legacy capture from captured zero command counts", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
+    temporaryDirectories.push(root);
+    const store = new TokenMiserStore(root);
+    const observation = {
+      threadId: "thread-owner", turnId: "turn-1", cellId: "cell-1",
+      outputCharacters: 100, maxOutputTokens: 10_000, scriptStatus: "completed", retrieval: false,
+    };
+    await store.recordCodeModeObservation({
+      ...observation, callId: "unavailable", capturedNestedInvocationCount: null,
+    });
+    await store.recordCodeModeObservation({
+      ...observation, callId: "legacy", capturedNestedInvocationCount: 0,
+      capturedCommandInvocationCount: 0, capturedOtherInvocationCount: 0,
+    });
+    expect((await store.summarizeThreadUsage("thread-owner")).codeMode).toMatchObject({
+      callCount: 2, unclassifiedCellCount: 2, commandCellCount: null,
+      capturedNestedInvocationCount: null, otherCellCount: null, pollingCellCount: null,
+    });
+    await store.recordCodeModeObservation({
+      ...observation, callId: "patch", capturedNestedInvocationCount: 1,
+      capturedCommandInvocationCount: 0, capturedPatchInvocationCount: 1,
+    });
+    expect((await store.summarizeThreadUsage("thread-owner")).codeMode).toMatchObject({
+      callCount: 3, unclassifiedCellCount: 2, commandCellCount: 0,
+      capturedNestedInvocationCount: 1, patchCellCount: 1, otherCellCount: 0,
+    });
+  });
+
   it("counts every Code Mode reducer request separately from gate decisions", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
     temporaryDirectories.push(root);

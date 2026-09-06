@@ -20,6 +20,7 @@ import {
 } from "./token-miser-types.js";
 import {
   TokenMiserStore,
+  codexVisibleStringRanges,
   type TokenMiserGroupStoredOutput,
   type TokenMiserStagedObject,
 } from "./token-miser-store.js";
@@ -76,12 +77,14 @@ const TOKEN_MISER_GROUP_SUMMARY_SCHEMA = {
 
 const TOKEN_MISER_SYSTEM_PROMPT = [
   "You are Token Miser, the first gate on completed coding-tool output before it enters a parent coding agent's context.",
-  "Choose pass_through when the visible parent intent and tool/script input show a deliberate, well-targeted request for exact content and the result is coherent, relevant, and likely to be consumed substantially as-is.",
-  "Examples that often deserve pass_through are a bounded read of a requested source or instruction file, a concise exact query result, or a focused diagnostic whose details are all material.",
-  "Treat a sed range read as a strong pass_through candidate when its lines are distinct, coherent source code or prose from the requested file or range, even when the result is large.",
-  "Choose summarize for a sed result that is primarily repetitive data, duplicated records, repeated error or log messages, or content that missed the requested file or range.",
-  "Choose summarize for broad or exploratory searches, repetitive matches, verbose logs, test/build output, noisy failures, accidental directory-wide reads, or results that missed the stated intent.",
-  "When intent is absent or the choice is uncertain, choose summarize.",
+  "Default to pass_through for source code, test source, diffs, and requested file content. The parent usually needs the exact bytes to inspect, review, or patch it; a description of the code is not a substitute.",
+  "For a sed range read containing distinct, coherent source code or prose, choose pass_through. Apply the same rule to cat, head/tail, file-reading tools, git diff, and targeted search results containing source lines.",
+  "Judge source using the visible parent intent, the command or script, and the actual result together. Missing intent, uncertain relevance, a large result, multiple source ranges, incomplete surrounding functions, or a nearby search are not evidence of a miss; choose pass_through in these cases.",
+  "Summarize source or requested file content only when that evidence establishes a substantial miss or a degenerate result, such as mostly blank space, generated repetitive data instead of the requested implementation, or an unrelated embedded transcript. State the concrete mismatch or degeneration in the audit summary.",
+  "If a sed result is primarily repetitive data or repeated error/log messages rather than coherent requested source, choose summarize. Do not confuse repeated code syntax, similar tests, or diff context with redundant noise.",
+  "Choose summarize for broad file/reference discovery listings, repetitive matches without material source context, verbose logs, test/build execution output, and noisy failures. Test source is source code; it is not test execution output.",
+  "For mixed results containing useful source or diffs plus search listings or diagnostics, choose pass_through unless the source itself clearly satisfies the substantial-miss or degenerate-result exception. Minor noise or failed companion commands do not justify discarding useful source.",
+  "For other exact query results or focused diagnostics whose details are material, choose pass_through. When uncertain whether source should be summarized, choose pass_through.",
   "The host returns the original bytes itself for pass_through. Never copy or reconstruct the full output in your response.",
   "For pass_through, keep the audit summary under 50 words and omit usefulDetails unless one short fact explains the decision.",
   "Summarize only what is present. Preserve exact filenames, identifiers, errors, counts, and commands that materially describe the result.",
@@ -289,7 +292,6 @@ export class TokenMiserService {
     const deterministicPassThrough = classifyDeterministicPassThrough({
       parentIntent: payload.parent_intent,
       request: serializeToolResponse(payload.tool_input),
-      outputCharacters: output.length,
     });
     if (deterministicPassThrough) {
       await this.recordPassThroughDecision({
@@ -343,50 +345,87 @@ export class TokenMiserService {
     if (!await this.isEnabledForThread(payload.thread_id)) {
       return undefined;
     }
-    const output = payload.content_items.map((item) => item.text).join("");
-    const retrieval = isCodeModeTokenMiserRetrievalInvocation(
-      payload.script ?? "",
-    );
+    const originalOutput = payload.content_items.map((item) => item.text).join("");
+    // Exempt only authenticated delivery bytes. A cell can retrieve source
+    // and emit unrelated commands, regardless of what its script calls look like.
+    const parts = await this.options.store.partitionRetrievalOutput({
+      output: originalOutput,
+      threadId: payload.thread_id,
+    });
+    const hasRetrieval = parts.some((part) => part.retrieval);
+    const output = parts.filter((part) => !part.retrieval)
+      .map((part) => part.text).join("");
+    const retrieval = hasRetrieval && output.trim().length === 0;
+    const maxVisibleBytes =
+      payload.max_output_tokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN;
+    // Codex keeps the head and tail when it caps the combined cell. Put the
+    // new result first, never in whitespace between preserved retrievals.
+    // Limit it to the head budget so its recovery reference survives too.
+    const replaceNewParts = (replacement: string) => [
+      { text: replacement, retrieval: false },
+      ...parts.filter((part) => part.retrieval),
+    ];
+    const replaceNewOutput = (replacement: string) =>
+      replaceNewParts(replacement).map((part) => part.text).join("");
+    const visibleNewBytes = (visibleParts: typeof parts) => {
+      const text = visibleParts.map((part) => part.text).join("");
+      const visibleRanges = codexVisibleStringRanges(text, maxVisibleBytes);
+      let offset = 0;
+      let bytes = 0;
+      for (const part of visibleParts) {
+        if (!part.retrieval) {
+          for (const range of visibleRanges) {
+            const start = Math.max(offset, range.start);
+            const end = Math.min(offset + part.text.length, range.end);
+            if (end > start) bytes += utf8ByteLength(text.slice(start, end));
+          }
+        }
+        offset += part.text.length;
+      }
+      return bytes;
+    };
+    const baselineBytes = visibleNewBytes(parts);
+    const baselineParentTokenCap = hasRetrieval
+      ? Math.max(1, Math.ceil(baselineBytes / TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN))
+      : payload.max_output_tokens;
+    const confirmRetrievals = (text: string) => this.options.store.confirmModelVisibleRetrievals({
+      maxVisibleBytes,
+      output: text,
+      threadId: payload.thread_id,
+    });
     const nestedKinds = [...(capturedGroup?.members.values() ?? [])].map(
       classifyCapturedGroupMember,
     );
-    const recordObservation = () => this.options.store.recordCodeModeObservation({
-      threadId: payload.thread_id,
-      turnId: payload.turn_id,
-      callId: payload.call_id,
-      cellId: payload.cell_id,
-      outputCharacters: output.length,
-      outputPreview: output.slice(0, 5_000),
-      outputPreviewTruncated: output.length > 5_000,
-      maxOutputTokens: payload.max_output_tokens,
-      scriptStatus: payload.script_status,
-      ...(payload.script ? { script: payload.script } : {}),
-      retrieval,
-      capturedNestedInvocationCount: capturedGroup?.members.size ?? 0,
-      capturedCommandInvocationCount: nestedKinds.filter(
-        (kind) => kind === "command",
-      ).length,
-      capturedPollingInvocationCount: nestedKinds.filter(
-        (kind) => kind === "polling",
-      ).length,
-      capturedPatchInvocationCount: nestedKinds.filter(
-        (kind) => kind === "patch",
-      ).length,
-      capturedOtherInvocationCount: nestedKinds.filter(
-        (kind) => kind === "other",
-      ).length,
-    });
-    if (retrieval) {
-      // The reducer observes exact Code Mode output before Codex applies its
-      // model-visible ceiling. Confirm only the prefix eligible to cross that
-      // boundary; otherwise one minified line can become an unbounded debit.
-      await this.options.store.confirmModelVisibleRetrievals({
-        maxVisibleBytes:
-          payload.max_output_tokens
-          * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
-        output,
+    const recordObservation = async (passedThrough = true) => {
+      if (passedThrough) await confirmRetrievals(originalOutput);
+      return this.options.store.recordCodeModeObservation({
         threadId: payload.thread_id,
+        turnId: payload.turn_id,
+        callId: payload.call_id,
+        cellId: payload.cell_id,
+        outputCharacters: originalOutput.length,
+        outputPreview: originalOutput.slice(0, 5_000),
+        outputPreviewTruncated: originalOutput.length > 5_000,
+        maxOutputTokens: payload.max_output_tokens,
+        scriptStatus: payload.script_status,
+        ...(payload.script ? { script: payload.script } : {}),
+        retrieval,
+        capturedNestedInvocationCount: capturedGroup?.members.size || null,
+        capturedCommandInvocationCount: capturedGroup ? nestedKinds.filter(
+          (kind) => kind === "command",
+        ).length : undefined,
+        capturedPollingInvocationCount: capturedGroup ? nestedKinds.filter(
+          (kind) => kind === "polling",
+        ).length : undefined,
+        capturedPatchInvocationCount: capturedGroup ? nestedKinds.filter(
+          (kind) => kind === "patch",
+        ).length : undefined,
+        capturedOtherInvocationCount: capturedGroup ? nestedKinds.filter(
+          (kind) => kind === "other",
+        ).length : undefined,
       });
+    };
+    if (retrieval || (hasRetrieval && baselineBytes === 0)) {
       await recordObservation();
       return undefined;
     }
@@ -405,7 +444,7 @@ export class TokenMiserService {
         toolName: "Code Mode",
         output,
         signal: options.signal,
-        baselineParentTokenCap: payload.max_output_tokens,
+        baselineParentTokenCap,
         summary: {
           summary:
             "Passed through because the result contains a live process or session handle needed for a follow-up operation.",
@@ -420,7 +459,6 @@ export class TokenMiserService {
     const deterministicPassThrough = classifyDeterministicPassThrough({
       parentIntent: payload.parent_intent,
       request: payload.script ?? "",
-      outputCharacters: output.length,
     });
     if (deterministicPassThrough) {
       await this.recordPassThroughDecision({
@@ -430,14 +468,14 @@ export class TokenMiserService {
         toolName: "Code Mode",
         output,
         signal: options.signal,
-        baselineParentTokenCap: payload.max_output_tokens,
+        baselineParentTokenCap,
         summary: deterministicPassThrough,
       });
       await recordObservation();
       return undefined;
     }
 
-    if (capturedGroup?.members.size && !capturedGroup.overflowed) {
+    if (!hasRetrieval && capturedGroup?.members.size && !capturedGroup.overflowed) {
       const grouped = await this.prepareGroupedCodeModeOutput(
         payload,
         output,
@@ -462,12 +500,11 @@ export class TokenMiserService {
       output,
       prompt: buildCodeModeSummaryPrompt(payload, output),
       signal: options.signal,
-      baselineParentTokenCap: payload.max_output_tokens,
-      maxReplacementBytes:
-        payload.max_output_tokens
-        * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+      baselineParentTokenCap,
+      maxReplacementBytes: hasRetrieval ? Math.floor(maxVisibleBytes / 2) : maxVisibleBytes,
       replacementCharacters: (text) =>
-        utf8ByteLength(text) + payload.model_visible_overhead_characters
+        visibleNewBytes(replaceNewParts(text))
+        + payload.model_visible_overhead_characters
         + this.codeModeActionableStateCharacters(payload),
     });
     if (!prepared) {
@@ -479,7 +516,10 @@ export class TokenMiserService {
       return undefined;
     }
     const response = {
-      replacement: [{ type: "input_text" as const, text: prepared.replacement }],
+      replacement: [{
+        type: "input_text" as const,
+        text: replaceNewOutput(prepared.replacement),
+      }],
       response_id: prepared.staged.metadata.objectId,
       ...(payload.actionable_state
         ? { actionable_state: payload.actionable_state }
@@ -493,10 +533,20 @@ export class TokenMiserService {
       await recordObservation();
       return undefined;
     }
-    await recordObservation();
+    await recordObservation(false);
+    let committed = false;
     return {
       response,
-      staged: prepared.staged,
+      staged: {
+        ...prepared.staged,
+        commit: async () => {
+          await prepared.staged.commit();
+          if (!committed) {
+            committed = true;
+            await confirmRetrievals(response.replacement[0].text);
+          }
+        },
+      },
     };
   }
 
@@ -876,17 +926,13 @@ function hasActionableNonterminalState(member: CapturedGroupMember): boolean {
 }
 
 const INSTRUCTION_FILE_PATTERN = /(?:^|[/\\])(?:AGENTS|CLAUDE|SKILL)\.md\b|(?:^|[/\\])UI-THEME\.md\b|(?:^|[/\\])[^\s"']*style-guide\.md\b/i;
-const SOURCE_FILE_PATTERN = /(?:^|[\s"'=:])[^\s"']+\.(?:c|cc|cpp|css|go|h|hpp|html|java|js|jsx|json|md|mjs|py|rb|rs|swift|toml|ts|tsx|yaml|yml)\b/i;
 const EXACT_READ_PATTERN = /\b(?:cat|head|tail|sed|readFile|read_text_file|read_file)\b/i;
 const BROAD_DISCOVERY_PATTERN = /\b(?:find|grep|rg|search)\b/i;
 const READ_INTENT_PATTERN = /\b(?:read|inspect|review|load|follow)\b[\s\S]{0,120}\b(?:instruction|guidance|guide|AGENTS|CLAUDE|SKILL|theme)\b|\b(?:instruction|guidance|guide|AGENTS|CLAUDE|SKILL|theme)\b[\s\S]{0,120}\b(?:read|inspect|review|load|follow)\b/i;
-const EXACT_SOURCE_INTENT_PATTERN = /\b(?:read|inspect|review|open|examine|look at)\b[\s\S]{0,160}\b(?:exact|source|file|range|implementation|code)\b|\b(?:exact|source|file|range|implementation|code)\b[\s\S]{0,160}\b(?:read|inspect|review|open|examine|look at)\b/i;
-const TARGETED_SOURCE_PASS_THROUGH_MAX_CHARACTERS = 20_000;
 
 function classifyDeterministicPassThrough(params: {
   parentIntent?: string;
   request: string;
-  outputCharacters: number;
 }): TokenMiserSummary | undefined {
   if (
     !EXACT_READ_PATTERN.test(params.request)
@@ -900,17 +946,6 @@ function classifyDeterministicPassThrough(params: {
   ) {
     return {
       summary: "A deliberate exact instruction-file read passed through unchanged by policy.",
-      usefulDetails: [],
-    };
-  }
-  if (
-    params.parentIntent
-    && params.outputCharacters <= TARGETED_SOURCE_PASS_THROUGH_MAX_CHARACTERS
-    && EXACT_SOURCE_INTENT_PATTERN.test(params.parentIntent)
-    && SOURCE_FILE_PATTERN.test(params.request)
-  ) {
-    return {
-      summary: "A bounded exact source read passed through unchanged by policy.",
       usefulDetails: [],
     };
   }
@@ -1361,18 +1396,6 @@ function isDirectTokenMiserRetrievalInvocation(
   return [input.tool, input.name, input.operation].some((value) =>
     typeof value === "string" && isTokenMiserRetrievalToolName(value)
   );
-}
-
-function isCodeModeTokenMiserRetrievalInvocation(script: string): boolean {
-  return TOKEN_MISER_RETRIEVAL_TOOL_NAMES.some((name) => {
-    const directMethod = new RegExp(
-      `\\btools\\s*\\.\\s*(?:pwragent__|pwragent\\s*\\.\\s*)${name}\\s*\\(`,
-    );
-    const namespaceDispatcher = new RegExp(
-      `\\btools\\s*\\.\\s*pwragent\\s*\\(\\s*\\{[\\s\\S]{0,500}?\\btool\\s*:\\s*["']${name}["']`,
-    );
-    return directMethod.test(script) || namespaceDispatcher.test(script);
-  });
 }
 
 function isTokenMiserRetrievalToolName(value: string): boolean {
