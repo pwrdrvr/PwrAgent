@@ -1202,6 +1202,36 @@ describe("agent ipc", () => {
     expect(unrelatedSend).not.toHaveBeenCalled();
   });
 
+  it.each(["disconnected", "connected"])("delivers process-owned %s status without thread demand", async (status) => {
+    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+    const localSend = vi.fn();
+    const ownerSend = vi.fn();
+    const unrelatedSend = vi.fn();
+    channelSubscribers = [
+      { id: 1, send: localSend },
+      { id: 2, send: ownerSend },
+      { id: 3, send: unrelatedSend },
+    ];
+    channelSubscriberTargets.set(2, { scope: "remote", instanceId: "owner_one" });
+    channelSubscriberTargets.set(3, { scope: "remote", instanceId: "owner_two" });
+    // Disconnect can remove the selected thread's demand before the status
+    // notification is broadcast. Transport liveness must not depend on it.
+    federationMock.runtime.rendererWantsRemoteEvent.mockReturnValue(false);
+    const event = {
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "owner_one" },
+      notification: {
+        method: "federation/peerStatus/changed",
+        params: { instanceId: "owner_one", status },
+      },
+    } as AgentEvent;
+    broadcastAgentEvent(event);
+    expect(localSend).toHaveBeenCalledWith(AGENT_EVENT_CHANNEL, event);
+    expect(ownerSend).toHaveBeenCalledWith(AGENT_EVENT_CHANNEL, event);
+    expect(unrelatedSend).not.toHaveBeenCalled();
+  });
+
   it("hydrates live message provenance before broadcasting it", async () => {
     const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
     const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
