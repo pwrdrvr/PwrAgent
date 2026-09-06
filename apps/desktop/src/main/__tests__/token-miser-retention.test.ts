@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -69,10 +70,27 @@ it("cold thread queries never enumerate or open unrelated thread directories", a
     expect(await cold.listMetadata("owner")).toHaveLength(1);
     expect(read).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledTimes(1);
-    expect(String(list.mock.calls[0]![0])).toMatch(/threads\/[a-f0-9]{64}$/);
+    expect(String(list.mock.calls[0]![0])).toBe(path.join(
+      root, "threads", createHash("sha256").update("owner").digest("hex"),
+    ));
     await store.store({ ...params, threadId: "owner" });
     expect(await cold.listMetadata("owner")).toHaveLength(2);
   } finally { read.mockRestore(); list.mockRestore(); }
+});
+it("does not materialize an absent profile during startup migration and accounting reads", async () => {
+  const { root } = await fixture();
+  const store = new TokenMiserStore(path.join(root, "profiles", "default", "state", "token-miser", "objects"));
+  const mkdir = vi.spyOn(fs, "mkdir");
+  const writes = vi.spyOn(fs, "writeFile");
+  try {
+    await store.prune({ maxAgeMs: 0, maxBytes: 0 });
+    expect(await store.listMetadata()).toEqual([]);
+    expect(await store.listMetadata("owner")).toEqual([]);
+    expect(await store.listCodeModeObservations()).toEqual([]);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
+    expect(await fs.readdir(root)).toEqual([]);
+  } finally { mkdir.mockRestore(); writes.mockRestore(); }
 });
 it("migrates contrived legacy content while preserving historical costs and deleting originals", async () => {
   const { store, root } = await fixture();

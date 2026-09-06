@@ -898,9 +898,13 @@ export class TokenMiserStore {
   }
 
   async prune(_params: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
-    await this.ensureRoot();
     // Only legacy flat files are migrated; safe accounting has no payload TTL.
-    const directory = await fs.opendir(this.rootDir);
+    // Startup migration must not create a profile before onboarding selects it.
+    const directory = await fs.opendir(this.rootDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!directory) return;
     for await (const entry of directory) {
       if (!entry.isFile()) continue;
       const file = path.join(this.rootDir, entry.name);
@@ -1069,10 +1073,6 @@ export class TokenMiserStore {
       fs.rm(this.metadataPath(objectId), { force: true }),
     ]);
     this.metadataIndex(this.owners.get(objectId)!).forget(`${objectId}${METADATA_SUFFIX}`);
-  }
-
-  private async ensureRoot(): Promise<void> {
-    await fs.mkdir(this.rootDir, { recursive: true, mode: 0o700 });
   }
 
   private async writeMetadata(metadata: TokenMiserObjectMetadata): Promise<void> {
