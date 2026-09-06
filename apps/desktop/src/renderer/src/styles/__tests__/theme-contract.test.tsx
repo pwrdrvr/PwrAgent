@@ -697,14 +697,23 @@ describe("Tangerine Terminal theme contract", () => {
     expect(titleButtonRule).not.toMatch(/(?:^|\n)\s*width:\s*100%;/);
   });
 
-  it("keeps launchpad setup output from shrinking the header summary", () => {
+  it("scrolls launchpad setup output while preserving the header and composer", () => {
     const setupComposerRule = extractRuleBody(
       css,
-      ".thread-view__launchpad-composer:has(.transcript-panel--setup)"
+      ".thread-view__launchpad-composer.is-materializing"
+    );
+    const setupTranscriptRule = extractRuleBody(css, ".thread-view__launchpad-transcript");
+    const composerRule = extractRuleBody(
+      css,
+      ".thread-view__launchpad-composer.is-materializing > .composer"
     );
 
     expect(setupComposerRule).toContain("flex: 1 1 0;");
     expect(setupComposerRule).toContain("min-height: 0;");
+    expect(setupTranscriptRule).toContain("flex: 1 1 0;");
+    expect(setupTranscriptRule).toContain("min-height: 0;");
+    expect(setupTranscriptRule).toContain("overflow-y: auto;");
+    expect(composerRule).toContain("flex-shrink: 0;");
   });
 
   it("keeps environment setup status, copying, and path wrapping on theme tokens", () => {

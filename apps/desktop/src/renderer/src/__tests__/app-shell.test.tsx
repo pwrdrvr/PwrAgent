@@ -2801,7 +2801,13 @@ describe("App", () => {
     expect(
       await screen.findByRole("region", { name: "Preparing transcript" })
     ).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "New thread" })).not.toBeInTheDocument();
+    const followUpComposer = screen.getByRole("textbox", { name: "New thread" });
+    expect(followUpComposer).toBe(newThreadComposer);
+    expect(followUpComposer).toHaveAttribute("contenteditable", "true");
+    expect(getComposerValueHost(followUpComposer)).toHaveAttribute("data-value", "");
+    expect(screen.getByRole("article", { name: "Submitted message" })).toHaveTextContent(
+      "Start a Grok-backed thread from the sidebar.",
+    );
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
