@@ -8,11 +8,14 @@ import { defineConfig } from "vitest/config";
 const TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
 const HOOK_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 10_000;
 
-// A Windows worker thread's process.env is case-sensitive, unlike the real
-// Electron main process and a forked Node process on Windows. Keep desktop-main
-// on forks there so PATH/Path behavior remains production-equivalent. POSIX
-// uses threads to avoid one OS process exec per test file.
-const DESKTOP_MAIN_POOL = process.platform === "win32" ? "forks" : "threads";
+// desktop-main loads native runtime bindings (better-sqlite3,
+// @napi-rs/canvas, and node-pty). A worker thread lets their native teardown
+// share a process with other test files and Vitest itself; on macOS that can
+// crash the entire test host after every assertion has passed. Forks preserve
+// parallel test execution while giving each binding an OS-process ownership
+// boundary. They are also required on Windows, where a worker thread's
+// process.env is case-sensitive unlike the real Electron main process.
+const DESKTOP_MAIN_POOL = "forks";
 
 // Where the desktop suites resolve the PwrAgent root to. `resolvePwragentRoot`
 // falls back to `~/.pwragent` — the operator's live application state — and
