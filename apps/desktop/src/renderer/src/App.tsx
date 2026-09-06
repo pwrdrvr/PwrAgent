@@ -740,7 +740,7 @@ function DesktopAppShell(props: {
         copyText: buildHotCpuProfileHandoffMessage(event),
         detail: `Session: ${event.sessionDirectoryName}`,
         id: `hot-cpu-profile:${event.capturedAt}:${event.profileFilename}`,
-        title: "CPU profile captured",
+        title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
         message: [
           `${formatHotCpuProfileTriggerSummary(event)} saved ${event.profileFilename}.`,
           heapSnapshotSummary,

@@ -464,8 +464,8 @@ export function TroubleshootingSettings(props: {
       >
         <div className="settings-fields">
           <SettingsField
-            label="Hot renderer CPU profiling"
-            sub="Start an armed capture only after the presets below are ready."
+            label="Hot CPU profiling"
+            sub="Monitor main and renderer CPU independently using the presets below. Main-process samples also record heap usage."
             source={sourceBadge(hotCpuProfilingEnabled)}
             control={
               <div className="settings-hot-cpu-capture">
@@ -532,7 +532,7 @@ export function TroubleshootingSettings(props: {
             checked={hotCpuProfilingCaptureHeapSnapshot.value}
             disabled={props.saving}
             label="Smart heap snapshots"
-            sub="Capture bounded heap snapshots around the next hot CPU trigger, then turn this option back off."
+            sub="Capture bounded renderer heap snapshots around the next hot renderer CPU trigger, then turn this option back off."
             help="Arms heap snapshots for the next explicit CPU capture start."
             source={sourceBadge(hotCpuProfilingCaptureHeapSnapshot)}
             onChange={(next) => {

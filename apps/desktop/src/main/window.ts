@@ -25,7 +25,9 @@ import { resolveHotCpuProfileConfig } from "./diagnostics/hot-cpu-profile-config
 import { createHotCpuProfileSession } from "./diagnostics/hot-cpu-profile-session";
 import { MainProcessHeapMonitor } from "./diagnostics/main-process-heap-monitor";
 import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
-import { RendererHotCpuProfiler } from "./diagnostics/renderer-hot-cpu-profiler";
+import { createMainProcessHotCpuTarget } from "./diagnostics/main-process-hot-cpu-target";
+import { SharedHotCpuProfiler } from "./diagnostics/shared-hot-cpu-profiler";
+import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
 import { isSafeExternalOpenUrl } from "./external-url-policy";
 import { getMainLogger } from "./log";
 import { macosTitleBarChrome } from "./macos-window-chrome";
@@ -127,6 +129,9 @@ const MAIN_WINDOW_MIN_WIDTH = 960;
 const MAIN_WINDOW_MIN_HEIGHT = 640;
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
+const sharedMainHotCpuProfiler = new SharedHotCpuProfiler();
+type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop">;
+
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
 const rendererConsoleLog = getMainLogger("pwragent:renderer:console");
 const hotCpuProfilerSyncHandlers = new Map<number, (reason: string) => void>();
@@ -505,15 +510,17 @@ export function createMainWindow(options?: {
   attachWindowFullscreenSync(window);
   let rendererLoaded = false;
   let hotCpuProfilerConfigKey: string | null = null;
-  let hotCpuProfilerPromise: Promise<RendererHotCpuProfiler | null> | null = null;
+  let hotCpuProfilerPromise: Promise<HotCpuProfilerLifecycle | null> | null = null;
   let hotCpuProfilerGeneration = 0;
   let hotCpuProfilerSyncQueue: Promise<void> = Promise.resolve();
 
-  const createHotCpuProfiler = async (
+  const createTargetHotCpuProfiler = async (
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
-  ): Promise<RendererHotCpuProfiler | null> => {
+    target: "main" | "renderer",
+  ): Promise<HotCpuProfilerLifecycle | null> => {
     const created = await createHotCpuProfileSession({
       config: hotCpuConfig,
+      target,
       versions: {
         appVersion: app.getVersion(),
         electronVersion: process.versions.electron ?? "unknown",
@@ -530,10 +537,11 @@ export function createMainWindow(options?: {
     }
 
     hotCpuLog.info("session directory", {
+      target,
       sessionDirectory: created.session.directoryPath,
     });
 
-    return new RendererHotCpuProfiler({
+    return new HotCpuProfiler({
       config: hotCpuConfig,
       getAppMetrics: () => app.getAppMetrics(),
       onHeapSnapshotLimitReached: async () => {
@@ -549,8 +557,36 @@ export function createMainWindow(options?: {
         }
       },
       session: created.session,
-      target: webContents,
+      target: target === "main" ? createMainProcessHotCpuTarget() : webContents,
     });
+  };
+
+  const createHotCpuProfiler = async (
+    config: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
+  ): Promise<HotCpuProfilerLifecycle | null> => {
+    const renderer = await createTargetHotCpuProfiler(config, "renderer");
+    const owner = Symbol("main-hot-cpu-window");
+    let stopped = false;
+    return {
+      start: async () => {
+        if (stopped) return;
+        await renderer?.start();
+        if (stopped) return;
+        await sharedMainHotCpuProfiler.acquire(owner, {
+          key: hotCpuConfigKey(config),
+          create: () => createTargetHotCpuProfiler(
+            { ...config, captureHeapSnapshot: false }, "main",
+          ),
+        });
+      },
+      stop: async (reason = "stopped") => {
+        stopped = true;
+        await Promise.all([
+          renderer?.stop(reason),
+          sharedMainHotCpuProfiler.release(owner, reason),
+        ]);
+      },
+    };
   };
 
   const stopHotCpuProfiler = async (reason: string): Promise<void> => {

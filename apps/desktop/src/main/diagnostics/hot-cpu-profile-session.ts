@@ -15,6 +15,10 @@ export type HotCpuProfileSample = {
   workingSetSize?: number;
   peakWorkingSetSize?: number;
   consecutiveHotSamples: number;
+  heapUsed?: number;
+  heapTotal?: number;
+  external?: number;
+  arrayBuffers?: number;
 };
 
 export type HotCpuProfileEvent = {
@@ -24,6 +28,7 @@ export type HotCpuProfileEvent = {
 };
 
 export type HotCpuProfileSession = {
+  target?: "main" | "renderer";
   id: string;
   directoryName: string;
   directoryPath: string;
@@ -41,6 +46,7 @@ export type HotCpuProfileSessionCreateResult =
   | { ok: false; code: "SESSION_CREATE_FAILED"; message: string; cause: unknown };
 
 type HotCpuProfileSessionManifest = {
+  target: "main" | "renderer";
   id: string;
   directoryName: string;
   createdAt: string;
@@ -89,10 +95,12 @@ async function writeManifest(
 
 export async function createHotCpuProfileSession(options: {
   config: Extract<HotCpuProfileConfig, { enabled: true }>;
+  target?: "main" | "renderer";
   createdAt?: Date;
   sessionId?: string;
   versions: HotCpuProfileSessionManifest["versions"];
 }): Promise<HotCpuProfileSessionCreateResult> {
+  const target = options.target ?? "renderer";
   const createdAt = options.createdAt ?? new Date();
   const sessionId = options.sessionId ?? randomBytes(3).toString("hex");
   const directoryName = `hot-cpu-${formatSessionPrefix(createdAt)}-${sessionId}`;
@@ -103,6 +111,7 @@ export async function createHotCpuProfileSession(options: {
   const artifacts: string[] = [];
 
   const manifest: HotCpuProfileSessionManifest = {
+    target,
     id: sessionId,
     directoryName,
     createdAt: createdAt.toISOString(),
@@ -153,6 +162,7 @@ export async function createHotCpuProfileSession(options: {
   return {
     ok: true,
     session: {
+      target,
       id: sessionId,
       directoryName,
       directoryPath,
@@ -161,11 +171,11 @@ export async function createHotCpuProfileSession(options: {
       appendSample: async (sample) => appendRecord(samplesPath, sample),
       appendEvent: async (event) => appendRecord(eventsPath, event),
       createProfilePath: (index) =>
-        path.join(directoryPath, `renderer-hot-${String(index).padStart(4, "0")}.cpuprofile`),
+        path.join(directoryPath, `${target}-hot-${String(index).padStart(4, "0")}.cpuprofile`),
       createHeapSnapshotPath: (index, phase) =>
         path.join(
           directoryPath,
-          `renderer-hot-${String(index).padStart(4, "0")}-${phase}.heapsnapshot`,
+          `${target}-hot-${String(index).padStart(4, "0")}-${phase}.heapsnapshot`,
         ),
       registerArtifact,
     },
