@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import { TokenMiserService } from "../token-miser/token-miser-service";
@@ -269,13 +269,14 @@ describe("Token Miser agent tools", () => {
     expect(dynamicText.text).toContain("RECOGNIZABLE_REQUESTED_LINE");
     expect(dynamicText.text).toContain("pwragent_token_miser_retrieval");
 
+    const generateSummary = vi.fn(async () => ({
+      status: "failed" as const,
+      reason: "ordinary output remains eligible for evaluation",
+    }));
     const service = new TokenMiserService({
       store,
       isEnabled: () => true,
-      generateSummary: async () => ({
-        status: "failed",
-        reason: "retrieval cells must bypass the reducer",
-      }),
+      generateSummary,
       thresholdCharacters: 1,
     });
     const retrievalScript =
@@ -297,6 +298,10 @@ describe("Token Miser agent tools", () => {
     })).toBeUndefined();
     expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
       .toBe(0);
+
+    // Calling a retrieval tool without emitting its delivery is not a
+    // retrieval-only cell. The script text cannot exempt ordinary output.
+    expect(generateSummary).toHaveBeenCalledTimes(1);
 
     const deliveredResponse = await router.handleDynamicToolCall({
       backend: "codex",
@@ -334,8 +339,17 @@ describe("Token Miser agent tools", () => {
     expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
       .toBeGreaterThanOrEqual("RECOGNIZABLE_REQUESTED_LINE".length);
     expect(await store.summarizeThreadUsage("thread-1")).toMatchObject({
-      codeMode: { retrievalCount: 2 },
+      codeMode: {
+        callCount: 2,
+        directCount: 1,
+        retrievalCount: 1,
+        observations: expect.arrayContaining([
+          expect.objectContaining({ callId: "call-code-mode-empty", retrieval: false, disposition: "direct" }),
+          expect.objectContaining({ callId: "call-code-mode", retrieval: true, disposition: "retrieval" }),
+        ]),
+      },
     });
+    expect(generateSummary).toHaveBeenCalledTimes(1);
   });
 });
 
