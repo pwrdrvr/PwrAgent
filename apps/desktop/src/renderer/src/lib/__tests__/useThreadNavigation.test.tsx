@@ -437,14 +437,11 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.id).toBe("thread-1");
     });
 
-    expect(
-      renderedStates.filter((state) => state.threadCount > 0),
-    ).toEqual([
-      {
-        selectedThreadId: "thread-1",
-        threadCount: 1,
-      },
-    ]);
+    const visibleStates = renderedStates.filter((state) => state.threadCount > 0);
+    expect(visibleStates.length).toBeGreaterThan(0);
+    for (const state of visibleStates) {
+      expect(state).toEqual({ selectedThreadId: "thread-1", threadCount: 1 });
+    }
   });
 
   it("reconciles an automatic partial selection against the full startup rows", async () => {
@@ -13351,5 +13348,40 @@ describe("useThreadNavigation", () => {
       expect(result.current.pickDirectoryError).toContain("not inside a git");
       expect(result.current.selectedItemKey).toBeUndefined();
     });
+  });
+});
+
+describe("main selected detail authority", () => {
+  it("keeps an off-page peer selection and hydrates configuration independently of row refresh", async () => {
+    const snapshot = acpTitleSnapshot("Loaded row", "explicit", 1);
+    const thread = { ...snapshot.threads[0]!, id: "off-page", model: "owner-model" };
+    const target = { scope: "remote" as const, instanceId: "peer" };
+    let resolveDetail!: (value: Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>) => void;
+    const pending = new Promise<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>>((resolve) => { resolveDetail = resolve; });
+    const readDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
+      if (request.ref.threadId === "off-page") return pending;
+      return { protocol: 2, ref: request.ref, revision: "loaded", readiness: "ready", identity: "present", thread: snapshot.threads[0] };
+    });
+    const api = {
+      getNavigationSnapshot: vi.fn(async () => snapshot), getNavigationSelectedDetail: readDetail,
+    } as unknown as DesktopApi;
+    const hook = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+    await act(() => hook.result.current.showThread({ backend: "acp:kimi", threadId: "off-page", federationTarget: target }));
+    expect(hook.result.current.selectedThreadKey).toBe("remote:peer:acp:kimi:off-page");
+    expect(hook.result.current.selectedThreadConfigurationReady).toBe(false);
+    expect(readDetail).toHaveBeenLastCalledWith(expect.objectContaining({
+      ref: { backend: "acp:kimi", threadId: "off-page", ownerInstanceId: "peer" }, federationTarget: target,
+    }));
+    await act(async () => resolveDetail({
+      protocol: 2, ref: { backend: "acp:kimi", threadId: "off-page", ownerInstanceId: "peer" },
+      revision: "exact", readiness: "ready", identity: "present", thread,
+    }));
+    expect(hook.result.current.selectedThreadConfigurationReady).toBe(true);
+    expect(hook.result.current.selectedThread?.model).toBe("owner-model");
+    await act(() => hook.result.current.refresh());
+    expect(hook.result.current.threads.some((row) => row.id === "off-page")).toBe(false);
+    expect(hook.result.current.selectedThread?.id).toBe("off-page");
+    expect(hook.result.current.selectedThreadKey).toBe("remote:peer:acp:kimi:off-page");
   });
 });

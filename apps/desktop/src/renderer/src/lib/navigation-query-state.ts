@@ -1,4 +1,6 @@
+import { parseThreadIdentityKey } from "@pwragent/shared";
 import type {
+  FederationTarget,
   NavigationIdentity,
   NavigationQueryEntry,
   NavigationQueryPage,
@@ -26,6 +28,23 @@ export type NavigationSelectionState = {
 
 export function navigationIdentityKey(ref: NavigationIdentity): string {
   return JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]);
+}
+
+/** Resolve a durable selection without consulting whichever rows happen to be loaded. */
+export function navigationIdentityFromThreadKey(key: string, target?: FederationTarget): NavigationIdentity | undefined {
+  let threadKey = key;
+  let ownerInstanceId = target?.scope === "remote" ? target.instanceId : undefined;
+  if (key.startsWith("remote:")) {
+    const ownerEnd = key.indexOf(":", "remote:".length);
+    if (ownerEnd <= "remote:".length) return undefined;
+    ownerInstanceId = key.slice("remote:".length, ownerEnd);
+    threadKey = key.slice(ownerEnd + 1);
+  } else if (key.startsWith("local:")) {
+    ownerInstanceId = undefined;
+    threadKey = key.slice("local:".length);
+  }
+  const identity = parseThreadIdentityKey(threadKey);
+  return identity && identity.threadId ? { ...identity, ...(ownerInstanceId ? { ownerInstanceId } : {}) } : undefined;
 }
 
 export function createNavigationPageState(request: NavigationQueryRequest): NavigationPageState {

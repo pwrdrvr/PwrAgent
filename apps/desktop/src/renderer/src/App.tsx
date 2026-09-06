@@ -1809,7 +1809,7 @@ function DesktopAppShell(props: {
     baseComposerDraftStore,
     desktopApi,
   );
-  useIndependentQueueProjection({
+  const selectedQueue = useIndependentQueueProjection({
     composerDraftStore,
     desktopApi,
     selectedThread: navigation.selectedThread,
@@ -2250,6 +2250,8 @@ function DesktopAppShell(props: {
     clearPendingRequest: session.clearPendingRequest,
     composerDisabled:
       !navigation.selectedThread ||
+      !navigation.selectedThreadConfigurationReady ||
+      selectedQueue.readiness !== "ready" ||
       // A remote thread cannot accept input while its owning instance is
       // unreachable — typing would only queue into a dead RPC.
       remoteReadsSuspended ||
@@ -2264,7 +2266,9 @@ function DesktopAppShell(props: {
     launchpadError: navigation.launchpadError,
     onProviderSelected: refreshSelectedAcpProvider,
     onShowNotice: showAppNotice,
-    onReloadThread: session.reload,
+    onReloadThread: async () => {
+      await Promise.all([session.reload(), navigation.refreshSelectedThreadConfiguration(), selectedQueue.refresh()]);
+    },
     initialLoadDurationMs: session.initialLoadDurationMs,
     loading: session.loading,
     loadingMore: session.loadingMore,
@@ -2371,7 +2375,7 @@ function DesktopAppShell(props: {
     providerCommands: skills.providerCommands,
     skills: skills.skills,
     transcriptEntries: session.entries,
-    transcriptError: session.error,
+    transcriptError: session.error ?? navigation.selectedThreadConfigurationError ?? selectedQueue.error,
     expandedTranscriptActivityIds: session.expandedTranscriptActivityIds,
     expandedTranscriptWorkPhaseGroupIds:
       session.expandedTranscriptWorkPhaseGroupIds,

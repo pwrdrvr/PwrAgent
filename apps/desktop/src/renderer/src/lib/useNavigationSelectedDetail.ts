@@ -72,7 +72,7 @@ export function useNavigationSelectedDetail(params: {
     return () => { sequenceRef.current += 1; };
   }, [identityKey, refresh, targetKey]);
   useEffect(() => {
-    if (!identityKey || !desktopApi?.onAgentEvent) return;
+    if (!identityKey || !desktopApi?.onAgentEvent || !desktopApi.getNavigationSelectedDetail) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = desktopApi.onAgentEvent((event) => {
       const selected = paramsRef.current.ref;
