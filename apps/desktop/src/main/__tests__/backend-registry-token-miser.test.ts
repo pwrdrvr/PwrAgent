@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import type {
   AgentEvent,
   NavigationSnapshot,
   ThreadSubAgentSummary,
+  ThreadToolAccounting,
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
@@ -41,6 +43,36 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await registry.close();
     stateDb.close();
     rmSync(directory, { force: true, recursive: true });
+  });
+
+  it("reads thread metadata once for both accounting and savings", async () => {
+    const tokenMiserStore = new TokenMiserStore(path.join(directory, "token-miser-objects"));
+    for (const threadId of ["thread-parent", "thread-unrelated"]) {
+      await tokenMiserStore.store({
+        ...metadata(randomUUID(), `helper-${threadId}`),
+        threadId,
+        output: "fixture output",
+        parentModel: "gpt-5.6-terra",
+      });
+    }
+    const internals = registry as unknown as {
+      tokenMiserStore?: TokenMiserStore;
+      withTokenMiserAccounting(params: {
+        backend: "codex";
+        threadId: string;
+        accounting: ThreadToolAccounting;
+      }): Promise<ThreadToolAccounting>;
+    };
+    internals.tokenMiserStore = tokenMiserStore;
+    const listMetadata = vi.spyOn(tokenMiserStore, "listMetadata");
+    const accounting = await internals.withTokenMiserAccounting({
+      backend: "codex",
+      threadId: "thread-parent",
+      accounting: await store.readThreadToolAccounting({ backend: "codex", threadId: "thread-parent" }),
+    });
+    expect(accounting.tokenMiser?.interceptionCount).toBe(1);
+    expect(accounting.tokenMiser?.savings?.gateCount).toBe(1);
+    expect(listMetadata).toHaveBeenCalledExactlyOnceWith("thread-parent");
   });
 
   it("batches gate cards and Luna usage into the parent ledgers", async () => {

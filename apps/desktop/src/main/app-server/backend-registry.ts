@@ -14226,8 +14226,10 @@ export class DesktopBackendRegistry {
       return params.accounting;
     }
     try {
+      const metadata = await this.tokenMiserStore.listMetadata(params.threadId);
       const tokenMiser = await this.tokenMiserStore.summarizeThreadUsage(
         params.threadId,
+        metadata,
       );
       const withReplays = withLegacyTokenMiserReplayAccounting(
         tokenMiser,
@@ -14235,6 +14237,7 @@ export class DesktopBackendRegistry {
       );
       const savings = await this.buildTokenMiserThreadSavings({
         backend: params.backend,
+        entries: metadata,
         invocations: params.accounting.invocations,
         threadId: params.threadId,
       });
@@ -30043,14 +30046,14 @@ export class DesktopBackendRegistry {
    */
   private async buildTokenMiserThreadSavings(params: {
     backend: AppServerBackendKind;
+    entries: readonly TokenMiserObjectMetadata[];
     invocations: readonly ThreadToolInvocationRecord[];
     threadId: string;
   }): Promise<ThreadTokenMiserSavings | undefined> {
     if (!this.tokenMiserStore) {
       return undefined;
     }
-    const entries = (await this.tokenMiserStore.listMetadata())
-      .filter((entry) => entry.threadId === params.threadId);
+    const entries = params.entries;
     if (entries.length === 0) {
       return undefined;
     }
