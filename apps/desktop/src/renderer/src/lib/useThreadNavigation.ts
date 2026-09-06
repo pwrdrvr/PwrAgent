@@ -52,6 +52,8 @@ import {
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";
+import { navigationIdentityFromThreadKey } from "./navigation-query-state";
 import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
 import { fileLabelFromPath } from "./directory-references";
 import {
@@ -3089,6 +3091,9 @@ export function useThreadNavigation(
   selectedItemKey?: string;
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
+  selectedThreadConfigurationReady: boolean;
+  selectedThreadConfigurationError?: string;
+  refreshSelectedThreadConfiguration: () => Promise<void>;
   selectedThreadKey?: string;
   setThreadExecutionMode: (
     thread: NavigationThreadSummary,
@@ -5213,7 +5218,7 @@ export function useThreadNavigation(
     return undefined;
   }, [displaySelectionKey]);
 
-  const selectedThread = useMemo<NavigationThreadSummary | undefined>(
+  const selectedRow = useMemo<NavigationThreadSummary | undefined>(
     () =>
       selectedThreadKey
         ? threads.find(
@@ -5222,6 +5227,20 @@ export function useThreadNavigation(
         : undefined,
     [selectedThreadKey, threads]
   );
+
+  const selectedIdentity = selectedThreadKey
+    ? navigationIdentityFromThreadKey(selectedThreadKey, rendererFederationTarget)
+    : undefined;
+  const selectedDetail = useNavigationSelectedDetail({
+    desktopApi,
+    ref: selectedIdentity,
+    federationTarget: selectedIdentity?.ownerInstanceId
+      ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
+      : undefined,
+  });
+  const selectedThreadConfigurationReady = selectedDetail.state?.readiness === "ready"
+    && selectedDetail.state.detail?.identity === "present";
+  const selectedThread = selectedDetail.state?.detail?.thread ?? selectedRow;
 
   const selectedDirectory = useMemo(() => {
     if (activeFederatedLaunchpad) {
@@ -8747,6 +8766,11 @@ export function useThreadNavigation(
     selectedItemKey: displaySelectionKey,
     selectedLaunchpad,
     selectedThread,
+    selectedThreadConfigurationReady,
+    selectedThreadConfigurationError: selectedDetail.state?.error
+      ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
+        ? `This thread is ${selectedDetail.state.detail.identity}.` : undefined),
+    refreshSelectedThreadConfiguration: selectedDetail.refresh,
     selectedThreadKey,
     setThreadExecutionMode: updateThreadExecutionMode,
     setAcpSessionRuntimeOption: updateAcpSessionRuntimeOption,

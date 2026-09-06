@@ -7,6 +7,7 @@ import {
   createNavigationPageState,
   failNavigationPageRead,
   navigationIdentityKey,
+  navigationIdentityFromThreadKey,
   selectNavigationIdentity,
 } from "../navigation-query-state";
 
@@ -83,5 +84,22 @@ describe("distinct navigation page state", () => {
   it("distinguishes owners even when backend and thread id collide", () => {
     const ref = { backend: "codex" as const, threadId: "same" };
     expect(navigationIdentityKey(ref)).not.toBe(navigationIdentityKey({ ...ref, ownerInstanceId: "peer" }));
+  });
+});
+
+
+describe("durable selection identity", () => {
+  it("resolves unloaded ACP identities and explicit owners without row membership", () => {
+    expect(navigationIdentityFromThreadKey("remote:peer:acp:grok:id:with:colons")).toEqual({
+      ownerInstanceId: "peer", backend: "acp:grok", threadId: "id:with:colons",
+    });
+    expect(navigationIdentityFromThreadKey("codex:thread", { scope: "remote", instanceId: "native-owner" })).toEqual({
+      ownerInstanceId: "native-owner", backend: "codex", threadId: "thread",
+    });
+    expect(navigationIdentityFromThreadKey("local:codex:thread", { scope: "remote", instanceId: "other" })).toEqual({
+      backend: "codex", threadId: "thread",
+    });
+    expect(navigationIdentityFromThreadKey("remote::codex:thread")).toBeUndefined();
+    expect(navigationIdentityFromThreadKey("codex:")).toBeUndefined();
   });
 });
