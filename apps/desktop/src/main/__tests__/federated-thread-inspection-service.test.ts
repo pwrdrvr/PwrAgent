@@ -286,6 +286,8 @@ describe("federated thread inspection service", () => {
     expect(listThreads).toHaveBeenCalledWith({
       backend: "codex",
       archived: true,
+    }, {
+      deadlineAt: expect.any(Number),
     });
   });
 
