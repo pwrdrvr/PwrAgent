@@ -2077,15 +2077,15 @@ describe("queue release without navigation rows", () => {
   }
   function ownerApi(patch: Partial<DesktopApi> = {}): DesktopApi {
     return {
-      getNavigationSelectedDetail: vi.fn(async (request) => ({
+      getNavigationSelectedDetail: vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
         protocol: 2, ref: request.ref, revision: "detail", readiness: "ready", identity: "present", thread: thread("same"),
       })),
-      getNavigationQueueProjection: vi.fn(async (request) => ({
+      getNavigationQueueProjection: vi.fn<NonNullable<DesktopApi["getNavigationQueueProjection"]>>(async (request) => ({
         protocol: 2, ref: request.ref, revision: "fifo", readiness: "ready", complete: true, entries: [],
       })),
       listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [backendSummary()] })),
-      readThread: vi.fn(async () => ({ backend: "codex", threadId: "same", threadStatus: "idle", replay: { entries: [] } })),
-      startTurn: vi.fn(async () => ({ backend: "codex", threadId: "same", turnId: "accepted" })),
+      readThread: vi.fn<NonNullable<DesktopApi["readThread"]>>(async () => ({ backend: "codex", threadId: "same", fetchedAt: 1, threadStatus: "idle", replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } } })),
+      startTurn: vi.fn<NonNullable<DesktopApi["startTurn"]>>(async () => ({ backend: "codex", threadId: "same", turnId: "accepted" })),
       ...patch,
     };
   }
@@ -2121,7 +2121,7 @@ describe("queue release without navigation rows", () => {
   it("does not leapfrog an owner FIFO that has not reached the renderer mirror yet", async () => {
     vi.useFakeTimers();
     const store = seededStore();
-    const api = ownerApi({ getNavigationQueueProjection: vi.fn(async (request) => ({
+    const api = ownerApi({ getNavigationQueueProjection: vi.fn<NonNullable<DesktopApi["getNavigationQueueProjection"]>>(async (request) => ({
       protocol: 2, ref: request.ref, revision: "fifo", readiness: "ready", complete: true,
       entries: [{ queueEntryId: "owner-head", createdAt: 1, displayText: "accepted earlier", origin: "manual", position: 0 }],
     })) });
@@ -2135,7 +2135,7 @@ describe("queue release without navigation rows", () => {
     vi.useFakeTimers();
     let resolve!: (value: Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>) => void;
     const pending = new Promise<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>>((done) => { resolve = done; });
-    const api = ownerApi({ getNavigationSelectedDetail: vi.fn(() => pending) });
+    const api = ownerApi({ getNavigationSelectedDetail: vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(() => pending) });
     const store = seededStore();
     const hook = renderHook(() => useOwnerQueuedTurnRelease({ backends: [backendSummary()], composerDraftStore: store, desktopApi: api }));
     await act(() => vi.advanceTimersByTimeAsync(30_000));
