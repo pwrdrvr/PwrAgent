@@ -6275,9 +6275,21 @@ class DesktopAppServerService {
       && isRemoteFederationTarget(request.federationTarget)
     ) {
       const { federationTarget, ...remoteRequest } = request;
-      return await getDesktopFederationRuntime()
+      const ownerPrefix = `remote:${federationTarget.instanceId}:`;
+      const ownerKey = (key: string): string => key.startsWith(ownerPrefix) ? key.slice(ownerPrefix.length) : key;
+      const result = await getDesktopFederationRuntime()
         .remoteBackend(federationTarget)
-        .reorderThreadPins(remoteRequest);
+        .reorderThreadPins({
+          ...remoteRequest,
+          threadKeys: remoteRequest.threadKeys?.map(ownerKey),
+          move: remoteRequest.move ? (remoteRequest.move.direction
+            ? { key: ownerKey(remoteRequest.move.key), direction: remoteRequest.move.direction }
+            : { key: ownerKey(remoteRequest.move.key), anchorKey: ownerKey(remoteRequest.move.anchorKey), placement: remoteRequest.move.placement })
+            : undefined,
+        });
+      return { pinnedRanks: Object.fromEntries(Object.entries(result.pinnedRanks).map(([key, rank]) => [
+        key.startsWith("remote:") ? key : `${ownerPrefix}${key}`, rank,
+      ])) };
     }
     // The pinned section interleaves local pins and viewer-owned remote
     // pins. The store assigns ranks from the FULL requested order in one
@@ -6286,7 +6298,7 @@ class DesktopAppServerService {
     // and a mixed reorder is atomic.
     const overlayStore = this.getOverlayStore();
     const remotePins =
-      typeof overlayStore.listRemoteThreadPins === "function"
+      !request.move && typeof overlayStore.listRemoteThreadPins === "function"
         ? await overlayStore.listRemoteThreadPins()
         : [];
     const remoteRefsByKey = Object.fromEntries(
@@ -6297,11 +6309,12 @@ class DesktopAppServerService {
     );
     const pinnedRanks = await overlayStore.reorderThreadPins({
       threadKeys: request.threadKeys,
+      ...(request.move ? { move: request.move } : {}),
       remoteRefsByKey,
     });
 
     logDebug("reorderThreadPins", {
-      pinCount: request.threadKeys.length,
+      pinCount: request.threadKeys?.length ?? 1,
       remotePinCount: Object.keys(remoteRefsByKey).length,
     });
 
@@ -6854,16 +6867,17 @@ class DesktopAppServerService {
   async reorderDirectoryPins(
     request: ReorderDirectoryPinsRequest,
   ): Promise<ReorderDirectoryPinsResponse> {
-    for (const directoryKey of request.directoryKeys) {
+    for (const directoryKey of request.directoryKeys ?? [request.move?.key, request.move?.anchorKey].filter((key): key is string => Boolean(key))) {
       rejectNonUserDirectoryKey(directoryKey);
     }
 
     const pinnedRanks = await this.getOverlayStore().reorderDirectoryPins({
       directoryKeys: request.directoryKeys,
+      ...(request.move ? { move: request.move } : {}),
     });
 
     logDebug("reorderDirectoryPins", {
-      pinCount: request.directoryKeys.length,
+      pinCount: request.directoryKeys?.length ?? 1,
     });
 
     await getDesktopBackendRegistry().publishLocalEvent({

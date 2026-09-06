@@ -1,4 +1,5 @@
 import path from "node:path";
+import { relativePinRanks } from "./relative-pin-order";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
@@ -12,6 +13,7 @@ import type {
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
   NavigationBrowseMode,
+  NavigationRelativePinMove,
   ThreadQueuedTurnSummary,
   NavigationDirectoryGitStatus,
   NavigationLaunchpadDefaults,
@@ -66,6 +68,7 @@ import {
   MAX_TURN_FAILURE_LOG_ENTRIES,
   buildPullRequestStatusKey,
   buildFederatedThreadRef,
+  federatedThreadIdentityKey,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   buildNavigationSnapshot,
@@ -3544,7 +3547,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
    * skipped without consuming a rank.
    */
   async reorderThreadPins(params: {
-    threadKeys: string[];
+    threadKeys?: string[];
+    move?: NavigationRelativePinMove;
     /**
      * Keys owned by remote thread pins: their rank writes patch the
      * remote_thread_pins payload (viewer-owned) instead of the local thread
@@ -3552,7 +3556,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
      */
     remoteRefsByKey?: Record<string, FederatedThreadRef>;
   }): Promise<Record<string, string>> {
+    if (Boolean(params.move) === Boolean(params.threadKeys)) {
+      throw new Error("Provide either a complete pin order or one relative move.");
+    }
     const pinnedRanks: Record<string, string> = {};
+    const remoteRefsByKey = { ...params.remoteRefsByKey };
     const selectRemote = this.stateDb.raw.prepare(
       `SELECT payload FROM remote_thread_pins
        WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
@@ -3563,9 +3571,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
        WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
     );
     const write = this.stateDb.raw.transaction(() => {
+      let moveRanks: Record<string, string> | undefined;
+      if (params.move) {
+        const localPins = this.stateDb.raw.prepare(
+          `SELECT json_extract(payload, '$.backend') AS backend,
+                  json_extract(payload, '$.threadId') AS threadId,
+                  json_extract(payload, '$.pinnedRank') AS rank
+           FROM threads WHERE json_extract(payload, '$.pinnedRank') IS NOT NULL`,
+        ).all() as Array<{ backend: AppServerBackendKind; threadId: string; rank: string }>;
+        const remotePins = this.stateDb.raw.prepare(
+          `SELECT instance_id, backend, thread_id,
+                  json_extract(payload, '$.localPinnedRank') AS rank
+           FROM remote_thread_pins WHERE revoked_at IS NULL
+             AND json_extract(payload, '$.localPinnedRank') IS NOT NULL`,
+        ).all() as Array<{ instance_id: string; backend: AppServerBackendKind; thread_id: string; rank: string }>;
+        const pins = localPins.map((pin) => ({ key: buildThreadIdentityKey(pin.backend, pin.threadId), rank: pin.rank }));
+        for (const pin of remotePins) {
+          const ref = buildFederatedThreadRef({ backend: pin.backend, instanceId: pin.instance_id, threadId: pin.thread_id });
+          const key = federatedThreadIdentityKey(ref);
+          remoteRefsByKey[key] = ref;
+          pins.push({ key, rank: pin.rank });
+        }
+        moveRanks = relativePinRanks(pins, params.move);
+      }
       let rankIndex = 0;
-      for (const threadKey of params.threadKeys) {
-        const remoteRef = params.remoteRefsByKey?.[threadKey];
+      for (const threadKey of moveRanks ? Object.keys(moveRanks) : params.threadKeys ?? []) {
+        const remoteRef = remoteRefsByKey[threadKey];
         if (remoteRef) {
           const instanceId = remotePinInstanceId(remoteRef);
           const row = selectRemote.get(
@@ -3583,7 +3614,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             parsed = {};
           }
           rankIndex += 1;
-          const pinnedRank = String(rankIndex * 1024);
+          const pinnedRank = moveRanks?.[threadKey] ?? String(rankIndex * 1024);
           pinnedRanks[threadKey] = pinnedRank;
           parsed.localPinnedRank = pinnedRank;
           updateRemote.run(
@@ -3605,7 +3636,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           extraLinkedDirectories: [],
         };
         rankIndex += 1;
-        const pinnedRank = String(rankIndex * 1024);
+        const pinnedRank = moveRanks?.[threadKey] ?? String(rankIndex * 1024);
         pinnedRanks[threadKey] = pinnedRank;
         this.putThread(threadKey, {
           ...current,
@@ -3614,7 +3645,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
     });
     write();
-    return pinnedRanks;
+    return params.move
+      ? (pinnedRanks[params.move.key] ? { [params.move.key]: pinnedRanks[params.move.key]! } : {})
+      : pinnedRanks;
   }
 
   async setThreadParent(params: {
@@ -3741,12 +3774,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   async reorderDirectoryPins(params: {
-    directoryKeys: string[];
+    directoryKeys?: string[];
+    move?: NavigationRelativePinMove;
   }): Promise<Record<string, string>> {
+    if (Boolean(params.move) === Boolean(params.directoryKeys)) {
+      throw new Error("Provide either a complete directory pin order or one relative move.");
+    }
     const pinnedRanks: Record<string, string> = {};
     const write = this.stateDb.raw.transaction(() => {
-      params.directoryKeys.forEach((directoryKey, index) => {
-        const pinnedRank = String((index + 1) * 1024);
+      const pins = params.move ? this.stateDb.raw.prepare(
+        `SELECT directory_key AS key, json_extract(payload, '$.pinnedRank') AS rank
+         FROM directory_overlay WHERE json_extract(payload, '$.pinnedRank') IS NOT NULL`,
+      ).all() as Array<{ key: string; rank: string }> : [];
+      const moveRanks = params.move ? relativePinRanks(pins, params.move) : undefined;
+      (moveRanks ? Object.keys(moveRanks) : params.directoryKeys ?? []).forEach((directoryKey, index) => {
+        const pinnedRank = moveRanks?.[directoryKey] ?? String((index + 1) * 1024);
         pinnedRanks[directoryKey] = pinnedRank;
         this.putDirectoryOverlay(directoryKey, {
           ...this.getDirectoryOverlay(directoryKey),
@@ -3756,7 +3798,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       });
     });
     write();
-    return pinnedRanks;
+    return params.move
+      ? (pinnedRanks[params.move.key] ? { [params.move.key]: pinnedRanks[params.move.key]! } : {})
+      : pinnedRanks;
   }
 
   async setDirectoryThreadsCollapsed(params: {

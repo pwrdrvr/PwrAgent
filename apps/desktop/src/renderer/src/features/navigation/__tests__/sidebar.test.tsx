@@ -4464,7 +4464,7 @@ describe("Sidebar", () => {
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       `codex:${pinnedBottom.id}`,
       `codex:${pinnedTop.id}`,
-    ]);
+    ], { key: `codex:${pinnedTop.id}`, direction: "down" });
   });
 
   it("omits Move Up / Move Down from an unpinned thread's context menu", async () => {
@@ -6519,7 +6519,7 @@ describe("Sidebar directory pinning", () => {
     expect(onReorderDirectoryPins).toHaveBeenCalledWith([
       pinnedB.key,
       pinnedA.key,
-    ]);
+    ], { key: pinnedB.key, anchorKey: pinnedA.key, placement: "before" });
   });
 
   it("keeps the directory launchpad button a single click and puts machines behind the chevron", async () => {
@@ -6978,7 +6978,7 @@ describe("Sidebar directory pinning", () => {
       pinnedTop.key,
       pinnedBottom.key,
       pinnedMiddle.key,
-    ]);
+    ], { key: pinnedMiddle.key, direction: "down" });
   });
 
   it("disables Move Up on the top pinned directory and Move Down on the bottom", async () => {
@@ -7194,7 +7194,7 @@ describe("Sidebar thread pinning Move items", () => {
       "remote:peer-laptop:acp:grok:grok-middle",
       "codex:codex-top",
       "acp:grok:grok-bottom",
-    ]);
+    ], { key: "remote:peer-laptop:acp:grok:grok-middle", direction: "up" });
   });
 
   it("invokes the reorder IPC on Cmd+Shift+ArrowDown on a focused pinned thread row", () => {
@@ -7253,6 +7253,6 @@ describe("Sidebar thread pinning Move items", () => {
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       `codex:${pinnedBottom.id}`,
       `codex:${pinnedTop.id}`,
-    ]);
+    ], { key: `codex:${pinnedTop.id}`, anchorKey: `codex:${pinnedBottom.id}`, placement: "after" });
   });
 });

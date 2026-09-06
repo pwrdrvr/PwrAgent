@@ -20,6 +20,7 @@ import type {
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
+  NavigationRelativePinMove,
   NavigationSnapshot,
   FederationPeerSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
@@ -3177,7 +3178,7 @@ export function useThreadNavigation(
    * Reorder pinned threads globally. `orderedThreadKeys` is the complete
    * pinned order across all backends (thread identity keys), top first.
    */
-  reorderThreadPins: (orderedThreadKeys: string[]) => Promise<void>;
+  reorderThreadPins: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   setThreadParent: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
@@ -3196,7 +3197,7 @@ export function useThreadNavigation(
     directory: NavigationDirectorySummary,
     pinned: boolean,
   ) => Promise<void>;
-  reorderDirectoryPins: (directoryKeys: string[]) => Promise<void>;
+  reorderDirectoryPins: (directoryKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   setDirectoryThreadsCollapsed: (
     directory: NavigationDirectorySummary,
     collapsed: boolean,
@@ -7916,12 +7917,12 @@ export function useThreadNavigation(
   );
 
   const reorderThreadPins = useCallback(
-    async (orderedThreadKeys: string[]): Promise<void> => {
+    async (orderedThreadKeys: string[], move?: NavigationRelativePinMove): Promise<void> => {
       if (!reorderThreadPinsRequest) {
         return;
       }
 
-      const pinnedRanksByThreadKey = buildPinnedRanks(orderedThreadKeys);
+      const pinnedRanksByThreadKey = move ? {} : buildPinnedRanks(orderedThreadKeys);
       setState((current) => ({
         ...current,
         response: updateThreadPinsInSnapshot(current.response, {
@@ -7933,7 +7934,7 @@ export function useThreadNavigation(
         const result = await reorderThreadPinsRequest({
           // A federation window reorders the owning instance's pins.
           federationTarget: readRendererFederationTarget(),
-          threadKeys: orderedThreadKeys,
+          ...(move ? { move } : { threadKeys: orderedThreadKeys }),
         });
         setState((current) => ({
           ...current,
@@ -8313,12 +8314,12 @@ export function useThreadNavigation(
   );
 
   const reorderDirectoryPins = useCallback(
-    async (directoryKeys: string[]): Promise<void> => {
+    async (directoryKeys: string[], move?: NavigationRelativePinMove): Promise<void> => {
       if (!reorderDirectoryPinsRequest) {
         return;
       }
 
-      const pinnedRanks = buildPinnedRanks(directoryKeys);
+      const pinnedRanks = move ? {} : buildPinnedRanks(directoryKeys);
       setState((current) => ({
         ...current,
         response: updateDirectoryPinsInSnapshot(current.response, {
@@ -8327,7 +8328,7 @@ export function useThreadNavigation(
       }));
 
       try {
-        const result = await reorderDirectoryPinsRequest({ directoryKeys });
+        const result = await reorderDirectoryPinsRequest(move ? { move } : { directoryKeys });
         setState((current) => ({
           ...current,
           response: updateDirectoryPinsInSnapshot(current.response, {

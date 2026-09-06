@@ -5631,6 +5631,7 @@ function localBackendOperations(): FederationBackendOperations {
     ): Promise<ReorderThreadPinsResponse> {
       const pinnedRanks = await getDesktopOverlayStore().reorderThreadPins({
         threadKeys: request.threadKeys,
+        ...(request.move ? { move: request.move } : {}),
       });
       // Pin order is global across backends; the backend field is
       // required by publishLocalEvent but irrelevant here (matches the

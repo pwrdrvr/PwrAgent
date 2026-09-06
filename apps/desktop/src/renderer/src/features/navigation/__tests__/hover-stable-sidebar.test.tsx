@@ -687,7 +687,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       "codex:bravo",
       "codex:alpha",
-    ]);
+    ], { key: "codex:alpha", anchorKey: "codex:bravo", placement: "after" });
 
     view.rerender(renderSidebar({
       browseMode: "directories",
