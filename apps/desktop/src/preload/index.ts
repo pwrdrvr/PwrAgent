@@ -678,6 +678,7 @@ import {
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+  NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
   NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
@@ -1958,6 +1959,10 @@ const desktopApi = Object.freeze({
     request: SetPullRequestPollingFocusRequest,
   ): Promise<void> =>
     await ipcRenderer.invoke(NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL, request),
+  probePullRequestPollingAfterReconnect: async (): Promise<void> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
+    ),
   detachThreadPullRequest: async (
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> =>

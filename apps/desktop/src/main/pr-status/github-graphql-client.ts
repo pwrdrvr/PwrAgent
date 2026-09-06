@@ -31,6 +31,11 @@ const graphqlLog = getMainLogger("pwragent:pr-graphql");
  * `gh` subprocess is limited to exporting its auth token and reporting
  * installation/login status in Settings.
  *
+ * An exhausted retry cycle puts every operation on this shared client into a
+ * bounded slow mode. That prevents status polling and branch discovery from
+ * independently retrying through the same outage. Any GitHub response resets
+ * the failure count so normal polling resumes as soon as connectivity returns.
+ *
  * Auth is still `gh`'s: we read the token from `gh` rather than asking the
  * operator for a PAT, so there is no new credential to store. Newer CLIs have
  * `gh auth token`; older CLIs only have `gh auth status --show-token`.
@@ -44,6 +49,12 @@ const STATUS_CONTEXT_PAGE_SIZE = 100;
 const MAX_RETRIES = 4;
 /** Upper bound on any single backoff wait. */
 const MAX_BACKOFF_MS = 60_000;
+/** Cooldown after one complete retry cycle still cannot reach GitHub. */
+const FAILURE_BACKOFF_BASE_MS = 60_000;
+/** Keep probing occasionally so recovery is discovered without user action. */
+const MAX_FAILURE_BACKOFF_MS = 15 * 60_000;
+/** Collapse duplicate Chromium online events from multiple renderer windows. */
+export const GITHUB_RECONNECT_DEDUP_MS = 30_000;
 /** How long a minted `gh auth token` stays fresh in memory. */
 const TOKEN_TTL_MS = 5 * 60_000;
 
@@ -638,6 +649,8 @@ export type GithubGraphqlPrClientOptions = {
   getConfiguredGhCommand?: () => string | undefined;
   /** Override the retry sleep — tests make backoff instant. */
   sleep?: (ms: number) => Promise<void>;
+  /** Override the cooldown clock for deterministic tests. */
+  now?: () => number;
   batchSize?: number;
   onRepositoryAccess?: (event: GithubRepositoryAccessEvent) => void;
   onAuthenticationFailure?: (event: GithubAuthenticationFailureEvent) => void;
@@ -662,6 +675,7 @@ export class GithubGraphqlPrClient {
     | NonNullable<GithubGraphqlPrClientOptions["getConfiguredGhCommand"]>
     | undefined;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
   private readonly batchSize: number;
   private readonly onRepositoryAccess:
     | NonNullable<GithubGraphqlPrClientOptions["onRepositoryAccess"]>
@@ -670,6 +684,10 @@ export class GithubGraphqlPrClient {
     | NonNullable<GithubGraphqlPrClientOptions["onAuthenticationFailure"]>
     | undefined;
   private tokenCache: { token: string; fetchedAt: number } | undefined;
+  private consecutiveRetryableFailures = 0;
+  private failureBackoffUntil = 0;
+  private reconnectBypassAvailable = false;
+  private lastNetworkReconnectAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: GithubGraphqlPrClientOptions = {}) {
     this.requestOverride = options.request;
@@ -678,6 +696,7 @@ export class GithubGraphqlPrClient {
     this.sleep =
       options.sleep
       ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.now = options.now ?? (() => Date.now());
     this.batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE);
     this.onRepositoryAccess = options.onRepositoryAccess;
     this.onAuthenticationFailure = options.onAuthenticationFailure;
@@ -686,6 +705,20 @@ export class GithubGraphqlPrClient {
   /** Force the next request to re-mint a token (e.g. after `gh auth login`). */
   invalidateToken(): void {
     this.tokenCache = undefined;
+  }
+
+  /**
+   * Preserve one slow-mode bypass for whichever GitHub lookup runs next.
+   * Returns false when another renderer already reported the same transition.
+   */
+  noteNetworkReconnect(): boolean {
+    const now = this.now();
+    if (now - this.lastNetworkReconnectAt < GITHUB_RECONNECT_DEDUP_MS) {
+      return false;
+    }
+    this.lastNetworkReconnectAt = now;
+    this.reconnectBypassAvailable = true;
+    return true;
   }
 
   /**
@@ -698,18 +731,44 @@ export class GithubGraphqlPrClient {
    * correctness — a stale chip beats a crashed sweep.
    */
   async fetchPullRequests(refs: PrRef[]): Promise<PrSummary[]> {
+    return await this.fetchPullRequestsWithBackoffPolicy(refs, false);
+  }
+
+  /**
+   * Allow the first batch through slow mode after Chromium reports that a
+   * network interface came back. The request still uses the normal retry
+   * ceiling; only a real GitHub response clears the accumulated failure state.
+   */
+  async fetchPullRequestsAfterReconnect(refs: PrRef[]): Promise<PrSummary[]> {
+    return await this.fetchPullRequestsWithBackoffPolicy(refs, true);
+  }
+
+  private async fetchPullRequestsWithBackoffPolicy(
+    refs: PrRef[],
+    requireReconnectBypass: boolean,
+  ): Promise<PrSummary[]> {
     if (refs.length === 0) {
+      return [];
+    }
+    const bypassFailureBackoff = this.consumeReconnectBypass();
+    if (requireReconnectBypass && !bypassFailureBackoff) {
+      return [];
+    }
+    if (!bypassFailureBackoff && this.deferForFailureBackoff("PR poll")) {
       return [];
     }
     const token = await this.resolveToken();
     if (!token) {
+      this.reconnectBypassAvailable ||= bypassFailureBackoff;
       graphqlLog.debug("skipping PR poll: no GitHub token from gh");
       return [];
     }
 
     const results: PrSummary[] = [];
+    let bypassNextBatchBackoff = bypassFailureBackoff;
     for (const batch of chunk(refs, this.batchSize)) {
-      const prs = await this.fetchBatch(batch, token);
+      const prs = await this.fetchBatch(batch, token, bypassNextBatchBackoff);
+      bypassNextBatchBackoff = false;
       results.push(...prs);
     }
     return results;
@@ -732,19 +791,30 @@ export class GithubGraphqlPrClient {
     if (refs.length === 0) {
       return results;
     }
+    const bypassFailureBackoff = this.consumeReconnectBypass();
+    if (
+      !bypassFailureBackoff
+      && this.deferForFailureBackoff("branch PR lookup")
+    ) {
+      return results;
+    }
     const token = await this.resolveToken();
     if (!token) {
+      this.reconnectBypassAvailable ||= bypassFailureBackoff;
       graphqlLog.debug("skipping branch PR lookup: no GitHub token from gh");
       return results;
     }
 
+    let bypassNextBatchBackoff = bypassFailureBackoff;
     for (const batch of chunk(refs, this.batchSize)) {
       const data = await this.runBatchQuery(
         buildBranchPrQuery(batch),
         token,
         batch.length,
         batch,
+        bypassNextBatchBackoff,
       );
+      bypassNextBatchBackoff = false;
       if (!data) {
         continue;
       }
@@ -929,17 +999,31 @@ export class GithubGraphqlPrClient {
     token: string,
     refCount: number,
     repositoryRefs?: Array<Pick<BranchRef, "owner" | "repo" | "branch">>,
+    bypassFailureBackoff = false,
   ): Promise<Record<string, unknown> | undefined> {
+    if (
+      !bypassFailureBackoff
+      && this.deferForFailureBackoff("PR batch")
+    ) {
+      return undefined;
+    }
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
       try {
-        return (await this.runRequest(built.query, built.variables, token)) as Record<
+        const data = (await this.runRequest(
+          built.query,
+          built.variables,
+          token,
+        )) as Record<
           string,
           unknown
         >;
+        this.recordRequestSuccess();
+        return data;
       } catch (error) {
         const partial = (error as { data?: Record<string, unknown> } | null)?.data;
         this.notifySamlEnforcement(error, repositoryRefs, partial);
         if (partial) {
+          this.recordRequestSuccess();
           graphqlLog.debug("PR batch returned partial data", {
             refCount,
             error: error instanceof Error ? error.message : String(error),
@@ -949,10 +1033,12 @@ export class GithubGraphqlPrClient {
 
         const delay = retryDelayMs(error, attempt);
         if (delay === null || attempt === MAX_RETRIES) {
+          const failureBackoff = this.recordRequestCompletion(delay);
           graphqlLog.warn("PR batch failed", {
             refCount,
             attempt,
             retryable: delay !== null,
+            ...failureBackoff,
             error: error instanceof Error ? error.message : String(error),
           });
           return undefined;
@@ -963,13 +1049,24 @@ export class GithubGraphqlPrClient {
     return undefined;
   }
 
-  private async fetchBatch(refs: PrRef[], token: string): Promise<PrSummary[]> {
+  private async fetchBatch(
+    refs: PrRef[],
+    token: string,
+    bypassFailureBackoff = false,
+  ): Promise<PrSummary[]> {
+    if (
+      !bypassFailureBackoff
+      && this.deferForFailureBackoff("PR poll batch")
+    ) {
+      return [];
+    }
     const { query, variables } = buildBatchedPrQuery(refs);
 
     let data: BatchedPrResponse | undefined;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
       try {
         data = (await this.runRequest(query, variables, token)) as BatchedPrResponse;
+        this.recordRequestSuccess();
         break;
       } catch (error) {
         // A GraphQL-level error still carries whatever aliases DID resolve.
@@ -977,6 +1074,7 @@ export class GithubGraphqlPrClient {
         const partial = (error as { data?: BatchedPrResponse } | null)?.data;
         this.notifySamlEnforcement(error, refs, partial);
         if (partial) {
+          this.recordRequestSuccess();
           graphqlLog.debug("PR poll batch returned partial data", {
             refCount: refs.length,
             error: error instanceof Error ? error.message : String(error),
@@ -987,10 +1085,12 @@ export class GithubGraphqlPrClient {
 
         const delay = retryDelayMs(error, attempt);
         if (delay === null || attempt === MAX_RETRIES) {
+          const failureBackoff = this.recordRequestCompletion(delay);
           graphqlLog.warn("PR poll batch failed", {
             refCount: refs.length,
             attempt,
             retryable: delay !== null,
+            ...failureBackoff,
             error: error instanceof Error ? error.message : String(error),
           });
           return [];
@@ -1038,6 +1138,63 @@ export class GithubGraphqlPrClient {
       });
     }
     return prs;
+  }
+
+  private deferForFailureBackoff(operation: string): boolean {
+    const retryInMs = this.failureBackoffUntil - this.now();
+    if (retryInMs <= 0) {
+      return false;
+    }
+    graphqlLog.debug("GitHub request deferred during slow mode", {
+      operation,
+      retryInMs,
+      consecutiveFailures: this.consecutiveRetryableFailures,
+    });
+    return true;
+  }
+
+  private consumeReconnectBypass(): boolean {
+    if (!this.reconnectBypassAvailable) {
+      return false;
+    }
+    this.reconnectBypassAvailable = false;
+    return true;
+  }
+
+  private recordRequestCompletion(
+    retryDelay: number | null,
+  ): { backoffMs: number; consecutiveFailures: number } | undefined {
+    if (retryDelay === null) {
+      // Authentication, permission, and not-found responses prove the network
+      // path is working even though retrying that particular request cannot.
+      this.recordRequestSuccess();
+      return undefined;
+    }
+
+    this.consecutiveRetryableFailures += 1;
+    const exponentialDelay = Math.min(
+      FAILURE_BACKOFF_BASE_MS
+        * 2 ** Math.min(this.consecutiveRetryableFailures - 1, 30),
+      MAX_FAILURE_BACKOFF_MS,
+    );
+    const backoffMs = Math.max(retryDelay, exponentialDelay);
+    this.failureBackoffUntil = this.now() + backoffMs;
+    return {
+      backoffMs,
+      consecutiveFailures: this.consecutiveRetryableFailures,
+    };
+  }
+
+  private recordRequestSuccess(): void {
+    this.reconnectBypassAvailable = false;
+    if (this.consecutiveRetryableFailures === 0) {
+      return;
+    }
+    graphqlLog.info("GitHub requests leaving slow mode", {
+      failedCycles: this.consecutiveRetryableFailures,
+    });
+    this.consecutiveRetryableFailures = 0;
+    this.failureBackoffUntil = 0;
   }
 
   private notifySamlEnforcement(
@@ -1102,14 +1259,14 @@ export class GithubGraphqlPrClient {
     }
     if (
       this.tokenCache
-      && Date.now() - this.tokenCache.fetchedAt < TOKEN_TTL_MS
+      && this.now() - this.tokenCache.fetchedAt < TOKEN_TTL_MS
     ) {
       return this.tokenCache.token;
     }
 
     const envToken = process.env.GITHUB_TOKEN?.trim();
     if (envToken) {
-      this.tokenCache = { token: envToken, fetchedAt: Date.now() };
+      this.tokenCache = { token: envToken, fetchedAt: this.now() };
       return envToken;
     }
 
@@ -1128,7 +1285,7 @@ export class GithubGraphqlPrClient {
         this.onAuthenticationFailure?.({ reason: "token-unavailable" });
         return null;
       }
-      this.tokenCache = { token, fetchedAt: Date.now() };
+      this.tokenCache = { token, fetchedAt: this.now() };
       return token;
     } catch (error) {
       // gh missing, or not logged in. The poller simply idles.

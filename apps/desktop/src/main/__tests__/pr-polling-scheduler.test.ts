@@ -269,6 +269,77 @@ describe("PrPollingScheduler", () => {
     expect(h.fetched[0]).toHaveLength(40);
   });
 
+  it("runs one bounded reconnect probe and deduplicates network events", async () => {
+    const targets = Array.from({ length: 90 }, (_, index) => target(index + 1));
+    const reconnectFetch = vi.fn(async (refs: PrRef[]) =>
+      refs.map((ref) => pr({ number: ref.number })),
+    );
+    const tryTakeToken = vi.fn(() => true);
+    const h = harness({
+      listTargets: () => targets,
+      fetchPullRequestsAfterReconnect: reconnectFetch,
+      tryTakeToken,
+    });
+
+    await h.scheduler.probeAfterNetworkReconnect();
+    expect(reconnectFetch).toHaveBeenCalledOnce();
+    expect(reconnectFetch.mock.calls[0]?.[0]).toHaveLength(40);
+    expect(tryTakeToken).toHaveBeenCalledOnce();
+
+    // Multiple renderer windows can observe the same Chromium event.
+    await h.scheduler.probeAfterNetworkReconnect();
+    expect(reconnectFetch).toHaveBeenCalledOnce();
+    expect(tryTakeToken).toHaveBeenCalledOnce();
+
+    h.advance(30_000);
+    await h.scheduler.probeAfterNetworkReconnect();
+    expect(reconnectFetch).toHaveBeenCalledTimes(2);
+    expect(tryTakeToken).toHaveBeenCalledTimes(2);
+  });
+
+  it("queues a reconnect probe behind an in-flight polling batch", async () => {
+    let resolveFetch: (() => void) | undefined;
+    const fetchPullRequests = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveFetch = resolve;
+      });
+      return [] as PrSummary[];
+    });
+    const fetchPullRequestsAfterReconnect = vi.fn(async () => [] as PrSummary[]);
+    const h = harness({
+      listTargets: () => [target(1)],
+      fetchPullRequests,
+      fetchPullRequestsAfterReconnect,
+    });
+
+    const tick = h.scheduler.tick();
+    expect(fetchPullRequests).toHaveBeenCalledOnce();
+
+    await h.scheduler.probeAfterNetworkReconnect();
+    expect(fetchPullRequestsAfterReconnect).not.toHaveBeenCalled();
+
+    resolveFetch?.();
+    await tick;
+    expect(fetchPullRequestsAfterReconnect).toHaveBeenCalledOnce();
+  });
+
+  it("holds a reconnect probe until the normal token budget refills", async () => {
+    let hasToken = false;
+    const fetchPullRequestsAfterReconnect = vi.fn(async () => [] as PrSummary[]);
+    const h = harness({
+      listTargets: () => [target(1)],
+      tryTakeToken: () => hasToken,
+      fetchPullRequestsAfterReconnect,
+    });
+
+    await h.scheduler.probeAfterNetworkReconnect();
+    expect(fetchPullRequestsAfterReconnect).not.toHaveBeenCalled();
+
+    hasToken = true;
+    await h.scheduler.tick();
+    expect(fetchPullRequestsAfterReconnect).toHaveBeenCalledOnce();
+  });
+
   it("round-robins so a long tail is not starved by the head of the list", async () => {
     // 50 targets, batch size 40 → the first tick can only cover 40. The next
     // tick must pick up the 10 that were skipped, not re-poll the first 40.

@@ -1,7 +1,10 @@
 import type { PrSummary } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import type { PrRef } from "./github-graphql-client";
-import { parsePrRefFromUrl } from "./github-graphql-client";
+import {
+  GITHUB_RECONNECT_DEDUP_MS,
+  parsePrRefFromUrl,
+} from "./github-graphql-client";
 import { isTerminalPullRequest } from "./pr-derivations";
 
 const schedulerLog = getMainLogger("pwragent:pr-poller");
@@ -95,6 +98,8 @@ export type PrPollingSchedulerDeps = {
   /** Global scheduled-fetch ceiling. One token per REQUEST, not per PR. */
   tryTakeToken: () => boolean;
   fetchPullRequests: (refs: PrRef[]) => Promise<PrSummary[]>;
+  /** One token-bounded probe allowed through the client's outage cooldown. */
+  fetchPullRequestsAfterReconnect?: (refs: PrRef[]) => Promise<PrSummary[]>;
   /** Persist + publish. Returns the prKeys whose status actually changed. */
   applyResults: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
   /** Allocate a globally ordered token immediately before starting a request. */
@@ -160,6 +165,9 @@ export class PrPollingScheduler {
   private readonly pendingInteractionThreadKeys = new Set<string>();
   private timer: NodeJS.Timeout | undefined;
   private ticking = false;
+  private reconnectProbePending = false;
+  private reconnectProbeWaitingForBudget = false;
+  private lastReconnectProbeAt = Number.NEGATIVE_INFINITY;
 
   constructor(deps: PrPollingSchedulerDeps) {
     this.deps = deps;
@@ -187,6 +195,9 @@ export class PrPollingScheduler {
     }
     this.pollState.clear();
     this.pendingInteractionThreadKeys.clear();
+    this.reconnectProbePending = false;
+    this.reconnectProbeWaitingForBudget = false;
+    this.lastReconnectProbeAt = Number.NEGATIVE_INFINITY;
   }
 
   /**
@@ -203,6 +214,24 @@ export class PrPollingScheduler {
     }
   }
 
+  /**
+   * Chromium observed an offline → online transition. Force one batch through
+   * the normal token budget so a successful GitHub response can end slow mode
+   * early. Multiple windows can emit the same event, so dedupe globally here.
+   */
+  async probeAfterNetworkReconnect(): Promise<void> {
+    const now = this.now();
+    if (now - this.lastReconnectProbeAt < GITHUB_RECONNECT_DEDUP_MS) {
+      return;
+    }
+    this.lastReconnectProbeAt = now;
+    if (this.ticking) {
+      this.reconnectProbePending = true;
+      return;
+    }
+    await this.runReconnectProbeExclusive();
+  }
+
   /** One scheduling pass. Exposed so tests can drive it without timers. */
   async tick(): Promise<void> {
     // Ticks must not overlap: a slow sweep would otherwise stack requests and
@@ -212,14 +241,40 @@ export class PrPollingScheduler {
     }
     this.ticking = true;
     try {
-      await this.runTick();
+      if (this.reconnectProbeWaitingForBudget) {
+        await this.runReconnectProbe();
+      } else {
+        await this.runTick();
+      }
     } catch (error) {
       schedulerLog.warn("PR poll tick failed", {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      this.ticking = false;
+      this.finishTick();
     }
+  }
+
+  private async runReconnectProbeExclusive(): Promise<void> {
+    this.ticking = true;
+    try {
+      await this.runReconnectProbe();
+    } catch (error) {
+      schedulerLog.warn("PR reconnect probe failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.finishTick();
+    }
+  }
+
+  private finishTick(): void {
+    this.ticking = false;
+    if (!this.reconnectProbePending) {
+      return;
+    }
+    this.reconnectProbePending = false;
+    void this.runReconnectProbeExclusive();
   }
 
   private async runTick(): Promise<void> {
@@ -249,7 +304,31 @@ export class PrPollingScheduler {
     await Promise.all(admitted.map(async (batch) => await this.pollBatch(batch)));
   }
 
-  private selectDueTargets(targets: PrPollTarget[], now: number): PrPollTarget[] {
+  private async runReconnectProbe(): Promise<void> {
+    this.reconnectProbeWaitingForBudget = false;
+    const now = this.now();
+    const targets = this.deps.listTargets();
+    this.prunePollState(targets);
+    const batch = this.selectDueTargets(targets, now, true).slice(0, BATCH_SIZE);
+    if (batch.length === 0) {
+      return;
+    }
+    if (!this.deps.tryTakeToken()) {
+      this.reconnectProbeWaitingForBudget = true;
+      schedulerLog.debug("PR reconnect probe deferred: token bucket empty");
+      return;
+    }
+    await this.pollBatch(
+      batch,
+      this.deps.fetchPullRequestsAfterReconnect ?? this.deps.fetchPullRequests,
+    );
+  }
+
+  private selectDueTargets(
+    targets: PrPollTarget[],
+    now: number,
+    ignoreCadence = false,
+  ): PrPollTarget[] {
     const focusedThreadKeys = this.deps.getFocusedThreadKeys();
     const cadenceMultiplier = this.deps.isWindowVisible()
       ? 1
@@ -289,7 +368,7 @@ export class PrPollingScheduler {
         continue;
       }
       const cadence = TIER_CADENCE_MS[tier] * cadenceMultiplier;
-      if (now - state.lastPolledAt < cadence) {
+      if (!ignoreCadence && now - state.lastPolledAt < cadence) {
         continue;
       }
       due.push({ target, tier, lastPolledAt: state.lastPolledAt });
@@ -305,7 +384,10 @@ export class PrPollingScheduler {
     return due.map((entry) => entry.target);
   }
 
-  private async pollBatch(batch: PrPollTarget[]): Promise<void> {
+  private async pollBatch(
+    batch: PrPollTarget[],
+    fetchPullRequests = this.deps.fetchPullRequests,
+  ): Promise<void> {
     const refs: PrRef[] = [];
     for (const target of batch) {
       const ref = parsePrRefFromUrl(target.pr.url);
@@ -331,7 +413,7 @@ export class PrPollingScheduler {
       return;
     }
 
-    const prs = await this.deps.fetchPullRequests(refs);
+    const prs = await fetchPullRequests(refs);
     if (prs.length === 0) {
       return;
     }

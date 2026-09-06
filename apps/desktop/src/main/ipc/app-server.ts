@@ -256,6 +256,7 @@ import {
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
+  NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
@@ -5109,6 +5110,15 @@ class DesktopAppServerService {
     this.prPollingFocus.clearSender(senderKey);
   }
 
+  async probePullRequestPollingAfterReconnect(): Promise<void> {
+    // Arm the shared client even when background polling is disabled or has no
+    // eligible target; the next foreground lookup can consume the bypass.
+    if (!this.getPrGraphqlClient().noteNetworkReconnect()) {
+      return;
+    }
+    await this.prPollingScheduler?.probeAfterNetworkReconnect();
+  }
+
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
       this.prGraphqlClient = new GithubGraphqlPrClient({
@@ -5381,6 +5391,8 @@ class DesktopAppServerService {
       tryTakeToken: () => this.prStatusTokenBucket.tryTake(),
       fetchPullRequests: async (refs) =>
         await this.getPrGraphqlClient().fetchPullRequests(refs),
+      fetchPullRequestsAfterReconnect: async (refs) =>
+        await this.getPrGraphqlClient().fetchPullRequestsAfterReconnect(refs),
       getObservationTimestamp: () => this.nextPrObservationTimestamp(),
       applyResults: async (prs, fetchedAt) =>
         await this.applyPolledPrStatuses(prs, fetchedAt),
@@ -8175,6 +8187,13 @@ export function registerAppServerIpcHandlers(): void {
       }
     },
   );
+  ipcMain.removeHandler(NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
+    async (): Promise<void> => {
+      await appServerService.probePullRequestPollingAfterReconnect();
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
   ipcMain.handle(
     NAVIGATION_DETACH_THREAD_PR_CHANNEL,
@@ -8581,6 +8600,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);

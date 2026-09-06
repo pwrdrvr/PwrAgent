@@ -424,6 +424,7 @@ describe("GithubGraphqlPrClient", () => {
     request: (query: string, variables: Record<string, string | number>) => Promise<unknown>,
     options: {
       batchSize?: number;
+      now?: () => number;
       onRepositoryAccess?: (event: GithubRepositoryAccessEvent) => void;
     } = {},
   ): GithubGraphqlPrClient {
@@ -588,6 +589,146 @@ describe("GithubGraphqlPrClient", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(prs).toHaveLength(1);
+  });
+
+  it("backs every GitHub poll off after repeated transport failures", async () => {
+    let now = 1_000_000;
+    const request = vi.fn(async () => {
+      throw new Error("connect timeout");
+    });
+    const graphqlClient = client(request, { now: () => now });
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    // Branch discovery shares the same client and must respect the outage
+    // detected by status polling rather than starting another retry storm.
+    await graphqlClient.fetchPullRequestsForBranches([
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "main" },
+    ]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    now += 60_000;
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(8);
+
+    // A second failed cycle doubles the quiet period.
+    now += 60_000;
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(8);
+
+    now += 60_000;
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(12);
+  });
+
+  it("allows one reconnect probe through an active failure backoff", async () => {
+    const now = 1_000_000;
+    let mode: "fail" | "succeed" = "fail";
+    const request = vi.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("connect timeout");
+      }
+      return { r0: { pullRequest: node() } };
+    });
+    const graphqlClient = client(request, { now: () => now });
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    mode = "succeed";
+    expect(graphqlClient.noteNetworkReconnect()).toBe(true);
+    await expect(
+      graphqlClient.fetchPullRequestsAfterReconnect([refs[0]!]),
+    ).resolves.toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(5);
+
+    // The successful probe clears slow mode immediately.
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(6);
+    expect(now).toBe(1_000_000);
+  });
+
+  it("preserves reconnect recovery for the next foreground branch lookup", async () => {
+    const now = 1_000_000;
+    let mode: "fail" | "succeed" = "fail";
+    const request = vi.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("connect timeout");
+      }
+      return { r0: { pullRequests: { nodes: [] } } };
+    });
+    const graphqlClient = client(request, { now: () => now });
+    const branchRefs = [
+      { owner: "pwrdrvr", repo: "PwrAgent", branch: "main" },
+    ];
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    // This is the scheduler-disabled / no-known-PR path: the online signal
+    // arrives, but no background status batch exists to consume it.
+    expect(graphqlClient.noteNetworkReconnect()).toBe(true);
+    mode = "succeed";
+    const result = await graphqlClient.fetchPullRequestsForBranches(branchRefs);
+
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(result.has("pwrdrvr/pwragent#main")).toBe(true);
+  });
+
+  it("deduplicates reconnect permits and lets only one request consume one", async () => {
+    let now = 1_000_000;
+    const request = vi.fn(async () => {
+      throw new Error("connect timeout");
+    });
+    const graphqlClient = client(request, { now: () => now });
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(graphqlClient.noteNetworkReconnect()).toBe(true);
+    expect(graphqlClient.noteNetworkReconnect()).toBe(false);
+
+    await graphqlClient.fetchPullRequestsAfterReconnect([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(8);
+    await graphqlClient.fetchPullRequestsAfterReconnect([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(8);
+
+    now += 30_000;
+    expect(graphqlClient.noteNetworkReconnect()).toBe(true);
+  });
+
+  it("returns to the initial backoff after GitHub recovers", async () => {
+    let now = 1_000_000;
+    let mode: "fail" | "succeed" = "fail";
+    const request = vi.fn(async () => {
+      if (mode === "fail") {
+        throw new Error("connect timeout");
+      }
+      return { r0: { pullRequest: node() } };
+    });
+    const graphqlClient = client(request, { now: () => now });
+
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    now += 60_000;
+    mode = "succeed";
+    await expect(graphqlClient.fetchPullRequests([refs[0]!]))
+      .resolves.toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(5);
+
+    mode = "fail";
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(9);
+
+    now += 59_999;
+    await graphqlClient.fetchPullRequests([refs[0]!]);
+    expect(request).toHaveBeenCalledTimes(9);
+
+    now += 1;
+    mode = "succeed";
+    await expect(graphqlClient.fetchPullRequests([refs[0]!]))
+      .resolves.toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(10);
   });
 
   it("gives up on a batch without throwing, so one bad batch cannot kill a sweep", async () => {

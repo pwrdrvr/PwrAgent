@@ -55,6 +55,26 @@ function buildResponse(
 }
 
 describe("usePullRequestRefresh", () => {
+  it("notifies main once when Chromium reports that the network returned", async () => {
+    const probePullRequestPollingAfterReconnect = vi.fn(async () => undefined);
+    const desktopApi = {
+      probePullRequestPollingAfterReconnect,
+    } satisfies DesktopApi;
+
+    const { unmount } = renderHook(() =>
+      usePullRequestRefresh({ desktopApi }),
+    );
+
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => {
+      expect(probePullRequestPollingAfterReconnect).toHaveBeenCalledOnce();
+    });
+
+    unmount();
+    window.dispatchEvent(new Event("online"));
+    expect(probePullRequestPollingAfterReconnect).toHaveBeenCalledOnce();
+  });
+
   it("refreshes navigation when the PR probe returns changed PRs", async () => {
     const onRefreshNavigation = vi.fn(async () => undefined);
     const refreshThreadPullRequests = vi.fn(async () => buildResponse());
