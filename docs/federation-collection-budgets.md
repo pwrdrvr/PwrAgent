@@ -13,7 +13,10 @@ is bounded to one small response, or that navigation is now a lazy directory API
 | Messaging `/resume` and `/agent` → desktop navigation bridge | At most three publications: local, one early peer aggregate, final. Slow provider edits coalesce arrivals. | Eight concurrent peer reads; existing remote navigation full/delta cache remains in use. Next admitted conversation action invalidates late publications. | One 10-second remote deadline, pending/failed counts shown. Non-progressive callers still await the complete result. |
 | Unknown thread owner discovery → target service | Exact active lookup, then exact archive lookup; eight concurrent peers | Explicit/remembered owner bypasses fan-out. Only unknown-owner discovery contacts all eligible connected peers. | One 10-second deadline covers active/archive and queued peers. Discovery must finish to detect duplicate owners; first response is not sufficient authority to route an action. |
 | Selected remote thread / open Star Map chat card → `backend.readThread` | Optional opaque revision of the complete response; matching responses are tiny unchanged markers | First read still sends the complete bounded page. Unchanged catch-up reads reuse the viewer's exact owner baseline, not its optimistically edited live session. No additional owner replay cache. | Status, approval/input requests, pricing, text, and pagination participate in the hash. Existing provider cursors and full-page semantics are preserved. Older peers return ordinary full pages. |
-| Star Map arrangement subscription / updates → existing merge notification | At most 100 entries per message, 256 KiB JSON budget with 4 KiB envelope reserve | Complete bootstrap is split; subsequent updates use the same partitioner. Tombstones are preserved. Identical reconnect pages make no row changes. | All partitions are constructed before sending, so an oversized entry fails explicitly. Receiver uses existing merge semantics; no protocol upgrade is needed. |
+| Cold remote pins → `backend.getNavigationDescendantPage` | At most 100 root IDs requested; at most 100 rows and 256 KiB per response. Owner computes descendant closure, including foreign-owned children, before transmission. | Shares the owner's canonical navigation revision. Viewer caches only the selected closure; owner still builds its existing full metadata projection. | One 10-second deadline, at most 256 pages / 16 MiB total. A revision change or non-advancing cursor fails without installing partial results or falling back to a full collection. Only method-not-found permits legacy full navigation. New-child discovery notifications remain source-wide. |
+| Gateway peer directory → negotiated replacement pages | At most 100 peers / 256 KiB per page; at most 256 pages / 16 MiB per complete replacement | Receivers stage privately by source/generation and keep the old routes until every page arrives. Staging accepts no pages after its 10-second expiry; disconnect drops that source's staging. At most four staging sources. | Ordered pages, duplicate suppression, aggregate bounds, atomic route installation. Authenticated optional wire-format negotiation is independent of capability grants; old peers retain the complete legacy snapshot and its existing 16 MiB socket ceiling. Total broadcast work is still O(peers²). |
+| Star Map arrangement subscription / updates → existing merge notification | At most 100 entries per message, 256 KiB JSON budget with 4 KiB envelope reserve; bootstrap at most 256 pages / 16 MiB | Owner reads SQLite in 100-row pages and shares one cached baseline for up to 60 seconds, invalidated by observed changes. Opted-in receivers retain a process-local cursor only after merging a page. Tombstones are preserved. | Reconnect resumes an unchanged baseline; changed/expired generations restart completely. Page sends await socket backpressure and cancel on subscription replacement. Old peers/gateways retain lossless merge-page fallback. Oversized history fails explicitly; tombstones are never pruned for the budget. |
+| Star Map saved chat-card restoration | Per-owner readiness, not an all-peer barrier | A card waits for its owning peer's layout; unrelated slow peers do not delay it. Canvas anchors restore independently. | Camera restoration retains its separate final-geometry gate; this is not a claim that every layout operation is progressive. |
 
 The new project/archive methods use the existing `thread_navigation` capability.
 Requests go directly to a connected owner, or through the existing gateway relay;
@@ -54,6 +57,7 @@ Checked-in scenarios use real SQLite instrumentation, excluding setup:
 | Cold + warm owner project reads | 0 | 0 | 0 |
 | 1,001 new Star Map entries/tombstones in 11 pages | 11 | 1,001 | 490,280 bytes |
 | Identical 11-page reconnect | 11 transaction completions | 0 | 0 |
+| Owner reads 1,001 Star Map entries in bounded SQLite pages | 0 | 0 | 0 |
 | Explicit resume: local + one coalesced remote publication | 10 | 10 | 156,560 bytes |
 
 At 100 two-publication browse commands/day, the measured projection is about
@@ -71,10 +75,7 @@ WAL growth. Per-entry statement count must not be confused with commit count.
 
 | Priority | Current evidence / remaining work | Completion gate |
 | --- | --- | --- |
-| High | Full remote navigation is metadata, but still a complete cold baseline. Pinned parents currently need a full owner projection to discover cross-instance descendants. New project pages do not make renderer navigation lazy. | A resumable, owner-filtered directory/descendant protocol must preserve attention/unread counts, pins, drafts locality, queued state, and cross-instance grouping. Add `cold_navigation_fetches_only_visible_membership` and `sparse_parent_selection_preserves_remote_descendants` regressions before changing those semantics. |
-| High | Gateway `peerDirectory` is an atomic replacement snapshot broadcast to connections. Work is O(peers²); it must **not** use the merge-only arrangement partitioner. Its safety ceiling is the existing 16 MiB frame limit, not a 256 KiB application budget. | Introduce negotiated paged replacement with generation, bounded staging, expiry, and atomic commit, or a documented maximum supported directory. Test `incomplete_peer_directory_pages_preserve_previous_routes` and old-peer fallback explicitly. |
-| Medium | Star Map arrangements now have a per-message bound, but complete history/tombstone bootstrap remains O(entries) in total bytes and owner memory. | A resumable acknowledged bootstrap or versioned delta baseline must retain offline tombstone correctness. Add `reconnect_after_tombstone_history_gap_does_not_resurrect_placement`. Do not prune old tombstones solely to meet a byte target. |
-| Medium | Star Map layout/card restoration has readiness constraints beyond messaging's progressive picker. New messaging callbacks do not make every renderer consumer progressive. | Add `fast_peer_nodes_render_before_slow_peer_timeout` with saved layout/card restoration, stable identity, no disappearing nodes, and reconnect coverage before changing readiness gates. |
+| High | Main and remote directory sidebars still receive complete cold navigation metadata. Sparse remote pins no longer require that transfer, but their owner still builds its full projection. New project/descendant pages do not make renderer navigation lazy. | Introduce explicit window demand for expanded directories and visible rows, with authoritative counts and paging. Preserve attention/unread counts, pins, drafts locality, queued state, selected-thread ancestry, and cross-instance grouping. Add `cold_navigation_fetches_only_visible_membership` before switching the renderer to a partial population. The sparse-parent regression now exists independently. |
 | Medium | A first selected-thread history page can still be multi-megabyte, and conditional reads still build/hash the owner response. | Measure actual card attribution first. Any byte-aware history API must preserve provider cursor ownership and access to oversized individual entries. Test large entry retrieval rather than dropping text. |
 
 These are acceptance criteria for the same consolidated performance work, not a
@@ -87,7 +88,16 @@ socket has a maximum frame size.
 - `federation-collection-reads.test.ts`: page rows/UTF-8 bytes, exact selection,
   oversized item failure, batching, original relay deadlines, failure fallback.
 - `federation-runtime.test.ts`: real owner project path (zero-write budget),
-  arrangement subscriber isolation and lossless partitioning.
+  arrangement subscriber isolation, resumed/completed bootstrap and cancellation,
+  negotiated versus legacy peer-directory sends, atomic route publication.
+- `federation-replacement-pages.test.ts`: incomplete, expired, duplicate,
+  superseded and oversized replacements; disconnect cleanup.
+- `federation-merge-bootstrap.test.ts`: warm resume, changed/expired baseline,
+  retained tombstones and invalidated in-flight cache.
+- `federation-navigation-selection.test.ts`: foreign descendant closure,
+  cycles, UTF-8/row limits, revision consistency, and legacy-only fallback.
+- `StarMapScreen.test.tsx`: saved card restores after its owner is ready while
+  an unrelated connected peer remains unresolved.
 - `remote-thread-summary-cache.test.ts`: sparse negative coverage, re-added pins,
   non-blocking archive proof and failure retention.
 - `federated-thread-target-service.test.ts`: bounded discovery concurrency,

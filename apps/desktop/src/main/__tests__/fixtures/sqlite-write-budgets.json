@@ -118,6 +118,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "federation-star-map-bootstrap-page-reads": {
+    "commits": 0,
+    "note": "1001 arrangement entries including tombstones read in SQL pages; no writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "federation-star-map-paged-bootstrap": {
     "commits": 11,
     "note": "1001 new arrangement entries/tombstones in 11 bounded merge notifications",

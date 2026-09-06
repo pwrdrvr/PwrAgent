@@ -10,6 +10,7 @@ import type {
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
 
 export type FederationRouterConnection = {
+  peerDirectoryPaging?: boolean;
   peerId: FederationInstanceId;
   capabilities: readonly FederationCapability[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;

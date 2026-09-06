@@ -220,6 +220,8 @@ type FederationSocketTransportHelloMessage = {
 };
 
 type FederationSocketAuthMessage = {
+  /** Wire-format negotiation, not an additional permission. */
+  peerDirectoryPaging?: boolean;
   kind: "auth";
   mode: "enroll" | "reconnect";
   gatewayInstanceId: FederationInstanceId;
@@ -248,6 +250,7 @@ type FederationSocketChallengeMessage = {
 };
 
 type FederationSocketAcceptedMessage = {
+  peerDirectoryPaging?: boolean;
   kind: "auth.accepted";
   gatewayInstanceId: FederationInstanceId;
   sessionId: FederationSessionId;
@@ -276,6 +279,7 @@ type FederationSocketMessage =
   | FederationSocketEnvelopeMessage;
 
 export type FederationGatewayConnection = {
+  peerDirectoryPaging?: boolean;
   peerId: FederationInstanceId;
   sessionId: FederationSessionId;
   capabilities: FederationCapability[];
@@ -617,6 +621,7 @@ export class FederationGatewayWebSocketServer {
       instanceLabel: this.options.instanceLabel,
     };
     const connection: FederationGatewayConnection = {
+      peerDirectoryPaging: message.peerDirectoryPaging === true,
       peerId: decision.peer.id,
       sessionId,
       capabilities: decision.capabilities,
@@ -716,6 +721,7 @@ export class FederationGatewayWebSocketServer {
       socket,
       {
         kind: "auth.accepted",
+        peerDirectoryPaging: message.peerDirectoryPaging === true,
         gatewayInstanceId: this.options.gatewayInstanceId,
         sessionId,
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
@@ -852,6 +858,7 @@ export class FederationGatewayWebSocketServer {
 }
 
 export type FederationClientWebSocketClient = {
+  peerDirectoryPaging?: boolean;
   sessionId: FederationSessionId;
   capabilities: FederationCapability[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
@@ -1078,6 +1085,7 @@ async function establishFederationClient(
     channelBinding,
   });
   const authMessage: FederationSocketAuthMessage = {
+    peerDirectoryPaging: true,
     kind: "auth",
     mode: params.mode,
     gatewayInstanceId: params.gatewayInstanceId,
@@ -1197,6 +1205,7 @@ async function establishFederationClient(
 
   return {
     sessionId: accepted.sessionId,
+    peerDirectoryPaging: accepted.peerDirectoryPaging === true,
     // The signature above covered the raw list; narrow to capabilities
     // THIS build understands only after it verified, so a newer gateway
     // granting a capability we predate is ignored, not fatal.
