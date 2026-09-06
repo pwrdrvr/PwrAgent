@@ -2143,7 +2143,7 @@ describe("Sidebar", () => {
     expect(tooltip).toHaveTextContent("Codex profile: work3");
     expect(tooltip).toHaveTextContent("Codex account: work@example.com");
     expect(tooltip).toHaveTextContent("Plan: pro");
-    expect(tooltip).toHaveTextContent("Credits: $100");
+    expect(tooltip).toHaveTextContent("Credits: 100");
     expect(tooltip).toHaveTextContent("5h limit");
     expect(tooltip).toHaveTextContent("85% left");
     expect(tooltip).toHaveTextContent("Weekly limit: 60% left");

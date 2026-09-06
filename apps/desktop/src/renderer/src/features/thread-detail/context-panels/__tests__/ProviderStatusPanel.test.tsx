@@ -171,7 +171,7 @@ describe("ProviderStatusPanel", () => {
     expect(screen.getByText("Available")).toBeInTheDocument();
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
     expect(screen.getByText("pro")).toBeInTheDocument();
-    expect(screen.getByText(/Credits: \$100/)).toBeInTheDocument();
+    expect(screen.getByText(/Credits: 100/)).toBeInTheDocument();
     expect(screen.getByText(/5h limit: 85% left/)).toBeInTheDocument();
     expect(screen.getByText(/Weekly limit: 91% left/)).toBeInTheDocument();
   });
