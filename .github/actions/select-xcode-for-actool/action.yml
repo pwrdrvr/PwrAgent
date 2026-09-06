@@ -1,0 +1,46 @@
+name: Select an Xcode with actool 26
+description: >-
+  electron-builder compiles build/icon.icon (an Icon Composer package) with
+  actool and hard-fails below actool 26, while GitHub's macos-15 image
+  defaults to Xcode 16.4. This finds the newest stable Xcode on the runner
+  whose actool is 26 or newer and returns its Developer directory. Consumers
+  set DEVELOPER_DIR from the output on exactly the steps that run actool
+  (the unit tests, electron-builder), so the icon compile does not move the
+  native helper builds onto a different SDK. See AGENTS.md "macOS app icon".
+
+outputs:
+  developer-dir:
+    description: DEVELOPER_DIR for the selected Xcode.
+    value: ${{ steps.select.outputs.developer-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Find the newest stable Xcode with actool 26 or newer
+      id: select
+      shell: bash
+      run: |
+        set -euo pipefail
+        selected=""
+        # Newest first. Betas and release candidates never build a release,
+        # and `sort -V` would otherwise rank Xcode_26.4_beta above Xcode_26.3.
+        while IFS= read -r candidate; do
+          [ -n "$candidate" ] || continue
+          developer_dir="$candidate/Contents/Developer"
+          [ -x "$developer_dir/usr/bin/actool" ] || continue
+          # actool prints a plist. plistlib.loads() reads a pipe; load() seeks
+          # to sniff the format and fails on stdin with "not seekable".
+          version="$(DEVELOPER_DIR="$developer_dir" xcrun actool --version \
+            | python3 -c 'import plistlib, sys; print(plistlib.loads(sys.stdin.buffer.read())["com.apple.actool.version"]["short-bundle-version"])')"
+          echo "$candidate: actool $version"
+          if [ "${version%%.*}" -ge 26 ]; then
+            selected="$developer_dir"
+            break
+          fi
+        done < <(ls -d /Applications/Xcode*.app 2>/dev/null | grep -viE '[_-](beta|rc)' | sort -rV || true)
+        if [ -z "$selected" ]; then
+          echo "::error::no /Applications/Xcode*.app with actool 26 or newer on this runner; build/icon.icon cannot be compiled" >&2
+          exit 1
+        fi
+        echo "DEVELOPER_DIR=$selected"
+        echo "developer-dir=$selected" >> "$GITHUB_OUTPUT"

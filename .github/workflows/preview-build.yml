@@ -42,7 +42,17 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
+      # electron-builder compiles build/icon.icon with actool, which needs
+      # Xcode 26; the image defaults to 16.4. Unlike release.yml this single
+      # step also runs build:native, so a preview's helpers compile with the
+      # selected Xcode as well. See AGENTS.md "macOS app icon".
+      - name: Select an Xcode with actool 26
+        id: xcode
+        uses: ./.github/actions/select-xcode-for-actool
+
       - name: Build preview package (unsigned)
+        env:
+          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
         run: pnpm --filter @pwragent/desktop package:dryrun
 
       - name: Upload DMG artifact
