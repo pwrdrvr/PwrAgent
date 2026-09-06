@@ -56,5 +56,6 @@ export function navigationRequestForOwner(request: NavigationQueryRequest, targe
   const query = request.query.kind === "exact"
     ? { ...request.query, identities: request.query.identities.map(localize) }
     : request.query.kind === "children" ? { ...request.query, parent: localize(request.query.parent) } : request.query;
-  return { ...ownerRequest, query };
+  const anchor = request.anchor?.kind === "thread" ? { ...request.anchor, ref: localize(request.anchor.ref) } : request.anchor;
+  return { ...ownerRequest, query, ...(anchor ? { anchor } : {}) };
 }

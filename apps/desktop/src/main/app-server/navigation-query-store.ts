@@ -29,6 +29,7 @@ const NAVIGATION_ATTENTION_MAX_BYTES = 8 * 1024 * 1024;
 export type NavigationQueryErrorCode =
   | "navigation_busy"
   | "navigation_cursor_expired"
+  | "navigation_anchor_missing"
   | "navigation_invalid_request"
   | "navigation_item_too_large";
 
@@ -120,6 +121,12 @@ function validateRequest(request: NavigationQueryRequest): void {
       "navigation_invalid_request",
       "Navigation page size must be between 1 and 100.",
     );
+  }
+  if (request.anchor && (request.cursor || request.completeBaselineRevision
+    || !["thread", "directory"].includes(request.anchor.kind)
+    || (request.anchor.kind === "thread" && (!request.anchor.ref?.backend || !request.anchor.ref.threadId))
+    || (request.anchor.kind === "directory" && !request.anchor.key))) {
+    throw new NavigationQueryError("navigation_invalid_request", "Navigation rebaseline requires one explicit anchor without a cursor or unchanged baseline.");
   }
   if (request.query.kind === "star-map") {
     const keys = new Set(["attention", "approval", "pr", "unpushed", "pinned", "agent"]);
@@ -268,6 +275,16 @@ export class NavigationQueryStore {
       }
     }
 
+    if (params.request.anchor) {
+      const anchor = params.request.anchor;
+      offset = anchor.kind === "directory"
+        ? generation.materialization.directories.findIndex((directory) => directory.key === anchor.key)
+        : generation.materialization.entries.findIndex(({ row }) => row.ref.backend === anchor.ref.backend
+          && row.ref.threadId === anchor.ref.threadId && row.ref.ownerInstanceId === anchor.ref.ownerInstanceId);
+      if (offset < 0) {
+        throw new NavigationQueryError("navigation_anchor_missing", "The visible navigation anchor is no longer in this query. Choose another item or restart this list explicitly.");
+      }
+    }
     generation.lastAccessedAt = now;
     return this.buildPage({
       generation,
@@ -334,6 +351,7 @@ export class NavigationQueryStore {
         ownerEpoch: params.ownerEpoch,
       }),
       entries: [],
+      ...(params.offset ? { rangeStart: params.offset } : {}),
       ...(collectionKind === "models" ? { modelGroups: [] } : collectionKind === "directories" ? { directories: [] } : {}),
       complete: false,
     };

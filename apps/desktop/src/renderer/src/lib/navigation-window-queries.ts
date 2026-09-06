@@ -1,5 +1,5 @@
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
-import type { NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryAnchor, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
@@ -26,6 +26,7 @@ type Resource = {
   pending?: Promise<void>;
   refreshAfterPending: boolean;
   released: boolean;
+  anchor?: NavigationQueryAnchor;
 };
 
 /** Window demand and loaded ranges only. All I/O shares the main-process query pool. */
@@ -113,6 +114,36 @@ export class NavigationWindowQueries {
     })).then(() => undefined);
   }
 
+  /** Invalidate transport baselines before canonical owner events can race a late page. */
+  invalidate(id?: string): void {
+    for (const resource of this.resources.values()) {
+      if (id && resource.value.id !== id) continue;
+      resource.value = { ...resource.value, state: { ...resource.value.state,
+        pendingSequence: resource.value.state.pendingSequence + 1, stale: true } };
+    }
+    this.publish();
+  }
+
+  setVisibleAnchor(id: string, anchor: NavigationQueryAnchor | undefined): void {
+    const resource = this.resources.get(id);
+    if (resource) resource.anchor = anchor;
+  }
+
+  rebaseline(id: string, anchor: NavigationQueryAnchor): Promise<void> {
+    this.setVisibleAnchor(id, anchor);
+    const resource = this.resources.get(id);
+    return resource ? this.read(resource, false, anchor) : Promise.resolve();
+  }
+
+  /** Returning to the start after a removed anchor is an explicit viewer action. */
+  restart(id: string): Promise<void> {
+    const resource = this.resources.get(id);
+    if (!resource) return Promise.resolve();
+    resource.anchor = undefined;
+    resource.value = { ...resource.value, state: { ...resource.value.state, rebaselineRequired: false, stale: true } };
+    return this.read(resource, false);
+  }
+
   loadMore(id: string): Promise<void> {
     const resource = this.resources.get(id);
     return resource ? this.read(resource, true) : Promise.resolve();
@@ -123,9 +154,14 @@ export class NavigationWindowQueries {
       && this.resources.get(resource.value.id) === resource;
   }
 
-  private read(resource: Resource, continuation: boolean): Promise<void> {
+  private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor): Promise<void> {
     if (!this.isCurrent(resource)) return Promise.resolve();
-    if (resource.pending) return resource.pending;
+    if (resource.pending) {
+      if (anchor) resource.refreshAfterPending = true;
+      return resource.pending;
+    }
+    anchor = continuation ? undefined : anchor ?? resource.anchor;
+    if (resource.value.state.rebaselineRequired && !anchor) return Promise.resolve();
     const cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
     const started = beginNavigationPageRead(resource.value.state);
@@ -135,10 +171,10 @@ export class NavigationWindowQueries {
       try {
         if (!this.isCurrent(resource)) return;
         if (!this.api.getNavigationQueryPage) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
-        const page = await this.api.getNavigationQueryPage({ ...started.request, cursor,
-          completeBaselineRevision: !cursor && started.page?.complete ? started.page.countsRevision : undefined,
+        const page = await this.api.getNavigationQueryPage({ ...started.request, cursor, anchor,
+          completeBaselineRevision: !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
         }, resource.token);
-        if (!this.isCurrent(resource)) return;
+        if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         if (new TextEncoder().encode(JSON.stringify(page)).byteLength > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
           throw new Error("Navigation page exceeds the bounded response size.");
         }

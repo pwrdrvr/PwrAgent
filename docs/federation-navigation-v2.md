@@ -75,6 +75,15 @@ moving all overlay logs into one new unbounded detail response is not completion
 | Operation deadline | One 10-second deadline per fetch transaction/page batch across queueing, relay and at most one cursor restart. Not a deadline for an entire human scrolling session |
 | Idle reconciliation | At most once per 60 seconds for an active query, coalesced; unchanged result at most 1 KiB. Preserve slower existing cadences (including five minutes); this ceiling does not require more polling. Hidden/closed UI consumers do not poll |
 
+`NavigationQueryRequest.anchor` identifies a thread or directory for an explicit
+rebaseline after cursor expiry. It cannot be combined with a cursor or an
+unchanged-baseline revision. Owners seek within the new immutable generation;
+a removed anchor returns `navigation_anchor_missing` instead of silently
+returning the first page. `NavigationQueryPage.rangeStart` distinguishes a tail
+from a complete collection baseline. The window query controller retains an
+expired range and requires anchor recovery or an explicit restart; consumers
+must supply their visible anchor when wiring the controller.
+
 Count retained serialized backing explicitly; document and measure transient
 decoding/projection allocations separately rather than describing a JSON byte
 limit as a JavaScript heap limit. These are navigation budgets, not permission

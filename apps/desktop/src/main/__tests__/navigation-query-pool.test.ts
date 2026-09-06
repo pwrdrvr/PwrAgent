@@ -154,3 +154,21 @@ describe("NavigationQueryPool", () => {
     expect(secondStarted).toBe(true);
   });
 });
+
+it("does not coalesce different visible anchors into the same page transaction", async () => {
+  const pool = new NavigationQueryPool();
+  let resolve!: (value: NavigationQueryPage) => void;
+  const first = pool.read({ consumerId: "a", request: { ...request,
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "a" } },
+  }, load: () => new Promise((done) => { resolve = done; }) });
+  const loadSecond = vi.fn(async () => ({ ...page, rangeStart: 50 }));
+  const second = pool.read({ consumerId: "b", request: { ...request,
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "b" } },
+  }, load: loadSecond });
+  expect(loadSecond).not.toHaveBeenCalled();
+  resolve(page);
+  await first;
+  await expect(second).resolves.toMatchObject({ rangeStart: 50 });
+  expect(loadSecond).toHaveBeenCalledTimes(1);
+  pool.release("a"); pool.release("b");
+});
