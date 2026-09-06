@@ -1670,6 +1670,8 @@ export type NavigationQueryRequest = {
   /** At most 100. Owners may return fewer rows to satisfy the byte budget. */
   pageSize?: number;
   cursor?: string;
+  /** One deadline across admission, relays and a bounded page transaction. */
+  deadlineAt?: number;
   /** Unchanged is legal only for a complete baseline of this exact query. */
   completeBaselineRevision?: string;
 };
