@@ -4112,6 +4112,10 @@ export function useThreadNavigation(
     return desktopApi.onAgentEvent((event) => {
       const windowTarget = readRendererFederationTarget();
       const method = event.notification.method as string;
+      if (method === "navigation/directory/removed") {
+        scheduleRefresh();
+        return;
+      }
       // A peer's row-state events carry its own remote target, which never
       // matches the main window's absent target — yet this window
       // hosts that peer's threads as viewer-side remote pins. Let row-state
@@ -7000,75 +7004,55 @@ export function useThreadNavigation(
     ]
   );
 
-  /**
-   * Remove an empty directory (one with no linked threads) from the Directories
-   * list. Such a row is kept alive solely by its registered
-   * `directory_launchpads` overlay row, so deleting that row via
-   * `resetDirectoryLaunchpad` clears `registeredAt` and the directory drops out
-   * of the next snapshot. We optimistically prune the row (and any local
-   * launchpad draft) so the list updates instantly; a directory that still has
-   * threads is left in place, and a failed delete is reconciled by `refresh`.
-   */
+  /** The owner validates complete membership before local state is removed. */
   const removeDirectory = useCallback(
     async (directoryKey: string): Promise<void> => {
-      if (!desktopApi?.resetDirectoryLaunchpad) {
-        setLaunchpadError("Desktop bridge is missing resetDirectoryLaunchpad().");
+      if (!desktopApi?.removeNavigationDirectory) {
+        setLaunchpadError("Upgrade this instance to remove a directory through owner navigation.");
         return;
       }
 
-      // Only an empty directory may be removed. One that still holds threads
-      // keeps its row from the thread side, so deleting its overlay row would
-      // silently drop its registration and sticky settings while the row stayed
-      // on screen. Sub-thread launchpads are transient composers, not
-      // directories, and must never be torn down through this path.
       const directory = directories.find(
         (candidate) => candidate.key === directoryKey,
       );
       if (
         !directory
-        || directory.threadKeys.length > 0
         || isSubthreadLaunchpadKey(directoryKey)
       ) {
         return;
       }
 
       setLaunchpadError(undefined);
-      setLocalLaunchpads((current) => {
-        if (!current[directoryKey]) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[directoryKey];
-        return next;
-      });
-      setState((current) => {
-        if (!current.response) {
-          return current;
-        }
-        return {
-          ...current,
-          response: {
-            ...current.response,
-            directories: current.response.directories.filter(
-              (directory) =>
-                directory.key !== directoryKey
-                || directory.threadKeys.length > 0,
-            ),
-          },
-        };
-      });
-      setSelectedItemKey((current) =>
-        current === buildLaunchpadSelectionKey(directoryKey) ? undefined : current,
-      );
-
       try {
-        await desktopApi.resetDirectoryLaunchpad({ directoryKey });
-        // Drop the pin overlay too. It lives in a separate `directory_overlay`
-        // row that resetDirectoryLaunchpad does not touch, and a stale
-        // pinnedRank would silently re-pin the directory if it is ever re-added.
-        if (directory.pinnedRank) {
-          await desktopApi.setDirectoryPin?.({ directoryKey, pinnedRank: null });
-        }
+        await desktopApi.removeNavigationDirectory({
+          directoryKey, federationTarget: readRendererFederationTarget(),
+        });
+        setLocalLaunchpads((current) => {
+          if (!current[directoryKey]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[directoryKey];
+          return next;
+        });
+        setState((current) => {
+          if (!current.response) {
+            return current;
+          }
+          return {
+            ...current,
+            response: {
+              ...current.response,
+              directories: current.response.directories.filter(
+                (directory) =>
+                  directory.key !== directoryKey,
+              ),
+            },
+          };
+        });
+        setSelectedItemKey((current) =>
+          current === buildLaunchpadSelectionKey(directoryKey) ? undefined : current,
+        );
       } catch (error) {
         setLaunchpadError(error instanceof Error ? error.message : String(error));
         await refresh();

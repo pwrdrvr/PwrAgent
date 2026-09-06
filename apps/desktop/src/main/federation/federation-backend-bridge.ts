@@ -1,3 +1,4 @@
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import {
   projectNavigationDescendantPage,
@@ -393,6 +394,7 @@ function authenticateScheduledTurnOrigin<
 
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
+  removeNavigationDirectory: "backend.removeNavigationDirectory",
   getNavigationLaunchpadConfig: "backend.getNavigationLaunchpadConfig",
   getNavigationSelectedDetail: "backend.getNavigationSelectedDetail",
   getNavigationQueueProjection: "backend.getNavigationQueueProjection",
@@ -503,6 +505,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   FederationCapability
 > = {
   [FEDERATION_BACKEND_METHODS.getNavigationQueryPage]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.removeNavigationDirectory]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getNavigationQueueProjection]: "thread_detail",
@@ -622,6 +625,7 @@ export type FederationBackendOperations = {
     request: NavigationQueryRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationQueryPage>;
+  removeNavigationDirectory?(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse>;
   getNavigationLaunchpadConfig?(
     request: NavigationLaunchpadConfigRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -896,6 +900,10 @@ export function registerFederationBackendHandlers(params: {
         },
       ),
     );
+  }
+  if (params.backend.removeNavigationDirectory) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.removeNavigationDirectory,
+      async (envelope) => params.backend.removeNavigationDirectory!(envelope.params as RemoveNavigationDirectoryRequest));
   }
   if (params.backend.getNavigationLaunchpadConfig) {
     params.router.registerHandler(
@@ -1786,6 +1794,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
       params: request,
       ...rpcOptions,
+    });
+  }
+
+  async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse> {
+    return this.rpc.request<RemoveNavigationDirectoryResponse>({
+      method: FEDERATION_BACKEND_METHODS.removeNavigationDirectory, params: request, ...rpcOptions,
     });
   }
 

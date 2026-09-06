@@ -9781,7 +9781,7 @@ describe("useThreadNavigation", () => {
       backend: "codex" as const,
       executionMode: "default" as const,
     };
-    const resetDirectoryLaunchpad = vi.fn(async () => ({
+    const removeNavigationDirectory = vi.fn(async () => ({
       directoryKey: "directory:/repo/app",
       defaults,
     }));
@@ -9806,7 +9806,7 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
-      resetDirectoryLaunchpad,
+      removeNavigationDirectory,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
     };
@@ -9827,8 +9827,9 @@ describe("useThreadNavigation", () => {
 
     // The empty row is pruned immediately and its overlay row is deleted so it
     // can't reappear on the next snapshot.
-    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(removeNavigationDirectory).toHaveBeenCalledWith({
       directoryKey: "directory:/repo/app",
+      federationTarget: undefined,
     });
     expect(
       result.current.directories.some(
@@ -9855,10 +9856,9 @@ describe("useThreadNavigation", () => {
       backend: "codex" as const,
       executionMode: "default" as const,
     };
-    const resetDirectoryLaunchpad = vi.fn(async () => ({
-      directoryKey: "directory:/repo/app",
-      defaults,
-    }));
+    const removeNavigationDirectory = vi.fn(async () => {
+      throw new Error("This directory contains threads.");
+    });
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -9879,7 +9879,7 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
-      resetDirectoryLaunchpad,
+      removeNavigationDirectory,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
     };
@@ -9900,7 +9900,7 @@ describe("useThreadNavigation", () => {
 
     // Deleting the overlay row would strip the directory's registration and
     // sticky settings while its threads kept the row on screen.
-    expect(resetDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(removeNavigationDirectory).toHaveBeenCalled();
     expect(
       result.current.directories.some(
         (directory) => directory.key === "directory:/repo/app",

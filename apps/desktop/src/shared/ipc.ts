@@ -637,3 +637,5 @@ export const APP_MENU_POPUP_CHANNEL = "app-menu:popup";
 // renderer would silently degrade to browser clipboard fallbacks.
 export const CLIPBOARD_WRITE_TEXT_CHANNEL = "clipboard:write-text";
 export const CLIPBOARD_WRITE_RICH_TEXT_CHANNEL = "clipboard:write-rich-text";
+
+export const NAVIGATION_REMOVE_DIRECTORY_CHANNEL = "navigation:remove-directory";

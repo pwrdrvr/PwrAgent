@@ -2723,3 +2723,10 @@ export type ThreadBranchDriftPair = {
 };
 
 export type DirectoryLaunchpadOverlayState = NavigationLaunchpadDraft;
+
+/** Revalidate complete owner membership before removing an empty registration. */
+export type RemoveNavigationDirectoryRequest = {
+  directoryKey: string;
+  federationTarget?: FederationTarget;
+};
+export type RemoveNavigationDirectoryResponse = { directoryKey: string };
