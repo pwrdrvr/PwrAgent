@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FederationTarget, NavigationIdentity } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import {
   applyNavigationSelectedDetail,
   navigationIdentityKey,
@@ -70,5 +71,26 @@ export function useNavigationSelectedDetail(params: {
     }
     return () => { sequenceRef.current += 1; };
   }, [identityKey, refresh, targetKey]);
-  return { state, refresh };
+  useEffect(() => {
+    if (!identityKey || !desktopApi?.onAgentEvent) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = desktopApi.onAgentEvent((event) => {
+      const selected = paramsRef.current.ref;
+      const target = paramsRef.current.federationTarget;
+      const eventOwner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
+      const selectedOwner = target?.scope === "remote" ? target.instanceId : selected?.ownerInstanceId;
+      const notification = event.notification;
+      if (!selected || event.backend !== selected.backend || eventOwner !== selectedOwner
+        || !("threadId" in notification.params) || notification.params.threadId !== selected.threadId) return;
+      if (!navigationQueryEventRequiresRefresh(notification.method)
+        && !notification.method.startsWith("thread/model")
+        && !notification.method.startsWith("thread/executionMode")) return;
+      if (timer !== undefined) return;
+      timer = setTimeout(() => { timer = undefined; void refresh(); }, 250);
+    });
+    return () => { if (timer !== undefined) clearTimeout(timer); unsubscribe(); };
+  }, [desktopApi, identityKey, refresh, targetKey]);
+  // A render for a new owner must never expose the previous owner's ready configuration.
+  const visibleState = state && identityKey === navigationIdentityKey(state.ref) ? state : undefined;
+  return { state: visibleState, refresh };
 }

@@ -93,7 +93,7 @@ export function reconcileCompleteNavigationQueue(params: {
     const existing = mirrorsById.get(entry.queueEntryId);
     return {
       ...(existing ?? {
-        id: `backend-queued:${entry.queueEntryId}`,
+        id: `backend-queued:${JSON.stringify([params.owner.target, params.owner.backend, params.owner.threadId, entry.queueEntryId])}`,
         queueEntryId: entry.queueEntryId,
         queueEntryCreatedAt: entry.createdAt,
         text: entry.displayText,
