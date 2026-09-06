@@ -387,9 +387,11 @@ export const FEDERATION_BACKEND_METHODS = {
   getProjectPage: "backend.getProjectPage",
   getNavigationDescendantPage: "backend.getNavigationDescendantPage",
   lookupArchivedThreads: "backend.lookupArchivedThreads",
+  /** @deprecated Alpha collection contract; migrate per docs/federation-navigation-v2.md before removal. */
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   searchNavigationThreads: "backend.searchNavigationThreads",
   searchFederatedThreads: "backend.searchFederatedThreads",
+  /** @deprecated Collection enumeration; use bounded queries or exact-ID archive lookup. */
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",

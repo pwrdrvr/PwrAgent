@@ -73,7 +73,7 @@ export type StarMapChatCardsController = {
   raise: (cardKey: string, persist?: boolean) => boolean;
   remapOwner: (placeholderInstanceId: string, durableInstanceId: string) => void;
   /** Pointer-frame update. Deliberately memory-only. */
-  setRect: (cardKey: string, rect: ChatCardRect) => void;
+  setRect: (cardKey: string, rect: ChatCardRect, userInitiated?: boolean) => void;
   /** Completed gesture: update relative geometry and persist once. */
   commitRect: (
     cardKey: string,
@@ -84,6 +84,7 @@ export type StarMapChatCardsController = {
     resolve: (
       anchor: StarMapWorkspaceAnchor,
     ) => StarMapChatCardAnchorResolution | null | undefined,
+    finalize?: boolean,
   ) => void;
   toggleContext: (cardKey: string) => void;
   toggleTerminal: (cardKey: string) => void;
@@ -578,10 +579,13 @@ export function useStarMapChatCards(params: {
   }, [applyState]);
 
   const setRect = useCallback(
-    (cardKey: string, rect: ChatCardRect) => {
+    (cardKey: string, rect: ChatCardRect, userInitiated = false) => {
       const current = stateRef.current;
       const cards = current.cards.map((card) =>
-        card.key === cardKey ? { ...card, rect } : card,
+        card.key === cardKey ? {
+          ...card, rect,
+          pendingAnchorRestore: userInitiated ? false : card.pendingAnchorRestore,
+        } : card,
       );
       applyState({ ...current, cards }, false);
     },
@@ -627,6 +631,7 @@ export function useStarMapChatCards(params: {
       resolve: (
         anchor: StarMapWorkspaceAnchor,
       ) => StarMapChatCardAnchorResolution | null | undefined,
+      finalize = true,
     ) => {
       const current = stateRef.current;
       if (!current.cards.some((card) => card.pendingAnchorRestore)) return;
@@ -637,7 +642,6 @@ export function useStarMapChatCards(params: {
         // null means this owner is still loading, not that its anchor is
         // absent. Other owners can finish independently in the same pass.
         if (resolution === null) return card;
-        changed = true;
         const offset = resolution?.basis === "instance"
           && card.instanceDx !== undefined
           && card.instanceDy !== undefined
@@ -645,16 +649,21 @@ export function useStarMapChatCards(params: {
             : resolution?.basis === "anchor"
               ? { dx: card.anchorDx, dy: card.anchorDy }
               : undefined;
+        const rect = resolution && offset
+          ? {
+              ...card.rect,
+              left: resolution.point.x + offset.dx,
+              top: resolution.point.y + offset.dy,
+            }
+          : card.rect;
+        const pendingAnchorRestore = !finalize;
+        if (rect.left === card.rect.left && rect.top === card.rect.top
+          && pendingAnchorRestore === card.pendingAnchorRestore) return card;
+        changed = true;
         return {
           ...card,
-          rect: resolution && offset
-            ? {
-                ...card.rect,
-                left: resolution.point.x + offset.dx,
-                top: resolution.point.y + offset.dy,
-              }
-            : card.rect,
-          pendingAnchorRestore: false,
+          rect,
+          pendingAnchorRestore,
         };
       });
       if (changed) applyState({ ...current, cards }, false);

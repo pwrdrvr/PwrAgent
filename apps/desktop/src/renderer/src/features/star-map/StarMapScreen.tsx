@@ -3299,8 +3299,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   useLayoutEffect(() => {
     if (!chatCards.hydrated) return;
-    chatCards.resolveRestoredAnchors(resolveWorkspaceAnchor);
-  }, [chatCards, resolveWorkspaceAnchor]);
+    // Orbit bounds can move every owner when another peer arrives. Show the
+    // early relative placement, but rebase it until initial geometry settles.
+    // Explicit user movement clears pendingAnchorRestore in the card store.
+    chatCards.resolveRestoredAnchors(resolveWorkspaceAnchor, federationLayoutReady);
+  }, [chatCards, federationLayoutReady, resolveWorkspaceAnchor]);
 
   useEffect(() => {
     if (!pendingFlight) return;

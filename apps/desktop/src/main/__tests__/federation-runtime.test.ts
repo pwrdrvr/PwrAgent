@@ -2215,7 +2215,7 @@ describe("DesktopFederationRuntime", () => {
     }
   });
 
-  it("cancels an obsolete bootstrap while its shared baseline is loading", async () => {
+  it.each([false, true])("maintains bootstrap ownership during loading (unrelated update: %s)", async (unrelatedUpdate) => {
     const db = openInMemoryStateDb();
     const overlay = new SqliteOverlayStore(db);
     setDesktopOverlayStoreForTests(overlay);
@@ -2240,8 +2240,12 @@ describe("DesktopFederationRuntime", () => {
         protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1,
       }, "viewer_one");
       subscribe(["star_map"]);
-      subscribe([]);
-      subscribe(["star_map"]);
+      if (unrelatedUpdate) {
+        subscribe(["star_map", "navigation"]);
+      } else {
+        subscribe([]);
+        subscribe(["star_map"]);
+      }
       finish({ entries: [] });
       await new Promise<void>((resolve) => setImmediate(resolve));
       // Only the replacement subscription sends, even though both reads
@@ -2249,6 +2253,50 @@ describe("DesktopFederationRuntime", () => {
       expect(sent).toHaveLength(1);
       expect(sent[0]).toMatchObject({ params: { entries: [], bootstrap: { index: 0, total: 1 } } });
     } finally {
+      initialized.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      db.close();
+    }
+  });
+
+  it.each([false, true])("keeps sending a backpressured bootstrap only while Star Map remains subscribed (removed: %s)", async (removed) => {
+    const db = openInMemoryStateDb();
+    const overlay = new SqliteOverlayStore(db);
+    setDesktopOverlayStoreForTests(overlay);
+    const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      await overlay.mergeStarMapArrangement(Array.from({ length: 101 }, (_, index) => ({
+        instanceId: "owner_one", threadKey: `codex:t-${index}`,
+        dx: index, dy: index, updatedAt: 1, by: "owner_one",
+      })));
+      const sent: FederationProtocolEnvelope[] = [];
+      const router = new FederationRouter({ localInstanceId: "owner_one" });
+      router.registerConnection({
+        peerId: "viewer_one", capabilities: ["event_subscriptions", "thread_navigation"],
+        sendEnvelope: () => { throw new Error("Bootstrap must honor backpressure."); },
+        sendEnvelopeWithBackpressure: async (envelope) => {
+          sent.push(envelope);
+          if (sent.length === 1) await blocked;
+        },
+      });
+      const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+      runtime.localInstanceId = "owner_one";
+      runtime.router = router;
+      const subscribe = (eventClasses: string[]) => runtime.applyEventSubscription({
+        id: "subscribe", kind: "notification", method: "federation.eventSubscription",
+        params: { eventClasses, starMapBootstrap: { protocol: 1 } },
+        protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1,
+      }, "viewer_one");
+      subscribe(["star_map"]);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      subscribe(removed ? ["navigation"] : ["star_map", "navigation"]);
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(removed ? 1 : 2);
+    } finally {
+      release();
       initialized.mockRestore();
       resetDesktopOverlayStoreForTests();
       db.close();
