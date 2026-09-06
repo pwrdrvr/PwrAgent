@@ -1957,6 +1957,13 @@ export type SetThreadTokenMiserResponse = {
   tokenMiserEnabled?: boolean;
 };
 
+export type NavigationRelativePinMove = {
+  key: string;
+} & (
+  | { direction: "up" | "down"; anchorKey?: never; placement?: never }
+  | { anchorKey: string; placement: "before" | "after"; direction?: never }
+);
+
 export type ReorderThreadPinsRequest = {
   federationTarget?: FederationTarget;
   /**
@@ -1966,7 +1973,9 @@ export type ReorderThreadPinsRequest = {
    * pins can be interleaved without collapsing an owner collision. Pin order
    * is global, not per-backend (mirrors directory pinning).
    */
-  threadKeys: string[];
+  threadKeys?: string[];
+  /** Owner-revalidated move preserving every unloaded pin. Exclusive with threadKeys. */
+  move?: NavigationRelativePinMove;
 };
 
 export type ReorderThreadPinsResponse = {
@@ -2038,7 +2047,9 @@ export type SetDirectoryPinResponse = {
 
 export type ReorderDirectoryPinsRequest = {
   /** Complete pinned order, first item at the top. */
-  directoryKeys: string[];
+  directoryKeys?: string[];
+  /** Owner-revalidated move preserving every unloaded pin. Exclusive with directoryKeys. */
+  move?: NavigationRelativePinMove;
 };
 
 export type ReorderDirectoryPinsResponse = {

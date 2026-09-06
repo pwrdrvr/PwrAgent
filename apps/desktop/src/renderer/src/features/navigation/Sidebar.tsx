@@ -11,6 +11,7 @@ import type {
   DesktopPwrAgentProfileSummary,
   MessagingThreadBindingSummary,
   NavigationDirectorySummary,
+  NavigationRelativePinMove,
   NavigationThreadSummary,
   PrSummary,
   ThreadExecutionMode,
@@ -311,7 +312,7 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     pinned: boolean,
   ) => Promise<void>;
-  onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
+  onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onSetThreadParent?: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
@@ -338,7 +339,7 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     pinned: boolean,
   ) => Promise<void>;
-  onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+  onReorderDirectoryPins?: (directoryKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onSetDirectoryThreadsCollapsed?: (
     directory: NavigationDirectorySummary,
     collapsed: boolean,
@@ -1475,7 +1476,7 @@ export function Sidebar(props: SidebarProps) {
     // tick, so subsequent Move clicks see updated adjacency.
     // Pin / Unpin / Rename / Archive are terminal actions and
     // still dismiss the menu.
-    void hoverReleasedListHandlers.reorderThreadPins?.(nextKeys);
+    void hoverReleasedListHandlers.reorderThreadPins?.(nextKeys, { key: threadKey, direction });
   };
 
   const moveDirectoryFromContextMenu = (
@@ -1497,7 +1498,7 @@ export function Sidebar(props: SidebarProps) {
     );
     // See `moveThreadFromContextMenu` for why we don't dismiss
     // the menu here.
-    void hoverReleasedListHandlers.reorderDirectoryPins?.(nextKeys);
+    void hoverReleasedListHandlers.reorderDirectoryPins?.(nextKeys, { key: directory.key, direction });
   };
 
   const archiveThreadsFromContextMenu = (
