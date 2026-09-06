@@ -1273,7 +1273,31 @@ describe("agent ipc", () => {
     );
   });
 
-  it("caps oversized live agent event strings before broadcasting to renderer subscribers", async () => {
+  it.each(["item/agentMessage/delta", "item/completed"])(
+    "preserves full message Markdown in %s events",
+    async (method) => {
+      const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+      const markdown = "| Finding | Test |\n| --- | --- |\n"
+        + "| Preserve content | Keep every table row |\n".repeat(1_000);
+      const notification = {
+        method,
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          ...(method === "item/completed"
+            ? { item: { id: "message-1", type: "agentMessage", text: markdown } }
+            : { itemId: "message-1", delta: markdown }),
+        },
+      };
+      registerAgentIpcHandlers();
+      await registryListener?.({ backend: "codex", notification } as AgentEvent);
+      const sent = send.mock.calls[0]?.[1] as AgentEvent;
+      expect(JSON.stringify(sent.notification) === JSON.stringify(notification)).toBe(true);
+      disposeAgentIpcHandlers();
+    },
+  );
+
+  it("preserves oversized live agent event strings when broadcasting to renderer subscribers", async () => {
     const {
       registerAgentIpcHandlers,
       disposeAgentIpcHandlers,
@@ -1320,15 +1344,12 @@ describe("agent ipc", () => {
       }),
     );
     expect(typeof output).toBe("string");
-    expect(output).toContain("PwrAgent renderer boundary: truncated");
-    expect(output).toContain("$.notification.params.item.data.aggregatedOutput");
-    expect(output).toContain("protocol-tail");
-    expect(output).not.toContain("x".repeat(60_000));
+    expect(output === oversizedOutput).toBe(true);
 
     disposeAgentIpcHandlers();
   });
 
-  it("caps oversized live diff payloads before broadcasting to renderer subscribers", async () => {
+  it("preserves oversized live diff payloads when broadcasting to renderer subscribers", async () => {
     const {
       registerAgentIpcHandlers,
       disposeAgentIpcHandlers,
@@ -1366,10 +1387,7 @@ describe("agent ipc", () => {
       }),
     );
     expect(typeof diff).toBe("string");
-    expect(diff).toContain("PwrAgent renderer boundary: truncated");
-    expect(diff).toContain("$.notification.params.diff");
-    expect(diff).toContain("protocol-tail");
-    expect(diff).not.toContain("x".repeat(60_000));
+    expect(diff === oversizedDiff).toBe(true);
     expect(mockAppServerLog.debug).toHaveBeenCalledWith(
       "agentEvent",
       expect.objectContaining({

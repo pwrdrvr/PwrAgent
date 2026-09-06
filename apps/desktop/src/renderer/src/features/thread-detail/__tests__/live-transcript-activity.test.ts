@@ -338,7 +338,7 @@ describe("buildLiveToolDetails", () => {
 });
 
 describe("appendCommandOutputDelta", () => {
-  it("caps accumulated live command output before it can grow unbounded in renderer state", () => {
+  it("preserves accumulated live command output across the former character limit", () => {
     const entry = appendCommandOutputDelta(
       {
         type: "activity",
@@ -364,10 +364,7 @@ describe("appendCommandOutputDelta", () => {
     );
 
     const output = entry.details[0]?.command?.output ?? "";
-    expect(output.length).toBeLessThan(36_000);
-    expect(output).toContain("PwrAgent renderer boundary: truncated");
-    expect(output).toContain("original length");
-    expect(output).not.toContain("x".repeat(60_000));
+    expect(output === `start\n{"backend":"codex","captureId":"large"}${"x".repeat(80_000)}tail`).toBe(true);
   });
 });
 

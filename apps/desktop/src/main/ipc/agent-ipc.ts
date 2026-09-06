@@ -8,7 +8,6 @@ import {
   subscribersForChannel,
 } from "../window-channels";
 import {
-  sanitizeRendererPayload,
   type AgentEvent,
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
@@ -381,9 +380,7 @@ export function broadcastAgentEvent(event: AgentEvent): void {
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
   }
-  const rendererEvent = sanitizeRendererPayload(
-    withRendererActivityEntry(hydratedEvent),
-  );
+  const rendererEvent = withRendererActivityEntry(hydratedEvent);
   const federationWindowsOnly = remotePrStatusEventIsSupersededLocally(
     hydratedEvent,
   );
@@ -424,7 +421,7 @@ export function broadcastAgentEvent(event: AgentEvent): void {
 function broadcastCodexEnvironmentSetupProgress(
   event: CodexEnvironmentSetupProgressEvent,
 ): void {
-  const rendererEvent = sanitizeRendererPayload(event);
+  const rendererEvent = event;
   for (const webContents of subscribersForChannel(
     CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   )) {

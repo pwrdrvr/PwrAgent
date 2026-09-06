@@ -1,5 +1,3 @@
-import { truncateRendererPayloadString } from "@pwragent/shared";
-
 const TOOL_ACTIVITY_TITLE_MAX_CHARS = 160;
 
 export function formatToolActivityTitle(value: string): string {
@@ -24,10 +22,7 @@ export function formatToolInvocation(
     return identifier;
   }
   try {
-    return truncateRendererPayloadString(
-      `${identifier}\n${JSON.stringify(args, null, 2)}`,
-      `${identifier} invocation`,
-    );
+    return `${identifier}\n${JSON.stringify(args, null, 2)}`;
   } catch {
     return identifier;
   }
@@ -88,9 +83,7 @@ export function formatMcpToolOutput(params: {
   }
 
   const output = parts.join("\n\n");
-  return output
-    ? truncateRendererPayloadString(output, "MCP tool output")
-    : undefined;
+  return output || undefined;
 }
 
 export function formatDynamicToolOutput(contentItems: unknown): string | undefined {
@@ -112,9 +105,7 @@ export function formatDynamicToolOutput(contentItems: unknown): string | undefin
     }
   }
   const output = parts.join("\n\n");
-  return output
-    ? truncateRendererPayloadString(output, "dynamic tool output")
-    : undefined;
+  return output || undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
