@@ -344,7 +344,6 @@ function normalizeQuery(query: NavigationQuery): NavigationQuery {
 export function navigationQueryKey(request: NavigationQueryRequest): string {
   return hashValue({
     backend: request.backend ?? "all",
-    consumer: request.consumer,
     attentionView: request.attentionView,
     query: normalizeQuery(request.query),
   });
@@ -430,15 +429,18 @@ function selectQueryThreads(params: {
   }
 
   const selected = new Map<string, NavigationThreadSummary>();
+  const visiting = new Set<string>();
   const addWithAncestry = (thread: NavigationThreadSummary): void => {
     const key = threadKey(thread);
-    if (selected.has(key)) return;
+    if (selected.has(key) || visiting.has(key)) return;
+    visiting.add(key);
     const parent = parentIdentity(thread);
     if (query.includeAncestry && parent) {
       const parentThread = params.threadsByIdentity.get(identityKey(parent));
       if (parentThread) addWithAncestry(parentThread);
     }
     selected.set(key, thread);
+    visiting.delete(key);
   };
   for (const identity of query.identities.slice(0, NAVIGATION_QUERY_MAX_PAGE_ROWS)) {
     const thread = params.threadsByIdentity.get(identityKey(identity));

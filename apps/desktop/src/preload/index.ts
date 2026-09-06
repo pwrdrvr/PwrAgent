@@ -717,6 +717,7 @@ import {
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_QUERY_PAGE_CHANNEL,
+  NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_QUEUE_PROJECTION_CHANNEL,
   NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -1818,12 +1819,11 @@ const desktopApi = Object.freeze({
     ),
   getNavigationQueryPage: async (
     request: NavigationQueryRequest,
+    consumerId?: string,
   ): Promise<NavigationQueryPage> =>
-    await invokeWithStartupProfileTiming(
-      "getNavigationQueryPage",
-      NAVIGATION_QUERY_PAGE_CHANNEL,
-      request,
-    ),
+    await ipcRenderer.invoke(NAVIGATION_QUERY_PAGE_CHANNEL, request, consumerId),
+  releaseNavigationQuery: async (consumerId: string): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_QUERY_RELEASE_CHANNEL, consumerId),
   getNavigationSelectedDetail: async (
     request: NavigationSelectedDetailRequest,
   ): Promise<NavigationSelectedDetailResponse> =>

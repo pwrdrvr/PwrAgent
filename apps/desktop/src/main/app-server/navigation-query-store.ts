@@ -202,6 +202,15 @@ export class NavigationQueryStore {
           "Navigation cursor expired; rebaseline around the visible anchor.",
         );
       }
+      // Cursor JSON is caller-controlled. Verify the retained authority too,
+      // rather than trusting a rewritten scope/query in the encoded cursor.
+      if (retained.scopeKey !== params.scopeKey
+        || retained.materialization.queryKey !== queryKey) {
+        throw new NavigationQueryError(
+          "navigation_invalid_request",
+          "Navigation generation does not belong to this requester and query.",
+        );
+      }
       generation = retained;
       offset = cursor.offset;
     } else {
@@ -334,6 +343,15 @@ export class NavigationQueryStore {
             ...page,
             entries: [...page.entries, item],
           };
+      const candidateNextOffset = nextOffset + 1;
+      if (candidateNextOffset < collection.length) {
+        candidate.nextCursor = encodeCursor({
+          generation: params.generation.generation,
+          offset: candidateNextOffset,
+          queryKey: params.generation.materialization.queryKey,
+          scopeKey: params.generation.scopeKey,
+        });
+      }
       if (serializedBytes(candidate) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         if (nextOffset === params.offset) {
           throw new NavigationQueryError(
@@ -357,8 +375,8 @@ export class NavigationQueryStore {
         queryKey: params.generation.materialization.queryKey,
         scopeKey: params.generation.scopeKey,
       });
-      this.assertPageBudget(page);
     }
+    this.assertPageBudget(page);
     return page;
   }
 

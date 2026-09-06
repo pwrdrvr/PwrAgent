@@ -838,7 +838,9 @@ export type DesktopApi = {
   ) => Promise<NavigationSnapshot>;
   getNavigationQueryPage?: (
     request: NavigationQueryRequest,
+    consumerId?: string,
   ) => Promise<NavigationQueryPage>;
+  releaseNavigationQuery?: (consumerId: string) => Promise<void>;
   getNavigationSelectedDetail?: (
     request: NavigationSelectedDetailRequest,
   ) => Promise<NavigationSelectedDetailResponse>;

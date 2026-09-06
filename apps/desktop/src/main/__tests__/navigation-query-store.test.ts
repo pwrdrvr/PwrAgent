@@ -53,6 +53,41 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it("rejects a cursor whose requester was rewritten around another retained generation", async () => {
+    const store = new NavigationQueryStore();
+    const loadIndex = async () => snapshot([thread("1"), thread("2")]);
+    const first = await store.readPage({
+      loadIndex, request: request({ pageSize: 1 }), scopeKey: "owner-a",
+    });
+    const cursor = JSON.parse(Buffer.from(first.nextCursor!, "base64url").toString("utf8"));
+    cursor.scopeKey = "owner-b";
+    await expect(store.readPage({
+      loadIndex,
+      request: request({ cursor: Buffer.from(JSON.stringify(cursor)).toString("base64url") }),
+      scopeKey: "owner-b",
+    })).rejects.toMatchObject({ code: "navigation_invalid_request" });
+  });
+
+  it("fits a continuation in the same byte budget as its rows", async () => {
+    const load = (titleLength: number) => snapshot([
+      thread("2", "x".repeat(titleLength)),
+      thread("1"),
+    ]);
+    const probe = await new NavigationQueryStore().readPage({
+      loadIndex: async () => load(1),
+      request: request({ pageSize: 1 }), scopeKey: "scope",
+    });
+    const wrapperBytes = Buffer.byteLength(JSON.stringify(probe), "utf8") - 1;
+    const page = await new NavigationQueryStore().readPage({
+      loadIndex: async () => load(NAVIGATION_QUERY_MAX_RESULT_BYTES - wrapperBytes - 1),
+      request: request({ pageSize: 100 }), scopeKey: "scope",
+    });
+    expect(page.entries).toHaveLength(1);
+    expect(page.nextCursor).toBeTruthy();
+    expect(Buffer.byteLength(JSON.stringify(page), "utf8"))
+      .toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+  });
+
   it("keeps owner Attention ranks across pages, lens changes and cursor expiry", async () => {
     let now = 1_000;
     const store = new NavigationQueryStore({ now: () => now });

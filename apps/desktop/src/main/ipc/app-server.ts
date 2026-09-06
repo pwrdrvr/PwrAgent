@@ -294,6 +294,7 @@ import {
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
   NAVIGATION_QUERY_PAGE_CHANNEL,
+  NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_QUEUE_PROJECTION_CHANNEL,
   NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -305,6 +306,7 @@ import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -2118,18 +2120,42 @@ class DesktopAppServerService {
 
   async getNavigationQueryPage(
     request: NavigationQueryRequest,
+    consumerId?: string,
+  ): Promise<NavigationQueryPage> {
+    if (consumerId) {
+      return navigationQueryPool.read({
+        consumerId,
+        request,
+        load: async ({ signal, deadlineAt }) => {
+          signal.throwIfAborted();
+          return this.readNavigationQueryPage(request, { signal, deadlineAt });
+        },
+      });
+    }
+    return this.readNavigationQueryPage(request);
+  }
+
+  private async readNavigationQueryPage(
+    request: NavigationQueryRequest,
+    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
   ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
       return await getDesktopFederationRuntime().remoteNavigationQueryPage(
         request.federationTarget,
         request,
+        rpcOptions,
       );
     }
     return await getDesktopNavigationQueryStore().readPage({
-      loadIndex: async () => await loadLocalNavigationQueryIndex({
-        backend: request.backend,
-        callerReason: "renderer-navigation-query",
-      }),
+      loadIndex: async () => {
+        rpcOptions?.signal.throwIfAborted();
+        const index = await loadLocalNavigationQueryIndex({
+          backend: request.backend,
+          callerReason: "renderer-navigation-query",
+        });
+        rpcOptions?.signal.throwIfAborted();
+        return index;
+      },
       request,
       scopeKey: "renderer-local",
     });
@@ -7646,6 +7672,9 @@ function commandLooksLikeGitMutation(command: string): boolean {
 const GIT_MUTATION_COMMAND =
   /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
 
+const navigationQueryPool = new NavigationQueryPool();
+const navigationQueryConsumersBySender = new Map<number, Set<string>>();
+let nextTransientNavigationConsumer = 0;
 const appServerService = new DesktopAppServerService();
 const navigationSnapshotTransport = new NavigationSnapshotTransport();
 
@@ -7959,11 +7988,44 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_QUERY_PAGE_CHANNEL,
     async (
-      _event,
+      event,
       request: NavigationQueryRequest,
-    ): Promise<NavigationQueryPage> =>
-      await appServerService.getNavigationQueryPage(request),
+      consumerId?: string,
+    ): Promise<NavigationQueryPage> => {
+      if (consumerId !== undefined
+        && (typeof consumerId !== "string" || consumerId.length < 1 || consumerId.length > 128)) {
+        throw new Error("Navigation consumer identity must contain 1 to 128 characters.");
+      }
+      const senderId = event.sender.id;
+      let consumers = navigationQueryConsumersBySender.get(senderId);
+      if (!consumers) {
+        consumers = new Set();
+        navigationQueryConsumersBySender.set(senderId, consumers);
+        event.sender.once("destroyed", () => {
+          for (const token of navigationQueryConsumersBySender.get(senderId) ?? []) {
+            navigationQueryPool.release(token);
+          }
+          navigationQueryConsumersBySender.delete(senderId);
+        });
+      }
+      const token = JSON.stringify([senderId, consumerId ?? ++nextTransientNavigationConsumer]);
+      consumers.add(token);
+      try {
+        return await appServerService.getNavigationQueryPage(request, token);
+      } finally {
+        if (consumerId === undefined) {
+          consumers.delete(token);
+          navigationQueryPool.release(token);
+        }
+      }
+    },
   );
+  ipcMain.removeHandler(NAVIGATION_QUERY_RELEASE_CHANNEL);
+  ipcMain.handle(NAVIGATION_QUERY_RELEASE_CHANNEL, async (event, consumerId: string) => {
+    const token = JSON.stringify([event.sender.id, consumerId]);
+    navigationQueryConsumersBySender.get(event.sender.id)?.delete(token);
+    navigationQueryPool.release(token);
+  });
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SELECTED_DETAIL_CHANNEL,
@@ -8658,6 +8720,11 @@ export function registerAppServerIpcHandlers(): void {
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(NAVIGATION_QUERY_RELEASE_CHANNEL);
+  for (const consumers of navigationQueryConsumersBySender.values()) {
+    for (const token of consumers) navigationQueryPool.release(token);
+  }
+  navigationQueryConsumersBySender.clear();
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
