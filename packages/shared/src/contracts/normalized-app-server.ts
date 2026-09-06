@@ -2072,6 +2072,8 @@ export type AppServerNotification =
          * waiting for the next navigation snapshot.
          */
         displayText?: string;
+        /** The owner replaced pending input, so existing previews must refresh. */
+        inputUpdated?: boolean;
         position?: number;
         turnId?: string;
         automationRunId?: string;

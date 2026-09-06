@@ -35805,6 +35805,8 @@ script = "printf setup"
     });
     const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
     for (const threadId of ["sender", "recipient"]) {
       await registry.publishLocalEvent({ backend: "codex", notification: {
         method: "turn/started", params: { threadId, turnId: `active:${threadId}`, turn: { id: `active:${threadId}` } },
@@ -35838,6 +35840,22 @@ script = "printf setup"
     const updated = await registry.readQueuedTurn(target);
     expect(updated.input).toEqual([{ type: "text", text: "Complete consolidated findings" }]);
     expect(updated.messageOrigin).toEqual(original.messageOrigin);
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.inputUpdated === true));
+    expect(events).toContainEqual(expect.objectContaining({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: expect.objectContaining({
+          threadId: "recipient",
+          queueEntryId,
+          status: "queued",
+          inputUpdated: true,
+          displayText: "Complete consolidated findings",
+        }),
+      },
+    }));
     expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]?.map((entry) => entry.queueEntryId)).toEqual([queueEntryId, "operator-next"]);
     const replay = correspondenceStore.appendToReplay({ backend: "codex", threadId: "sender" }, {
       entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },

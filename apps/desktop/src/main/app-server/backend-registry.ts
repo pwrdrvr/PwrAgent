@@ -15418,7 +15418,7 @@ export class DesktopBackendRegistry {
     if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
-    this.threadTurnQueue.updateQueuedEntryInput(entry.id, request.input);
+    this.updateQueuedTurnInput(entry.id, request.input);
     return {
       backend: entry.backend,
       threadId: entry.threadId,
@@ -15432,7 +15432,31 @@ export class DesktopBackendRegistry {
     entryId: string,
     input: AppServerTurnInputItem[],
   ): void {
-    this.threadTurnQueue.updateQueuedEntryInput(entryId, input);
+    const entry = this.threadTurnQueue.updateQueuedEntryInput(entryId, input);
+    if (!entry) return;
+    // This is an input refresh, not another queue admission. In particular,
+    // do not replay sender correspondence lifecycle transitions.
+    void this.emit({
+      backend: entry.backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: entry.threadId,
+          queueEntryId: entry.id,
+          queueEntryCreatedAt: entry.createdAt,
+          origin: entry.origin,
+          status: "queued",
+          inputUpdated: true,
+          displayText: queuedTurnDisplayText(entry.input),
+          manualReleaseRequired: entry.manualReleaseRequired === true,
+          ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
+        },
+      },
+    }).catch((error) => {
+      backendRegistryLog.error("Could not publish queued input update", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   canStartThreadTurnImmediately(params: {
