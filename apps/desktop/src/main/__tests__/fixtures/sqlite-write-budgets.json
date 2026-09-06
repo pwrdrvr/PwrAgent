@@ -209,6 +209,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "navigation-owner-query-reads": {
+    "commits": 0,
+    "note": "1,000 real overlay-backed rows, owner Attention metadata, facet counts, page continuation and repeated query: zero commits; 0 MB/day added WAL",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "navigation-relative-thread-pin": {
     "commits": 1,
     "note": "One owner-revalidated move across 102 pins changes one rank in one commit; at 100 moves/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes",

@@ -46,7 +46,8 @@ export function threadAttentionCategories(
     categories.push("active");
   }
   if (
-    sessionKeys?.approvalRequestThreadKeys?.[key] === true
+    ("needsInput" in thread && thread.needsInput === true)
+    || sessionKeys?.approvalRequestThreadKeys?.[key] === true
     || sessionKeys?.inputRequestThreadKeys?.[key] === true
   ) {
     categories.push("approval");

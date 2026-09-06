@@ -121,6 +121,13 @@ function validateRequest(request: NavigationQueryRequest): void {
       "Navigation page size must be between 1 and 100.",
     );
   }
+  if (request.query.kind === "star-map") {
+    const keys = new Set(["attention", "approval", "pr", "unpushed", "pinned", "agent"]);
+    if (!request.query.filters || Object.entries(request.query.filters).some(([key, value]) =>
+      !keys.has(key) || !["neutral", "include", "exclude"].includes(value))) {
+      throw new NavigationQueryError("navigation_invalid_request", "Invalid Star Map filter selection.");
+    }
+  }
   if (request.query.kind === "exact" && request.query.identities.length > 100) {
     throw new NavigationQueryError(
       "navigation_invalid_request",
@@ -157,6 +164,7 @@ function pageBase(params: {
     countsRevision: generation.completeRevision,
     coverage: { state: "complete" },
     counts: generation.materialization.counts,
+    ...(generation.materialization.facets ? { facets: generation.materialization.facets } : {}),
   };
 }
 

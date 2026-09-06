@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
   type FederationPeerSummary,
   type NavigationCounts,
+  type NavigationStarMapFacetCounts,
+  type NavigationStarMapFilterSelection,
   type NavigationDirectoryRow,
   type NavigationIdentity,
   type NavigationQueryEntry,
@@ -18,6 +20,7 @@ type RetainedPeerQuery = {
   attentionThreads: NavigationThreadSummary[];
   completeRevision?: string;
   counts: NavigationCounts;
+  facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
   exactThreads: NavigationThreadSummary[];
   generation: string;
@@ -28,6 +31,7 @@ type RetainedPeerQuery = {
 export type StarMapRemoteThreads = {
   /** Authoritative owner totals, independent of the visible row page. */
   countsByInstance: Map<string, NavigationCounts>;
+  facetsByInstance: Map<string, NavigationStarMapFacetCounts>;
   /** Compact project/group geometry descriptors for each owner. */
   directoriesByInstance: Map<string, NavigationDirectoryRow[]>;
   /** Per-instance bounded row pages, retained across peer reconnect churn. */
@@ -51,12 +55,15 @@ type StarMapRemoteThreadState = {
 function attentionRequest(params: {
   cursor?: string;
   instanceId: string;
+  filters?: NavigationStarMapFilterSelection;
+  attentionView?: NavigationQueryRequest["attentionView"];
 }): NavigationQueryRequest {
   return {
     protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
     consumer: "star-map",
     federationTarget: { scope: "remote", instanceId: params.instanceId },
-    query: { kind: "lens", lens: "attention" },
+    query: params.filters ? { kind: "star-map", filters: params.filters } : { kind: "lens", lens: "attention" },
+    attentionView: params.attentionView,
     pageSize: STAR_MAP_FIRST_PAGE_ROWS,
     cursor: params.cursor,
   };
@@ -139,6 +146,8 @@ export function useStarMapThreads(params: {
   desktopApi?: DesktopApi;
   peers: readonly FederationPeerSummary[];
   enabled: boolean;
+  filters?: NavigationStarMapFilterSelection;
+  attentionPromoteOnTurnEnd?: boolean;
   demandedIdentitiesByInstance?: ReadonlyMap<
     string,
     readonly NavigationIdentity[]
@@ -147,6 +156,10 @@ export function useStarMapThreads(params: {
   refreshNonce?: number;
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
+  const viewId = useId();
+  const attentionView = useMemo(() => ({ id: viewId, promoteOnTurnEnd: params.attentionPromoteOnTurnEnd ?? true }),
+    [viewId, params.attentionPromoteOnTurnEnd]);
+  const filters = params.filters;
   const [state, setState] = useState<StarMapRemoteThreadState>({
     queriesByInstance: new Map(),
     unreachableInstanceIds: new Set(),
@@ -178,7 +191,7 @@ export function useStarMapThreads(params: {
       if (!desktopApi?.getNavigationQueryPage) return;
       try {
         const previous = stateRef.current.queriesByInstance.get(instanceId);
-        const baseRequest = attentionRequest({ instanceId });
+        const baseRequest = attentionRequest({ instanceId, filters, attentionView });
         const [page, geometry] = await Promise.all([
           desktopApi.getNavigationQueryPage({
             ...baseRequest,
@@ -197,6 +210,7 @@ export function useStarMapThreads(params: {
             attentionThreads,
             completeRevision: page.complete ? page.countsRevision : undefined,
             counts: page.counts,
+            facets: page.facets,
             directories: geometry.directories ?? [],
             exactThreads: retained?.exactThreads ?? [],
             generation: page.generation,
@@ -224,7 +238,7 @@ export function useStarMapThreads(params: {
         throw error;
       }
     },
-    [desktopApi],
+    [desktopApi, filters, attentionView],
   );
 
   const refreshInstance = useCallback(
@@ -240,7 +254,7 @@ export function useStarMapThreads(params: {
       if (!desktopApi?.getNavigationQueryPage || !retained?.nextCursor) return;
       const generation = generationRef.current;
       const page = await desktopApi.getNavigationQueryPage(
-        attentionRequest({ cursor: retained.nextCursor, instanceId }),
+        attentionRequest({ cursor: retained.nextCursor, instanceId, filters, attentionView }),
       );
       if (generationRef.current !== generation) return;
       setState((current) => {
@@ -257,7 +271,7 @@ export function useStarMapThreads(params: {
         return { ...current, queriesByInstance };
       });
     },
-    [desktopApi],
+    [desktopApi, filters, attentionView],
   );
 
   useEffect(() => {
@@ -357,17 +371,19 @@ export function useStarMapThreads(params: {
 
   const result = useMemo(() => {
     const countsByInstance = new Map<string, NavigationCounts>();
+    const facetsByInstance = new Map<string, NavigationStarMapFacetCounts>();
     const directoriesByInstance = new Map<string, NavigationDirectoryRow[]>();
     const threadsByInstance = new Map<string, NavigationThreadSummary[]>();
     for (const [instanceId, query] of state.queriesByInstance) {
       countsByInstance.set(instanceId, query.counts);
+      if (query.facets) facetsByInstance.set(instanceId, query.facets);
       directoriesByInstance.set(instanceId, query.directories);
       threadsByInstance.set(
         instanceId,
         mergeThreads(query.attentionThreads, query.exactThreads),
       );
     }
-    return { countsByInstance, directoriesByInstance, threadsByInstance };
+    return { countsByInstance, facetsByInstance, directoriesByInstance, threadsByInstance };
   }, [state.queriesByInstance]);
 
   return {

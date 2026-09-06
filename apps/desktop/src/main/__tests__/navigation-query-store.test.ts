@@ -53,6 +53,57 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it("filters Star Map facets on the owner and counts off-page members", async () => {
+    const threads = Array.from({ length: 1001 }, (_, index) => ({
+      ...thread(String(index)),
+      inbox: { inInbox: true, reason: "updated-since-seen" as const },
+      ...(index % 2 === 0 ? { agent: { name: "Agent", instructions: "private configuration", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1 } } : {}),
+    }));
+    const store = new NavigationQueryStore();
+    const result = await store.readPage({
+      scopeKey: "viewer",
+      loadIndex: async () => ({ ...snapshot(threads), inputRequestThreadKeys: new Set(["codex:1000"]) }),
+      request: request({ query: { kind: "star-map", filters: { agent: "include", approval: "include" } }, pageSize: 10 }),
+    });
+    expect(result.entries.map((entry) => entry.row.id)).toEqual(["1000"]);
+    expect(result.entries[0]?.row.needsInput).toBe(true);
+    expect(result.facets?.matches).toMatchObject({ attention: 501, approval: 1, agent: 1 });
+    expect(result.facets?.unread).toBe(501);
+    expect(JSON.stringify(result)).not.toContain("private configuration");
+    expect(result.counts.total).toBe(1001);
+  });
+
+  it("keeps numeric owner pin order and includes pins through unrelated facet filters", async () => {
+    const threads = [
+      { ...thread("1"), pinnedRank: "1024" },
+      { ...thread("2"), pinnedRank: "256" },
+      { ...thread("3"), pinnedRank: "2048" },
+    ];
+    const store = new NavigationQueryStore();
+    const result = await store.readPage({ scopeKey: "viewer", loadIndex: async () => snapshot(threads),
+      request: request({ query: { kind: "star-map", filters: { agent: "include" } } }),
+    });
+    expect(result.entries.map((entry) => entry.row.id)).toEqual(["2", "1", "3"]);
+    const excluded = await store.readPage({ scopeKey: "viewer", loadIndex: async () => snapshot(threads),
+      request: request({ query: { kind: "star-map", filters: { pinned: "exclude" } } }),
+    });
+    expect(excluded.entries).toEqual([]);
+  });
+
+  it("invalidates row and count revisions when owner input readiness changes", async () => {
+    const store = new NavigationQueryStore();
+    const threadKeys = new Set<string>();
+    const params = { scopeKey: "viewer", loadIndex: async () => ({ ...snapshot([thread("1")]), inputRequestThreadKeys: threadKeys }),
+      request: request({ query: { kind: "star-map" as const, filters: {} } }),
+    };
+    const first = await store.readPage(params);
+    threadKeys.add("codex:1");
+    const changed = await store.readPage({ ...params, request: { ...params.request, completeBaselineRevision: first.countsRevision } });
+    expect(changed.unchanged).not.toBe(true);
+    expect(changed.entries[0]?.row.rowRevision).not.toBe(first.entries[0]?.row.rowRevision);
+    expect(changed.facets?.matches.approval).toBe(1);
+  });
+
   it("rejects a cursor whose requester was rewritten around another retained generation", async () => {
     const store = new NavigationQueryStore();
     const loadIndex = async () => snapshot([thread("1"), thread("2")]);

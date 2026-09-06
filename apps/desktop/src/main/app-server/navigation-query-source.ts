@@ -44,5 +44,5 @@ export async function loadLocalNavigationQueryIndex(params: {
       gitStatus: directoryStatusCache[directory.key]?.gitStatus,
     }),
   );
-  return { directories, threads };
+  return { directories, threads, inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys() };
 }

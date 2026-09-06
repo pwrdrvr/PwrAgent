@@ -20353,6 +20353,15 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** Compact navigation signal only; never expose pending prompts or response options. */
+  getNavigationInputRequestThreadKeys(): ReadonlySet<string> {
+    const keys = new Set<string>();
+    for (const pending of this.pendingServerRequests.values()) {
+      keys.add(buildThreadIdentityKey(pending.backend, pending.notification.params.threadId));
+    }
+    return keys;
+  }
+
   private pendingServerRequestForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
