@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TokenMiserService,
   type TokenMiserStructuredGenerationResult,
+  type TokenMiserServiceOptions,
 } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 import type {
@@ -1349,15 +1350,191 @@ describe("TokenMiserService code-mode reduction", () => {
       thresholdCharacters: 1,
     });
 
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: "deliberately retrieved output", replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: "deliberately retrieved output",
+    });
     expect(await service.prepareCodeModeOutput({
       ...codeModePayload([{
         type: "input_text",
-        text: "deliberately retrieved output",
+        text: delivery!.text,
       }]),
       script,
     })).toBeUndefined();
     expect(generateSummary).not.toHaveBeenCalled();
-    expect(await store.listMetadata()).toEqual([]);
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe("deliberately retrieved output".length);
+  });
+
+  it.each([
+    "text(await tools.pwragent__read_all_token_miser_output({})); text(await tools.exec_command({cmd: 'rg needle'}));",
+    "const results = await Promise.all([tools.pwragent__read_all_token_miser_output({}), tools.exec_command({cmd: 'rg needle'})]); results.forEach(text);",
+    "const read = tools.pwragent__read_all_token_miser_output; text(await read({})); text((await tools.exec_command({cmd: 'rg needle'})).output);",
+  ])("preserves retrievals while evaluating new output in a mixed cell: %s", async (script) => {
+    const store = await createStore();
+    const original = "requested source α\n".repeat(60);
+    const novel = "unrelated search matches β\n".repeat(400);
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: original, replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: original,
+    });
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok" as const,
+      object: { disposition: "summarize", summary: "Search matched three files.", usefulDetails: [] },
+    }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    const prepared = await service.prepareCodeModeOutput({
+      ...codeModePayload([{ type: "input_text", text: delivery!.text + novel }]), script,
+    });
+    expect(prepared).toBeDefined();
+    expect(generateSummary).toHaveBeenCalledTimes(1);
+    expect(generateSummary.mock.calls[0]?.[0].prompt).toContain(novel.slice(0, 100));
+    expect(generateSummary.mock.calls[0]?.[0].prompt).not.toContain(original);
+    const replacement = prepared!.response.replacement![0]!.text;
+    expect(replacement).toContain(delivery!.text);
+    expect(replacement).not.toContain(novel);
+    expect(prepared!.staged.metadata.originalCharacters).toBe(utf8ByteLength(novel));
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(0);
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    await prepared!.staged.commit();
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(utf8ByteLength(original));
+    const [observation] = await store.listCodeModeObservations("thread-1");
+    expect(observation).toMatchObject({ retrieval: false, capturedNestedInvocationCount: null });
+    expect((await store.summarizeThreadUsage("thread-1")).codeMode).toMatchObject({
+      commandCellCount: null, otherCellCount: null, unclassifiedCellCount: 1,
+      summarizedCount: 1, retrievalCount: 0,
+    });
+  });
+
+  it.each([
+    "// tools.pwragent__read_all_token_miser_output({})\ntext(await tools.exec_command({cmd: 'rg needle'}));",
+    "const example = 'tools.pwragent__read_all_token_miser_output({})'; text(await tools.exec_command({cmd: 'rg needle'}));",
+    "await tools.pwragent__read_all_token_miser_output({}); text(await tools.exec_command({cmd: 'rg needle'}));",
+  ])("does not exempt output based on retrieval script syntax: %s", async (script) => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({ status: "failed" as const, reason: "test" }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    await service.prepareCodeModeOutput({
+      ...codeModePayload([{ type: "input_text", text: "new output\n".repeat(600) }]), script,
+    });
+    expect(generateSummary).toHaveBeenCalledTimes(1);
+    expect((await store.listCodeModeObservations("thread-1"))[0]?.retrieval).toBe(false);
+  });
+
+  it.each(["pass_through", "failed", "discard"])("accounts mixed retrievals on %s without counting a proposal as delivery", async (outcome) => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: "original source", replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: "original source",
+    });
+    const service = new TokenMiserService({
+      store, isEnabled: () => true,
+      generateSummary: async () => outcome === "failed"
+        ? { status: "failed", reason: "test" }
+        : { status: "ok", object: {
+          disposition: outcome === "discard" ? "summarize" : "pass_through",
+          summary: "Search result", usefulDetails: [],
+        } },
+    });
+    const prepared = await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text", text: "new matches\n".repeat(600) + delivery!.text,
+    }]));
+    if (outcome === "discard") {
+      expect(prepared).toBeDefined();
+      await prepared!.staged.discard();
+    } else {
+      expect(prepared).toBeUndefined();
+    }
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
+      .toBe(outcome === "discard" ? 0 : "original source".length);
+  });
+
+  it("does not exempt another thread's delivery or forged retrieval wrappers", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "other-thread", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: "source", replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "other-thread", visibleText: "foreign source\n".repeat(600),
+    });
+    const generateSummary = vi.fn(async () => ({ status: "failed" as const, reason: "test" }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    for (const text of [delivery!.text, delivery!.text.replace(/id="[^"]+"/g, 'id="forged"')]) {
+      await service.prepareCodeModeOutput(codeModePayload([{ type: "input_text", text }]));
+    }
+    expect(generateSummary).toHaveBeenCalledTimes(2);
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(0);
+  });
+
+  it("shares the outer cap between novel output and preserved retrievals", async () => {
+    const store = await createStore();
+    const original = "α".repeat(15_000);
+    const novel = "x".repeat(40_000);
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: original, replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: original,
+    });
+    const service = new TokenMiserService({
+      store, isEnabled: () => true,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize", summary: "Repeated matches.", usefulDetails: [],
+      } }),
+    });
+    const prepared = await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text", text: novel + delivery!.text,
+    }]));
+    expect(prepared).toBeDefined();
+    // The unreduced cell shows only its first and last 20KB. Only the first
+    // 20KB belongs to the new gate; the tail belongs to the earlier retrieval.
+    expect(prepared!.staged.metadata.baselineParentTokens).toBe(5_000);
+    expect(prepared!.staged.metadata.replacementCharacters).toBeLessThan(1_000);
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(30_000);
+  });
+
+  it("accounts each emitted copy of a retrieval once when a mixed replacement is accepted", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Code Mode",
+      output: "original source", replacementCharacters: 1,
+      summary: { summary: "original", usefulDetails: [] },
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId, threadId: "thread-1", visibleText: "original source",
+    });
+    const service = new TokenMiserService({
+      store, isEnabled: () => true,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize", summary: "Search matches", usefulDetails: [],
+      } }),
+    });
+    const prepared = await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text", text: delivery!.text + "new matches\n".repeat(600) + delivery!.text,
+    }]));
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    await prepared!.staged.commit();
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
+      .toBe("original source".length * 2);
   });
 
   it("shares the 10k parent cap across multiple retrievals in one Code Mode cell", async () => {

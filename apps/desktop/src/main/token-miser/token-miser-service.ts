@@ -20,6 +20,7 @@ import {
 } from "./token-miser-types.js";
 import {
   TokenMiserStore,
+  codexVisibleStringRanges,
   type TokenMiserGroupStoredOutput,
   type TokenMiserStagedObject,
 } from "./token-miser-store.js";
@@ -343,50 +344,89 @@ export class TokenMiserService {
     if (!await this.isEnabledForThread(payload.thread_id)) {
       return undefined;
     }
-    const output = payload.content_items.map((item) => item.text).join("");
-    const retrieval = isCodeModeTokenMiserRetrievalInvocation(
-      payload.script ?? "",
-    );
+    const originalOutput = payload.content_items.map((item) => item.text).join("");
+    // Exempt only authenticated delivery bytes. A cell can retrieve source
+    // and emit unrelated commands, regardless of what its script calls look like.
+    const parts = await this.options.store.partitionRetrievalOutput({
+      output: originalOutput,
+      threadId: payload.thread_id,
+    });
+    const hasRetrieval = parts.some((part) => part.retrieval);
+    const output = parts.filter((part) => !part.retrieval)
+      .map((part) => part.text).join("");
+    const retrieval = hasRetrieval && output.trim().length === 0;
+    const maxVisibleBytes =
+      payload.max_output_tokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN;
+    const replaceNewParts = (replacement: string) => {
+      let replaced = false;
+      return parts.map((part) => {
+        if (part.retrieval) return part;
+        const text = replaced ? "" : replacement;
+        replaced = true;
+        return { text, retrieval: false };
+      });
+    };
+    const replaceNewOutput = (replacement: string) =>
+      replaceNewParts(replacement).map((part) => part.text).join("");
+    const visibleNewBytes = (visibleParts: typeof parts) => {
+      const text = visibleParts.map((part) => part.text).join("");
+      const visibleRanges = codexVisibleStringRanges(text, maxVisibleBytes);
+      let offset = 0;
+      let bytes = 0;
+      for (const part of visibleParts) {
+        if (!part.retrieval) {
+          for (const range of visibleRanges) {
+            const start = Math.max(offset, range.start);
+            const end = Math.min(offset + part.text.length, range.end);
+            if (end > start) bytes += utf8ByteLength(text.slice(start, end));
+          }
+        }
+        offset += part.text.length;
+      }
+      return bytes;
+    };
+    const baselineBytes = visibleNewBytes(parts);
+    const baselineParentTokenCap = hasRetrieval
+      ? Math.max(1, Math.ceil(baselineBytes / TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN))
+      : payload.max_output_tokens;
+    const confirmRetrievals = (text: string) => this.options.store.confirmModelVisibleRetrievals({
+      maxVisibleBytes,
+      output: text,
+      threadId: payload.thread_id,
+    });
     const nestedKinds = [...(capturedGroup?.members.values() ?? [])].map(
       classifyCapturedGroupMember,
     );
-    const recordObservation = () => this.options.store.recordCodeModeObservation({
-      threadId: payload.thread_id,
-      turnId: payload.turn_id,
-      callId: payload.call_id,
-      cellId: payload.cell_id,
-      outputCharacters: output.length,
-      outputPreview: output.slice(0, 5_000),
-      outputPreviewTruncated: output.length > 5_000,
-      maxOutputTokens: payload.max_output_tokens,
-      scriptStatus: payload.script_status,
-      ...(payload.script ? { script: payload.script } : {}),
-      retrieval,
-      capturedNestedInvocationCount: capturedGroup?.members.size ?? 0,
-      capturedCommandInvocationCount: nestedKinds.filter(
-        (kind) => kind === "command",
-      ).length,
-      capturedPollingInvocationCount: nestedKinds.filter(
-        (kind) => kind === "polling",
-      ).length,
-      capturedPatchInvocationCount: nestedKinds.filter(
-        (kind) => kind === "patch",
-      ).length,
-      capturedOtherInvocationCount: nestedKinds.filter(
-        (kind) => kind === "other",
-      ).length,
-    });
-    if (retrieval) {
-      // The reducer observes exact Code Mode output before Codex applies its
-      // model-visible ceiling. Confirm only the prefix eligible to cross that
-      // boundary; otherwise one minified line can become an unbounded debit.
-      await this.options.store.confirmModelVisibleRetrievals({
-        maxVisibleBytes:
-          payload.max_output_tokens
-          * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
-        output,
+    const recordObservation = async (passedThrough = true) => {
+      if (passedThrough) await confirmRetrievals(originalOutput);
+      return this.options.store.recordCodeModeObservation({
         threadId: payload.thread_id,
+        turnId: payload.turn_id,
+        callId: payload.call_id,
+        cellId: payload.cell_id,
+        outputCharacters: originalOutput.length,
+        outputPreview: originalOutput.slice(0, 5_000),
+        outputPreviewTruncated: originalOutput.length > 5_000,
+        maxOutputTokens: payload.max_output_tokens,
+        scriptStatus: payload.script_status,
+        ...(payload.script ? { script: payload.script } : {}),
+        retrieval,
+        capturedNestedInvocationCount: capturedGroup?.members.size || null,
+        capturedCommandInvocationCount: capturedGroup ? nestedKinds.filter(
+          (kind) => kind === "command",
+        ).length : undefined,
+        capturedPollingInvocationCount: capturedGroup ? nestedKinds.filter(
+          (kind) => kind === "polling",
+        ).length : undefined,
+        capturedPatchInvocationCount: capturedGroup ? nestedKinds.filter(
+          (kind) => kind === "patch",
+        ).length : undefined,
+        capturedOtherInvocationCount: capturedGroup ? nestedKinds.filter(
+          (kind) => kind === "other",
+        ).length : undefined,
       });
+    };
+    if (retrieval || (hasRetrieval && baselineBytes === 0)) {
       await recordObservation();
       return undefined;
     }
@@ -405,7 +445,7 @@ export class TokenMiserService {
         toolName: "Code Mode",
         output,
         signal: options.signal,
-        baselineParentTokenCap: payload.max_output_tokens,
+        baselineParentTokenCap,
         summary: {
           summary:
             "Passed through because the result contains a live process or session handle needed for a follow-up operation.",
@@ -430,14 +470,14 @@ export class TokenMiserService {
         toolName: "Code Mode",
         output,
         signal: options.signal,
-        baselineParentTokenCap: payload.max_output_tokens,
+        baselineParentTokenCap,
         summary: deterministicPassThrough,
       });
       await recordObservation();
       return undefined;
     }
 
-    if (capturedGroup?.members.size && !capturedGroup.overflowed) {
+    if (!hasRetrieval && capturedGroup?.members.size && !capturedGroup.overflowed) {
       const grouped = await this.prepareGroupedCodeModeOutput(
         payload,
         output,
@@ -462,12 +502,13 @@ export class TokenMiserService {
       output,
       prompt: buildCodeModeSummaryPrompt(payload, output),
       signal: options.signal,
-      baselineParentTokenCap: payload.max_output_tokens,
+      baselineParentTokenCap,
       maxReplacementBytes:
         payload.max_output_tokens
         * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
       replacementCharacters: (text) =>
-        utf8ByteLength(text) + payload.model_visible_overhead_characters
+        visibleNewBytes(replaceNewParts(text))
+        + payload.model_visible_overhead_characters
         + this.codeModeActionableStateCharacters(payload),
     });
     if (!prepared) {
@@ -479,7 +520,10 @@ export class TokenMiserService {
       return undefined;
     }
     const response = {
-      replacement: [{ type: "input_text" as const, text: prepared.replacement }],
+      replacement: [{
+        type: "input_text" as const,
+        text: replaceNewOutput(prepared.replacement),
+      }],
       response_id: prepared.staged.metadata.objectId,
       ...(payload.actionable_state
         ? { actionable_state: payload.actionable_state }
@@ -493,10 +537,20 @@ export class TokenMiserService {
       await recordObservation();
       return undefined;
     }
-    await recordObservation();
+    await recordObservation(false);
+    let committed = false;
     return {
       response,
-      staged: prepared.staged,
+      staged: {
+        ...prepared.staged,
+        commit: async () => {
+          await prepared.staged.commit();
+          if (!committed) {
+            committed = true;
+            await confirmRetrievals(response.replacement[0].text);
+          }
+        },
+      },
     };
   }
 
@@ -1361,18 +1415,6 @@ function isDirectTokenMiserRetrievalInvocation(
   return [input.tool, input.name, input.operation].some((value) =>
     typeof value === "string" && isTokenMiserRetrievalToolName(value)
   );
-}
-
-function isCodeModeTokenMiserRetrievalInvocation(script: string): boolean {
-  return TOKEN_MISER_RETRIEVAL_TOOL_NAMES.some((name) => {
-    const directMethod = new RegExp(
-      `\\btools\\s*\\.\\s*(?:pwragent__|pwragent\\s*\\.\\s*)${name}\\s*\\(`,
-    );
-    const namespaceDispatcher = new RegExp(
-      `\\btools\\s*\\.\\s*pwragent\\s*\\(\\s*\\{[\\s\\S]{0,500}?\\btool\\s*:\\s*["']${name}["']`,
-    );
-    return directMethod.test(script) || namespaceDispatcher.test(script);
-  });
 }
 
 function isTokenMiserRetrievalToolName(value: string): boolean {

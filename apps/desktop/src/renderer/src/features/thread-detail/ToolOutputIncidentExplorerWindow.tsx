@@ -2254,6 +2254,13 @@ function TokenMiserCodeModeStats(props: {
 }) {
   const codeMode = props.tokenMiser.codeMode;
   if (!codeMode || codeMode.callCount === 0) return null;
+  const unclassified = codeMode.unclassifiedCellCount
+    ?? codeMode.observations.filter((entry) => !entry.capturedNestedInvocationCount).length;
+  const captureAvailable = unclassified < codeMode.callCount;
+  const formatCaptured = (count: number | null | undefined) =>
+    !captureAvailable || count == null
+      ? "Unavailable"
+      : `${unclassified > 0 ? "≥" : ""}${count.toLocaleString()}`;
   const commandCells = codeMode.commandCellCount ?? 0;
   const nestedCommands = codeMode.nestedCommandInvocationCount ?? 0;
   const dispatchClusters = codeMode.dispatchClusterCount ?? 0;
@@ -2281,13 +2288,13 @@ function TokenMiserCodeModeStats(props: {
         },
         {
           label: "command cells",
-          value: commandCells.toLocaleString(),
-          zero: commandCells === 0,
+          value: formatCaptured(commandCells),
+          zero: captureAvailable && commandCells === 0,
         },
         {
           label: "dispatch clusters",
-          value: dispatchClusters.toLocaleString(),
-          zero: dispatchClusters === 0,
+          value: formatCaptured(dispatchClusters),
+          zero: captureAvailable && dispatchClusters === 0,
         },
       ]}
       label="Code Mode"
@@ -2295,6 +2302,9 @@ function TokenMiserCodeModeStats(props: {
       open={props.open}
       sectionKey="code-mode"
     >
+      {unclassified > 0 ? (
+        <p>{unclassified.toLocaleString()} cells have no nested tool capture. Command and tool-type counts are unavailable for those cells; their outer output is still inspected.</p>
+      ) : null}
       <SavingsFigureGrid
         figures={[
           {
@@ -2308,37 +2318,37 @@ function TokenMiserCodeModeStats(props: {
             zero: codeMode.passThroughCount === 0,
           },
           {
-            detail: `${nestedCommands.toLocaleString()} nested · `
+            detail: !captureAvailable ? "Nested tool capture was not supplied." : `${nestedCommands.toLocaleString()} nested · `
               + `${commandCells > 0
                 ? (nestedCommands / commandCells).toFixed(2)
                 : "0.00"} per cell`,
             label: "Command-bearing cells",
-            value: commandCells.toLocaleString(),
-            zero: commandCells === 0,
+            value: formatCaptured(commandCells),
+            zero: captureAvailable && commandCells === 0,
           },
           {
-            detail: `${multiInvocation.toLocaleString()} multi-invocation`
+            detail: !captureAvailable ? undefined : `${multiInvocation.toLocaleString()} multi-invocation`
               + (multiInvocation > 0
                 ? ` · largest ${(codeMode.largestDispatchCluster ?? 0).toLocaleString()}`
                 : ""),
             label: "Dispatch clusters",
-            value: dispatchClusters.toLocaleString(),
-            zero: dispatchClusters === 0,
+            value: formatCaptured(dispatchClusters),
+            zero: captureAvailable && dispatchClusters === 0,
           },
           {
             label: "Direct command cells",
-            value: (codeMode.directCommandCellCount ?? 0).toLocaleString(),
-            zero: (codeMode.directCommandCellCount ?? 0) === 0,
+            value: formatCaptured(codeMode.directCommandCellCount),
+            zero: captureAvailable && codeMode.directCommandCellCount === 0,
           },
           {
             label: "Patch cells",
-            value: (codeMode.patchCellCount ?? 0).toLocaleString(),
-            zero: (codeMode.patchCellCount ?? 0) === 0,
+            value: formatCaptured(codeMode.patchCellCount),
+            zero: captureAvailable && codeMode.patchCellCount === 0,
           },
           {
             label: "Other cells",
-            value: (codeMode.otherCellCount ?? 0).toLocaleString(),
-            zero: (codeMode.otherCellCount ?? 0) === 0,
+            value: formatCaptured(codeMode.otherCellCount),
+            zero: captureAvailable && codeMode.otherCellCount === 0,
           },
           {
             label: "Retrieval cells",
@@ -2347,8 +2357,8 @@ function TokenMiserCodeModeStats(props: {
           },
           {
             label: "Polling cells",
-            value: (codeMode.pollingCellCount ?? 0).toLocaleString(),
-            zero: (codeMode.pollingCellCount ?? 0) === 0,
+            value: formatCaptured(codeMode.pollingCellCount),
+            zero: captureAvailable && codeMode.pollingCellCount === 0,
           },
         ]}
       />

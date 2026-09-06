@@ -168,21 +168,22 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
     summary?: TokenMiserSummary;
   }>;
   codeMode: {
+    unclassifiedCellCount: number;
     callCount: number;
-    commandCellCount: number;
-    directCommandCellCount: number;
-    dispatchClusterCount: number;
-    multiInvocationClusterCount: number;
-    largestDispatchCluster: number;
-    nestedCommandInvocationCount: number;
-    patchCellCount: number;
-    otherCellCount: number;
-    pollingCellCount: number;
+    commandCellCount: number | null;
+    directCommandCellCount: number | null;
+    dispatchClusterCount: number | null;
+    multiInvocationClusterCount: number | null;
+    largestDispatchCluster: number | null;
+    nestedCommandInvocationCount: number | null;
+    patchCellCount: number | null;
+    otherCellCount: number | null;
+    pollingCellCount: number | null;
     directCount: number;
     summarizedCount: number;
     passThroughCount: number;
     retrievalCount: number;
-    capturedNestedInvocationCount: number;
+    capturedNestedInvocationCount: number | null;
     observations: Array<TokenMiserCodeModeObservation & {
       disposition: "direct" | "summarized" | "passed_through" | "retrieval";
     }>;
@@ -623,6 +624,50 @@ export class TokenMiserStore {
     return { deliveryId, text: wrappedText };
   }
 
+  /** Match only live, thread-owned deliveries, never script text or marker syntax. */
+  async partitionRetrievalOutput(params: { output: string; threadId: string }): Promise<Array<{
+    text: string;
+    retrieval: boolean;
+  }>> {
+    if (await this.isArchived(params.threadId)) {
+      return [{ text: params.output, retrieval: false }];
+    }
+    const generation = await this.readRetentionGeneration(params.threadId);
+    const matches = [...this.pendingRetrievalDeliveries.entries()]
+      .filter(([, reference]) => reference.threadId === params.threadId)
+      .flatMap(([deliveryId, reference]) => {
+        const text = this.outputs.get(deliveryId);
+        if (!text || Date.now() - reference.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
+          this.abandonRetrievalDelivery(deliveryId);
+          return [];
+        }
+        const pending = JSON.parse(text) as PendingRetrievalDelivery;
+        if (pending.generation !== generation) return [];
+        const matches: Array<{ start: number; end: number }> = [];
+        let start = params.output.indexOf(pending.wrappedText);
+        while (start >= 0) {
+          matches.push({ start, end: start + pending.wrappedText.length });
+          start = params.output.indexOf(pending.wrappedText, start + pending.wrappedText.length);
+        }
+        return matches;
+      })
+      .sort((left, right) => left.start - right.start);
+    const parts: Array<{ text: string; retrieval: boolean }> = [];
+    let offset = 0;
+    for (const match of matches) {
+      if (match.start < offset) continue;
+      if (match.start > offset) {
+        parts.push({ text: params.output.slice(offset, match.start), retrieval: false });
+      }
+      parts.push({ text: params.output.slice(match.start, match.end), retrieval: true });
+      offset = match.end;
+    }
+    if (offset < params.output.length) {
+      parts.push({ text: params.output.slice(offset), retrieval: false });
+    }
+    return parts;
+  }
+
   async confirmModelVisibleRetrievals(params: {
     maxVisibleBytes?: number;
     output: string;
@@ -655,15 +700,25 @@ export class TokenMiserStore {
     for (const { deliveryId, outputOffset, pending } of candidates) {
       this.abandonRetrievalDelivery(deliveryId);
       if (pending.generation !== generation) continue;
-      const visibleTextStart = outputOffset + pending.visibleTextOffset;
-      const visibleTextEnd = visibleTextStart + pending.visibleText.length;
-      const visibleCharacters = visibleRanges.reduce((total, range) => {
-        const start = Math.max(visibleTextStart, range.start);
-        const end = Math.min(visibleTextEnd, range.end);
-        return end > start
-          ? total + utf8ByteLength(params.output.slice(start, end))
-          : total;
-      }, 0);
+      let visibleCharacters = 0;
+      let occurrence = outputOffset;
+      // A cell can emit the same delivery more than once. Each visible copy
+      // enters context, but update its metadata only once per delivery.
+      while (occurrence >= 0) {
+        const visibleTextStart = occurrence + pending.visibleTextOffset;
+        const visibleTextEnd = visibleTextStart + pending.visibleText.length;
+        visibleCharacters += visibleRanges.reduce((total, range) => {
+          const start = Math.max(visibleTextStart, range.start);
+          const end = Math.min(visibleTextEnd, range.end);
+          return end > start
+            ? total + utf8ByteLength(params.output.slice(start, end))
+            : total;
+        }, 0);
+        occurrence = params.output.indexOf(
+          pending.wrappedText,
+          occurrence + pending.wrappedText.length,
+        );
+      }
       await this.recordRetrieval(pending.objectId, visibleCharacters);
       confirmedCharacters += visibleCharacters;
     }
@@ -758,11 +813,17 @@ export class TokenMiserStore {
         ? "retrieval" as const
         : metadataByToolUseId.get(observation.callId)?.disposition
           ?? "direct" as const;
-      return { ...observation, disposition };
+      // Legacy zeroes meant no hooks arrived, not that no tools executed.
+      const capturedNestedInvocationCount = observation.capturedNestedInvocationCount || null;
+      return { ...observation, capturedNestedInvocationCount, disposition };
     });
+    const capturedCells = codeModeObservations.filter(
+      (entry) => entry.capturedNestedInvocationCount !== null,
+    );
+    const capturedCount = (count: number) => capturedCells.length > 0 ? count : null;
     const commandCount = (entry: TokenMiserCodeModeObservation) =>
       entry.capturedCommandInvocationCount
-      ?? (entry.retrieval ? 0 : entry.capturedNestedInvocationCount);
+      ?? (entry.retrieval ? 0 : entry.capturedNestedInvocationCount ?? 0);
     const commandCells = codeModeObservations.filter(
       (entry) => commandCount(entry) > 0,
     );
@@ -813,35 +874,38 @@ export class TokenMiserStore {
         };
       }),
       codeMode: {
+        unclassifiedCellCount: codeModeObservations.length - capturedCells.length,
         callCount: codeModeObservations.length,
-        commandCellCount: commandCells.length,
-        directCommandCellCount: commandCells.filter(
+        commandCellCount: capturedCount(commandCells.length),
+        directCommandCellCount: capturedCount(commandCells.filter(
           (entry) => entry.disposition === "direct",
-        ).length,
-        dispatchClusterCount: dispatchClusterSizes.length,
-        multiInvocationClusterCount: dispatchClusterSizes.filter(
+        ).length),
+        dispatchClusterCount: capturedCount(dispatchClusterSizes.length),
+        multiInvocationClusterCount: capturedCount(dispatchClusterSizes.filter(
           (size) => size > 1,
-        ).length,
-        largestDispatchCluster: dispatchClusterSizes.length > 0
-          ? Math.max(...dispatchClusterSizes)
-          : 0,
-        nestedCommandInvocationCount: dispatchClusterSizes.reduce(
+        ).length),
+        largestDispatchCluster: capturedCells.length === 0
+          ? null
+          : dispatchClusterSizes.length > 0
+            ? Math.max(...dispatchClusterSizes)
+            : 0,
+        nestedCommandInvocationCount: capturedCount(dispatchClusterSizes.reduce(
           (total, size) => total + size,
           0,
-        ),
-        patchCellCount: codeModeObservations.filter(
+        )),
+        patchCellCount: capturedCount(capturedCells.filter(
           (entry) => (entry.capturedPatchInvocationCount ?? 0) > 0,
-        ).length,
-        otherCellCount: codeModeObservations.filter(
+        ).length),
+        otherCellCount: capturedCount(capturedCells.filter(
           (entry) => !entry.retrieval
             && (
               entry.capturedNestedInvocationCount === 0
               || (entry.capturedOtherInvocationCount ?? 0) > 0
             ),
-        ).length,
-        pollingCellCount: codeModeObservations.filter(
+        ).length),
+        pollingCellCount: capturedCount(capturedCells.filter(
           (entry) => (entry.capturedPollingInvocationCount ?? 0) > 0,
-        ).length,
+        ).length),
         directCount: codeModeObservations.filter(
           (entry) => entry.disposition === "direct",
         ).length,
@@ -854,10 +918,10 @@ export class TokenMiserStore {
         retrievalCount: codeModeObservations.filter(
           (entry) => entry.disposition === "retrieval",
         ).length,
-        capturedNestedInvocationCount: codeModeObservations.reduce(
-          (total, entry) => total + entry.capturedNestedInvocationCount,
+        capturedNestedInvocationCount: capturedCount(codeModeObservations.reduce(
+          (total, entry) => total + (entry.capturedNestedInvocationCount ?? 0),
           0,
-        ),
+        )),
         observations: codeModeObservations,
       },
     };
@@ -1398,7 +1462,7 @@ function normalizePositiveInteger(
     : fallback;
 }
 
-function codexVisibleStringRanges(
+export function codexVisibleStringRanges(
   text: string,
   maxBytes: number,
 ): Array<{ start: number; end: number }> {

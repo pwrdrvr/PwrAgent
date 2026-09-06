@@ -161,6 +161,33 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByText(/gated \d+ of \d+ flagged/)).not.toBeInTheDocument();
   });
 
+  it("shows unavailable nested capture without implying zero commands", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 0, originalCharacters: 0, baselineParentTokens: 0,
+      replacementTokens: 0, retrievedTokens: 0, estimatedParentTokensSaved: 0,
+      interceptions: [], codeMode: {
+      callCount: 2, unclassifiedCellCount: 2, commandCellCount: null,
+      directCommandCellCount: null, dispatchClusterCount: null,
+      multiInvocationClusterCount: null, largestDispatchCluster: null,
+      nestedCommandInvocationCount: null, patchCellCount: null, otherCellCount: null,
+      pollingCellCount: null, directCount: 1, summarizedCount: 1, passThroughCount: 0,
+      retrievalCount: 0, capturedNestedInvocationCount: null, observations: [],
+      },
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+    await screen.findByRole("region", { name: "Code Mode" });
+    expect(savingsSection("Code Mode").getByRole("button"))
+      .toHaveTextContent(/Unavailable command cells.*Unavailable dispatch clusters/);
+    openSavingsSection("Code Mode");
+    expect(savingsSection("Code Mode").getByText("Other cells").nextSibling)
+      .toHaveTextContent("Unavailable");
+    expect(savingsSection("Code Mode").getByText(/2 cells have no nested tool capture/))
+      .toBeInTheDocument();
+  });
+
   it("makes ungated Code Mode calls a filter in the shared results list", async () => {
     const response = buildResponse();
     const observations = Array.from({ length: 2 }, (_, index) => ({
