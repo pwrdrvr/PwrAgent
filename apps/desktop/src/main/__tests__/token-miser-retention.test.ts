@@ -136,6 +136,80 @@ it("bounds filesystem bytes and writes at acceptance and lifecycle boundaries", 
     expect(Buffer.byteLength(String(writes.mock.calls[0]![1]))).toBeLessThan(1024);
   } finally { writes.mockRestore(); }
 });
+it("merges buffered replay deltas with another instance's retirement and retrieval updates", async () => {
+  const { store, root } = await fixture();
+  const entry = await store.store(params);
+  for (const tokens of [100, 200, 300]) {
+    await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: tokens });
+  }
+  const other = new TokenMiserStore(root);
+  await (other as unknown as { recordRetrieval(id: string, characters: number): Promise<void> }).recordRetrieval(entry.objectId, 12);
+  await other.stopReplayTracking({ objectId: entry.objectId, stoppedAt: 1234 });
+  expect(await store.readMetadata(entry.objectId, "owner")).toMatchObject({ retrievedCharacters: 12, replayTrackingStoppedAt: 1234 });
+  await store.flushThread("owner");
+  const restored = await new TokenMiserStore(root).readMetadata(entry.objectId, "owner");
+  expect(restored).toMatchObject({ cachedReplayCount: 1, retrievedCharacters: 12, replayTrackingStoppedAt: 1234 });
+  expect(await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: 400 })).toBeUndefined();
+});
+it("adds independent replay deltas without replacing newer durable counters", async () => {
+  const { store, root } = await fixture();
+  const entry = await store.store(params);
+  for (const tokens of [100, 200]) await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: tokens });
+  await store.flushThread("owner");
+  await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: 300 });
+  const other = new TokenMiserStore(root);
+  await other.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: 400 });
+  await other.flushThread("owner");
+  await store.flushThread("owner");
+  expect(await new TokenMiserStore(root).readMetadata(entry.objectId, "owner")).toMatchObject({
+    cachedReplayCount: 2, parentRequestsObservedAfterGate: 4, lastParentCumulativeInputTokens: 400,
+  });
+});
+it("retains failed flush deltas and drains other threads before reporting shutdown failure", async () => {
+  const { store, root } = await fixture();
+  const entries = await Promise.all([store.store(params), store.store({ ...params, threadId: "other" })]);
+  for (const entry of entries) {
+    for (const tokens of [100, 200, 300]) await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: tokens });
+  }
+  const writeFile = fs.writeFile.bind(fs);
+  const write = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+    if (String(file).includes(entries[0]!.objectId)) throw new Error("fixture flush failure");
+    return writeFile(file, data, options);
+  });
+  try {
+    await expect(store.flushAll()).rejects.toThrow("replay flush failed");
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls.every((call) => Buffer.byteLength(String(call[1])) < 1024)).toBe(true);
+  }
+  finally { write.mockRestore(); }
+  const other = new TokenMiserStore(root);
+  expect((await other.readMetadata(entries[1]!.objectId))?.cachedReplayCount).toBe(1);
+  await other.stopReplayTracking({ objectId: entries[0]!.objectId, stoppedAt: 1234 });
+  await store.flushAll();
+  expect(await other.readMetadata(entries[0]!.objectId)).toMatchObject({ cachedReplayCount: 1, replayTrackingStoppedAt: 1234 });
+  expect((await other.readMetadata(entries[1]!.objectId))?.cachedReplayCount).toBe(1);
+  const writes = vi.spyOn(fs, "writeFile");
+  try { await store.flushAll(); expect(writes).not.toHaveBeenCalled(); }
+  finally { writes.mockRestore(); }
+});
+it("preserves a newer durable request epoch when older buffered estimates flush", async () => {
+  const { store, root } = await fixture();
+  const entry = await store.store(params);
+  await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: 100, requestEpoch: "old" });
+  await store.flushThread("owner");
+  await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: 200, requestEpoch: "old" });
+  const other = new TokenMiserStore(root);
+  await other.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: 10, requestEpoch: "new" });
+  await other.flushThread("owner");
+  const writes = vi.spyOn(fs, "writeFile");
+  try {
+    await Promise.all([store.flushAll(), store.flushAll()]);
+    expect(writes).toHaveBeenCalledTimes(1);
+  } finally { writes.mockRestore(); }
+  expect(await other.readMetadata(entry.objectId)).toMatchObject({
+    parentRequestEpoch: "new", lastParentCumulativeInputTokens: 10, parentRequestsObservedAfterGate: 3,
+  });
+});
 it("never publishes a failed acceptance or exposes another thread's payload", async () => {
   const { store } = await fixture();
   const staged = await store.stage(params);

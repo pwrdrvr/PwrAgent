@@ -12600,6 +12600,19 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async restoreTokenMiserThread(threadId: string): Promise<void> {
+    try {
+      await this.tokenMiserStore?.restoreThread(threadId);
+    } catch (error) {
+      // Codex restoration already succeeded. The retained archive marker
+      // keeps originals unavailable while desktop restoration still finishes.
+      backendRegistryLog.warn("Token Miser restore retention failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async restoreThread(
     request: RestoreThreadRequest,
   ): Promise<RestoreThreadResponse> {
@@ -12618,7 +12631,7 @@ export class DesktopBackendRegistry {
       await this.restoreWithClient(client, request.threadId),
     );
     if (backend === "codex") {
-      await this.tokenMiserStore?.restoreThread(result.threadId);
+      await this.restoreTokenMiserThread(result.threadId);
       await this.overlayStore.setThreadArchiveTombstone({
         backend,
         threadId: result.threadId,
@@ -21833,6 +21846,13 @@ export class DesktopBackendRegistry {
         ? [{ name: resources[index].name, reason: result.reason }]
         : [],
     );
+    // Producers are now closed and previously admitted observations drained.
+    // Preserve active-turn estimates even when another resource failed close.
+    try {
+      await this.tokenMiserStore?.flushAll();
+    } catch (error) {
+      failures.push({ name: "token-miser-replay", reason: error });
+    }
     if (failures.length > 0) {
       throw new AggregateError(
         failures.map((failure) => failure.reason),
@@ -22940,7 +22960,7 @@ export class DesktopBackendRegistry {
           });
         }
         if (notification.method === "thread/unarchived") {
-          if (backend === "codex") await this.tokenMiserStore?.restoreThread(notification.params.threadId);
+          if (backend === "codex") await this.restoreTokenMiserThread(notification.params.threadId);
           this.clearArchivedMessagingCleanupCache({
             backend,
             threadId: notification.params.threadId,

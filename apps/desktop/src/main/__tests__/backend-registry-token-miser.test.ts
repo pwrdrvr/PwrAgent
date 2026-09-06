@@ -83,6 +83,28 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await expect(fs.stat(path.join(root, `${legacy.objectId}.txt`))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each([false, true])("drains active-turn replay estimates even if another shutdown resource fails (%s)", async (failClose) => {
+    const root = path.join(directory, "token-miser-objects");
+    const tokenMiserStore = new TokenMiserStore(root);
+    const entry = await tokenMiserStore.store({
+      ...metadata(randomUUID(), "helper-shutdown"), output: "fixture output",
+    });
+    Object.assign(registry, { tokenMiserStore });
+    for (const tokens of [100, 200]) {
+      await tokenMiserStore.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: tokens });
+    }
+    const queuedUpdate = tokenMiserStore.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: 300 });
+    if (failClose) {
+      const internals = registry as unknown as { codexClient: { close(): Promise<void> } };
+      vi.spyOn(internals.codexClient, "close").mockRejectedValueOnce(new Error("fixture close failure"));
+      await expect(registry.close()).rejects.toThrow("codex");
+    } else {
+      await registry.close();
+    }
+    await queuedUpdate;
+    expect(await new TokenMiserStore(root).readMetadata(entry.objectId, entry.threadId)).toMatchObject({ cachedReplayCount: 1 });
+  });
+
   it("reads thread metadata once for both accounting and savings", async () => {
     const tokenMiserStore = new TokenMiserStore(path.join(directory, "token-miser-objects"));
     for (const threadId of ["thread-parent", "thread-unrelated"]) {

@@ -24,6 +24,33 @@ const MAX_GROUP_BATCH_OPERATIONS = 16;
 const DEFAULT_GROUP_BATCH_OUTPUT_CHARACTERS = 20_000;
 const MAX_GROUP_BATCH_OUTPUT_CHARACTERS = 40_000;
 const RETRIEVAL_DELIVERY_TTL_MS = 2 * 60_000;
+const REPLAY_COUNTER_KEYS = ["parentRequestsObservedAfterGate", "cachedReplayCount", "cachedBaselineTokens", "cachedRevealedTokens"] as const;
+type ReplayCounter = typeof REPLAY_COUNTER_KEYS[number];
+type PendingReplayUpdate = {
+  view: TokenMiserObjectMetadata;
+  deltas: Partial<Record<ReplayCounter, number>>;
+  baseRequestEpoch?: string;
+};
+
+function mergeReplayUpdate(metadata: TokenMiserObjectMetadata, pending?: PendingReplayUpdate): TokenMiserObjectMetadata {
+  if (!pending) return metadata;
+  const merged = { ...metadata };
+  for (const key of REPLAY_COUNTER_KEYS) {
+    if (pending.deltas[key]) merged[key] = (metadata[key] ?? 0) + pending.deltas[key]!;
+  }
+  // A different epoch written since we buffered this work belongs to the
+  // other instance. Do not replace its request cursor with our older epoch.
+  if (metadata.parentRequestEpoch === pending.view.parentRequestEpoch) {
+    merged.lastParentCumulativeInputTokens = Math.max(
+      metadata.lastParentCumulativeInputTokens ?? -1,
+      pending.view.lastParentCumulativeInputTokens ?? -1,
+    );
+  } else if (metadata.parentRequestEpoch === pending.baseRequestEpoch) {
+    merged.parentRequestEpoch = pending.view.parentRequestEpoch;
+    merged.lastParentCumulativeInputTokens = pending.view.lastParentCumulativeInputTokens;
+  }
+  return merged;
+}
 
 async function readStoredFile(filePath: string): Promise<string> {
   return await withTokenMiserFileOperation(() => fs.readFile(filePath, "utf8"));
@@ -229,7 +256,7 @@ export class TokenMiserStore {
   private readonly updateLocks = new Map<string, Promise<void>>();
   private readonly pendingRetrievalDeliveries =
     new Map<string, { createdAt: number; threadId: string }>();
-  private readonly replayUpdates = new Map<string, TokenMiserObjectMetadata>();
+  private readonly replayUpdates = new Map<string, PendingReplayUpdate>();
   private readonly outputGenerations = new Map<string, string>();
   private readonly owners = new Map<string, string>();
   private readonly metadataIndexes = new Map<string, TokenMiserRecordIndex<TokenMiserObjectMetadata>>();
@@ -409,11 +436,14 @@ export class TokenMiserStore {
   }
 
   async readMetadata(objectId: string, threadId?: string): Promise<TokenMiserObjectMetadata | undefined> {
+    const metadata = await this.readDurableMetadata(objectId, threadId);
+    return metadata ? mergeReplayUpdate(metadata, this.replayUpdates.get(objectId)) : undefined;
+  }
+
+  private async readDurableMetadata(objectId: string, threadId?: string): Promise<TokenMiserObjectMetadata | undefined> {
     if (!isSafeObjectId(objectId)) {
       return undefined;
     }
-    const pending = this.replayUpdates.get(objectId);
-    if (pending && (threadId === undefined || pending.threadId === threadId)) return { ...pending };
     if (threadId === undefined && !this.owners.has(objectId)) await this.listMetadata();
     const key = threadId === undefined ? this.owners.get(objectId) : this.threadKey(threadId);
     if (!key) return undefined;
@@ -647,7 +677,7 @@ export class TokenMiserStore {
 
   async listMetadata(threadId?: string): Promise<TokenMiserObjectMetadata[]> {
     return (await mapTokenMiserFiles(await this.threadKeys(threadId), (key) => this.metadataIndex(key).list(threadId))).flat()
-      .map((entry) => this.replayUpdates.get(entry.objectId) ?? entry)
+      .map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)))
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
@@ -834,10 +864,22 @@ export class TokenMiserStore {
   }
 
   async flushThread(threadId: string): Promise<void> {
-    for (const [objectId, metadata] of this.replayUpdates) {
-      if (metadata.threadId !== threadId) continue;
+    for (const [objectId, pending] of this.replayUpdates) {
+      if (pending.view.threadId !== threadId) continue;
       await this.updateMetadata(objectId, () => true, "flushed");
     }
+  }
+
+  async flushAll(): Promise<void> {
+    // The caller stops event producers before draining. Include updates that
+    // have entered the serialization queue but have not reached the buffer.
+    await Promise.allSettled([...this.updateLocks.values()]);
+    const failures: unknown[] = [];
+    for (const objectId of [...this.replayUpdates.keys()]) {
+      try { await this.updateMetadata(objectId, () => true, "flushed"); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "Token Miser replay flush failed");
   }
 
   private async isArchived(threadId: string): Promise<boolean> {
@@ -875,7 +917,10 @@ export class TokenMiserStore {
       path.join(root, "archived"),
       path.join(root, "retention-generation"),
     )).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") throw error;
+      if (error.code !== "ENOENT") {
+        this.archivedThreads.add(threadId);
+        throw error;
+      }
     });
     this.archivedThreads.delete(threadId);
   }
@@ -1042,12 +1087,31 @@ export class TokenMiserStore {
       .catch(() => undefined);
     let updated: TokenMiserObjectMetadata | undefined;
     const next = previous.then(async () => {
-      const metadata = this.replayUpdates.get(objectId) ?? await this.readMetadata(objectId);
-      if (!metadata || !update(metadata)) {
+      const pending = this.replayUpdates.get(objectId);
+      if (reason === "flushed" && !pending) return;
+      // Replay events stay in RAM. Persistence boundaries always merge our
+      // counter deltas into fresh disk state, preserving retirement/retrieval.
+      const current = reason === "replay" && pending
+        ? pending.view
+        : await this.readMetadata(objectId);
+      if (!current) {
+        this.replayUpdates.delete(objectId);
+        return;
+      }
+      const metadata = { ...current };
+      if (!update(metadata)) {
         return;
       }
       if (reason === "replay") {
-        this.replayUpdates.set(objectId, metadata);
+        const deltas = { ...pending?.deltas };
+        for (const key of REPLAY_COUNTER_KEYS) {
+          const delta = (metadata[key] ?? 0) - (current[key] ?? 0);
+          if (delta) deltas[key] = (deltas[key] ?? 0) + delta;
+        }
+        this.replayUpdates.set(objectId, {
+          view: metadata, deltas,
+          baseRequestEpoch: pending ? pending.baseRequestEpoch : current.parentRequestEpoch,
+        });
       } else {
         await this.writeMetadata(metadata);
         this.replayUpdates.delete(objectId);

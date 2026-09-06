@@ -4734,7 +4734,7 @@ describe("DesktopBackendRegistry", () => {
       };
       resolveTokenMiserCodexRuntimeFn?: typeof resolveRuntime;
     };
-    internals.tokenMiserStore = {} as TokenMiserStore;
+    internals.tokenMiserStore = { flushAll: vi.fn(async () => {}) } as unknown as TokenMiserStore;
     internals.tokenMiserHookBridge = {
       start: startBridge,
       close: closeBridge,
@@ -4811,7 +4811,7 @@ describe("DesktopBackendRegistry", () => {
       };
       resolveTokenMiserCodexRuntimeFn?: typeof resolveRuntime;
     };
-    internals.tokenMiserStore = {} as TokenMiserStore;
+    internals.tokenMiserStore = { flushAll: vi.fn(async () => {}) } as unknown as TokenMiserStore;
     internals.tokenMiserHookBridge = {
       start: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -45537,6 +45537,7 @@ script = "printf setup"
     });
 
     Object.assign(registry, { tokenMiserStore: {
+      flushAll: vi.fn(async () => {}),
       archiveThread: vi.fn(async () => { throw new Error("fixture retention failure"); }),
     } });
     const internals = registry as unknown as {
@@ -45634,7 +45635,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("clears archive messaging cleanup cache when a thread is restored", async () => {
+  it("completes restoration after Token Miser retention fails", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive me again",
@@ -45657,21 +45658,28 @@ script = "printf setup"
       notifiedCount: 1,
       revokedCount: 1,
     });
+    const overlayStore = createOverlayStoreMock();
+    const tombstone = vi.spyOn(overlayStore, "setThreadArchiveTombstone");
     const registry = new DesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner,
       messagingStore,
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
     });
 
-    const restoreTokenMiser = vi.fn(async () => {});
+    const restoreWorktrees = vi.fn(async () => []);
+    Object.assign(registry, { restoreThreadWorktrees: restoreWorktrees });
+    const restoreTokenMiser = vi.fn(async () => { throw new Error("fixture restore retention failure"); });
     Object.assign(registry, { tokenMiserStore: {
+      flushAll: vi.fn(async () => {}),
       archiveThread: vi.fn(async () => {}),
       restoreThread: restoreTokenMiser,
     } });
 
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
     await registry.restoreThread({ backend: "codex", threadId: "thread-1" });
+    expect(tombstone).toHaveBeenLastCalledWith({ backend: "codex", threadId: "thread-1", archivedAt: undefined });
+    expect(restoreWorktrees).toHaveBeenCalledTimes(1);
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
 
     expect(messagingArchiveCleaner.requests).toEqual([
@@ -45711,8 +45719,9 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
     });
 
-    const restoreTokenMiser = vi.fn(async () => {});
+    const restoreTokenMiser = vi.fn(async () => { throw new Error("fixture restore retention failure"); });
     Object.assign(registry, { tokenMiserStore: {
+      flushAll: vi.fn(async () => {}),
       archiveThread: vi.fn(async () => { throw new Error("fixture notification retention failure"); }),
       restoreThread: restoreTokenMiser,
     } });
@@ -45721,11 +45730,12 @@ script = "printf setup"
     const unsubscribe = registry.onEvent((event) => { events.push(event); });
     await codexClient.emit({ method: "thread/archived", params: { threadId: "thread-1" } });
     expect(events.some((event) => event.notification.method === "thread/archived")).toBe(true);
-    unsubscribe();
     await codexClient.emit({
       method: "thread/unarchived",
       params: { threadId: "thread-1" },
     });
+    expect(events.some((event) => event.notification.method === "thread/unarchived")).toBe(true);
+    unsubscribe();
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
 
     expect(messagingArchiveCleaner.requests).toHaveLength(2);

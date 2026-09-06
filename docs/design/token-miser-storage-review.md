@@ -223,3 +223,28 @@ separately and continues messaging revocation, child/worktree cleanup, archive
 bookkeeping and notification publication. A failed durable marker cannot inform
 other processes by itself; the failure remains visible in the log. No new SQLite
 write or periodic filesystem write is introduced by this handling.
+
+### Replay flush and restoration review
+
+Pending replay accounting stores counter deltas plus an in-memory view for the
+next model request. Durable writes and accounting reads merge those deltas with
+fresh metadata. Retirement timestamps, retrieval counts, and a newer request
+cursor written by another instance survive a later flush. This fixes sequential
+stale-buffer overwrites; it does not turn overlapping cross-process file
+read/modify/write operations into transactions, as noted above.
+
+Orderly registry shutdown stops producers, drains admitted updates, and flushes
+all pending gates after closing resources. One failed gate does not prevent the
+remaining gates from flushing; failed deltas remain retryable and shutdown
+reports the failure. Empty or duplicate drains make no writes. The existing
+per-gate filesystem budget remains below 1 KiB for the contrived fixture. Closing
+with 100 dirty gates therefore adds less than 0.1024 MB of JSON payload writes
+per shutdown (excluding filesystem journaling). No SQLite write, per-stream
+write, or periodic write is added. Abrupt termination can still lose estimates
+that have not reached a lifecycle flush.
+
+Both explicit restoration and unarchive notifications log retention failures
+separately. The desktop still clears archive bookkeeping, restores worktrees,
+invalidates cached state, and publishes notifications after Codex succeeds.
+A failed retention restore keeps originals unavailable through the durable
+archive marker and a local guard; successful restoration can clear that guard.
