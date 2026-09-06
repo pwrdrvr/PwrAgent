@@ -15,6 +15,81 @@ afterEach(async () => {
 });
 
 describe("TokenMiserStore", () => {
+  it("bounds metadata reads across overlapping scans and store instances", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
+    temporaryDirectories.push(root);
+    const first = new TokenMiserStore(root);
+    const second = new TokenMiserStore(root);
+    for (let index = 0; index < 40; index += 1) {
+      await createObject(first, `output-${index}`, index);
+      await first.recordCodeModeObservation({
+        threadId: "thread-owner",
+        turnId: "turn-1",
+        callId: `call-${index}`,
+        cellId: `cell-${index}`,
+        outputCharacters: 100,
+        maxOutputTokens: 1_000,
+        scriptStatus: "completed",
+        retrieval: false,
+        capturedNestedInvocationCount: 1,
+      });
+    }
+
+    let releaseReads!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseReads = resolve; });
+    let active = 0;
+    let peak = 0;
+    const readFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (file, options) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        await gate;
+        return await readFile(file, options);
+      } finally {
+        active -= 1;
+      }
+    });
+    const scans = Promise.all([
+      first.listMetadata(),
+      second.listMetadata(),
+      first.listCodeModeObservations("thread-owner"),
+      second.listCodeModeObservations("thread-owner"),
+    ]);
+    try {
+      await vi.waitFor(() => expect(active).toBe(16));
+      releaseReads();
+      const results = await scans;
+      expect(results.map((entries) => entries.length)).toEqual([40, 40, 40, 40]);
+      expect(readSpy).toHaveBeenCalledTimes(160);
+      expect(peak).toBeLessThanOrEqual(16);
+      expect(active).toBe(0);
+    } finally {
+      releaseReads();
+      await scans;
+      readSpy.mockRestore();
+    }
+  });
+
+  it("releases metadata read slots after filesystem failures", async () => {
+    const store = await createStore();
+    const entry = await createObject(store, "retained output", 1);
+    const readFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValue(
+      Object.assign(new Error("read failed"), { code: "EIO" }),
+    );
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: 40 }, () => store.readMetadata(entry.objectId)),
+      );
+      expect(results.every((result) => result.status === "rejected")).toBe(true);
+      readSpy.mockImplementation(readFile);
+      expect(await store.readMetadata(entry.objectId)).toEqual(entry);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   it("counts all decisions separately from helper evaluations", async () => {
     const store = await createStore();
     const helperUsage = (ordinal: number) => ({

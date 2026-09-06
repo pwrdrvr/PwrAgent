@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
+import { TokenMiserRecordIndex } from "./token-miser-record-index";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   estimateTokenCount,
@@ -25,6 +27,10 @@ const RETRIEVAL_DELIVERY_TTL_MS = 2 * 60_000;
 // fresh pending output owned by another PwrAgent process sharing the profile,
 // while still reclaiming raw files left by a crash before acceptance.
 const PENDING_OUTPUT_ORPHAN_GRACE_MS = 5 * 60_000;
+
+async function readStoredFile(filePath: string): Promise<string> {
+  return await withTokenMiserFileOperation(() => fs.readFile(filePath, "utf8"));
+}
 
 export type TokenMiserStoredObject = {
   metadata: TokenMiserObjectMetadata;
@@ -221,11 +227,21 @@ export class TokenMiserStore {
   private readonly updateLocks = new Map<string, Promise<void>>();
   private readonly pendingRetrievalDeliveries =
     new Map<string, PendingRetrievalDelivery>();
+  private readonly metadataIndex: TokenMiserRecordIndex<TokenMiserObjectMetadata>;
+  private readonly observationIndex: TokenMiserRecordIndex<TokenMiserCodeModeObservation>;
 
   constructor(
     private readonly rootDir: string,
     private readonly options: TokenMiserStoreOptions = {},
-  ) {}
+  ) {
+    this.metadataIndex = new TokenMiserRecordIndex(rootDir, (name) =>
+      this.readMetadata(name.slice(0, -METADATA_SUFFIX.length))
+    );
+    this.observationIndex = new TokenMiserRecordIndex(
+      this.observationRoot(),
+      (name) => this.readCodeModeObservation(name),
+    );
+  }
 
   async store(params: TokenMiserStoreParams): Promise<TokenMiserObjectMetadata> {
     const staged = await this.stage(params);
@@ -338,7 +354,7 @@ export class TokenMiserStore {
       return undefined;
     }
     try {
-      const raw = await fs.readFile(this.metadataPath(objectId), "utf8");
+      const raw = await readStoredFile(this.metadataPath(objectId));
       const value = JSON.parse(raw) as TokenMiserObjectMetadata;
       return value?.version === 1 && value.objectId === objectId
         ? value
@@ -439,8 +455,8 @@ export class TokenMiserStore {
     operations: TokenMiserGroupBatchOperation[];
     maxOutputChars?: number;
   }): Promise<TokenMiserGroupBatchResult | undefined> {
-    const metadata = (await this.listMetadata()).find((entry) =>
-      entry.threadId === params.threadId && entry.groupId === params.groupId
+    const metadata = (await this.listMetadata(params.threadId)).find((entry) =>
+      entry.groupId === params.groupId
     );
     if (!metadata || !metadata.groupMembers?.length) {
       return undefined;
@@ -553,20 +569,8 @@ export class TokenMiserStore {
     this.pendingRetrievalDeliveries.delete(deliveryId);
   }
 
-  async listMetadata(): Promise<TokenMiserObjectMetadata[]> {
-    const entries = await fs.readdir(this.rootDir).catch((error: unknown) => {
-      if (isMissingFileError(error)) {
-        return [];
-      }
-      throw error;
-    });
-    const metadata = await Promise.all(
-      entries
-        .filter((entry) => entry.endsWith(METADATA_SUFFIX))
-        .map((entry) => this.readMetadata(entry.slice(0, -METADATA_SUFFIX.length))),
-    );
-    return metadata
-      .filter((entry): entry is TokenMiserObjectMetadata => Boolean(entry))
+  async listMetadata(threadId?: string): Promise<TokenMiserObjectMetadata[]> {
+    return (await this.metadataIndex.list(threadId))
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
@@ -615,6 +619,7 @@ export class TokenMiserStore {
       this.observationPath(observationId),
       `${JSON.stringify(observation)}\n`,
     );
+    this.observationIndex.remember(`${observationId}${METADATA_SUFFIX}`, observation.threadId);
     await this.options.onCodeModeObservationUpdated?.(observation);
     return observation;
   }
@@ -622,51 +627,37 @@ export class TokenMiserStore {
   async listCodeModeObservations(
     threadId?: string,
   ): Promise<TokenMiserCodeModeObservation[]> {
-    const entries = await fs.readdir(this.observationRoot()).catch(
-      (error: unknown) => {
-        if (isMissingFileError(error)) return [];
-        throw error;
-      },
-    );
-    const observations = await Promise.all(entries
-      .filter((entry) => entry.endsWith(METADATA_SUFFIX))
-      .map(async (entry) => {
-        try {
-          const raw = await fs.readFile(
-            path.join(this.observationRoot(), entry),
-            "utf8",
-          );
-          const value = JSON.parse(raw) as TokenMiserCodeModeObservation;
-          return value?.version === 1
-            && value.observationId === entry.slice(0, -METADATA_SUFFIX.length)
-            ? value
-            : undefined;
-        } catch {
-          return undefined;
-        }
-      }));
-    return observations
-      .filter((entry): entry is TokenMiserCodeModeObservation => Boolean(entry))
-      .filter((entry) => !threadId || entry.threadId === threadId)
+    return (await this.observationIndex.list(threadId))
       .sort((left, right) => left.createdAt - right.createdAt);
+  }
+
+  private async readCodeModeObservation(name: string): Promise<TokenMiserCodeModeObservation | undefined> {
+    try {
+      const raw = await readStoredFile(path.join(this.observationRoot(), name));
+      const value = JSON.parse(raw) as TokenMiserCodeModeObservation;
+      return value?.version === 1
+        && value.observationId === name.slice(0, -METADATA_SUFFIX.length)
+        ? value
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   async summarizeUsage(params?: {
     threadId?: string;
   }): Promise<TokenMiserUsageSummary> {
-    const allMetadata = await this.listMetadata();
-    const metadata = params?.threadId
-      ? allMetadata.filter((entry) => entry.threadId === params.threadId)
-      : allMetadata;
+    const metadata = await this.listMetadata(params?.threadId);
     return summarizeMetadata(metadata);
   }
 
   async summarizeThreadUsage(
     threadId: string,
+    metadataSnapshot?: TokenMiserObjectMetadata[],
   ): Promise<TokenMiserThreadUsageSummary> {
-    const metadata = (await this.listMetadata()).filter(
-      (entry) => entry.threadId === threadId,
-    );
+    // Accounting and savings can share the same current metadata snapshot.
+    const metadata = (metadataSnapshot ?? await this.listMetadata(threadId))
+      .filter((entry) => entry.threadId === threadId);
     const observations = await this.listCodeModeObservations(threadId);
     const metadataByToolUseId = new Map(
       metadata.map((entry) => [entry.toolUseId, entry]),
@@ -850,7 +841,7 @@ export class TokenMiserStore {
     ) {
       return undefined;
     }
-    const output = await fs.readFile(this.outputPath(objectId), "utf8").catch(
+    const output = await readStoredFile(this.outputPath(objectId)).catch(
       (error: unknown) => {
         if (isMissingFileError(error)) {
           return undefined;
@@ -871,7 +862,7 @@ export class TokenMiserStore {
       }
       throw error;
     });
-    await Promise.all(entries.map(async (entry) => {
+    await mapTokenMiserFiles(entries, async (entry) => {
       if (!entry.endsWith(OUTPUT_SUFFIX)) {
         return;
       }
@@ -887,7 +878,7 @@ export class TokenMiserStore {
       ) {
         await fs.rm(outputPath, { force: true });
       }
-    }));
+    });
   }
 
   private async recordRetrieval(objectId: string, characters: number): Promise<void> {
@@ -1004,6 +995,7 @@ export class TokenMiserStore {
       fs.rm(this.outputPath(objectId), { force: true }),
       fs.rm(this.metadataPath(objectId), { force: true }),
     ]);
+    this.metadataIndex.forget(`${objectId}${METADATA_SUFFIX}`);
   }
 
   private async ensureRoot(): Promise<void> {
@@ -1015,6 +1007,7 @@ export class TokenMiserStore {
       this.metadataPath(metadata.objectId),
       `${JSON.stringify(metadata)}\n`,
     );
+    this.metadataIndex.remember(`${metadata.objectId}${METADATA_SUFFIX}`, metadata.threadId);
   }
 
   private metadataPath(objectId: string): string {
@@ -1035,9 +1028,16 @@ export class TokenMiserStore {
 }
 
 async function writePrivateFileAtomic(filePath: string, contents: string): Promise<void> {
-  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
-  await fs.writeFile(temporaryPath, contents, { encoding: "utf8", mode: 0o600 });
-  await fs.rename(temporaryPath, filePath);
+  await withTokenMiserFileOperation(async () => {
+    const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temporaryPath, contents, { encoding: "utf8", mode: 0o600 });
+      await fs.rename(temporaryPath, filePath);
+    } catch (error) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  });
 }
 
 function summarizeMetadata(
