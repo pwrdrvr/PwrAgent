@@ -400,3 +400,43 @@ it("localizes exact and child identities only for the serving owner", () => {
   expect(navigationRequestForOwner(request({ query: { kind: "children", parent: identities[0]! } }), owner).query)
     .toEqual({ kind: "children", parent: { backend: "codex", threadId: "same" } });
 });
+
+it("rebaselines an expired cursor at an owner identity without replaying preceding pages", async () => {
+  let now = 0;
+  const store = new NavigationQueryStore({ now: () => now });
+  const threads = Array.from({ length: 120 }, (_, index) => thread(String(index)));
+  const loadIndex = async () => snapshot(threads);
+  const query = request({ pageSize: 10 });
+  const first = await store.readPage({ scopeKey: "window", loadIndex, request: query });
+  now = 60_001;
+  await expect(store.readPage({ scopeKey: "window", loadIndex, request: { ...query, cursor: first.nextCursor } }))
+    .rejects.toMatchObject({ code: "navigation_cursor_expired" });
+  const anchored = await store.readPage({ scopeKey: "window", loadIndex, request: { ...query,
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "35" } },
+  } });
+  expect(anchored.entries[0]?.row.id).toBe("35");
+  expect(anchored.entries).toHaveLength(10);
+  expect(anchored.rangeStart).toBeGreaterThan(70);
+  expect(anchored.counts.total).toBe(120);
+  expect(anchored.generation).not.toBe(first.generation);
+  await expect(store.readPage({ scopeKey: "window", loadIndex, request: { ...query,
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "removed" } },
+  } })).rejects.toMatchObject({ code: "navigation_anchor_missing" });
+});
+
+it("localizes only the serving owner's thread anchor", () => {
+  const target = { scope: "remote" as const, instanceId: "owner" };
+  const query = request({ anchor: { kind: "thread", ref: { backend: "codex", threadId: "t", ownerInstanceId: "owner" } } });
+  expect(navigationRequestForOwner(query, target).anchor).toEqual({ kind: "thread", ref: { backend: "codex", threadId: "t" } });
+  expect(navigationRequestForOwner({ ...query, anchor: { kind: "thread", ref: { backend: "codex", threadId: "t", ownerInstanceId: "other" } } }, target).anchor)
+    .toEqual({ kind: "thread", ref: { backend: "codex", threadId: "t", ownerInstanceId: "other" } });
+});
+
+it("rejects cursor and unchanged-baseline combinations with an anchor", async () => {
+  const store = new NavigationQueryStore();
+  for (const conflict of [{ cursor: "old" }, { completeBaselineRevision: "old" }]) {
+    await expect(store.readPage({ scopeKey: "window", loadIndex: async () => snapshot([]),
+      request: request({ ...conflict, anchor: { kind: "directory", key: "directory:/selected" } }),
+    })).rejects.toMatchObject({ code: "navigation_invalid_request" });
+  }
+});

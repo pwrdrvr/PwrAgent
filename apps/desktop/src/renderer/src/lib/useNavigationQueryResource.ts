@@ -55,7 +55,7 @@ export function useNavigationQueryResource(params: {
         const page = await api.getNavigationQueryPage!({
           ...started.request,
           cursor,
-          completeBaselineRevision: !cursor && started.page?.complete
+          completeBaselineRevision: !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0
             ? started.page.countsRevision : undefined,
         }, consumerId);
         if (lifetimeRef.current !== lifetime) return;

@@ -1669,6 +1669,10 @@ export type NavigationQuery =
       kind: "star-map-geometry";
     };
 
+export type NavigationQueryAnchor =
+  | { kind: "thread"; ref: NavigationIdentity }
+  | { kind: "directory"; key: string };
+
 export type NavigationQueryRequest = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
   consumer: NavigationQueryConsumerClass;
@@ -1683,6 +1687,8 @@ export type NavigationQueryRequest = {
   /** At most 100. Owners may return fewer rows to satisfy the byte budget. */
   pageSize?: number;
   cursor?: string;
+  /** Explicit rebaseline at a visible identity after cursor expiry; never combined with a cursor. */
+  anchor?: NavigationQueryAnchor;
   /** One deadline across admission, relays and a bounded page transaction. */
   deadlineAt?: number;
   /** Unchanged is legal only for a complete baseline of this exact query. */
@@ -1712,6 +1718,8 @@ export type NavigationQueryPage = {
   counts: NavigationCounts;
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
+  /** Offset of this page in its immutable owner generation. Omitted means zero. */
+  rangeStart?: number;
   directories?: NavigationDirectoryRow[];
   modelGroups?: NavigationModelInventoryRow[];
   nextCursor?: string;

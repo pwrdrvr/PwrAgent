@@ -122,3 +122,41 @@ it("does not begin transport after the window closes before its scheduled read",
   await Promise.resolve();
   expect(read).not.toHaveBeenCalled();
 });
+
+it("rejects a late page after canonical invalidation and never certifies its stale baseline unchanged", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page({ complete: true, nextCursor: undefined }))
+    .mockReturnValueOnce(pending.promise).mockResolvedValue(page({ countsRevision: "canonical", complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["lens", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  void queries.refresh();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  queries.invalidate();
+  void queries.refresh();
+  pending.resolve(page({ countsRevision: "late-old", complete: true, nextCursor: undefined }));
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+  expect(read.mock.calls[2]?.[0].completeBaselineRevision).toBeUndefined();
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.state.page?.countsRevision).toBe("canonical"));
+  queries.dispose();
+});
+
+it("retains an expired range until explicit anchor recovery and does not certify a tail as a full baseline", async () => {
+  const read = vi.fn().mockResolvedValueOnce(page()).mockRejectedValueOnce(new Error("Navigation cursor expired; rebaseline around the visible anchor."))
+    .mockResolvedValue(page({ rangeStart: 80, complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["lens", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  await queries.loadMore("lens");
+  expect(queries.getSnapshot().resources.get("lens")?.state.rebaselineRequired).toBe(true);
+  await queries.refresh();
+  await queries.loadMore("lens");
+  expect(read).toHaveBeenCalledTimes(2);
+  const anchor = { kind: "thread" as const, ref: { backend: "codex" as const, threadId: "visible" } };
+  await queries.rebaseline("lens", anchor);
+  expect(read.mock.calls[2]?.[0]).toMatchObject({ anchor, cursor: undefined, completeBaselineRevision: undefined });
+  expect(queries.getSnapshot().resources.get("lens")?.state.rebaselineRequired).toBe(false);
+  await queries.refresh();
+  expect(read.mock.calls[3]?.[0]).toMatchObject({ anchor, completeBaselineRevision: undefined });
+  queries.dispose();
+});

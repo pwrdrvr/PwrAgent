@@ -15,6 +15,7 @@ export type NavigationPageState = {
   pendingSequence: number;
   stale: boolean;
   error?: string;
+  rebaselineRequired?: boolean;
 };
 
 /** Exact identity authority is independent of all collection pages. */
@@ -79,7 +80,7 @@ export function applyNavigationPage(params: {
   }
   const previous = state.page;
   if (page.unchanged) {
-    if (!previous?.complete || cursor || page.queryKey !== previous.queryKey
+    if (!previous?.complete || state.stale || (previous.rangeStart ?? 0) !== 0 || cursor || page.queryKey !== previous.queryKey
       || page.countsRevision !== previous.countsRevision || page.ownerEpoch !== previous.ownerEpoch) {
       throw new Error("Navigation unchanged response has no complete matching baseline.");
     }
@@ -102,13 +103,14 @@ export function applyNavigationPage(params: {
       error: undefined,
       page: {
         ...page,
+        rangeStart: previous.rangeStart ?? 0,
         entries: mergeEntries(previous.entries, page.entries),
         ...(previous.modelGroups || page.modelGroups ? { modelGroups: [...modelGroups.values()] } : {}),
         ...(previous.directories || page.directories ? { directories: [...directories.values()] } : {}),
       },
     };
   }
-  return { ...state, page, stale: false, error: undefined };
+  return { ...state, page, stale: false, error: undefined, rebaselineRequired: false };
 }
 
 export function failNavigationPageRead(
@@ -117,7 +119,9 @@ export function failNavigationPageRead(
   error: unknown,
 ): NavigationPageState {
   if (sequence !== state.pendingSequence) return state;
-  return { ...state, stale: Boolean(state.page), error: error instanceof Error ? error.message : String(error) };
+  const message = error instanceof Error ? error.message : String(error);
+  const expired = message.includes("navigation_cursor_expired") || message.includes("Navigation cursor expired");
+  return { ...state, stale: Boolean(state.page), error: message, rebaselineRequired: state.rebaselineRequired || expired };
 }
 
 export function selectNavigationIdentity(

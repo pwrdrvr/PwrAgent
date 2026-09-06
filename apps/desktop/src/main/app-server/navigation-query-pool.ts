@@ -84,6 +84,7 @@ export class NavigationQueryPool {
     query.consumers.add(params.consumerId);
     const operationKey = JSON.stringify([
       params.request.cursor ?? null,
+      params.request.anchor ?? null,
       params.request.completeBaselineRevision ?? null,
       params.request.pageSize ?? 100,
     ]);
