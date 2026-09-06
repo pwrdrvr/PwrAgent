@@ -271,6 +271,7 @@ import {
   type ThreadSearchResult,
   type SteerTurnRequest,
   type SteerTurnResponse,
+  type StartTurnResponse,
   type StartReviewRequest,
   type StartReviewResponse,
   type StartReviewToolResult,
@@ -10081,35 +10082,42 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private publishCorrespondenceMessage(
+    source: Parameters<ThreadCorrespondenceStore["message"]>[0],
+    id: string,
+  ): void {
+    const message = this.correspondenceStore.message(source, id);
+    if (message) {
+      void this.emit({
+        backend: source.backend,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: source.threadId,
+            item: {
+              id: message.id,
+              type: "agentMessage",
+              text: message.text,
+              content: message.parts,
+              origin: message.origin,
+            },
+          },
+        },
+      }).catch((error) => {
+        backendRegistryLog.error("Could not publish cross-thread delivery state", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
   private updateCorrespondenceStatus(
     ...args: Parameters<ThreadCorrespondenceStore["update"]>
   ): void {
     try {
       this.correspondenceStore.update(...args);
       const [source, id] = args;
-      const message = this.correspondenceStore.message(source, id);
-      if (message) {
-        void this.emit({
-          backend: source.backend,
-          notification: {
-            method: "item/completed",
-            params: {
-              threadId: source.threadId,
-              item: {
-                id: message.id,
-                type: "agentMessage",
-                text: message.text,
-                content: message.parts,
-                origin: message.origin,
-              },
-            },
-          },
-        }).catch((error) => {
-          backendRegistryLog.error("Could not publish cross-thread delivery state", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
+      this.publishCorrespondenceMessage(source, id);
     } catch (error) {
       // Status persistence must not turn an already-admitted backend turn into
       // a failed submission or prevent the recipient FIFO from advancing.
@@ -15380,6 +15388,43 @@ export class DesktopBackendRegistry {
       ...(result.disposition === "blocked"
         ? { errorMessage: result.error.message }
         : {}),
+    };
+  }
+
+  replaceQueuedAgentMessage(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    queueEntryId: string;
+    input: AppServerTurnInputItem[];
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }): StartTurnResponse & { queueStatus: "queued" } {
+    // No await between lookup, ownership check, and replacement: admission
+    // cannot consume the entry between validation and the edit.
+    const entry = this.threadTurnQueue.getQueuedEntries(request)
+      .find((candidate) => candidate.id === request.queueEntryId);
+    if (!entry) throw new Error("Queued message not found or already started; no new turn was created.");
+    const owner = entry.messageOrigin?.sourceThread;
+    const sender = request.messageOrigin?.sourceThread;
+    if (
+      entry.messageOrigin?.kind !== "agent"
+      || request.messageOrigin?.kind !== "agent"
+      || !owner || !sender
+      || owner.backend !== sender.backend
+      || owner.threadId !== sender.threadId
+      || owner.instanceId !== sender.instanceId
+    ) {
+      throw new Error("Only the sending thread can replace its own queued agent message.");
+    }
+    if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
+      throw new Error("Replacement input requires a non-empty prompt.");
+    }
+    this.threadTurnQueue.updateQueuedEntryInput(entry.id, request.input);
+    return {
+      backend: entry.backend,
+      threadId: entry.threadId,
+      turnId: entry.id,
+      queueStatus: "queued",
+      queueEntryId: entry.id,
     };
   }
 
@@ -32569,7 +32614,7 @@ export class DesktopBackendRegistry {
       if (messageOrigin.sourceThread) {
         messageOrigin.sourceThread = { ...messageOrigin.sourceThread, messageId: correspondenceId };
       }
-      this.correspondenceStore.record({
+      if (!request.args.replaceQueueEntryId) this.correspondenceStore.record({
         id: correspondenceId,
         source,
         destination: { backend, threadId, ...(instanceId ? { instanceId } : {}) },
@@ -32590,6 +32635,7 @@ export class DesktopBackendRegistry {
       let localResolutionError: unknown;
       let localThread: AppServerThreadSummary | undefined;
       const remoteRequest = {
+        replaceQueueEntryId: request.args.replaceQueueEntryId,
         backend,
         threadId,
         input,
@@ -32630,34 +32676,44 @@ export class DesktopBackendRegistry {
         throw new Error(`Thread not found: ${threadId}`);
       } else {
         if (localThread) {
-          const submitted = await this.submitTurn({
-            backend,
-            threadId,
-            input,
-            origin: "manual",
-            messageOrigin,
-            executionMode: request.args.executionMode,
-            model: request.args.model,
-            reasoningEffort: request.args.reasoningEffort,
-            serviceTier: request.args.serviceTier,
-            fastMode: request.args.fastMode,
-            approvalPolicy: request.args.approvalPolicy,
-            sandbox: request.args.sandbox,
-          });
-          turn = submitted.status === "started"
-            ? {
-                backend: submitted.entry.backend,
-                threadId: submitted.entry.threadId,
-                turnId: submitted.turnId,
-              }
-            : {
-                backend: submitted.entry.backend,
-                threadId: submitted.entry.threadId,
-                turnId: submitted.entry.id,
-                queueStatus: "queued",
-                queueEntryId: submitted.entry.id,
-                position: submitted.position,
-              };
+          if (request.args.replaceQueueEntryId) {
+            turn = this.replaceQueuedAgentMessage({
+              backend,
+              threadId,
+              queueEntryId: request.args.replaceQueueEntryId,
+              input,
+              messageOrigin,
+            });
+          } else {
+            const submitted = await this.submitTurn({
+              backend,
+              threadId,
+              input,
+              origin: "manual",
+              messageOrigin,
+              executionMode: request.args.executionMode,
+              model: request.args.model,
+              reasoningEffort: request.args.reasoningEffort,
+              serviceTier: request.args.serviceTier,
+              fastMode: request.args.fastMode,
+              approvalPolicy: request.args.approvalPolicy,
+              sandbox: request.args.sandbox,
+            });
+            turn = submitted.status === "started"
+              ? {
+                  backend: submitted.entry.backend,
+                  threadId: submitted.entry.threadId,
+                  turnId: submitted.turnId,
+                }
+              : {
+                  backend: submitted.entry.backend,
+                  threadId: submitted.entry.threadId,
+                  turnId: submitted.entry.id,
+                  queueStatus: "queued",
+                  queueEntryId: submitted.entry.id,
+                  position: submitted.position,
+                };
+          }
           targetTitle = localThread.title;
         } else if (includeRemote && this.federatedThreadMessageHandler) {
           const discoveredRemoteTurn = await this.federatedThreadMessageHandler({
@@ -32685,7 +32741,20 @@ export class DesktopBackendRegistry {
         ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
         threadId: turn.threadId,
       };
-      this.updateCorrespondenceStatus(source, correspondenceId, {
+      if (request.args.replaceQueueEntryId) {
+        try {
+          const replaced = this.correspondenceStore.replaceQueuedInput(source, {
+            backend, threadId, ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
+          }, request.args.replaceQueueEntryId, input);
+          if (replaced) this.publishCorrespondenceMessage(source, replaced.id);
+        } catch (error) {
+          // The recipient already accepted the edit. A sender-side log failure
+          // must not encourage another send of the same findings.
+          backendRegistryLog.error("Could not persist replaced cross-thread message", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else this.updateCorrespondenceStatus(source, correspondenceId, {
         state: turn.queueStatus === "queued" ? "queued" : "started",
         destination: { ...threadLinkRef, title: targetTitle },
         queueEntryId: turn.queueEntryId,
@@ -32708,6 +32777,7 @@ export class DesktopBackendRegistry {
             ? {
                 queueStatus: turn.queueStatus,
                 queueEntryId: turn.queueEntryId,
+                guidance: "Batch related findings. To update this pending message, call send_message_to_thread with replaceQueueEntryId set to this queueEntryId and the complete consolidated prompt. Do not append overlapping updates as separate turns.",
                 ...(turn.position === undefined ? {} : { position: turn.position }),
               }
             : {}),

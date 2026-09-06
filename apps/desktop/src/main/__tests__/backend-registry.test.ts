@@ -35795,6 +35795,61 @@ script = "printf setup"
     expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(backend, "recipient")]?.map((entry) => entry.queueEntryId)).toEqual(["held-one", "held-two"]);
   });
 
+  it("consolidates only the sender's queued message without adding a turn", async () => {
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: ["sender", "recipient"].map((id) => ({
+        id, title: id, titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [],
+      })),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    for (const threadId of ["sender", "recipient"]) {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId, turnId: `active:${threadId}`, turn: { id: `active:${threadId}` } },
+      } });
+    }
+    const send = async (prompt: string, replaceQueueEntryId?: string) => {
+      const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: "sender", turnId: "active:sender", callId: `replace:${prompt}`, requestId: `replace:${prompt}`,
+        namespace: "pwragent", tool: "send_message_to_thread",
+        arguments: { backend: "codex", threadId: "recipient", prompt, ...(replaceQueueEntryId ? { replaceQueueEntryId } : {}) },
+      } } as AppServerPendingRequestNotification);
+      return { response, payload: JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text) };
+    };
+    const first = await send("Initial evidence");
+    const queueEntryId = first.payload.queueEntryId as string;
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", input: [{ type: "text", text: "Operator message" }], queueEntryId: "operator-next" });
+    const target = { backend: "codex" as const, threadId: "recipient", queueEntryId };
+    const original = await registry.readQueuedTurn(target);
+    const input = [{ type: "text" as const, text: "Unwanted overwrite" }];
+    for (const sourceThread of [
+      { backend: "codex" as const, threadId: "other" },
+      { backend: "codex" as const, threadId: "sender", instanceId: "other-machine" },
+    ]) {
+      expect(() => registry.replaceQueuedAgentMessage({ ...target, input, messageOrigin: { kind: "agent", sourceThread } })).toThrow("Only the sending thread");
+    }
+    expect(() => registry.replaceQueuedAgentMessage({ ...target, queueEntryId: "operator-next", input, messageOrigin: original.messageOrigin })).toThrow("Only the sending thread");
+    expect(() => registry.replaceQueuedAgentMessage({ ...target, threadId: "sender", input, messageOrigin: original.messageOrigin })).toThrow("not found or already started");
+    const replacement = await send("Complete consolidated findings", queueEntryId);
+    expect(replacement.response).toMatchObject({ success: true });
+    expect(replacement.payload).toMatchObject({ queueStatus: "queued", queueEntryId });
+    const updated = await registry.readQueuedTurn(target);
+    expect(updated.input).toEqual([{ type: "text", text: "Complete consolidated findings" }]);
+    expect(updated.messageOrigin).toEqual(original.messageOrigin);
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]?.map((entry) => entry.queueEntryId)).toEqual([queueEntryId, "operator-next"]);
+    const replay = correspondenceStore.appendToReplay({ backend: "codex", threadId: "sender" }, {
+      entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+    });
+    expect(replay.messages).toHaveLength(1);
+    expect(replay.messages[0]?.text).toContain("Complete consolidated findings");
+    expect(replay.messages[0]?.text).not.toContain("Initial evidence");
+    registry.cancelQueuedTurn(queueEntryId);
+    expect((await send("Too late", queueEntryId)).response).toMatchObject({ success: false });
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]).toHaveLength(1);
+  });
+
   it("keeps cross-thread queue content lossless and persists sender correspondence through cancellation and reload", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "correspondence-test-"));
     onTestFinished(() => rmSync(directory, { recursive: true, force: true }));

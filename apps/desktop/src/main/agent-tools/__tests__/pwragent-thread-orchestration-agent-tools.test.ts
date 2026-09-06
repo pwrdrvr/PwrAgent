@@ -273,6 +273,24 @@ describe("pwragent thread orchestration agent tools", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { replaceQueueEntryId: " " },
+    { replaceQueueEntryId: 42 },
+    { replaceQueueEntryId: "queue-1", model: "different-model" },
+    { replaceQueueEntryId: "queue-1", fastMode: false },
+  ])("rejects invalid queued replacement arguments %j", async (args) => {
+    const handler = vi.fn();
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    await expect(router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "sender", turnId: "turn-1", callId: "call-1", namespace: "pwragent", tool: "send_message_to_thread",
+        arguments: { backend: "codex", threadId: "recipient", prompt: "Consolidated findings", ...args },
+      },
+    })).resolves.toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("validates move_thread_workspace before dispatch", async () => {
     const handler = vi.fn();
     const router = buildPwrAgentThreadOrchestrationToolRouter(handler);

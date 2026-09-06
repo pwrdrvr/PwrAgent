@@ -55,6 +55,7 @@ export type PwrAgentFederatedThreadMessageRequest = {
   backend: SendMessageToThreadToolArgs["backend"];
   threadId: SendMessageToThreadToolArgs["threadId"];
   instanceId?: SendMessageToThreadToolArgs["instanceId"];
+  replaceQueueEntryId?: string;
   resolutionMode?: "remembered_only" | "discover_only";
   input: AppServerTurnInputItem[];
   messageOrigin: AppServerThreadMessageOrigin;
@@ -193,7 +194,7 @@ function descriptionForOperation(
     case "move_thread_workspace":
       return "Move the current thread workspace after this turn ends. Use this to move this thread to an isolated worktree. Do not create a child thread. Pass sourcePath when the thread has multiple directories or the source is unclear. After success, stop work and end the turn. PwrAgent moves the workspace, updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
     case "send_message_to_thread":
-      return "Send a follow-up as a new turn to another PwrAgent thread. If a turn is active, PwrAgent queues the follow-up. Use steer_thread for guidance to the active turn. Use stop_thread for an urgent interruption. Find an unknown thread with search_threads or read_thread. Pass instanceId from a remote result when available. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
+      return "Send a follow-up as a new turn to another PwrAgent thread. If a turn is active, PwrAgent queues the follow-up. Batch related findings into one message. When updating your own pending message, pass its queueEntryId as replaceQueueEntryId and supply the complete consolidated prompt instead of appending another turn. Replacement preserves queue position and settings and fails if the message is no longer pending; it never starts a new turn. Use steer_thread for guidance to the active turn. Use stop_thread for an urgent interruption. Find an unknown thread with search_threads or read_thread. Pass instanceId from a remote result when available. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
     case "steer_thread":
       return "Advise another PwrAgent thread. PwrAgent steers a matching active turn at the next tool boundary. If the target is idle or changes before admission, PwrAgent preserves the guidance. It starts a follow-up turn or queues one behind the current turn. The result disposition is steered, started, or queued, so this tool never reports a fallback as steered. Use send_message_to_thread when a distinct new turn is required and stop_thread for an urgent interruption. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same steer. This thread cannot steer itself.";
     case "stop_thread":
@@ -408,6 +409,10 @@ function inputSchemaForOperation(
             type: "boolean",
             description:
               "Defaults to true. Set false to restrict resolution to the local instance.",
+          },
+          replaceQueueEntryId: {
+            type: "string",
+            description: "queueEntryId of your own pending message to replace with the complete consolidated prompt. Preserves queue position and settings. Omit model and execution settings when replacing. A missing or already started entry fails without sending another message.",
           },
           prompt: {
             type: "string",
@@ -695,6 +700,15 @@ function normalizeSendMessageToThreadArgs(
   const backend = readTrimmedString(args.backend);
   const threadId = readTrimmedString(args.threadId);
   const instanceId = readTrimmedString(args.instanceId);
+  const replaceQueueEntryId = readTrimmedString(args.replaceQueueEntryId);
+  if (Object.hasOwn(args, "replaceQueueEntryId") && !replaceQueueEntryId) {
+    return undefined;
+  }
+  if (replaceQueueEntryId && [
+    "model", "reasoningEffort", "serviceTier", "fastMode", "executionMode", "approvalPolicy", "sandbox",
+  ].some((key) => Object.hasOwn(args, key))) {
+    return undefined;
+  }
   const prompt = typeof args.prompt === "string" && args.prompt.trim() ? args.prompt : undefined;
   if (!backend || !threadId || !prompt) {
     return undefined;
@@ -717,6 +731,7 @@ function normalizeSendMessageToThreadArgs(
       ? { includeRemote: args.includeRemote }
       : {}),
     prompt,
+    ...(replaceQueueEntryId ? { replaceQueueEntryId } : {}),
     ...(readTrimmedString(args.model)
       ? { model: readTrimmedString(args.model) }
       : {}),

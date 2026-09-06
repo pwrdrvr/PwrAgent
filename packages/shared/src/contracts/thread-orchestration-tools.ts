@@ -134,6 +134,8 @@ export type SendMessageToThreadToolArgs = {
    * Defaults to true. Set false to restrict resolution to the local instance.
    */
   includeRemote?: boolean;
+  /** Replace only this sender’s pending message; never enqueue on a miss. */
+  replaceQueueEntryId?: string;
   prompt: string;
   model?: string;
   reasoningEffort?: string;
@@ -423,6 +425,8 @@ export type SendMessageToThreadResult = {
   queueStatus?: "queued";
   queueEntryId?: string;
   position?: number;
+  /** Advice for consolidating subsequent updates while this message waits. */
+  guidance?: string;
   promptPreview: string;
   /** Canonical `pwragent://thread/…` URL for the messaged thread. */
   threadUrl: string;

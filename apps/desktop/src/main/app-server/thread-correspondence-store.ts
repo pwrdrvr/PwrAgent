@@ -111,6 +111,23 @@ export class ThreadCorrespondenceStore {
     records.set(id, { ...record, ...status });
   }
 
+  replaceQueuedInput(
+    source: ThreadRef,
+    destination: ThreadRef,
+    queueEntryId: string,
+    input: AppServerTurnInputItem[],
+  ): CorrespondenceRecord | undefined {
+    const record = [...this.load(source).values()].find((candidate) =>
+      candidate.queueEntryId === queueEntryId
+      && candidate.destination.backend === destination.backend
+      && candidate.destination.threadId === destination.threadId
+      && candidate.destination.instanceId === destination.instanceId);
+    if (!record) return undefined;
+    const updated = { ...record, input };
+    this.record(updated);
+    return updated;
+  }
+
   message(source: ThreadRef, id: string): AppServerThreadMessageEntry | undefined {
     return this.appendToReplay(source, {
       entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
