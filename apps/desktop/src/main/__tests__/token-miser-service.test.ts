@@ -720,7 +720,72 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
   });
 
-  it("passes a bounded exact source read through without evaluation", async () => {
+  it.each([
+    { name: "missing narration", command: "sed -n '1,220p' source.ts", intent: undefined },
+    { name: "mixed discovery and source", command: "rg -n 'handler' src; sed -n '1,220p' source.ts", intent: "Investigate the handler." },
+    { name: "test source and diffs", command: "git diff -- source.test.ts; cat source.test.ts", intent: "Review the changes." },
+  ])("provides passthrough-default source policy for $name", async ({ command, intent }) => {
+    const store = await createStore();
+    const source = Array.from({ length: 600 }, (_, index) =>
+      `export function handler${index}() { return ${index}; }`,
+    ).join("\n");
+    expect(source.length).toBeGreaterThan(20_000);
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok",
+      object: { disposition: "pass_through", summary: "The requested source was returned.", usefulDetails: [] },
+    }));
+    const service = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
+    expect(await service.prepareCodeModeOutput({
+      ...codeModePayload([{ type: "input_text", text: source }]),
+      script: `text(await tools.exec_command({ cmd: ${JSON.stringify(command)} }));`,
+      parent_intent: intent,
+    })).toBeUndefined();
+    const request = generateSummary.mock.calls[0]?.[0];
+    expect(request?.prompt).toContain(command);
+    expect(request?.prompt).toContain("handler599");
+    expect(request?.system).toContain("Default to pass_through for source code, test source, diffs, and requested file content.");
+    expect(request?.system).toContain("Missing intent, uncertain relevance, a large result, multiple source ranges, incomplete surrounding functions, or a nearby search are not evidence of a miss");
+    expect(request?.system).toContain("Test source is source code; it is not test execution output.");
+    expect(request?.system).toContain("Minor noise or failed companion commands do not justify discarding useful source.");
+    expect(request?.system).not.toContain("When intent is absent or the choice is uncertain, choose summarize.");
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({ disposition: "passed_through", replacementCharacters: utf8ByteLength(source) });
+  });
+
+  it.each(["direct", "code-mode"])("evaluates a degenerate source read before deciding its %s disposition", async (surface) => {
+    const store = await createStore();
+    const generateSummary = vi.fn<TokenMiserServiceOptions["generateSummary"]>(async () => ({
+      status: "ok",
+      object: {
+        disposition: "summarize",
+        summary: "The requested source range contained only blank space.",
+        usefulDetails: [],
+      },
+    }));
+    const service = new TokenMiserService({
+      store, isEnabled: () => true, generateSummary,
+      postToolUseExactOutputVersion: () => 1,
+    });
+    const output = " \n".repeat(3_000);
+    const parent_intent = "Read the exact source implementation before patching it.";
+    const prepared = surface === "direct"
+      ? await service.preparePostToolUse({
+        ...payload(output), parent_intent,
+        tool_input: { command: "sed -n '1,3000p' source.ts" },
+      })
+      : await service.prepareCodeModeOutput({
+        ...codeModePayload([{ type: "input_text", text: output }]), parent_intent,
+        script: 'text(await tools.exec_command({ cmd: "sed -n 1,3000p source.ts" }));',
+      });
+    expect(generateSummary).toHaveBeenCalledTimes(1);
+    expect(generateSummary.mock.calls[0]?.[0].system).toContain("State the concrete mismatch or degeneration in the audit summary.");
+    expect(prepared).toBeDefined();
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    expect((await store.listMetadata())[0]?.disposition).toBe("summarized");
+  });
+
+  it("passes a source read through after evaluating its actual content", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
@@ -750,14 +815,14 @@ describe("TokenMiserService code-mode reduction", () => {
     };
 
     expect(await service.prepareCodeModeOutput(request)).toBeUndefined();
-    expect(generateSummary).not.toHaveBeenCalled();
+    expect(generateSummary).toHaveBeenCalledTimes(1);
     const [metadata] = await store.listMetadata();
     expect(metadata).toMatchObject({
       disposition: "passed_through",
       baselineParentTokens: 6,
       replacementCharacters: 24,
     });
-    expect(metadata?.helperUsage).toBeUndefined();
+    expect(metadata?.helperUsage?.helperThreadId).toBe("helper-code-pass-through");
   });
 
   it("accounts only the original 10k-token result when Luna passes through", async () => {

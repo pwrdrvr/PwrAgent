@@ -77,12 +77,14 @@ const TOKEN_MISER_GROUP_SUMMARY_SCHEMA = {
 
 const TOKEN_MISER_SYSTEM_PROMPT = [
   "You are Token Miser, the first gate on completed coding-tool output before it enters a parent coding agent's context.",
-  "Choose pass_through when the visible parent intent and tool/script input show a deliberate, well-targeted request for exact content and the result is coherent, relevant, and likely to be consumed substantially as-is.",
-  "Examples that often deserve pass_through are a bounded read of a requested source or instruction file, a concise exact query result, or a focused diagnostic whose details are all material.",
-  "Treat a sed range read as a strong pass_through candidate when its lines are distinct, coherent source code or prose from the requested file or range, even when the result is large.",
-  "Choose summarize for a sed result that is primarily repetitive data, duplicated records, repeated error or log messages, or content that missed the requested file or range.",
-  "Choose summarize for broad or exploratory searches, repetitive matches, verbose logs, test/build output, noisy failures, accidental directory-wide reads, or results that missed the stated intent.",
-  "When intent is absent or the choice is uncertain, choose summarize.",
+  "Default to pass_through for source code, test source, diffs, and requested file content. The parent usually needs the exact bytes to inspect, review, or patch it; a description of the code is not a substitute.",
+  "For a sed range read containing distinct, coherent source code or prose, choose pass_through. Apply the same rule to cat, head/tail, file-reading tools, git diff, and targeted search results containing source lines.",
+  "Judge source using the visible parent intent, the command or script, and the actual result together. Missing intent, uncertain relevance, a large result, multiple source ranges, incomplete surrounding functions, or a nearby search are not evidence of a miss; choose pass_through in these cases.",
+  "Summarize source or requested file content only when that evidence establishes a substantial miss or a degenerate result, such as mostly blank space, generated repetitive data instead of the requested implementation, or an unrelated embedded transcript. State the concrete mismatch or degeneration in the audit summary.",
+  "If a sed result is primarily repetitive data or repeated error/log messages rather than coherent requested source, choose summarize. Do not confuse repeated code syntax, similar tests, or diff context with redundant noise.",
+  "Choose summarize for broad file/reference discovery listings, repetitive matches without material source context, verbose logs, test/build execution output, and noisy failures. Test source is source code; it is not test execution output.",
+  "For mixed results containing useful source or diffs plus search listings or diagnostics, choose pass_through unless the source itself clearly satisfies the substantial-miss or degenerate-result exception. Minor noise or failed companion commands do not justify discarding useful source.",
+  "For other exact query results or focused diagnostics whose details are material, choose pass_through. When uncertain whether source should be summarized, choose pass_through.",
   "The host returns the original bytes itself for pass_through. Never copy or reconstruct the full output in your response.",
   "For pass_through, keep the audit summary under 50 words and omit usefulDetails unless one short fact explains the decision.",
   "Summarize only what is present. Preserve exact filenames, identifiers, errors, counts, and commands that materially describe the result.",
@@ -290,7 +292,6 @@ export class TokenMiserService {
     const deterministicPassThrough = classifyDeterministicPassThrough({
       parentIntent: payload.parent_intent,
       request: serializeToolResponse(payload.tool_input),
-      outputCharacters: output.length,
     });
     if (deterministicPassThrough) {
       await this.recordPassThroughDecision({
@@ -460,7 +461,6 @@ export class TokenMiserService {
     const deterministicPassThrough = classifyDeterministicPassThrough({
       parentIntent: payload.parent_intent,
       request: payload.script ?? "",
-      outputCharacters: output.length,
     });
     if (deterministicPassThrough) {
       await this.recordPassThroughDecision({
@@ -930,17 +930,13 @@ function hasActionableNonterminalState(member: CapturedGroupMember): boolean {
 }
 
 const INSTRUCTION_FILE_PATTERN = /(?:^|[/\\])(?:AGENTS|CLAUDE|SKILL)\.md\b|(?:^|[/\\])UI-THEME\.md\b|(?:^|[/\\])[^\s"']*style-guide\.md\b/i;
-const SOURCE_FILE_PATTERN = /(?:^|[\s"'=:])[^\s"']+\.(?:c|cc|cpp|css|go|h|hpp|html|java|js|jsx|json|md|mjs|py|rb|rs|swift|toml|ts|tsx|yaml|yml)\b/i;
 const EXACT_READ_PATTERN = /\b(?:cat|head|tail|sed|readFile|read_text_file|read_file)\b/i;
 const BROAD_DISCOVERY_PATTERN = /\b(?:find|grep|rg|search)\b/i;
 const READ_INTENT_PATTERN = /\b(?:read|inspect|review|load|follow)\b[\s\S]{0,120}\b(?:instruction|guidance|guide|AGENTS|CLAUDE|SKILL|theme)\b|\b(?:instruction|guidance|guide|AGENTS|CLAUDE|SKILL|theme)\b[\s\S]{0,120}\b(?:read|inspect|review|load|follow)\b/i;
-const EXACT_SOURCE_INTENT_PATTERN = /\b(?:read|inspect|review|open|examine|look at)\b[\s\S]{0,160}\b(?:exact|source|file|range|implementation|code)\b|\b(?:exact|source|file|range|implementation|code)\b[\s\S]{0,160}\b(?:read|inspect|review|open|examine|look at)\b/i;
-const TARGETED_SOURCE_PASS_THROUGH_MAX_CHARACTERS = 20_000;
 
 function classifyDeterministicPassThrough(params: {
   parentIntent?: string;
   request: string;
-  outputCharacters: number;
 }): TokenMiserSummary | undefined {
   if (
     !EXACT_READ_PATTERN.test(params.request)
@@ -954,17 +950,6 @@ function classifyDeterministicPassThrough(params: {
   ) {
     return {
       summary: "A deliberate exact instruction-file read passed through unchanged by policy.",
-      usefulDetails: [],
-    };
-  }
-  if (
-    params.parentIntent
-    && params.outputCharacters <= TARGETED_SOURCE_PASS_THROUGH_MAX_CHARACTERS
-    && EXACT_SOURCE_INTENT_PATTERN.test(params.parentIntent)
-    && SOURCE_FILE_PATTERN.test(params.request)
-  ) {
-    return {
-      summary: "A bounded exact source read passed through unchanged by policy.",
       usefulDetails: [],
     };
   }
