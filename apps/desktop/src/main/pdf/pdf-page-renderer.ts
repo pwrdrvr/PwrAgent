@@ -1,7 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
   IMAGE_UPLOAD_QUALITY_PROFILES,
   type ImageUploadQualityProfile,
@@ -58,9 +57,6 @@ export const MAX_PDF_TEXT_SEARCH_QUERY_CHARACTERS = 200;
 const PDF_PAGE_DATA_URL_PREFIX = "data:image/png;base64,";
 
 const require = createRequire(import.meta.url);
-const wasmUrl = pathToFileURL(
-  `${path.dirname(require.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
-).href;
 
 /**
  * PDFs describe a page in points, not pixels. Render into the selected
@@ -111,7 +107,7 @@ export async function inspectPdfDocument(params: {
   data: Uint8Array;
   profile: ImageUploadQualityProfile;
 }): Promise<PdfDocumentInspection> {
-  const loadingTask = loadPdfDocument(params.data);
+  const loadingTask = await loadPdfDocument(params.data);
   try {
     const document = await loadingTask.promise;
     if (document.numPages < 1) {
@@ -163,7 +159,7 @@ export async function searchPdfText(params: {
     );
   }
 
-  const loadingTask = loadPdfDocument(params.data);
+  const loadingTask = await loadPdfDocument(params.data);
   try {
     const document = await loadingTask.promise;
     const pageStart = normalizePageNumber(params.pageStart, 1);
@@ -224,7 +220,7 @@ export async function renderPdfPages(params: {
   profile: ImageUploadQualityProfile;
 }): Promise<RenderedPdfPage[]> {
   const limits = normalizePdfRenderLimits(params.limits);
-  const loadingTask = loadPdfDocument(params.data);
+  const loadingTask = await loadPdfDocument(params.data);
 
   try {
     const document = await loadingTask.promise;
@@ -327,7 +323,13 @@ export async function renderPdfPages(params: {
   }
 }
 
-function loadPdfDocument(data: Uint8Array) {
+async function loadPdfDocument(data: Uint8Array) {
+  // PDF.js loads native canvas and scans installed fonts during import.
+  // Keep that work deferred until a PDF operation actually needs the runtime.
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const wasmUrl = pathToFileURL(
+    `${path.dirname(require.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
+  ).href;
   return pdfjs.getDocument({
     data: new Uint8Array(data),
     verbosity: pdfjs.VerbosityLevel.ERRORS,

@@ -1,7 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 /**
  * The Composer preview is deliberately much smaller than any image sent to a
@@ -19,9 +18,6 @@ export type ComposerPdfPreview = {
 };
 
 const require = createRequire(import.meta.url);
-const wasmUrl = pathToFileURL(
-  `${path.dirname(require.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
-).href;
 
 /**
  * Render page one for the Composer only. This module intentionally does not
@@ -31,6 +27,12 @@ const wasmUrl = pathToFileURL(
 export async function renderComposerPdfPreview(params: {
   data: Uint8Array;
 }): Promise<ComposerPdfPreview> {
+  // PDF.js loads native canvas and scans installed fonts during import.
+  // Keep that work deferred until a PDF operation actually needs the runtime.
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const wasmUrl = pathToFileURL(
+    `${path.dirname(require.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
+  ).href;
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(params.data),
     verbosity: pdfjs.VerbosityLevel.ERRORS,
