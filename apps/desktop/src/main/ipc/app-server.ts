@@ -1,3 +1,5 @@
+import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -300,6 +302,7 @@ import {
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
   NAVIGATION_QUERY_PAGE_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
+  NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
   NAVIGATION_QUEUE_PROJECTION_CHANNEL,
   NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
   NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
@@ -2167,6 +2170,13 @@ class DesktopAppServerService {
       request,
       scopeKey: "renderer-local",
     });
+  }
+
+  async releaseNavigationAttentionView(request: NavigationAttentionViewReleaseRequest): Promise<void> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteReleaseNavigationAttentionView(request.federationTarget, request);
+    }
+    getDesktopNavigationQueryStore().releaseAttentionView("renderer-local", request.viewId);
   }
 
   async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {
@@ -7731,6 +7741,7 @@ const navigationQueryPool = getDesktopNavigationQueryPool();
 const navigationQueryConsumersBySender = new Map<number, Set<string>>();
 let nextTransientNavigationConsumer = 0;
 const appServerService = new DesktopAppServerService();
+const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
 const navigationSnapshotTransport = new NavigationSnapshotTransport();
 
 /** Sender ids that already have a destroyed-listener reaping their PR focus. */
@@ -8061,12 +8072,13 @@ export function registerAppServerIpcHandlers(): void {
             navigationQueryPool.release(token);
           }
           navigationQueryConsumersBySender.delete(senderId);
+          void navigationAttentionViewLeases.releaseSender(senderId);
         });
       }
       const token = JSON.stringify([senderId, consumerId ?? ++nextTransientNavigationConsumer]);
       consumers.add(token);
       try {
-        return await appServerService.getNavigationQueryPage(request, token);
+        return await appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(senderId, request), token);
       } finally {
         if (consumerId === undefined) {
           consumers.delete(token);
@@ -8075,6 +8087,9 @@ export function registerAppServerIpcHandlers(): void {
       }
     },
   );
+  ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
+  ipcMain.handle(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL, async (event, request: NavigationAttentionViewReleaseRequest) =>
+    navigationAttentionViewLeases.release(event.sender.id, request));
   ipcMain.removeHandler(NAVIGATION_QUERY_RELEASE_CHANNEL);
   ipcMain.handle(NAVIGATION_QUERY_RELEASE_CHANNEL, async (event, consumerId: string) => {
     const token = JSON.stringify([event.sender.id, consumerId]);
@@ -8082,6 +8097,7 @@ export function registerAppServerIpcHandlers(): void {
     navigationQueryPool.release(token);
   });
   ipcMain.removeHandler(NAVIGATION_REMOVE_DIRECTORY_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
   ipcMain.handle(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, async (_event, request: MarkNavigationDirectorySeenRequest) =>
     appServerService.markNavigationDirectorySeen(request));
   ipcMain.handle(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, async (_event, request: RemoveNavigationDirectoryRequest) =>
@@ -8789,6 +8805,9 @@ export function registerAppServerIpcHandlers(): void {
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
+  await navigationAttentionViewLeases.dispose();
   ipcMain.removeHandler(NAVIGATION_QUERY_RELEASE_CHANNEL);
   for (const consumers of navigationQueryConsumersBySender.values()) {
     for (const token of consumers) navigationQueryPool.release(token);

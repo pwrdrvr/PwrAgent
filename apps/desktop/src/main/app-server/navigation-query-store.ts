@@ -51,6 +51,7 @@ type NavigationQueryGeneration = {
   materialization: NavigationQueryMaterialization;
   retainedBytes: number;
   scopeKey: string;
+  attentionViewId?: string;
 };
 
 type NavigationQueryCursor = {
@@ -186,6 +187,7 @@ function pageBase(params: {
 
 export class NavigationQueryStore {
   private readonly ownerEpoch = randomUUID();
+  private readonly attentionLifetimes = new Map<string, { closedAt?: number }>();
   private readonly generations = new Map<string, NavigationQueryGeneration>();
   private readonly currentGenerationByScopeAndQuery = new Map<string, string>();
   private readonly attentionViews = new Map<string, {
@@ -207,6 +209,15 @@ export class NavigationQueryStore {
     validateRequest(params.request);
     const now = this.options.now?.() ?? Date.now();
     this.expireIdle(now);
+    const attentionKey = params.request.attentionView ? JSON.stringify([params.scopeKey, params.request.attentionView.id]) : undefined;
+    let lifetime = attentionKey ? this.attentionLifetimes.get(attentionKey) : undefined;
+    if (attentionKey && !lifetime) {
+      const bytes = [...this.attentionLifetimes.keys(), attentionKey].reduce((total, key) => total + serializedBytes(key) + 32, 0);
+      if (this.attentionLifetimes.size >= 256 || bytes > 256 * 1024) throw new NavigationQueryError("navigation_busy", "Attention lifetime admission is occupied.");
+      lifetime = {};
+      this.attentionLifetimes.set(attentionKey, lifetime);
+    }
+    if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view has closed. Open a new view lifetime.");
     const queryKey = navigationQueryKey(params.request);
     let generation: NavigationQueryGeneration;
     let offset = 0;
@@ -239,6 +250,7 @@ export class NavigationQueryStore {
       offset = cursor.offset;
     } else {
       const index = await params.loadIndex();
+      if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
       const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index);
       const materialization = projectNavigationQuery({
         index,
@@ -260,6 +272,7 @@ export class NavigationQueryStore {
           materialization,
           retainedBytes: serializedBytes(materialization),
           scopeKey: params.scopeKey,
+          attentionViewId: params.request.attentionView?.id,
         });
         this.currentGenerationByScopeAndQuery.set(currentKey, generation.generation);
       }
@@ -301,6 +314,14 @@ export class NavigationQueryStore {
 
   /** Window teardown releases order lifetime; page expiry deliberately does not. */
   releaseAttentionView(scopeKey: string, viewId: string): void {
+    const lifetime = this.attentionLifetimes.get(JSON.stringify([scopeKey, viewId]));
+    if (lifetime) lifetime.closedAt = this.options.now?.() ?? Date.now();
+    for (const [key, generation] of this.generations) {
+      if (generation.scopeKey === scopeKey && generation.attentionViewId === viewId) this.generations.delete(key);
+    }
+    for (const [key, generationId] of this.currentGenerationByScopeAndQuery) {
+      if (!this.generations.has(generationId)) this.currentGenerationByScopeAndQuery.delete(key);
+    }
     for (const promoteOnTurnEnd of [false, true]) {
       this.attentionViews.delete(JSON.stringify([scopeKey, viewId, promoteOnTurnEnd]));
     }
@@ -442,6 +463,9 @@ export class NavigationQueryStore {
   }
 
   private expireIdle(now: number): void {
+    for (const [key, lifetime] of this.attentionLifetimes) {
+      if (lifetime.closedAt !== undefined && now - lifetime.closedAt > NAVIGATION_QUERY_CURSOR_IDLE_MS) this.attentionLifetimes.delete(key);
+    }
     for (const generation of this.generations.values()) {
       if (now - generation.lastAccessedAt <= NAVIGATION_QUERY_CURSOR_IDLE_MS) {
         continue;

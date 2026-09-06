@@ -1,3 +1,4 @@
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { useEffect, useState } from "react";
@@ -846,6 +847,7 @@ export type DesktopApi = {
     consumerId?: string,
   ) => Promise<NavigationQueryPage>;
   releaseNavigationQuery?: (consumerId: string) => Promise<void>;
+  releaseNavigationAttentionView?: (request: NavigationAttentionViewReleaseRequest) => Promise<void>;
   markNavigationDirectorySeen?: (request: MarkNavigationDirectorySeenRequest) => Promise<MarkNavigationDirectorySeenResponse>;
   removeNavigationDirectory?: (request: RemoveNavigationDirectoryRequest) => Promise<RemoveNavigationDirectoryResponse>;
   getNavigationLaunchpadConfig?: (

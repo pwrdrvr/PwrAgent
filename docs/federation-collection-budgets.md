@@ -163,3 +163,14 @@ commits once for 100 watermark writes; an already-read directory commits zero
 times. At a conservative 4 KiB per changed row, this fixture projects about
 0.4 MB per explicit action, or 4 MB/day at ten such actions, with no idle writes.
 The owner publishes one directory invalidation after acceptance.
+
+### Attention view lifetimes
+
+The main process qualifies renderer view IDs into unique owner-visible lifetimes.
+Its lease directory admits at most 256 views and 256 KiB of serialized key/value
+backing, separately from query pages. Window teardown and explicit view release
+remove the matching owner order and generations. Owner lifetime fences retain
+at most 256 records / 256 KiB; closed records expire after 60 seconds and prevent
+late reads from recreating released ranks. These operations add no SQLite writes.
+Hidden views retain their Attention lifetime without polling. Releasing a query
+page or changing a lens does not release the view.

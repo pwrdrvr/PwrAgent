@@ -60,6 +60,12 @@ export function useBoundedNavigationWindow(params: Demand & {
   }, [desktopApi, demandKey, enabled, visible, connected]);
 
   useEffect(() => {
+    const viewId = params.attentionView.id;
+    const federationTarget = paramsRef.current.target;
+    return () => { void desktopApi?.releaseNavigationAttentionView?.({ viewId, federationTarget }).catch(() => undefined); };
+  }, [desktopApi, params.attentionView.id, targetKey]);
+
+  useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {
       controllerRef.current?.invalidate();

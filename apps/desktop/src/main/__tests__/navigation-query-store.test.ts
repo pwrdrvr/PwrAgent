@@ -237,11 +237,11 @@ describe("NavigationQueryStore", () => {
       { ...thread("1"), inbox: { inInbox: true } },
       { ...thread("2"), inbox: { inInbox: true } },
     ]);
-    const read = (promoteOnTurnEnd: boolean) => store.readPage({
+    const read = (promoteOnTurnEnd: boolean, id = "view") => store.readPage({
       loadIndex: async () => owner,
       request: request({
         query: { kind: "lens", lens: "attention" },
-        attentionView: { id: "view", promoteOnTurnEnd },
+        attentionView: { id, promoteOnTurnEnd },
         pageSize: 1,
       }),
       scopeKey: "requester",
@@ -252,7 +252,8 @@ describe("NavigationQueryStore", () => {
     expect((await read(true)).entries[0]?.row.id).toBe("1");
     expect((await read(false)).entries[0]?.row.id).toBe("2");
     store.releaseAttentionView("requester", "view");
-    expect((await read(false)).entries[0]?.row.id).toBe("1");
+    await expect(read(false)).rejects.toThrow("has closed");
+    expect((await read(false, "replacement-view")).entries[0]?.row.id).toBe("1");
   });
 
   it("cursor_preserves_generation_during_owner_activity", async () => {
@@ -453,4 +454,40 @@ it("does not certify incomplete provider coverage as an authoritative empty popu
   expect(ready.coverage.state).toBe("complete");
   expect(ready.unchanged).not.toBe(true);
   expect(ready.countsRevision).not.toBe(checking.countsRevision);
+});
+
+it("does not recreate Attention ranks or generations when an owner read finishes after teardown", async () => {
+  const store = new NavigationQueryStore();
+  let resolve!: (value: ReturnType<typeof snapshot>) => void;
+  const pending = store.readPage({ scopeKey: "window", request: request({ attentionView: { id: "closed-lifetime", promoteOnTurnEnd: true } }),
+    loadIndex: () => new Promise((done) => { resolve = done; }),
+  });
+  store.releaseAttentionView("window", "closed-lifetime");
+  resolve(snapshot([thread("1")]));
+  await expect(pending).rejects.toThrow("closed during");
+  await expect(store.readPage({ scopeKey: "window", request: request({ attentionView: { id: "closed-lifetime", promoteOnTurnEnd: true } }),
+    loadIndex: async () => snapshot([]),
+  })).rejects.toThrow("has closed");
+  // Released generations cannot fill the eight-generation budget as views open and close.
+  for (let index = 0; index < 12; index += 1) {
+    await store.readPage({ scopeKey: "window", request: request({ attentionView: { id: `next-${index}`, promoteOnTurnEnd: true } }),
+      loadIndex: async () => snapshot([thread("1")]),
+    });
+    store.releaseAttentionView("window", `next-${index}`);
+  }
+});
+
+it("bounds closed Attention lifetime metadata and expires it after the late-read window", async () => {
+  let now = 0;
+  const store = new NavigationQueryStore({ now: () => now });
+  const read = (id: string) => store.readPage({ scopeKey: "viewer", request: request({ attentionView: { id, promoteOnTurnEnd: true } }),
+    loadIndex: async () => snapshot([]),
+  });
+  for (let index = 0; index < 256; index += 1) {
+    await read(String(index));
+    store.releaseAttentionView("viewer", String(index));
+  }
+  await expect(read("next")).rejects.toMatchObject({ code: "navigation_busy" });
+  now = 60_001;
+  await expect(read("next")).resolves.toMatchObject({ protocol: 2 });
 });
