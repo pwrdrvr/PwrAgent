@@ -54,3 +54,5 @@ export * from "./tool-activity-burst";
 export * from "./token-usage-pricing";
 export * from "./thread-pricing-projection";
 export * from "./worktree-paths";
+
+export * from "./composer-scope";
