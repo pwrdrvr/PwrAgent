@@ -1,3 +1,4 @@
+import { stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
 import { describe, expect, it } from "vitest";
 import type {
   NavigationQueryRequest,
@@ -364,4 +365,28 @@ describe("NavigationQueryStore", () => {
       code: "navigation_cursor_expired",
     } satisfies Partial<NavigationQueryError>);
   });
+});
+
+it.each([undefined, "owner", "other-owner"])("stamps off-page parent ownership independently of child ownership %s", async (childOwner) => {
+  const store = new NavigationQueryStore();
+  const page = await store.readPage({ scopeKey: "remote-placement", loadIndex: async () => snapshot([thread("child")]), request: request() });
+  const entry = page.entries[0]!;
+  const stamped = stampRemoteNavigationQueryPage({ instanceLabel: "Owner", target: { scope: "remote", instanceId: "owner" }, page: {
+    ...page, entries: [{ ...entry,
+      row: { ...entry.row, ref: { ...entry.row.ref, ownerInstanceId: childOwner } },
+      placement: { kind: "child", parent: { backend: "codex", threadId: "off-page-parent" } },
+    }],
+  } });
+  expect(stamped.entries[0]?.placement).toEqual({ kind: "child", parent: {
+    backend: "codex", threadId: "off-page-parent", ownerInstanceId: "owner",
+  } });
+  expect(stamped.entries[0]?.row.ref.ownerInstanceId).toBe(childOwner ?? "owner");
+  const foreign = stampRemoteNavigationQueryPage({ instanceLabel: "Owner", target: { scope: "remote", instanceId: "owner" }, page: {
+    ...stamped, entries: [{ ...stamped.entries[0]!, placement: { kind: "child", parent: {
+      backend: "codex", threadId: "off-page-parent", ownerInstanceId: "foreign-parent-owner",
+    } } }],
+  } });
+  expect(foreign.entries[0]?.placement).toEqual({ kind: "child", parent: {
+    backend: "codex", threadId: "off-page-parent", ownerInstanceId: "foreign-parent-owner",
+  } });
 });

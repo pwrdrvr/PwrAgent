@@ -13,8 +13,14 @@ export function stampRemoteNavigationQueryPage(params: {
   return {
     ...params.page,
     entries: params.page.entries.map((entry) => {
+      const placement = entry.placement.kind === "child"
+        && !entry.placement.parent.ownerInstanceId
+        ? { ...entry.placement, parent: {
+          ...entry.placement.parent, ownerInstanceId: params.target.instanceId,
+        } }
+        : entry.placement;
       if (entry.row.ref.ownerInstanceId || entry.row.federation) {
-        return entry;
+        return placement === entry.placement ? entry : { ...entry, placement };
       }
       const ref = buildFederatedThreadRef({
         backend: entry.row.source,
@@ -23,6 +29,7 @@ export function stampRemoteNavigationQueryPage(params: {
       });
       return {
         ...entry,
+        placement,
         row: {
           ...entry.row,
           ref: {
