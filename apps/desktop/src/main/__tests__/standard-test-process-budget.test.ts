@@ -1,13 +1,9 @@
 // Regression budget for standard Vitest worker-process churn.
 //
-// Vitest 4 defaults to the `forks` pool. In this workspace that produced one
-// fresh Node OS process per test file: 356 fork-worker execs for desktop-main
-// alone. Ten concurrent worktrees therefore multiply ordinary test discovery
-// into thousands of executable provenance events on macOS.
-//
-// `threads` keeps Vitest's default file isolation but does not exec an OS
-// process for each file. Keep the budget explicit so a pool default change or
-// a newly added project cannot quietly restore per-file process scaling.
+// The desktop main suite loads native runtime bindings. Vitest documents that
+// native modules can segfault in the worker-thread pool, so that project owns
+// its bindings in forked OS processes. The pure projects retain `threads` to
+// avoid expanding normal test discovery into per-file process churn.
 import { describe, expect, it } from "vitest";
 import workspaceConfig from "../../../../../vitest.workspace";
 
@@ -17,13 +13,18 @@ const EXPECTED_PROJECTS = [
   "messaging",
   "shared",
 ];
-const OS_WORKER_PROCESS_BUDGET_PER_TEST_FILE = 0;
 const EXPECTED_POOLS = {
-  "desktop-main": process.platform === "win32" ? "forks" : "threads",
+  "desktop-main": "forks",
   "desktop-renderer": "threads",
   messaging: "threads",
   shared: "threads",
 } as const;
+const EXPECTED_OS_WORKER_PROCESSES_PER_TEST_FILE = [
+  { name: "desktop-main", osWorkerProcessesPerTestFile: 1 },
+  { name: "desktop-renderer", osWorkerProcessesPerTestFile: 0 },
+  { name: "messaging", osWorkerProcessesPerTestFile: 0 },
+  { name: "shared", osWorkerProcessesPerTestFile: 0 },
+];
 
 type ConfiguredProject = {
   test?: {
@@ -33,7 +34,7 @@ type ConfiguredProject = {
 };
 
 describe("standard test process budget", () => {
-  it("keeps every project on its production-equivalent worker pool", () => {
+  it("keeps native desktop-main in process-isolated workers", () => {
     const projects = configuredProjects();
 
     expect(projects.map((project) => project.test?.name).sort()).toEqual(
@@ -48,7 +49,7 @@ describe("standard test process budget", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "keeps the POSIX OS worker process budget at zero per test file",
+    "keeps the POSIX OS worker process budget explicit per test file",
     () => {
       const projects = configuredProjects();
 
@@ -58,13 +59,7 @@ describe("standard test process budget", () => {
           osWorkerProcessesPerTestFile:
             project.test?.pool === "threads" ? 0 : 1,
         })),
-      ).toEqual(
-        EXPECTED_PROJECTS.map((name) => ({
-          name,
-          osWorkerProcessesPerTestFile:
-            OS_WORKER_PROCESS_BUDGET_PER_TEST_FILE,
-        })),
-      );
+      ).toEqual(EXPECTED_OS_WORKER_PROCESSES_PER_TEST_FILE);
     },
   );
 });
