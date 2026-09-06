@@ -1478,30 +1478,52 @@ textarea,
   color: var(--text-secondary);
 }
 
+/* Pane resize seams (sidebar | main, and transcript | pinned context rail).
+
+   Each handle straddles the 1px border between its two panes, and its
+   hover / focus indicator IS that border pixel lit in accent — one seam,
+   not a second line running beside the real one. The 11px hit band is
+   deliberately lopsided: `--pane-seam-scroll-side` (2px) on the side that
+   scrolls, the seam itself, then the rest on the side whose edge holds no
+   scrollbar. Both scrolling neighbours park their thumb flush against
+   this border (`.sidebar-list--dense` at the sidebar wall,
+   `.transcript-list__items` at the rail), and the earlier 11px band that
+   sat entirely inside the sidebar covered that thumb end to end — a
+   classic-mode (mouse attached) scrollbar is exactly 11px wide, so every
+   grab of it started a resize instead. 2px is the sliver a thumb can
+   afford to lose; the panel / main side pays the remaining 8px because
+   nothing interactive lives in its first 8px (the transcript's left pad
+   is 16px, the rail sections' is 12px). */
 .sidebar__resize-handle,
 .context-rail__resize-handle {
+  --pane-seam-scroll-side: 2px;
   position: absolute;
+  top: 0;
+  bottom: 0;
   z-index: 12;
   width: 11px;
   cursor: col-resize;
   touch-action: none;
 }
 
+/* A sibling of `.sidebar` inside `.app-shell` (see SidebarResizeHandle):
+   the aside is `overflow: hidden`, which clips at its padding box, so a
+   child could never reach the border pixel. `--sidebar-reserve` tracks the
+   live `--sidebar-width` during a drag, so the seam follows the wall. */
 .sidebar__resize-handle {
-  top: 0;
-  right: 0;
-  bottom: 0;
+  left: calc(
+    var(--sidebar-reserve, 408px) - 1px - var(--pane-seam-scroll-side)
+  );
 }
 
 .sidebar__resize-handle::after,
 .context-rail__resize-handle::after {
   content: "";
   position: absolute;
-  top: 12px;
-  bottom: 12px;
-  left: 5px;
+  top: 0;
+  bottom: 0;
+  left: var(--pane-seam-scroll-side);
   width: 1px;
-  border-radius: 999px;
   background: transparent;
   transition:
     background 140ms ease,
@@ -1514,6 +1536,14 @@ textarea,
 .context-rail__resize-handle:focus-visible::after {
   background: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-bg-medium);
+}
+
+/* A pointer crossing the seam on its way somewhere else should not flash
+   it; hold the hover lit-up a beat. Keyboard focus is deliberate, so it
+   lights immediately (the rule above, no delay). */
+.sidebar__resize-handle:hover:not(:focus-visible)::after,
+.context-rail__resize-handle:hover:not(:focus-visible)::after {
+  transition-delay: 120ms;
 }
 
 .sidebar__resize-handle:focus-visible,
@@ -23345,10 +23375,11 @@ a.transcript-message__messaging-origin:focus-visible {
   flex: 1 1 auto;
 }
 
+/* Straddles the panel's border-left: 2px over the transcript (whose
+   scrollbar parks against this edge), the seam, 8px into the panel. The
+   rail is `overflow: visible`, so the negative offset is not clipped. */
 .context-rail__resize-handle {
-  top: 0;
-  bottom: 0;
-  left: 0;
+  left: calc(-1 * var(--pane-seam-scroll-side));
   z-index: 3;
 }
 

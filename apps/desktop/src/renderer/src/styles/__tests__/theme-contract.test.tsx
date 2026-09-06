@@ -383,6 +383,10 @@ describe("Tangerine Terminal theme contract", () => {
       "sidebar-rail-inset",
       "sidebar-lane-inset",
       "sidebar-masthead-pull",
+      // Pane resize seams — defined on the two resize handles, not `:root`.
+      // How far the 11px hit band reaches over the scrolling neighbour's
+      // edge; both seams read it so their geometry cannot drift apart.
+      "pane-seam-scroll-side",
       // Live run strip row height — defined on `.live-strip`, not `:root`.
       // The four-row scroll cap is derived from it, so the two cannot drift.
       "live-strip-row-h",

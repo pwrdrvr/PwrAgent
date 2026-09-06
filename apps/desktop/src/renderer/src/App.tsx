@@ -39,6 +39,7 @@ import {
   toolOutputWarningChars,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
 import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
@@ -2810,12 +2811,18 @@ function DesktopAppShell(props: {
             await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
             await navigation.refresh?.();
           }}
-          onResizeStart={startSidebarResize}
-          onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
-          sidebarWidth={sidebarWidth}
-          sidebarMinWidth={sidebarMinWidth}
-          sidebarMaxWidth={sidebarMaxWidth}
         />
+        {/* Sibling of the sidebar, not a child: the seam straddles the
+            sidebar's border, which the aside's overflow clip would cut off. */}
+        {sidebarHidden ? null : (
+          <SidebarResizeHandle
+            onResizeStart={startSidebarResize}
+            onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidthRef.current + delta)}
+            sidebarWidth={sidebarWidth}
+            sidebarMinWidth={sidebarMinWidth}
+            sidebarMaxWidth={sidebarMaxWidth}
+          />
+        )}
 
         <main
           className={`app-main${
