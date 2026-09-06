@@ -1478,6 +1478,7 @@ export const NAVIGATION_QUERY_MAX_RESULT_BYTES = 252 * 1024;
 
 export type NavigationQueryConsumerClass =
   | "main-sidebar"
+  | "settings"
   | "remote-window"
   | "star-map"
   | "search"
@@ -1613,6 +1614,7 @@ export type NavigationDirectoryRow = {
   };
   /** Launchpad existence only. Read the launchpad/config resource on demand. */
   launchpadPresent: boolean;
+  launchpadBackend?: AppServerBackendKind;
 };
 
 export type NavigationStarMapFilterKey = "attention" | "approval" | "pr" | "unpushed" | "pinned" | "agent";
@@ -1623,7 +1625,16 @@ export type NavigationStarMapFacetCounts = {
   unread: number;
 };
 
+export type NavigationModelInventoryRow = {
+  backend: AppServerBackendKind;
+  model?: string;
+  modelMigrationRevision?: string;
+  threadCount: number;
+  fastThreadCount: number;
+};
+
 export type NavigationQuery =
+  | { kind: "model-inventory" }
   | {
       kind: "directory-index";
       filter?: string;
@@ -1700,6 +1711,7 @@ export type NavigationQueryPage = {
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
   directories?: NavigationDirectoryRow[];
+  modelGroups?: NavigationModelInventoryRow[];
   nextCursor?: string;
   complete: boolean;
   unchanged?: boolean;

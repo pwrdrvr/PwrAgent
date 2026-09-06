@@ -1,3 +1,4 @@
+import type { NavigationQueryPage, NavigationQueryRequest, NavigationDirectoryRow, NavigationModelInventoryRow } from "@pwragent/shared";
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -2768,7 +2769,8 @@ describe("SettingsScreen", () => {
           },
         ],
       })),
-      getNavigationSnapshot: vi.fn(async () => ({
+      releaseNavigationQuery: vi.fn(async () => {}),
+      getNavigationQueryPage: vi.fn(async (request: NavigationQueryRequest) => settingsQueryPage(request, {
         fetchedAt: 1000,
         browseMode: "inbox" as const,
         directories: [
@@ -6843,7 +6845,7 @@ describe("SettingsScreen", () => {
 
   it("applies Auto-fix PR defaults to launchpads and eligible existing threads", async () => {
     const settings = createSettingsState();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => settingsQueryPage(request, {
       backend: "all" as const,
       fetchedAt: 1_000,
       unchanged: false,
@@ -6916,7 +6918,8 @@ describe("SettingsScreen", () => {
       updatedThreadCount: request.dryRun ? 2 : 2,
     }));
     const desktopApi = {
-      getNavigationSnapshot,
+      getNavigationQueryPage,
+      releaseNavigationQuery: vi.fn(async () => {}),
       updateDirectoryLaunchpad,
       setEligibleThreadsPrAutoDispatch,
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
@@ -7059,3 +7062,30 @@ describe("SettingsScreen", () => {
     expect(screen.queryByRole("radio", { name: "TipTap with chips" })).not.toBeInTheDocument();
   });
 });
+
+
+function settingsQueryPage<T extends {
+  directories: Array<{ key: string; label: string; kind: NavigationDirectoryRow["kind"]; launchpad?: { backend: NavigationModelInventoryRow["backend"] } }>;
+  threads?: Array<{ source: NavigationModelInventoryRow["backend"]; model?: string; fastMode?: boolean; modelMigrationRevision?: string }>;
+}>(request: NavigationQueryRequest, fixture: T): NavigationQueryPage {
+  const groups = new Map<string, NavigationModelInventoryRow>();
+  for (const thread of fixture.threads ?? []) {
+    if (request.backend && request.backend !== "all" && request.backend !== thread.source) continue;
+    const key = JSON.stringify([thread.source, thread.model, thread.modelMigrationRevision]);
+    const group = groups.get(key) ?? { backend: thread.source, model: thread.model, modelMigrationRevision: thread.modelMigrationRevision, threadCount: 0, fastThreadCount: 0 };
+    group.threadCount += 1;
+    if (thread.fastMode) group.fastThreadCount += 1;
+    groups.set(key, group);
+  }
+  const counts = { total: [...groups.values()].reduce((count, group) => count + group.threadCount, 0), active: 0, unread: 0, review: 0 };
+  return {
+    protocol: 2, queryKey: JSON.stringify([request.query, request.backend]), generation: "fixture", ownerEpoch: "owner",
+    countsRevision: "revision", coverage: { state: "complete" }, counts, entries: [], complete: true,
+    ...(request.query.kind === "model-inventory" ? { modelGroups: [...groups.values()] } : {
+      directories: fixture.directories.map((directory) => ({ key: directory.key, label: directory.label, kind: directory.kind,
+        counts: { total: 0, active: 0, unread: 0, review: 0 }, pinnedRootCount: 0, unpinnedRootCount: 0,
+        launchpadPresent: Boolean(directory.launchpad), launchpadBackend: directory.launchpad?.backend,
+      })),
+    }),
+  };
+}

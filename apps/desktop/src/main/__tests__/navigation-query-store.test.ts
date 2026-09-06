@@ -53,6 +53,42 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it("returns compact owner model counts without thread or launchpad contents", async () => {
+    const threads = Array.from({ length: 1001 }, (_, index) => ({
+      ...thread(String(index), "private thread contents".repeat(1000)), model: "owner-model",
+      modelMigrationRevision: index % 2 ? "previous" : "current", fastMode: index % 3 === 0,
+    }));
+    threads.push({ ...thread("other"), source: "acp:grok", model: "foreign-backend", modelMigrationRevision: "current", fastMode: true });
+    const store = new NavigationQueryStore();
+    const page = await store.readPage({ scopeKey: "settings", loadIndex: async () => snapshot(threads),
+      request: request({ consumer: "settings", backend: "codex", query: { kind: "model-inventory" } }),
+    });
+    expect(page.entries).toEqual([]);
+    expect(page.modelGroups).toEqual([
+      { backend: "codex", model: "owner-model", modelMigrationRevision: "current", threadCount: 501, fastThreadCount: 167 },
+      { backend: "codex", model: "owner-model", modelMigrationRevision: "previous", threadCount: 500, fastThreadCount: 167 },
+    ]);
+    expect(page.counts.total).toBe(1001);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1024);
+    expect(JSON.stringify(page)).not.toContain("private thread contents");
+  });
+
+  it("pages model inventory groups with immutable generation and unchanged semantics", async () => {
+    const threads = Array.from({ length: 101 }, (_, index) => ({ ...thread(String(index)), model: `model-${index}` }));
+    const store = new NavigationQueryStore();
+    const query = request({ consumer: "settings", query: { kind: "model-inventory" }, pageSize: 100 });
+    const first = await store.readPage({ scopeKey: "settings", loadIndex: async () => snapshot(threads), request: query });
+    const last = await store.readPage({ scopeKey: "settings", loadIndex: async () => snapshot([]), request: { ...query, cursor: first.nextCursor } });
+    expect(first.modelGroups).toHaveLength(100);
+    expect(last.modelGroups).toHaveLength(1);
+    expect(last.complete).toBe(true);
+    expect(last.generation).toBe(first.generation);
+    const unchanged = await store.readPage({ scopeKey: "settings", loadIndex: async () => snapshot(threads),
+      request: { ...query, completeBaselineRevision: last.countsRevision },
+    });
+    expect(unchanged.unchanged).toBe(true);
+  });
+
   it("pages complete project geometry by primary membership rather than loaded cards or secondary links", async () => {
     const threads = Array.from({ length: 101 }, (_, index) => ({
       ...thread(String(index)),
