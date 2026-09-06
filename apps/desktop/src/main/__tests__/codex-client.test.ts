@@ -3487,7 +3487,7 @@ describe("CodexAppServerClient", () => {
           id: "item-2",
           role: "assistant",
           text: "I’m tracing the transcript scroll container.",
-          createdAt: 1_763_500_100_000,
+          createdAt: undefined,
           phase: "commentary",
           turn
         },
@@ -3495,7 +3495,7 @@ describe("CodexAppServerClient", () => {
           type: "activity",
           id: "activity-item-3",
           summary: "Explored 1 file, Ran 1 command, Edited 1 file, +2, -1",
-          createdAt: 1_763_500_100_000,
+          createdAt: undefined,
           status: "completed",
           turn,
           details: [
@@ -3544,7 +3544,7 @@ describe("CodexAppServerClient", () => {
           id: "item-6",
           role: "assistant",
           text: "The desktop shell is live and listing Codex threads.",
-          createdAt: 1_763_500_100_000,
+          createdAt: undefined,
           phase: "final",
           turn
         }
@@ -3566,13 +3566,13 @@ describe("CodexAppServerClient", () => {
           id: "item-2",
           role: "assistant",
           text: "I’m tracing the transcript scroll container.",
-          createdAt: 1_763_500_100_000
+          createdAt: undefined
         },
         {
           id: "item-6",
           role: "assistant",
           text: "The desktop shell is live and listing Codex threads.",
-          createdAt: 1_763_500_100_000
+          createdAt: undefined
         }
       ],
       lastUserMessage: "Show me the current desktop thread shell",
@@ -3667,7 +3667,7 @@ describe("CodexAppServerClient", () => {
             { type: "agentMessage", id: "early", phase: "commentary", text: "Starting." },
             { type: "commandExecution", id: "work", command: "pnpm test", status: "completed" },
             { type: "agentMessage", id: "late", phase: "commentary", text: "Three hours later." },
-            { type: "plan", id: "plan", plan: [{ step: "Verify", status: "inProgress" }] },
+            { type: "plan", plan: [{ step: "Verify", status: "inProgress" }] },
           ],
         }],
       },
@@ -3675,7 +3675,7 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
       const replay = await client.readThread({ threadId: "thread-long-turn" });
-      expect(replay.entries.map((entry) => entry.id)).toEqual(["prompt", "early", "activity-work", "late", "plan"]);
+      expect(replay.entries.map((entry) => entry.id)).toEqual(["prompt", "early", "activity-work", "late", "plan-1763500100000"]);
       expect(replay.entries[0]?.createdAt).toBe(1_763_500_100_000);
       for (const entry of replay.entries.slice(1)) {
         expect(entry.createdAt).toBeUndefined();
@@ -3818,7 +3818,7 @@ describe("CodexAppServerClient", () => {
         id: "new-final-answer",
         role: "assistant",
         text: "Same final answer.",
-        createdAt: 1_781_112_452_000,
+        createdAt: undefined,
       }),
     ]);
     expect(replay.messages.at(-1)).toEqual(
@@ -3826,7 +3826,7 @@ describe("CodexAppServerClient", () => {
         id: "new-final-answer",
         role: "assistant",
         text: "Same final answer.",
-        createdAt: 1_781_112_452_000,
+        createdAt: undefined,
       }),
     );
     expect(replay.lastAssistantMessage).toBe("Same final answer.");
@@ -3937,7 +3937,7 @@ describe("CodexAppServerClient", () => {
         type: "activity",
         id: "activity-item-file-change",
         summary: "Edited 6 files, +9, -5",
-        createdAt: 1_763_500_100_000,
+        createdAt: undefined,
         status: "completed",
         turn: {
           id: "turn-file-change-counts",
@@ -4115,7 +4115,7 @@ describe("CodexAppServerClient", () => {
         type: "activity",
         id: "activity-item-metadata-patches",
         summary: "Edited 2 files, +2, -2",
-        createdAt: 1_763_500_150_000,
+        createdAt: undefined,
         status: "completed",
         turn: {
           id: "turn-metadata-patches",
@@ -6135,7 +6135,7 @@ describe("CodexAppServerClient", () => {
       {
         type: "plan",
         id: "plan-1",
-        createdAt: 1_763_500_200_000,
+        createdAt: undefined,
         explanation: "Keep the transcript contract stable.",
         markdown: "## Final plan\n\nShip the transcript renderer in small steps.",
         steps: [
@@ -6583,7 +6583,7 @@ describe("CodexAppServerClient", () => {
         type: "activity",
         id: "activity-tool-1",
         summary: "Used 2 tools",
-        createdAt: 1_763_500_210_000,
+        createdAt: undefined,
         status: "in_progress",
         turn: {
           id: "turn-tools",
@@ -6907,7 +6907,7 @@ describe("CodexAppServerClient", () => {
         id: "message-1",
         role: "assistant",
         text: "I am checking CI.",
-        createdAt: 1_763_500_220_000,
+        createdAt: undefined,
         parts: [{ type: "text", text: "I am checking CI." }],
         phase: "commentary",
         turn: {
@@ -6921,7 +6921,7 @@ describe("CodexAppServerClient", () => {
         type: "activity",
         id: "activity-call-1",
         summary: "Used 2 tools",
-        createdAt: 1_763_500_220_000,
+        createdAt: undefined,
         details: [
           {
             id: "call-1",
@@ -6956,7 +6956,7 @@ describe("CodexAppServerClient", () => {
         id: "message-2",
         role: "assistant",
         text: "CI is green.",
-        createdAt: 1_763_500_220_000,
+        createdAt: undefined,
         parts: [{ type: "text", text: "CI is green." }],
         turn: {
           id: "turn-tools",
@@ -7053,7 +7053,7 @@ describe("CodexAppServerClient", () => {
         id: "message-1",
         role: "assistant",
         text: "Review team:",
-        createdAt: 1_763_500_260_000,
+        createdAt: undefined,
         parts: [{ type: "text", text: "Review team:" }],
         turn: {
           id: "turn-review",
@@ -7066,7 +7066,7 @@ describe("CodexAppServerClient", () => {
         type: "activity",
         id: "activity-collab-spawn-1",
         summary: "Spawned 1 agent, Waited on 1 agent, 1 collaboration tool failed",
-        createdAt: 1_763_500_260_000,
+        createdAt: undefined,
         status: "failed",
         details: [
           expect.objectContaining({
@@ -7785,7 +7785,7 @@ describe("CodexAppServerClient", () => {
       {
         type: "plan",
         id: "item-2",
-        createdAt: 1_763_500_300_000,
+        createdAt: undefined,
         explanation: "Track the desktop work in three steps.",
         steps: [
           { step: "Normalize replay", status: "pending" },
@@ -7866,7 +7866,7 @@ describe("CodexAppServerClient", () => {
       {
         type: "plan",
         id: "item-2",
-        createdAt: 1_763_500_350_000,
+        createdAt: undefined,
         explanation: "Verify the renderer path before changing it.",
         steps: [
           { step: "Read the replay normalizer", status: "completed" },
