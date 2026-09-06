@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import gitBudgets from "./fixtures/git-subprocess-budgets.json";
 import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
 import type {
   ConfigWriteResponse,
@@ -2136,6 +2137,37 @@ describe("CodexAppServerClient", () => {
     expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/fixture-user/github/PwrAgnt");
 
     await client.close();
+  });
+
+  it("validates each directory once per listing even across mapper batches", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadDirectoryEnricher = vi.fn(async () => ({ linkedDirectories: [] }));
+    const client = new CodexAppServerClient({ command: "codex", threadDirectoryEnricher });
+    const threads: AppServerThreadSummary[] = Array.from(
+      { length: gitBudgets.directoryEnrichment.threadsPerListing },
+      (_, index) => ({
+        id: `thread-${index}`,
+        title: `Thread ${index}`,
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: index % 2 ? "/repo/first" : "/repo/second",
+        linkedDirectories: [],
+      }),
+    );
+    try {
+      expect((await client.enrichThreadDirectories(threads)).map((thread) => thread.id))
+        .toEqual(threads.map((thread) => thread.id));
+      expect(threadDirectoryEnricher).toHaveBeenCalledTimes(
+        gitBudgets.directoryEnrichment.uniqueDirectories,
+      );
+      await client.enrichThreadDirectories(threads);
+      // A new listing must validate directories again to detect external changes.
+      expect(threadDirectoryEnricher).toHaveBeenCalledTimes(
+        2 * gitBudgets.directoryEnrichment.uniqueDirectories,
+      );
+    } finally {
+      await client.close();
+    }
   });
 
   it("preserves thread order while enriching directories concurrently", async () => {

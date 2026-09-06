@@ -10,6 +10,15 @@ const expectedDir = (p: string): string => path.resolve(p).replace(/\\/g, "/");
 describe("createThreadDirectoryEnricher", () => {
   beforeEach(() => {
     vi.resetModules();
+    // This suite isolates Git discovery and fallback behavior. The companion
+    // enrichment-cache suite validates real filesystem invalidation.
+    vi.doMock("../codex-app-server/git-directory-observation", () => ({
+      createGitDirectoryObserver: () => async () => ({
+        relationship: "fixture",
+        head: "fixture-head",
+        repository: true,
+      }),
+    }));
   });
 
   it("resolves the home repo, preserves the worktree path, and caches repeated lookups", async () => {
@@ -77,9 +86,7 @@ describe("createThreadDirectoryEnricher", () => {
     const { createThreadDirectoryEnricher } = await import(
       "../app-server/thread-directory-enricher"
     );
-    const enricher = createThreadDirectoryEnricher({
-      cacheTtlMs: 60_000,
-    });
+    const enricher = createThreadDirectoryEnricher();
 
     const first = await enricher(projectPath);
     const second = await enricher(projectPath);
@@ -315,7 +322,7 @@ describe("createThreadDirectoryEnricher", () => {
     const { createThreadDirectoryEnricher } = await import(
       "../app-server/thread-directory-enricher"
     );
-    const enricher = createThreadDirectoryEnricher({ cacheTtlMs: 60_000 });
+    const enricher = createThreadDirectoryEnricher();
 
     await expect(enricher(projectPath)).resolves.toEqual({
       linkedDirectories: [],

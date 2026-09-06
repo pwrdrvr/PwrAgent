@@ -8301,6 +8301,11 @@ export class CodexAppServerClient {
     threads: RawCodexThreadSummary[],
   ): Promise<EnrichedCodexThread[]> {
     const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
+    // A listing can span many mapper batches and contain hundreds of threads
+    // sharing one checkout. Validate each directory once for this observation,
+    // including failures, rather than once for every row. The next listing
+    // observes it again so external workspace changes remain visible.
+    const directories = new Map<string, Promise<ThreadDirectoryEnrichment>>();
 
     for await (const enrichedThread of new IterableMapper(
       threads.map((thread, index) => ({ index, thread })),
@@ -8311,7 +8316,13 @@ export class CodexAppServerClient {
         const projectKey = await resolveThreadProjectKey(thread);
         let enrichment: ThreadDirectoryEnrichment;
         try {
-          enrichment = await this.threadDirectoryEnricher(projectKey);
+          const directoryKey = projectKey ? path.resolve(projectKey) : "";
+          let pending = directories.get(directoryKey);
+          if (!pending) {
+            pending = this.threadDirectoryEnricher(projectKey);
+            directories.set(directoryKey, pending);
+          }
+          enrichment = await pending;
         } catch (error) {
           codexClientLog.warn("thread directory enrichment failed", {
             threadId: thread.id,

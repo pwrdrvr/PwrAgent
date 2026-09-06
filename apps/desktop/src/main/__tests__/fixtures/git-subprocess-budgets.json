@@ -4,6 +4,14 @@
     "baselineGitCommands": 105,
     "maxGitCommands": 10
   },
+  "directoryEnrichment": {
+    "repeatedListings": 20,
+    "baselineWarmGitCommands": 60,
+    "warmGitCommands": 0,
+    "branchChangeGitCommands": 1,
+    "threadsPerListing": 100,
+    "uniqueDirectories": 2
+  },
   "automaticFleet": {
     "worktreeCount": 100,
     "navigationRequestsWhileInFlight": 100,
