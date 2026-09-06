@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
+  buildThreadComposerScopeKey,
   useComposerDraftStore,
   type ComposerDraftStore,
   type ComposerQueuedTurnSnapshot,
@@ -34,7 +35,7 @@ function makeQueuedTurn(
 }
 
 function scopeKey(thread: NavigationThreadSummary): string {
-  return `thread:${thread.source}:${thread.id}`;
+  return buildThreadComposerScopeKey(thread.source, thread.id, thread.federation?.ref.target);
 }
 
 function renderIndicators(threads: NavigationThreadSummary[]) {

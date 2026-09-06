@@ -1,3 +1,4 @@
+import { buildOwnedComposerScopeKey } from "@pwragent/shared";
 import { useEffect, useRef } from "react";
 import type {
   AgentEvent,
@@ -187,8 +188,8 @@ export function useQueuedTurnRelease(params: {
     if (!mountedRef.current || globalInFlightScopeKeys.size >= 8) return;
     const lifetime = lifetimeRef.current;
     const current = paramsRef.current;
-    const ownerKey = JSON.stringify(owner);
-    const leaseKey = JSON.stringify([scopeKey, owner]);
+    const ownerKey = buildOwnedComposerScopeKey(owner);
+    const leaseKey = ownerKey;
     if (
       inFlightScopeKeysRef.current.has(leaseKey) ||
       globalInFlightScopeKeys.has(leaseKey)
@@ -199,7 +200,7 @@ export function useQueuedTurnRelease(params: {
     const queuedTurn = getNextReleasableQueuedTurn(
       current.composerDraftStore.getQueuedTurns(scopeKey),
     );
-    if (!queuedTurn || !queuedTurn.threadOwner || JSON.stringify(queuedTurn.threadOwner) !== ownerKey
+    if (!queuedTurn || !queuedTurn.threadOwner || buildOwnedComposerScopeKey(queuedTurn.threadOwner) !== ownerKey
       || isThreadSelected(current, owner)) {
       return;
     }
@@ -216,12 +217,12 @@ export function useQueuedTurnRelease(params: {
         releaseState.composerDraftStore.getQueuedTurns(scopeKey),
       );
       if (!releaseQueuedSnapshot || releaseQueuedSnapshot.id !== queuedTurnId
-        || !releaseQueuedSnapshot.threadOwner || JSON.stringify(releaseQueuedSnapshot.threadOwner) !== ownerKey) {
+        || !releaseQueuedSnapshot.threadOwner || buildOwnedComposerScopeKey(releaseQueuedSnapshot.threadOwner) !== ownerKey) {
         return undefined;
       }
 
       const resolved = resolveComposerScopeOwner(releaseState.composerDraftStore, scopeKey);
-      if (resolved.state !== "known" || JSON.stringify(resolved.owner) !== ownerKey) return undefined;
+      if (resolved.state !== "known" || buildOwnedComposerScopeKey(resolved.owner) !== ownerKey) return undefined;
       const releaseThread = candidateThread;
       if (!ownerBackend?.available) return undefined;
       const backend = ownerBackend;

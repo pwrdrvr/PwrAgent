@@ -1,3 +1,4 @@
+import { buildThreadComposerScopeKey } from "../../composer/useComposerDraftStore";
 import {
   act,
   fireEvent,
@@ -1550,7 +1551,7 @@ describe("StarMapChatCard start-turn queue handling", () => {
       }),
     );
     expect(
-      result.current.getQueuedTurns("thread:codex:t-local"),
+      result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "t-local")),
     ).toEqual([
       expect.objectContaining({
         backendQueuePending: false,
@@ -1702,7 +1703,7 @@ describe("StarMapChatCard send failures", () => {
       expect(input.value).toBe("newer edit");
     });
     expect(
-      composerDraftStore.popDraft("thread:codex:t-local"),
+      composerDraftStore.popDraft(buildThreadComposerScopeKey("codex", "t-local")),
     ).toEqual(expect.objectContaining({ draft: "failed submission" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(
       /admission failed/,

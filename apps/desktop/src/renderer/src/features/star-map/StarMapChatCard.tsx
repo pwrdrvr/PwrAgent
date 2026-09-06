@@ -289,7 +289,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         : undefined,
     [remoteInstanceId],
   );
-  const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id);
+  const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id, federationTarget ?? { scope: "local" });
   const ownedComposerDraftStore = useOwnedComposerDraftStore(
     props.composerDraftStore,
     composerScopeKey,

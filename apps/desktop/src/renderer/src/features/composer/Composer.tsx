@@ -2862,7 +2862,7 @@ export function Composer(props: ComposerProps) {
   const composerScopeKey = props.launchpad
     ? `launchpad:${props.launchpad.directoryKey}`
     : props.thread
-      ? buildThreadComposerScopeKey(props.thread.source, props.thread.id)
+      ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
       : "empty";
   const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
   const localDraftStore = useComposerDraftStore();
@@ -5314,6 +5314,7 @@ export function Composer(props: ComposerProps) {
         const mirrorScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
+          event.federationTarget ?? { scope: "local" },
         );
         const mirrorCurrent = draftStore.getQueuedTurns(mirrorScopeKey);
         const matchingIndex = mirrorCurrent.findIndex(
@@ -5371,7 +5372,7 @@ export function Composer(props: ComposerProps) {
         typeof turnQueueRecord?.queueEntryId === "string" &&
         (
           draftStore.getQueuedTurns(
-            buildThreadComposerScopeKey(event.backend, notificationThreadId),
+            buildThreadComposerScopeKey(event.backend, notificationThreadId, event.federationTarget ?? { scope: "local" }),
           ).some(
             (queued) => queued.queueEntryId === turnQueueRecord.queueEntryId,
           )
@@ -5387,6 +5388,7 @@ export function Composer(props: ComposerProps) {
         const queueScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
+          event.federationTarget ?? { scope: "local" },
         );
         const queueEventIsCurrentThread =
           agentEventMatchesThread(event, thread, notificationThreadId);

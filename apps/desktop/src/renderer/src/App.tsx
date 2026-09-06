@@ -108,7 +108,7 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActionProjection";
 import { useIndependentQueueProjection } from "./lib/useIndependentQueueProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
-import { useThreadDraftIndicators } from "./lib/useThreadDraftIndicators";
+import { useThreadDraftIndicators, useUnassignedThreadDraftCount } from "./lib/useThreadDraftIndicators";
 import { copyText } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -1873,6 +1873,7 @@ function DesktopAppShell(props: {
     composerDraftStore,
     threads: navigation.threads,
   });
+  const unassignedThreadDraftCount = useUnassignedThreadDraftCount(composerDraftStore);
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
   // window opens, and graduating the bootstrap profile spawns a
@@ -2666,6 +2667,7 @@ function DesktopAppShell(props: {
           terminalThreadKeys={terminalThreadKeys}
           queuedMessageThreadKeys={queuedMessageThreadKeys}
           draftThreadKeys={draftThreadKeys}
+          unassignedThreadDraftCount={unassignedThreadDraftCount}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           revealSelectedThreadRequest={revealSelectedThreadRequest}
           onRevealSelectedThreadComplete={threadJump.completePeekRestore}

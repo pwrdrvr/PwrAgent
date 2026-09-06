@@ -1,3 +1,4 @@
+import { buildOwnedComposerScopeKey } from "@pwragent/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ComposerThreadOwner,
@@ -36,7 +37,7 @@ export function useIndependentQueueProjection(params: {
     threadId: selected.id,
     target: selected.federation?.ref.target ?? params.federationTarget ?? { scope: "local" },
   } : undefined;
-  const selectedKey = selectedOwner ? JSON.stringify(selectedOwner) : undefined;
+  const selectedKey = selectedOwner ? buildOwnedComposerScopeKey(selectedOwner) : undefined;
   const [selectedState, setSelectedState] = useState<SelectedQueueReadiness>({ readiness: "loading" });
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const refreshSelected = useCallback(() => refreshRef.current(), []);
@@ -61,7 +62,7 @@ export function useIndependentQueueProjection(params: {
         for (const scope of composerDraftStore?.getQueuedScopeKeys() ?? []) {
           const resolved = resolveComposerScopeOwner(composerDraftStore!, scope);
           if (resolved.state !== "known") continue;
-          const key = JSON.stringify(resolved.owner);
+          const key = buildOwnedComposerScopeKey(resolved.owner);
           const demand = demands.get(key) ?? { owner: resolved.owner, scopes: new Set<string>() };
           demand.scopes.add(scope);
           demands.set(key, demand);
@@ -72,12 +73,12 @@ export function useIndependentQueueProjection(params: {
             backend: selected.source, threadId: selected.id,
             target: selected.federation?.ref.target ?? current.current.federationTarget ?? { scope: "local" },
           };
-          const key = JSON.stringify(owner);
+          const key = buildOwnedComposerScopeKey(owner);
           const demand = demands.get(key) ?? { owner, scopes: new Set<string>() };
-          const scope = buildThreadComposerScopeKey(selected.source, selected.id);
+          const scope = buildThreadComposerScopeKey(selected.source, selected.id, owner.target);
           const resolved = composerDraftStore ? resolveComposerScopeOwner(composerDraftStore, scope) : undefined;
           // Selection authorizes an exact read, never ownership of ambiguous or legacy local drafts.
-          if (resolved?.state === "known" && JSON.stringify(resolved.owner) === key) demand.scopes.add(scope);
+          if (resolved?.state === "known" && buildOwnedComposerScopeKey(resolved.owner) === key) demand.scopes.add(scope);
           demands.set(key, demand);
         }
         const pending = [...demands];
@@ -99,7 +100,7 @@ export function useIndependentQueueProjection(params: {
               if (baselineKey === selectedKey) setSelectedState({ ownerKey: baselineKey, readiness: "ready", projection });
               for (const [scope, atReadStart] of captured) {
                 const resolved = resolveComposerScopeOwner(composerDraftStore!, scope);
-                if (resolved.state !== "known" || JSON.stringify(resolved.owner) !== baselineKey) continue;
+                if (resolved.state !== "known" || buildOwnedComposerScopeKey(resolved.owner) !== baselineKey) continue;
                 const existing = composerDraftStore!.getQueuedTurns(scope);
                 const next = reconcileCompleteNavigationQueue({ owner, projection, atReadStart, current: existing });
                 if (JSON.stringify(next) !== JSON.stringify(existing)) composerDraftStore!.setQueuedTurns(scope, next);

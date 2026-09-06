@@ -1,3 +1,4 @@
+import { parseOwnedComposerScopeKey } from "@pwragent/shared";
 import {
   useCallback,
   useEffect,
@@ -159,7 +160,7 @@ export function useDurableComposerDraftStore(
 
     let cancelled = false;
     setHydration({ baseStore, desktopApi, status: "loading" });
-    void desktopApi.listComposerDraftLatest()
+    void desktopApi.listComposerDraftLatest({ migrateKnownOwners: true })
       .then((response) => {
         if (cancelled) {
           return;
@@ -395,6 +396,8 @@ function parseScope(scopeKey: string): {
   scopeKind: ComposerDraftScopeKind;
   threadId?: string;
 } {
+  const owned = parseOwnedComposerScopeKey(scopeKey);
+  if (owned) return { backend: owned.backend, threadId: owned.threadId, scopeKind: "thread" };
   if (scopeKey.startsWith("thread:")) {
     const remainder = scopeKey.slice("thread:".length);
     const separatorIndex = remainder.indexOf(":");
