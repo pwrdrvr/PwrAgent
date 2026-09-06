@@ -1,8 +1,11 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  FederationPeerSummary,
-  NavigationThreadSummary,
+import {
+  NAVIGATION_QUERY_PROTOCOL_VERSION,
+  type FederationPeerSummary,
+  type NavigationQueryPage,
+  type NavigationQueryRequest,
+  type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
@@ -30,6 +33,7 @@ function peer(id: string): FederationPeerSummary {
     label: id,
     status: "connected",
     capabilities: ["thread_navigation"],
+    navigationQueryProtocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
   } as unknown as FederationPeerSummary;
 }
 
@@ -64,11 +68,49 @@ function buildLoadingFleet(
         peers: [...peers],
       },
     })),
-    getNavigationSnapshot: vi.fn(
-      async (request: { federationTarget: { instanceId: string } }) => ({
-        threads:
-          threadsByPeer.get(request.federationTarget.instanceId) ?? [],
-      }),
+    getNavigationQueryPage: vi.fn(
+      async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+        const instanceId = request.federationTarget?.scope === "remote"
+          ? request.federationTarget.instanceId
+          : "local";
+        const peerThreads = threadsByPeer.get(instanceId) ?? [];
+        const entries = request.query.kind === "star-map-geometry"
+          ? []
+          : peerThreads.map((thread, index) => ({
+              row: {
+                ...thread,
+                ref: {
+                  backend: thread.source,
+                  threadId: thread.id,
+                  ownerInstanceId: instanceId,
+                },
+                rowRevision: `row-${thread.source}-${thread.id}`,
+                ordinaryChildCount: 0,
+                nativeSubAgentGroupPresent: false,
+                queueCount: 0,
+                queueState: "unknown" as const,
+              },
+              orderKey: index.toString().padStart(10, "0"),
+              placement: { kind: "root" as const },
+            }));
+        return {
+          protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
+          queryKey: request.query.kind,
+          generation: `${instanceId}-${request.query.kind}`,
+          ownerEpoch: `epoch-${instanceId}`,
+          countsRevision: `revision-${instanceId}-${request.query.kind}`,
+          coverage: { state: "complete" },
+          counts: {
+            total: peerThreads.length,
+            active: 0,
+            unread: peerThreads.length,
+            review: peerThreads.length,
+          },
+          entries,
+          directories: [],
+          complete: true,
+        };
+      },
     ),
     onAgentEvent: vi.fn((listener: (event: { notification: { method: string } }) => void) => {
       listeners.add(listener);
