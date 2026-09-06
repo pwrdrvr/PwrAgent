@@ -104,14 +104,10 @@ mac:
   # electron-builder merges the universal app.
   x64ArchFiles: "Contents/Resources/app.asar.unpacked/node_modules/@napi-rs/canvas-darwin-*/**"
   category: public.app-category.developer-tools
-  # Icon Composer package, NOT a hand-built .icns. electron-builder compiles
-  # it with Xcode 26's actool into Contents/Resources/Assets.car +
-  # CFBundleIconName (what macOS 26 draws) and derives the legacy
-  # Contents/Resources/icon.icns + CFBundleIconFile (macOS 15 and earlier)
-  # from the same source. The build machine must have Xcode 26+ selected
-  # (release.yml does this; electron-builder hard-fails on actool < 26).
-  # #1918 padded a hand-built .icns for macOS 15; macOS 26.6.2 composites
-  # such a .icns onto a light plate when no .icon is present — see
+  # Icon Composer package, NOT a hand-built .icns: electron-builder compiles
+  # it with Xcode 26's actool (Assets.car + CFBundleIconName for macOS 26) and
+  # derives the legacy icon.icns + CFBundleIconFile (macOS 15 and earlier).
+  # Needs actool 26 selected (release.yml and preview-build.yml do it). Why:
   # AGENTS.md "macOS app icon".
   icon: build/icon.icon
   hardenedRuntime: true

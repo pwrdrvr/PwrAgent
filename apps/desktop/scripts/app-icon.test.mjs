@@ -1,6 +1,11 @@
+// Pins the macOS icon inputs generate-macos-app-icon.swift derives from the
+// authored build/icon.png and, on a Mac with Xcode 26, compiles the Icon
+// Composer package through electron-builder's own helper so a package that
+// passes here is what packages at release time. See AGENTS.md "macOS app icon".
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +18,15 @@ const iconPackage = resolve(buildDir, "icon.icon");
 
 /** #e8743a — the app-icon orange the mark is drawn in. */
 const ACCENT = [232, 116, 58];
+
+/**
+ * Read inside each test, not at describe scope: a missing or malformed
+ * icon.json should fail the tests written to report it, not turn the whole
+ * file into a collection error that registers no tests at all.
+ */
+function readManifest() {
+  return JSON.parse(readFileSync(join(iconPackage, "icon.json"), "utf8"));
+}
 
 async function readPixels(source) {
   const image = await loadImage(source);
@@ -31,6 +45,7 @@ function pixelAt(pixels, x, y) {
   return Array.from(pixels.data.subarray(offset, offset + 4));
 }
 
+/** Bounding box of pixels at or above the alpha threshold, or null when none is. */
 function opaqueBounds(pixels, threshold = 128) {
   let left = pixels.width;
   let top = pixels.height;
@@ -45,24 +60,50 @@ function opaqueBounds(pixels, threshold = 128) {
       bottom = Math.max(bottom, y);
     }
   }
+  if (right < 0) return null;
   return { x: left, y: top, width: right - left + 1, height: bottom - top + 1 };
 }
 
-function actoolMajorVersion() {
-  if (process.platform !== "darwin") return 0;
+/**
+ * Major version of the selected Xcode's actool (0 when unavailable) and why,
+ * so a lane that requires it can report the probe failure instead of a bare
+ * 0. electron-builder refuses to compile a .icon with anything below 26.
+ */
+function probeActool() {
+  if (process.platform !== "darwin") return { major: 0, reason: `no actool on ${process.platform}` };
   try {
     const plist = execFileSync("xcrun", ["actool", "--version"], {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
     const json = JSON.parse(
-      execFileSync("plutil", ["-convert", "json", "-o", "-", "-"], { input: plist, encoding: "utf8" }),
+      execFileSync("plutil", ["-convert", "json", "-o", "-", "-"], {
+        input: plist,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
     );
     const version = String(json["com.apple.actool.version"]["short-bundle-version"]);
-    return Number.parseInt(version.split(".")[0], 10) || 0;
-  } catch {
-    return 0;
+    return { major: Number.parseInt(version.split(".")[0], 10) || 0, reason: `actool ${version}` };
+  } catch (error) {
+    return { major: 0, reason: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * electron-builder's own compile step, reached through its dependency graph
+ * so this test cannot drift from what packages at release time. app-builder-lib
+ * copies the package to `Icon.icon` (actool resolves `--app-icon Icon` by the
+ * basename and silently writes no icns otherwise), creates the --compile
+ * directory, runs its actool invocation, refuses actool < 26, and returns
+ * Assets.car plus the derived legacy icns. The Info.plist keys are set by its
+ * macPackager at package time (CFBundleIconName = Icon, CFBundleIconFile =
+ * icon.icns), not by actool's partial plist, so they are not asserted here.
+ */
+function loadIconComposer() {
+  const fromHere = createRequire(import.meta.url);
+  const fromElectronBuilder = createRequire(fromHere.resolve("electron-builder"));
+  return fromElectronBuilder("app-builder-lib/out/util/macosIconComposer");
 }
 
 describe("macOS app icon", () => {
@@ -76,20 +117,32 @@ describe("macOS app icon", () => {
   });
 });
 
-describe("build/icon.icon (Icon Composer package)", () => {
-  const manifest = JSON.parse(readFileSync(join(iconPackage, "icon.json"), "utf8"));
+/**
+ * The tile gradient, top then bottom, as `tileTop` / `tileBottom` in
+ * generate-macos-app-icon.swift. macOS 26 paints the package fill as the
+ * tile, so the stops are pinned to the palette, not just to the `srgb:` shape.
+ */
+const TILE_GRADIENT_RGB = [
+  [30, 25, 20],
+  [10, 9, 8],
+];
 
+/** `srgb:r,g,b,1.00000` → 8-bit `[r, g, b]`, or null when malformed. */
+function parseSrgbStop(stop) {
+  const match = /^srgb:(\d\.\d{5}),(\d\.\d{5}),(\d\.\d{5}),1\.00000$/.exec(stop);
+  if (match === null) return null;
+  return match.slice(1, 4).map((channel) => Math.round(Number(channel) * 255));
+}
+
+describe("build/icon.icon (Icon Composer package)", () => {
   it("carries the tile gradient as the package fill", () => {
-    const stops = manifest.fill["linear-gradient"];
-    expect(stops).toHaveLength(2);
-    for (const stop of stops) {
-      expect(stop).toMatch(/^srgb:\d\.\d{5},\d\.\d{5},\d\.\d{5},1\.00000$/);
-    }
+    const manifest = readManifest();
+    expect(manifest.fill["linear-gradient"].map(parseSrgbStop)).toEqual(TILE_GRADIENT_RGB);
     expect(manifest["supported-platforms"]).toEqual({ circles: ["watchOS"], squares: "shared" });
   });
 
   it("references layer images that exist in Assets/", () => {
-    const layers = manifest.groups.flatMap((group) => group.layers);
+    const layers = readManifest().groups.flatMap((group) => group.layers);
     expect(layers.length).toBeGreaterThan(0);
     for (const layer of layers) {
       expect(existsSync(join(iconPackage, "Assets", layer["image-name"]))).toBe(true);
@@ -107,22 +160,25 @@ describe("build/icon.icon (Icon Composer package)", () => {
     ]) {
       expect(pixelAt(glyph, x, y)[3], `alpha at ${x},${y}`).toBe(0);
     }
+    // The four bars of logo-pwragnt.svg at 8x: x 28..100, y 32..96 in a
+    // 128 viewBox. Antialiased corners may shade one pixel either way.
     const bounds = opaqueBounds(glyph, 1);
-    expect(bounds.x).toBeGreaterThanOrEqual(200);
-    expect(bounds.y).toBeGreaterThanOrEqual(200);
-    expect(bounds.x + bounds.width).toBeLessThanOrEqual(824);
-    expect(bounds.y + bounds.height).toBeLessThanOrEqual(824);
+    expect(bounds).not.toBeNull();
+    expect(Math.abs(bounds.x - 224), `left edge ${bounds.x}`).toBeLessThanOrEqual(1);
+    expect(Math.abs(bounds.y - 256), `top edge ${bounds.y}`).toBeLessThanOrEqual(1);
+    expect(Math.abs(bounds.width - 576), `width ${bounds.width}`).toBeLessThanOrEqual(2);
+    expect(Math.abs(bounds.height - 512), `height ${bounds.height}`).toBeLessThanOrEqual(2);
   });
 
   it("keeps the four bars in the accent color at their authored opacities", async () => {
     const glyph = await readPixels(join(iconPackage, "Assets", "glyph.png"));
-    // Bar centers in the 1024px canvas (2x the 512px master) and the
-    // 100/65/40/25% tiers the mark is authored at.
+    // Bar centers in the 1024px canvas and the 100/65/40/25% tiers the
+    // mark is authored at.
     const bars = [
-      { x: 464, y: 297, alpha: 255 },
-      { x: 512, y: 441, alpha: 166 },
-      { x: 400, y: 585, alpha: 102 },
-      { x: 448, y: 729, alpha: 64 },
+      { x: 464, y: 296, alpha: 255 },
+      { x: 512, y: 440, alpha: 166 },
+      { x: 400, y: 584, alpha: 102 },
+      { x: 448, y: 728, alpha: 64 },
     ];
     for (const bar of bars) {
       const [r, g, b, a] = pixelAt(glyph, bar.x, bar.y);
@@ -135,66 +191,44 @@ describe("build/icon.icon (Icon Composer package)", () => {
   });
 });
 
-// What electron-builder does at package time (app-builder-lib's
-// macosIconComposer): copy the package to Icon.icon, compile it with actool,
-// read CFBundleIconName + CFBundleIconFile out of the partial plist, and
-// derive the legacy .icns. Needs Xcode 26; release.yml selects it before
-// `pnpm test` so this runs on the release runner instead of skipping.
-const actoolMajor = actoolMajorVersion();
-describe.skipIf(actoolMajor < 26)("actool compile of build/icon.icon", () => {
-  let tempDir;
-  let outputDir;
+const actool = probeActool();
+const requireActool = process.env.PWRAGENT_REQUIRE_ACTOOL === "1";
 
-  beforeAll(() => {
+// The skip below is a convenience for Linux, Windows, and Macs without Xcode
+// 26 — not for the release lane, which exists to compile the package.
+// release.yml sets PWRAGENT_REQUIRE_ACTOOL=1 on its unit-test step so a probe
+// failure or a wrong Xcode selection fails here, with the reason, instead of
+// surfacing as the first actool error inside the sign job.
+it.runIf(requireActool)("finds actool 26+ when PWRAGENT_REQUIRE_ACTOOL=1", () => {
+  expect(actool.major, actool.reason).toBeGreaterThanOrEqual(26);
+});
+
+describe.skipIf(actool.major < 26)("actool compile of build/icon.icon", () => {
+  let tempDir;
+  let compiled;
+
+  // In beforeAll, not the describe body: vitest runs a skipped suite's body
+  // at collection but never its hooks.
+  beforeAll(async () => {
     tempDir = mkdtempSync(join(tmpdir(), "pwragent-icon-"));
-    // actool resolves `--app-icon Icon` by the package's basename; fed
-    // `icon.icon` it exits 0 and silently writes no .icns.
-    const packageCopy = join(tempDir, "Icon.icon");
-    cpSync(iconPackage, packageCopy, { recursive: true });
-    outputDir = join(tempDir, "out");
-    mkdirSync(outputDir);
-    execFileSync(
-      "xcrun",
-      [
-        "actool",
-        packageCopy,
-        "--compile", outputDir,
-        "--output-format", "human-readable-text",
-        "--notices", "--warnings",
-        "--output-partial-info-plist", join(outputDir, "assetcatalog_generated_info.plist"),
-        "--app-icon", "Icon",
-        "--include-all-app-icons",
-        "--accent-color", "AccentColor",
-        "--enable-on-demand-resources", "NO",
-        "--development-region", "en",
-        "--target-device", "mac",
-        "--minimum-deployment-target", "26.0",
-        "--platform", "macosx",
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
+    compiled = await loadIconComposer().generateAssetCatalogForIcon(iconPackage);
+    writeFileSync(join(tempDir, "Icon.icns"), compiled.icnsFile);
   }, 120_000);
 
   afterAll(() => {
     if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("emits Assets.car, the legacy Icon.icns, and both Info.plist keys", () => {
-    expect(existsSync(join(outputDir, "Assets.car"))).toBe(true);
-    expect(existsSync(join(outputDir, "Icon.icns"))).toBe(true);
-    const plist = JSON.parse(
-      execFileSync(
-        "plutil",
-        ["-convert", "json", "-o", "-", join(outputDir, "assetcatalog_generated_info.plist")],
-        { encoding: "utf8" },
-      ),
-    );
-    expect(plist).toMatchObject({ CFBundleIconName: "Icon", CFBundleIconFile: "Icon" });
+  it("emits Assets.car and the legacy Icon.icns", () => {
+    expect(compiled.assetCatalog.byteLength).toBeGreaterThan(0);
+    expect(compiled.icnsFile.subarray(0, 4).toString("latin1")).toBe("icns");
   });
 
   it("derives a legacy .icns on Apple's padded template for macOS 15", async () => {
+    // actool writes four reps (16, 16@2x, 128, 128@2x); 256px is its
+    // ceiling — see AGENTS.md. Measure the largest PNG iconutil extracts.
     const iconset = join(tempDir, "Icon.iconset");
-    execFileSync("iconutil", ["-c", "iconset", join(outputDir, "Icon.icns"), "-o", iconset]);
+    execFileSync("iconutil", ["-c", "iconset", join(tempDir, "Icon.icns"), "-o", iconset]);
     let largest = null;
     for (const name of readdirSync(iconset)) {
       if (!name.endsWith(".png")) continue;
@@ -202,7 +236,9 @@ describe.skipIf(actoolMajor < 26)("actool compile of build/icon.icon", () => {
       if (largest === null || pixels.width > largest.width) largest = pixels;
     }
     expect(largest).not.toBeNull();
-    const fill = opaqueBounds(largest).width / largest.width;
+    const bounds = opaqueBounds(largest);
+    expect(bounds).not.toBeNull();
+    const fill = bounds.width / largest.width;
     // Apple's template is 824/1024 = 80.5%; actool lands at ~80.9% (Ghostty's
     // actool-made .icns measures the same). Full-bleed would be 100%.
     expect(fill).toBeGreaterThan(0.78);
