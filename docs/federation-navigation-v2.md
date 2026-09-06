@@ -62,15 +62,17 @@ moving all overlay logs into one new unbounded detail response is not completion
 
 | Resource | Required bound / terminal behavior |
 | --- | --- |
-| Serialized page including wrapper | 256 KiB; reserve 4 KiB for its outer envelope |
+| Serialized page including wrapper | Result at most 252 KiB; 4 KiB outer envelope reserve is inside the 256 KiB total, not additional |
 | Rows per page | 100; detail/blob continuation for an individually oversized record |
-| Immutable owner generation | 16 MiB serialized / 256 pages maximum; explicit budget error before publishing a partial replacement |
-| Owner cursor pool | At most 8 generations and 32 MiB serialized backing, shared across readers rather than a history per filter string |
-| Cursor lifetime | 60 seconds idle; eviction/expiry returns `cursor_expired`, never a substituted baseline |
-| Viewer retained query pool | At most 8 materialized queries / 64 MiB serialized-equivalent per process; window owners reference the shared pool, not duplicate full baselines |
+| Request selectors / nested row records | At most 100 exact identities/disclosures per request; nested chip arrays and UTF-8 strings count against the same page bytes and expose continuation/detail availability |
+| Immutable owner generation | Stable owner-backed range/membership metadata, not a serialized copy of the whole collection. The existing 16 MiB/256-page replacement cap is not a cap on reachable Inbox/Recents threads |
+| Owner cursor pool | At most 8 retained generations and 32 MiB backing, process-wide. New admission cannot silently evict a referenced generation; return a typed busy/budget outcome when no safe eviction exists |
+| Cursor lifetime | 60 seconds idle; eviction/expiry returns `cursor_expired`. Resume via explicit rebaseline and seek around the visible anchor; deep browsing must remain reachable after human pauses |
+| Viewer retained query pool | At most 8 materialized queries / 64 MiB serialized-equivalent per process, shared across windows/owners. Queue additional active demands; evict only unreferenced query pages. Exact detail, FIFO, Attention order lifetime and user-owned drag state are separate resources |
+| Geometry / Attention metadata | Separate measured process-wide retained and transient budgets required before enabling these resources; page-cache limits do not bound their membership/order backing |
 | Remote reads | At most 8 active peers; one in-flight read per canonical owner/query, coalesced across consumers |
-| Operation deadline | One 10-second deadline across queueing, relay, pages and any single cursor restart; no per-page reset |
-| Idle reconciliation | At most once per 60 seconds for an active query, coalesced; unchanged result at most 1 KiB; closed consumers do not poll |
+| Operation deadline | One 10-second deadline per fetch transaction/page batch across queueing, relay and at most one cursor restart. Not a deadline for an entire human scrolling session |
+| Idle reconciliation | At most once per 60 seconds for an active query, coalesced; unchanged result at most 1 KiB. Preserve slower existing cadences (including five minutes); this ceiling does not require more polling. Hidden/closed UI consumers do not poll |
 
 Count retained serialized backing explicitly; document and measure transient
 decoding/projection allocations separately rather than describing a JSON byte
@@ -87,24 +89,49 @@ its consumers still assume that snapshot is the complete population.
   what can render, including the selected thread and its required ancestry.
 - Owner counts replace global counts derived by iterating fetched rows. A
   collapsed directory needs its counts, not its complete `threadKeys` array.
+  Global totals deduplicate ordinary thread identities across directories and
+  exclude native worker rows. `active` and `review` (unread and idle) are exclusive
+  Sidebar counts; Star Map `active` and `unread` can overlap. Peer coverage is
+  checking/degraded/complete: an unanswered peer is not an authoritative zero.
+  Directory removal/Mark read and pin/group mutations use owner membership and
+  revalidation, never loaded-row length. Relative pin moves preserve unloaded pins.
 - Keep Attention ordering per turn and owner membership changes, not per page
   arrival or `updatedAt`. Pagination must not reset ranks or remove an unread
   thread because its row has not arrived yet.
+  Preserve the current per-window ordering lifetime: the main-process query
+  owner ranks complete eligible metadata for that view, seeds once with today's
+  initial order, then consumes membership/turn transitions. Include the view
+  lifetime and promote-on-turn-end policy in its scope. Do not compare rank
+  numbers from different owners. Page eviction, lens changes and reconnect do
+  not reset ranks; owner restart/lifetime eviction requires explicit rebaseline.
 - Draft presence and draft text remain local. Local draft/queued-reply stores
   must expose the identities needed for exact row reads independently of the
   fetched navigation population. Do not label those requests as drafts on the
   wire or federate their content.
+  Store hydration distinguishes loading, failed, complete-empty and nonempty.
+  Legacy backend/thread scopes do not prove a remote owner; retain explicit owner
+  metadata and resolve ambiguous legacy scopes rather than guessing. Preserve
+  existing machine-wide persistence and window-local draft visibility.
 - Inbox and Recents retain access to all matching threads through continuation;
   a first-page limit is not a new maximum thread count. Preserve keyboard
   selection, directory pin ordering and foreign-child grouping across pages.
 - Selected-thread actions wait for authoritative detail/admission state, rather
   than treating omitted fields in an index row as defaults or empty queues.
+  A row must never enter the legacy queue projector: its `queuedTurns ?? []`
+  semantics prune mirrors. Complete FIFO projection has its own revision and
+  readiness, independent of row fetchedAt, configuration and history readiness.
+  Independently owned background queue release survives hidden/closed UI demand.
 - Cold peers publish independently. Per-peer partial versus complete readiness
   is explicit. Last-known rows survive transient disconnects; removal/revocation
   is distinct from an incomplete or failed read.
 - Early Star Map anchors remain relative/provisional until initial geometry
   converges. Explicit user movement takes ownership immediately. Unrelated
   subscription changes cannot cancel an ongoing Star Map bootstrap.
+  Complete compact project/cluster descriptors determine geometry and mass;
+  fetched-card length and first-page arrival do not certify geometry coverage.
+  Query placement distinguishes roots/children even when the parent is off-page.
+  Selected identities, range anchors, draft identities and history survive page
+  eviction; archive/deletion/access denial require explicit owner evidence.
 
 ## Subscription and idle behavior
 
@@ -113,6 +140,19 @@ invalidation/version signals may be broad and coalesced; transcript, queued
 content and detail updates must be selected by the threads actually in use.
 An invisible/closed consumer releases its interest without cancelling another
 consumer's interest in the same resource.
+
+Implemented first prerequisite: `eventClassSelections` preserves class/selector
+pairs through aggregation, direct owner delivery, gateway relays and renderer IPC.
+Missing classes in an explicit map have no thread interest. A selected thread's
+transcript/pending requests no longer inherit all pinned threads on its owner.
+Remote-window lifetime demand retains navigation/scheduled actions for the
+current complete projection; selected detail and Star Map belong to mounted
+consumers. This is not yet hidden-window teardown or lazy queue demand.
+
+The additive alpha field is not a negotiated V2 guarantee. Old owners/gateways
+can ignore/drop it and over-send the legacy union. Updated gateways/viewers
+filter delivery, but cannot recover bytes already transferred. A negotiated
+end-to-end upgrade gate is still required before removing alpha compatibility.
 
 Star Map's periodic reconciliation must use its bounded query and revision,
 not unconditional full navigation. Remote windows must not subscribe to every
@@ -124,6 +164,8 @@ Instrumentation should classify method, direction, physical hop versus logical
 endpoint, fixed consumer class and full/page/delta/unchanged result kind. Its
 cardinality and numeric storage must be bounded, including an overflow bucket.
 Do not retain payloads or add per-message filesystem/log/SQLite writes.
+Read-only query/order state must add zero SQLite commits; no query-access or
+event timestamp persistence. Existing measured placement writes are unchanged.
 
 ## Legacy deprecation and the 1.1 beta gate
 

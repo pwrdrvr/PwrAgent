@@ -104,6 +104,56 @@ function createDeferred<T>(): {
 }
 
 describe("StarMapScreen", () => {
+  it("owns exact detail subscriptions for restored chats and releases them on close", async () => {
+    const thread: NavigationThreadSummary = {
+      ...unreadThread("chat-A"),
+      federation: {
+        instanceLabel: "Remote", ref: {
+          backend: "codex", threadId: "chat-A", target: { scope: "remote", instanceId: "pwr_remote" },
+        },
+      },
+    };
+    const setFederationEventSubscriptions = vi.fn(async (request) => ({ subscriptions: request.subscriptions }));
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      setFederationEventSubscriptions,
+      readFederationHealth: vi.fn<NonNullable<DesktopApi["readFederationHealth"]>>(async () => ({ health: {
+        enabled: true, role: "gateway", status: "listening", instanceId: "pwr_local",
+        peers: [{ id: "pwr_remote", label: "Remote", role: "client", status: "connected",
+          capabilities: ["thread_navigation", "thread_detail", "event_subscriptions", "pending_request_control"],
+        }],
+      } })),
+      readStarMapWorkspace: vi.fn<NonNullable<DesktopApi["readStarMapWorkspace"]>>(async () => ({ workspace: {
+        version: 1, revision: 1, updatedAt: 100, views: {},
+        cards: [{ key: "pwr_remote::codex:chat-A", ownerInstanceId: "pwr_remote", thread,
+          geometry: { anchor: { kind: "canvas" }, dx: 0, dy: 0,
+            fallbackRect: { left: 300, top: 240, width: 420, height: 520 },
+          }, contextOpen: false, terminalOpen: false,
+        }],
+      } })),
+    };
+    render(<StarMapScreen desktopApi={desktopApi} localThreads={[]} sessionKeys={{}}
+      localInstanceLabel="Local" onOpenLocalThread={() => undefined} onFocusLocalInstance={() => undefined} />);
+    const close = await screen.findByRole("button", { name: "Close chat: Thread chat-A" });
+    await waitFor(() => expect(setFederationEventSubscriptions).toHaveBeenLastCalledWith({
+      consumer: "star_map", subscriptions: [{
+        sourceInstanceId: "pwr_remote", threadSelection: { kind: "all" },
+        eventClasses: ["navigation", "star_map", "transcript", "pending_requests"],
+        eventClassSelections: {
+          navigation: { kind: "all" }, star_map: { kind: "all" },
+          transcript: { kind: "threads", threads: [{ backend: "codex", threadId: "chat-A" }] },
+          pending_requests: { kind: "threads", threads: [{ backend: "codex", threadId: "chat-A" }] },
+        },
+      }],
+    }));
+    fireEvent.click(close);
+    await waitFor(() => expect(setFederationEventSubscriptions).toHaveBeenLastCalledWith({
+      consumer: "star_map", subscriptions: [{ sourceInstanceId: "pwr_remote",
+        threadSelection: { kind: "all" }, eventClasses: ["navigation", "star_map"],
+      }],
+    }));
+  });
+
   it("marks a card whose thread holds an unsent draft", async () => {
     // Drafts ride a prop of their own rather than `sessionKeys`, which the
     // screen only trusts for local cards — a draft is this window's own

@@ -98,6 +98,7 @@ import {
 import { StarMapProjectBody } from "./StarMapProjectBody";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
+import { buildStarMapEventSubscriptions } from "./star-map-event-subscriptions";
 import {
   StarMapContextCard,
   StarMapTerminalCard,
@@ -1049,32 +1050,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
       : visible;
   }, [health, preferences.hideOfflineInstances]);
   const eventSubscriptionsJson = JSON.stringify(
-    peers
-      .filter(
-        (peer) =>
-          peer.status === "connected"
-          && peer.capabilities.includes("event_subscriptions"),
-      )
-      .map((peer) => ({
-        sourceInstanceId: peer.id,
-        eventClasses: [
-          ...(peer.capabilities.includes("thread_navigation")
-            ? ["navigation" as const, "star_map" as const]
-            : []),
-          ...(peer.capabilities.includes("scheduled_actions")
-            ? ["scheduled_actions" as const]
-            : []),
-        ],
-        threadSelection: { kind: "all" as const },
-      })),
+    buildStarMapEventSubscriptions(peers, chatCards.cards),
   );
   useEffect(() => {
     if (!props.desktopApi?.setFederationEventSubscriptions) return;
-    const subscriptions = JSON.parse(eventSubscriptionsJson) as Array<{
-      sourceInstanceId: string;
-      eventClasses: Array<"navigation" | "scheduled_actions" | "star_map">;
-      threadSelection: { kind: "all" };
-    }>;
+    const subscriptions = JSON.parse(eventSubscriptionsJson) as ReturnType<typeof buildStarMapEventSubscriptions>;
     void props.desktopApi.setFederationEventSubscriptions({
       consumer: "star_map",
       subscriptions,

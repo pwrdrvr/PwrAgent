@@ -407,6 +407,7 @@ export function broadcastAgentEvent(event: AgentEvent): void {
           webContents.id,
           hydratedEvent.federationTarget.instanceId,
           federationEventClassForMethod(hydratedEvent.notification.method),
+          hydratedEvent,
         )
       ) {
         continue;

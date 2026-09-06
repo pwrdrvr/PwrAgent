@@ -196,6 +196,7 @@ type RuntimeHarness = {
     webContentsId: number,
     sourceInstanceId: FederationInstanceId,
     eventClass: FederationEventClass,
+    event?: AgentEvent,
   ) => boolean;
   setEnvironmentSetupProgressPublisher: (
     publisher: (event: CodexEnvironmentSetupProgressEvent) => void,
@@ -273,6 +274,7 @@ function applyEventSubscription(params: {
   sourcePeerId?: FederationInstanceId;
   eventClasses: FederationEventClass[];
   threadSelection?: FederationEventSubscription["threadSelection"];
+  eventClassSelections?: FederationEventSubscription["eventClassSelections"];
   hopCount?: number;
 }): void {
   expect(params.runtime.applyEventSubscription({
@@ -284,6 +286,7 @@ function applyEventSubscription(params: {
       ...(params.threadSelection
         ? { threadSelection: params.threadSelection }
         : {}),
+      ...(params.eventClassSelections ? { eventClassSelections: params.eventClassSelections } : {}),
     },
     protocolVersion: FEDERATION_PROTOCOL_VERSION,
     sourceInstanceId: params.subscriberInstanceId,
@@ -2047,6 +2050,153 @@ describe("DesktopFederationRuntime", () => {
     expect(params.at(3)).toEqual(params.at(1));
   });
 
+  it.each([false, true])("broad navigation does not widen transcript selection (gateway=%s)", (viaGateway) => {
+    const capabilities: FederationCapability[] = [
+      "gateway_relay", "thread_navigation", "navigation_snapshot_deltas",
+      "thread_detail", "event_subscriptions",
+    ];
+    const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const owner = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const gateway = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    for (const [runtime, id] of [[viewer, "viewer_one"], [owner, "owner_one"], [gateway, "gateway_one"]] as const) {
+      runtime.localInstanceId = id;
+      runtime.router = new FederationRouter({ localInstanceId: id });
+    }
+    const published: AgentEvent[] = [];
+    const ownerFrames: FederationProtocolEnvelope[] = [];
+    const subscriptions: FederationProtocolEnvelope[] = [];
+    viewer.setAgentEventPublisher((event) => published.push(event));
+    const viewerPeer = viaGateway ? "gateway_one" : "owner_one";
+    viewer.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    owner.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    const viewerConnection = createConnection({
+      peerId: viewerPeer, capabilities,
+      sendEnvelope: (envelope) => {
+        subscriptions.push(envelope);
+        if (viaGateway) gateway.applyEventSubscription(envelope, "viewer_one");
+        else owner.applyEventSubscription(envelope, "viewer_one");
+      },
+    });
+    viewer.router!.registerConnection(viewerConnection);
+    owner.router!.registerConnection(createConnection({
+      peerId: viaGateway ? "gateway_one" : "viewer_one", capabilities,
+      sendEnvelope: (envelope) => {
+        ownerFrames.push(envelope);
+        if (viaGateway) gateway.publishRemoteBackendEvent(envelope, "owner_one");
+        else viewer.publishRemoteBackendEvent(envelope, "owner_one");
+      },
+    }));
+    gateway.router!.registerConnection(createConnection({
+      peerId: "owner_one", capabilities,
+      sendEnvelope: (envelope) => owner.applyEventSubscription(envelope, "gateway_one"),
+    }));
+    gateway.router!.registerConnection(createConnection({
+      peerId: "viewer_one", capabilities,
+      sendEnvelope: (envelope) => viewer.publishRemoteBackendEvent(envelope, "gateway_one"),
+    }));
+    const chat = (threadId: string): FederationEventSubscription => ({
+      sourceInstanceId: "owner_one", eventClasses: ["transcript"],
+      threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId }] },
+    });
+    viewer.setEventSubscriptions("map", [{
+      sourceInstanceId: "owner_one", eventClasses: ["navigation"], threadSelection: { kind: "all" },
+    }]);
+    viewer.setEventSubscriptions("chat", [chat("A")]);
+    expect(subscriptions.at(-1)).toMatchObject({ params: { eventClassSelections: {
+      navigation: { kind: "all" },
+      transcript: { kind: "threads", threads: [{ backend: "codex", threadId: "A" }] },
+    } } });
+    // An older owner can over-send. A modern gateway and final viewer must
+    // still enforce their own retained matrix before delivering the event.
+    const unwanted: FederationProtocolEnvelope = {
+      id: "legacy-over-send", kind: "notification", method: FEDERATION_BACKEND_EVENT_METHOD,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION, createdAt: 1_000,
+      sourceInstanceId: "owner_one", targetInstanceId: "viewer_one",
+      params: { backend: "codex", notification: {
+        method: "item/agentMessage/delta", params: { threadId: "B" },
+      } },
+    };
+    if (viaGateway) gateway.publishRemoteBackendEvent(unwanted, "owner_one");
+    viewer.publishRemoteBackendEvent(unwanted, viewerPeer);
+    expect(published).toEqual([]);
+    const emit = (method: string, threadId: string) => owner.forwardLocalBackendEvent({
+      backend: "codex", notification: { method, params: { threadId } },
+    } as AgentEvent);
+    emit("item/agentMessage/delta", "B");
+    emit("item/agentMessage/delta", "A");
+    emit("thread/status/changed", "B");
+    expect(ownerFrames).toHaveLength(2);
+    expect(published.map((event) => event.notification.method)).toEqual([
+      "item/agentMessage/delta", "thread/status/changed",
+    ]);
+    // Same union of IDs/classes, different matrix: the changed selector must publish.
+    viewer.setEventSubscriptions("chat", [chat("B")]);
+    emit("item/agentMessage/delta", "A");
+    emit("item/agentMessage/delta", "B");
+    expect(ownerFrames).toHaveLength(3);
+    // Replay after a reconnect retains the changed matrix, including through
+    // a gateway that has not received the owner's delta-capability metadata.
+    viewer.setEventSubscriptions("chat", [chat("B"), chat("B")]);
+    const beforeReplay = subscriptions.length;
+    viewer.unregisterGatewayConnection(viewerConnection);
+    viewer.registerGatewayConnection(viewerConnection);
+    expect(subscriptions).toHaveLength(beforeReplay + 1);
+    emit("item/agentMessage/delta", "A");
+    expect(ownerFrames).toHaveLength(3);
+    viewer.setEventSubscriptions("map", []);
+    emit("thread/status/changed", "B");
+    emit("item/agentMessage/delta", "A");
+    emit("item/agentMessage/delta", "B");
+    expect(ownerFrames).toHaveLength(4);
+    viewer.setEventSubscriptions("chat", []);
+    emit("item/agentMessage/delta", "B");
+    expect(ownerFrames).toHaveLength(4);
+  });
+
+  it("fails closed for missing or malformed per-class selectors", () => {
+    const forwarded: FederationProtocolEnvelope[] = [];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.router = new FederationRouter({ localInstanceId: "owner_one" });
+    runtime.router.registerConnection(createConnection({
+      peerId: "viewer_one", capabilities: ["thread_detail", "thread_navigation", "event_subscriptions"],
+      sendEnvelope: (envelope) => forwarded.push(envelope),
+    }));
+    applyEventSubscription({
+      runtime, sourceInstanceId: "owner_one", subscriberInstanceId: "viewer_one",
+      eventClasses: ["navigation", "transcript"], threadSelection: { kind: "all" },
+      eventClassSelections: { navigation: { kind: "threads" } } as FederationEventSubscription["eventClassSelections"],
+    });
+    for (const method of ["thread/status/changed", "item/agentMessage/delta"]) {
+      runtime.forwardLocalBackendEvent({ backend: "codex", notification: {
+        method, params: { threadId: "B" },
+      } } as AgentEvent);
+    }
+    expect(forwarded).toEqual([]);
+  });
+
+  it("filters each renderer against its own class selectors, not another window's demand", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.setRendererEventSubscriptions(7, "star-map", [{
+      sourceInstanceId: "owner_one", eventClasses: ["navigation"], threadSelection: { kind: "all" },
+    }]);
+    for (const [windowId, threadId] of [[7, "A"], [8, "B"]] as const) {
+      runtime.setRendererEventSubscriptions(windowId, "thread-view", [{
+        sourceInstanceId: "owner_one", eventClasses: ["transcript"],
+        threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId }] },
+      }]);
+    }
+    const event = { backend: "codex", notification: {
+      method: "item/agentMessage/delta", params: { threadId: "B" },
+    } } as AgentEvent;
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "transcript", event)).toBe(false);
+    expect(runtime.rendererWantsRemoteEvent(8, "owner_one", "transcript", event)).toBe(true);
+    runtime.clearRendererEventSubscriptions(8);
+    expect(runtime.rendererWantsRemoteEvent(8, "owner_one", "transcript", event)).toBe(false);
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "navigation", event)).toBe(true);
+  });
+
   it("keeps viewer and thread subscriptions while Star Map opens and closes", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "viewer_one";
@@ -2089,11 +2239,11 @@ describe("DesktopFederationRuntime", () => {
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "navigation"))
       .toBe(true);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "transcript"))
-      .toBe(true);
+      .toBe(false);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "star_map"))
-      .toBe(true);
+      .toBe(false);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "pending_requests"))
-      .toBe(true);
+      .toBe(false);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "scheduled_actions"))
       .toBe(true);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_two", "navigation"))

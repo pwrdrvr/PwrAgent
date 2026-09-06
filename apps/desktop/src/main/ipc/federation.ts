@@ -188,6 +188,7 @@ export function registerFederationIpcHandlers(): void {
                   sourceInstanceId: peer.target.instanceId,
                   eventClasses,
                   threadSelection: subscription.threadSelection,
+                  ...(subscription.eventClassSelections ? { eventClassSelections: subscription.eventClassSelections } : {}),
                 }]
               : [];
           })
