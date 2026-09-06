@@ -19,6 +19,7 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   ComposerDraftSnapshot,
+  ComposerDraftHydrationStatus,
   ComposerDraftStore,
 } from "./useComposerDraftStore";
 
@@ -65,6 +66,17 @@ export function useDurableComposerDraftStore(
   const localRecoveryCandidatesRef = useRef<LocalRecoveryCandidate[]>([]);
   const localRecoverySequenceRef = useRef(0);
   const [hydrationVersion, setHydrationVersion] = useState(0);
+  const [hydration, setHydration] = useState<{
+    baseStore: ComposerDraftStore;
+    desktopApi: DesktopApi;
+    status: ComposerDraftHydrationStatus;
+  }>();
+  // A replaced IPC/store cannot render one frame of the previous source's
+  // readiness while the new hydration effect is waiting to run.
+  const hydrationStatus: ComposerDraftHydrationStatus = !desktopApi?.listComposerDraftLatest
+    ? "memory-only"
+    : hydration?.baseStore === baseStore && hydration.desktopApi === desktopApi
+      ? hydration.status : "loading";
 
   const rememberLocalRecoveryCandidate = useCallback(
     (record: ComposerDraftSnapshotRecord): void => {
@@ -146,6 +158,7 @@ export function useDurableComposerDraftStore(
     }
 
     let cancelled = false;
+    setHydration({ baseStore, desktopApi, status: "loading" });
     void desktopApi.listComposerDraftLatest()
       .then((response) => {
         if (cancelled) {
@@ -163,8 +176,11 @@ export function useDurableComposerDraftStore(
         if (hydratedAny) {
           setHydrationVersion((current) => current + 1);
         }
+        setHydration({ baseStore, desktopApi, status: "ready" });
       })
       .catch((error) => {
+        if (cancelled) return;
+        setHydration({ baseStore, desktopApi, status: "failed" });
         console.warn("Failed to hydrate composer drafts", error);
       });
 
@@ -228,6 +244,7 @@ export function useDurableComposerDraftStore(
     () => ({
       ...baseStore,
       hydrationVersion,
+      hydrationStatus,
       delete: (scopeKey) => {
         baseStore.delete(scopeKey);
         createdAtRef.current.delete(scopeKey);
@@ -315,6 +332,7 @@ export function useDurableComposerDraftStore(
       desktopApi,
       flushPendingSave,
       hydrationVersion,
+      hydrationStatus,
       persistDraftHistory,
     ],
   );

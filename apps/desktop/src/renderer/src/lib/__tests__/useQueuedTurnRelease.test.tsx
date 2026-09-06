@@ -20,6 +20,9 @@ function createComposerDraftStore(): ComposerDraftStore {
     ReturnType<ComposerDraftStore["getQueuedTurns"]>
   >();
   return {
+    hydrationStatus: "memory-only",
+    getDraftScopeKeys: () => [],
+    getQueuedScopeKeys: () => [...queuedTurns.keys()],
     delete: vi.fn(),
     get: vi.fn(),
     popDraft: vi.fn(),

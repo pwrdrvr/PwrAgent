@@ -118,6 +118,8 @@ export function hasComposerDraftContent(
   );
 }
 
+export type ComposerDraftHydrationStatus = "memory-only" | "loading" | "ready" | "failed";
+
 export type ComposerDraftStore = {
   delete(scopeKey: string): void;
   get(scopeKey: string): ComposerDraftSnapshot | undefined;
@@ -127,6 +129,11 @@ export type ComposerDraftStore = {
    * surfaces outside the composer can mark a thread as having a draft.
    */
   hasDraftContent(scopeKey: string): boolean;
+  /** Local opaque scopes only: no content, and no inferred remote ownership. */
+  getDraftScopeKeys(): readonly string[];
+  /** Includes off-page local/owner-mirrored queues, independently of navigation. */
+  getQueuedScopeKeys(): readonly string[];
+  hydrationStatus: ComposerDraftHydrationStatus;
   /**
    * Monotonic counter bumped when a scope *gains or loses* draft content.
    * Deliberately not bumped on every edit: the sidebar only cares whether a
@@ -268,6 +275,9 @@ export function useComposerDraftStore(): ComposerDraftStore {
       },
       get: (scopeKey) => storeRef.current.get(scopeKey),
       hasDraftContent: (scopeKey) => draftPresenceRef.current.has(scopeKey),
+      getDraftScopeKeys: () => [...draftPresenceRef.current],
+      getQueuedScopeKeys: () => [...queuedTurnStoreRef.current.keys()],
+      hydrationStatus: "memory-only",
       getDraftPresenceVersion: () => draftPresenceVersionRef.current,
       subscribeDraftPresence: (listener) => {
         draftPresenceListenersRef.current.add(listener);

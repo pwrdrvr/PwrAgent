@@ -147,7 +147,17 @@ Missing classes in an explicit map have no thread interest. A selected thread's
 transcript/pending requests no longer inherit all pinned threads on its owner.
 Remote-window lifetime demand retains navigation/scheduled actions for the
 current complete projection; selected detail and Star Map belong to mounted
-consumers. This is not yet hidden-window teardown or lazy queue demand.
+consumers. Open/restored Star Map chat cards own exact transcript/pending-request
+selectors, including foreign-mounted thread owners, and closing a card releases
+that interest. This is not yet hidden-window teardown or lazy queue demand.
+
+Implemented local preparation: `ComposerDraftStore.getDraftScopeKeys` and
+`getQueuedScopeKeys` enumerate opaque local scopes without navigation rows or
+message content. `hydrationStatus` distinguishes memory-only, loading, ready
+(including successful empty reads), and failed. Existing draft writes, hydration
+merge rules and per-presence notifications are unchanged. These APIs do not yet
+resolve an owner or migrate background queue release / the legacy queue projector;
+those remain prerequisites for the row-query cutover.
 
 The additive alpha field is not a negotiated V2 guarantee. Old owners/gateways
 can ignore/drop it and over-send the legacy union. Updated gateways/viewers
