@@ -345,6 +345,34 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("preserves known message times in both transcript views after an untimed refresh", async () => {
+    const entries = [
+      messageEntry({ id: "early", text: "Starting.", createdAt: 1_000 }),
+      messageEntry({ id: "late", text: "Three hours later.", createdAt: 10_801_000 }),
+    ];
+    const readThread = vi.fn()
+      .mockResolvedValueOnce(readThreadResponse({ entries, hasPreviousPage: false }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: entries.map(({ createdAt: _createdAt, ...entry }) => entry),
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = { onAgentEvent: () => () => undefined, readThread };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) => useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt }),
+      }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+    await waitForThreadHydration(result);
+    rerender({ updatedAt: 2_000 });
+    await waitFor(() => expect(readThread).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.createdAt)).toEqual([1_000, 10_801_000]);
+      expect(result.current.response?.replay.messages.map((message) => message.createdAt)).toEqual([1_000, 10_801_000]);
+    });
+  });
+
   it("preserves loaded older transcript pages across limited refreshes", async () => {
     const initialTail = readThreadResponse({
       entries: [

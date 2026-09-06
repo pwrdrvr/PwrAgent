@@ -3653,6 +3653,67 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each(["inProgress", "completed"])("does not stamp a long %s turn's commentary and work with its start time", async (status) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-long-turn", {
+      thread: {
+        turns: [{
+          id: "long-turn",
+          status,
+          startedAt: 1_763_500_100,
+          ...(status === "completed" ? { completedAt: 1_763_510_900 } : {}),
+          items: [
+            { type: "userMessage", id: "prompt", content: [{ type: "text", text: "Keep working." }] },
+            { type: "agentMessage", id: "early", phase: "commentary", text: "Starting." },
+            { type: "commandExecution", id: "work", command: "pnpm test", status: "completed" },
+            { type: "agentMessage", id: "late", phase: "commentary", text: "Three hours later." },
+            { type: "plan", id: "plan", plan: [{ step: "Verify", status: "inProgress" }] },
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const replay = await client.readThread({ threadId: "thread-long-turn" });
+      expect(replay.entries.map((entry) => entry.id)).toEqual(["prompt", "early", "activity-work", "late", "plan"]);
+      expect(replay.entries[0]?.createdAt).toBe(1_763_500_100_000);
+      for (const entry of replay.entries.slice(1)) {
+        expect(entry.createdAt).toBeUndefined();
+        expect(entry.turn?.startedAt).toBe(1_763_500_100_000);
+      }
+      expect(replay.messages.slice(1).map((message) => message.createdAt)).toEqual([undefined, undefined]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("keeps individual replay item times for commentary, work, and plans", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-item-times", {
+      thread: {
+        turns: [{
+          id: "timed-turn",
+          startedAt: 1_763_500_100,
+          items: [
+            { type: "agentMessage", id: "early", phase: "commentary", text: "Starting.", createdAt: 1_763_500_200 },
+            { type: "commandExecution", id: "work", command: "pnpm test", status: "completed", created_at: 1_763_500_300 },
+            { type: "agentMessage", id: "late", phase: "commentary", text: "Later.", timestamp: 1_763_510_800_000 },
+            { type: "plan", id: "plan", plan: [{ step: "Verify", status: "inProgress" }], createdAt: 1_763_510_900 },
+          ],
+        }],
+      },
+    });
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const replay = await client.readThread({ threadId: "thread-item-times" });
+      expect(replay.entries.map((entry) => entry.createdAt)).toEqual([
+        1_763_500_200_000, 1_763_500_300_000, 1_763_510_800_000, 1_763_510_900_000,
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("uses turn completion time for final assistant entries without item timestamps", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-final-completed-at", {
