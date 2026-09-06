@@ -15,8 +15,10 @@ import {
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
   rankThreadJumpMatches,
+  sortThreadJumpMatches,
 } from "@pwragent/shared";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
+import { compactNavigationSearchResult } from "./navigation-search-result";
 import { ThreadInfoStore } from "../app-server/thread-info-store";
 import {
   hasFederationErrorCode,
@@ -849,12 +851,13 @@ export class RemoteThreadSummaryCache {
         }
       }
     }
-    return await this.threadsForPeer(
+    const legacyThreads = await this.threadsForPeer(
       target,
       { kind: "all" },
       "jump-search",
       deadlineAt,
     );
+    return rankThreadJumpMatches(legacyThreads, request.query);
   }
 
   private async threadsForPeer(
@@ -1095,7 +1098,7 @@ function rankUniqueThreadJumpMatches(
   limit: number,
 ): NavigationThreadSummary[] {
   const seen = new Set<string>();
-  return rankThreadJumpMatches(threads, query)
+  return sortThreadJumpMatches(threads, query)
     .filter((thread) => {
       const key = thread.federation?.ref
         ? federatedThreadIdentityKey(thread.federation.ref)
@@ -1106,5 +1109,6 @@ function rankUniqueThreadJumpMatches(
       seen.add(key);
       return true;
     })
-    .slice(0, limit);
+    .slice(0, limit)
+    .map((thread) => compactNavigationSearchResult(thread, query));
 }

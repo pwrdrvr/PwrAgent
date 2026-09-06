@@ -3,8 +3,12 @@ import type {
   AppServerListThreadsResponse,
   AppServerThreadSummary,
   FederationProtocolEnvelope,
+  FederationThreadSearchResponse,
 } from "@pwragent/shared";
-import { FederationRemoteBackendClient } from "../federation/federation-backend-bridge";
+import {
+  FEDERATION_BACKEND_METHODS,
+  FederationRemoteBackendClient,
+} from "../federation/federation-backend-bridge";
 import { FederatedSearchService } from "../federation/federated-search-service";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 
@@ -28,13 +32,40 @@ function thread(
 }
 
 describe("FederatedSearchService", () => {
-  it("uses exact resolution for a pasted thread UUID", async () => {
+  it("returns a healthy peer when local search fails", async () => {
+    const service = new FederatedSearchService({
+      local: { listThreads: vi.fn(), searchFederatedThreads: vi.fn(async () => { throw new Error("local unavailable"); }) },
+      peers: () => [{ instanceId: "healthy", label: "Healthy", backend: {
+        listThreads: vi.fn(), searchFederatedThreads: vi.fn(async () => ({
+          threads: [thread("peer-result", "Needle", 1)], totalCount: 1, truncated: false,
+        })),
+      } }],
+    });
+    expect(await service.search({ query: "needle" })).toMatchObject({
+      results: [{ thread: { id: "peer-result" } }],
+      localSearch: { error: "local unavailable", totalCount: 0 },
+    });
+  });
+
+  it("bounds a hung local owner by the same search budget", async () => {
+    vi.useFakeTimers();
+    const service = new FederatedSearchService({ peerTimeoutMs: 25,
+      local: { listThreads: vi.fn(), searchFederatedThreads: vi.fn(() => new Promise<never>(() => {})) },
+      peers: () => [],
+    });
+    const pending = service.search({ query: "needle" });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(await pending).toMatchObject({ localSearch: { error: "Local federated search timed out." } });
+  });
+
+  it("uses the read-only bounded owner path for a pasted thread UUID", async () => {
     const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
     const localListThreads = vi.fn();
     const remoteListThreads = vi.fn();
     const service = new FederatedSearchService({
       local: {
         listThreads: localListThreads,
+        searchFederatedThreads: vi.fn(async () => ({ threads: [], totalCount: 0, truncated: false })),
         resolveThread: vi.fn(async () => ({})),
       },
       peers: () => [
@@ -43,6 +74,11 @@ describe("FederatedSearchService", () => {
           label: "Harold-Mac-Mini-M4",
           backend: {
             listThreads: remoteListThreads,
+            searchFederatedThreads: vi.fn(async () => ({
+              threads: [thread(threadId, "Thread list stays disabled after reconnect", 3_000)],
+              totalCount: 1,
+              truncated: false,
+            })),
             resolveThread: vi.fn(async () => ({
               thread: thread(
                 threadId,
@@ -70,7 +106,7 @@ describe("FederatedSearchService", () => {
     expect(remoteListThreads).not.toHaveBeenCalled();
   });
 
-  it("falls back to exact list scanning when a peer lacks resolution RPC", async () => {
+  it("falls back to exact list scanning only when bounded search is missing", async () => {
     const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
     const service = new FederatedSearchService({
       includeLocal: false,
@@ -80,6 +116,11 @@ describe("FederatedSearchService", () => {
           instanceId: "pwr_older",
           label: "Older Mac",
           backend: {
+            searchFederatedThreads: vi.fn(async () => {
+              throw Object.assign(new Error("Unsupported federation method"), {
+                code: "method_not_found",
+              });
+            }),
             resolveThread: vi.fn(async () => {
               throw Object.assign(new Error("Unsupported federation method"), {
                 code: "method_not_found",
@@ -110,7 +151,50 @@ describe("FederatedSearchService", () => {
     });
   });
 
-  it("does not amplify a resolve failure into full active and archive scans", async () => {
+  it("uses bounded owner search for an archived exact-id resolve miss", async () => {
+    const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
+    const listThreads = vi.fn();
+    const searchFederatedThreads = vi.fn(async () => ({
+      threads: [{
+        ...thread(threadId, "Archived reconnect fix", 3_000),
+        archivedAt: 4_000,
+      }],
+      totalCount: 1,
+      truncated: false,
+    }));
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "pwr_current",
+        label: "Current Mac",
+        backend: {
+          listThreads,
+          resolveThread: vi.fn(async () => ({})),
+          searchFederatedThreads,
+        },
+      }],
+    });
+
+    await expect(service.search({
+      query: threadId,
+      backend: "codex",
+      includeArchived: true,
+      limit: 5,
+    })).resolves.toMatchObject({
+      results: [{ thread: { id: threadId, archivedAt: 4_000 } }],
+      failures: [],
+    });
+    expect(searchFederatedThreads).toHaveBeenCalledWith({
+      query: threadId,
+      backend: "codex",
+      includeArchived: true,
+      limit: 5,
+    }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
+    expect(listThreads).not.toHaveBeenCalled();
+  });
+
+  it("does not amplify an exact owner search failure into full active and archive scans", async () => {
     const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
     const listThreads = vi.fn();
     const service = new FederatedSearchService({
@@ -120,7 +204,7 @@ describe("FederatedSearchService", () => {
         instanceId: "pwr_broken",
         label: "Broken Mac",
         backend: {
-          resolveThread: vi.fn(async () => {
+          searchFederatedThreads: vi.fn(async () => {
             throw Object.assign(new Error("Remote handler failed"), {
               code: "handler_failed",
             });
@@ -164,6 +248,11 @@ describe("FederatedSearchService", () => {
               backend: "codex" as const,
               fetchedAt: 1_000,
               threads: [thread("remote-1", "Remote control design", 2_000)],
+            })),
+            searchFederatedThreads: vi.fn(async () => ({
+              threads: [thread("remote-1", "Remote control design", 2_000)],
+              totalCount: 1,
+              truncated: false,
             })),
           },
         },
@@ -212,7 +301,8 @@ describe("FederatedSearchService", () => {
           instanceId: "child_one",
           label: "Laptop",
           backend: {
-            listThreads: vi.fn(async () => {
+            listThreads: vi.fn(),
+            searchFederatedThreads: vi.fn(async () => {
               throw new Error("offline");
             }),
           },
@@ -221,10 +311,11 @@ describe("FederatedSearchService", () => {
           instanceId: "child_two",
           label: "Desktop",
           backend: {
-            listThreads: vi.fn(async () => ({
-              backend: "codex" as const,
-              fetchedAt: 1_000,
+            listThreads: vi.fn(),
+            searchFederatedThreads: vi.fn(async () => ({
               threads: [thread("remote-2", "Search survives failure", 3_000)],
+              totalCount: 1,
+              truncated: false,
             })),
           },
         },
@@ -258,7 +349,7 @@ describe("FederatedSearchService", () => {
     });
   });
 
-  it("applies backend, project, archive, and date filters before limiting", async () => {
+  it("uses full-list compatibility only for a method_not_found old peer", async () => {
     const listThreads = vi.fn(async (request?: {
       archived?: boolean;
       backend?: string;
@@ -283,7 +374,14 @@ describe("FederatedSearchService", () => {
       peers: () => [{
         instanceId: "pwr_remote",
         label: "Remote Mac",
-        backend: { listThreads },
+        backend: {
+          listThreads,
+          searchFederatedThreads: vi.fn(async () => {
+            throw Object.assign(new Error("Older peer"), {
+              code: "method_not_found",
+            });
+          }),
+        },
       }],
     });
 
@@ -303,13 +401,158 @@ describe("FederatedSearchService", () => {
     expect(listThreads).toHaveBeenNthCalledWith(1, {
       backend: "codex",
       archived: false,
-      filter: "collector",
     }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
     expect(listThreads).toHaveBeenNthCalledWith(2, {
       backend: "codex",
       archived: true,
-      filter: "collector",
     }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
+  });
+
+  it("keeps one absolute deadline through the old-peer list fallback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const searchFederatedThreads = vi.fn(
+      (
+        _request: unknown,
+        _rpcOptions?: { deadlineAt?: number },
+      ) => new Promise<FederationThreadSearchResponse>((_resolve, reject) => {
+        setTimeout(() => reject(Object.assign(new Error("Older peer"), {
+          code: "method_not_found",
+        })), 40);
+      }),
+    );
+    const listThreads = vi.fn((
+      request?: { archived?: boolean },
+      _rpcOptions?: { deadlineAt?: number },
+    ) =>
+      request?.archived
+        ? new Promise<AppServerListThreadsResponse>(() => {})
+        : new Promise<AppServerListThreadsResponse>((resolve) => {
+            setTimeout(() => resolve({
+              backend: "codex",
+              fetchedAt: 1_000,
+              threads: [],
+            }), 40);
+          }));
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      peerTimeoutMs: 100,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "pwr_older",
+        label: "Older Mac",
+        backend: { listThreads, searchFederatedThreads },
+      }],
+    });
+
+    const search = service.search({
+      query: "collector",
+      includeArchived: true,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(search).resolves.toMatchObject({
+      failures: [{
+        instanceId: "pwr_older",
+        error: "Federated search timed out after 0s.",
+      }],
+    });
+    expect(searchFederatedThreads.mock.calls[0]?.[1]).toEqual({
+      deadlineAt: 1_100,
+    });
+    expect(listThreads.mock.calls[0]?.[1]).toEqual({ deadlineAt: 1_100 });
+    expect(listThreads.mock.calls[1]?.[1]).toEqual({ deadlineAt: 1_100 });
+  });
+
+  it("forwards filters and the global limit to bounded owner-side search", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: 1_000,
+      threads: [thread("legacy-full-list", "Collector result", 4_500)],
+    }));
+    const searchFederatedThreads = vi.fn(async () => ({
+      threads: [{
+        ...thread("bounded-match", "Collector result", 5_000),
+        archivedAt: 6_000,
+        projectKey: "PwrSuiteLab",
+      }],
+      totalCount: 37,
+      truncated: true,
+    }));
+    const remoteBackend = {
+      listThreads,
+      searchFederatedThreads,
+    };
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "pwr_remote",
+        label: "Remote Mac",
+        backend: remoteBackend,
+      }],
+    });
+
+    await expect(service.search({
+      query: "  collector  ",
+      backend: "codex",
+      includeArchived: true,
+      projectKeys: ["PwrSuiteLab"],
+      updatedAfter: 4_000,
+      updatedBefore: 6_000,
+      limit: 1,
+    })).resolves.toMatchObject({
+      results: [{ thread: { id: "bounded-match" } }],
+      totalCount: 37,
+      truncated: true,
+      searchedInstances: [{
+        instanceId: "pwr_remote",
+        resultCount: 37,
+      }],
+    });
+    expect(searchFederatedThreads).toHaveBeenCalledWith({
+      query: "collector",
+      backend: "codex",
+      includeArchived: true,
+      projectKeys: ["PwrSuiteLab"],
+      updatedAfter: 4_000,
+      updatedBefore: 6_000,
+      limit: 1,
+    }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
+    expect(listThreads).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to full lists after bounded owner search fails", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: 1_000,
+      threads: [thread("should-not-load", "Collector result", 5_000)],
+    }));
+    const remoteBackend = {
+      listThreads,
+      searchFederatedThreads: vi.fn(async () => {
+        throw Object.assign(new Error("Remote handler failed"), {
+          code: "handler_failed",
+        });
+      }),
+    };
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "pwr_broken",
+        label: "Broken Mac",
+        backend: remoteBackend,
+      }],
+    });
+
+    await expect(service.search({ query: "collector" })).resolves.toMatchObject({
+      results: [],
+      failures: [{
+        instanceId: "pwr_broken",
+        error: "Remote handler failed",
+      }],
+    });
+    expect(listThreads).not.toHaveBeenCalled();
   });
 
   it("reports totalCount and truncation before slicing the result page", async () => {
@@ -320,11 +563,12 @@ describe("FederatedSearchService", () => {
         instanceId: "pwr_remote",
         label: "Remote Mac",
         backend: {
-          listThreads: vi.fn(async () => ({
-            backend: "codex" as const,
-            fetchedAt: 1_000,
-            threads: Array.from({ length: 11 }, (_, index) =>
+          listThreads: vi.fn(),
+          searchFederatedThreads: vi.fn(async () => ({
+            threads: Array.from({ length: 10 }, (_, index) =>
               thread(`remote-${index}`, "Collector result", index)),
+            totalCount: 11,
+            truncated: true,
           })),
         },
       }],
@@ -350,13 +594,14 @@ describe("FederatedSearchService", () => {
         instanceId: "pwr_remote",
         label: "Remote Mac",
         backend: {
-          listThreads: vi.fn(async () => ({
-            backend: "codex" as const,
-            fetchedAt: 1_000,
+          listThreads: vi.fn(),
+          searchFederatedThreads: vi.fn(async () => ({
             threads: [
               thread("older", "Older", 1_000),
               thread("newer", "Newer", 2_000),
             ],
+            totalCount: 2,
+            truncated: false,
           })),
         },
       }],
@@ -388,8 +633,9 @@ describe("FederatedSearchService", () => {
           backend: {
             // Never resolves — simulates a peer that accepted the RPC
             // but will not answer within the interactive window.
-            listThreads: vi.fn(
-              () => new Promise<AppServerListThreadsResponse>(() => {}),
+            listThreads: vi.fn(),
+            searchFederatedThreads: vi.fn(
+              () => new Promise<FederationThreadSearchResponse>(() => {}),
             ),
           },
         },
@@ -434,7 +680,10 @@ describe("FederatedSearchService", () => {
     await expect(search).resolves.toMatchObject({
       failures: [{ instanceId: "child_hung" }],
     });
-    expect(sent[0]).toMatchObject({ deadlineAt: 1_025 });
+    expect(sent[0]).toMatchObject({
+      deadlineAt: 1_025,
+      method: FEDERATION_BACKEND_METHODS.searchFederatedThreads,
+    });
     expect(
       (endpoint as unknown as { pending: Map<string, unknown> }).pending.size,
     ).toBe(0);

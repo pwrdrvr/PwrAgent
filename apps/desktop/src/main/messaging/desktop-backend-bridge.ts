@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { compactNavigationSearchResult } from "../federation/navigation-search-result";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -21,6 +22,8 @@ import type {
   FederationInstanceId,
   FederationJumpSearchRequest,
   FederationJumpSearchResponse,
+  FederationThreadSearchRequest,
+  FederationThreadSearchResponse,
   FederationRemoteTarget,
   FederationTarget,
   FederationThreadSelection,
@@ -83,6 +86,7 @@ import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { materializeTranscriptMessageImagesForMessaging } from "../transcript-image-protocol";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+import { searchFederatedThreadsOnOwner } from "../federation/federated-search-service";
 import {
   FederatedThreadTargetError,
   resolveFederatedThreadTarget,
@@ -452,8 +456,38 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     const limit = Math.max(1, Math.min(request.limit ?? 8, 50));
     const threads = await this.navigationThreadsForSearch();
     return {
-      results: rankThreadJumpMatches(threads, query).slice(0, limit),
+      results: rankThreadJumpMatches(threads, query).slice(0, limit)
+        .map((thread) => compactNavigationSearchResult(thread, query)),
     };
+  }
+
+  /**
+   * Generic Federation search stays on the owner and returns only its top K.
+   * This path deliberately skips navigation reconciliation and archive-state
+   * maintenance: a debounced read must not turn into SQLite writes.
+   */
+  async searchFederatedThreads(
+    request: FederationThreadSearchRequest,
+    rpcOptions?: { deadlineAt?: number },
+  ): Promise<FederationThreadSearchResponse> {
+    return await searchFederatedThreadsOnOwner(
+      {
+        listThreads: async (listRequest = {}) => {
+          const threads = await this.registry.listThreadSearchCandidates({
+            backend: listRequest.backend,
+            archived: listRequest.archived,
+            deadlineAt: rpcOptions?.deadlineAt,
+          });
+          return {
+            backend: listRequest.backend ?? "all",
+            fetchedAt: Date.now(),
+            threads,
+          };
+        },
+      },
+      request,
+      rpcOptions,
+    );
   }
 
   private async navigationThreadsForSearch(): Promise<NavigationThreadSummary[]> {

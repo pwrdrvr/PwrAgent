@@ -37,6 +37,8 @@ import type {
   FederationCapability,
   FederationJumpSearchRequest,
   FederationJumpSearchResponse,
+  FederationThreadSearchRequest,
+  FederationThreadSearchResponse,
   FederationInstanceId,
   FederatedThreadRef,
   FederationLoadStatus,
@@ -362,6 +364,7 @@ function authenticateScheduledTurnOrigin<
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   searchNavigationThreads: "backend.searchNavigationThreads",
+  searchFederatedThreads: "backend.searchFederatedThreads",
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
@@ -461,6 +464,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 > = {
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchNavigationThreads]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.searchFederatedThreads]: "federated_search",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
@@ -579,6 +583,14 @@ export type FederationBackendOperations = {
     request: FederationJumpSearchRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<FederationJumpSearchResponse>;
+  /**
+   * Optional on owner adapters so mixed-version peers return method_not_found
+   * and callers can select the explicit legacy list fallback.
+   */
+  searchFederatedThreads?(
+    request: FederationThreadSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationThreadSearchResponse>;
   listThreads(
     request?: AppServerListThreadsRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -853,6 +865,20 @@ export function registerFederationBackendHandlers(params: {
         }
         return await params.backend.searchNavigationThreads(
           envelope.params as FederationJumpSearchRequest,
+        );
+      },
+    );
+  }
+  if (params.backend.searchFederatedThreads) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.searchFederatedThreads,
+      async (envelope) => {
+        if (!params.backend.searchFederatedThreads) {
+          throw new Error("Bounded federated search became unavailable.");
+        }
+        return await params.backend.searchFederatedThreads(
+          envelope.params as FederationThreadSearchRequest,
+          { deadlineAt: envelope.deadlineAt },
         );
       },
     );
@@ -1589,6 +1615,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<FederationJumpSearchResponse> {
     return await this.rpc.request<FederationJumpSearchResponse>({
       method: FEDERATION_BACKEND_METHODS.searchNavigationThreads,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async searchFederatedThreads(
+    request: FederationThreadSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationThreadSearchResponse> {
+    return await this.rpc.request<FederationThreadSearchResponse>({
+      method: FEDERATION_BACKEND_METHODS.searchFederatedThreads,
       params: request,
       ...rpcOptions,
     });

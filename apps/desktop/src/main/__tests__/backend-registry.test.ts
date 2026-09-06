@@ -7835,6 +7835,34 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it.each([false, true])("isolates unavailable Codex in aggregate search candidates (archived: %s)", async (archived) => {
+    const failure = new Error("Codex unavailable");
+    const codexClient = new MockBackendClient({ listThreadsError: failure });
+    const { registry } = createKimiAcpRegistry({
+      codexClient,
+      sessions: [{
+        backendId: "acp:kimi", sessionId: "healthy-acp", title: "Healthy ACP",
+        createdAt: 1000, updatedAt: 2000, executionMode: "default", status: "idle",
+        ...(archived ? { archivedAt: 3000 } : {}),
+      }],
+    });
+    onTestFinished(() => registry.close());
+
+    await expect(registry.listThreadSearchCandidates({ archived })).resolves.toEqual([
+      expect.objectContaining({ id: "healthy-acp", source: "acp:kimi" }),
+    ]);
+    // An aggregate partial result must not mask an explicitly requested error.
+    await expect(registry.listThreadSearchCandidates({ backend: "codex", archived })).rejects.toBe(failure);
+    // Nor should caching a partial aggregate hide a recovered provider.
+    vi.spyOn(codexClient, "listThreads").mockResolvedValue([{
+      id: "recovered-codex", source: "codex", title: "Recovered", titleSource: "explicit", linkedDirectories: [],
+    }]);
+    await expect(registry.listThreadSearchCandidates({ archived })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "recovered-codex" }),
+      expect.objectContaining({ id: "healthy-acp" }),
+    ]));
+  });
+
   it("serves durable startup threads before provider refresh completes", async () => {
     const providerRefresh = createDeferred<void>();
     const codexClient = new MockBackendClient({

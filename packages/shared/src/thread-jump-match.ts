@@ -118,18 +118,24 @@ export function rankThreadJumpMatches(
   threads: readonly NavigationThreadSummary[],
   query: string,
 ): NavigationThreadSummary[] {
-  return threads
-    .filter((thread) => threadMatchesQuery(thread, query))
-    .sort((left, right) => {
-      const exactPrPriority =
-        Number(threadHasExactPrNumberMatch(right, query))
-        - Number(threadHasExactPrNumberMatch(left, query));
-      if (exactPrPriority !== 0) {
-        return exactPrPriority;
-      }
-      return (
-        (right.updatedAt ?? right.createdAt ?? 0)
-        - (left.updatedAt ?? left.createdAt ?? 0)
-      );
-    });
+  return sortThreadJumpMatches(threads.filter((thread) => threadMatchesQuery(thread, query)), query);
+}
+
+/** Merge owner-matched results without re-filtering their compact display data. */
+export function sortThreadJumpMatches(
+  threads: readonly NavigationThreadSummary[],
+  query: string,
+): NavigationThreadSummary[] {
+  return [...threads].sort((left, right) => {
+    const exactPrPriority =
+      Number(threadHasExactPrNumberMatch(right, query))
+      - Number(threadHasExactPrNumberMatch(left, query));
+    if (exactPrPriority !== 0) {
+      return exactPrPriority;
+    }
+    return (
+      (right.updatedAt ?? right.createdAt ?? 0)
+      - (left.updatedAt ?? left.createdAt ?? 0)
+    );
+  });
 }

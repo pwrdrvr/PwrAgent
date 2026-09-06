@@ -266,6 +266,7 @@ describe("DesktopMessagingBackendBridge", () => {
       {
         id: "thread-alpha",
         title: "Alpha federation work",
+        summary: "large provider preview".repeat(100_000),
         titleSource: "explicit",
         source: "codex",
         linkedDirectories: [],
@@ -295,6 +296,9 @@ describe("DesktopMessagingBackendBridge", () => {
       .resolves.toMatchObject({ results: [{ id: "thread-alpha" }] });
     await expect(bridge.searchNavigationThreads({ query: "beta" }))
       .resolves.toMatchObject({ results: [{ id: "thread-beta" }] });
+    const wireResponse = await bridge.searchNavigationThreads({ query: "alpha" });
+    expect(Buffer.byteLength(JSON.stringify(wireResponse))).toBeLessThan(8 * 1024);
+    expect(wireResponse.results[0]).not.toHaveProperty("summary");
 
     expect(registry.listThreads).toHaveBeenCalledTimes(1);
     expect(reconcileNavigationSnapshot).toHaveBeenCalledTimes(
@@ -305,6 +309,83 @@ describe("DesktopMessagingBackendBridge", () => {
       partial: true,
       threads: listedThreads,
     });
+  });
+
+  it("filters and bounds generic search on the owner without reconciliation", async () => {
+    const listThreads = vi.fn(async (request?: { archived?: boolean }) =>
+      request?.archived
+        ? [
+            {
+              id: "archived-newer",
+              title: "Collector result",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              projectKey: "PwrSuiteLab",
+              archivedAt: 6_000,
+              updatedAt: 5_500,
+            },
+            {
+              id: "archived-older",
+              title: "Collector result",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              projectKey: "PwrSuiteLab",
+              archivedAt: 5_000,
+              updatedAt: 4_500,
+            },
+          ]
+        : [
+            ...Array.from({ length: 1_200 }, (_, index) => ({
+              id: `active-match-${index}`,
+              title: "Collector result",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              projectKey: "PwrSuiteLab",
+              updatedAt: 5_000,
+            })),
+            {
+              id: "wrong-project",
+              title: "Collector result",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              projectKey: "OtherProject",
+              updatedAt: 5_000,
+            },
+          ]);
+    const registry = { listThreadSearchCandidates: listThreads } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+    const reconcileCallsBefore = reconcileNavigationSnapshot.mock.calls.length;
+
+    await expect(bridge.searchFederatedThreads({
+      query: "collector",
+      backend: "codex",
+      includeArchived: true,
+      projectKeys: ["PwrSuiteLab"],
+      updatedAfter: 4_000,
+      updatedBefore: 6_000,
+      limit: 1,
+    })).resolves.toMatchObject({
+      threads: [{ id: "archived-newer" }],
+      totalCount: 1_202,
+      truncated: true,
+    });
+    expect(listThreads).toHaveBeenNthCalledWith(1, {
+      backend: "codex",
+      archived: false,
+      deadlineAt: undefined,
+    });
+    expect(listThreads).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      archived: true,
+      deadlineAt: undefined,
+    });
+    expect(reconcileNavigationSnapshot).toHaveBeenCalledTimes(
+      reconcileCallsBefore,
+    );
   });
 
   it("returns a broad snapshot before its stale directory batch finishes", async () => {

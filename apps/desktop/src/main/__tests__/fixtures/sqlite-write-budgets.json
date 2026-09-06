@@ -97,6 +97,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "federated-owner-search": {
+    "commits": 0,
+    "note": "first and repeated generic owner searches, including archives",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "federation-activity-monitor": {
     "commits": 0,
     "note": "10,000 transfers, local snapshots and reset: in-memory only; 0 MB/day added WAL",

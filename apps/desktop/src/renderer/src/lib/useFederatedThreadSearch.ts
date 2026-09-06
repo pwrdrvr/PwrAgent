@@ -36,6 +36,10 @@ export function useFederatedThreadSearch(params: {
   const [completedPeerCount, setCompletedPeerCount] = useState(0);
   const [totalPeerCount, setTotalPeerCount] = useState(0);
   const generationRef = useRef(0);
+  // One fan-out at a time per mounted search surface. New input replaces the
+  // pending generation, not the request already on the wire. Peer deadlines
+  // still bound that request; stale progress never updates the current query.
+  const inFlightRef = useRef<Promise<void> | undefined>(undefined);
   const query = params.query.trim();
   const search = params.search ?? getDesktopApi()?.jumpSearchRemoteThreads;
   // A remote-viewer window already scopes to one peer; only the main window
@@ -61,40 +65,48 @@ export function useFederatedThreadSearch(params: {
     setCompletedPeerCount(0);
     setTotalPeerCount(0);
     const timer = setTimeout(() => {
-      search(
-        {
-          query,
-          limit: params.limit ?? FEDERATED_THREAD_SEARCH_LIMIT,
-        },
-        (progress) => {
-          if (generationRef.current !== generation) {
-            return;
-          }
-          setResults(progress.results);
-          setCompletedPeerCount(progress.completedPeerCount);
-          setTotalPeerCount(progress.totalPeerCount);
-          if (progress.complete) {
+      const dispatch = async (): Promise<void> => {
+        await inFlightRef.current;
+        if (generationRef.current !== generation) return;
+        const pending = search(
+          {
+            query,
+            limit: params.limit ?? FEDERATED_THREAD_SEARCH_LIMIT,
+          },
+          (progress) => {
+            if (generationRef.current !== generation) {
+              return;
+            }
+            setResults(progress.results);
+            setCompletedPeerCount(progress.completedPeerCount);
+            setTotalPeerCount(progress.totalPeerCount);
+            if (progress.complete) {
+              setLoading(false);
+              setSettledQuery(query);
+            }
+          },
+        )
+          .then((response) => {
+            if (generationRef.current !== generation) {
+              return;
+            }
+            setResults(response.results);
             setLoading(false);
             setSettledQuery(query);
-          }
-        },
-      )
-        .then((response) => {
-          if (generationRef.current !== generation) {
-            return;
-          }
-          setResults(response.results);
-          setLoading(false);
-          setSettledQuery(query);
-        })
-        .catch(() => {
-          if (generationRef.current !== generation) {
-            return;
-          }
-          setResults([]);
-          setLoading(false);
-          setSettledQuery(query);
-        });
+          })
+          .catch(() => {
+            if (generationRef.current !== generation) {
+              return;
+            }
+            setResults([]);
+            setLoading(false);
+            setSettledQuery(query);
+          });
+        inFlightRef.current = pending;
+        await pending;
+        if (inFlightRef.current === pending) inFlightRef.current = undefined;
+      };
+      void dispatch();
     }, FEDERATED_THREAD_SEARCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);

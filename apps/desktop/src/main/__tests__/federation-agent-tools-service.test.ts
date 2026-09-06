@@ -1169,7 +1169,7 @@ describe("federation agent tools service", () => {
           listThreads: async () => ({
             backend: "all",
             fetchedAt: 10,
-            threads: [localThread],
+            threads: Array.from({ length: 100 }, (_, index) => ({ ...localThread, id: `local-${index}` })),
           }),
         })) as never,
         connectedPeerTargets: () => [
@@ -1180,10 +1180,11 @@ describe("federation agent tools service", () => {
           },
         ],
         remoteBackend: (() => ({
-          listThreads: async () => ({
-            backend: "all",
-            fetchedAt: 10,
+          listThreads: vi.fn(),
+          searchFederatedThreads: async () => ({
             threads: [remoteThread],
+            totalCount: 1,
+            truncated: false,
           }),
         })) as never,
       }),
@@ -1192,20 +1193,13 @@ describe("federation agent tools service", () => {
     const response = await handler({
       operation: "search_federation_threads",
       context,
-      args: { query: "recorder crash" },
+      args: { query: "recorder crash", limit: 1 },
     });
 
     const data = (response as { ok: true; data: SearchFederationThreadsResult })
       .data;
-    expect(data.results).toHaveLength(2);
-    const local = data.results.find((entry) => entry.isLocal);
+    expect(data.results).toHaveLength(1);
     const remote = data.results.find((entry) => !entry.isLocal);
-    expect(local).toMatchObject({
-      instanceId: "pwr_local",
-      instanceLabel: "Local Mac",
-      threadId: "thread-local",
-    });
-    expect(local?.threadLink).toContain("pwragent://thread/thread-local");
     expect(remote).toMatchObject({
       instanceId: "pwr_studio",
       instanceLabel: "Studio Mac",
@@ -1214,14 +1208,9 @@ describe("federation agent tools service", () => {
     expect(remote?.threadLink).toContain(
       "instanceId=pwr_studio",
     );
-    expect(rememberRemoteThreadTarget).toHaveBeenCalledWith({
-      instanceId: "pwr_studio",
-      instanceLabel: "Studio Mac",
-      backend: "codex",
-      threadId: "thread-remote",
-    });
+    expect(rememberRemoteThreadTarget).not.toHaveBeenCalled();
     expect(data.searchedInstances).toEqual([
-      { instanceId: "pwr_local", instanceLabel: "Local Mac", resultCount: 1 },
+      { instanceId: "pwr_local", instanceLabel: "Local Mac", resultCount: 100, truncated: true },
       { instanceId: "pwr_studio", instanceLabel: "Studio Mac", resultCount: 1 },
     ]);
   });
@@ -1255,6 +1244,20 @@ describe("federation agent tools service", () => {
         },
       ],
     }));
+    const remoteSearchThreads = vi.fn(async () => ({
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Recorder crash investigation",
+          source: "codex" as const,
+          linkedDirectories: [],
+          createdAt: 1,
+          updatedAt: 3,
+        },
+      ],
+      totalCount: 1,
+      truncated: false,
+    }));
     const handler = createFederationAgentToolsHandler({
       // Never let unit tests mint a machine-id in the real PwrAgent root.
       collectHostInfo: async () => localHostInfo,
@@ -1268,7 +1271,10 @@ describe("federation agent tools service", () => {
             capabilities: ["federated_search"],
           },
         ],
-        remoteBackend: (() => ({ listThreads: remoteListThreads })) as never,
+        remoteBackend: (() => ({
+          listThreads: remoteListThreads,
+          searchFederatedThreads: remoteSearchThreads,
+        })) as never,
       }),
     });
 
@@ -1296,7 +1302,8 @@ describe("federation agent tools service", () => {
     const localData = (
       localOnly as { ok: true; data: SearchFederationThreadsResult }
     ).data;
-    expect(remoteListThreads).toHaveBeenCalledTimes(1);
+    expect(remoteSearchThreads).toHaveBeenCalledTimes(1);
+    expect(remoteListThreads).not.toHaveBeenCalled();
     expect(localData.results.map((entry) => entry.threadId)).toEqual([
       "thread-local",
     ]);
@@ -1332,10 +1339,11 @@ describe("federation agent tools service", () => {
           },
         ],
         remoteBackend: (() => ({
-          listThreads: async () => ({
-            backend: "all",
-            fetchedAt: 10,
+          listThreads: vi.fn(),
+          searchFederatedThreads: async () => ({
             threads: [],
+            totalCount: 0,
+            truncated: false,
           }),
         })) as never,
       }),

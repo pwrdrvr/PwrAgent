@@ -2919,6 +2919,28 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("stops owner search pagination at its absolute deadline", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const send = MockTransport.prototype.send;
+    const spy = vi.spyOn(MockTransport.prototype, "send").mockImplementation(function (this: MockTransport, message) {
+      send.call(this, message);
+      if (JSON.parse(message).method === "thread/list") now.mockReturnValue(1_101);
+    });
+    try {
+      await expect(client.listThreads({ archived: true, filter: "paginated-archive", deadlineAt: 1_100 }))
+        .rejects.toThrow("deadline expired");
+      const requests = MockTransport.instances.at(-1)!.sentMessages
+        .map((message) => JSON.parse(message)).filter((message) => message.method === "thread/list");
+      expect(requests).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      now.mockRestore();
+      await client.close();
+    }
+  });
+
   it("follows thread/list pagination for archived codex threads", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

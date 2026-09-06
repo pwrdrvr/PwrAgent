@@ -1588,7 +1588,10 @@ export type FederationJumpSearchRequest = {
 };
 
 export type FederationJumpSearchResponse = {
-  /** Stamped remote rows (`federation` set), ordered by updatedAt desc. */
+  /** Compact navigation-compatible search placeholders, not hydrated thread
+   * state. Owner matching precedes projection. Viewers stamp `federation`;
+   * selecting a result fetches authoritative navigation/thread state.
+   */
   results: NavigationThreadSummary[];
 };
 

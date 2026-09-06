@@ -7220,16 +7220,21 @@ async function requestWithFallbacks(params: {
   methods: Array<CodexClientRequestMethod | (string & {})>;
   payloads: unknown[];
   timeoutMs: number;
+  deadlineAt?: number;
 }): Promise<unknown> {
   let lastError: unknown;
 
   for (const method of params.methods) {
     for (const payload of params.payloads) {
+      const timeoutMs = params.deadlineAt === undefined
+        ? params.timeoutMs
+        : Math.min(params.timeoutMs, params.deadlineAt - Date.now());
+      if (timeoutMs <= 0) throw new Error("Thread search deadline expired.");
       try {
         return await params.client.request(
           method,
           payload,
-          params.timeoutMs,
+          timeoutMs,
           params.diagnostics,
         );
       } catch (error) {
@@ -7252,6 +7257,7 @@ async function requestThreadListPages(params: {
   limit?: number;
   maxPages?: number;
   requestTimeoutMs: number;
+  deadlineAt?: number;
   sourceKinds?: CodexThreadListParams["sourceKinds"];
 }): Promise<RawCodexThreadSummary[]> {
   const pages: RawCodexThreadSummary[] = [];
@@ -7283,6 +7289,7 @@ async function requestThreadListPages(params: {
         params.sourceKinds,
       ),
       timeoutMs: params.requestTimeoutMs,
+      deadlineAt: params.deadlineAt,
     });
     const page = extractThreadListPage(result);
     pages.push(...page.threads);
@@ -8070,6 +8077,7 @@ export class CodexAppServerClient {
     limit?: number;
     maxPages?: number;
     skipArchivedMetadataRefresh?: boolean;
+    deadlineAt?: number;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
@@ -8088,6 +8096,7 @@ export class CodexAppServerClient {
         limit: params?.limit,
         maxPages: params?.maxPages,
         requestTimeoutMs: requestParams.timeoutMs,
+        deadlineAt: params?.deadlineAt,
       });
       return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
         enrichDirectories: params?.enrichDirectories ?? true,
@@ -8103,6 +8112,7 @@ export class CodexAppServerClient {
         limit: params?.limit,
         maxPages: params?.maxPages,
         requestTimeoutMs: requestParams.timeoutMs,
+        deadlineAt: params?.deadlineAt,
       }),
     );
     const threads = params?.skipArchivedMetadataRefresh

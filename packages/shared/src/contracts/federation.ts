@@ -606,6 +606,20 @@ export type FederatedSearchRequest = {
   updatedBefore?: number;
 };
 
+/** Owner-executed generic thread search used by Federation fan-out. */
+export type FederationThreadSearchRequest = FederatedSearchRequest & {
+  /** Maximum rows that may cross the Federation transport. */
+  limit: number;
+};
+
+export type FederationThreadSearchResponse = {
+  /** Owner-ranked matches, bounded by the request limit. */
+  threads: AppServerThreadSummary[];
+  /** Matches on the owner before applying the transport limit. */
+  totalCount: number;
+  truncated: boolean;
+};
+
 export type FederatedSearchResult = {
   ref: FederatedThreadRef;
   thread: AppServerThreadSummary;
@@ -624,6 +638,7 @@ export type FederatedSearchInstanceSummary = {
   instanceId: FederationInstanceId;
   instanceLabel: string;
   resultCount: number;
+  truncated?: boolean;
 };
 
 export type FederatedSearchResponse = {
@@ -633,6 +648,8 @@ export type FederatedSearchResponse = {
   totalCount: number;
   truncated: boolean;
   failures: FederatedSearchPeerFailure[];
+  /** Local owner metadata before the global page is sliced. */
+  localSearch?: { totalCount: number; truncated: boolean; error?: string };
   /** Peers that were queried successfully, so the UI can disclose scope. */
   searchedInstances?: FederatedSearchInstanceSummary[];
 };
