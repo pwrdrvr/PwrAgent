@@ -220,7 +220,21 @@ describe("backend status formatting", () => {
     ]);
   });
 
-  it("formats a dollar credits balance, unlimited credits, and a hidden amount", () => {
+  it.each([
+    [1226.02, "1,226"],
+    [1226.5, "1,227"],
+    [0.4, "0"],
+    [0, "0"],
+  ])("rounds %s credits to %s without a currency symbol", (remaining, expected) => {
+    expect(formatRateLimitLine({
+      name: "Credits",
+      windowKey: "credits",
+      hasCredits: remaining > 0,
+      remaining,
+    })).toBe(`Credits: ${expected}`);
+  });
+
+  it("formats a credits balance, unlimited credits, and a hidden amount", () => {
     expect(
       formatRateLimitLine({
         name: "Credits",
@@ -228,7 +242,7 @@ describe("backend status formatting", () => {
         hasCredits: true,
         remaining: 100,
       }),
-    ).toBe("Credits: $100");
+    ).toBe("Credits: 100");
     expect(
       formatRateLimitLine({
         name: "Credits",

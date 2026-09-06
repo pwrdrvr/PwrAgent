@@ -146,24 +146,12 @@ function formatCreditsLine(limit: BackendRateLimitSummary): string {
     return "Credits: unlimited";
   }
   if (typeof limit.remaining === "number" && limit.remaining > 0) {
-    return `Credits: ${formatUsdBalance(limit.remaining)}`;
+    return `Credits: ${formatWholeNumber(limit.remaining)}`;
   }
   if (limit.hasCredits) {
     return "Credits: available";
   }
-  return "Credits: $0";
-}
-
-function formatUsdBalance(value: number): string {
-  const cents = Math.round(value * 100);
-  const dollars = cents / 100;
-  if (cents % 100 === 0) {
-    return `$${dollars.toLocaleString()}`;
-  }
-  return `$${dollars.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+  return "Credits: 0";
 }
 
 function isReserveRateLimit(limit: BackendRateLimitSummary): boolean {
