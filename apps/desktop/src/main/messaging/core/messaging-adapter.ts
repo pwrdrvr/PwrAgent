@@ -159,6 +159,7 @@ export type MessagingAdapter = {
 export type MessagingBackendBridge = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
+    options?: { onProgress?: (snapshot: NavigationSnapshot) => Promise<void> },
   ): Promise<NavigationSnapshot>;
   getThreadAdmissionState(request: {
     backend: AppServerBackendKind;

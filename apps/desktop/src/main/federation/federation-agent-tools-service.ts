@@ -39,6 +39,7 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import { FederatedSearchService } from "./federated-search-service";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
+import { readFederationProjectSnapshot } from "./federation-collection-client";
 import {
   collectFederationHostInfo,
   collectFederationLoadStatus,
@@ -350,7 +351,7 @@ async function listInstanceProjects(
     return resolved.response;
   }
   const instance = resolved.instance;
-  const snapshot = await backendFor(runtime, instance).getNavigationSnapshot({});
+  const snapshot = await readFederationProjectSnapshot(backendFor(runtime, instance));
   const result: ListInstanceProjectsResult = {
     instanceId: instance.instanceId,
     instanceLabel: instance.label,
@@ -395,7 +396,7 @@ async function createInstanceThread(
   const instance = resolved.instance;
   const groupingMode = args.groupingMode ?? "none";
   const backend = backendFor(runtime, instance);
-  const snapshot = await backend.getNavigationSnapshot({});
+  const snapshot = await readFederationProjectSnapshot(backend, args.projectKey);
   const directory = snapshot.directories.find(
     (candidate) => candidate.key === args.projectKey,
   );
@@ -423,9 +424,7 @@ async function createInstanceThread(
         "The local federation instance identity is unavailable, so the cross-instance parent relationship cannot be recorded.",
       );
     }
-    const localSnapshot = instance.isLocal
-      ? snapshot
-      : await runtime.localBackend().getNavigationSnapshot({});
+    const localSnapshot = await runtime.localBackend().getNavigationSnapshot({});
     groupingParent = resolveGroupingParent(
       localSnapshot,
       context,

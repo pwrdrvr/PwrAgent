@@ -1113,6 +1113,7 @@ export class MessagingController {
   // handle open, which blocks the test harness from deleting the temp profile
   // dir. Gate re-scheduling on this flag so a disposed controller stays quiet.
   private disposed = false;
+  private readonly progressiveBrowseByConversation = new Map<string, symbol>();
   private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
@@ -1249,6 +1250,9 @@ export class MessagingController {
     // a burst of rejected events push the entries this map exists to hold out
     // of it.
     this.markAdmissionStage(event, "handled");
+    // An actor's next action owns the surface. Late browse arrivals must not
+    // overwrite a selection, cancellation, query edit, or a newer browser.
+    this.progressiveBrowseByConversation.delete(buildMessagingConversationKey(event.channel));
 
     // Breadcrumb self-healing and managed-topic observation are optional UX
     // bookkeeping for turn input. Start them from this lifecycle boundary, but
@@ -7756,6 +7760,7 @@ export class MessagingController {
 
   dispose(): void {
     this.disposed = true;
+    this.progressiveBrowseByConversation.clear();
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
@@ -7869,67 +7874,69 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
+    await this.presentProgressiveBrowse(event, {
       backend: "all",
       filter: parsed.query,
-    });
-    const selectedBackend =
-      isNewThreadLaunchAction(parsed.launchAction)
-        ? await this.resolveNewThreadBackendForSession(
-            {
-              launchpadBackend: navigation.launchpadDefaults.backend,
-            },
-            event,
+    }, async (navigation, current) => {
+      const selectedBackend =
+        isNewThreadLaunchAction(parsed.launchAction)
+          ? await this.resolveNewThreadBackendForSession(
+              {
+                launchpadBackend: navigation.launchpadDefaults.backend,
+              },
+              event,
+            )
+          : undefined;
+      if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
+        return;
+      }
+      const selectedDirectory = parsed.cwd
+        ? navigation.directories.find(
+            (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
           )
         : undefined;
-    if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
-      return;
-    }
-    const selectedDirectory = parsed.cwd
-      ? navigation.directories.find(
-          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
-        )
-      : undefined;
-    const preferences = parsed.preferences
-      ? {
-          ...parsed.preferences,
-          updatedAt: this.now(),
-        }
-      : undefined;
-    const session: MessagingBrowseSessionRecord = {
-      id: this.newIntentId("browse"),
-      allowedActorIds: [event.actor.platformUserId],
-      backend: selectedBackend?.kind,
-      cancelDestination: options?.cancelDestination,
-      channel: event.channel,
-      createdAt: this.now(),
-      updatedAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
-      launchAction: parsed.launchAction,
-      mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
-      pageIndex: 0,
-      pageSize: resumeBrowserPageSize(this.capabilityProfile),
-      preferences,
-      query: parsed.query,
-      returnTo: parsed.launchAction === "start_new_thread"
+      const preferences = parsed.preferences
         ? {
-            launchAction: "resume_thread",
-            mode: "recents",
-            pageIndex: 0,
-            preferences,
-            query: parsed.query,
+            ...parsed.preferences,
+            updatedAt: this.now(),
           }
-        : undefined,
-      selectedProject: selectedDirectory
-        ? {
-            directoryKey: selectedDirectory.key,
-            label: selectedDirectory.label,
-            path: selectedDirectory.path,
-          }
-        : undefined,
-      surface: options?.targetSurface,
-    };
-    await this.renderResumeBrowser(session, navigation, event);
+        : undefined;
+      const session: MessagingBrowseSessionRecord = {
+        id: this.newIntentId("browse"),
+        allowedActorIds: [event.actor.platformUserId],
+        backend: selectedBackend?.kind,
+        cancelDestination: options?.cancelDestination,
+        channel: event.channel,
+        createdAt: this.now(),
+        updatedAt: this.now(),
+        expiresAt: this.now() + this.pendingIntentTtlMs,
+        launchAction: parsed.launchAction,
+        mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
+        pageIndex: 0,
+        pageSize: resumeBrowserPageSize(this.capabilityProfile),
+        preferences,
+        query: parsed.query,
+        returnTo: parsed.launchAction === "start_new_thread"
+          ? {
+              launchAction: "resume_thread",
+              mode: "recents",
+              pageIndex: 0,
+              preferences,
+              query: parsed.query,
+            }
+          : undefined,
+        selectedProject: selectedDirectory
+          ? {
+              directoryKey: selectedDirectory.key,
+              label: selectedDirectory.label,
+              path: selectedDirectory.path,
+            }
+          : undefined,
+        surface: options?.targetSurface,
+      };
+      await this.renderResumeBrowser(session, navigation, event, current);
+      return session;
+    });
   }
 
   private async presentAgentBrowser(
@@ -7955,59 +7962,97 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
+    await this.presentProgressiveBrowse(event, {
       backend: "all",
       filter: parsed.query,
-    });
-    const selectedBackend =
-      parsed.launchAction === "start_new_thread"
-        ? await this.resolveNewThreadBackendForSession(
-            {
-              launchpadBackend: navigation.launchpadDefaults.backend,
-            },
-            event,
+    }, async (navigation, current) => {
+      const selectedBackend =
+        parsed.launchAction === "start_new_thread"
+          ? await this.resolveNewThreadBackendForSession(
+              {
+                launchpadBackend: navigation.launchpadDefaults.backend,
+              },
+              event,
+            )
+          : undefined;
+      if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
+        return;
+      }
+      const selectedDirectory = parsed.cwd
+        ? navigation.directories.find(
+            (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
           )
         : undefined;
-    if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
-      return;
-    }
-    const selectedDirectory = parsed.cwd
-      ? navigation.directories.find(
-          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
-        )
-      : undefined;
-    const session: MessagingBrowseSessionRecord = {
-      id: this.newIntentId("browse"),
-      allowedActorIds: [event.actor.platformUserId],
-      backend: selectedBackend?.kind,
-      cancelDestination: options?.cancelDestination,
-      channel: event.channel,
-      createdAt: this.now(),
-      updatedAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
-      launchAction: parsed.launchAction === "start_new_thread"
-        ? "start_new_agent_thread"
-        : "resume_thread",
-      mode: parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
-      pageIndex: 0,
-      pageSize: resumeBrowserPageSize(this.capabilityProfile),
-      preferences: parsed.preferences
-        ? {
-            ...parsed.preferences,
-            updatedAt: this.now(),
-          }
-        : undefined,
-      query: parsed.query,
-      selectedProject: selectedDirectory
-        ? {
-            directoryKey: selectedDirectory.key,
-            label: selectedDirectory.label,
-            path: selectedDirectory.path,
-          }
-        : undefined,
-      surface: options?.targetSurface,
+      const session: MessagingBrowseSessionRecord = {
+        id: this.newIntentId("browse"),
+        allowedActorIds: [event.actor.platformUserId],
+        backend: selectedBackend?.kind,
+        cancelDestination: options?.cancelDestination,
+        channel: event.channel,
+        createdAt: this.now(),
+        updatedAt: this.now(),
+        expiresAt: this.now() + this.pendingIntentTtlMs,
+        launchAction: parsed.launchAction === "start_new_thread"
+          ? "start_new_agent_thread"
+          : "resume_thread",
+        mode: parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
+        pageIndex: 0,
+        pageSize: resumeBrowserPageSize(this.capabilityProfile),
+        preferences: parsed.preferences
+          ? {
+              ...parsed.preferences,
+              updatedAt: this.now(),
+            }
+          : undefined,
+        query: parsed.query,
+        selectedProject: selectedDirectory
+          ? {
+              directoryKey: selectedDirectory.key,
+              label: selectedDirectory.label,
+              path: selectedDirectory.path,
+            }
+          : undefined,
+        surface: options?.targetSurface,
+      };
+      await this.renderResumeBrowser(session, navigation, event, current);
+      return session;
+    });
+  }
+
+  private async presentProgressiveBrowse(
+    event: MessagingInboundEvent,
+    request: Parameters<MessagingBackendBridge["getNavigationSnapshot"]>[0],
+    initial: (
+      navigation: NavigationSnapshot,
+      current: () => boolean,
+    ) => Promise<MessagingBrowseSessionRecord | undefined>,
+  ): Promise<void> {
+    const key = buildMessagingConversationKey(event.channel);
+    const generation = Symbol("browse");
+    this.progressiveBrowseByConversation.set(key, generation);
+    let started = false;
+    let session: MessagingBrowseSessionRecord | undefined;
+    const current = (): boolean => !this.disposed
+      && this.progressiveBrowseByConversation.get(key) === generation;
+    const onProgress = async (navigation: NavigationSnapshot): Promise<void> => {
+      if (!current()) return;
+      if (!started) {
+        started = true;
+        session = await initial(navigation, current);
+        return;
+      }
+      if (!session) return;
+      const stored = await this.options.store.getBrowseSession(session.id, { now: this.now() });
+      if (!stored || !current()) return;
+      await this.renderResumeBrowser(stored, navigation, event, current);
     };
-    await this.renderResumeBrowser(session, navigation, event);
+    try {
+      const navigation = await this.options.backend.getNavigationSnapshot(request, { onProgress });
+      // Non-desktop adapters may not implement incremental publication.
+      if (!started) await onProgress(navigation);
+    } finally {
+      if (current()) this.progressiveBrowseByConversation.delete(key);
+    }
   }
 
   private async handleDefaultAgentCommand(
@@ -9244,7 +9289,9 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
     event: MessagingInboundEvent,
+    stillCurrent: () => boolean = () => true,
   ): Promise<void> {
+    if (!stillCurrent()) return;
     await this.options.store.upsertBrowseSession(session);
     const browseNavigation = this.filterRemoteThreadsForActor(
       event,
@@ -9256,7 +9303,9 @@ export class MessagingController {
       navigation: browseNavigation,
       session,
     });
+    if (!stillCurrent()) return;
     await this.storePendingIntent(intent, undefined, event);
+    if (!stillCurrent()) return;
     const result = await this.deliver(intent, undefined, event);
     if (!result.surface) {
       return;

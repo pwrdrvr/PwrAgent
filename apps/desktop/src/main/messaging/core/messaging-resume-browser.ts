@@ -159,11 +159,19 @@ export function buildResumeIntent(params: {
   navigation: NavigationSnapshot;
   session: MessagingBrowseSessionRecord;
 }): MessagingThreadPickerIntent | MessagingProjectPickerIntent {
-  if (params.session.mode === "projects" || params.session.mode === "new_project") {
-    return buildProjectPickerIntent(params);
-  }
-
-  return buildThreadPickerIntent(params);
+  const intent = params.session.mode === "projects" || params.session.mode === "new_project"
+    ? buildProjectPickerIntent(params)
+    : buildThreadPickerIntent(params);
+  const progress = params.navigation.federationRefresh;
+  const notes = [
+    progress?.pendingPeers ? `Still checking ${progress.pendingPeers} Federation instances.` : undefined,
+    progress?.failedPeers ? `${progress.failedPeers} Federation instances could not be checked. Results are incomplete.` : undefined,
+  ].filter(Boolean).join(" ");
+  return notes ? {
+    ...intent,
+    prompt: `${intent.prompt}\n${notes}`,
+    fallbackText: `${intent.fallbackText}\n${notes}`,
+  } : intent;
 }
 
 export function selectProjectFromValue(

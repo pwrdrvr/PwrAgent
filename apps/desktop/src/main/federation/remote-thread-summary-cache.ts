@@ -146,7 +146,7 @@ export class RemoteThreadSummaryCache {
   >();
   private readonly archivedCache = new Map<
     string,
-    { fetchedAt: number; threadKeys: Set<string> }
+    { fetchedAt: number; threadKeys: Set<string>; queriedKeys: ReadonlySet<string> }
   >();
   /**
    * Display names for threads owned by peers, held in the same information
@@ -201,6 +201,8 @@ export class RemoteThreadSummaryCache {
       fetchArchivedThreads: (
         target: FederationRemoteTarget,
         backend: RemoteThreadPin["ref"]["backend"],
+        threadIds: string[],
+        rpcOptions: FederationRpcRequestOptions,
       ) => Promise<Array<Pick<NavigationThreadSummary, "source" | "id">>>;
       /**
        * Current visible status, composed label, and the VIEWER-actionable
@@ -750,6 +752,7 @@ export class RemoteThreadSummaryCache {
             backend,
             candidateKeys,
             timeoutMs,
+            missing.filter((pin) => pin.ref.backend === backend).map((pin) => pin.ref.threadId),
           );
           for (const key of candidateKeys) {
             if (!keys.has(key)) {
@@ -983,6 +986,7 @@ export class RemoteThreadSummaryCache {
     backend: RemoteThreadPin["ref"]["backend"],
     candidateKeys: ReadonlySet<string>,
     timeoutMs: number,
+    threadIds: string[],
   ): Promise<Set<string>> {
     const cacheKey = `${target.instanceId}:${backend}`;
     const now = this.options.now?.() ?? Date.now();
@@ -992,7 +996,7 @@ export class RemoteThreadSummaryCache {
     if (
       cached
       && now - cached.fetchedAt < ttlMs
-      && [...candidateKeys].every((key) => !cached.threadKeys.has(key))
+      && [...candidateKeys].every((key) => cached.queriedKeys.has(key) && !cached.threadKeys.has(key))
     ) {
       // A cached negative can only delay cleanup. A cached positive could
       // delete a thread restored and re-pinned since the probe, so positive
@@ -1000,7 +1004,9 @@ export class RemoteThreadSummaryCache {
       return cached.threadKeys;
     }
     const archivedThreads = await withTimeout(
-      this.options.fetchArchivedThreads(target, backend),
+      this.options.fetchArchivedThreads(target, backend, threadIds, {
+        deadlineAt: Date.now() + timeoutMs,
+      }),
       timeoutMs,
       `Remote archived threads timed out after ${Math.round(timeoutMs / 1000)}s.`,
     );
@@ -1015,6 +1021,7 @@ export class RemoteThreadSummaryCache {
     this.archivedCache.set(cacheKey, {
       fetchedAt: this.options.now?.() ?? Date.now(),
       threadKeys,
+      queriedKeys: new Set(candidateKeys),
     });
     return threadKeys;
   }

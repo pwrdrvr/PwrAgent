@@ -12,6 +12,9 @@ import { getMainLogger } from "../log";
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import { hasFederationErrorCode } from "./federation-rpc";
+import { lookupFederationArchivedThreads } from "./federation-collection-client";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
+import type { FederationRpcRequestOptions } from "./federation-rpc";
 
 export type FederatedThreadTargetRuntime = {
   connectedPeerTargets(): Array<{
@@ -58,6 +61,7 @@ export async function resolveFederatedThreadTarget(params: {
   request: FederatedThreadTargetRequest;
 }): Promise<ResolvedFederatedThreadTarget | undefined> {
   const { request, runtime, targetStore } = params;
+  const rpcOptions = { deadlineAt: Date.now() + 10_000 };
   const connectedPeers = runtime.connectedPeerTargets();
   const rememberedTargets = request.instanceId
     || request.resolutionMode === "discover_only"
@@ -94,7 +98,7 @@ export async function resolveFederatedThreadTarget(params: {
         `Federation instance ${peer.label} owns thread ${request.threadId} but does not grant thread_navigation.`,
       );
     }
-    const match = await resolveThreadOnPeer(runtime, peer, request);
+    const match = await resolveThreadOnPeer(runtime, peer, request, rpcOptions);
     if (!match) {
       if (
         rememberedTargets.length > 0
@@ -118,21 +122,24 @@ export async function resolveFederatedThreadTarget(params: {
     peer.capabilities.includes("thread_navigation"),
   );
   const failures: Array<{ label: string; message: string }> = [];
-  const matches = (
-    await Promise.all(
-      peers.map(async (peer): Promise<ResolvedFederatedThreadTarget | undefined> => {
-        try {
-          return await resolveThreadOnPeer(runtime, peer, request);
-        } catch (error) {
-          failures.push({
-            label: peer.label,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          return undefined;
-        }
-      }),
-    )
-  ).filter((match): match is ResolvedFederatedThreadTarget => Boolean(match));
+  // Discovery must finish to detect duplicate owners. Bound its concurrency
+  // and one shared deadline; never turn the first reply into permission to
+  // operate on an arbitrary owner. Remembered/explicit owners skip fan-out.
+  const matches: ResolvedFederatedThreadTarget[] = [];
+  const results = new IterableMapper(peers, async (peer) => {
+    try {
+      return { match: await resolveThreadOnPeer(runtime, peer, request, rpcOptions) };
+    } catch (error) {
+      failures.push({
+        label: peer.label,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return { match: undefined };
+    }
+  }, { concurrency: 8, maxUnread: 8 });
+  for await (const result of results) {
+    if (result.match) matches.push(result.match);
+  }
 
   if (matches.length > 1) {
     throw new Error(
@@ -160,7 +167,14 @@ async function resolveThreadOnPeer(
   runtime: FederatedThreadTargetRuntime,
   peer: ResolvedFederatedThreadTarget["peer"],
   request: FederatedThreadTargetRequest,
+  rpcOptions: FederationRpcRequestOptions,
 ): Promise<ResolvedFederatedThreadTarget | undefined> {
+  const checkDeadline = (): void => {
+    if (rpcOptions.deadlineAt !== undefined && Date.now() >= rpcOptions.deadlineAt) {
+      throw new Error("Federation owner resolution deadline expired.");
+    }
+  };
+  checkDeadline();
   const backend = runtime.remoteBackend(peer.target);
   let thread: AppServerThreadSummary | undefined;
   try {
@@ -168,7 +182,7 @@ async function resolveThreadOnPeer(
       await backend.resolveThread({
         backend: request.backend,
         threadId: request.threadId,
-      })
+      }, rpcOptions)
     ).thread;
   } catch (error) {
     if (!hasFederationErrorCode(error, "method_not_found")) {
@@ -177,16 +191,17 @@ async function resolveThreadOnPeer(
     // Mixed-version peers may predate backend.resolveThread. Their unfiltered
     // list still provides an exact-ID compatibility path.
     thread = (
-      await backend.listThreads({ backend: request.backend })
+      await backend.listThreads({ backend: request.backend }, rpcOptions)
     ).threads.find((candidate) => candidate.id === request.threadId);
   }
   if (!thread) {
-    thread = (
-      await backend.listThreads({
-        backend: request.backend,
-        archived: true,
-      })
-    ).threads.find((candidate) => candidate.id === request.threadId);
+    checkDeadline();
+    thread = (await lookupFederationArchivedThreads(
+      backend,
+      request.backend,
+      [request.threadId],
+      rpcOptions,
+    )).find((candidate) => candidate.id === request.threadId);
   }
   return thread ? { backend, peer, thread } : undefined;
 }

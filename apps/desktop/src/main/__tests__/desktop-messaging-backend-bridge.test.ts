@@ -75,6 +75,53 @@ vi.mock("../app-server/codex-environment-config", () => ({
 }));
 
 describe("DesktopMessagingBackendBridge", () => {
+  it("publishes local and fast-peer navigation before a slow peer and shares one deadline", async () => {
+    const registry = {
+      listThreads: vi.fn(async () => []),
+      canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
+      refreshThreadGitWorkingStates: vi.fn(async () => undefined),
+      rememberCompleteNavigationSnapshot: vi.fn(),
+      readDirectoryStatuses: vi.fn(async () => ({})),
+    } as unknown as DesktopBackendRegistry;
+    const remoteSnapshot: NavigationSnapshot = {
+      backend: "all", fetchedAt: 1, unchanged: false, threads: [],
+      directories: [], inboxThreadKeys: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    let finishSlow!: (snapshot: NavigationSnapshot) => void;
+    const slow = new Promise<NavigationSnapshot>((resolve) => { finishSlow = resolve; });
+    let finishMiddle!: (snapshot: NavigationSnapshot) => void;
+    const middle = new Promise<NavigationSnapshot>((resolve) => { finishMiddle = resolve; });
+    const remoteNavigationSnapshot = vi.fn(async (target: { instanceId: string }) =>
+      target.instanceId === "slow" ? await slow
+        : target.instanceId === "middle" ? await middle : remoteSnapshot);
+    const bridge = new DesktopMessagingBackendBridge(registry, {
+      connectedPeerTargets: () => ["fast", "middle", "slow"].map((instanceId) => ({
+        target: { scope: "remote", instanceId }, label: instanceId, capabilities: ["messaging_route"],
+      })),
+      remoteNavigationSnapshot,
+    } as unknown as DesktopMessagingFederationBridge);
+    const progress: NavigationSnapshot[] = [];
+    let settled = false;
+    const pending = bridge.getNavigationSnapshot({}, { onProgress: async (snapshot) => { progress.push(snapshot); } })
+      .then((snapshot) => { settled = true; return snapshot; });
+    await vi.waitFor(() => expect(progress.at(-1)?.federationRefresh?.pendingPeers).toBe(2));
+    expect(progress[0]?.federationRefresh?.pendingPeers).toBe(3);
+    expect(settled).toBe(false);
+    const calls = remoteNavigationSnapshot.mock.calls as unknown as Array<[unknown, unknown, unknown, { deadlineAt: number }]>;
+    expect(calls[0]![3].deadlineAt).toBe(calls[1]![3].deadlineAt);
+    finishMiddle(remoteSnapshot);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(progress).toHaveLength(2);
+    finishSlow(remoteSnapshot);
+    await pending;
+    expect(progress).toHaveLength(3);
+    expect(progress.at(-1)?.federationRefresh).toEqual({ pendingPeers: 0, failedPeers: 0 });
+  });
+
   it("resolves admission state from one thread cache and overlay only", async () => {
     getThreadOverlayState.mockResolvedValueOnce({
       backend: "codex",

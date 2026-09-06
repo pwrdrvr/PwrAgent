@@ -1731,6 +1731,87 @@ describe("MessagingController", () => {
       });
   });
 
+  it("publishes a usable browse surface before the last peer answers and updates that surface", async () => {
+    const peer = createDeferred<void>();
+    const navigation = buildNavigationSnapshot();
+    const harness = await createHarness({
+      getNavigationSnapshot: async (_request, options) => {
+        await options?.onProgress?.({ ...navigation, federationRefresh: { pendingPeers: 1, failedPeers: 0 } });
+        await peer.promise;
+        await options?.onProgress?.({ ...navigation, federationRefresh: { pendingPeers: 0, failedPeers: 1 } });
+        return navigation;
+      },
+    });
+    const pending = harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "thread_picker", prompt: expect.stringContaining("Still checking 1"),
+    });
+    peer.resolve();
+    await pending;
+    expect(harness.delivered).toHaveLength(2);
+    expect(harness.delivered[1]).toMatchObject({
+      kind: "thread_picker", delivery: { mode: "update" },
+      prompt: expect.stringContaining("Results are incomplete"),
+      browseSessionId: (harness.delivered[0] as { browseSessionId: string }).browseSessionId,
+    });
+    harness.controller.dispose();
+  });
+
+  it("does not overwrite the actor's next action with late peer results", async () => {
+    const peer = createDeferred<void>();
+    const navigation = buildNavigationSnapshot();
+    const harness = await createHarness({
+      getNavigationSnapshot: async (_request, options) => {
+        await options?.onProgress?.(navigation);
+        await peer.promise;
+        await options?.onProgress?.(navigation);
+        return navigation;
+      },
+    });
+    const pending = harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+    const afterAction = harness.delivered.length;
+    peer.resolve();
+    await pending;
+    expect(harness.delivered).toHaveLength(afterAction);
+    harness.controller.dispose();
+  });
+
+  it("budgets SQLite writes for initial and completed progressive browse publications", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-browse-writes-"));
+    tempDirs.push(tempDir);
+    const db = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const navigation = buildNavigationSnapshot();
+      const harness = await createHarness({
+        store: new SqliteMessagingStore(db),
+        getNavigationSnapshot: async (_request, options) => {
+          await options?.onProgress?.({ ...navigation, federationRefresh: { pendingPeers: 1, failedPeers: 0 } });
+          await options?.onProgress?.({ ...navigation, federationRefresh: { pendingPeers: 0, failedPeers: 0 } });
+          return navigation;
+        },
+      });
+      resetSqliteWriteMetrics();
+      const { writes } = await measureSqliteWrites(async () => {
+        await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+      });
+      harness.controller.dispose();
+      expectSqliteWriteBudget({
+        scenario: "messaging-progressive-browse",
+        note: "one explicit resume command: local publication plus one coalesced remote publication",
+        writes,
+      });
+    } finally {
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
+  });
+
   it("presents an Agent-only picker for authorized /agent commands", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads = [

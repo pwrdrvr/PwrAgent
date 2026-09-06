@@ -964,6 +964,58 @@ describe("DesktopFederationRuntime", () => {
     });
   });
 
+  it("serves owner project pages without full navigation reconciliation or SQLite writes", async () => {
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-project-pages-"));
+    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService")
+      .mockReturnValue(new Proxy({}, {
+        get: () => () => undefined,
+      }) as never);
+    const configStore = vi.spyOn(desktopSettingsSingleton, "getDesktopConfigStore")
+      .mockReturnValue({
+        read: () => ({ settings: {} }), subscribe: () => () => undefined,
+      } as never);
+    const registry = getDesktopBackendRegistry();
+    const candidates = vi.spyOn(registry, "listThreadSearchCandidates").mockResolvedValue([{
+      id: "project-thread", source: "codex", title: "Project thread",
+      titleSource: "explicit",
+      linkedDirectories: [{
+        id: "fixture-project", label: "Project", path: "/fixture/project", kind: "local",
+      }],
+    }]);
+    const navigation = vi.spyOn(DesktopMessagingBackendBridge.prototype, "getNavigationSnapshot")
+      .mockRejectedValue(new Error("Project pages must not read full navigation."));
+    try {
+      const backend = new DesktopFederationRuntime().localBackend();
+      const deadlineAt = Date.now() + 5000;
+      const { writes } = await measureSqliteWrites(async () => {
+        const first = await backend.getProjectPage!({}, { deadlineAt });
+        expect(first.directories.some((directory) => directory.path === "/fixture/project")).toBe(true);
+        expect(first.directories.every((directory) => directory.threadKeys.length === 0)).toBe(true);
+        await backend.getProjectPage!({ projectKey: first.directories[0]!.key }, { deadlineAt });
+      });
+      expect(candidates).toHaveBeenCalledWith({ deadlineAt });
+      expect(navigation).not.toHaveBeenCalled();
+      expectSqliteWriteBudget({
+        scenario: "federation-owner-project-pages",
+        note: "cold and warm project-only reads from read-only provider inventory; no navigation maintenance",
+        writes,
+      });
+    } finally {
+      candidates.mockRestore();
+      navigation.mockRestore();
+      settings.mockRestore();
+      configStore.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
+      rmSync(tempDir, { recursive: true, force: true });
+      delete process.env[SQLITE_WRITE_METRICS_ENV];
+    }
+  });
+
   it("ungroups pinned remote children on their owner after parent archive", async () => {
     const stateDb = openInMemoryStateDb();
     const overlayStore = new SqliteOverlayStore(stateDb);
@@ -2095,6 +2147,20 @@ describe("DesktopFederationRuntime", () => {
         entries: [{ threadKey: "acp%3Agrok:thread-1" }],
       },
     }]);
+    expect(unrelated).toEqual([]);
+
+    subscribed.length = 0;
+    const entries = Array.from({ length: 1001 }, (_, index) => ({
+      instanceId: "owner_one", threadKey: `codex:thread-${index}`,
+      dx: index % 2 ? null : index, dy: index % 2 ? null : index,
+      updatedAt: 1000, by: "owner_one",
+    }));
+    runtime.broadcastStarMapArrangement(entries);
+    expect(subscribed).toHaveLength(11);
+    expect(subscribed.flatMap((envelope) =>
+      (envelope as { params: { entries: unknown[] } }).params.entries,
+    )).toEqual(entries);
+    expect(subscribed.every((envelope) => Buffer.byteLength(JSON.stringify(envelope)) < 256 * 1024)).toBe(true);
     expect(unrelated).toEqual([]);
   });
 

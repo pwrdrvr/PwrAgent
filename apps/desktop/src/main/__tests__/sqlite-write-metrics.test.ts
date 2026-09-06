@@ -32,6 +32,7 @@ import {
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { StateDb } from "../state/state-db";
+import { partitionFederationCollection } from "../federation/federation-collection-reads";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
@@ -63,6 +64,36 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("budgets paged Star Map bootstrap and identical reconnects", async () => {
+    const entries = Array.from({ length: 1001 }, (_, index) => ({
+      instanceId: "owner_one",
+      threadKey: `codex:thread-${index}`,
+      dx: index % 2 ? null : index,
+      dy: index % 2 ? null : index,
+      updatedAt: 1000,
+      by: "owner_one",
+    }));
+    const pages = partitionFederationCollection(entries);
+    const { writes } = await measureSqliteWrites(async () => {
+      for (const page of pages) await store.mergeStarMapArrangement(page);
+    });
+    expectSqliteWriteBudget({
+      scenario: "federation-star-map-paged-bootstrap",
+      note: "1001 new arrangement entries/tombstones in 11 bounded merge notifications",
+      writes,
+    });
+    const reconnect = await measureSqliteWrites(async () => {
+      for (const page of pages) {
+        expect((await store.mergeStarMapArrangement(page)).accepted).toEqual([]);
+      }
+    });
+    expectSqliteWriteBudget({
+      scenario: "federation-star-map-unchanged-reconnect",
+      note: "11 identical arrangement pages on reconnect; no changed rows or WAL",
+      writes: reconnect.writes,
+    });
+  });
+
   it("keeps partial navigation search reconciliation read-only", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-search",

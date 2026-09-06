@@ -237,6 +237,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const session = useThreadSessionState({
     desktopApi,
     initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+    readReason: "star-map-card",
     thread,
   });
   // The session is a fresh object literal on every render of a hook that

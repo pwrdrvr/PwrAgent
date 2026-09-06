@@ -4629,6 +4629,7 @@ function didHydrateCompletedTurn(
 export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
   initialHistoryLimit?: number;
+  readReason?: "thread-view" | "star-map-card";
   liveTranscriptEventFiltering?: boolean;
   suspended?: boolean;
   thread?: NavigationThreadSummary;
@@ -4726,6 +4727,17 @@ export function useThreadSessionState(params: {
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
+  // Keep the last owner page, not the live/optimistically patched session.
+  // Reusing a locally cleared approval would otherwise hide an owner request
+  // that is still pending. Only the selected thread retains this baseline;
+  // its entries are shared with the session rather than cloned.
+  const conditionalReadRef = useRef<{
+    threadKey: string;
+    response: AppServerReadThreadResponse;
+  } | undefined>(undefined);
+  if (conditionalReadRef.current?.threadKey !== threadKey) {
+    conditionalReadRef.current = undefined;
+  }
 
   selectedThreadKeyRef.current = threadKey;
   if (launchpadMessageCandidateRef.current?.threadKey !== threadKey) {
@@ -4900,15 +4912,37 @@ export function useThreadSessionState(params: {
           backend: targetThread.source,
           threadId: targetThread.id,
         });
-        const response = normalizeResponseImageBoundaryText(await readThread({
+        const previousResponse = conditionalReadRef.current?.threadKey === targetThreadKey
+          ? conditionalReadRef.current.response
+          : undefined;
+        const federationTarget = targetThread.federation?.ref.target ?? readRendererFederationTarget();
+        const fetchedResponse = await readThread({
           backend: targetThread.source,
           ...(initialHistoryLimit !== undefined
             ? { limit: initialHistoryLimit }
             : {}),
-          federationTarget: targetThread.federation?.ref.target ??
-            readRendererFederationTarget(),
+          federationTarget,
+          ...(federationTarget?.scope === "remote"
+            ? {
+                knownRevision: previousResponse?.replayRevision ?? "",
+                readReason: params.readReason ?? "thread-view",
+              }
+            : {}),
           threadId: targetThread.id,
-        }));
+        });
+        if (fetchedResponse.unchanged
+          && (!previousResponse?.replayRevision
+            || previousResponse.replayRevision !== fetchedResponse.replayRevision)) {
+          throw new Error("Thread owner returned an unchanged page without a matching cached revision.");
+        }
+        const response = normalizeResponseImageBoundaryText(fetchedResponse.unchanged
+          ? {
+              ...previousResponse!,
+              fetchedAt: fetchedResponse.fetchedAt,
+              readDurationMs: fetchedResponse.readDurationMs,
+              unchanged: false,
+            }
+          : fetchedResponse);
         desktopApi?.recordStartupProfileEvent?.("thread-hydration:response", {
           backend: targetThread.source,
           entryCount: response.replay.entries.length,
@@ -4917,6 +4951,9 @@ export function useThreadSessionState(params: {
 
         if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
           return;
+        }
+        if (selectedThreadKeyRef.current === targetThreadKey && response.replayRevision) {
+          conditionalReadRef.current = { threadKey: targetThreadKey, response };
         }
         if (
           !response.replay.pagination.supportsPagination
@@ -5175,6 +5212,7 @@ export function useThreadSessionState(params: {
       desktopApi?.readThread,
       desktopApi?.recordStartupProfileEvent,
       initialHistoryLimit,
+      params.readReason,
       logStaleThinkingState,
       suspended,
       updateSession,

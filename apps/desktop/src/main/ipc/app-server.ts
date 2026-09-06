@@ -1809,6 +1809,8 @@ class DesktopAppServerService {
           includeTurns: request.includeTurns,
           limit: request.limit,
           viewOnly: request.viewOnly,
+          knownRevision: request.knownRevision,
+          readReason: request.readReason,
         });
     }
     const backend = request.backend ?? "codex";

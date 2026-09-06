@@ -66,6 +66,7 @@ import type {
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
 import type { MessagingImagePart } from "@pwragent/messaging-interface";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
 import {
   buildThreadIdentityKey,
   buildFederatedThreadRef,
@@ -113,6 +114,7 @@ export type DesktopMessagingFederationBridge = {
     target: FederationRemoteTarget,
     request: GetNavigationSnapshotRequest,
     selectionOverride?: FederationThreadSelection,
+    rpcOptions?: { deadlineAt?: number },
   ): Promise<NavigationSnapshot>;
 };
 
@@ -270,6 +272,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
+    options?: { onProgress?: (snapshot: NavigationSnapshot) => Promise<void> },
   ): Promise<NavigationSnapshot> {
     if (
       request.federationTarget &&
@@ -402,27 +405,17 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       directories: directoriesWithLaunchpads,
     };
     if (!this.federation) {
+      await options?.onProgress?.(localSnapshot);
       return localSnapshot;
     }
-    const remoteSnapshots = await Promise.allSettled(
-      this.federation
-        .connectedPeerTargets()
-        // messaging_route is the peer's opt-in for messaging surfaces to
-        // browse and drive its threads — skip peers that don't grant it.
-        .filter(({ capabilities }) => capabilities.includes("messaging_route"))
-        .map(({ target }) =>
-          this.federation!.remoteNavigationSnapshot(
-            target,
-            request,
-            { kind: "all" },
-          )
-        ),
-    );
-    const availableRemoteSnapshots = remoteSnapshots.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : []
-    );
-    return {
+    const peers = this.federation.connectedPeerTargets()
+      .filter(({ capabilities }) => capabilities.includes("messaging_route"));
+    const availableRemoteSnapshots: NavigationSnapshot[] = [];
+    let pendingPeers = peers.length;
+    let failedPeers = 0;
+    const merged = (): NavigationSnapshot => ({
       ...localSnapshot,
+      ...(peers.length ? { federationRefresh: { pendingPeers, failedPeers } } : {}),
       fetchedAt: Math.max(
         localSnapshot.fetchedAt,
         ...availableRemoteSnapshots.map((remote) => remote.fetchedAt),
@@ -436,7 +429,72 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ...localSnapshot.inboxThreadKeys,
         ...availableRemoteSnapshots.flatMap((remote) => remote.inboxThreadKeys),
       ],
+    });
+    // Coalesce arrivals during a provider edit. A slow messaging provider must
+    // not accumulate one growing snapshot (or one DB-backed edit) per peer.
+    let publication: Promise<void> | undefined;
+    let dirty = false;
+    let publicationError: unknown;
+    let publicationFailed = false;
+    let publicationCount = 0;
+    let lastPublishedPendingPeers: number | undefined;
+    let finalPublication = false;
+    const publish = (): void => {
+      if (!options?.onProgress || publicationFailed) return;
+      // Each durable picker publication has a write/delivery cost. Keep it
+      // independent of Federation size: local, one early aggregate, final.
+      if (!finalPublication && publicationCount >= 2) return;
+      dirty = true;
+      if (publication) return;
+      publication = Promise.resolve().then(async () => {
+        while (dirty) {
+          dirty = false;
+          if (!finalPublication && publicationCount >= 2) return;
+          publicationCount += 1;
+          lastPublishedPendingPeers = pendingPeers;
+          await options.onProgress!(merged());
+        }
+      }).catch((error) => {
+        publicationFailed = true;
+        publicationError = error;
+        dirty = false;
+      }).finally(() => {
+        publication = undefined;
+        if (dirty) publish();
+      });
     };
+    publish();
+    const deadlineAt = Date.now() + 10_000;
+    const results = new IterableMapper(peers, async ({ target }) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const remainingMs = deadlineAt - Date.now();
+        if (remainingMs <= 0) throw new Error("Federation browse deadline expired.");
+        const response = await Promise.race([
+          this.federation!.remoteNavigationSnapshot(target, request, { kind: "all" }, {
+            deadlineAt,
+          }),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("Remote navigation timed out.")), remainingMs);
+          }),
+        ]);
+        availableRemoteSnapshots.push(response);
+      } catch {
+        failedPeers += 1;
+      } finally {
+        clearTimeout(timer);
+        pendingPeers -= 1;
+        publish();
+      }
+      return true;
+    }, { concurrency: 8, maxUnread: 8 });
+    for await (const completed of results) void completed;
+    while (publication) await publication;
+    finalPublication = true;
+    if (lastPublishedPendingPeers !== pendingPeers) publish();
+    while (publication) await publication;
+    if (publicationFailed) throw publicationError;
+    return merged();
   }
 
   /**

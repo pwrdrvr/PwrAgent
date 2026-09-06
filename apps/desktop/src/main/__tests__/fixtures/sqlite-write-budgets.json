@@ -111,6 +111,27 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "federation-owner-project-pages": {
+    "commits": 0,
+    "note": "cold and warm project-only reads from read-only provider inventory; no navigation maintenance",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "federation-star-map-paged-bootstrap": {
+    "commits": 11,
+    "note": "1001 new arrangement entries/tombstones in 11 bounded merge notifications",
+    "observedWalBytes": 490280,
+    "rowsChanged": 1001,
+    "statements": 1001
+  },
+  "federation-star-map-unchanged-reconnect": {
+    "commits": 11,
+    "note": "11 identical arrangement pages on reconnect; no changed rows or WAL",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "held-scheduled-action-retry": {
     "commits": 3,
     "note": "one operator-triggered held retry: claim, queue admission, and successful turn start; no timer or automatic retry",
@@ -159,6 +180,13 @@
     "observedWalBytes": 20600,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "messaging-progressive-browse": {
+    "commits": 10,
+    "note": "one explicit resume command: local publication plus one coalesced remote publication",
+    "observedWalBytes": 156560,
+    "rowsChanged": 10,
+    "statements": 10
   },
   "native-subagent-discovery-backfill": {
     "commits": 2,

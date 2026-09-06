@@ -193,6 +193,7 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
 import {
@@ -235,6 +236,13 @@ import {
 } from "./federation-host-info";
 import { FederationActivityLedger } from "./federation-activity-ledger";
 import { FederationTransferLedger } from "./federation-transfer-ledger";
+import { lookupFederationArchivedThreads } from "./federation-collection-client";
+import {
+  projectFederationArchivedThreads,
+  projectFederationProjectPage,
+  partitionFederationCollection,
+  validateArchivedThreadLookup,
+} from "./federation-collection-reads";
 import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
 import { hydrateFederatedThreadMessageOrigins } from "./federated-thread-origin-hydrator";
 import {
@@ -2352,13 +2360,10 @@ export class DesktopFederationRuntime {
           throw error;
         }
       },
-      fetchArchivedThreads: async (target, backend) =>
-        (
-          await this.remoteBackend(target).listThreads({
-            backend,
-            archived: true,
-          })
-        ).threads,
+      fetchArchivedThreads: async (target, backend, threadIds, rpcOptions) =>
+        await lookupFederationArchivedThreads(
+          this.remoteBackend(target), backend, threadIds, rpcOptions,
+        ),
       peerStatus: (instanceId) => {
         try {
           const visible = this.visiblePeers();
@@ -4103,26 +4108,38 @@ export class DesktopFederationRuntime {
     entries: StarMapArrangementEntry[],
   ): void {
     if (!this.router || entries.length === 0) return;
-    const protocolEntries = encodeStarMapEntriesForProtocolV1(entries);
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
       if (!subscription.eventClasses.has("star_map")) {
         continue;
       }
       try {
-        this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
+        this.sendStarMapArrangementEntries(subscriberInstanceId, entries);
+      } catch (error) {
+        log.warn("star map arrangement delta send failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private sendStarMapArrangementEntries(
+    subscriberInstanceId: FederationInstanceId,
+    entries: StarMapArrangementEntry[],
+  ): void {
+    // Existing receivers merge each notification, including tombstones. No
+    // replacement semantics, new capability, or lossy truncation is involved.
+    for (const page of partitionFederationCollection(encodeStarMapEntriesForProtocolV1(entries))) {
+      this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
           id: `federation-star-map:${randomUUID()}`,
           kind: "notification",
           method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
-          params: { entries: protocolEntries },
+          params: { entries: page },
           protocolVersion: FEDERATION_PROTOCOL_VERSION,
           sourceInstanceId: this.ensureLocalInstanceId(),
           targetInstanceId: subscriberInstanceId,
           createdAt: Date.now(),
-        });
-      } catch {
-        // Live subscribers are cleaned up with their connection.
-      }
+      });
     }
   }
 
@@ -4147,20 +4164,11 @@ export class DesktopFederationRuntime {
           .get(subscriberInstanceId);
         if (!subscription?.eventClasses.has("star_map")) return;
         try {
-          this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
-            id: `federation-star-map:${randomUUID()}`,
-            kind: "notification",
-            method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
-            params: {
-              entries: encodeStarMapEntriesForProtocolV1(entries),
-            },
-            protocolVersion: FEDERATION_PROTOCOL_VERSION,
-            sourceInstanceId: this.ensureLocalInstanceId(),
-            targetInstanceId: subscriberInstanceId,
-            createdAt: Date.now(),
+          this.sendStarMapArrangementEntries(subscriberInstanceId, entries);
+        } catch (error) {
+          log.warn("star map arrangement snapshot send failed", {
+            error: error instanceof Error ? error.message : String(error),
           });
-        } catch {
-          // The subscription will replay on the next connection.
         }
       })
       .catch((error) => {
@@ -5004,6 +5012,30 @@ async function mountRemoteParentForLocalChild(
 function localBackendOperations(): FederationBackendOperations {
   const messagingBridge = new DesktopMessagingBackendBridge();
   return {
+    async getProjectPage(request, rpcOptions) {
+      const threads = await getDesktopBackendRegistry().listThreadSearchCandidates({
+        deadlineAt: rpcOptions?.deadlineAt,
+      });
+      // Project discovery must not reconcile the complete navigation baseline
+      // or initialize seen metadata merely because a remote tool lists projects.
+      const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
+        backend: "all",
+        fetchedAt: Date.now(),
+        partial: true,
+        threads,
+        workspaceRoots: resolveScratchProjectsRoots(),
+      });
+      return projectFederationProjectPage(snapshot, request);
+    },
+    async lookupArchivedThreads(request, rpcOptions) {
+      if (validateArchivedThreadLookup(request).size === 0) return { threads: [] };
+      const threads = await getDesktopBackendRegistry().listThreadSearchCandidates({
+        backend: request.backend,
+        archived: true,
+        deadlineAt: rpcOptions?.deadlineAt,
+      });
+      return projectFederationArchivedThreads(threads, request);
+    },
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
       return await messagingBridge.getNavigationSnapshot(request);
     },

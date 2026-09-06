@@ -1,3 +1,12 @@
+import { conditionalThreadRead } from "../app-server/conditional-thread-read";
+import {
+  projectFederationArchivedThreads,
+  projectFederationProjectPage,
+  validateArchivedThreadLookup,
+  type FederationArchivedThreadLookupRequest,
+  type FederationProjectPage,
+  type FederationProjectPageRequest,
+} from "./federation-collection-reads";
 import type {
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
@@ -370,6 +379,8 @@ function authenticateScheduledTurnOrigin<
 }
 
 export const FEDERATION_BACKEND_METHODS = {
+  getProjectPage: "backend.getProjectPage",
+  lookupArchivedThreads: "backend.lookupArchivedThreads",
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   searchNavigationThreads: "backend.searchNavigationThreads",
   searchFederatedThreads: "backend.searchFederatedThreads",
@@ -471,6 +482,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   FederationBackendMethod,
   FederationCapability
 > = {
+  [FEDERATION_BACKEND_METHODS.getProjectPage]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.lookupArchivedThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchNavigationThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchFederatedThreads]: "federated_search",
@@ -580,6 +593,14 @@ export function additionalFederationBackendCapabilities(
 }
 
 export type FederationBackendOperations = {
+  getProjectPage?(
+    request: FederationProjectPageRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationProjectPage>;
+  lookupArchivedThreads?(
+    request: FederationArchivedThreadLookupRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<Pick<AppServerListThreadsResponse, "threads">>;
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -820,6 +841,38 @@ export function registerFederationBackendHandlers(params: {
     maxScopes: 1,
   });
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.getProjectPage,
+    async (envelope) => {
+      const request = (envelope.params ?? {}) as FederationProjectPageRequest;
+      const rpcOptions = { deadlineAt: envelope.deadlineAt };
+      if (params.backend.getProjectPage) {
+        return await params.backend.getProjectPage(request, rpcOptions);
+      }
+      return projectFederationProjectPage(
+        await params.backend.getNavigationSnapshot({}, rpcOptions),
+        request,
+      );
+    },
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.lookupArchivedThreads,
+    async (envelope) => {
+      const request = envelope.params as FederationArchivedThreadLookupRequest;
+      const ids = validateArchivedThreadLookup(request);
+      if (ids.size === 0) return { threads: [] };
+      if (params.backend.lookupArchivedThreads) {
+        return await params.backend.lookupArchivedThreads(request, {
+          deadlineAt: envelope.deadlineAt,
+        });
+      }
+      const response = await params.backend.listThreads({
+        backend: request.backend,
+        archived: true,
+      });
+      return projectFederationArchivedThreads(response.threads, request);
+    },
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
     async (envelope) => {
       const request = (envelope.params ?? {}) as
@@ -991,7 +1044,7 @@ export function registerFederationBackendHandlers(params: {
             "utf8",
           ),
       });
-      return { ...response, replay };
+      return conditionalThreadRead({ ...response, replay }, request.knownRevision);
     },
   );
   params.router.registerHandler(
@@ -1613,6 +1666,28 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       | Promise<AppServerReadThreadResponse> = (response) => response,
     private readonly prepareTurnInput?: PrepareOutgoingFederationTurnInput,
   ) {}
+
+  async getProjectPage(
+    request: FederationProjectPageRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationProjectPage> {
+    return await this.rpc.request({
+      method: FEDERATION_BACKEND_METHODS.getProjectPage,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async lookupArchivedThreads(
+    request: FederationArchivedThreadLookupRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<Pick<AppServerListThreadsResponse, "threads">> {
+    return await this.rpc.request({
+      method: FEDERATION_BACKEND_METHODS.lookupArchivedThreads,
+      params: request,
+      ...rpcOptions,
+    });
+  }
 
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
