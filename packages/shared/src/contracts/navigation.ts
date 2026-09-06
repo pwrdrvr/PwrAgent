@@ -1647,9 +1647,11 @@ export type NavigationQuery =
   | {
       kind: "directory";
       directoryKey: string;
+      roots?: "all" | "pinned" | "unpinned";
       /** Parent rows whose children are explicitly disclosed by the viewer. */
       disclosedParentThreadKeys?: string[];
     }
+  | { kind: "children"; parent: NavigationIdentity }
   | {
       kind: "exact";
       identities: NavigationIdentity[];

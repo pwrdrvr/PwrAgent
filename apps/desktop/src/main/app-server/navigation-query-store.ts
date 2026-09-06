@@ -128,6 +128,10 @@ function validateRequest(request: NavigationQueryRequest): void {
       throw new NavigationQueryError("navigation_invalid_request", "Invalid Star Map filter selection.");
     }
   }
+  if (request.query.kind === "directory" && request.query.roots !== undefined
+    && !["all", "pinned", "unpinned"].includes(request.query.roots)) {
+    throw new NavigationQueryError("navigation_invalid_request", "Invalid directory root disclosure.");
+  }
   if (request.query.kind === "exact" && request.query.identities.length > 100) {
     throw new NavigationQueryError(
       "navigation_invalid_request",

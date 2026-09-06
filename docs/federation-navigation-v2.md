@@ -22,7 +22,7 @@ without migrating their consumers.
 | --- | --- | --- |
 | Directory index | Paged directory identities, labels, availability, authoritative membership/attention counts, directory ordering, launchpad existence/backend | Every thread ID, thread rows, launchpad environment output, transcript or queue payloads |
 | Lens rows | Owner-filtered, ordered page of explicit navigation-row records, total/count revision, continuation | All rows for viewer-side filtering, detail-state spreads |
-| Directory rows | Requested directory's pinned/root order and requested child disclosures, bounded continuation | Collapsed unrelated directories' membership or rows |
+| Directory rows | Requested directory's pinned/root order (all, pinned, or unpinned), ten roots initially, bounded continuation; children use an independent parent query in owner tray order | Collapsed unrelated directories' membership or rows |
 | Exact rows / descendants | Requested identities and owner-computed descendant closure, retaining foreign owner identity | An entire owner's navigation snapshot to discover children |
 | Model inventory | Paged owner/backend model and migration-revision groups with thread/Fast counts | Thread rows, titles, transcripts, prompts or launchpad contents |
 | Selected-thread detail | Requested thread's authoritative configuration and bounded detail collections | Other threads' details; treating a navigation placeholder as admission/configuration authority |

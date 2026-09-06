@@ -189,3 +189,23 @@ describe("navigation query projection", () => {
     });
   });
 });
+
+it("keeps ten-root demand separate from disclosed child pages and pin disclosure", () => {
+  const threads = [thread("parent", { pinnedRank: "1024", subthreadOrder: ["child-0", "child-19"] }),
+    ...Array.from({ length: 12 }, (_, index) => thread(`root-${index}`)),
+    ...Array.from({ length: 20 }, (_, index) => thread(`child-${index}`, { parentThreadId: "parent" })),
+  ];
+  const index = snapshot(threads);
+  const roots = projectNavigationQuery({ index, request: request({ kind: "directory", directoryKey: "directory:/repo", roots: "all" }) });
+  expect(roots.entries).toHaveLength(13);
+  expect(roots.entries.every((entry) => entry.placement.kind === "root")).toBe(true);
+  expect(roots.counts.total).toBe(33);
+  const pinned = projectNavigationQuery({ index, request: request({ kind: "directory", directoryKey: "directory:/repo", roots: "pinned" }) });
+  expect(pinned.entries.map((entry) => entry.row.id)).toEqual(["parent"]);
+  expect(pinned.counts.total).toBe(33);
+  const children = projectNavigationQuery({ index, request: request({ kind: "children", parent: { backend: "codex", threadId: "parent" } }) });
+  expect(children.entries).toHaveLength(20);
+  expect(children.entries.slice(0, 2).map((entry) => entry.row.id)).toEqual(["child-0", "child-19"]);
+  expect(children.entries.every((entry) => entry.placement.kind === "child")).toBe(true);
+  expect(children.counts.total).toBe(20);
+});

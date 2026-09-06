@@ -140,3 +140,15 @@ checks; eight physical reads alone do not bound completed responses awaiting del
 `navigation-query-pool.test.ts` enforce the accounting and physical admission
 boundaries. `navigation-query-write-budget.test.ts` exercises the real overlay
 read path and records zero SQLite commits for navigation query reads.
+
+### Main-window paged state
+
+`NavigationWindowQueries` is a window-demand building block for the atomic main
+renderer cutover. It retains at most eight explicitly demanded resources and
+8 MiB of serialized-equivalent accepted page backing. Each incoming result is
+checked against 252 KiB before it is merged. Collapsing a resource releases its
+main-process lease and page backing; hiding the window releases transport leases
+while retaining its accepted display ranges. Replacement lifetimes use distinct
+consumer tokens so late release cannot cancel the successor. This does not claim
+that the legacy main renderer has switched or that process-wide IPC decode
+allocation accounting is complete.
