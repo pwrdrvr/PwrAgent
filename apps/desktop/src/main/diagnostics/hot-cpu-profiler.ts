@@ -13,7 +13,7 @@ const CHROME_DEBUGGER_PROTOCOL_VERSION = "1.3";
 
 type Logger = Pick<Console, "info" | "warn" | "error">;
 
-type RendererDebugger = {
+type HotCpuDebugger = {
   attach: (version: string) => void;
   detach: () => void;
   isAttached: () => boolean;
@@ -22,11 +22,17 @@ type RendererDebugger = {
   off?: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
 };
 
-type RendererHotCpuTarget = {
-  debugger: RendererDebugger;
+export type HotCpuTarget = {
+  debugger: HotCpuDebugger;
   getOSProcessId: () => number;
   isDestroyed?: () => boolean;
   takeHeapSnapshot?: (filePath: string) => Promise<void>;
+  readHeapUsage?: () => {
+    heapUsed: number;
+    heapTotal: number;
+    external: number;
+    arrayBuffers: number;
+  };
 };
 
 type CpuUsageReading = {
@@ -52,7 +58,7 @@ function artifactFilename(filePath: string): string {
   return path.basename(filePath);
 }
 
-export class RendererHotCpuProfiler {
+export class HotCpuProfiler {
   private readonly detachListener = (_event: unknown, reason: string) => {
     this.debuggerAttached = false;
     void this.session.appendEvent({
@@ -60,8 +66,9 @@ export class RendererHotCpuProfiler {
       type: "debugger-detached",
       detail: { reason },
     });
-    this.logger.warn("[pwragent:hot-cpu] renderer debugger detached", {
+    this.logger.warn("[pwragent:hot-cpu] target debugger detached", {
       reason,
+      target: this.session.target ?? "renderer",
       sessionDirectory: this.session.directoryPath,
     });
   };
@@ -76,7 +83,7 @@ export class RendererHotCpuProfiler {
     event: HotCpuProfileCapturedEvent,
   ) => void | Promise<void>;
   private readonly session: HotCpuProfileSession;
-  private readonly target: RendererHotCpuTarget;
+  private readonly target: HotCpuTarget;
 
   private consecutiveHotSamples = 0;
   private debuggerAttached = false;
@@ -103,7 +110,7 @@ export class RendererHotCpuProfiler {
     config: Extract<HotCpuProfileConfig, { enabled: true }>;
     getAppMetrics: () => ProcessMetric[];
     session: HotCpuProfileSession;
-    target: RendererHotCpuTarget;
+    target: HotCpuTarget;
     logger?: Logger;
     now?: () => Date;
     onHeapSnapshotLimitReached?: () => void | Promise<void>;
@@ -152,6 +159,7 @@ export class RendererHotCpuProfiler {
       },
     });
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
+      target: this.session.target ?? "renderer",
       sessionDirectory: this.session.directoryPath,
       startDelayMs: this.config.startDelayMs,
       triggerMode: this.config.triggerMode,
@@ -267,6 +275,7 @@ export class RendererHotCpuProfiler {
         capturedAt,
         pid,
         cpuPercent,
+        ...this.target.readHeapUsage?.(),
         electronCpuPercent: cpuUsage.electronCpuPercent,
         ...(cpuUsage.cumulativeCpuDeltaSeconds !== undefined
           ? { cumulativeCpuDeltaSeconds: cpuUsage.cumulativeCpuDeltaSeconds }
@@ -449,6 +458,7 @@ export class RendererHotCpuProfiler {
       this.logger.warn("[pwragent:hot-cpu] CPU profile started", {
         cpuPercent: options.cpuPercent,
         pid: options.pid,
+        target: this.session.target ?? "renderer",
         sessionDirectory: this.session.directoryPath,
       });
 
@@ -519,7 +529,7 @@ export class RendererHotCpuProfiler {
       };
       await fs.writeFile(
         profilePath,
-        `${JSON.stringify(result.profile ?? {}, null, 2)}\n`,
+        `${JSON.stringify(result.profile ?? {})}\n`,
         "utf8",
       );
       await this.session.registerArtifact(profileFilename);
@@ -546,6 +556,7 @@ export class RendererHotCpuProfiler {
         heapSnapshotArtifacts: [...this.activeProfileHeapSnapshots],
         profileFilename,
         profilePath,
+        target: this.session.target ?? "renderer",
         sessionDirectory: this.session.directoryPath,
         sessionDirectoryName: this.session.directoryName,
         ...activeProfileTrigger,
@@ -707,6 +718,7 @@ export class RendererHotCpuProfiler {
     } catch (error) {
       this.logger.warn("[pwragent:hot-cpu] heap snapshot auto-disable failed", {
         error: serializeError(error),
+        target: this.session.target ?? "renderer",
         sessionDirectory: this.session.directoryPath,
       });
     }
@@ -731,8 +743,9 @@ export class RendererHotCpuProfiler {
       this.debuggerAttached = false;
     } catch (error) {
       this.debuggerAttached = false;
-      this.logger.warn("[pwragent:hot-cpu] renderer debugger detach failed", {
+      this.logger.warn("[pwragent:hot-cpu] target debugger detach failed", {
         error: serializeError(error),
+        target: this.session.target ?? "renderer",
         sessionDirectory: this.session.directoryPath,
       });
     }

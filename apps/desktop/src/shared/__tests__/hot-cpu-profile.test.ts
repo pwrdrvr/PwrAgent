@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { buildHotCpuProfileHandoffMessage } from "../hot-cpu-profile";
 
 describe("hot CPU profile handoff message", () => {
+  it("identifies main-process captures", () => {
+    expect(buildHotCpuProfileHandoffMessage({
+      target: "main",
+      capturedAt: "2026-09-05T23:00:00.000Z",
+      profileFilename: "main-hot-0001.cpuprofile",
+      profilePath: "/tmp/hot-cpu/main-hot-0001.cpuprofile",
+      sessionDirectory: "/tmp/hot-cpu",
+      sessionDirectoryName: "hot-cpu",
+      triggerConsecutiveSamples: 2,
+      triggerCpuPercent: 206,
+      triggerMode: "sustained",
+      triggerThresholdPercent: 50,
+    })).toContain("PwrAgent captured a main CPU profile.");
+  });
+
   it("includes copyable basenames and absolute paths", () => {
     expect(
       buildHotCpuProfileHandoffMessage({

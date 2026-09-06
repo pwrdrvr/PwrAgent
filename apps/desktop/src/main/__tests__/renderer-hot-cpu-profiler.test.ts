@@ -4,7 +4,7 @@ import { createTemporaryTestDirectory } from "../testing/test-harness";
 import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
-import { RendererHotCpuProfiler } from "../diagnostics/renderer-hot-cpu-profiler";
+import { HotCpuProfiler } from "../diagnostics/hot-cpu-profiler";
 
 function createEnabledConfig(
   repoRoot: string,
@@ -174,20 +174,20 @@ function createSampleTracker() {
   };
 }
 
-describe("RendererHotCpuProfiler", () => {
+describe("HotCpuProfiler", () => {
   const cleanups: Array<() => Promise<void>> = [];
-  const profilers: RendererHotCpuProfiler[] = [];
+  const profilers: HotCpuProfiler[] = [];
 
   const sampleTrackers = new WeakMap<
-    RendererHotCpuProfiler,
+    HotCpuProfiler,
     ReturnType<typeof createSampleTracker>
   >();
 
   function createProfiler(
-    options: ConstructorParameters<typeof RendererHotCpuProfiler>[0],
-  ): RendererHotCpuProfiler {
+    options: ConstructorParameters<typeof HotCpuProfiler>[0],
+  ): HotCpuProfiler {
     const tracker = createSampleTracker();
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = new HotCpuProfiler({
       ...options,
       onSampleCaptured: () => {
         options.onSampleCaptured?.();
@@ -201,7 +201,7 @@ describe("RendererHotCpuProfiler", () => {
 
   /** Sampling-progress tracker for a profiler built by `createProfiler`. */
   function samplesOf(
-    profiler: RendererHotCpuProfiler,
+    profiler: HotCpuProfiler,
   ): ReturnType<typeof createSampleTracker> {
     const tracker = sampleTrackers.get(profiler);
     if (!tracker) {

@@ -7,6 +7,7 @@ export type HotCpuProfileHeapSnapshotArtifact = {
 };
 
 export type HotCpuProfileCapturedEvent = {
+  target?: "main" | "renderer";
   capturedAt: string;
   heapSnapshotArtifacts?: HotCpuProfileHeapSnapshotArtifact[];
   profileFilename: string;
@@ -72,7 +73,7 @@ export function buildHotCpuProfileHandoffMessage(
       : [];
 
   return [
-    "PwrAgent captured a renderer CPU profile.",
+    `PwrAgent captured a ${event.target ?? "renderer"} CPU profile.`,
     `Trigger: ${formatHotCpuProfileTriggerSummary(event)}`,
     `Session basename: ${event.sessionDirectoryName}`,
     `Session directory path: ${event.sessionDirectory}`,
