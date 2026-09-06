@@ -1648,6 +1648,11 @@ export type NavigationQueryRequest = {
   backend?: AppServerBackendScope;
   federationTarget?: FederationTarget;
   query: NavigationQuery;
+  /** Window lifetime, independent of pages, lenses and transport connections. */
+  attentionView?: {
+    id: string;
+    promoteOnTurnEnd: boolean;
+  };
   /** At most 100. Owners may return fewer rows to satisfy the byte budget. */
   pageSize?: number;
   cursor?: string;
@@ -1663,6 +1668,8 @@ export type NavigationQueryEntry = {
   row: NavigationRow;
   /** Opaque within this query generation; compare only inside this page set. */
   orderKey: string;
+  /** Owner/view-local turn rank. Never compare ranks from different owners. */
+  attentionRank?: number;
   placement: NavigationQueryPlacement;
 };
 

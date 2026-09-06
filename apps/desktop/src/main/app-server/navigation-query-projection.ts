@@ -14,6 +14,10 @@ import {
   buildThreadIdentityKey,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
 } from "@pwragent/shared";
+import {
+  navigationAttentionIdentity,
+  type NavigationAttentionOrder,
+} from "./navigation-attention-order";
 
 const MAX_ROW_NESTED_RECORDS = 16;
 
@@ -341,6 +345,7 @@ export function navigationQueryKey(request: NavigationQueryRequest): string {
   return hashValue({
     backend: request.backend ?? "all",
     consumer: request.consumer,
+    attentionView: request.attentionView,
     query: normalizeQuery(request.query),
   });
 }
@@ -445,6 +450,7 @@ function selectQueryThreads(params: {
 export function projectNavigationQuery(params: {
   index: NavigationQueryIndex;
   request: NavigationQueryRequest;
+  attentionOrder?: NavigationAttentionOrder;
 }): NavigationQueryMaterialization {
   const query = params.request.query;
   const threadsByIdentity = new Map(
@@ -469,6 +475,12 @@ export function projectNavigationQuery(params: {
     threadsByIdentity,
     threadsByLegacyKey,
   });
+  if (query.kind === "lens" && query.lens === "attention" && params.attentionOrder) {
+    const members = params.attentionOrder.members;
+    selectedThreads.sort((left, right) =>
+      (members.get(navigationAttentionIdentity(right))?.rank ?? 0)
+      - (members.get(navigationAttentionIdentity(left))?.rank ?? 0));
+  }
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread);
     return {
@@ -477,6 +489,9 @@ export function projectNavigationQuery(params: {
         thread,
       }),
       orderKey: rowOrderKey(index),
+      ...(params.attentionOrder?.members.has(navigationAttentionIdentity(thread))
+        ? { attentionRank: params.attentionOrder.members.get(navigationAttentionIdentity(thread))!.rank }
+        : {}),
       placement: parent
         ? { kind: "child", parent }
         : { kind: "root" },
