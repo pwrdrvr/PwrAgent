@@ -4677,7 +4677,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
               sameThread && duplicate.status === "pending"
                 ? "pending"
                 : "duplicate",
-            ...(sameThread && record ? { pending: record.pending } : {}),
+            ...(sameThread && duplicate.status === "pending" && record
+              ? { pending: record.pending }
+              : {}),
           };
         }
       }

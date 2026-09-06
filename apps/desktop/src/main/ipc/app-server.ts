@@ -325,6 +325,7 @@ import {
   buildPrRepositoryKey,
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
+import { logPrAutoDispatchOutcome } from "../pr-status/pr-auto-dispatch-log";
 import {
   PrStatusWatchCoordinator,
   getPrStatusWatchOutcome,
@@ -5655,7 +5656,7 @@ class DesktopAppServerService {
           })
         : [];
       for (const outcome of outcomes) {
-        appServerLog.info("pr auto dispatch", { prKey, ...outcome });
+        logPrAutoDispatchOutcome(appServerLog, prKey, outcome);
       }
       if (this.backgroundPrPollingEnabled) {
         const failureCoveredThreadKeys = new Set(
