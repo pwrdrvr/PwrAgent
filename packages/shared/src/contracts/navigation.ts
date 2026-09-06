@@ -1689,6 +1689,59 @@ export type NavigationQueryPage = {
   unchanged?: boolean;
 };
 
+/** Selected launchpad configuration excludes unsent text, attachments and environment output. */
+export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
+  | "backend"
+  | "executionMode"
+  | "workMode"
+  | "model"
+  | "reasoningEffort"
+  | "serviceTier"
+  | "fastMode"
+  | "acpRuntime"
+  | "providerSettings"
+  | "directoryKey"
+  | "directoryKind"
+  | "directoryLabel"
+  | "directoryPath"
+  | "agent"
+  | "mcpConnectionIds"
+  | "registeredAt"
+  | "settingsTouchedAt"
+  | "messagingToolUpdateMode"
+  | "prAutoDispatchEnabled"
+  | "tokenMiserEnabled"
+  | "branchName"
+  | "federationTarget"
+  | "parentThreadId"
+  | "parentThreadBackend"
+  | "parentThreadInstanceId"
+  | "parentThreadTitle"
+  | "sourceThreadId"
+  | "codexEnvironmentId"
+  | "codexEnvironmentExecutionTarget"
+  | "codexEnvironmentActionId"
+  | "createdAt"
+  | "updatedAt"
+>;
+
+/** Independent defaults and one explicitly selected launchpad; never a collection. */
+export type NavigationLaunchpadConfigRequest = {
+  protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  federationTarget?: FederationTarget;
+  directoryKey?: string;
+  knownRevision?: string;
+};
+
+export type NavigationLaunchpadConfigResponse = {
+  protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  revision: string;
+  defaults?: NavigationLaunchpadDefaults;
+  directoryKey?: string;
+  launchpad?: NavigationLaunchpadConfiguration;
+  unchanged?: boolean;
+};
+
 export type NavigationSelectedDetailRequest = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
   ref: NavigationIdentity;

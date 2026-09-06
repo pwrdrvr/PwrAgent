@@ -127,6 +127,8 @@ import type {
   NavigationQueryRequest,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   GetNavigationSnapshotRequest,
@@ -719,6 +721,7 @@ import {
   NAVIGATION_QUERY_PAGE_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+  NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
   NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
@@ -1824,6 +1827,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(NAVIGATION_QUERY_PAGE_CHANNEL, request, consumerId),
   releaseNavigationQuery: async (consumerId: string): Promise<void> =>
     await ipcRenderer.invoke(NAVIGATION_QUERY_RELEASE_CHANNEL, consumerId),
+  getNavigationLaunchpadConfig: async (
+    request: NavigationLaunchpadConfigRequest,
+  ): Promise<NavigationLaunchpadConfigResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL, request),
   getNavigationSelectedDetail: async (
     request: NavigationSelectedDetailRequest,
   ): Promise<NavigationSelectedDetailResponse> =>

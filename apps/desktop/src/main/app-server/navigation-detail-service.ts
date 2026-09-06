@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import type {
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
+  NavigationLaunchpadConfiguration,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   ThreadQueuedTurnSummary,
@@ -63,6 +66,66 @@ export class NavigationDetailService {
   constructor(
     private readonly registry: DesktopBackendRegistry = getDesktopBackendRegistry(),
   ) {}
+
+  async readLaunchpadConfig(
+    request: NavigationLaunchpadConfigRequest,
+  ): Promise<NavigationLaunchpadConfigResponse> {
+    if (request.protocol !== NAVIGATION_QUERY_PROTOCOL_VERSION
+      || (request.directoryKey !== undefined
+        && (typeof request.directoryKey !== "string" || request.directoryKey.length > 16_384))) {
+      throw new NavigationQueryError("navigation_invalid_request", "Invalid launchpad configuration request.");
+    }
+    const store = getDesktopOverlayStore();
+    const [defaults, storedLaunchpad] = await Promise.all([
+      store.getLaunchpadDefaults(),
+      request.directoryKey ? store.getDirectoryLaunchpad({ directoryKey: request.directoryKey }) : undefined,
+    ]);
+    const launchpad: NavigationLaunchpadConfiguration | undefined = storedLaunchpad ? {
+      backend: storedLaunchpad.backend,
+      executionMode: storedLaunchpad.executionMode,
+      workMode: storedLaunchpad.workMode,
+      model: storedLaunchpad.model,
+      reasoningEffort: storedLaunchpad.reasoningEffort,
+      serviceTier: storedLaunchpad.serviceTier,
+      fastMode: storedLaunchpad.fastMode,
+      acpRuntime: storedLaunchpad.acpRuntime,
+      providerSettings: storedLaunchpad.providerSettings,
+      directoryKey: storedLaunchpad.directoryKey,
+      directoryKind: storedLaunchpad.directoryKind,
+      directoryLabel: storedLaunchpad.directoryLabel,
+      directoryPath: storedLaunchpad.directoryPath,
+      agent: storedLaunchpad.agent,
+      mcpConnectionIds: storedLaunchpad.mcpConnectionIds,
+      registeredAt: storedLaunchpad.registeredAt,
+      settingsTouchedAt: storedLaunchpad.settingsTouchedAt,
+      messagingToolUpdateMode: storedLaunchpad.messagingToolUpdateMode,
+      prAutoDispatchEnabled: storedLaunchpad.prAutoDispatchEnabled,
+      tokenMiserEnabled: storedLaunchpad.tokenMiserEnabled,
+      branchName: storedLaunchpad.branchName,
+      federationTarget: storedLaunchpad.federationTarget,
+      parentThreadId: storedLaunchpad.parentThreadId,
+      parentThreadBackend: storedLaunchpad.parentThreadBackend,
+      parentThreadInstanceId: storedLaunchpad.parentThreadInstanceId,
+      parentThreadTitle: storedLaunchpad.parentThreadTitle,
+      sourceThreadId: storedLaunchpad.sourceThreadId,
+      codexEnvironmentId: storedLaunchpad.codexEnvironmentId,
+      codexEnvironmentExecutionTarget: storedLaunchpad.codexEnvironmentExecutionTarget,
+      codexEnvironmentActionId: storedLaunchpad.codexEnvironmentActionId,
+      createdAt: storedLaunchpad.createdAt,
+      updatedAt: storedLaunchpad.updatedAt,
+    } : undefined;
+    const payload = { defaults, directoryKey: request.directoryKey, launchpad };
+    const configRevision = revision(payload);
+    const response: NavigationLaunchpadConfigResponse = {
+      protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
+      revision: configRevision,
+      ...(request.knownRevision === configRevision ? { unchanged: true, directoryKey: request.directoryKey } : payload),
+    };
+    if (responseBytes(response) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+      throw new NavigationQueryError("navigation_item_too_large", "Selected launchpad configuration exceeds the bounded detail budget.");
+    }
+    return response;
+  }
 
   async readSelectedDetail(
     request: NavigationSelectedDetailRequest,

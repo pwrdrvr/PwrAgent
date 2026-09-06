@@ -8,11 +8,15 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 
 const mocks = vi.hoisted(() => ({
   reconcileNavigationSnapshot: vi.fn(),
+  getLaunchpadDefaults: vi.fn(),
+  getDirectoryLaunchpad: vi.fn(),
 }));
 
 vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot: mocks.reconcileNavigationSnapshot,
+    getLaunchpadDefaults: mocks.getLaunchpadDefaults,
+    getDirectoryLaunchpad: mocks.getDirectoryLaunchpad,
   }),
 }));
 
@@ -36,6 +40,33 @@ function thread(id: string): NavigationThreadSummary {
 describe("NavigationDetailService", () => {
   beforeEach(() => {
     mocks.reconcileNavigationSnapshot.mockReset();
+    mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
+    mocks.getDirectoryLaunchpad.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("reads defaults and only the selected launchpad without enumerating navigation", async () => {
+    const service = new NavigationDetailService({} as DesktopBackendRegistry);
+    const defaults = await service.readLaunchpadConfig({ protocol: 2 });
+    expect(defaults.defaults).toEqual({ backend: "codex", executionMode: "default" });
+    expect(mocks.getDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(mocks.reconcileNavigationSnapshot).not.toHaveBeenCalled();
+    mocks.getDirectoryLaunchpad.mockResolvedValue({ directoryKey: "chosen", prompt: "selected draft" });
+    const selected = await service.readLaunchpadConfig({ protocol: 2, directoryKey: "chosen" });
+    expect(mocks.getDirectoryLaunchpad).toHaveBeenCalledExactlyOnceWith({ directoryKey: "chosen" });
+    expect(selected.launchpad?.directoryKey).toBe("chosen");
+    expect(JSON.stringify(selected)).not.toContain("selected draft");
+    const unchanged = await service.readLaunchpadConfig({ protocol: 2, directoryKey: "chosen", knownRevision: selected.revision });
+    expect(unchanged.unchanged).toBe(true);
+    expect(unchanged.defaults).toBeUndefined();
+    expect(unchanged.launchpad).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(unchanged))).toBeLessThan(1024);
+  });
+
+  it("rejects oversized configuration without truncating action metadata", async () => {
+    const service = new NavigationDetailService({} as DesktopBackendRegistry);
+    mocks.getDirectoryLaunchpad.mockResolvedValue({ directoryKey: "chosen", agent: { name: "owner", instructions: "x".repeat(252 * 1024) } });
+    await expect(service.readLaunchpadConfig({ protocol: 2, directoryKey: "chosen" }))
+      .rejects.toMatchObject({ code: "navigation_item_too_large" });
   });
 
   it("loads authoritative selected detail independently of a row page", async () => {
