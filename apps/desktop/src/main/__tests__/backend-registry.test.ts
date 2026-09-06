@@ -4734,7 +4734,7 @@ describe("DesktopBackendRegistry", () => {
       };
       resolveTokenMiserCodexRuntimeFn?: typeof resolveRuntime;
     };
-    internals.tokenMiserStore = {} as TokenMiserStore;
+    internals.tokenMiserStore = { flushAll: vi.fn(async () => {}) } as unknown as TokenMiserStore;
     internals.tokenMiserHookBridge = {
       start: startBridge,
       close: closeBridge,
@@ -4811,7 +4811,7 @@ describe("DesktopBackendRegistry", () => {
       };
       resolveTokenMiserCodexRuntimeFn?: typeof resolveRuntime;
     };
-    internals.tokenMiserStore = {} as TokenMiserStore;
+    internals.tokenMiserStore = { flushAll: vi.fn(async () => {}) } as unknown as TokenMiserStore;
     internals.tokenMiserHookBridge = {
       start: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -45508,7 +45508,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("routes archive binding revocation through the messaging archive cleaner when available", async () => {
+  it("continues archive cleanup and reports Token Miser persistence failures", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive me",
@@ -45536,6 +45536,16 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
     });
 
+    Object.assign(registry, { tokenMiserStore: {
+      flushAll: vi.fn(async () => {}),
+      archiveThread: vi.fn(async () => { throw new Error("fixture retention failure"); }),
+    } });
+    const internals = registry as unknown as {
+      ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
+      archiveThreadWorktrees(params: unknown): Promise<unknown[]>;
+    };
+    const ungroup = vi.spyOn(internals, "ungroupChildrenOfArchivedThread");
+    const worktrees = vi.spyOn(internals, "archiveThreadWorktrees");
     await registry.archiveThread({
       backend: "codex",
       threadId: "thread-1",
@@ -45553,6 +45563,9 @@ script = "printf setup"
     ]);
     expect(messagingStore.revokedBindingIds).toEqual([]);
 
+    expect(ungroup).toHaveBeenCalledOnce();
+    expect(worktrees).toHaveBeenCalledOnce();
+    expect(mainLoggerMock.warn).toHaveBeenCalledWith("Token Miser archive retention failed", expect.objectContaining({ threadId: "thread-1", error: "fixture retention failure" }));
     await registry.close();
   });
 
@@ -45622,7 +45635,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("clears archive messaging cleanup cache when a thread is restored", async () => {
+  it("completes restoration after Token Miser retention fails", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive me again",
@@ -45645,15 +45658,28 @@ script = "printf setup"
       notifiedCount: 1,
       revokedCount: 1,
     });
+    const overlayStore = createOverlayStoreMock();
+    const tombstone = vi.spyOn(overlayStore, "setThreadArchiveTombstone");
     const registry = new DesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner,
       messagingStore,
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
     });
+
+    const restoreWorktrees = vi.fn(async () => []);
+    Object.assign(registry, { restoreThreadWorktrees: restoreWorktrees });
+    const restoreTokenMiser = vi.fn(async () => { throw new Error("fixture restore retention failure"); });
+    Object.assign(registry, { tokenMiserStore: {
+      flushAll: vi.fn(async () => {}),
+      archiveThread: vi.fn(async () => {}),
+      restoreThread: restoreTokenMiser,
+    } });
 
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
     await registry.restoreThread({ backend: "codex", threadId: "thread-1" });
+    expect(tombstone).toHaveBeenLastCalledWith({ backend: "codex", threadId: "thread-1", archivedAt: undefined });
+    expect(restoreWorktrees).toHaveBeenCalledTimes(1);
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
 
     expect(messagingArchiveCleaner.requests).toEqual([
@@ -45661,10 +45687,11 @@ script = "printf setup"
       { backend: "codex", threadId: "thread-1", origin: "thread-archive" },
     ]);
 
+    expect(restoreTokenMiser).toHaveBeenCalledExactlyOnceWith("thread-1");
     await registry.close();
   });
 
-  it("clears archive messaging cleanup cache when an unarchive notification arrives", async () => {
+  it("publishes archive notifications and cleans messaging after retention failure", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive me again",
@@ -45692,15 +45719,28 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
     });
 
-    await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
+    const restoreTokenMiser = vi.fn(async () => { throw new Error("fixture restore retention failure"); });
+    Object.assign(registry, { tokenMiserStore: {
+      flushAll: vi.fn(async () => {}),
+      archiveThread: vi.fn(async () => { throw new Error("fixture notification retention failure"); }),
+      restoreThread: restoreTokenMiser,
+    } });
+
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    await codexClient.emit({ method: "thread/archived", params: { threadId: "thread-1" } });
+    expect(events.some((event) => event.notification.method === "thread/archived")).toBe(true);
     await codexClient.emit({
       method: "thread/unarchived",
       params: { threadId: "thread-1" },
     });
+    expect(events.some((event) => event.notification.method === "thread/unarchived")).toBe(true);
+    unsubscribe();
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
 
     expect(messagingArchiveCleaner.requests).toHaveLength(2);
 
+    expect(restoreTokenMiser).toHaveBeenCalledExactlyOnceWith("thread-1");
     await registry.close();
   });
 

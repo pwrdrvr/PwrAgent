@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -103,6 +104,7 @@ describe("Token Miser storage I/O budgets", () => {
     await writer.recordParentModelRequest({ objectId: original.objectId, cumulativeInputTokens: 100 });
     await writer.recordParentModelRequest({ objectId: original.objectId, cumulativeInputTokens: 200 });
     await writer.recordParentModelRequest({ objectId: original.objectId, cumulativeInputTokens: 300 });
+    await writer.flushThread("thread-a");
     const added = await addObject(writer, "thread-a");
     await addObservation(writer, "thread-a", "call-2");
     expect(await reader.summarizeThreadUsage("thread-a")).toMatchObject({
@@ -110,8 +112,8 @@ describe("Token Miser storage I/O budgets", () => {
       cachedReplayCount: 1,
       codeMode: { callCount: 2 },
     });
-    await fs.rm(path.join(root, `${added.objectId}.json`));
-    await fs.rm(path.join(root, "code-mode-observations", `${records[0]!.observation.observationId}.json`));
+    await fs.rm(path.join(threadRoot(root), `${added.objectId}.json`));
+    await fs.rm(path.join(threadRoot(root), "code-mode-observations", `${records[0]!.observation.observationId}.json`));
     expect(await reader.summarizeThreadUsage("thread-a")).toMatchObject({
       interceptionCount: 1,
       cachedReplayCount: 1,
@@ -164,7 +166,7 @@ describe("Token Miser storage I/O budgets", () => {
     const readFile = fs.readFile.bind(fs);
     let blocked = false;
     vi.spyOn(fs, "readFile").mockImplementation(async (file, options) => {
-      if (!blocked && String(file) === path.join(root, `${records[0]!.metadata.objectId}.json`)) {
+      if (!blocked && String(file) === path.join(threadRoot(root), `${records[0]!.metadata.objectId}.json`)) {
         blocked = true;
         entered();
         await gate;
@@ -196,10 +198,14 @@ describe("Token Miser storage I/O budgets", () => {
       (_, index) => addObservation(writer, "thread-a", `failed-${index}`),
     ));
     expect(results.every((result) => result.status === "rejected")).toBe(true);
-    expect((await fs.readdir(path.join(root, "code-mode-observations")))
+    expect((await fs.readdir(path.join(threadRoot(root), "code-mode-observations")))
       .some((name) => name.endsWith(".tmp"))).toBe(false);
     rename.mockRestore();
     await addObservation(writer, "thread-a", "successful");
     expect(await writer.listCodeModeObservations("thread-a")).toHaveLength(2);
   });
 });
+
+function threadRoot(root: string): string {
+  return path.join(root, "threads", createHash("sha256").update("thread-a").digest("hex"));
+}

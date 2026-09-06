@@ -8385,6 +8385,7 @@ export class DesktopBackendRegistry {
     string,
     Map<string, ThreadUsageLineRecord>
   >();
+  private tokenMiserStoragePreparation: Promise<void> = Promise.resolve();
   private tokenMiserLedgerReconciliation: Promise<void> = Promise.resolve();
   private tokenMiserLivePublishChain: Promise<void> = Promise.resolve();
   private liveThreadUsageObservationSequence = 0;
@@ -9177,7 +9178,7 @@ export class DesktopBackendRegistry {
             // single usage event into N pricing reads and 2N notifications;
             // `recordTokenMiserParentModelRequest` already emits once for the
             // whole batch.
-            if (reason === "replay") {
+            if (reason === "replay" || reason === "flushed") {
               return;
             }
             const publish = this.tokenMiserLivePublishChain.then(() =>
@@ -9281,13 +9282,7 @@ export class DesktopBackendRegistry {
       ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     if (this.tokenMiserStore) {
-      this.tokenMiserLedgerReconciliation = Promise.resolve()
-        .then(async () => await this.reconcileTokenMiserLedger())
-        .catch((error) => {
-          backendRegistryLog.warn("Token Miser ledger reconciliation failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
+      void this.initializeTokenMiserLedger();
     }
     this.gitDirectoryService =
       options?.gitDirectoryService ??
@@ -10872,7 +10867,8 @@ export class DesktopBackendRegistry {
   /**
    * Bring the Token Miser gate up at boot when the feature is on, so a resumed
    * thread is covered from its first tool call rather than from whenever a new
-   * thread happens to be created. Retention pruning rides this one call.
+   * thread happens to be created. Accounting migration runs independently during
+   * registry initialization, even when this feature is disabled.
    *
    * The caller must run this AFTER the one permitted startup Codex discovery
    * has published a selection. Preparation opens the app-server to read its
@@ -10890,10 +10886,10 @@ export class DesktopBackendRegistry {
     // could be followed by a fresh Codex child process and writes to a store
     // `close()` already finalized. `maybeRestartCodexForManagedRuntimeChange`
     // guards on `closed` for the same reason.
-    if (this.closed || !this.resolveTokenMiserEnabledFn()) {
-      return;
-    }
-    await this.prepareTokenMiserRuntime({ prune: true });
+    if (this.closed) return;
+    await this.tokenMiserLedgerReconciliation;
+    if (this.closed || !this.resolveTokenMiserEnabledFn()) return;
+    await this.prepareTokenMiserRuntime();
   }
 
   refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
@@ -12484,6 +12480,7 @@ export class DesktopBackendRegistry {
       result = { threadId: request.threadId };
     }
     this.invalidateThreadListCache(backend);
+    if (backend === "codex") await this.archiveTokenMiserThread(result.threadId);
     const messagingCleanup = await this.cleanupMessagingForArchivedThread({
       backend,
       threadId: result.threadId,
@@ -12590,6 +12587,32 @@ export class DesktopBackendRegistry {
     ];
   }
 
+  private async archiveTokenMiserThread(threadId: string): Promise<void> {
+    try {
+      await this.tokenMiserStore?.archiveThread(threadId);
+    } catch (error) {
+      // Codex has already archived the thread. Retention failures must not
+      // prevent binding revocation, child cleanup, bookkeeping or publication.
+      backendRegistryLog.warn("Token Miser archive retention failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async restoreTokenMiserThread(threadId: string): Promise<void> {
+    try {
+      await this.tokenMiserStore?.restoreThread(threadId);
+    } catch (error) {
+      // Codex restoration already succeeded. The retained archive marker
+      // keeps originals unavailable while desktop restoration still finishes.
+      backendRegistryLog.warn("Token Miser restore retention failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async restoreThread(
     request: RestoreThreadRequest,
   ): Promise<RestoreThreadResponse> {
@@ -12608,6 +12631,7 @@ export class DesktopBackendRegistry {
       await this.restoreWithClient(client, request.threadId),
     );
     if (backend === "codex") {
+      await this.restoreTokenMiserThread(result.threadId);
       await this.overlayStore.setThreadArchiveTombstone({
         backend,
         threadId: result.threadId,
@@ -14226,6 +14250,7 @@ export class DesktopBackendRegistry {
       return params.accounting;
     }
     try {
+      await this.tokenMiserStoragePreparation;
       const metadata = await this.tokenMiserStore.listMetadata(params.threadId);
       const tokenMiser = await this.tokenMiserStore.summarizeThreadUsage(
         params.threadId,
@@ -21821,6 +21846,13 @@ export class DesktopBackendRegistry {
         ? [{ name: resources[index].name, reason: result.reason }]
         : [],
     );
+    // Producers are now closed and previously admitted observations drained.
+    // Preserve active-turn estimates even when another resource failed close.
+    try {
+      await this.tokenMiserStore?.flushAll();
+    } catch (error) {
+      failures.push({ name: "token-miser-replay", reason: error });
+    }
     if (failures.length > 0) {
       throw new AggregateError(
         failures.map((failure) => failure.reason),
@@ -22154,12 +22186,10 @@ export class DesktopBackendRegistry {
    * something else happened to start one — five minutes of fail-open on the
    * turn this was diagnosed from, nine large results ungated. Every call
    * after the first is cheap: the bridge start and the plugin install are
-   * memoized, retention pruning is boot-only, and the activation record is
+   * memoized, legacy cleanup runs at boot and managed runtime restart, and the activation record is
    * written only when its state changes.
    */
-  private async prepareTokenMiserRuntime(
-    options: { prune?: boolean } = {},
-  ): Promise<void> {
+  private async prepareTokenMiserRuntime(): Promise<void> {
     if (
       !this.tokenMiserStore
       || !this.tokenMiserHookBridge
@@ -22168,6 +22198,7 @@ export class DesktopBackendRegistry {
       return;
     }
     try {
+      await this.tokenMiserLedgerReconciliation;
       await this.tokenMiserHookBridge.start();
       const capabilities = await this.readTokenMiserServerCapabilities(
         this.codexClient,
@@ -22191,12 +22222,6 @@ export class DesktopBackendRegistry {
           : codexRuntime
             ? this.tokenMiserPluginManager.ensureInstalled(codexRuntime)
             : this.tokenMiserPluginManager.ensurePluginSource(),
-        options.prune
-          ? this.tokenMiserStore.prune({
-              maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
-              maxBytes: 512 * 1024 * 1024,
-            })
-          : Promise.resolve(),
       ]);
       this.tokenMiserRuntimePreparationFailure = undefined;
       await this.recordTokenMiserActivation(
@@ -22927,6 +22952,7 @@ export class DesktopBackendRegistry {
           this.invalidateThreadListCache(backend);
         }
         if (notification.method === "thread/archived") {
+          if (backend === "codex") await this.archiveTokenMiserThread(notification.params.threadId);
           await this.cleanupMessagingForArchivedThread({
             backend,
             threadId: notification.params.threadId,
@@ -22934,6 +22960,7 @@ export class DesktopBackendRegistry {
           });
         }
         if (notification.method === "thread/unarchived") {
+          if (backend === "codex") await this.restoreTokenMiserThread(notification.params.threadId);
           this.clearArchivedMessagingCleanupCache({
             backend,
             threadId: notification.params.threadId,
@@ -22949,6 +22976,7 @@ export class DesktopBackendRegistry {
             || notification.method === "turn/cancelled"
           )
         ) {
+          await this.tokenMiserStore?.flushThread(notification.params.threadId);
           await this.handleCodexTurnTerminalForInvalidIdRecovery(
             notification as Extract<
               AppServerNotification,
@@ -27866,8 +27894,9 @@ export class DesktopBackendRegistry {
       this.tokenMiserCodeModeGroupingVersion = undefined;
       this.tokenMiserPostToolUseExactOutputVersion = undefined;
       this.tokenMiserRuntimePreparationFailure = undefined;
+      if (this.tokenMiserStore) await this.initializeTokenMiserLedger();
       if (this.resolveTokenMiserEnabledFn()) {
-        await this.prepareTokenMiserRuntime({ prune: true });
+        await this.prepareTokenMiserRuntime();
       }
       if (completesManagedSwitch) {
         this.markManagedCodexRuntimeSwitchCompleteFn();
@@ -29476,6 +29505,25 @@ export class DesktopBackendRegistry {
         threadId: line.parentThreadId ?? line.threadId,
       });
     }
+  }
+
+  private initializeTokenMiserLedger(): Promise<void> {
+    this.tokenMiserStoragePreparation = this.tokenMiserStoragePreparation
+      .catch(() => undefined)
+      .then(async () => {
+        await this.tokenMiserStore?.prune({
+          maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
+          maxBytes: 512 * 1024 * 1024,
+        });
+      });
+    this.tokenMiserLedgerReconciliation = this.tokenMiserStoragePreparation
+      .then(async () => await this.reconcileTokenMiserLedger())
+      .catch((error) => {
+        backendRegistryLog.warn("Token Miser ledger reconciliation failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return this.tokenMiserLedgerReconciliation;
   }
 
   private async reconcileTokenMiserLedger(): Promise<void> {

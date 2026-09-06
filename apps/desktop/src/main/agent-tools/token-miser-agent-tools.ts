@@ -18,7 +18,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "search_token_miser_output",
       description:
-        "Search one preserved tool result by literal text. The returned matches remain subject to the 10k-token parent-result cap. Code Mode receives a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
+        "Search one preserved tool result by literal text. The returned matches remain subject to the 10k-token parent-result cap. Code Mode receives a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread. Originals expire within five minutes and are unavailable after eviction, archive or restart.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -58,7 +58,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_token_miser_output",
       description:
-        "Read an inclusive line range from one preserved tool result. The returned range remains subject to the 10k-token parent-result cap, including one very long line. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
+        "Read an inclusive line range from one preserved tool result. The returned range remains subject to the 10k-token parent-result cap, including one very long line. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread. Originals expire within five minutes and are unavailable after eviction, archive or restart.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -161,7 +161,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_all_token_miser_output",
       description:
-        "Read the complete preserved tool result as plain text in Code Mode or a text content block over MCP. The source must belong to the invoking thread.",
+        "Read the complete preserved tool result as plain text in Code Mode or a text content block over MCP. The source must belong to the invoking thread. Originals expire within five minutes and are unavailable after eviction, archive or restart.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -300,6 +300,6 @@ function invalidArguments(message: string) {
 function notFound() {
   return agentToolFailure({
     code: "not_found",
-    message: "Token Miser output was not found or does not belong to this thread.",
+    message: "Token Miser original output is expired, unavailable, or does not belong to this thread. Historical accounting does not retain original content.",
   });
 }

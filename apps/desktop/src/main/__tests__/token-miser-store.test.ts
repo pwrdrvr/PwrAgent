@@ -219,7 +219,7 @@ describe("TokenMiserStore", () => {
       maxAgeMs: Number.MAX_SAFE_INTEGER,
       maxBytes: 0,
     });
-    expect(await store.listCodeModeObservations("thread-owner")).toEqual([]);
+    expect(await store.listCodeModeObservations("thread-owner")).toHaveLength(2);
   });
 
   it("reports new and retrieved metadata for turn-batched accounting", async () => {
@@ -279,9 +279,7 @@ describe("TokenMiserStore", () => {
 
     await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
     await rejected.persist();
-    expect((await fs.readdir(root)).sort()).toEqual([
-      `${rejected.metadata.objectId}.txt`,
-    ]);
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await store.listMetadata()).toEqual([]);
     expect(await store.readMetadata(rejected.metadata.objectId))
       .toBeUndefined();
@@ -318,7 +316,7 @@ describe("TokenMiserStore", () => {
       rejected.discard(),
       rejected.persist(),
     ]);
-    expect(await fs.readdir(root)).toEqual([]);
+    expect(await fs.readdir(root).catch(() => [])).toEqual([]);
     expect(await store.listMetadata()).toEqual([]);
 
     const accepted = await store.stage(params);
@@ -327,10 +325,7 @@ describe("TokenMiserStore", () => {
       accepted.commit(),
       accepted.persist(),
     ]);
-    expect((await fs.readdir(root)).sort()).toEqual([
-      `${accepted.metadata.objectId}.json`,
-      `${accepted.metadata.objectId}.txt`,
-    ]);
+    expect(await fs.readdir(root)).toEqual(["threads"]);
     expect(await store.listMetadata()).toEqual([accepted.metadata]);
     expect(onMetadataUpdated).toHaveBeenCalledOnce();
     expect(onMetadataUpdated).toHaveBeenCalledWith(
@@ -591,7 +586,7 @@ describe("TokenMiserStore", () => {
     });
   });
 
-  it("prunes expired and over-budget outputs oldest first", async () => {
+  it("preserves accounting independently of the former raw-output quota", async () => {
     const store = await createStore();
     const expired = await createObject(store, "expired", 1);
     const older = await createObject(store, "older", 100);
@@ -599,47 +594,18 @@ describe("TokenMiserStore", () => {
 
     await store.prune({ maxAgeMs: 250, maxBytes: 6, now: 300 });
 
-    expect(await store.readMetadata(expired.objectId)).toBeUndefined();
-    expect(await store.readMetadata(older.objectId)).toBeUndefined();
+    expect(await store.readMetadata(expired.objectId)).toBeDefined();
+    expect(await store.readMetadata(older.objectId)).toBeDefined();
     expect(await store.readMetadata(newer.objectId)).toBeDefined();
   });
 
-  it("prunes stale hidden output without touching fresh cross-instance stages", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "pwragent-token-miser-"),
-    );
-    temporaryDirectories.push(root);
-    const store = new TokenMiserStore(root);
-    const params = {
-      threadId: "thread-owner",
-      turnId: "turn-pending",
-      toolUseId: "tool-pending",
-      toolName: "Code Mode",
-      output: "pending raw output",
-      replacementCharacters: 100,
-      summary: {
-        summary: "Pending output.",
-        usefulDetails: [],
-        suggestedNextStep: "None.",
-      },
-    };
-    const stale = await store.stage(params);
-    const fresh = await store.stage(params);
-    await Promise.all([stale.persist(), fresh.persist()]);
-    const now = Date.now();
-    const stalePath = path.join(root, `${stale.metadata.objectId}.txt`);
-    const freshPath = path.join(root, `${fresh.metadata.objectId}.txt`);
-    const old = new Date(now - 10 * 60_000);
-    await fs.utimes(stalePath, old, old);
-
-    await store.prune({
-      maxAgeMs: 24 * 60 * 60_000,
-      maxBytes: 1024 * 1024,
-      now,
-    });
-
-    await expect(fs.stat(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(freshPath)).resolves.toBeDefined();
+  it("never writes staged originals into the legacy flat directory", async () => {
+    const store = await createStore();
+    const staged = await store.stage({ threadId: "owner", turnId: "turn", toolUseId: "tool", toolName: "Bash", output: "private", replacementCharacters: 10, summary: { summary: "private", usefulDetails: [] } });
+    await staged.persist();
+    await store.prune({ maxAgeMs: 0, maxBytes: 0 });
+    expect(await store.listMetadata()).toEqual([]);
+    await staged.discard();
   });
 });
 

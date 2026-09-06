@@ -66,7 +66,7 @@ describe("TokenMiserService", () => {
     expect(result?.stopReason).toContain("Summary: The command printed");
     expect(result?.stopReason).toContain("Output reference:");
     expect(result?.stopReason).toContain(
-      "Exact source material is available when required.",
+      "Original output is temporary (up to five minutes); expiry, eviction or restart makes it unavailable.",
     );
     expect(result?.stopReason).not.toMatch(BEHAVIOR_PRIMING_LANGUAGE);
     expect(result?.stopReason).not.toMatch(/suggested next step/i);
@@ -828,7 +828,7 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(metadata).toMatchObject({
       disposition: "passed_through",
       summary: {
-        summary: "A deliberate exact instruction-file read passed through unchanged by policy.",
+        summary: "Output passed through.",
       },
     });
     expect(metadata?.helperUsage).toBeUndefined();
@@ -838,6 +838,32 @@ describe("TokenMiserService code-mode reduction", () => {
         passThroughCount: 1,
         directCount: 0,
       });
+  });
+
+  it("charges pre-reduction nested captures to the shared original-output budget", async () => {
+    const store = await createStore();
+    const original = await store.store({
+      threadId: "thread-1", turnId: "turn-1", toolUseId: "original", toolName: "Bash",
+      output: "original", replacementCharacters: 10,
+      summary: { summary: "Output summarized.", usefulDetails: [] },
+    });
+    let enabled = true;
+    const service = new TokenMiserService({
+      store, isEnabled: () => enabled, codeModeGroupingVersion: () => 1,
+      generateSummary: async () => ({ status: "unavailable", reason: "fixture" }),
+    });
+    for (let index = 0; index < 16; index += 1) {
+      await service.captureNestedPostToolUse({
+        ...payload("x".repeat(900_000)), is_code_mode_nested: true,
+        token_miser_grouping_version: 1, code_mode_cell_id: `budget-${index}`,
+        code_mode_tool_call_id: "nested",
+      });
+    }
+    expect(await store.readAll({ objectId: original.objectId, threadId: "thread-1" })).toBeUndefined();
+    enabled = false;
+    for (let index = 0; index < 16; index += 1) {
+      await service.prepareCodeModeOutput({ ...codeModePayload([]), cell_id: `budget-${index}` });
+    }
   });
 
   it("joins parallel nested outputs into one retrievable group gate", async () => {
@@ -911,14 +937,14 @@ describe("TokenMiserService code-mode reduction", () => {
         { toolName: "Bash", summary: "Found alpha matches." },
         { toolName: "Read", summary: "Found beta matches." },
       ],
-      sourceMaterial: "Available by group and member reference when required.",
+      sourceMaterial: "Temporary: expires within five minutes; unavailable after eviction or restart.",
     });
     expect(replacementText).not.toMatch(BEHAVIOR_PRIMING_LANGUAGE);
     const [metadata] = await store.listMetadata();
     expect(metadata).toMatchObject({
       groupId: "cell-1",
       originalCharacters: 59,
-      groupMembers: replacement.members,
+      groupMembers: replacement.members.map((member) => ({ ...member, summary: "Output summarized." })),
     });
     expect(metadata!.replacementCharacters).toBe(
       replacementText.length
@@ -1177,7 +1203,7 @@ describe("TokenMiserService code-mode reduction", () => {
       disposition: "passed_through",
       toolName: "Code Mode",
       summary: {
-        summary: expect.stringContaining("live process or session handle"),
+        summary: "Output passed through.",
       },
     });
     expect(metadata?.helperUsage).toBeUndefined();
