@@ -1,10 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
-  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactElement,
   ReactNode,
-  PointerEvent,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -368,19 +366,6 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     binding: MessagingThreadBindingSummary,
   ) => Promise<void>;
-  onResizeStart?: (event: PointerEvent<HTMLElement>) => void;
-  onResizeByKeyboard?: (delta: number) => void;
-  /**
-   * Current sidebar width and clamp range, plumbed in so the resize
-   * handle can expose aria-valuenow / aria-valuemin / aria-valuemax —
-   * required by axe-core for focusable role="separator". All three are
-   * optional so older callers (and unit tests that mount Sidebar in
-   * isolation) keep compiling; the handle silently omits the aria-value*
-   * attributes when they're absent.
-   */
-  sidebarWidth?: number;
-  sidebarMinWidth?: number;
-  sidebarMaxWidth?: number;
 };
 
 /**
@@ -1876,26 +1861,9 @@ export function Sidebar(props: SidebarProps) {
           onClose={() => props.onThreadJumpOpenChange?.(false)}
         />
       ) : null}
-      <div
-        aria-label="Resize thread sidebar"
-        aria-orientation="vertical"
-        aria-valuenow={props.sidebarWidth}
-        aria-valuemin={props.sidebarMinWidth}
-        aria-valuemax={props.sidebarMaxWidth}
-        className="sidebar__resize-handle"
-        role="separator"
-        tabIndex={0}
-        onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
-          if (event.key === "ArrowLeft") {
-            event.preventDefault();
-            props.onResizeByKeyboard?.(-16);
-          } else if (event.key === "ArrowRight") {
-            event.preventDefault();
-            props.onResizeByKeyboard?.(16);
-          }
-        }}
-        onPointerDown={props.onResizeStart}
-      />
+      {/* The resize seam is NOT here — see SidebarResizeHandle, rendered by
+          the shell as this aside's sibling so it can straddle the border
+          that `overflow: hidden` keeps every child from reaching. */}
       <header className="sidebar__masthead">
         <p className="sidebar__brand">
           Pwr<span className="sidebar__brand-accent">Agent</span>
