@@ -7,7 +7,13 @@ export type FederationEnvelopeLogFields = Record<string, string | undefined>;
  * Keep completed entries briefly: receiving a response precedes forwarding it.
  */
 export class FederationEnvelopeDiagnostics {
-  private readonly requests = new Map<string, { method: string; queryFingerprint?: string; expiresAt: number }>();
+  private readonly requests = new Map<string, {
+    method: string;
+    queryFingerprint?: string;
+    threadId?: string;
+    readReason?: string;
+    expiresAt: number;
+  }>();
 
   constructor(
     private readonly now = Date.now,
@@ -27,6 +33,7 @@ export class FederationEnvelopeDiagnostics {
     this.requests.set(key, {
       method: envelope.method,
       queryFingerprint: searchQueryFingerprint(envelope),
+      ...threadReadLogFields(envelope),
       expiresAt: this.now() + this.ttlMs,
     });
   }
@@ -53,6 +60,10 @@ export class FederationEnvelopeDiagnostics {
       method,
       queryFingerprint: envelope.kind === "request" ? searchQueryFingerprint(envelope)
         : request && request.expiresAt > this.now() ? request.queryFingerprint : undefined,
+      ...(envelope.kind === "request" ? threadReadLogFields(envelope)
+        : request && request.expiresAt > this.now()
+          ? { threadId: request.threadId, readReason: request.readReason }
+          : {}),
       errorCode: envelope.kind === "error" ? envelope.error.code : undefined,
       notificationMethod: notification && typeof notification === "object"
         && "method" in notification && typeof notification.method === "string"
@@ -63,6 +74,21 @@ export class FederationEnvelopeDiagnostics {
       targetInstanceLabel: envelope.targetInstanceId ? label(envelope.targetInstanceId) : undefined,
     };
   }
+}
+
+function threadReadLogFields(envelope: FederationProtocolEnvelope): {
+  threadId?: string;
+  readReason?: string;
+} {
+  if (envelope.kind !== "request" || envelope.method !== "backend.readThread") return {};
+  const params = envelope.params;
+  if (!params || typeof params !== "object") return {};
+  return {
+    threadId: "threadId" in params && typeof params.threadId === "string" && params.threadId.length <= 256
+      ? params.threadId : undefined,
+    readReason: "readReason" in params && (params.readReason === "star-map-card" || params.readReason === "thread-view")
+      ? params.readReason : undefined,
+  };
 }
 
 function searchQueryFingerprint(envelope: FederationProtocolEnvelope): string | undefined {

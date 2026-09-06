@@ -202,6 +202,40 @@ async function flushReactUpdates(): Promise<void> {
 }
 
 describe("useThreadSessionState", () => {
+  it("reuses an unchanged remote owner page without clearing transcript or pagination", async () => {
+    const initial = {
+      ...readThreadResponse({
+        entries: [{ type: "message", id: "message", role: "assistant", text: "Keep this complete message." }],
+        hasPreviousPage: true,
+      }),
+      replayRevision: "revision-1",
+    };
+    const readThread = vi.fn().mockResolvedValueOnce(initial).mockResolvedValue({
+      backend: "codex", threadId: "thread-1", fetchedAt: 200,
+      replayRevision: "revision-1", unchanged: true,
+      replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+    });
+    const desktopApi: DesktopApi = { readThread, onAgentEvent: () => () => undefined };
+    const thread: NavigationThreadSummary = {
+      ...buildThread({ id: "thread-1", updatedAt: 100 }),
+      federation: {
+        instanceLabel: "Owner", ref: {
+          backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner" },
+        },
+      },
+    };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+    await waitForThreadHydration(result);
+    await act(async () => { await result.current.reload(); });
+    expect(readThread.mock.calls[0]![0]).toMatchObject({ knownRevision: "" });
+    expect(readThread.mock.calls[1]![0]).toMatchObject({ knownRevision: "revision-1" });
+    expect(result.current.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "message", text: "Keep this complete message." }),
+    ]));
+    expect(result.current.response?.replay.pagination).toEqual(initial.replay.pagination);
+    expect(result.current.error).toBeUndefined();
+  });
+
   afterEach(async () => {
     await flushReactUpdates();
     vi.restoreAllMocks();

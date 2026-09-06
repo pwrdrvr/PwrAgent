@@ -1007,6 +1007,10 @@ export type RenameThreadResponse = {
 };
 
 export type AppServerReadThreadRequest = {
+  /** Bounded diagnostic attribution; never transcript content. */
+  readReason?: "thread-view" | "star-map-card";
+  /** Opt into conditional page revalidation. Empty string requests a first revision. */
+  knownRevision?: string;
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
@@ -1028,6 +1032,10 @@ export type AppServerReadThreadRequest = {
 };
 
 export type AppServerReadThreadResponse = {
+  /** Opaque hash of the complete owner response, excluding observation timings. */
+  replayRevision?: string;
+  /** Only in response to knownRevision. Reuse that exact cached response, not this empty replay. */
+  unchanged?: boolean;
   backend: AppServerBackendKind;
   fetchedAt: number;
   /**

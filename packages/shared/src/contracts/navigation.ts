@@ -1315,6 +1315,8 @@ export function encodeLegacyThreadIdentityKey(
 }
 
 export type NavigationSnapshot = {
+  /** Messaging browse progress; an unanswered owner is not an empty result. */
+  federationRefresh?: { pendingPeers: number; failedPeers: number };
   backend: AppServerBackendScope;
   fetchedAt: number;
   /** Source instance for this snapshot. Omitted for the local default instance. */

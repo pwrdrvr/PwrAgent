@@ -14,6 +14,22 @@ const response = {
 } satisfies FederationProtocolEnvelope;
 
 describe("federation envelope diagnostics", () => {
+  it("attributes large replay responses to their thread and bounded initiating surface", () => {
+    const diagnostics = new FederationEnvelopeDiagnostics();
+    diagnostics.observe({ ...request, method: "backend.readThread", params: {
+      threadId: "thread-1", readReason: "star-map-card", text: "private content",
+    } });
+    expect(diagnostics.describe(response)).toMatchObject({
+      threadId: "thread-1", readReason: "star-map-card", method: "backend.readThread",
+    });
+    expect(JSON.stringify(diagnostics.describe(response))).not.toContain("private content");
+    diagnostics.observe({ ...request, id: "long", method: "backend.readThread", params: {
+      threadId: "x".repeat(257), readReason: "private reason",
+    } });
+    expect(diagnostics.describe({ ...response, requestId: "long" })).toMatchObject({
+      threadId: undefined, readReason: undefined,
+    });
+  });
   it("correlates search query fingerprints without logging query text", () => {
     const diagnostics = new FederationEnvelopeDiagnostics();
     const search = { ...request, method: "backend.searchNavigationThreads", params: { query: "private search phrase" } };

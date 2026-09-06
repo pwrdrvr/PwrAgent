@@ -1397,12 +1397,44 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(fetchArchivedThreads).toHaveBeenCalledWith(
       remoteTarget("peer-a"),
       "codex",
+      [archivedPin.ref.threadId],
+      { deadlineAt: expect.any(Number) },
     );
 
     const resolved = await cache.resolvePinnedThreads([archivedPin]);
     expect(resolved.threads).toEqual([]);
     expect(resolved.refreshed).toEqual([]);
     expect(resolved.archived).toEqual([archivedPin.ref]);
+  });
+
+  it("does not treat an unqueried pin as covered by a cached negative archive lookup", async () => {
+    let now = 0;
+    const second = stampedThread({
+      instanceId: "peer-a", threadId: "second", title: "Archived second pin",
+    });
+    const fetchArchivedThreads = vi.fn()
+      .mockImplementationOnce(async () => {
+        now = 50;
+        return [];
+      })
+      .mockResolvedValueOnce([second]);
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      now: () => now,
+      ttlMs: 100,
+    });
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "first" })]);
+    await settle();
+    // Navigation expired, but the slower first archive probe is still fresh.
+    now = 110;
+    const secondPin = pin({ instanceId: "peer-a", threadId: "second" });
+    await cache.resolvePinnedThreads([secondPin]);
+    await settle();
+    expect(fetchArchivedThreads).toHaveBeenCalledTimes(2);
+    expect((await cache.resolvePinnedThreads([secondPin])).archived).toEqual([secondPin.ref]);
   });
 
   it("revalidates cached archive evidence before pruning a re-added pin", async () => {
