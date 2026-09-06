@@ -7,6 +7,7 @@ import { isToolManagedWorktreePath } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { getGitCommand } from "../git-command";
+import { createGitDirectoryObserver, type GitDirectoryObservation } from "./git-directory-observation";
 
 const execFile = promisify(execFileCallback);
 const threadDirectoryLog = getMainLogger("pwragent:thread-directory-enricher");
@@ -29,9 +30,8 @@ export type ThreadDirectoryEnrichment = {
 };
 
 type CachedEnrichment = {
-  expiresAt: number;
-  inFlight?: Promise<ThreadDirectoryEnrichment>;
-  value?: ThreadDirectoryEnrichment;
+  observation: GitDirectoryObservation;
+  value: ThreadDirectoryEnrichment;
 };
 
 type GitMetadataEvidence = {
@@ -300,66 +300,56 @@ async function loadThreadDirectoryEnrichment(
   }
 }
 
-export function createThreadDirectoryEnricher(params?: {
-  cacheTtlMs?: number;
-}): (projectKey?: string) => Promise<ThreadDirectoryEnrichment> {
-  const cacheTtlMs = params?.cacheTtlMs ?? 5_000;
+/**
+ * Directory facts survive query invalidation and elapsed time. Filesystem
+ * identity is the invalidation authority; HEAD changes only refresh the branch.
+ * Failed/partial Git probes are returned as fallbacks but never memoized.
+ */
+export function createThreadDirectoryEnricher(): (
+  projectKey?: string,
+) => Promise<ThreadDirectoryEnrichment> {
   const cache = new Map<string, CachedEnrichment>();
+  const pending = new Map<string, Promise<ThreadDirectoryEnrichment>>();
+  const observe = createGitDirectoryObserver();
 
-  return async (projectKey?: string): Promise<ThreadDirectoryEnrichment> => {
-    const normalizedKey = projectKey?.trim();
-    if (!normalizedKey) {
-      return { linkedDirectories: [] };
-    }
-
-    const now = Date.now();
-    const cached = cache.get(normalizedKey);
-    if (cached?.inFlight) {
-      return await cached.inFlight;
-    }
-    if (cached?.value && cached.expiresAt > now) {
+  async function refresh(key: string): Promise<ThreadDirectoryEnrichment> {
+    const before = await observe(key).catch(() => undefined);
+    const cached = cache.get(key);
+    const sameRelationship = before
+      && cached?.observation.relationship === before.relationship;
+    if (sameRelationship && cached.observation.head === before.head) {
       return cached.value;
     }
+    cache.delete(key);
+    let value: ThreadDirectoryEnrichment;
+    if (before && !before.repository) {
+      value = { linkedDirectories: [buildFallbackLinkedDirectory(key)] };
+    } else if (sameRelationship) {
+      const branch = await runGit(key, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .catch(() => undefined);
+      value = { ...cached.value, observedGitBranch: branch || undefined };
+    } else {
+      value = await loadThreadDirectoryEnrichment(key);
+    }
+    // The branch is present only when the complete probe succeeded. Retaining
+    // a fallback would hide recovery after a failed executable/filesystem read.
+    if (before && (!before.repository || value.observedGitBranch)) {
+      const after = await observe(key).catch(() => undefined);
+      if (after?.relationship === before.relationship && after.head === before.head) {
+        cache.set(key, { observation: after, value });
+      }
+    }
+    return value;
+  }
 
-    const inFlight = loadThreadDirectoryEnrichment(normalizedKey)
-      .then((value) => {
-        // A miss is deliberately left uncached, matching the ACP worktree
-        // resolver (`resolveAcpLinkedDirectories` persists only a directory
-        // it actually resolved). `loadThreadDirectoryEnrichment` yields no
-        // directories only when `access()` on the path fails — every other
-        // outcome, including a git probe that fails or times out, still
-        // returns one. Note what that does and does not prove: `access()`
-        // also fails for a path that is merely unreachable right now (denied
-        // permissions, an unmounted or stalled network volume), so a miss
-        // means "unresolved", not "deleted" — the same distinction the thread
-        // header's copy draws. Retrying is worth it because the common causes
-        // are transient: a scratch project root and a worktree are both
-        // created moments after a thread first refers to them. Caching pins
-        // the thread to "no linked project" for the rest of the TTL after the
-        // directory appears, which is long enough on a slow machine to show
-        // a workspace warning for a directory that exists by the time anyone
-        // reads it. Recomputing costs one `access()` and never spawns git.
-        if (value.linkedDirectories.length === 0) {
-          cache.delete(normalizedKey);
-          return value;
-        }
-        cache.set(normalizedKey, {
-          expiresAt: Date.now() + cacheTtlMs,
-          value,
-        });
-        return value;
-      })
-      .catch((error) => {
-        cache.delete(normalizedKey);
-        throw error;
-      });
-
-    cache.set(normalizedKey, {
-      expiresAt: cached?.expiresAt ?? 0,
-      inFlight,
-      value: cached?.value,
-    });
-
+  return async (projectKey) => {
+    if (!projectKey?.trim()) return { linkedDirectories: [] };
+    const key = path.resolve(projectKey.trim());
+    let inFlight = pending.get(key);
+    if (!inFlight) {
+      inFlight = refresh(key).finally(() => pending.delete(key));
+      pending.set(key, inFlight);
+    }
     return await inFlight;
   };
 }

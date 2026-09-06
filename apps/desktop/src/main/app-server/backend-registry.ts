@@ -37173,7 +37173,7 @@ export class DesktopBackendRegistry {
       // is not a failure -- it is the answer for a thread this backend does not
       // list, which is precisely the case this dedup exists for, so keying the
       // retry on the label drops the entry every time and charges each of that
-      // thread's later notifications another enriched walk.
+      // thread's later notifications another walk.
       //
       // Rejection is not the signal either: `listThreads` absorbs a provider
       // error and resolves, so the `catch` below never runs for the restart it
@@ -37185,7 +37185,7 @@ export class DesktopBackendRegistry {
       reconciliation = this.listThreads({
         backend,
         callerReason: "notification-context",
-        enrichDirectories: true,
+        enrichDirectories: false,
       })
         .then((rows) => {
           walkListedRows = rows.length > 0;

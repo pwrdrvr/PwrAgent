@@ -253,6 +253,10 @@ describe("thread read budgets across product flows", () => {
       reads: client.counts,
       scenario: "terminal-notification-burst",
     });
+    expect(client.listCalls.filter((call) => call.callerReason === "notification-context"))
+      .toEqual([expect.objectContaining({
+        params: expect.objectContaining({ enrichDirectories: false }),
+      })]);
   });
 
   it("reads the provider once for a window opening onto a warm profile", async () => {
