@@ -156,6 +156,8 @@ import {
   type NavigationQueryRequest,
   type NavigationQueueProjection,
   type NavigationQueueProjectionRequest,
+  type NavigationLaunchpadConfigRequest,
+  type NavigationLaunchpadConfigResponse,
   type NavigationSelectedDetailRequest,
   type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
@@ -2091,6 +2093,23 @@ export class DesktopFederationRuntime {
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
     return stampRemoteNavigationQueryPage({ instanceLabel, page, target });
+  }
+
+  async remoteNavigationLaunchpadConfig(
+    target: FederationRemoteTarget,
+    request: NavigationLaunchpadConfigRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationLaunchpadConfigResponse> {
+    this.assertRemoteNavigationQueryProtocol(target);
+    const backend = this.remoteBackend(target);
+    if (!backend.getNavigationLaunchpadConfig) throw navigationUpgradeRequired(target.instanceId);
+    const { federationTarget: _federationTarget, ...ownerRequest } = request;
+    try {
+      return await backend.getNavigationLaunchpadConfig(ownerRequest, rpcOptions);
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) throw navigationUpgradeRequired(target.instanceId);
+      throw error;
+    }
   }
 
   async remoteNavigationSelectedDetail(
@@ -5423,6 +5442,9 @@ function localBackendOperations(): FederationBackendOperations {
           ? `federation:${rpcOptions.requesterInstanceId}`
           : "federation:unknown",
       });
+    },
+    async getNavigationLaunchpadConfig(request) {
+      return await getDesktopNavigationDetailService().readLaunchpadConfig(request);
     },
     async getNavigationSelectedDetail(request) {
       return await getDesktopNavigationDetailService().readSelectedDetail(

@@ -92,6 +92,8 @@ import {
   type NavigationQueryRequest,
   type NavigationQueueProjection,
   type NavigationQueueProjectionRequest,
+  type NavigationLaunchpadConfigRequest,
+  type NavigationLaunchpadConfigResponse,
   type NavigationSelectedDetailRequest,
   type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
@@ -296,6 +298,7 @@ import {
   NAVIGATION_QUERY_PAGE_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+  NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
   NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
@@ -2159,6 +2162,15 @@ class DesktopAppServerService {
       request,
       scopeKey: "renderer-local",
     });
+  }
+
+  async getNavigationLaunchpadConfig(
+    request: NavigationLaunchpadConfigRequest,
+  ): Promise<NavigationLaunchpadConfigResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request);
+    }
+    return await getDesktopNavigationDetailService().readLaunchpadConfig(request);
   }
 
   async getNavigationSelectedDetail(
@@ -8027,6 +8039,15 @@ export function registerAppServerIpcHandlers(): void {
     navigationQueryConsumersBySender.get(event.sender.id)?.delete(token);
     navigationQueryPool.release(token);
   });
+  ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
+    async (
+      _event,
+      request: NavigationLaunchpadConfigRequest,
+    ): Promise<NavigationLaunchpadConfigResponse> =>
+      await appServerService.getNavigationLaunchpadConfig(request),
+  );
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SELECTED_DETAIL_CHANNEL,
@@ -8747,6 +8768,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);

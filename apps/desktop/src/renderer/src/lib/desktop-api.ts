@@ -96,6 +96,8 @@ import type {
   NavigationQueryRequest,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   GetNavigationSnapshotRequest,
@@ -841,6 +843,9 @@ export type DesktopApi = {
     consumerId?: string,
   ) => Promise<NavigationQueryPage>;
   releaseNavigationQuery?: (consumerId: string) => Promise<void>;
+  getNavigationLaunchpadConfig?: (
+    request: NavigationLaunchpadConfigRequest,
+  ) => Promise<NavigationLaunchpadConfigResponse>;
   getNavigationSelectedDetail?: (
     request: NavigationSelectedDetailRequest,
   ) => Promise<NavigationSelectedDetailResponse>;

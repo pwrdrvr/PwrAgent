@@ -103,6 +103,8 @@ import type {
   NavigationQueryRequest,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
   NavigationSnapshot,
@@ -391,6 +393,7 @@ function authenticateScheduledTurnOrigin<
 
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
+  getNavigationLaunchpadConfig: "backend.getNavigationLaunchpadConfig",
   getNavigationSelectedDetail: "backend.getNavigationSelectedDetail",
   getNavigationQueueProjection: "backend.getNavigationQueueProjection",
   getProjectPage: "backend.getProjectPage",
@@ -500,6 +503,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   FederationCapability
 > = {
   [FEDERATION_BACKEND_METHODS.getNavigationQueryPage]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getNavigationQueueProjection]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getProjectPage]: "thread_navigation",
@@ -618,6 +622,10 @@ export type FederationBackendOperations = {
     request: NavigationQueryRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationQueryPage>;
+  getNavigationLaunchpadConfig?(
+    request: NavigationLaunchpadConfigRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationLaunchpadConfigResponse>;
   getNavigationSelectedDetail?(
     request: NavigationSelectedDetailRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -882,6 +890,18 @@ export function registerFederationBackendHandlers(params: {
       FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
       async (envelope) => await params.backend.getNavigationQueryPage!(
         envelope.params as NavigationQueryRequest,
+        {
+          deadlineAt: envelope.deadlineAt,
+          requesterInstanceId: envelope.sourceInstanceId,
+        },
+      ),
+    );
+  }
+  if (params.backend.getNavigationLaunchpadConfig) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig,
+      async (envelope) => await params.backend.getNavigationLaunchpadConfig!(
+        envelope.params as NavigationLaunchpadConfigRequest,
         {
           deadlineAt: envelope.deadlineAt,
           requesterInstanceId: envelope.sourceInstanceId,
@@ -1764,6 +1784,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<NavigationQueryPage> {
     return await this.rpc.request<NavigationQueryPage>({
       method: FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async getNavigationLaunchpadConfig(
+    request: NavigationLaunchpadConfigRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationLaunchpadConfigResponse> {
+    return await this.rpc.request<NavigationLaunchpadConfigResponse>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig,
       params: request,
       ...rpcOptions,
     });
