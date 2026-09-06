@@ -3480,7 +3480,7 @@ describe("useThreadNavigation", () => {
     // setThreadPin API must not be touched.
     expect(setRemoteThreadLocalPin).toHaveBeenCalledWith({
       ref: remoteRef,
-      pinnedRank: expect.any(String),
+      pinned: true,
     });
     expect(setThreadPin).not.toHaveBeenCalled();
     expect(result.current.threads.find((thread) => !thread.federation)?.pinnedRank)
@@ -3560,7 +3560,7 @@ describe("useThreadNavigation", () => {
       backend: "codex",
       threadId: "thread-remote",
       federationTarget,
-      pinnedRank: expect.any(String),
+      pinned: true,
     });
     expect(setRemoteThreadLocalPin).not.toHaveBeenCalled();
   });

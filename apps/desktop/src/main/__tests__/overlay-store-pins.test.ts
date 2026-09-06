@@ -282,3 +282,18 @@ describe("SqliteOverlayStore — thread pins", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+it("appends pin intent after unloaded owner pins and preserves concurrent order", async () => {
+  for (let index = 1; index <= 100; index += 1) {
+    await store.setThreadPin({ backend: "codex", threadId: `unloaded-${index}`, pinnedRank: String(index * 1024) });
+  }
+  const [first, second] = await Promise.all([
+    store.setThreadPin({ backend: "codex", threadId: "first", pinned: true }),
+    store.setThreadPin({ backend: "codex", threadId: "second", pinned: true }),
+  ]);
+  expect(first.pinnedRank).toBe("103424");
+  expect(second.pinnedRank).toBe("104448");
+  expect((await store.setThreadPin({ backend: "codex", threadId: "first", pinned: true })).pinnedRank).toBe(first.pinnedRank);
+  expect((await store.setThreadPin({ backend: "codex", threadId: "first", pinned: false })).pinnedRank).toBeUndefined();
+  await expect(store.setThreadPin({ backend: "codex", threadId: "first", pinned: true, pinnedRank: "1" })).rejects.toThrow("either pin intent");
+});

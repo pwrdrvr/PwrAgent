@@ -1,3 +1,4 @@
+import { buildAppendPinRank } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import type {
@@ -2972,25 +2973,44 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  private appendThreadPinRank(): string {
+    const ranks = this.stateDb.raw.prepare(
+      `SELECT json_extract(payload, '$.pinnedRank') AS rank FROM threads
+       WHERE json_type(payload, '$.pinnedRank') = 'text'
+       UNION ALL
+       SELECT json_extract(payload, '$.localPinnedRank') AS rank FROM remote_thread_pins
+       WHERE revoked_at IS NULL AND json_type(payload, '$.localPinnedRank') = 'text'`,
+    ).all() as Array<{ rank: string }>;
+    return buildAppendPinRank(ranks.map((row) => row.rank));
+  }
+
   async setThreadPin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
+    pinned?: boolean;
     pinnedRank?: string | null;
   }): Promise<ThreadOverlayState> {
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const pinnedRank = params.pinnedRank?.trim();
-    const nextState: ThreadOverlayState = {
-      ...current,
-      pinnedRank: pinnedRank || undefined,
-    };
-    this.putThread(threadKey, nextState);
-    return nextState;
+    if (params.pinned !== undefined
+      && (typeof params.pinned !== "boolean" || params.pinnedRank != null)) {
+      throw new Error("Provide either pin intent or an explicit legacy rank.");
+    }
+    return this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim()
+        : params.pinned ? current.pinnedRank ?? this.appendThreadPinRank() : undefined;
+      const nextState: ThreadOverlayState = {
+        ...current,
+        pinnedRank: pinnedRank || undefined,
+      };
+      this.putThread(threadKey, nextState);
+      return nextState;
+    })();
   }
 
   async addRemoteThreadPin(params: {
@@ -3124,45 +3144,54 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
    */
   async setRemoteThreadLocalPin(params: {
     ref: FederatedThreadRef;
+    pinned?: boolean;
     pinnedRank?: string | null;
   }): Promise<{ pinnedRank?: string }> {
-    const instanceId = remotePinInstanceId(params.ref);
-    const row = this.stateDb.raw
-      .prepare(
-        `SELECT payload FROM remote_thread_pins
-         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
-      )
-      .get(instanceId, params.ref.backend, params.ref.threadId) as
-        | { payload: string }
-        | undefined;
-    if (!row) {
-      return {};
+    if (params.pinned !== undefined
+      && (typeof params.pinned !== "boolean" || params.pinnedRank != null)) {
+      throw new Error("Provide either pin intent or an explicit legacy rank.");
     }
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(row.payload) as Record<string, unknown>;
-    } catch {
-      parsed = {};
-    }
-    const pinnedRank = params.pinnedRank?.trim() || undefined;
-    if (pinnedRank === undefined) {
-      delete parsed.localPinnedRank;
-    } else {
-      parsed.localPinnedRank = pinnedRank;
-    }
-    this.stateDb.raw
-      .prepare(
-        `UPDATE remote_thread_pins
-         SET payload = ?
-         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
-      )
-      .run(
-        JSON.stringify(parsed),
-        instanceId,
-        params.ref.backend,
-        params.ref.threadId,
-      );
-    return pinnedRank === undefined ? {} : { pinnedRank };
+    return this.stateDb.raw.transaction(() => {
+      const instanceId = remotePinInstanceId(params.ref);
+      const row = this.stateDb.raw
+        .prepare(
+          `SELECT payload FROM remote_thread_pins
+           WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+        )
+        .get(instanceId, params.ref.backend, params.ref.threadId) as
+          | { payload: string }
+          | undefined;
+      if (!row) {
+        return {};
+      }
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        parsed = {};
+      }
+      const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim() || undefined
+        : params.pinned ? (typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
+          ? parsed.localPinnedRank : this.appendThreadPinRank()) : undefined;
+      if (pinnedRank === undefined) {
+        delete parsed.localPinnedRank;
+      } else {
+        parsed.localPinnedRank = pinnedRank;
+      }
+      this.stateDb.raw
+        .prepare(
+          `UPDATE remote_thread_pins
+           SET payload = ?
+           WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+        )
+        .run(
+          JSON.stringify(parsed),
+          instanceId,
+          params.ref.backend,
+          params.ref.threadId,
+        );
+      return pinnedRank === undefined ? {} : { pinnedRank };
+    })();
   }
 
   /**
@@ -3761,16 +3790,30 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
    */
   async setDirectoryPin(params: {
     directoryKey: string;
+    pinned?: boolean;
     pinnedRank?: string | null;
   }): Promise<DirectoryOverlayState> {
-    const pinnedRank = params.pinnedRank?.trim();
-    const nextState: DirectoryOverlayState = {
-      ...this.getDirectoryOverlay(params.directoryKey),
-      directoryKey: params.directoryKey,
-      pinnedRank: pinnedRank || undefined,
-    };
-    this.putDirectoryOverlay(params.directoryKey, nextState);
-    return nextState;
+    if (params.pinned !== undefined
+      && (typeof params.pinned !== "boolean" || params.pinnedRank != null)) {
+      throw new Error("Provide either pin intent or an explicit legacy rank.");
+    }
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getDirectoryOverlay(params.directoryKey);
+      const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim()
+        : params.pinned ? current?.pinnedRank ?? buildAppendPinRank(
+          (this.stateDb.raw.prepare(
+            `SELECT json_extract(payload, '$.pinnedRank') AS rank FROM directory_overlay
+             WHERE json_type(payload, '$.pinnedRank') = 'text'`,
+          ).all() as Array<{ rank: string }>).map((row) => row.rank),
+        ) : undefined;
+      const nextState: DirectoryOverlayState = {
+        ...current,
+        directoryKey: params.directoryKey,
+        pinnedRank: pinnedRank || undefined,
+      };
+      this.putDirectoryOverlay(params.directoryKey, nextState);
+      return nextState;
+    })();
   }
 
   async reorderDirectoryPins(params: {

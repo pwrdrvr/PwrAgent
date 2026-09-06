@@ -878,8 +878,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   };
 
-  // Pin order is global across backends, so reorder submits the complete new
-  // order of pinned-thread keys (not a per-backend slice).
+  // The owner resolves relative moves against its complete pin order.
   const reorderPins = (nextThreadKeys: string[], move?: NavigationRelativePinMove): void => {
     if (move) void props.onReorderThreadPins?.(nextThreadKeys, move);
     else void props.onReorderThreadPins?.(nextThreadKeys);
@@ -907,15 +906,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
       return;
     }
 
-    // Reposition within the full pinned list (cross-backend allowed) and submit
-    // the complete new order.
-    const sourceKeys = pinnedThreadKeys.includes(draggedKey)
-      ? pinnedThreadKeys
-      : [...pinnedThreadKeys, draggedKey];
-    reorderPins(moveThreadKey(sourceKeys, draggedKey, targetKey, position),
-      pinnedThreadKeys.includes(draggedKey)
-        ? { key: draggedKey, anchorKey: targetKey, placement: position }
-        : undefined);
+    const move = { key: draggedKey, anchorKey: targetKey, placement: position };
+    if (pinnedThreadKeys.includes(draggedKey)) {
+      reorderPins(moveThreadKey(pinnedThreadKeys, draggedKey, targetKey, position), move);
+      return;
+    }
+    if (!props.onSetThreadPin) return;
+    void (async () => {
+      await props.onSetThreadPin!(draggedThread, true);
+      await props.onReorderThreadPins?.([], move);
+    })();
   };
 
   const dropThreadAfterDirectoryPins = (
@@ -933,7 +933,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
     if (!targetKey) {
       if (pinnedThreadKeys.includes(draggedKey)) return;
-      reorderPins([...pinnedThreadKeys, draggedKey]);
+      void props.onSetThreadPin?.(draggedThread, true);
       return;
     }
 
@@ -1491,22 +1491,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   return;
                 }
 
-                const nextKeys = pinnedDirectoryKeys.includes(draggedKey)
-                  ? moveDirectoryKey(
-                      pinnedDirectoryKeys,
-                      draggedKey,
-                      directory.key,
-                      position,
-                    )
-                  : moveDirectoryKey(
-                      [...pinnedDirectoryKeys, draggedKey],
-                      draggedKey,
-                      directory.key,
-                      position,
-                    );
-                reorderDirectoryPins(nextKeys, pinnedDirectoryKeys.includes(draggedKey)
-                  ? { key: draggedKey, anchorKey: directory.key, placement: position }
-                  : undefined);
+                const move = { key: draggedKey, anchorKey: directory.key, placement: position };
+                if (pinnedDirectoryKeys.includes(draggedKey)) {
+                  reorderDirectoryPins(moveDirectoryKey(pinnedDirectoryKeys, draggedKey, directory.key, position), move);
+                } else if (draggedDirectory && props.onSetDirectoryPin) {
+                  void (async () => {
+                    await props.onSetDirectoryPin!(draggedDirectory, true);
+                    await props.onReorderDirectoryPins?.([], move);
+                  })();
+                }
               }
             : undefined
         }
@@ -2011,9 +2004,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             ) {
               return;
             }
-            // Append to the end of the pinned list — same as the
-            // RecentsList divider behavior.
-            reorderDirectoryPins([...pinnedDirectoryKeys, draggedKey]);
+            void props.onSetDirectoryPin?.(draggedDirectory, true);
           }}
         >
           <span>Directories</span>

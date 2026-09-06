@@ -1534,21 +1534,11 @@ export function Sidebar(props: SidebarProps) {
     if (props.browseMode === "directories") {
       hoverStableSnapshot.release();
     }
-    const threadKeys = threads.map((thread) =>
-      threadSummaryIdentityKey(thread),
-    );
-    if (props.onReorderThreadPins) {
-      const nextKeys = [
-        ...pinnedThreadKeysInOrder,
-        ...threadKeys.filter((threadKey) => !pinnedThreadKeysInOrder.includes(threadKey)),
-      ];
-      void props.onReorderThreadPins(nextKeys);
-      return;
-    }
-
-    void Promise.all(
-      threads.map((thread) => props.onSetThreadPin?.(thread, true)),
-    );
+    void (async () => {
+      for (const thread of threads) {
+        await props.onSetThreadPin?.(thread, true);
+      }
+    })();
   };
 
   const unpinThreadsFromContextMenu = (

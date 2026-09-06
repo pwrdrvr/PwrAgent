@@ -235,3 +235,11 @@ describe("SqliteOverlayStore — directory pins", () => {
     });
   });
 });
+
+it("appends directory pin intent after unloaded pins without rewriting their ranks", async () => {
+  await store.setDirectoryPin({ directoryKey: "directory:/unloaded", pinnedRank: "102400" });
+  const first = await store.setDirectoryPin({ directoryKey: "directory:/new", pinned: true });
+  expect(first.pinnedRank).toBe("103424");
+  expect((await store.setDirectoryPin({ directoryKey: "directory:/unloaded", pinned: true })).pinnedRank).toBe("102400");
+  expect((await store.setDirectoryPin({ directoryKey: "directory:/new", pinned: false })).pinnedRank).toBeUndefined();
+});
