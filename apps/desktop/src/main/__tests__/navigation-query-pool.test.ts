@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 
@@ -20,6 +20,41 @@ const page: NavigationQueryPage = {
 };
 
 describe("NavigationQueryPool", () => {
+  it("returns at the transaction deadline while retaining an unresponsive provider's physical slot", async () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new NavigationQueryPool();
+      let resolve!: (value: NavigationQueryPage) => void;
+      const pending = pool.read({ consumerId: "window", request: { ...request, deadlineAt: Date.now() + 20 },
+        load: () => new Promise((done) => { resolve = done; }) });
+      const rejected = expect(pending).rejects.toMatchObject({ code: "navigation_busy" });
+      await vi.advanceTimersByTimeAsync(21);
+      await rejected;
+      expect(pool.getBudgetUsage().activeReads).toBe(1);
+      resolve(page);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pool.getBudgetUsage().activeReads).toBe(0);
+      expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("honors a coalesced consumer's shorter deadline without cancelling the shared owner read", async () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new NavigationQueryPool();
+      let resolve!: (value: NavigationQueryPage) => void;
+      const load = vi.fn(() => new Promise<NavigationQueryPage>((done) => { resolve = done; }));
+      const first = pool.read({ consumerId: "first", request, load });
+      const second = pool.read({ consumerId: "second", request: { ...request, deadlineAt: Date.now() + 5 }, load });
+      const rejected = expect(second).rejects.toMatchObject({ code: "navigation_busy" });
+      await vi.advanceTimersByTimeAsync(6);
+      await rejected;
+      expect(load).toHaveBeenCalledTimes(1);
+      resolve(page);
+      await expect(first).resolves.toEqual(page);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("reconnect_deduplicates_consumer_cold_reads", async () => {
     const pool = new NavigationQueryPool();
     let resolve!: (value: NavigationQueryPage) => void;

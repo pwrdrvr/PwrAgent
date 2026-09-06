@@ -44,7 +44,11 @@ export class NavigationQueryPool {
       || this.pendingReads >= MAX_PENDING_READS) {
       throw new NavigationQueryError("navigation_busy", "Navigation demand budget is occupied.");
     }
-    const deadlineAt = Date.now() + DEADLINE_MS;
+    if (params.request.deadlineAt !== undefined && !Number.isFinite(params.request.deadlineAt)) {
+      throw new NavigationQueryError("navigation_invalid_request", "Navigation deadline must be finite.");
+    }
+    const deadlineAt = Math.min(params.request.deadlineAt ?? Infinity, Date.now() + DEADLINE_MS);
+    if (deadlineAt <= Date.now()) throw new NavigationQueryError("navigation_busy", "Navigation read deadline expired.");
     const admission = new AbortController();
     const admissions = this.admissions.get(params.consumerId) ?? new Set<AbortController>();
     admissions.add(admission);
@@ -84,7 +88,7 @@ export class NavigationQueryPool {
       params.request.pageSize ?? 100,
     ]);
     const pending = query.reads.get(operationKey);
-    if (pending) return pending.promise;
+    if (pending) return this.waitForRead(pending.promise, deadlineAt);
     const controller = new AbortController();
     const retainedQuery = query;
     this.pendingReads += 1;
@@ -135,7 +139,7 @@ export class NavigationQueryPool {
     params.query.active = true;
     const timer = setTimeout(() => params.controller.abort(),
       Math.max(0, params.deadlineAt - Date.now()));
-    try {
+    const completion = (async () => {
       const page = await params.load({ signal, deadlineAt: params.deadlineAt });
       signal.throwIfAborted();
       if (page.unchanged) return page;
@@ -151,16 +155,37 @@ export class NavigationQueryPool {
       this.retainedBytes += bytes - (previous?.bytes ?? 0);
       params.query.pages.set(params.operationKey, { page, bytes });
       return page;
-    } finally {
+    })().finally(() => {
       clearTimeout(timer);
       this.activeReads -= 1;
       params.query.active = false;
-    }
+      this.wake();
+    });
+    // Return by the deadline even if a local provider ignores cancellation.
+    // Its physical slot remains occupied until that provider actually settles.
+    return this.waitForRead(completion, params.deadlineAt, signal);
+  }
+
+  private waitForRead(
+    promise: Promise<NavigationQueryPage>,
+    deadlineAt: number,
+    signal?: AbortSignal,
+  ): Promise<NavigationQueryPage> {
+    return new Promise((resolve, reject) => {
+      const cancel = (): void => reject(new NavigationQueryError("navigation_busy", "Navigation read cancelled or its deadline expired."));
+      const timer = setTimeout(cancel, Math.max(0, deadlineAt - Date.now()));
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
+      promise.then(resolve, reject).finally(() => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", cancel);
+      });
+    });
   }
 
   private evictUnused(except?: Query): void {
     for (const [key, query] of this.queries) {
-      if (query === except || query.consumers.size > 0 || query.reads.size > 0) continue;
+      if (query === except || query.consumers.size > 0 || query.reads.size > 0 || query.active) continue;
       for (const page of query.pages.values()) this.retainedBytes -= page.bytes;
       this.queries.delete(key);
     }
