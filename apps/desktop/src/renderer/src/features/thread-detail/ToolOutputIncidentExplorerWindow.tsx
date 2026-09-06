@@ -2467,30 +2467,15 @@ function TokenMiserResultList(props: {
                 {isOpen ? (
                   <div className="incident-explorer__gate-detail">
                     {entry.edge ? <p>{entry.edge.detail}</p> : null}
-                    {entry.interception.summary ? (
-                      <>
-                        <p className="incident-explorer__gate-summary">
-                          {entry.interception.summary.summary}
-                        </p>
-                        {entry.interception.summary.usefulDetails.length > 0 ? (
-                          <ul>
-                            {entry.interception.summary.usefulDetails.map((detail) => (
-                              <li key={detail}>{detail}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                        {entry.interception.summary.suggestedNextStep ? (
-                          <p className="incident-explorer__gate-next">
-                            <b>Legacy suggested next step</b>{" "}
-                            {entry.interception.summary.suggestedNextStep}
-                          </p>
-                        ) : null}
-                      </>
-                    ) : (
-                      <p className="incident-explorer__gate-summary">
-                        No summary was recorded for this gate.
-                      </p>
-                    )}
+                    <p className="incident-explorer__gate-summary">
+                      {entry.interception.disposition === "passed_through" ? "Output passed through." : "Output summarized."}
+                    </p>
+                    <p>
+                      {entry.interception.originalOutputAvailableUntil && entry.interception.originalOutputAvailableUntil > Date.now()
+                        ? `Original output is temporary and expires by ${new Date(entry.interception.originalOutputAvailableUntil).toLocaleTimeString()}. It may become unavailable earlier.`
+                        : "Original output is expired or unavailable."}
+                      {" "}Costs and tokens are saved. Originals are unavailable after archive or restart.
+                    </p>
                   </div>
                 ) : null}
               </li>
@@ -2524,13 +2509,7 @@ function TokenMiserResultList(props: {
                       No reducer replacement was selected; the ordinary result
                       reached the parent directly.
                     </p>
-                    {entry.script ? <pre><code>{entry.script}</code></pre> : null}
-                    {entry.outputPreview ? (
-                      <pre><code>
-                        {entry.outputPreview}
-                        {entry.outputPreviewTruncated ? "\n… preview truncated" : ""}
-                      </code></pre>
-                    ) : null}
+                    <p>Scripts and output previews are not retained.</p>
                   </div>
                 ) : null}
               </li>

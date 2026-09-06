@@ -1,3 +1,4 @@
+import { TokenMiserOutputCache } from "./token-miser-output-cache";
 import { randomUUID } from "node:crypto";
 import {
   TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
@@ -177,7 +178,8 @@ export type TokenMiserServiceOptions = {
 export class TokenMiserService {
   private readonly thresholdCharacters: number;
   private readonly summaryTimeoutMs: number;
-  private readonly capturedGroups = new Map<string, CapturedGroup>();
+  private readonly capturedGroups = new Map<string, Omit<CapturedGroup, "members">>();
+  private readonly capturedOutputs = new TokenMiserOutputCache();
 
   constructor(private readonly options: TokenMiserServiceOptions) {
     this.thresholdCharacters =
@@ -213,29 +215,37 @@ export class TokenMiserService {
     if (!group) {
       const timer = setTimeout(() => {
         this.capturedGroups.delete(key);
+        this.capturedOutputs.remove(key);
       }, CAPTURED_GROUP_TTL_MS);
       timer.unref?.();
-      group = { members: new Map(), characters: 0, overflowed: false, timer };
+      group = { characters: 0, overflowed: false, timer };
       this.capturedGroups.set(key, group);
     }
-    const previous = group.members.get(payload.code_mode_tool_call_id);
+    const stored = this.capturedOutputs.get(key);
+    if (!stored && group.characters > 0) {
+      group.overflowed = true;
+      return;
+    }
+    const members = new Map<string, CapturedGroupMember>(stored ? JSON.parse(stored) : []);
+    const previous = members.get(payload.code_mode_tool_call_id);
     const nextCharacters = group.characters
       - ((previous?.output.length ?? 0) + (previous?.toolInput.length ?? 0))
       + output.length
       + toolInput.length;
     if (
-      (!previous && group.members.size >= MAX_CAPTURED_GROUP_MEMBERS)
+      (!previous && members.size >= MAX_CAPTURED_GROUP_MEMBERS)
       || nextCharacters > MAX_CAPTURED_GROUP_CHARACTERS
     ) {
       group.overflowed = true;
       return;
     }
-    group.members.set(payload.code_mode_tool_call_id, {
+    members.set(payload.code_mode_tool_call_id, {
       toolCallId: payload.code_mode_tool_call_id,
       toolName: payload.tool_name,
       toolInput,
       output,
     });
+    group.overflowed ||= !this.capturedOutputs.put(key, JSON.stringify([...members]));
     group.characters = nextCharacters;
   }
 
@@ -503,7 +513,10 @@ export class TokenMiserService {
       clearTimeout(group.timer);
       this.capturedGroups.delete(key);
     }
-    return group;
+    if (!group) return undefined;
+    const stored = this.capturedOutputs.get(key);
+    this.capturedOutputs.remove(key);
+    return { ...group, overflowed: group.overflowed || !stored, members: new Map(stored ? JSON.parse(stored) : []) };
   }
 
   private codeModeActionableStateCharacters(
@@ -1120,7 +1133,7 @@ function buildCappedReplacement(params: {
   if (utf8ByteLength(full) <= params.maxBytes) {
     return full;
   }
-  const reference = `Output reference: ${params.objectId}`;
+  const reference = `Output reference: ${params.objectId} (temporary, expires within 5m)`;
   if (utf8ByteLength(reference) > params.maxBytes) {
     return undefined;
   }
@@ -1145,7 +1158,7 @@ function buildReplacement(params: {
     buildReplacementBody(params.summary),
     "",
     `Output reference: ${params.objectId}`,
-    "Exact source material is available when required.",
+    "Original output is temporary (up to five minutes); expiry, eviction or restart makes it unavailable.",
   ].join("\n");
 }
 
@@ -1176,7 +1189,7 @@ function buildCappedGroupReplacement(params: {
       toolName: member.toolName,
       summary: member.summary,
     })),
-    sourceMaterial: "Available by group and member reference when required.",
+    sourceMaterial: "Temporary: expires within five minutes; unavailable after eviction or restart.",
   }, null, 2);
   if (utf8ByteLength(full) <= params.maxBytes) {
     return full;
@@ -1189,7 +1202,7 @@ function buildCappedGroupReplacement(params: {
       objectId: member.objectId,
       toolName: member.toolName,
     })),
-    sourceMaterial: "Retrieve source material by group or member reference.",
+    sourceMaterial: "Temporary group/member retrieval; expires within five minutes or earlier.",
   });
   if (utf8ByteLength(compact) <= params.maxBytes) {
     return compact;

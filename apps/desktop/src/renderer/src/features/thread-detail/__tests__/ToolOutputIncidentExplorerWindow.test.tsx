@@ -418,7 +418,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   // The summary is what the parent actually received in place of the payload.
   // Without it the screen can only say how many tokens were traded, never what
   // was traded for — which is the only way to judge whether a "win" was one.
-  it("shows Luna's summary for a gate and filters gates by outcome", async () => {
+  it("shows safe decision notes and unavailable originals while filtering outcomes", async () => {
     const response = buildResponse();
     const gate = (
       objectId: string,
@@ -467,11 +467,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     // The summary is behind a disclosure so the list stays scannable.
     expect(screen.queryByText("Traced the handler for win-1.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /win-1/ }));
-    expect(screen.getByText("Traced the handler for win-1.")).toBeInTheDocument();
-    expect(
-      screen.getByText("pr-auto-dispatch.ts:326 clears the timer for win-1"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Inspect notifyPending for win-1/)).toBeInTheDocument();
+    expect(screen.getByText("Output summarized.")).toBeInTheDocument();
+    expect(screen.getByText(/Original output is expired or unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText("Traced the handler for win-1.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Inspect notifyPending for win-1/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^Big misses\s*1$/ }));
     expect(screen.getByRole("button", { name: /cost-1/ })).toBeInTheDocument();

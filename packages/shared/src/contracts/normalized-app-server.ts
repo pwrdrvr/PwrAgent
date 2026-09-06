@@ -1294,6 +1294,8 @@ export type ThreadTokenMiserCodeModeAccounting = {
 
 export type ThreadTokenMiserInterceptionAccounting = {
   objectId: string;
+  /** Temporary owner-process availability; eviction may make it unavailable earlier. */
+  originalOutputAvailableUntil?: number;
   turnId: string;
   toolUseId: string;
   toolName: string;
@@ -1323,9 +1325,7 @@ export type ThreadTokenMiserInterceptionAccounting = {
     summary: string;
   }>;
   /**
-   * What the parent actually received in place of the payload. This is the
-   * gate's real product — carrying it here is what lets the Explorer show the
-   * operator what was traded away, rather than only how many tokens it cost.
+   * Fixed accounting decision note. Original helper text is not retained.
    */
   summary?: {
     summary: string;

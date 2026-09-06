@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
+import { TokenMiserOutputCache } from "./token-miser-output-cache";
 import { TokenMiserRecordIndex } from "./token-miser-record-index";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
@@ -23,10 +24,6 @@ const MAX_GROUP_BATCH_OPERATIONS = 16;
 const DEFAULT_GROUP_BATCH_OUTPUT_CHARACTERS = 20_000;
 const MAX_GROUP_BATCH_OUTPUT_CHARACTERS = 40_000;
 const RETRIEVAL_DELIVERY_TTL_MS = 2 * 60_000;
-// Reducer acknowledgements expire after 60 seconds. A longer grace protects a
-// fresh pending output owned by another PwrAgent process sharing the profile,
-// while still reclaiming raw files left by a crash before acceptance.
-const PENDING_OUTPUT_ORPHAN_GRACE_MS = 5 * 60_000;
 
 async function readStoredFile(filePath: string): Promise<string> {
   return await withTokenMiserFileOperation(() => fs.readFile(filePath, "utf8"));
@@ -120,6 +117,7 @@ export type TokenMiserUsageSummary = {
 export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
   interceptions: Array<{
     objectId: string;
+    originalOutputAvailableUntil?: number;
     turnId: string;
     toolUseId: string;
     toolName: string;
@@ -173,7 +171,8 @@ export type TokenMiserMetadataUpdateReason =
   | "replay"
   | "retrieval"
   | "stopped"
-  | "stored";
+  | "stored"
+  | "flushed";
 
 export type TokenMiserStoreOptions = {
   onMetadataUpdated?: (
@@ -215,32 +214,72 @@ export type TokenMiserStoreParams = {
 
 export type TokenMiserStagedObject = {
   metadata: TokenMiserObjectMetadata;
-  /** Persist the retrievable object before its replacement is delivered. */
+  /** Verify the temporary reservation before its replacement is delivered. */
   persist(): Promise<void>;
-  /** Publish the already-persisted object to live accounting and cards. */
+  /** Persist accepted accounting and publish its fixed decision note. */
   commit(): Promise<void>;
   /** Remove an object whose replacement was not accepted by the caller. */
   discard(): Promise<void>;
 };
 
 export class TokenMiserStore {
+  private readonly outputs = new TokenMiserOutputCache();
   private readonly updateLocks = new Map<string, Promise<void>>();
   private readonly pendingRetrievalDeliveries =
-    new Map<string, PendingRetrievalDelivery>();
-  private readonly metadataIndex: TokenMiserRecordIndex<TokenMiserObjectMetadata>;
-  private readonly observationIndex: TokenMiserRecordIndex<TokenMiserCodeModeObservation>;
+    new Map<string, { createdAt: number; threadId: string }>();
+  private readonly replayUpdates = new Map<string, TokenMiserObjectMetadata>();
+  private readonly owners = new Map<string, string>();
+  private readonly metadataIndexes = new Map<string, TokenMiserRecordIndex<TokenMiserObjectMetadata>>();
+  private readonly observationIndexes = new Map<string, TokenMiserRecordIndex<TokenMiserCodeModeObservation>>();
 
   constructor(
     private readonly rootDir: string,
     private readonly options: TokenMiserStoreOptions = {},
-  ) {
-    this.metadataIndex = new TokenMiserRecordIndex(rootDir, (name) =>
-      this.readMetadata(name.slice(0, -METADATA_SUFFIX.length))
-    );
-    this.observationIndex = new TokenMiserRecordIndex(
-      this.observationRoot(),
-      (name) => this.readCodeModeObservation(name),
-    );
+  ) {}
+
+  private threadKey(threadId: string): string {
+    return createHash("sha256").update(threadId).digest("hex");
+  }
+
+  private threadRoot(key: string): string {
+    return path.join(this.rootDir, "threads", key);
+  }
+
+  private async threadKeys(threadId?: string): Promise<string[]> {
+    if (threadId !== undefined) return [this.threadKey(threadId)];
+    return await withTokenMiserFileOperation(() => fs.readdir(path.join(this.rootDir, "threads")))
+      .then((names) => names.filter((name) => /^[a-f0-9]{64}$/.test(name)))
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      });
+  }
+
+  private metadataIndex(key: string): TokenMiserRecordIndex<TokenMiserObjectMetadata> {
+    let index = this.metadataIndexes.get(key);
+    if (!index) {
+      index = new TokenMiserRecordIndex(this.threadRoot(key), async (name) => {
+        const value = JSON.parse(await readStoredFile(path.join(this.threadRoot(key), name))) as TokenMiserObjectMetadata;
+        if (value.version !== 1 || this.threadKey(value.threadId) !== key || `${value.objectId}.json` !== name) return undefined;
+        this.owners.set(value.objectId, key);
+        return value;
+      });
+      this.metadataIndexes.set(key, index);
+    }
+    return index;
+  }
+
+  private observationIndex(key: string): TokenMiserRecordIndex<TokenMiserCodeModeObservation> {
+    let index = this.observationIndexes.get(key);
+    if (!index) {
+      const directory = path.join(this.threadRoot(key), OBSERVATION_DIRECTORY);
+      index = new TokenMiserRecordIndex(directory, async (name) => {
+        const value = JSON.parse(await readStoredFile(path.join(directory, name))) as TokenMiserCodeModeObservation;
+        return value.version === 1 && this.threadKey(value.threadId) === key ? value : undefined;
+      });
+      this.observationIndexes.set(key, index);
+    }
+    return index;
   }
 
   async store(params: TokenMiserStoreParams): Promise<TokenMiserObjectMetadata> {
@@ -250,10 +289,12 @@ export class TokenMiserStore {
   }
 
   async stage(params: TokenMiserStoreParams): Promise<TokenMiserStagedObject> {
+    if (await this.isArchived(params.threadId)) throw new Error("Token Miser originals are unavailable for an archived thread.");
     const objectId = params.objectId ?? randomUUID();
     if (!isSafeObjectId(objectId)) {
       throw new Error("Invalid Token Miser object id.");
     }
+    if (await this.readMetadata(objectId, params.threadId)) throw new Error("Token Miser object id already exists.");
     const originalCharacters =
       params.baselineCharacters ?? utf8ByteLength(params.output);
     const metadata: TokenMiserObjectMetadata = {
@@ -287,16 +328,22 @@ export class TokenMiserStore {
               params.parentCumulativeInputTokens,
           }
         : {}),
-      summary: params.summary,
+      summary: { summary: params.disposition === "passed_through" ? "Output passed through." : "Output summarized.", usefulDetails: [] },
       ...(params.disposition ? { disposition: params.disposition } : {}),
       ...(params.groupId ? { groupId: params.groupId } : {}),
-      ...(params.groupMembers ? { groupMembers: params.groupMembers } : {}),
-      ...(params.helperUsage ? { helperUsage: params.helperUsage } : {}),
+      ...(params.groupMembers ? { groupMembers: params.groupMembers.map((member) => ({ objectId: member.objectId, toolCallId: member.toolCallId, toolName: member.toolName, summary: "Output summarized." })) } : {}),
+      ...(params.helperUsage ? { helperUsage: safeHelperUsage(params.helperUsage) } : {}),
       ...(params.parentModel ? { parentModel: params.parentModel } : {}),
       ...(params.parentServiceTier
         ? { parentServiceTier: params.parentServiceTier }
         : {}),
     };
+    if (this.owners.has(objectId)) throw new Error("Token Miser object id already reserved.");
+    // Reserve before returning a replacement. The closure retains no raw text.
+    const retained = params.disposition === "passed_through"
+      || this.outputs.put(objectId, params.output);
+    if (!retained) throw new Error("Token Miser temporary output capacity exceeded.");
+    this.owners.set(objectId, this.threadKey(params.threadId));
     let persisted = false;
     let committed = false;
     let discarded = false;
@@ -307,11 +354,16 @@ export class TokenMiserStore {
     };
     const persist = async (): Promise<void> => {
       await serialize(async () => {
+        if (await this.isArchived(metadata.threadId)) {
+          this.outputs.remove(objectId);
+          throw new Error("Token Miser original output expired or unavailable.");
+        }
         if (persisted || committed || discarded) {
           return;
         }
-        await this.ensureRoot();
-        await writePrivateFileAtomic(this.outputPath(objectId), params.output);
+        if (metadata.disposition !== "passed_through" && this.outputs.get(objectId) === undefined) {
+          throw new Error("Token Miser original output expired or unavailable.");
+        }
         persisted = true;
       });
     };
@@ -324,11 +376,9 @@ export class TokenMiserStore {
             return;
           }
           if (!persisted) {
-            await this.ensureRoot();
-            await writePrivateFileAtomic(
-              this.outputPath(objectId),
-              params.output,
-            );
+            if (metadata.disposition !== "passed_through" && this.outputs.get(objectId) === undefined) {
+              throw new Error("Token Miser original output expired or unavailable.");
+            }
             persisted = true;
           }
           await this.writeMetadata(metadata);
@@ -349,14 +399,19 @@ export class TokenMiserStore {
     };
   }
 
-  async readMetadata(objectId: string): Promise<TokenMiserObjectMetadata | undefined> {
+  async readMetadata(objectId: string, threadId?: string): Promise<TokenMiserObjectMetadata | undefined> {
     if (!isSafeObjectId(objectId)) {
       return undefined;
     }
+    const pending = this.replayUpdates.get(objectId);
+    if (pending && (threadId === undefined || pending.threadId === threadId)) return { ...pending };
+    if (threadId === undefined && !this.owners.has(objectId)) await this.listMetadata();
+    const key = threadId === undefined ? this.owners.get(objectId) : this.threadKey(threadId);
+    if (!key) return undefined;
     try {
-      const raw = await readStoredFile(this.metadataPath(objectId));
+      const raw = await readStoredFile(path.join(this.threadRoot(key), `${objectId}.json`));
       const value = JSON.parse(raw) as TokenMiserObjectMetadata;
-      return value?.version === 1 && value.objectId === objectId
+      return value?.version === 1 && value.objectId === objectId && this.threadKey(value.threadId) === key
         ? value
         : undefined;
     } catch (error) {
@@ -496,7 +551,8 @@ export class TokenMiserStore {
     threadId: string;
     visibleText: string;
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
-    const metadata = await this.readMetadata(params.objectId);
+    if (await this.isArchived(params.threadId)) return undefined;
+    const metadata = await this.readMetadata(params.objectId, params.threadId);
     if (
       !metadata
       || metadata.threadId !== params.threadId
@@ -514,14 +570,15 @@ export class TokenMiserStore {
     const begin = `<pwragent_token_miser_retrieval id="${deliveryId}">`;
     const end = `</pwragent_token_miser_retrieval id="${deliveryId}">`;
     const wrappedText = `${begin}\n${params.visibleText}\n${end}`;
-    this.pendingRetrievalDeliveries.set(deliveryId, {
+    if (!this.outputs.put(deliveryId, JSON.stringify({
       createdAt: now,
       objectId: params.objectId,
       threadId: params.threadId,
       visibleText: params.visibleText,
       visibleTextOffset: begin.length + 1,
       wrappedText,
-    });
+    }))) return undefined;
+    this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId });
     return { deliveryId, text: wrappedText };
   }
 
@@ -534,13 +591,18 @@ export class TokenMiserStore {
     // Codex applies one shared ceiling to the outer result. Its truncator keeps
     // both the beginning and end, so attribute only the intersections with
     // those exact UTF-8 byte-budgeted ranges.
+    if (await this.isArchived(params.threadId)) return 0;
     const candidates = [...this.pendingRetrievalDeliveries.entries()]
       .filter(([, pending]) => pending.threadId === params.threadId)
-      .map(([deliveryId, pending]) => ({
-        deliveryId,
-        outputOffset: params.output.indexOf(pending.wrappedText),
-        pending,
-      }))
+      .flatMap(([deliveryId, reference]) => {
+        const text = this.outputs.get(deliveryId);
+        if (!text || Date.now() - reference.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
+          this.abandonRetrievalDelivery(deliveryId);
+          return [];
+        }
+        const pending = JSON.parse(text) as PendingRetrievalDelivery;
+        return [{ deliveryId, outputOffset: params.output.indexOf(pending.wrappedText), pending }];
+      })
       .filter((candidate) => candidate.outputOffset >= 0)
       .sort((left, right) => left.outputOffset - right.outputOffset);
     const visibleRanges = codexVisibleStringRanges(
@@ -549,7 +611,7 @@ export class TokenMiserStore {
     );
     let confirmedCharacters = 0;
     for (const { deliveryId, outputOffset, pending } of candidates) {
-      this.pendingRetrievalDeliveries.delete(deliveryId);
+      this.abandonRetrievalDelivery(deliveryId);
       const visibleTextStart = outputOffset + pending.visibleTextOffset;
       const visibleTextEnd = visibleTextStart + pending.visibleText.length;
       const visibleCharacters = visibleRanges.reduce((total, range) => {
@@ -567,17 +629,19 @@ export class TokenMiserStore {
 
   abandonRetrievalDelivery(deliveryId: string): void {
     this.pendingRetrievalDeliveries.delete(deliveryId);
+    this.outputs.remove(deliveryId);
   }
 
   async listMetadata(threadId?: string): Promise<TokenMiserObjectMetadata[]> {
-    return (await this.metadataIndex.list(threadId))
+    return (await mapTokenMiserFiles(await this.threadKeys(threadId), (key) => this.metadataIndex(key).list(threadId))).flat()
+      .map((entry) => this.replayUpdates.get(entry.objectId) ?? entry)
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
   async recordCodeModeObservation(params: Omit<
     TokenMiserCodeModeObservation,
     "version" | "observationId" | "createdAt"
-  > & { createdAt?: number }): Promise<TokenMiserCodeModeObservation> {
+  > & { createdAt?: number }, publish = true): Promise<TokenMiserCodeModeObservation> {
     const observationId = createHash("sha256")
       .update(JSON.stringify([params.threadId, params.turnId, params.callId]))
       .digest("hex");
@@ -590,15 +654,8 @@ export class TokenMiserStore {
       cellId: params.cellId,
       createdAt: params.createdAt ?? Date.now(),
       outputCharacters: params.outputCharacters,
-      ...(params.outputPreview
-        ? { outputPreview: params.outputPreview.slice(0, 5_000) }
-        : {}),
-      ...(params.outputPreviewTruncated
-        ? { outputPreviewTruncated: true }
-        : {}),
       maxOutputTokens: params.maxOutputTokens,
-      scriptStatus: params.scriptStatus,
-      ...(params.script ? { script: params.script.slice(-4_000) } : {}),
+      scriptStatus: ["completed", "running", "failed", "cancelled"].includes(params.scriptStatus) ? params.scriptStatus : "unknown",
       retrieval: params.retrieval,
       capturedNestedInvocationCount: params.capturedNestedInvocationCount,
       ...(params.capturedCommandInvocationCount === undefined
@@ -614,34 +671,21 @@ export class TokenMiserStore {
         ? {}
         : { capturedOtherInvocationCount: params.capturedOtherInvocationCount }),
     };
-    await fs.mkdir(this.observationRoot(), { recursive: true, mode: 0o700 });
+    await fs.mkdir(this.observationRoot(params.threadId), { recursive: true, mode: 0o700 });
     await writePrivateFileAtomic(
-      this.observationPath(observationId),
+      this.observationPath(observationId, params.threadId),
       `${JSON.stringify(observation)}\n`,
     );
-    this.observationIndex.remember(`${observationId}${METADATA_SUFFIX}`, observation.threadId);
-    await this.options.onCodeModeObservationUpdated?.(observation);
+    this.observationIndex(this.threadKey(observation.threadId)).remember(`${observationId}${METADATA_SUFFIX}`, observation.threadId);
+    if (publish) await this.options.onCodeModeObservationUpdated?.(observation);
     return observation;
   }
 
   async listCodeModeObservations(
     threadId?: string,
   ): Promise<TokenMiserCodeModeObservation[]> {
-    return (await this.observationIndex.list(threadId))
+    return (await mapTokenMiserFiles(await this.threadKeys(threadId), (key) => this.observationIndex(key).list(threadId))).flat()
       .sort((left, right) => left.createdAt - right.createdAt);
-  }
-
-  private async readCodeModeObservation(name: string): Promise<TokenMiserCodeModeObservation | undefined> {
-    try {
-      const raw = await readStoredFile(path.join(this.observationRoot(), name));
-      const value = JSON.parse(raw) as TokenMiserCodeModeObservation;
-      return value?.version === 1
-        && value.observationId === name.slice(0, -METADATA_SUFFIX.length)
-        ? value
-        : undefined;
-    } catch {
-      return undefined;
-    }
   }
 
   async summarizeUsage(params?: {
@@ -658,6 +702,7 @@ export class TokenMiserStore {
     // Accounting and savings can share the same current metadata snapshot.
     const metadata = (metadataSnapshot ?? await this.listMetadata(threadId))
       .filter((entry) => entry.threadId === threadId);
+    const archived = await this.isArchived(threadId);
     const observations = await this.listCodeModeObservations(threadId);
     const metadataByToolUseId = new Map(
       metadata.map((entry) => [entry.toolUseId, entry]),
@@ -687,6 +732,7 @@ export class TokenMiserStore {
         const retrievedTokens = estimateTokenCount(entry.retrievedCharacters);
         return {
           objectId: entry.objectId,
+          originalOutputAvailableUntil: archived ? undefined : this.outputs.expiresAt(entry.objectId),
           turnId: entry.turnId,
           toolUseId: entry.toolUseId,
           toolName: entry.toolName,
@@ -769,63 +815,66 @@ export class TokenMiserStore {
     };
   }
 
-  async prune(params: {
-    maxAgeMs: number;
-    maxBytes: number;
-    now?: number;
-  }): Promise<void> {
-    const now = params.now ?? Date.now();
-    const metadata = await this.listMetadata();
-    const observations = await this.listCodeModeObservations();
-    const retainedObservations: Array<{
-      observation: TokenMiserCodeModeObservation;
-      bytes: number;
-    }> = [];
-    for (const observation of observations) {
-      const observationPath = this.observationPath(observation.observationId);
-      const stats = await fs.stat(observationPath).catch(() => undefined);
-      if (!stats || now - observation.createdAt > params.maxAgeMs) {
-        await fs.rm(observationPath, { force: true });
-        continue;
-      }
-      retainedObservations.push({ observation, bytes: stats.size });
+  async flushThread(threadId: string): Promise<void> {
+    for (const [objectId, metadata] of this.replayUpdates) {
+      if (metadata.threadId !== threadId) continue;
+      await this.updateMetadata(objectId, () => true, "flushed");
     }
-    await this.pruneStalePendingOutputs(
-      new Set(metadata.map((entry) => entry.objectId)),
-      now,
-    );
-    const retained: Array<{ metadata: TokenMiserObjectMetadata; bytes: number }> = [];
-    for (const entry of metadata) {
-      const outputPath = this.outputPath(entry.objectId);
-      const stats = await fs.stat(outputPath).catch(() => undefined);
-      if (!stats || now - entry.createdAt > params.maxAgeMs) {
-        await this.remove(entry.objectId);
-        continue;
-      }
-      retained.push({ metadata: entry, bytes: stats.size });
+  }
+
+  private async isArchived(threadId: string): Promise<boolean> {
+    return await withTokenMiserFileOperation(() => fs.stat(path.join(this.threadRoot(this.threadKey(threadId)), "archived")))
+      .then(() => true)
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      });
+  }
+
+  async archiveThread(threadId: string): Promise<void> {
+    const key = this.threadKey(threadId);
+    await fs.mkdir(this.threadRoot(key), { recursive: true, mode: 0o700 });
+    if (!await this.isArchived(threadId)) await writePrivateFileAtomic(path.join(this.threadRoot(key), "archived"), "1\n");
+    for (const [objectId, owner] of this.owners) {
+      if (owner === key) this.outputs.remove(objectId);
     }
-    const candidates = [
-      ...retained.map((entry) => ({
-        bytes: entry.bytes,
-        createdAt: entry.metadata.createdAt,
-        remove: () => this.remove(entry.metadata.objectId),
-      })),
-      ...retainedObservations.map((entry) => ({
-        bytes: entry.bytes,
-        createdAt: entry.observation.createdAt,
-        remove: () => fs.rm(
-          this.observationPath(entry.observation.observationId),
-          { force: true },
-        ),
-      })),
-    ].sort((left, right) => left.createdAt - right.createdAt);
-    let totalBytes = candidates.reduce((total, entry) => total + entry.bytes, 0);
-    for (const entry of candidates) {
-      if (totalBytes <= params.maxBytes) {
-        break;
+    for (const [id, pending] of this.pendingRetrievalDeliveries) {
+      if (pending.threadId === threadId) this.abandonRetrievalDelivery(id);
+    }
+    await this.flushThread(threadId);
+  }
+
+  async prune(_params: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
+    await this.ensureRoot();
+    // Only legacy flat files are migrated; safe accounting has no payload TTL.
+    const directory = await fs.opendir(this.rootDir);
+    for await (const entry of directory) {
+      if (!entry.isFile()) continue;
+      const file = path.join(this.rootDir, entry.name);
+      if (entry.name.endsWith(".txt") || entry.name.endsWith(".tmp")) {
+        await withTokenMiserFileOperation(() => fs.rm(file, { force: true }));
+      } else if (entry.name.endsWith(".json")) {
+        const metadata = JSON.parse(await readStoredFile(file)) as TokenMiserObjectMetadata;
+        if (metadata.version !== 1 || !isSafeObjectId(metadata.objectId) || typeof metadata.threadId !== "string") {
+          throw new Error("Invalid legacy Token Miser accounting record; migration stopped.");
+        }
+        metadata.summary = { summary: metadata.disposition === "passed_through" ? "Output passed through." : "Output summarized.", usefulDetails: [] };
+        metadata.groupMembers = metadata.groupMembers?.map((member) => ({ objectId: member.objectId, toolCallId: member.toolCallId, toolName: member.toolName, summary: "Output summarized." }));
+        if (!await this.readMetadata(metadata.objectId, metadata.threadId)) await this.writeMetadata(metadata);
+        await withTokenMiserFileOperation(() => fs.rm(file, { force: true }));
       }
-      await entry.remove();
-      totalBytes -= entry.bytes;
+    }
+    const legacy = await fs.opendir(path.join(this.rootDir, OBSERVATION_DIRECTORY)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (legacy) for await (const entry of legacy) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const file = path.join(this.rootDir, OBSERVATION_DIRECTORY, entry.name);
+      const observation = JSON.parse(await readStoredFile(file)) as TokenMiserCodeModeObservation;
+      if (observation.version !== 1 || typeof observation.threadId !== "string") throw new Error("Invalid legacy Token Miser observation; migration stopped.");
+      await this.recordCodeModeObservation(observation, false);
+      await withTokenMiserFileOperation(() => fs.rm(file, { force: true }));
     }
   }
 
@@ -833,7 +882,8 @@ export class TokenMiserStore {
     objectId: string,
     threadId: string,
   ): Promise<TokenMiserStoredObject | undefined> {
-    const metadata = await this.readMetadata(objectId);
+    if (await this.isArchived(threadId)) return undefined;
+    const metadata = await this.readMetadata(objectId, threadId);
     if (
       !metadata
       || metadata.threadId !== threadId
@@ -841,44 +891,8 @@ export class TokenMiserStore {
     ) {
       return undefined;
     }
-    const output = await readStoredFile(this.outputPath(objectId)).catch(
-      (error: unknown) => {
-        if (isMissingFileError(error)) {
-          return undefined;
-        }
-        throw error;
-      },
-    );
+    const output = this.outputs.get(objectId);
     return output === undefined ? undefined : { metadata, output };
-  }
-
-  private async pruneStalePendingOutputs(
-    committedObjectIds: ReadonlySet<string>,
-    now: number,
-  ): Promise<void> {
-    const entries = await fs.readdir(this.rootDir).catch((error: unknown) => {
-      if (isMissingFileError(error)) {
-        return [];
-      }
-      throw error;
-    });
-    await mapTokenMiserFiles(entries, async (entry) => {
-      if (!entry.endsWith(OUTPUT_SUFFIX)) {
-        return;
-      }
-      const objectId = entry.slice(0, -OUTPUT_SUFFIX.length);
-      if (!isSafeObjectId(objectId) || committedObjectIds.has(objectId)) {
-        return;
-      }
-      const outputPath = this.outputPath(objectId);
-      const stats = await fs.stat(outputPath).catch(() => undefined);
-      if (
-        stats
-        && now - stats.mtimeMs > PENDING_OUTPUT_ORPHAN_GRACE_MS
-      ) {
-        await fs.rm(outputPath, { force: true });
-      }
-    });
   }
 
   private async recordRetrieval(objectId: string, characters: number): Promise<void> {
@@ -971,11 +985,16 @@ export class TokenMiserStore {
       .catch(() => undefined);
     let updated: TokenMiserObjectMetadata | undefined;
     const next = previous.then(async () => {
-      const metadata = await this.readMetadata(objectId);
+      const metadata = this.replayUpdates.get(objectId) ?? await this.readMetadata(objectId);
       if (!metadata || !update(metadata)) {
         return;
       }
-      await this.writeMetadata(metadata);
+      if (reason === "replay") {
+        this.replayUpdates.set(objectId, metadata);
+      } else {
+        await this.writeMetadata(metadata);
+        this.replayUpdates.delete(objectId);
+      }
       await this.options.onMetadataUpdated?.(metadata, reason);
       updated = metadata;
     });
@@ -991,11 +1010,12 @@ export class TokenMiserStore {
   }
 
   private async remove(objectId: string): Promise<void> {
+    this.outputs.remove(objectId);
     await Promise.all([
       fs.rm(this.outputPath(objectId), { force: true }),
       fs.rm(this.metadataPath(objectId), { force: true }),
     ]);
-    this.metadataIndex.forget(`${objectId}${METADATA_SUFFIX}`);
+    this.metadataIndex(this.owners.get(objectId)!).forget(`${objectId}${METADATA_SUFFIX}`);
   }
 
   private async ensureRoot(): Promise<void> {
@@ -1003,28 +1023,68 @@ export class TokenMiserStore {
   }
 
   private async writeMetadata(metadata: TokenMiserObjectMetadata): Promise<void> {
+    await fs.mkdir(this.threadRoot(this.threadKey(metadata.threadId)), { recursive: true, mode: 0o700 });
+    this.owners.set(metadata.objectId, this.threadKey(metadata.threadId));
     await writePrivateFileAtomic(
       this.metadataPath(metadata.objectId),
-      `${JSON.stringify(metadata)}\n`,
+      `${JSON.stringify(safeMetadata(metadata))}\n`,
     );
-    this.metadataIndex.remember(`${metadata.objectId}${METADATA_SUFFIX}`, metadata.threadId);
+    this.metadataIndex(this.threadKey(metadata.threadId)).remember(`${metadata.objectId}${METADATA_SUFFIX}`, metadata.threadId);
   }
 
   private metadataPath(objectId: string): string {
-    return path.join(this.rootDir, `${objectId}${METADATA_SUFFIX}`);
+    return path.join(this.threadRoot(this.owners.get(objectId)!), `${objectId}${METADATA_SUFFIX}`);
   }
 
   private outputPath(objectId: string): string {
     return path.join(this.rootDir, `${objectId}${OUTPUT_SUFFIX}`);
   }
 
-  private observationRoot(): string {
-    return path.join(this.rootDir, OBSERVATION_DIRECTORY);
+  private observationRoot(threadId: string): string {
+    return path.join(this.threadRoot(this.threadKey(threadId)), OBSERVATION_DIRECTORY);
   }
 
-  private observationPath(observationId: string): string {
-    return path.join(this.observationRoot(), `${observationId}${METADATA_SUFFIX}`);
+  private observationPath(observationId: string, threadId: string): string {
+    return path.join(this.observationRoot(threadId), `${observationId}${METADATA_SUFFIX}`);
   }
+}
+
+function safeHelperUsage(value: TokenMiserHelperUsage): TokenMiserHelperUsage {
+  return {
+    helperThreadId: value.helperThreadId,
+    helperTurnId: value.helperTurnId,
+    model: value.model,
+    reasoningEffort: value.reasoningEffort,
+    serviceTier: value.serviceTier,
+    tokenUsage: safeTokenUsage(value.tokenUsage),
+  };
+}
+
+function safeTokenUsage(value: unknown, depth = 0): unknown {
+  if (!value || typeof value !== "object" || depth > 8) return undefined;
+  const result: Record<string, unknown> = {};
+  const counts = new Set(["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningOutputTokens", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_output_tokens", "cache_read_input_tokens", "cached_tokens", "reasoning_tokens"]);
+  const containers = new Set(["tokenUsage", "token_usage", "info", "last", "last_token_usage", "total", "total_token_usage", "data", "payload", "usage", "result", "input_tokens_details", "output_tokens_details"]);
+  for (const [key, entry] of Object.entries(value)) {
+    if (counts.has(key) && typeof entry === "number" && Number.isFinite(entry) && entry >= 0) result[key] = entry;
+    else if (containers.has(key)) result[key] = safeTokenUsage(entry, depth + 1);
+  }
+  return result;
+}
+
+function safeMetadata(value: TokenMiserObjectMetadata): TokenMiserObjectMetadata {
+  const result = {} as TokenMiserObjectMetadata;
+  // Deliberate allowlist: legacy JSON and helper objects may have extra content.
+  const keys = ["version", "objectId", "threadId", "turnId", "toolUseId", "toolName", "createdAt", "originalCharacters", "baselineParentTokens", "replacementCharacters", "retrievedCharacters", "replayTrackingVersion", "parentRequestsObservedAfterGate", "lastParentCumulativeInputTokens", "cachedReplayCount", "cachedBaselineTokens", "cachedRevealedTokens", "replayTrackingStoppedAt", "parentRequestEpoch", "disposition", "groupId", "parentModel", "parentServiceTier"] as const;
+  for (const key of keys) {
+    Object.assign(result, { [key]: value[key] });
+  }
+  result.summary = { summary: value.disposition === "passed_through" ? "Output passed through." : "Output summarized.", usefulDetails: [] };
+  if (value.helperUsage) result.helperUsage = safeHelperUsage(value.helperUsage);
+  if (value.groupMembers) result.groupMembers = value.groupMembers.map((member) => ({
+    objectId: member.objectId, toolCallId: member.toolCallId, toolName: member.toolName, summary: "Output summarized.",
+  }));
+  return result;
 }
 
 async function writePrivateFileAtomic(filePath: string, contents: string): Promise<void> {

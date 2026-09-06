@@ -53,10 +53,10 @@ descriptors above 10,239: <https://github.com/libuv/libuv/issues/5204>.
 5. Startup reconciliation and retention legitimately need profile-wide data.
    Settings also requests a profile-wide usage summary. They need bounded scans
    even after thread-specific callers stop reading unrelated records.
-6. Retention runs at startup, with a seven-day age and 512 MiB payload budget.
+6. Retention runs at startup and managed Codex runtime restart, with a seven-day age and 512 MiB payload budget.
    This is not a continuous disk quota. It currently counts output and
    observation bytes, but omits result JSON bytes. Script/preview collection and
-   the boot-only retention schedule are existing product behavior; this repair
+   the startup/runtime-restart retention schedule are existing product behavior; this repair
    should not silently redefine them.
 
 ## Selected design
@@ -126,3 +126,75 @@ accounting/savings reads, and failed-rename temporary-file cleanup. The original
 mixed workload reaches 42 simultaneous operations against a budget of 16.
 The corrected implementation also covers local/external commits during discovery
 and live cross-instance changes without a persistent content cache.
+
+
+## Retention redesign review (September 6, 2026)
+
+The stacked retention change supersedes the original retention choice above.
+Raw output is sensitive even when it is small or passed through. Helper summaries,
+useful details, group summaries, scripts, and previews are also content. Durable
+records must project an explicit accounting schema, with fixed decision notes.
+They must never serialize arbitrary helper output. Codex thread APIs cannot
+reconstruct the exact pre-reduction output; no rollout reader is appropriate.
+
+The selected retrieval lifetime is five minutes in process memory, with a shared
+32 MiB process budget and a 4 MiB entry ceiling. Staged outputs count against the
+same budget. Expiry and eviction are irreversible; acceptance does not extend
+TTL. Failed staging cannot advertise retrieval. Restart provides accounting only.
+Archive invalidates staged and accepted payloads and prevents late callbacks from
+resurrecting them, while retaining historical accounting.
+
+Durable accounting belongs under a SHA-256 thread key, so a cold thread read
+opens only that thread's records. Global maintenance is an explicit bounded
+operation under the existing process-wide file I/O limiter. Migration removes
+legacy payload files and replaces content-bearing records with accounting-only
+records before removing the legacy JSON. Migration must be restartable and must
+not silently drop valid historical costs. No operator profile is used in tests.
+
+Replay counters should be persisted at lifecycle boundaries, not once per gate
+per model request. No new SQLite path or timer is warranted. Filesystem bytes and
+atomic replacements, in addition to SQLite commits, require regression budgets.
+A crash may lose unflushed replay estimates; accepted gate/helper costs must stay
+durable. The UI must explain temporary original availability and retain costs,
+tokens and fixed notes after restart. Implementation validation and measured
+write costs will be recorded below before publication.
+
+
+### Implemented limits and validation
+
+The cache charges UTF-8 bytes plus UTF-16 string storage and per-entry overhead
+against its 32 MiB budget. Original and grouped payloads, staged reservations,
+pending delivery text, and pre-reduction nested Code Mode captures share this process budget. A 4 MiB charged entry limit
+can cause a large reduction to fail open without advertising a retrieval ID.
+Cache timers only release memory; they do not write to disk.
+
+The filesystem regression permits one atomic accounting replacement below 1 KiB
+for the contrived single-output acceptance, zero replacements for 100 replay
+requests, and one replacement below 1 KiB at turn-boundary flush. At ten such
+gates per minute for an eight-hour day, these upper bounds project 9.83 MB/day
+of filesystem payload writes, assuming one flush per gate. Each further turn
+with that gate active adds another fixture-sized replacement. Actual filesystem journal/page traffic is not
+included. Group accounting scales with member IDs. Observations retain counts
+and correlation IDs and require one small JSON write per call. At a conservative
+1 KiB per observation and the same call rate, they add 4.92 MB/day. There is no
+new SQLite write path or timer: incremental SQLite write cost is 0 MB/day; the
+existing Token Miser ledger write-budget tests remain in force. Flush callbacks
+explicitly skip per-gate ledger publication.
+
+Eight retention regressions failed with the parent's store substituted in this
+worktree (raw/script/preview writes, restart, archive, thread-scoped discovery,
+legacy migration, filesystem write count, grouped content, cross-thread ID reuse). The prior I/O tests
+continue to enforce the shared 16-operation budget and cross-instance freshness.
+Other instances see replay totals after a lifecycle flush. A crash can lose the
+unflushed estimates; accepted gate and helper costs remain durable.
+
+Safe accounting is not aged out by the former raw-output TTL or byte quota.
+Its disk usage continues to grow with history. Legacy cleanup runs at startup
+and managed Codex runtime restart, before capability discovery, and does not
+publish one live refresh per migrated observation. It does not run periodically
+or against archived-thread accounting. An invalid legacy JSON record stops
+cleanup with an error rather than silently dropping potentially valid costs;
+that record requires follow-up. Multiple old app versions can still create
+legacy payloads until those processes are upgraded. Archived threads retain
+accounting but cannot create new temporary originals, including after reopening.
+No operator profile, app restart, or Codex-owned file was used for validation.
