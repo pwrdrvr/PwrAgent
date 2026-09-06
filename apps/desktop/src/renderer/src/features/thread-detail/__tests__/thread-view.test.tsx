@@ -2841,6 +2841,46 @@ describe("ThreadView", () => {
     );
   });
 
+  it("opens submitted image previews while the launchpad is materializing", () => {
+    const dataUrl = "data:image/png;base64,aGVsbG8=";
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={{
+          key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
+          threadKeys: [], needsAttentionCount: 0,
+        }}
+        selectedLaunchpad={{
+          backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "Inspect this screenshot", workMode: "worktree", createdAt: 1, updatedAt: 1,
+        }}
+        pendingLaunchpadCreation={{
+          selectionKey: "launchpad:directory:/repo", directoryKey: "directory:/repo",
+          title: "Inspect this screenshot",
+          input: [{ type: "image", url: dataUrl }],
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "blob:expanded-transcript-image");
+    expect(screen.getByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Expanded image" })).not.toBeInTheDocument();
+  });
+
   it("opens transcript image previews in a lightbox and dismisses them with Escape", () => {
     const dataUrl = "data:image/png;base64,aGVsbG8=";
 

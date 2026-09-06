@@ -3231,6 +3231,32 @@ export function ThreadView(props: ThreadViewProps) {
     );
   }
 
+  const imageLightbox = expandedImage ? (
+    <ImageLightbox
+      src={expandedImage.url}
+      alt={expandedImage.alt ?? "Expanded image"}
+      position={expandedImageIndex >= 0 ? expandedImageIndex + 1 : undefined}
+      total={expandedImageIndex >= 0 ? threadImageGallery.length : undefined}
+      onClose={() => {
+        setExpandedImage(undefined);
+      }}
+      onNext={
+        expandedImageIndex >= 0 && expandedImageIndex < threadImageGallery.length - 1
+          ? () => {
+              setExpandedImage(threadImageGallery[expandedImageIndex + 1]);
+            }
+          : undefined
+      }
+      onPrevious={
+        expandedImageIndex > 0
+          ? () => {
+              setExpandedImage(threadImageGallery[expandedImageIndex - 1]);
+            }
+          : undefined
+      }
+    />
+  ) : null;
+
   if (selectedLaunchpad && props.selectedDirectory) {
     const launchpadBackend = props.backends.find(
       (backend) => backend.kind === selectedLaunchpad.backend
@@ -3463,6 +3489,7 @@ export function ThreadView(props: ThreadViewProps) {
             pinned={contextRailPinned}
           />
         </div>
+        {imageLightbox}
       </section>
     );
   }
@@ -3882,31 +3909,7 @@ export function ThreadView(props: ThreadViewProps) {
         />
       </div>
 
-      {expandedImage ? (
-        <ImageLightbox
-          src={expandedImage.url}
-          alt={expandedImage.alt ?? "Expanded image"}
-          position={expandedImageIndex >= 0 ? expandedImageIndex + 1 : undefined}
-          total={expandedImageIndex >= 0 ? threadImageGallery.length : undefined}
-          onClose={() => {
-            setExpandedImage(undefined);
-          }}
-          onNext={
-            expandedImageIndex >= 0 && expandedImageIndex < threadImageGallery.length - 1
-              ? () => {
-                  setExpandedImage(threadImageGallery[expandedImageIndex + 1]);
-                }
-              : undefined
-          }
-          onPrevious={
-            expandedImageIndex > 0
-              ? () => {
-                  setExpandedImage(threadImageGallery[expandedImageIndex - 1]);
-                }
-              : undefined
-          }
-        />
-      ) : null}
+      {imageLightbox}
 
       {rewindDialog ? (
         <div className="workspace-handoff-modal">
