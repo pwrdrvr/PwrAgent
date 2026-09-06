@@ -52,6 +52,7 @@ import {
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "./useNavigationDirectoryDisclosure";
 import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";
 import { navigationIdentityFromThreadKey } from "./navigation-query-state";
 import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
@@ -2977,6 +2978,7 @@ export function useThreadNavigation(
   options: UseThreadNavigationOptions = {}
 ): {
   browseMode: BrowseMode;
+  directoryDisclosure: NavigationDirectoryDisclosure;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
   createThread: (
@@ -3210,6 +3212,7 @@ export function useThreadNavigation(
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
+  const directoryDisclosure = useNavigationDirectoryDisclosure();
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
   const archiveThreadRequest = desktopApi?.archiveThread;
@@ -8721,6 +8724,7 @@ export function useThreadNavigation(
 
   return {
     browseMode,
+    directoryDisclosure,
     composerSourceThreadKey,
     createThread,
     createSubthread,

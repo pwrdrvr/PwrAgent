@@ -2641,6 +2641,7 @@ function DesktopAppShell(props: {
         style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
       >
         <Sidebar
+          directoryDisclosure={navigation.directoryDisclosure}
           pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
           onSelectPendingLaunchpad={(creation) => {
             navigation.selectPendingLaunchpad(creation.selectionKey);

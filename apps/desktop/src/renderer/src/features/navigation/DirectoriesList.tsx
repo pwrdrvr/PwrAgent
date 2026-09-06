@@ -72,7 +72,13 @@ import {
   type ExpandedDirectoryThreadRenderModel,
 } from "./directory-thread-render-model";
 
+import {
+  useNavigationDirectoryDisclosure,
+  type NavigationDirectoryDisclosure,
+} from "../../lib/useNavigationDirectoryDisclosure";
+
 type DirectoriesListProps = {
+  directoryDisclosure?: NavigationDirectoryDisclosure;
   approvalRequestThreadKeys?: Record<string, boolean>;
   /** Thread keys with a live integrated terminal in the main process. */
   terminalThreadKeys?: Record<string, boolean>;
@@ -477,14 +483,15 @@ function DirectoryCount(props: {
 }
 
 export function DirectoriesList(props: DirectoriesListProps) {
-  const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>({});
+  const localDisclosure = useNavigationDirectoryDisclosure();
+  const {
+    expandedByKey, setExpandedByKey, unpinnedExpandedByKey, setUnpinnedExpandedByKey,
+    previousSelectedItemKeyRef, handledRevealRequestRef,
+  } =
+    props.directoryDisclosure ?? localDisclosure;
   const unavailableDirectoryTooltip = useViewportTooltip({
     className: "viewport-tooltip",
   });
-  // Per-directory "show all unpinned threads" toggle, keyed by directory.key.
-  const [unpinnedExpandedByKey, setUnpinnedExpandedByKey] = useState<
-    Record<string, boolean>
-  >({});
   const dropIndicator = useDropIndicatorController();
   // Sub-thread (child) drag/drop state — kept SEPARATE from the
   // pinned-thread / directory drag state above so a child reorder can
@@ -506,8 +513,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const directoryDropIndicator = useDropIndicatorController();
   const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
     useState(false);
-  const previousSelectedItemKeyRef = useRef<string | undefined>(undefined);
-  const handledRevealRequestRef = useRef(0);
   const threadPinDragSessionRef = useRef<ThreadPinDragSession | undefined>(
     undefined,
   );
@@ -996,7 +1001,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         [matchingDirectory.key]: true,
       };
     });
-  }, [visibleDirectories, props.selectedItemKey]);
+  }, [previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey]);
 
   useEffect(() => {
     const request = revealSelectedThreadRequest ?? 0;
@@ -1081,6 +1086,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       }));
     }
   }, [
+    handledRevealRequestRef,
+    setExpandedByKey,
+    setUnpinnedExpandedByKey,
     revealSelectedThreadRequest,
     selectedItemKeyForReveal,
     setDirectoryThreadsCollapsed,
