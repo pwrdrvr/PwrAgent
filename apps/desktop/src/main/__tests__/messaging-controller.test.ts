@@ -1758,18 +1758,63 @@ describe("MessagingController", () => {
     harness.controller.dispose();
   });
 
-  it("does not overwrite the actor's next action with late peer results", async () => {
+  it.each([
+    ["/resume", "/remote/project", "project_threads"],
+    ["/resume", "remote:project", "project_threads"],
+    ["/agent", "/remote/project", "agents"],
+    ["/agent", "remote:project", "agents"],
+  ])("resolves late peer directory selection for %s --cwd %s", async (command, selector, mode) => {
+    const peer = createDeferred<void>();
+    const local = buildNavigationSnapshot();
+    const remoteDirectory = {
+      ...local.directories[0]!,
+      key: "remote:project", path: "/remote/project", label: "Remote project", threadKeys: [],
+    };
+    const complete = { ...local, directories: [...local.directories, remoteDirectory] };
+    const harness = await createHarness({
+      getNavigationSnapshot: async (_request, options) => {
+        await options?.onProgress?.({ ...local, federationRefresh: { pendingPeers: 1, failedPeers: 0 } });
+        await peer.promise;
+        await options?.onProgress?.(complete);
+        return complete;
+      },
+    });
+    const pending = harness.controller.handleInboundEvent(buildCommandEvent(`${command} --cwd ${selector}`));
+    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
+    const browseSessionId = (harness.delivered[0] as { browseSessionId: string }).browseSessionId;
+    peer.resolve();
+    await pending;
+    expect(harness.delivered[1]).toMatchObject({
+      browseSessionId, delivery: { mode: "update" },
+    });
+    await expect(harness.store.getBrowseSession(browseSessionId, { now: 1000 })).resolves.toMatchObject({
+      mode,
+      selectedProject: {
+        directoryKey: remoteDirectory.key, path: remoteDirectory.path, label: remoteDirectory.label,
+      },
+    });
+    expect(JSON.stringify(harness.delivered[1])).not.toContain("Thread one");
+    harness.controller.dispose();
+  });
+
+  it.each(["", " --cwd /remote/project"])("does not overwrite the actor's next action with late peer results%s", async (args) => {
     const peer = createDeferred<void>();
     const navigation = buildNavigationSnapshot();
+    const complete = {
+      ...navigation,
+      directories: [...navigation.directories, {
+        ...navigation.directories[0]!, key: "remote:project", path: "/remote/project",
+      }],
+    };
     const harness = await createHarness({
       getNavigationSnapshot: async (_request, options) => {
         await options?.onProgress?.(navigation);
         await peer.promise;
-        await options?.onProgress?.(navigation);
-        return navigation;
+        await options?.onProgress?.(complete);
+        return complete;
       },
     });
-    const pending = harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    const pending = harness.controller.handleInboundEvent(buildCommandEvent(`/resume${args}`));
     await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
     await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
     const afterAction = harness.delivered.length;

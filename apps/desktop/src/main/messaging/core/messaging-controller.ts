@@ -7936,7 +7936,7 @@ export class MessagingController {
       };
       await this.renderResumeBrowser(session, navigation, event, current);
       return session;
-    });
+    }, parsed.cwd);
   }
 
   private async presentAgentBrowser(
@@ -8016,7 +8016,7 @@ export class MessagingController {
       };
       await this.renderResumeBrowser(session, navigation, event, current);
       return session;
-    });
+    }, parsed.cwd);
   }
 
   private async presentProgressiveBrowse(
@@ -8026,6 +8026,7 @@ export class MessagingController {
       navigation: NavigationSnapshot,
       current: () => boolean,
     ) => Promise<MessagingBrowseSessionRecord | undefined>,
+    requestedDirectory?: string,
   ): Promise<void> {
     const key = buildMessagingConversationKey(event.channel);
     const generation = Symbol("browse");
@@ -8044,7 +8045,26 @@ export class MessagingController {
       if (!session) return;
       const stored = await this.options.store.getBrowseSession(session.id, { now: this.now() });
       if (!stored || !current()) return;
-      await this.renderResumeBrowser(stored, navigation, event, current);
+      // A --cwd selector may name a directory absent from the initial local
+      // publication. Retain it for this refresh, without replacing a project
+      // already selected or reviving a browse invalidated by an actor action.
+      const directory = requestedDirectory && !stored.selectedProject
+        ? navigation.directories.find((candidate) =>
+            candidate.path === requestedDirectory || candidate.key === requestedDirectory,
+          )
+        : undefined;
+      const updated = directory
+        ? {
+            ...stored,
+            mode: stored.mode === "recents" ? "project_threads" as const : stored.mode,
+            selectedProject: {
+              directoryKey: directory.key,
+              label: directory.label,
+              path: directory.path,
+            },
+          }
+        : stored;
+      await this.renderResumeBrowser(updated, navigation, event, current);
     };
     try {
       const navigation = await this.options.backend.getNavigationSnapshot(request, { onProgress });
