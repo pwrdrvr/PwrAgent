@@ -39,6 +39,31 @@ import {
 } from "./federation-redaction";
 import { FederationSessionRegistry } from "./federation-session-state";
 import type { FederationStore } from "./federation-store";
+import { FederationEnvelopeDiagnostics } from "./federation-envelope-diagnostics";
+
+type EnvelopeDiagnosticsContext = {
+  diagnostics: FederationEnvelopeDiagnostics;
+  peerId: string;
+  instanceLabel?: (id: string) => string | undefined;
+};
+
+function envelopeLogFields(envelope: FederationProtocolEnvelope, context?: EnvelopeDiagnosticsContext) {
+  return {
+    ...(context?.diagnostics ?? new FederationEnvelopeDiagnostics()).describe(envelope, context?.instanceLabel),
+    peerId: context?.peerId,
+    peerLabel: context?.instanceLabel?.(context.peerId),
+  };
+}
+
+function observeReceivedEnvelope(envelope: FederationProtocolEnvelope, byteCount: number, context: EnvelopeDiagnosticsContext) {
+  context.diagnostics.observe(envelope);
+  if (byteCount >= FEDERATION_LARGE_FRAME_LOG_BYTES && envelope.kind !== "blob_chunk") {
+    log.info("large federation frame received", {
+      byteCount,
+      ...envelopeLogFields(envelope, context),
+    });
+  }
+}
 
 const log = getMainLogger("pwragent:federation-transport");
 const FEDERATION_NOISE_TRANSPORT = "noise_ik_25519_aesgcm_sha256";
@@ -265,6 +290,7 @@ export type FederationGatewayConnection = {
 };
 
 export type FederationGatewayWebSocketServerOptions = {
+  instanceLabel?: (id: string) => string | undefined;
   gatewayInstanceId: FederationInstanceId;
   gatewayPrivateKeyPem: string;
   gatewayPublicKeyPem: string;
@@ -317,6 +343,7 @@ export type FederationGatewayWebSocketServerOptions = {
 };
 
 export class FederationGatewayWebSocketServer {
+  private readonly envelopeDiagnostics = new FederationEnvelopeDiagnostics();
   private httpServer?: http.Server;
   private wsServer?: WebSocketServer;
   private sweepTimer?: ReturnType<typeof setInterval>;
@@ -584,6 +611,11 @@ export class FederationGatewayWebSocketServer {
       connectedAt: Date.now(),
       capabilities: decision.capabilities,
     });
+    const diagnosticsContext: EnvelopeDiagnosticsContext = {
+      diagnostics: this.envelopeDiagnostics,
+      peerId: decision.peer.id,
+      instanceLabel: this.options.instanceLabel,
+    };
     const connection: FederationGatewayConnection = {
       peerId: decision.peer.id,
       sessionId,
@@ -594,6 +626,7 @@ export class FederationGatewayWebSocketServer {
           { kind: "envelope", envelope },
           transport,
           this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
+          diagnosticsContext,
         );
         if (byteCount > 0) {
           this.options.onEnvelopeTransfer?.({
@@ -611,6 +644,7 @@ export class FederationGatewayWebSocketServer {
           { kind: "envelope", envelope },
           transport,
           this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
+          diagnosticsContext,
         );
         if (byteCount > 0) {
           this.options.onEnvelopeTransfer?.({
@@ -750,6 +784,7 @@ export class FederationGatewayWebSocketServer {
         return;
       }
       if (!next || next.kind !== "envelope") continue;
+      observeReceivedEnvelope(next.envelope, frame.byteLength, diagnosticsContext);
       this.sessions.heartbeat(sessionId, Date.now());
       this.options.onEnvelopeTransfer?.({
         peerId: connection.peerId,
@@ -827,6 +862,7 @@ export type FederationClientWebSocketClient = {
 };
 
 export async function connectFederationClient(params: {
+  instanceLabel?: (id: string) => string | undefined;
   url: string;
   mode: "enroll" | "reconnect";
   gatewayInstanceId: FederationInstanceId;
@@ -951,6 +987,11 @@ async function establishFederationClient(
   reader: FederationFrameReader,
 ): Promise<FederationClientWebSocketClient> {
   const maxFrameBytes = params.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES;
+  const diagnosticsContext: EnvelopeDiagnosticsContext = {
+    diagnostics: new FederationEnvelopeDiagnostics(),
+    peerId: params.gatewayInstanceId,
+    instanceLabel: params.instanceLabel,
+  };
   await waitForOpen(socket);
 
   // Phase 1: Noise_IK handshake (initiator). Skipped in tunnel mode.
@@ -1142,6 +1183,7 @@ async function establishFederationClient(
         return;
       }
       if (message?.kind === "envelope") {
+        observeReceivedEnvelope(message.envelope, frame.byteLength, diagnosticsContext);
         params.onEnvelopeTransfer?.({
           direction: "received",
           byteCount: frame.byteLength,
@@ -1165,6 +1207,7 @@ async function establishFederationClient(
         { kind: "envelope", envelope },
         transport,
         maxFrameBytes,
+        diagnosticsContext,
       );
       if (byteCount > 0) {
         params.onEnvelopeTransfer?.({
@@ -1179,6 +1222,7 @@ async function establishFederationClient(
         { kind: "envelope", envelope },
         transport,
         maxFrameBytes,
+        diagnosticsContext,
       );
       if (byteCount > 0) {
         params.onEnvelopeTransfer?.({
@@ -1287,8 +1331,10 @@ function sendFrame(
   message: FederationSocketMessage,
   transport?: NoiseTransport,
   maxFrameBytes = FEDERATION_MAX_FRAME_BYTES,
+  context?: EnvelopeDiagnosticsContext,
 ): number {
   if (socket.readyState !== WebSocket.OPEN) return 0;
+  if (message.kind === "envelope") context?.diagnostics.observe(message.envelope);
   const payload = encodeFederationSocketPayload(message);
   const wireByteLength = transport
     ? transport.encryptedByteLength(payload.byteLength)
@@ -1297,12 +1343,9 @@ function sendFrame(
     const envelope = message.kind === "envelope" ? message.envelope : undefined;
     log.error("federation frame exceeds configured send limit", {
       byteCount: wireByteLength,
-      envelopeKind: envelope?.kind,
       maxFrameBytes,
       messageKind: message.kind,
-      method: envelope?.kind === "request" ? envelope.method : undefined,
-      sourceInstanceId: envelope?.sourceInstanceId,
-      targetInstanceId: envelope?.targetInstanceId,
+      ...(envelope ? envelopeLogFields(envelope, context) : {}),
     });
     throw new FederationFrameTooLargeError(wireByteLength, maxFrameBytes);
   }
@@ -1313,12 +1356,8 @@ function sendFrame(
   ) {
     log.info("large federation frame queued for send", {
       byteCount: wireByteLength,
-      envelopeKind: envelope?.kind,
-      maxFrameBytes,
       messageKind: message.kind,
-      method: envelope?.kind === "request" ? envelope.method : undefined,
-      sourceInstanceId: envelope?.sourceInstanceId,
-      targetInstanceId: envelope?.targetInstanceId,
+      ...(envelope ? envelopeLogFields(envelope, context) : {}),
     });
   }
   const wire = transport ? transport.encrypt(payload) : payload;
@@ -1331,12 +1370,13 @@ async function sendFrameWithBackpressure(
   message: FederationSocketMessage,
   transport?: NoiseTransport,
   maxFrameBytes = FEDERATION_MAX_FRAME_BYTES,
+  context?: EnvelopeDiagnosticsContext,
 ): Promise<number> {
   await waitForFederationSendCapacity(socket);
   if (socket.readyState !== WebSocket.OPEN) {
     throw new Error("Federation connection closed while sending an attachment.");
   }
-  return sendFrame(socket, message, transport, maxFrameBytes);
+  return sendFrame(socket, message, transport, maxFrameBytes, context);
 }
 
 export async function waitForFederationSendCapacity(

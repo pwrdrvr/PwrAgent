@@ -2107,11 +2107,29 @@ export class DesktopFederationRuntime {
     log.info("remote navigation wire response was slow or large", {
       durationMs,
       instanceId: params.target.instanceId,
+      instanceLabel: this.diagnosticInstanceLabel(params.target.instanceId),
+      method: "backend.getNavigationSnapshot",
       responseBytes,
       responseKind,
       selection: params.selection,
       threadCount,
     });
+  }
+
+  private diagnosticInstanceLabel(instanceId: string): string {
+    // Diagnostics must not disrupt transport during startup/teardown.
+    try {
+      if (instanceId === this.ensureLocalInstanceId()) {
+        return this.instanceLabel || defaultInstanceLabel();
+      }
+      const visible = this.visiblePeers();
+      const peer = visible.find((candidate) => candidate.id === instanceId)
+        ?? this.remotePeerDirectory.get(instanceId as FederationInstanceId)
+        ?? this.store().getPeer(instanceId as FederationInstanceId);
+      return peer ? formatFederationPeerDisplayLabel(peer, visible) : instanceId;
+    } catch {
+      return instanceId;
+    }
   }
 
   private remotePeerAdvertisesCapability(
@@ -2293,6 +2311,8 @@ export class DesktopFederationRuntime {
             log.info("remote bounded navigation search was slow", {
               durationMs,
               instanceId: target.instanceId,
+              instanceLabel: this.diagnosticInstanceLabel(target.instanceId),
+              method: "backend.searchNavigationThreads",
               queryLength: request.query.length,
               responseBytes,
               resultCount: response.results.length,
@@ -2311,12 +2331,21 @@ export class DesktopFederationRuntime {
             && typeof error.code === "string"
               ? error.code
               : undefined;
-          if (code !== "method_not_found" || durationMs >= 1_000) {
+          if (code === "method_not_found") {
+            log.info("remote navigation search using legacy snapshot fallback", {
+              instanceId: target.instanceId,
+              instanceLabel: this.diagnosticInstanceLabel(target.instanceId),
+              method: "backend.searchNavigationThreads",
+              code,
+            });
+          } else {
             log.warn("remote bounded navigation search failed", {
               code,
               durationMs,
               error: error instanceof Error ? error.message : String(error),
               instanceId: target.instanceId,
+              instanceLabel: this.diagnosticInstanceLabel(target.instanceId),
+              method: "backend.searchNavigationThreads",
               queryLength: request.query.length,
             });
           }
@@ -2645,6 +2674,7 @@ export class DesktopFederationRuntime {
         .getOrCreateFederationIdentityKeyPair();
       if (startupAborted()) return;
       const server = new FederationGatewayWebSocketServer({
+        instanceLabel: (id) => this.diagnosticInstanceLabel(id),
         gatewayInstanceId: localInstanceId,
         gatewayPrivateKeyPem: gatewayIdentity.privateKeyPem,
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
@@ -2903,6 +2933,7 @@ export class DesktopFederationRuntime {
           localInstanceId: this.ensureLocalInstanceId(),
         });
       },
+      instanceLabel: (id) => this.diagnosticInstanceLabel(id),
       role: "client",
       headers: cloudflareAccessEnabled
         ? {

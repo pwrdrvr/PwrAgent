@@ -37,6 +37,9 @@ import {
 } from "../federation/federation-transport";
 import { StateDb } from "../state/state-db";
 
+const transportLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => transportLog }));
+
 let stateDb: StateDb;
 let store: FederationStore;
 let tempDir: string;
@@ -45,6 +48,7 @@ let rawServer: WebSocketServer | undefined;
 let gatewayKeyPair: ReturnType<typeof generateFederationIdentityKeyPair>;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-transport-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"));
   store = new FederationStore(stateDb);
@@ -276,7 +280,7 @@ describe("federation transport", () => {
     client.close();
   });
 
-  it.each([false, true])("reports exact data and encoded bytes at both ends (Noise: %s)", async (encrypted) => {
+  it.each([false, true])("reports exact bytes and correlated large responses at both ends (Noise: %s)", async (encrypted) => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -305,6 +309,7 @@ describe("federation transport", () => {
       gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
       noiseStatic: encrypted ? gatewayNoise : undefined,
+      instanceLabel: (id) => id === "gateway_one" ? "Gateway" : "Client",
       host: "127.0.0.1",
       port: 0,
       store,
@@ -317,7 +322,7 @@ describe("federation transport", () => {
           sourceInstanceId: "gateway_one",
           targetInstanceId: connection.peerId,
           createdAt: 2_000,
-          result: { ok: true },
+          result: { privatePayload: "x".repeat(600_000) },
         });
       },
       onEnvelopeTransfer: (info) => gatewayTransfers.push(info),
@@ -328,6 +333,7 @@ describe("federation transport", () => {
       void connectFederationClient({
         url,
         noiseStatic: encrypted ? clientNoise : undefined,
+        instanceLabel: (id) => id === "gateway_one" ? "Gateway" : "Client",
         gatewayNoisePublicKey: encrypted ? gatewayNoise.publicKeyRaw : undefined,
         mode: "enroll",
         gatewayInstanceId: "gateway_one",
@@ -365,6 +371,23 @@ describe("federation transport", () => {
     expect(clientTransfers).toHaveLength(2);
     const [gatewayReceived, gatewaySent] = gatewayTransfers;
     const [clientSent, clientReceived] = clientTransfers;
+    for (const message of ["large federation frame queued for send", "large federation frame received"]) {
+      expect(transportLog.info).toHaveBeenCalledWith(message, expect.objectContaining({
+        envelopeKind: "response",
+        requestId: "request-transfer",
+        method: "thread.list",
+        sourceInstanceId: "gateway_one",
+        sourceInstanceLabel: "Gateway",
+        targetInstanceId: "client_one",
+        targetInstanceLabel: "Client",
+      }));
+    }
+    const largeLogs = transportLog.info.mock.calls.filter(([message]) => message.startsWith("large federation frame"));
+    expect(largeLogs).toHaveLength(2);
+    expect(largeLogs[0][1]).toMatchObject({ peerId: "client_one", peerLabel: "Client" });
+    expect(largeLogs[1][1]).toMatchObject({ peerId: "gateway_one", peerLabel: "Gateway" });
+    expect(JSON.stringify(largeLogs)).not.toContain("privatePayload");
+    expect(JSON.stringify(largeLogs)).not.toContain("maxFrameBytes");
     expect(gatewayReceived).toMatchObject({
       peerId: "client_one",
       direction: "received",
