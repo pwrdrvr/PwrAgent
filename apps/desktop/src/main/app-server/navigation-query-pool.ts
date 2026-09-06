@@ -217,3 +217,10 @@ export class NavigationQueryPool {
     });
   }
 }
+
+let desktopNavigationQueryPool: NavigationQueryPool | undefined;
+
+/** Native windows and owner-local query consumers share physical admission and backing. */
+export function getDesktopNavigationQueryPool(): NavigationQueryPool {
+  return desktopNavigationQueryPool ??= new NavigationQueryPool();
+}

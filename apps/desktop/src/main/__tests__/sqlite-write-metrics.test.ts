@@ -625,8 +625,8 @@ describe("sqlite write metrics", () => {
             kind: "directory",
             label: "PwrSuiteLab",
             path: "/repos/PwrSuiteLab",
-            threadKeys: [],
-            needsAttentionCount: 0,
+            counts: { total: 0, active: 0, unread: 0, review: 0 },
+            pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false,
           },
         );
       });

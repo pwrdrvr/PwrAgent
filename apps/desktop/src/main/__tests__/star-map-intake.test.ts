@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationDirectorySummary } from "@pwragent/shared";
+import type { NavigationDirectoryRow } from "@pwragent/shared";
 
 const generateStructuredObject = vi.fn();
 const ensureDirectoryLaunchpad = vi.fn();
 const materializeDirectoryLaunchpad = vi.fn();
 const publishLocalEvent = vi.fn(async () => undefined);
-const getNavigationSnapshot = vi.fn();
+const readLocalNavigationDirectoryIndex = vi.hoisted(() => vi.fn());
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({
@@ -16,11 +16,7 @@ vi.mock("../app-server/backend-registry", () => ({
   }),
 }));
 
-vi.mock("../messaging/desktop-backend-bridge", () => ({
-  DesktopMessagingBackendBridge: class {
-    getNavigationSnapshot = getNavigationSnapshot;
-  },
-}));
+vi.mock("../app-server/navigation-directory-index", () => ({ readLocalNavigationDirectoryIndex }));
 
 vi.mock("../profile", () => ({
   resolveActiveProfileDir: () => "/nonexistent/profile",
@@ -32,25 +28,23 @@ import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 function directory(
   key: string,
   label: string,
-): NavigationDirectorySummary {
+): NavigationDirectoryRow {
   return {
     key,
     kind: "directory",
     label,
     path: `/repos/${label}`,
-    threadKeys: [],
-    needsAttentionCount: 0,
-  } as unknown as NavigationDirectorySummary;
+    counts: { total: 0, active: 0, unread: 0, review: 0 },
+    pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false,
+  } as unknown as NavigationDirectoryRow;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getNavigationSnapshot.mockResolvedValue({
-    directories: [
+  readLocalNavigationDirectoryIndex.mockResolvedValue([
       directory("dir-snap", "PwrSnap"),
       directory("dir-agent", "PwrAgent"),
-    ],
-  });
+  ]);
   materializeDirectoryLaunchpad.mockResolvedValue({
     backend: "codex",
     threadId: "thread-9",
@@ -230,6 +224,6 @@ describe("dispatchStarMapIntake", () => {
       request: "   ",
     });
     expect(response.status).toBe("failed");
-    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(readLocalNavigationDirectoryIndex).not.toHaveBeenCalled();
   });
 });
