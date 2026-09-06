@@ -376,6 +376,7 @@ function normalizeQuery(query: NavigationQuery): NavigationQuery {
   if (query.kind === "lens" || query.kind === "directory-index") {
     return {
       ...query,
+      ...(query.kind === "directory-index" && query.keys ? { keys: [...new Set(query.keys)].sort() } : {}),
       ...(query.filter?.trim().toLowerCase()
         ? { filter: query.filter.trim().toLowerCase() }
         : { filter: undefined }),
@@ -651,6 +652,7 @@ export function projectNavigationQuery(params: {
     directories: includeDirectories
       ? (query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
         : buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey }))
+          .filter((directory) => query.kind !== "directory-index" || !query.keys || query.keys.includes(directory.key))
           .filter((directory) => query.kind !== "directory-index"
             || !query.filter?.trim()
             || `${directory.label}\n${directory.path ?? ""}`.toLowerCase()

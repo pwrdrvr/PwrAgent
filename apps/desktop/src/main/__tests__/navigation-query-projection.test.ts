@@ -209,3 +209,17 @@ it("keeps ten-root demand separate from disclosed child pages and pin disclosure
   expect(children.entries.every((entry) => entry.placement.kind === "child")).toBe(true);
   expect(children.counts.total).toBe(20);
 });
+
+it("returns exact off-page directory counts without directory membership arrays", () => {
+  const index = snapshot([thread("t1", { pinnedRank: "a", threadStatus: "active" }), thread("t2", { inbox: { inInbox: true } })]);
+  index.directories = [
+    ...Array.from({ length: 150 }, (_, number) => ({ key: `directory:/earlier-${number}`, kind: "directory" as const,
+      label: `Earlier ${number}`, path: `/earlier-${number}`, threadKeys: [], needsAttentionCount: 0 })),
+    ...index.directories,
+  ];
+  const exact = projectNavigationQuery({ index, request: request({ kind: "directory-index", keys: ["directory:/repo"] }) });
+  expect(exact.directories).toHaveLength(1);
+  expect(exact.directories[0]).toMatchObject({ key: "directory:/repo", counts: { total: 2, active: 1, unread: 1, review: 1 }, pinnedRootCount: 1, unpinnedRootCount: 1 });
+  expect(exact.entries).toEqual([]);
+  expect(exact.directories[0]).not.toHaveProperty("threadKeys");
+});

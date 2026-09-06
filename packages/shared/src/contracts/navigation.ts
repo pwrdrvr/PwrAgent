@@ -1638,6 +1638,8 @@ export type NavigationQuery =
   | {
       kind: "directory-index";
       filter?: string;
+      /** Exact compact descriptors for off-page selected directories, at most 100. */
+      keys?: string[];
     }
   | {
       kind: "lens";
