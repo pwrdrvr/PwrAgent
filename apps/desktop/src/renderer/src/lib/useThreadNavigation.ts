@@ -3087,6 +3087,7 @@ export function useThreadNavigation(
   clearPickDirectoryError: () => void;
   resetDirectoryLaunchpad: (directoryKey: string) => Promise<void>;
   removeDirectory: (directoryKey: string) => Promise<void>;
+  markDirectoriesSeen: (directoryKeys: string[]) => Promise<void>;
   /** Select an existing launchpad without creating or resetting its draft. */
   selectDirectoryLaunchpad: (directoryKey: string) => void;
   selectedDirectory?: NavigationDirectorySummary;
@@ -4116,6 +4117,10 @@ export function useThreadNavigation(
     return desktopApi.onAgentEvent((event) => {
       const windowTarget = readRendererFederationTarget();
       const method = event.notification.method as string;
+      if (method === "navigation/directory/seen") {
+        scheduleRefresh();
+        return;
+      }
       if (method === "navigation/directory/removed") {
         scheduleRefresh();
         return;
@@ -7022,6 +7027,19 @@ export function useThreadNavigation(
     ]
   );
 
+  const markDirectoriesSeen = useCallback(async (directoryKeys: string[]): Promise<void> => {
+    onThreadActionErrorRef.current?.({ kind: "mark-directory-read", message: undefined });
+    try {
+      if (!desktopApi?.markNavigationDirectorySeen) throw new Error("Upgrade this instance to mark directory membership read on its owner.");
+      for (const directoryKey of new Set(directoryKeys)) {
+        await desktopApi.markNavigationDirectorySeen({ directoryKey, federationTarget: readRendererFederationTarget() });
+      }
+      await refresh();
+    } catch (error) {
+      onThreadActionErrorRef.current?.({ kind: "mark-directory-read", message: error instanceof Error ? error.message : String(error) });
+    }
+  }, [desktopApi, refresh]);
+
   /** The owner validates complete membership before local state is removed. */
   const removeDirectory = useCallback(
     async (directoryKey: string): Promise<void> => {
@@ -8776,6 +8794,7 @@ export function useThreadNavigation(
     clearPickDirectoryError,
     resetDirectoryLaunchpad,
     removeDirectory,
+    markDirectoriesSeen,
     selectDirectoryLaunchpad,
     selectPendingLaunchpad,
     selectedDirectory,

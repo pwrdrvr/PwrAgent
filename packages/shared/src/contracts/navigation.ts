@@ -2742,3 +2742,10 @@ export type RemoveNavigationDirectoryRequest = {
   federationTarget?: FederationTarget;
 };
 export type RemoveNavigationDirectoryResponse = { directoryKey: string };
+
+/** Resolve complete directory membership on its owner; never accept a renderer row allowlist. */
+export type MarkNavigationDirectorySeenRequest = {
+  directoryKey: string;
+  federationTarget?: FederationTarget;
+};
+export type MarkNavigationDirectorySeenResponse = { directoryKey: string; changedCount: number };

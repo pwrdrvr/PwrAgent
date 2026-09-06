@@ -301,6 +301,7 @@ type SidebarProps = {
   onOpenProfile?: (profile: string) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
+  onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
   onMarkThreadUnread?: (thread: NavigationThreadSummary) => Promise<void>;
   onArchiveThread?: (
     thread: NavigationThreadSummary,
@@ -1409,6 +1410,13 @@ export function Sidebar(props: SidebarProps) {
       return;
     }
 
+    if (props.onMarkDirectoriesSeen) {
+      const keys = directoryContextMenu.directories.map((directory) => directory.key);
+      setDirectoryContextMenu(undefined);
+      hoverStableSnapshot.release();
+      void props.onMarkDirectoriesSeen(keys);
+      return;
+    }
     const directoryThreadKeys = new Set(
       directoryContextMenu.directories.flatMap(
         (directory) => directory.threadKeys,
@@ -1812,7 +1820,7 @@ export function Sidebar(props: SidebarProps) {
       ) && thread.inbox.inInbox,
   );
   const directoryMenuCanMarkRead = Boolean(
-    props.onMarkThreadsSeen && directoryMenuUnreadThreads.length > 0,
+    props.onMarkDirectoriesSeen || (props.onMarkThreadsSeen && directoryMenuUnreadThreads.length > 0),
   );
   const directoryMenuCanPin = Boolean(
     !directoryContextMenuIsBulk
@@ -2134,7 +2142,7 @@ export function Sidebar(props: SidebarProps) {
                 hoverReleasedListHandlers.setDirectoryThreadsCollapsed
               }
               onOpenDirectoryContextMenu={
-                props.onSetDirectoryPin || props.onMarkThreadsSeen
+                props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen
                   ? openDirectoryContextMenu
                   : undefined
               }

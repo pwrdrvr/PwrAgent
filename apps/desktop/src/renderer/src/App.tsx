@@ -2786,6 +2786,7 @@ function DesktopAppShell(props: {
             await navigation.refresh();
           }}
           onArchiveThread={navigation.archiveThread}
+          onMarkDirectoriesSeen={desktopApi?.markNavigationDirectorySeen ? navigation.markDirectoriesSeen : undefined}
           onMarkThreadsSeen={
             desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined
           }

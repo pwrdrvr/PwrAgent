@@ -1,4 +1,5 @@
-import { removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
@@ -301,6 +302,7 @@ import {
   NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_QUEUE_PROJECTION_CHANNEL,
   NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
+  NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
   NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
   NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -2165,6 +2167,13 @@ class DesktopAppServerService {
       request,
       scopeKey: "renderer-local",
     });
+  }
+
+  async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteMarkNavigationDirectorySeen(request.federationTarget, request);
+    }
+    return markLocalNavigationDirectorySeen(request);
   }
 
   async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> {
@@ -8073,6 +8082,8 @@ export function registerAppServerIpcHandlers(): void {
     navigationQueryPool.release(token);
   });
   ipcMain.removeHandler(NAVIGATION_REMOVE_DIRECTORY_CHANNEL);
+  ipcMain.handle(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, async (_event, request: MarkNavigationDirectorySeenRequest) =>
+    appServerService.markNavigationDirectorySeen(request));
   ipcMain.handle(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, async (_event, request: RemoveNavigationDirectoryRequest) =>
     appServerService.removeNavigationDirectory(request));
   ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);

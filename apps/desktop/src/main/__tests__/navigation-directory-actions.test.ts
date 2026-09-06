@@ -64,3 +64,44 @@ it("rejects a membership check invalidated during the owner read", async () => {
   expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeDefined();
   expect(mocks.listeners.size).toBe(0);
 });
+
+it("marks all owner directory members read in one transaction with no renderer allowlist", async () => {
+  const { markLocalNavigationDirectorySeen } = await import("../app-server/navigation-directory-actions");
+  const threads = Array.from({ length: 100 }, (_, index) => ({ id: `thread-${index}`, source: "codex" as const,
+    title: `Thread ${index}`, titleSource: "derived" as const, linkedDirectories: [],
+    inbox: { inInbox: true }, updatedAt: index + 1,
+  }));
+  mocks.loadIndex.mockResolvedValue({ threads, directories: [{ ...directory, threadKeys: threads.map((thread) => `codex:${thread.id}`) }] });
+  const { writes, result } = await measureSqliteWrites(() => markLocalNavigationDirectorySeen({ directoryKey: key }));
+  expect(result).toEqual({ directoryKey: key, changedCount: 100 });
+  expect(writes.commits).toBe(1);
+  expect(await mocks.store!.getThreadOverlayState({ backend: "codex", threadId: "thread-99" })).toMatchObject({ lastSeenUpdatedAt: 100 });
+  expect(mocks.publish).toHaveBeenCalledWith({ backend: "codex", notification: { method: "navigation/directory/seen", params: result } });
+  expectSqliteWriteBudget({ scenario: "navigation-mark-directory-seen-100-threads", writes,
+    note: "Explicit owner directory action commits 100 watermarks in one transaction, no per-thread commits or idle writes; conservative 4 KiB/row is ~0.4 MB/action (~4 MB/day at 10 such actions)" });
+  mocks.loadIndex.mockResolvedValue({ threads: threads.map((thread) => ({ ...thread, inbox: { inInbox: false } })), directories: [{ ...directory, threadKeys: threads.map((thread) => `codex:${thread.id}`) }] });
+  const repeated = await measureSqliteWrites(() => markLocalNavigationDirectorySeen({ directoryKey: key }));
+  expect(repeated.result.changedCount).toBe(0);
+  expect(repeated.writes.commits).toBe(0);
+});
+
+it("does not mark unread state when owner directory membership is incomplete", async () => {
+  const { markLocalNavigationDirectorySeen } = await import("../app-server/navigation-directory-actions");
+  mocks.loadIndex.mockResolvedValue({ threads: [], directories: [{ ...directory, threadKeys: ["codex:unloaded"] }] });
+  const { writes } = await measureSqliteWrites(async () => {
+    await expect(markLocalNavigationDirectorySeen({ directoryKey: key })).rejects.toThrow("resolved completely");
+  });
+  expect(writes.commits).toBe(0);
+  expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+it.each(["checking", "degraded"] as const)("rejects directory actions while provider coverage is %s", async (state) => {
+  const { markLocalNavigationDirectorySeen } = await import("../app-server/navigation-directory-actions");
+  mocks.loadIndex.mockResolvedValue({ threads: [], directories: [directory], coverage: { state } });
+  const { writes } = await measureSqliteWrites(async () => {
+    await expect(markLocalNavigationDirectorySeen({ directoryKey: key })).rejects.toThrow("providers are ready");
+    await expect(removeLocalNavigationDirectory({ directoryKey: key })).rejects.toThrow("providers are ready");
+  });
+  expect(writes.commits).toBe(0);
+  expect(await mocks.store!.getDirectoryLaunchpad({ directoryKey: key })).toBeDefined();
+});

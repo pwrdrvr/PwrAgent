@@ -1,3 +1,4 @@
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
@@ -724,6 +725,7 @@ import {
   NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_QUEUE_PROJECTION_CHANNEL,
   NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
+  NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
   NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
   NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -1830,6 +1832,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(NAVIGATION_QUERY_PAGE_CHANNEL, request, consumerId),
   releaseNavigationQuery: async (consumerId: string): Promise<void> =>
     await ipcRenderer.invoke(NAVIGATION_QUERY_RELEASE_CHANNEL, consumerId),
+  markNavigationDirectorySeen: async (request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, request),
   removeNavigationDirectory: async (request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, request),
   getNavigationLaunchpadConfig: async (

@@ -10,7 +10,7 @@ const ROW_CHANGE_METHODS = new Set([
   "thread/automations/updated", "automation/run/updated",
   "directory/pin/added", "directory/pin/removed", "directory/pin/reordered", "directory/threadsCollapsed/updated",
   "navigation/providerThreads/refreshed", "navigation/remoteThreadPins/changed",
-  "navigation/directory/removed", "navigation/directoryGitStatus/updated",
+  "navigation/directory/seen", "navigation/directory/removed", "navigation/directoryGitStatus/updated",
   "navigation/threadGitWorkingState/updated", "navigation/threadDirectories/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
   "serverRequest/resolved", "item/tool/requestUserInput",

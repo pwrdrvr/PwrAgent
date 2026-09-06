@@ -8,6 +8,7 @@ import type {
   NavigationDirectoryRow,
   NavigationIdentity,
   NavigationQuery,
+  NavigationQueryCoverage,
   NavigationQueryEntry,
   NavigationModelInventoryRow,
   NavigationQueryRequest,
@@ -31,6 +32,7 @@ import {
 const MAX_ROW_NESTED_RECORDS = 16;
 
 export type NavigationQueryMaterialization = {
+  coverage: NavigationQueryCoverage;
   counts: NavigationCounts;
   facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
@@ -41,6 +43,7 @@ export type NavigationQueryMaterialization = {
 
 /** Complete compact owner inventory used to answer bounded queries. */
 export type NavigationQueryIndex = {
+  coverage?: NavigationQueryCoverage;
   directories: NavigationDirectorySummary[];
   threads: NavigationThreadSummary[];
   inputRequestThreadKeys?: ReadonlySet<string>;
@@ -571,7 +574,7 @@ export function projectNavigationQuery(params: {
   if (query.kind === "model-inventory") {
     const owned = params.index.threads.filter((thread) => isStarMapOwnerThread(thread)
       && (!params.request.backend || params.request.backend === "all" || params.request.backend === thread.source));
-    return { counts: countsForThreads(owned), directories: [], entries: [], modelGroups: buildModelInventory(owned), queryKey: navigationQueryKey(params.request) };
+    return { coverage: params.index.coverage ?? { state: "complete" }, counts: countsForThreads(owned), directories: [], entries: [], modelGroups: buildModelInventory(owned), queryKey: navigationQueryKey(params.request) };
   }
   const threadsByIdentity = new Map(
     params.index.threads.map((thread) => [threadKey(thread), thread]),
@@ -641,6 +644,7 @@ export function projectNavigationQuery(params: {
       ? selectedThreads
       : params.index.threads;
   return {
+    coverage: params.index.coverage ?? { state: "complete" },
     counts: countsForThreads(countsThreads),
     ...(query.kind === "star-map" ? {
       facets: countNavigationStarMapFacets(
