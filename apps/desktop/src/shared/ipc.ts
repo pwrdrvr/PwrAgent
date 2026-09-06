@@ -641,3 +641,5 @@ export const CLIPBOARD_WRITE_RICH_TEXT_CHANNEL = "clipboard:write-rich-text";
 export const NAVIGATION_REMOVE_DIRECTORY_CHANNEL = "navigation:remove-directory";
 
 export const NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL = "navigation:mark-directory-seen";
+
+export const NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL = "navigation:release-attention-view";

@@ -2749,3 +2749,5 @@ export type MarkNavigationDirectorySeenRequest = {
   federationTarget?: FederationTarget;
 };
 export type MarkNavigationDirectorySeenResponse = { directoryKey: string; changedCount: number };
+
+export type NavigationAttentionViewReleaseRequest = { viewId: string; federationTarget?: FederationTarget };

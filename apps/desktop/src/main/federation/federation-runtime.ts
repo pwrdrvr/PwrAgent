@@ -1,3 +1,4 @@
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
@@ -2096,6 +2097,12 @@ export class DesktopFederationRuntime {
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
     return stampRemoteNavigationQueryPage({ instanceLabel, page, target });
+  }
+
+  async remoteReleaseNavigationAttentionView(target: FederationRemoteTarget, request: NavigationAttentionViewReleaseRequest): Promise<void> {
+    this.assertRemoteNavigationQueryProtocol(target);
+    const { federationTarget: _target, ...ownerRequest } = request;
+    await this.remoteBackend(target).releaseNavigationAttentionView(ownerRequest);
   }
 
   async remoteMarkNavigationDirectorySeen(target: FederationRemoteTarget, request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {
@@ -5467,6 +5474,10 @@ function localBackendOperations(): FederationBackendOperations {
           ? `federation:${rpcOptions.requesterInstanceId}`
           : "federation:unknown",
       });
+    },
+    async releaseNavigationAttentionView(request, rpcOptions) {
+      getDesktopNavigationQueryStore().releaseAttentionView(rpcOptions?.requesterInstanceId
+        ? `federation:${rpcOptions.requesterInstanceId}` : "federation:unknown", request.viewId);
     },
     async markNavigationDirectorySeen(request) {
       return markLocalNavigationDirectorySeen(request);

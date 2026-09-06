@@ -149,6 +149,7 @@ export function useStarMapThreads(params: {
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
   const viewId = useId();
+  const attentionOwnersRef = useRef(new Set<string>());
   const metadataKeys = useRef(new Set<string>());
   const attentionView = useMemo(() => ({ id: viewId, promoteOnTurnEnd: params.attentionPromoteOnTurnEnd ?? true }),
     [viewId, params.attentionPromoteOnTurnEnd]);
@@ -188,6 +189,7 @@ export function useStarMapThreads(params: {
         metadataKeys.current.add(key);
         geometryLease = navigationGeometryBudget.begin(key);
         const previous = stateRef.current.queriesByInstance.get(instanceId);
+        attentionOwnersRef.current.add(instanceId);
         const baseRequest = attentionRequest({ instanceId, filters, attentionView });
         const [rowResult, geometryResult] = await Promise.allSettled([
           desktopApi.getNavigationQueryPage({
@@ -434,6 +436,16 @@ export function useStarMapThreads(params: {
       keys.clear();
     };
   }, []);
+
+  useEffect(() => {
+    const owners = attentionOwnersRef.current;
+    return () => {
+      for (const instanceId of owners) {
+        void desktopApi?.releaseNavigationAttentionView?.({ viewId, federationTarget: { scope: "remote", instanceId } }).catch(() => undefined);
+      }
+      owners.clear();
+    };
+  }, [desktopApi, viewId]);
 
   const result = useMemo(() => {
     const countsByInstance = new Map<string, NavigationCounts>();

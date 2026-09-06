@@ -33,6 +33,9 @@ export function useLocalStarMapThreads(params: {
     pageSize: 10,
   } : undefined, [id, params.enabled, params.filters, params.promoteOnTurnEnd]);
   const rows = useNavigationQueryResource({ desktopApi: api, request });
+  useEffect(() => () => {
+    void api?.releaseNavigationAttentionView?.({ viewId: id }).catch(() => undefined);
+  }, [api, id]);
   const [directories, setDirectories] = useState<NavigationDirectoryRow[]>([]);
   const [geometryReady, setGeometryReady] = useState(false);
   const [metadataError, setMetadataError] = useState<string>();

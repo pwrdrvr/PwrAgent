@@ -1,3 +1,4 @@
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
@@ -397,6 +398,7 @@ export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
   removeNavigationDirectory: "backend.removeNavigationDirectory",
   markNavigationDirectorySeen: "backend.markNavigationDirectorySeen",
+  releaseNavigationAttentionView: "backend.releaseNavigationAttentionView",
   getNavigationLaunchpadConfig: "backend.getNavigationLaunchpadConfig",
   getNavigationSelectedDetail: "backend.getNavigationSelectedDetail",
   getNavigationQueueProjection: "backend.getNavigationQueueProjection",
@@ -509,6 +511,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getNavigationQueryPage]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.removeNavigationDirectory]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getNavigationQueueProjection]: "thread_detail",
@@ -628,6 +631,7 @@ export type FederationBackendOperations = {
     request: NavigationQueryRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationQueryPage>;
+  releaseNavigationAttentionView?(request: NavigationAttentionViewReleaseRequest, rpcOptions?: FederationRpcRequestOptions): Promise<void>;
   markNavigationDirectorySeen?(request: MarkNavigationDirectorySeenRequest, rpcOptions?: FederationRpcRequestOptions): Promise<MarkNavigationDirectorySeenResponse>;
   removeNavigationDirectory?(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse>;
   getNavigationLaunchpadConfig?(
@@ -904,6 +908,11 @@ export function registerFederationBackendHandlers(params: {
         },
       ),
     );
+  }
+  if (params.backend.releaseNavigationAttentionView) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView,
+      async (envelope) => params.backend.releaseNavigationAttentionView!(envelope.params as NavigationAttentionViewReleaseRequest,
+        { requesterInstanceId: envelope.sourceInstanceId, deadlineAt: envelope.deadlineAt }));
   }
   if (params.backend.markNavigationDirectorySeen) {
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen,
@@ -1803,6 +1812,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       params: request,
       ...rpcOptions,
     });
+  }
+
+  async releaseNavigationAttentionView(request: NavigationAttentionViewReleaseRequest, rpcOptions?: FederationRpcRequestOptions): Promise<void> {
+    return this.rpc.request<void>({ method: FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView, params: request, ...rpcOptions });
   }
 
   async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest, rpcOptions?: FederationRpcRequestOptions): Promise<MarkNavigationDirectorySeenResponse> {
