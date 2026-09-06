@@ -112,6 +112,32 @@ describe("useStarMapChatCards", () => {
     expect(result.current.cards[0].rect).toMatchObject({ left: 140, top: 230 });
   });
 
+  it.each([false, true])("rebases provisional anchors unless the user moves the card (moved: %s)", async (moved) => {
+    const desktopApi: DesktopApi = {
+      readStarMapWorkspace: vi.fn(async () => savedWorkspace()),
+    };
+    const { result } = renderHook(() => useStarMapChatCards({ desktopApi }));
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    const resolve = () => ({ point: { x: 100, y: 200 }, basis: "anchor" as const });
+    act(() => result.current.resolveRestoredAnchors(resolve, false));
+    expect(result.current.cards[0]).toMatchObject({
+      rect: { left: 140, top: 230 }, pendingAnchorRestore: true,
+    });
+    const unchanged = result.current.cards;
+    act(() => result.current.resolveRestoredAnchors(resolve, false));
+    expect(result.current.cards).toBe(unchanged);
+    if (moved) act(() => result.current.setRect("pwr_remote::codex:t-remote", {
+      ...result.current.cards[0].rect, left: 321, top: 432,
+    }, true));
+    act(() => result.current.resolveRestoredAnchors(() => ({
+      point: { x: 900, y: 900 }, basis: "anchor",
+    }), true));
+    expect(result.current.cards[0]).toMatchObject({
+      rect: moved ? { left: 321, top: 432 } : { left: 940, top: 930 },
+      pendingAnchorRestore: false,
+    });
+  });
+
   it("uses the separately persisted instance basis when a thread is absent", async () => {
     const desktopApi: DesktopApi = {
       readStarMapWorkspace: vi.fn(async () => savedWorkspace()),

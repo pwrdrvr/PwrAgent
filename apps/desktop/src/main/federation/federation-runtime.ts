@@ -356,6 +356,7 @@ const GATEWAY_NOISE_PUBLIC_KEY_META_KEY = "federation_gateway_noise_public_key";
 const GATEWAY_LAST_ENDPOINT_META_KEY = "federation_gateway_last_endpoint";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
+/** @deprecated Alpha single-frame replacement; negotiated atomic pages replace it. */
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_PEER_DIRECTORY_PAGE_METHOD = "federation.peerDirectoryPage";
 const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
@@ -504,6 +505,8 @@ type FederationEventSubscriptionNotification = {
 };
 
 type IncomingEventSubscription = {
+  /** Lifetime of this Star Map interest, independent of other event classes. */
+  starMapBootstrapToken?: object;
   eventClasses: Set<FederationEventClass>;
   threadSelection: FederationThreadSelection;
   viaPeerId: FederationInstanceId;
@@ -4237,11 +4240,14 @@ export class DesktopFederationRuntime {
     };
     const subscription = this.incomingEventSubscriptions.get(subscriberInstanceId);
     if (!subscription?.eventClasses.has("star_map")) return;
+    const bootstrapToken = subscription.starMapBootstrapToken;
     void this.arrangementBootstrap.read(load, cursor ?? { protocol: 1 })
       .then(async (pages) => {
         try {
           for (const page of pages) {
-            if (this.incomingEventSubscriptions.get(subscriberInstanceId) !== subscription) return;
+            const current = this.incomingEventSubscriptions.get(subscriberInstanceId);
+            if (!current?.eventClasses.has("star_map")
+              || current.starMapBootstrapToken !== bootstrapToken) return;
             const { entries, ...bootstrap } = page;
             await this.sendEnvelopeToEventSubscriberWithBackpressure(subscriberInstanceId, {
               id: `federation-star-map:${randomUUID()}`,
@@ -4602,8 +4608,14 @@ export class DesktopFederationRuntime {
           )
         )
       : requestedClasses;
+    const retainsStarMap = allowedClasses.includes("star_map")
+      && previous?.eventClasses.has("star_map")
+      && previous.viaPeerId === sourcePeerId;
     if (allowedClasses.length > 0) {
       this.incomingEventSubscriptions.set(subscriberInstanceId, {
+        ...(allowedClasses.includes("star_map") ? {
+          starMapBootstrapToken: retainsStarMap ? previous?.starMapBootstrapToken : {},
+        } : {}),
         eventClasses: new Set(allowedClasses),
         threadSelection: requestedThreadSelection,
         viaPeerId: sourcePeerId,
@@ -4613,7 +4625,7 @@ export class DesktopFederationRuntime {
     }
     if (
       allowedClasses.includes("star_map")
-      && !previous?.eventClasses.has("star_map")
+      && !retainsStarMap
     ) {
       this.sendStarMapArrangementSnapshot(subscriberInstanceId, starMapBootstrap);
     }

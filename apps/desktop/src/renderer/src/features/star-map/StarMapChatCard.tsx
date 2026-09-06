@@ -88,7 +88,7 @@ export type StarMapChatCardProps = {
   /** Refresh the owning navigation feed after a monitor is stopped. */
   onRefreshNavigation?: () => Promise<void>;
   onRaise: (cardKey: string, persist?: boolean) => boolean | void;
-  onRectChange: (cardKey: string, rect: ChatCardRect) => void;
+  onRectChange: (cardKey: string, rect: ChatCardRect, userInitiated?: boolean) => void;
   onRectCommit?: (cardKey: string, rect: ChatCardRect) => void;
   resolveRect?: (
     rect: ChatCardRect,
@@ -564,7 +564,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       drag.moved = true;
       drag.lastRect = next;
       onGuidesChange?.(resolved.guides);
-      onRectChange(cardKey, next);
+      onRectChange(cardKey, next, true);
     },
     [bounds, cardKey, onGuidesChange, onRectChange, resolveRect, scale],
   );

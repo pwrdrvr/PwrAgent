@@ -4,6 +4,10 @@ This describes current code after the bounded-search work in #1982 and the
 collection/browse follow-through. It is not a claim that all Federation traffic
 is bounded to one small response, or that navigation is now a lazy directory API.
 
+The remaining replacement contracts and pre-beta deprecation gates are defined
+in [Federation navigation v2](federation-navigation-v2.md). They remain
+implementation requirements, not completed migrations.
+
 ## Implemented boundaries
 
 | Initiator / owner operation | Transfer boundary | Cold / warm behavior | Completion |

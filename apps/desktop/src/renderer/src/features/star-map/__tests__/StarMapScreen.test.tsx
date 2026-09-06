@@ -1041,13 +1041,14 @@ describe("StarMapScreen", () => {
     >;
     const health = createDeferred<HealthResponse>();
     const remoteSnapshot = createDeferred<SnapshotResponse>();
+    const slowSnapshot = createDeferred<SnapshotResponse>();
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
       readFederationHealth: vi.fn(() => health.promise),
       getNavigationSnapshot: vi.fn((request) =>
         request?.federationTarget?.scope === "remote"
           && request.federationTarget.instanceId === "pwr_slow"
-          ? new Promise<SnapshotResponse>(() => {})
+          ? slowSnapshot.promise
           : remoteSnapshot.promise,
       ),
       readStarMapWorkspace: vi.fn(async () => ({
@@ -1167,7 +1168,7 @@ describe("StarMapScreen", () => {
       await remoteSnapshot.promise;
     });
 
-    await waitFor(() => {
+    const expectRelativeAnchor = () => {
       const shell = document.querySelector<HTMLElement>(
         '[data-card-key="pwr_remote::codex:t-remote"]',
       );
@@ -1183,7 +1184,19 @@ describe("StarMapScreen", () => {
         + Number.parseFloat(shell?.style.top ?? "");
       expect(Number.parseFloat(chat.style.left)).toBeCloseTo(threadLeft + 24);
       expect(Number.parseFloat(chat.style.top)).toBeCloseTo(threadTop + 36);
-    });
+    };
+    await waitFor(expectRelativeAnchor);
+    if (slowPeer) {
+      const before = chat.style.left;
+      await act(async () => {
+        slowSnapshot.resolve({ fetchedAt: 201,
+          threads: Array.from({ length: 20 }, (_, index) => unreadThread(`slow-${index}`)),
+        } as unknown as SnapshotResponse);
+        await slowSnapshot.promise;
+      });
+      await waitFor(expectRelativeAnchor);
+      expect(chat.style.left).not.toBe(before);
+    }
   });
 
   it("waits for the initial federation layout before restoring the camera", async () => {
