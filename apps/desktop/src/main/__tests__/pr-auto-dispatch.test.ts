@@ -190,6 +190,22 @@ async function createReadyBudgetClaim(params: {
 }
 
 describe("PrAutoDispatchCoordinator", () => {
+  it("does not rearm completed duplicate claims on unchanged polls", async () => {
+    const { coordinator, submitTurnIfIdle } = createHarness();
+    await observe(coordinator);
+    await runCountdown();
+    expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    const timers = vi.getTimerCount();
+
+    for (let poll = 0; poll < 3; poll += 1) {
+      expect(await observe(coordinator)).toEqual([
+        expect.objectContaining({ status: "duplicate" }),
+      ]);
+      expect(vi.getTimerCount()).toBe(timers);
+    }
+    expect(submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
   it("treats PRs from secondary repositories as informational", () => {
     const primaryRepoKey = buildPrRepositoryKey(
       "github.com",
