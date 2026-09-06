@@ -135,6 +135,11 @@ function validateRequest(request: NavigationQueryRequest): void {
       throw new NavigationQueryError("navigation_invalid_request", "Invalid Star Map filter selection.");
     }
   }
+  if (request.query.kind === "directory-index" && request.query.keys !== undefined
+    && (!Array.isArray(request.query.keys) || request.query.keys.length > 100
+      || request.query.keys.some((key) => typeof key !== "string" || !key))) {
+    throw new NavigationQueryError("navigation_invalid_request", "Exact directory metadata accepts at most 100 keys.");
+  }
   if (request.query.kind === "directory" && request.query.roots !== undefined
     && !["all", "pinned", "unpinned"].includes(request.query.roots)) {
     throw new NavigationQueryError("navigation_invalid_request", "Invalid directory root disclosure.");

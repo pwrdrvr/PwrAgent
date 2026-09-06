@@ -9,6 +9,8 @@ export function buildNavigationWindowDemand(params: {
   target?: FederationTarget;
   attentionView: NonNullable<NavigationQueryRequest["attentionView"]>;
   directories: readonly NavigationDirectoryRow[];
+  /** Index membership is distinct from selected descriptors retained outside that page. */
+  indexedDirectoryKeys?: ReadonlySet<string>;
   expandedByKey: Readonly<Record<string, boolean>>;
   unpinnedExpandedByKey: Readonly<Record<string, boolean>>;
   selectedDirectoryKeys?: readonly string[];
@@ -27,8 +29,14 @@ export function buildNavigationWindowDemand(params: {
   if (params.selectedRef) {
     demand.set("selected-context", request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100));
   }
+  const loadedDirectoryKeys = params.indexedDirectoryKeys ?? new Set(params.directories.map((directory) => directory.key));
+  const missingSelectedDirectories = (params.selectedDirectoryKeys ?? []).filter((key) => !loadedDirectoryKeys.has(key));
+  if (missingSelectedDirectories.length) {
+    demand.set("selected-directories", request({ kind: "directory-index", keys: missingSelectedDirectories }, 100));
+  }
   if (params.browseMode === "directories") {
-    for (const directory of params.directories) {
+    const orderedDirectories = [...params.directories].sort((left, right) => Number(params.selectedDirectoryKeys?.includes(right.key) ?? false) - Number(params.selectedDirectoryKeys?.includes(left.key) ?? false));
+    for (const directory of orderedDirectories) {
       const expanded = params.expandedByKey[directory.key] ?? params.selectedDirectoryKeys?.includes(directory.key) ?? false;
       if (!expanded) continue;
       const showUnpinned = params.unpinnedExpandedByKey[directory.key] ?? !directory.directoryThreadsCollapsed;
