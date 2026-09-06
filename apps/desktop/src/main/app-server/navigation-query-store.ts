@@ -348,3 +348,9 @@ export class NavigationQueryStore {
     }
   }
 }
+
+const desktopNavigationQueryStore = new NavigationQueryStore();
+
+export function getDesktopNavigationQueryStore(): NavigationQueryStore {
+  return desktopNavigationQueryStore;
+}

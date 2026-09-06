@@ -52,6 +52,41 @@ async function request(
 }
 
 describe("bounded Federation collection reads", () => {
+  it("binds navigation cursors to the authenticated requester", async () => {
+    const getNavigationQueryPage = vi.fn(async () => ({
+      protocol: 2 as const,
+      queryKey: "query",
+      generation: "generation",
+      ownerEpoch: "epoch",
+      countsRevision: "counts",
+      coverage: { state: "complete" as const },
+      counts: { total: 0, active: 0, unread: 0, review: 0 },
+      entries: [],
+      complete: true,
+    }));
+    const backend = {
+      getNavigationQueryPage,
+    } as unknown as FederationBackendOperations;
+    const deadlineAt = Date.now() + 5_000;
+    const query = {
+      protocol: 2 as const,
+      consumer: "main-sidebar" as const,
+      query: { kind: "lens" as const, lens: "inbox" as const },
+    };
+    const reply = await request(
+      backend,
+      "backend.getNavigationQueryPage",
+      query,
+      deadlineAt,
+    );
+
+    expect(reply).toMatchObject({ kind: "response", result: { complete: true } });
+    expect(getNavigationQueryPage).toHaveBeenCalledWith(query, {
+      deadlineAt,
+      requesterInstanceId: "viewer",
+    });
+  });
+
   it("passes the original relay deadline to owner collection operations", async () => {
     const getProjectPage = vi.fn(async () => ({ ...snapshot(), directories: [] }));
     const lookupArchivedThreads = vi.fn(async () => ({ threads: [] }));

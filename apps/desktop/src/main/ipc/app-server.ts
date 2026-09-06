@@ -88,6 +88,12 @@ import {
   type NavigationDirectorySummary,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
+  type NavigationQueryPage,
+  type NavigationQueryRequest,
+  type NavigationQueueProjection,
+  type NavigationQueueProjectionRequest,
+  type NavigationSelectedDetailRequest,
+  type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
   type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
@@ -287,6 +293,9 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_QUERY_PAGE_CHANNEL,
+  NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+  NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -295,6 +304,8 @@ import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   isFederationPeerUnavailableError,
 } from "../federation/federation-peer-unavailable-error";
@@ -2102,6 +2113,48 @@ class DesktopAppServerService {
     this.pendingNavigationSnapshots.set(requestKey, promise);
 
     return await promise;
+  }
+
+  async getNavigationQueryPage(
+    request: NavigationQueryRequest,
+  ): Promise<NavigationQueryPage> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationQueryPage(
+        request.federationTarget,
+        request,
+      );
+    }
+    return await getDesktopNavigationQueryStore().readPage({
+      loadSnapshot: async () => await this.getNavigationSnapshot({
+        backend: request.backend,
+      }),
+      request,
+      scopeKey: "renderer-local",
+    });
+  }
+
+  async getNavigationSelectedDetail(
+    request: NavigationSelectedDetailRequest,
+  ): Promise<NavigationSelectedDetailResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationSelectedDetail(
+        request.federationTarget,
+        request,
+      );
+    }
+    return await getDesktopNavigationDetailService().readSelectedDetail(request);
+  }
+
+  async getNavigationQueueProjection(
+    request: NavigationQueueProjectionRequest,
+  ): Promise<NavigationQueueProjection> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationQueueProjection(
+        request.federationTarget,
+        request,
+      );
+    }
+    return getDesktopNavigationDetailService().readQueueProjection(request);
   }
 
   async setNavigationBrowseMode(
@@ -7900,6 +7953,33 @@ export function registerAppServerIpcHandlers(): void {
       });
     },
   );
+  ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_QUERY_PAGE_CHANNEL,
+    async (
+      _event,
+      request: NavigationQueryRequest,
+    ): Promise<NavigationQueryPage> =>
+      await appServerService.getNavigationQueryPage(request),
+  );
+  ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SELECTED_DETAIL_CHANNEL,
+    async (
+      _event,
+      request: NavigationSelectedDetailRequest,
+    ): Promise<NavigationSelectedDetailResponse> =>
+      await appServerService.getNavigationSelectedDetail(request),
+  );
+  ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+    async (
+      _event,
+      request: NavigationQueueProjectionRequest,
+    ): Promise<NavigationQueueProjection> =>
+      await appServerService.getNavigationQueueProjection(request),
+  );
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_BROWSE_MODE_CHANNEL,
@@ -8596,6 +8676,9 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);

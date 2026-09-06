@@ -92,6 +92,12 @@ import type {
   GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationQueueProjection,
+  NavigationQueueProjectionRequest,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
   GetNavigationSnapshotRequest,
   GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
@@ -830,6 +836,15 @@ export type DesktopApi = {
   getNavigationSnapshot?: (
     request?: GetNavigationSnapshotRequest
   ) => Promise<NavigationSnapshot>;
+  getNavigationQueryPage?: (
+    request: NavigationQueryRequest,
+  ) => Promise<NavigationQueryPage>;
+  getNavigationSelectedDetail?: (
+    request: NavigationSelectedDetailRequest,
+  ) => Promise<NavigationSelectedDetailResponse>;
+  getNavigationQueueProjection?: (
+    request: NavigationQueueProjectionRequest,
+  ) => Promise<NavigationQueueProjection>;
   getNavigationSnapshotTransport?: (
     request: GetNavigationSnapshotTransportRequest,
   ) => Promise<NavigationSnapshotTransportResponse>;

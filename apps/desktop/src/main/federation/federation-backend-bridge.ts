@@ -99,6 +99,12 @@ import type {
   SendThreadPrAutoDispatchNowResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationQueueProjection,
+  NavigationQueueProjectionRequest,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
   NavigationSnapshotTransportSelection,
@@ -384,6 +390,9 @@ function authenticateScheduledTurnOrigin<
 }
 
 export const FEDERATION_BACKEND_METHODS = {
+  getNavigationQueryPage: "backend.getNavigationQueryPage",
+  getNavigationSelectedDetail: "backend.getNavigationSelectedDetail",
+  getNavigationQueueProjection: "backend.getNavigationQueueProjection",
   getProjectPage: "backend.getProjectPage",
   getNavigationDescendantPage: "backend.getNavigationDescendantPage",
   lookupArchivedThreads: "backend.lookupArchivedThreads",
@@ -490,6 +499,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   FederationBackendMethod,
   FederationCapability
 > = {
+  [FEDERATION_BACKEND_METHODS.getNavigationQueryPage]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.getNavigationQueueProjection]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getProjectPage]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationDescendantPage]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.lookupArchivedThreads]: "thread_navigation",
@@ -602,6 +614,18 @@ export function additionalFederationBackendCapabilities(
 }
 
 export type FederationBackendOperations = {
+  getNavigationQueryPage?(
+    request: NavigationQueryRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueryPage>;
+  getNavigationSelectedDetail?(
+    request: NavigationSelectedDetailRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationSelectedDetailResponse>;
+  getNavigationQueueProjection?(
+    request: NavigationQueueProjectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueueProjection>;
   getNavigationDescendantPage?(
     request: FederationNavigationSelectionRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -853,6 +877,42 @@ export function registerFederationBackendHandlers(params: {
     // Request selectors never create histories of their own.
     maxScopes: 1,
   });
+  if (params.backend.getNavigationQueryPage) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
+      async (envelope) => await params.backend.getNavigationQueryPage!(
+        envelope.params as NavigationQueryRequest,
+        {
+          deadlineAt: envelope.deadlineAt,
+          requesterInstanceId: envelope.sourceInstanceId,
+        },
+      ),
+    );
+  }
+  if (params.backend.getNavigationSelectedDetail) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
+      async (envelope) => await params.backend.getNavigationSelectedDetail!(
+        envelope.params as NavigationSelectedDetailRequest,
+        {
+          deadlineAt: envelope.deadlineAt,
+          requesterInstanceId: envelope.sourceInstanceId,
+        },
+      ),
+    );
+  }
+  if (params.backend.getNavigationQueueProjection) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.getNavigationQueueProjection,
+      async (envelope) => await params.backend.getNavigationQueueProjection!(
+        envelope.params as NavigationQueueProjectionRequest,
+        {
+          deadlineAt: envelope.deadlineAt,
+          requesterInstanceId: envelope.sourceInstanceId,
+        },
+      ),
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.getNavigationDescendantPage,
     async (envelope) => {
@@ -1697,6 +1757,39 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       | Promise<AppServerReadThreadResponse> = (response) => response,
     private readonly prepareTurnInput?: PrepareOutgoingFederationTurnInput,
   ) {}
+
+  async getNavigationQueryPage(
+    request: NavigationQueryRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueryPage> {
+    return await this.rpc.request<NavigationQueryPage>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async getNavigationSelectedDetail(
+    request: NavigationSelectedDetailRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationSelectedDetailResponse> {
+    return await this.rpc.request<NavigationSelectedDetailResponse>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async getNavigationQueueProjection(
+    request: NavigationQueueProjectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueueProjection> {
+    return await this.rpc.request<NavigationQueueProjection>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationQueueProjection,
+      params: request,
+      ...rpcOptions,
+    });
+  }
 
   async getProjectPage(
     request: FederationProjectPageRequest,

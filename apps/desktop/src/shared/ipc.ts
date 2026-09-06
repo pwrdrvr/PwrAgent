@@ -166,6 +166,11 @@ export const MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL =
 export const MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrsnap-download";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
+export const NAVIGATION_QUERY_PAGE_CHANNEL = "navigation:get-query-page";
+export const NAVIGATION_SELECTED_DETAIL_CHANNEL =
+  "navigation:get-selected-detail";
+export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
+  "navigation:get-queue-projection";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";

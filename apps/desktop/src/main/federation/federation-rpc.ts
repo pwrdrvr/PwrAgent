@@ -21,6 +21,12 @@ export type FederationRpcRequestOptions = {
    * timeout after the first request consumes most of the caller's budget.
    */
   deadlineAt?: number;
+  /**
+   * Owner-side requester identity used to bind retained cursors. This is
+   * injected from the authenticated request envelope and is never serialized
+   * from a client-supplied RPC option.
+   */
+  requesterInstanceId?: FederationInstanceId;
 };
 
 export function hasFederationErrorCode(
