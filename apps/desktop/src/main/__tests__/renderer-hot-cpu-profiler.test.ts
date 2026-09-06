@@ -5,6 +5,7 @@ import type { ProcessMetric } from "electron";
 import { resolveHotCpuProfileConfig } from "../diagnostics/hot-cpu-profile-config";
 import { createHotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
 import { HotCpuProfiler } from "../diagnostics/hot-cpu-profiler";
+import { createMainProcessHotCpuTarget } from "../diagnostics/main-process-hot-cpu-target";
 
 function createEnabledConfig(
   repoRoot: string,
@@ -65,7 +66,7 @@ function createTarget() {
       attached = false;
     }),
     isAttached: vi.fn(() => attached),
-    sendCommand: vi.fn(async (method: string) => {
+    sendCommand: vi.fn(async (method: string): Promise<unknown> => {
       if (method === "Profiler.stop") {
         return {
           profile: {
@@ -229,6 +230,175 @@ describe("HotCpuProfiler", () => {
     }
   });
 
+  it("captures a real main-thread burst that finishes before the trigger is evaluated", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "0",
+      PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+      PWRAGENT_HOT_CPU_PROFILING_MAX_PROFILES: "1",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      target: "main",
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: process.versions.node },
+    });
+    if (!sessionResult.ok) throw new Error(sessionResult.message);
+    const written = deferred();
+    let burstFinished = false;
+    const profiler = createProfiler({
+      config,
+      session: sessionResult.session,
+      target: createMainProcessHotCpuTarget(),
+      getAppMetrics: () => [{
+        ...createMetric(burstFinished ? 90 : 0),
+        pid: process.pid,
+        cpu: { percentCPUUsage: burstFinished ? 90 : 0, idleWakeupsPerSecond: 0 },
+      } as ProcessMetric],
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      onProfileWritten: async () => { written.resolve(); },
+    });
+    await profiler.start();
+    await samplesOf(profiler).waitForCount(1);
+    // The inspector samples this synchronous function, but the timer cannot
+    // evaluate the CPU trigger until the function has returned.
+    function preTriggerCpuBurst(): void {
+      const end = performance.now() + 150;
+      while (performance.now() < end) Math.sqrt(Math.random());
+    }
+    preTriggerCpuBurst();
+    burstFinished = true;
+    await written.promise;
+    await profiler.stop();
+    const profile = JSON.parse(await fs.readFile(sessionResult.session.createProfilePath(1), "utf8"));
+    const burstIds = new Set(profile.nodes
+      .filter((node: { callFrame: { functionName: string } }) => node.callFrame.functionName === "preTriggerCpuBurst")
+      .map((node: { id: number }) => node.id));
+    expect(burstIds.size).toBeGreaterThan(0);
+    expect(profile.samples.some((id: number) => burstIds.has(id))).toBe(true);
+  });
+
+  it.each([false, true])("bounds history across rotations and capture limits (missing metrics: %s)", async (missingMetrics) => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "0",
+      PWRAGENT_HOT_CPU_PROFILING_INTERVAL_MS: "30000",
+      PWRAGENT_HOT_CPU_PROFILING_TRIGGER_MODE: "spike",
+      PWRAGENT_HOT_CPU_PROFILING_MAX_PROFILES: "1",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: "test" },
+    });
+    if (!sessionResult.ok) throw new Error(sessionResult.message);
+    vi.useFakeTimers();
+    const { target, debuggerApi } = createTarget();
+    let recordingStart = 0;
+    let windowIndex = 0;
+    const frame = { functionName: "(root)", scriptId: "0", url: "", lineNumber: -1, columnNumber: -1 };
+    debuggerApi.sendCommand.mockImplementation(async (method: string) => {
+      if (method === "Profiler.start") recordingStart = Date.now() * 1_000;
+      if (method !== "Profiler.stop") return {};
+      const endTime = Date.now() * 1_000;
+      const name = ["expiredHistory", "burstBeforeRotation", "burstAfterRotation"][windowIndex++];
+      return { profile: {
+        nodes: [
+          { id: 1, callFrame: frame, children: [2] },
+          { id: 2, callFrame: { ...frame, functionName: name } },
+        ],
+        startTime: recordingStart,
+        endTime,
+        samples: [2],
+        timeDeltas: [endTime - recordingStart],
+      } };
+    });
+    let hot = false;
+    const written = deferred();
+    const profiler = createProfiler({
+      config,
+      session: sessionResult.session,
+      target,
+      getAppMetrics: () => missingMetrics && !hot ? [] : [{
+        ...createMetric(0),
+        cpu: { percentCPUUsage: hot ? 80 : 0, idleWakeupsPerSecond: 0 },
+      } as ProcessMetric],
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      onProfileWritten: async () => { written.resolve(); },
+    });
+    await profiler.start();
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.start");
+    await vi.advanceTimersByTimeAsync(0);
+    await samplesOf(profiler).waitForCount(1);
+    for (let count = 2; count <= 3; count += 1) {
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await samplesOf(profiler).waitForCount(count);
+    }
+    expect(windowIndex).toBe(2);
+    expect(await fs.readdir(sessionResult.session.directoryPath)).not.toContain("renderer-hot-0001.cpuprofile");
+    hot = true;
+    await vi.advanceTimersByTimeAsync(config.intervalMs);
+    await samplesOf(profiler).waitForCount(4);
+    // Detection happens before rotation: the still-running window is frozen
+    // for the post-trigger duration, not discarded at the boundary.
+    expect(windowIndex).toBe(2);
+    await vi.advanceTimersByTimeAsync(config.profileDurationMs);
+    await written.promise;
+    await profiler.stop();
+    const profile = JSON.parse(await fs.readFile(sessionResult.session.createProfilePath(1), "utf8"));
+    const names = profile.nodes.map((node: { callFrame: { functionName: string } }) => node.callFrame.functionName);
+    expect(names).toContain("burstBeforeRotation");
+    expect(names).toContain("burstAfterRotation");
+    expect(names).not.toContain("expiredHistory");
+    expect(profile.endTime - profile.startTime).toBe(60_010_000);
+    expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.start")).toHaveLength(3);
+    expect(debuggerApi.sendCommand.mock.calls.filter(([method]) => method === "Profiler.stop")).toHaveLength(3);
+    expect(target.debugger.isAttached()).toBe(false);
+  });
+
+  it("discards an untriggered recorder and waits for an in-flight start during shutdown", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const config = createEnabledConfig(workspace.path);
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      versions: { appVersion: "test", electronVersion: "test", chromeVersion: "test", nodeVersion: "test" },
+    });
+    if (!sessionResult.ok) throw new Error(sessionResult.message);
+    const { target, debuggerApi } = createTarget();
+    const startEntered = deferred();
+    const releaseStart = deferred();
+    const sendCommand = debuggerApi.sendCommand.getMockImplementation()!;
+    debuggerApi.sendCommand.mockImplementation(async (method: string) => {
+      if (method === "Profiler.start") {
+        startEntered.resolve();
+        await releaseStart.promise;
+      }
+      return sendCommand(method);
+    });
+    const onProfileWritten = vi.fn();
+    const profiler = createProfiler({
+      config,
+      session: sessionResult.session,
+      target,
+      getAppMetrics: () => [createMetric(0)],
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      onProfileWritten,
+    });
+    const started = profiler.start();
+    await startEntered.promise;
+    let stopped = false;
+    const stopping = profiler.stop().then(() => { stopped = true; });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    releaseStart.resolve();
+    await Promise.all([started, stopping]);
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.stop");
+    expect(target.debugger.isAttached()).toBe(false);
+    expect(onProfileWritten).not.toHaveBeenCalled();
+    expect((await fs.readdir(sessionResult.session.directoryPath)).filter((name) => name.endsWith(".cpuprofile"))).toEqual([]);
+  });
+
   it("records a renderer CPU profile after sustained hot samples", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
@@ -271,10 +441,7 @@ describe("HotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await samplesOf(profiler).waitUntil(
-      () => debuggerApi.attach.mock.calls.length > 0,
-      "debugger attach",
-    );
+    await samplesOf(profiler).waitForCount(config.triggerMode === "spike" ? 2 : 3);
     expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
 
     expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(1, "Profiler.enable");
@@ -689,10 +856,7 @@ describe("HotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await samplesOf(profiler).waitUntil(
-      () => debuggerApi.attach.mock.calls.length > 0,
-      "debugger attach",
-    );
+    await samplesOf(profiler).waitForCount(config.triggerMode === "spike" ? 2 : 3);
     expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
     await profiler.stop("test-complete");
 
@@ -756,10 +920,7 @@ describe("HotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await samplesOf(profiler).waitUntil(
-      () => debuggerApi.attach.mock.calls.length > 0,
-      "debugger attach",
-    );
+    await samplesOf(profiler).waitForCount(config.triggerMode === "spike" ? 2 : 3);
     expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
     await profiler.stop("test-complete");
 
@@ -955,6 +1116,9 @@ describe("HotCpuProfiler", () => {
       },
     });
 
+    await (profiler as unknown as {
+      ensureRecording: (startedAtMs: number) => Promise<void>;
+    }).ensureRecording(Date.now());
     await (
       profiler as unknown as {
         startProfile: (options: {
@@ -1189,6 +1353,9 @@ describe("HotCpuProfiler", () => {
       },
     });
 
+    await (profiler as unknown as {
+      ensureRecording: (startedAtMs: number) => Promise<void>;
+    }).ensureRecording(Date.now());
     await (
       profiler as unknown as {
         startProfile: (options: {
@@ -1257,6 +1424,9 @@ describe("HotCpuProfiler", () => {
       },
     });
 
+    await (profiler as unknown as {
+      ensureRecording: (startedAtMs: number) => Promise<void>;
+    }).ensureRecording(Date.now());
     await (
       profiler as unknown as {
         startProfile: (options: {
@@ -1331,6 +1501,9 @@ describe("HotCpuProfiler", () => {
       },
     });
 
+    await (profiler as unknown as {
+      ensureRecording: (startedAtMs: number) => Promise<void>;
+    }).ensureRecording(Date.now());
     await (
       profiler as unknown as {
         startProfile: (options: {
