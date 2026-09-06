@@ -45652,6 +45652,12 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
     });
 
+    const restoreTokenMiser = vi.fn(async () => {});
+    Object.assign(registry, { tokenMiserStore: {
+      archiveThread: vi.fn(async () => {}),
+      restoreThread: restoreTokenMiser,
+    } });
+
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
     await registry.restoreThread({ backend: "codex", threadId: "thread-1" });
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
@@ -45661,6 +45667,7 @@ script = "printf setup"
       { backend: "codex", threadId: "thread-1", origin: "thread-archive" },
     ]);
 
+    expect(restoreTokenMiser).toHaveBeenCalledExactlyOnceWith("thread-1");
     await registry.close();
   });
 
@@ -45692,6 +45699,12 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
     });
 
+    const restoreTokenMiser = vi.fn(async () => {});
+    Object.assign(registry, { tokenMiserStore: {
+      archiveThread: vi.fn(async () => {}),
+      restoreThread: restoreTokenMiser,
+    } });
+
     await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
     await codexClient.emit({
       method: "thread/unarchived",
@@ -45701,6 +45714,7 @@ script = "printf setup"
 
     expect(messagingArchiveCleaner.requests).toHaveLength(2);
 
+    expect(restoreTokenMiser).toHaveBeenCalledExactlyOnceWith("thread-1");
     await registry.close();
   });
 

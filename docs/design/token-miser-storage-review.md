@@ -196,5 +196,11 @@ or against archived-thread accounting. An invalid legacy JSON record stops
 cleanup with an error rather than silently dropping potentially valid costs;
 that record requires follow-up. Multiple old app versions can still create
 legacy payloads until those processes are upgraded. Archived threads retain
-accounting but cannot create new temporary originals, including after reopening.
+accounting. Restoration atomically moves the unique archive marker to a retention
+generation file, allowing new originals without reactivating old payloads or
+staged callbacks in any store instance. Duplicate restoration is harmless. Each
+archive writes 37 marker bytes; restoration adds a rename and no payload write
+or SQLite commit (0 MB/day incremental SQLite traffic). At 100 archive/restore
+cycles per day, marker payload writes are 0.0037 MB/day, excluding filesystem
+journaling.
 No operator profile, app restart, or Codex-owned file was used for validation.

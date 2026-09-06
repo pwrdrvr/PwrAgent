@@ -89,6 +89,7 @@ export type TokenMiserRetrievalDelivery = {
 };
 
 type PendingRetrievalDelivery = {
+  generation: string;
   createdAt: number;
   objectId: string;
   threadId: string;
@@ -228,6 +229,7 @@ export class TokenMiserStore {
   private readonly pendingRetrievalDeliveries =
     new Map<string, { createdAt: number; threadId: string }>();
   private readonly replayUpdates = new Map<string, TokenMiserObjectMetadata>();
+  private readonly outputGenerations = new Map<string, string>();
   private readonly owners = new Map<string, string>();
   private readonly metadataIndexes = new Map<string, TokenMiserRecordIndex<TokenMiserObjectMetadata>>();
   private readonly observationIndexes = new Map<string, TokenMiserRecordIndex<TokenMiserCodeModeObservation>>();
@@ -289,6 +291,7 @@ export class TokenMiserStore {
   }
 
   async stage(params: TokenMiserStoreParams): Promise<TokenMiserStagedObject> {
+    const generation = await this.readRetentionGeneration(params.threadId);
     if (await this.isArchived(params.threadId)) throw new Error("Token Miser originals are unavailable for an archived thread.");
     const objectId = params.objectId ?? randomUUID();
     if (!isSafeObjectId(objectId)) {
@@ -344,6 +347,7 @@ export class TokenMiserStore {
       || this.outputs.put(objectId, params.output);
     if (!retained) throw new Error("Token Miser temporary output capacity exceeded.");
     this.owners.set(objectId, this.threadKey(params.threadId));
+    this.outputGenerations.set(objectId, generation);
     let persisted = false;
     let committed = false;
     let discarded = false;
@@ -354,7 +358,7 @@ export class TokenMiserStore {
     };
     const persist = async (): Promise<void> => {
       await serialize(async () => {
-        if (await this.isArchived(metadata.threadId)) {
+        if (!await this.isCurrentRetention(metadata.threadId, generation)) {
           this.outputs.remove(objectId);
           throw new Error("Token Miser original output expired or unavailable.");
         }
@@ -374,6 +378,10 @@ export class TokenMiserStore {
         await serialize(async () => {
           if (committed || discarded) {
             return;
+          }
+          if (!await this.isCurrentRetention(metadata.threadId, generation)) {
+            this.outputs.remove(objectId);
+            throw new Error("Token Miser original output expired or unavailable.");
           }
           if (!persisted) {
             if (metadata.disposition !== "passed_through" && this.outputs.get(objectId) === undefined) {
@@ -551,7 +559,8 @@ export class TokenMiserStore {
     threadId: string;
     visibleText: string;
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
-    if (await this.isArchived(params.threadId)) return undefined;
+    const generation = this.outputGenerations.get(params.objectId);
+    if (!await this.isCurrentRetention(params.threadId, generation)) return undefined;
     const metadata = await this.readMetadata(params.objectId, params.threadId);
     if (
       !metadata
@@ -571,6 +580,7 @@ export class TokenMiserStore {
     const end = `</pwragent_token_miser_retrieval id="${deliveryId}">`;
     const wrappedText = `${begin}\n${params.visibleText}\n${end}`;
     if (!this.outputs.put(deliveryId, JSON.stringify({
+      generation,
       createdAt: now,
       objectId: params.objectId,
       threadId: params.threadId,
@@ -592,6 +602,7 @@ export class TokenMiserStore {
     // both the beginning and end, so attribute only the intersections with
     // those exact UTF-8 byte-budgeted ranges.
     if (await this.isArchived(params.threadId)) return 0;
+    const generation = await this.readRetentionGeneration(params.threadId);
     const candidates = [...this.pendingRetrievalDeliveries.entries()]
       .filter(([, pending]) => pending.threadId === params.threadId)
       .flatMap(([deliveryId, reference]) => {
@@ -612,6 +623,7 @@ export class TokenMiserStore {
     let confirmedCharacters = 0;
     for (const { deliveryId, outputOffset, pending } of candidates) {
       this.abandonRetrievalDelivery(deliveryId);
+      if (pending.generation !== generation) continue;
       const visibleTextStart = outputOffset + pending.visibleTextOffset;
       const visibleTextEnd = visibleTextStart + pending.visibleText.length;
       const visibleCharacters = visibleRanges.reduce((total, range) => {
@@ -702,6 +714,9 @@ export class TokenMiserStore {
     // Accounting and savings can share the same current metadata snapshot.
     const metadata = (metadataSnapshot ?? await this.listMetadata(threadId))
       .filter((entry) => entry.threadId === threadId);
+    const generation = metadata.some((entry) => this.outputs.expiresAt(entry.objectId) !== undefined)
+      ? await this.readRetentionGeneration(threadId)
+      : undefined;
     const archived = await this.isArchived(threadId);
     const observations = await this.listCodeModeObservations(threadId);
     const metadataByToolUseId = new Map(
@@ -732,7 +747,9 @@ export class TokenMiserStore {
         const retrievedTokens = estimateTokenCount(entry.retrievedCharacters);
         return {
           objectId: entry.objectId,
-          originalOutputAvailableUntil: archived ? undefined : this.outputs.expiresAt(entry.objectId),
+          originalOutputAvailableUntil: archived || this.outputGenerations.get(entry.objectId) !== generation
+            ? undefined
+            : this.outputs.expiresAt(entry.objectId),
           turnId: entry.turnId,
           toolUseId: entry.toolUseId,
           toolName: entry.toolName,
@@ -831,10 +848,36 @@ export class TokenMiserStore {
       });
   }
 
+  private async readRetentionGeneration(threadId: string): Promise<string> {
+    return await readStoredFile(path.join(this.threadRoot(this.threadKey(threadId)), "retention-generation"))
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return "";
+        throw error;
+      });
+  }
+
+  private async isCurrentRetention(threadId: string, generation: string | undefined): Promise<boolean> {
+    return generation !== undefined
+      && !await this.isArchived(threadId)
+      && generation === await this.readRetentionGeneration(threadId);
+  }
+
+  async restoreThread(threadId: string): Promise<void> {
+    const root = this.threadRoot(this.threadKey(threadId));
+    // Atomically remove the archive marker and retain its unique generation.
+    // Duplicate restoration cannot rotate the generation of newly staged work.
+    await withTokenMiserFileOperation(() => fs.rename(
+      path.join(root, "archived"),
+      path.join(root, "retention-generation"),
+    )).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
+
   async archiveThread(threadId: string): Promise<void> {
     const key = this.threadKey(threadId);
     await fs.mkdir(this.threadRoot(key), { recursive: true, mode: 0o700 });
-    if (!await this.isArchived(threadId)) await writePrivateFileAtomic(path.join(this.threadRoot(key), "archived"), "1\n");
+    if (!await this.isArchived(threadId)) await writePrivateFileAtomic(path.join(this.threadRoot(key), "archived"), `${randomUUID()}\n`);
     for (const [objectId, owner] of this.owners) {
       if (owner === key) this.outputs.remove(objectId);
     }
@@ -882,7 +925,7 @@ export class TokenMiserStore {
     objectId: string,
     threadId: string,
   ): Promise<TokenMiserStoredObject | undefined> {
-    if (await this.isArchived(threadId)) return undefined;
+    if (!await this.isCurrentRetention(threadId, this.outputGenerations.get(objectId))) return undefined;
     const metadata = await this.readMetadata(objectId, threadId);
     if (
       !metadata

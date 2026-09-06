@@ -12609,6 +12609,7 @@ export class DesktopBackendRegistry {
       await this.restoreWithClient(client, request.threadId),
     );
     if (backend === "codex") {
+      await this.tokenMiserStore?.restoreThread(result.threadId);
       await this.overlayStore.setThreadArchiveTombstone({
         backend,
         threadId: result.threadId,
@@ -22936,6 +22937,7 @@ export class DesktopBackendRegistry {
           });
         }
         if (notification.method === "thread/unarchived") {
+          if (backend === "codex") await this.tokenMiserStore?.restoreThread(notification.params.threadId);
           this.clearArchivedMessagingCleanupCache({
             backend,
             threadId: notification.params.threadId,

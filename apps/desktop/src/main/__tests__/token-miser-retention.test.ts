@@ -154,3 +154,51 @@ it("rejects cross-thread reuse of a staged id", async () => {
   await first.commit();
   expect((await store.readAll({ objectId: "00000000-0000-4000-8000-000000000001", threadId: "owner" }))?.text).toBe(params.output);
 });
+it("restores new reductions without reviving originals, deliveries, or staged callbacks in another store", async () => {
+  const { store, root } = await fixture();
+  const archiveOwner = new TokenMiserStore(root);
+  const accepted = await store.store(params);
+  const staged = await store.stage(params);
+  await staged.persist();
+  const delivery = await store.prepareRetrievalDelivery({ objectId: accepted.objectId, threadId: "owner", visibleText: params.output });
+  await archiveOwner.archiveThread("owner");
+  await archiveOwner.restoreThread("owner");
+  expect(await store.readAll({ objectId: accepted.objectId, threadId: "owner" })).toBeUndefined();
+  expect((await store.summarizeThreadUsage("owner")).interceptions[0]?.originalOutputAvailableUntil).toBeUndefined();
+  expect(await store.confirmModelVisibleRetrievals({ threadId: "owner", output: delivery!.text })).toBe(0);
+  await expect(staged.persist()).rejects.toThrow("unavailable");
+  await expect(staged.commit()).rejects.toThrow("unavailable");
+  const fresh = await store.store(params);
+  expect(await store.readAll({ objectId: fresh.objectId, threadId: "owner" })).toBeDefined();
+  const restarted = new TokenMiserStore(root);
+  expect(await restarted.listMetadata("owner")).toHaveLength(2);
+  await expect(restarted.store(params)).resolves.toBeDefined();
+});
+it("makes duplicate restoration harmless and writes only a bounded lifecycle marker", async () => {
+  const { store } = await fixture();
+  const writes = vi.spyOn(fs, "writeFile");
+  try {
+    await store.archiveThread("owner");
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(Buffer.byteLength(String(writes.mock.calls[0]![1]))).toBe(37);
+    writes.mockClear();
+    await Promise.all([store.restoreThread("owner"), store.restoreThread("owner")]);
+    expect(writes).not.toHaveBeenCalled();
+    const fresh = await store.store(params);
+    writes.mockClear();
+    await store.restoreThread("owner");
+    expect(writes).not.toHaveBeenCalled();
+    expect(await store.readAll({ objectId: fresh.objectId, threadId: "owner" })).toBeDefined();
+  } finally { writes.mockRestore(); }
+});
+it("keeps restoration fail-closed if the archive marker cannot be moved", async () => {
+  const { store } = await fixture();
+  await store.archiveThread("owner");
+  const rename = vi.spyOn(fs, "rename").mockRejectedValue(new Error("fixture rename failure"));
+  try {
+    await expect(store.restoreThread("owner")).rejects.toThrow("fixture rename failure");
+    await expect(store.stage(params)).rejects.toThrow("archived");
+  } finally { rename.mockRestore(); }
+  await store.restoreThread("owner");
+  await expect(store.store(params)).resolves.toBeDefined();
+});
