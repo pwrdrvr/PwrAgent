@@ -13,7 +13,7 @@ import {
   estimateHistoricalThreadUsageGapLines,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChipContextMenu,
   type ChipContextMenuItem,
@@ -91,19 +91,29 @@ const DEFAULT_PRICING_DISPLAY_OPTIONS: PricingDisplayOptions = {
 };
 const PRICING_USAGE_PAGE_SIZE = 20;
 
-export function PricingPanel(props: PricingPanelProps) {
-  const summaries = props.pricing?.summaries ?? [];
-  const lines = props.pricing?.lines ?? [];
-  const allDisplayLines = buildPricingDisplayLines(lines);
-  const subAgentsById = new Map(
-    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
+export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps) {
+  // These derivations cover the entire history, including folded gate rows.
+  // Reuse them for presentation updates when their source data is unchanged.
+  const summaries = useMemo(
+    () => props.pricing?.summaries ?? [],
+    [props.pricing?.summaries],
   );
+  const lines = useMemo(
+    () => props.pricing?.lines ?? [],
+    [props.pricing?.lines],
+  );
+  const allDisplayLines = useMemo(() => buildPricingDisplayLines(lines), [lines]);
+  const subAgentsById = useMemo(() => new Map(
+    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
+  ), [props.subAgents]);
   // Gate rows nest under the turn they happened in. Left in the flat list they
   // sort *above* their turn — a gate is created mid-turn, after the turn's
   // first usage flush — and each one is a full card, so a turn with 25 gates
   // pushed its own row a screen below the noise it produced.
-  const { gateLinesByTurn, displayLines, orphanGroupsByAnchor } =
-    partitionTokenMiserGateLines(allDisplayLines, subAgentsById);
+  const { gateLinesByTurn, displayLines, orphanGroupsByAnchor } = useMemo(
+    () => partitionTokenMiserGateLines(allDisplayLines, subAgentsById),
+    [allDisplayLines, subAgentsById],
+  );
   const pricingHistoryKey = summaries[0]
     ? `${summaries[0].backend}:${summaries[0].threadId}`
     : displayLines[0]
@@ -119,15 +129,16 @@ export function PricingPanel(props: PricingPanelProps) {
       : PRICING_USAGE_PAGE_SIZE;
   const visibleDisplayLines = displayLines.slice(0, visibleUsageRowCount);
   const hiddenUsageRowCount = displayLines.length - visibleDisplayLines.length;
-  const estimatedLines = allDisplayLines.filter(isEstimatedUsageGap);
-  const displaySummaries = addEstimatedLinesToSummaries(summaries, estimatedLines);
-  const summary =
-    aggregateSummaries(displaySummaries) ?? aggregateUsageLines(allDisplayLines);
+  const summary = useMemo(() => {
+    const estimatedLines = allDisplayLines.filter(isEstimatedUsageGap);
+    const displaySummaries = addEstimatedLinesToSummaries(summaries, estimatedLines);
+    return aggregateSummaries(displaySummaries) ?? aggregateUsageLines(allDisplayLines);
+  }, [summaries, allDisplayLines]);
   // The headline is the all-in bill, including naming, reviews, monitors and
   // Token Miser. Underneath it, the same bill split by the model that spent
   // it: a turn that sends four reviewers to four models bills three providers,
   // and a per-provider split answers none of the questions that raises.
-  const spendByModel = buildPricingSpendByModel({
+  const spendByModel = useMemo(() => buildPricingSpendByModel({
     lines: allDisplayLines,
     resolveModel: (line) =>
       resolveUsageLineModel(
@@ -136,7 +147,7 @@ export function PricingPanel(props: PricingPanelProps) {
           ? subAgentsById.get(line.sourceItemId)
           : undefined,
       ),
-  });
+  }), [allDisplayLines, subAgentsById]);
   const spendModelCount = spendByModel.reduce(
     (total, group) => total + group.models.length,
     0,
@@ -215,14 +226,11 @@ export function PricingPanel(props: PricingPanelProps) {
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   // Totals run over every line, nested gates included: a gate's helper cost is
   // still part of the running total of every turn after it.
-  const pricingTotals = buildPricingRunningTotals(allDisplayLines);
-  const activeTurnId = props.activeTurnId;
-  const hasActiveRow = allDisplayLines.some((line) =>
-    isActiveUsageLine({ activeTurnId, line, subAgentsById }),
+  const pricingTotals = useMemo(
+    () => buildPricingRunningTotals(allDisplayLines),
+    [allDisplayLines],
   );
-  // Tick while any row is live — the main turn or any still-running sub-agent —
-  // so completed threads render static and never spin a 1s interval.
-  const now = useNowWhileActive(hasActiveRow);
+  const activeTurnId = props.activeTurnId;
   const compactionsByRow = useMemo(
     () => groupCompactionsByRow(props.pricing?.compactions ?? []),
     [props.pricing?.compactions],
@@ -376,7 +384,6 @@ export function PricingPanel(props: PricingPanelProps) {
         <PricingUsageTimestamp
           isActive={isActive}
           line={line}
-          now={now}
           onScrollToTurn={props.onScrollToTurn}
           subAgent={subAgent}
         />
@@ -557,7 +564,7 @@ export function PricingPanel(props: PricingPanelProps) {
       ) : null}
     </section>
   );
-}
+});
 
 /**
  * One model's share of the bill, closed by default, opening onto the token
@@ -1639,10 +1646,11 @@ function isActiveUsageLine(params: {
 function PricingUsageTimestamp(props: {
   isActive: boolean;
   line: ThreadUsageLineRecord;
-  now: number;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   subAgent?: ThreadSubAgentSummary;
 }) {
+  // Only this timestamp subscribes to the clock; completed cards stay static.
+  const now = useNowWhileActive(props.isActive);
   const startedAt =
     props.subAgent?.createdAt ?? props.line.startedAt ?? props.line.createdAt;
   const completedAt =
@@ -1658,7 +1666,7 @@ function PricingUsageTimestamp(props: {
   return (
     <RailCardTiming
       completedAt={completedAt}
-      now={props.now}
+      now={now}
       running={props.isActive}
       startedAt={startedAt}
       {...(canScrollToTurn

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type {
   AppServerThreadActivityDetail,
   AppServerThreadEntry,
@@ -38,7 +38,7 @@ type ToolAccountingTotals = {
   warningLines: number;
 };
 
-export function ToolCallsPanel(props: ToolCallsPanelProps) {
+export const ToolCallsPanel = memo(function ToolCallsPanel(props: ToolCallsPanelProps) {
   const [expandedSummary, setExpandedSummary] = useState<string>();
   const [expandedInvocation, setExpandedInvocation] = useState<string>();
   const accounting = props.toolAccounting;
@@ -199,7 +199,7 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
       ) : null}
     </section>
   );
-}
+});
 
 function ToolInvocationList(props: {
   detailsByItemId: Map<string, AppServerThreadActivityDetail>;

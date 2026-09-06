@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
 import { EnvActionRunsView } from "../EnvActionRunsView";
 import type { ActionRunsDock } from "./context-tab";
@@ -14,7 +15,7 @@ type ActionRunsPanelProps = {
   runs: CodexEnvironmentActionRun[];
 };
 
-export function ActionRunsPanel(props: ActionRunsPanelProps) {
+export const ActionRunsPanel = memo(function ActionRunsPanel(props: ActionRunsPanelProps) {
   return (
     <section className="context-panel__section context-panel__section--env-actions">
       {props.runs.length > 0 ? (
@@ -44,4 +45,4 @@ export function ActionRunsPanel(props: ActionRunsPanelProps) {
       )}
     </section>
   );
-}
+});

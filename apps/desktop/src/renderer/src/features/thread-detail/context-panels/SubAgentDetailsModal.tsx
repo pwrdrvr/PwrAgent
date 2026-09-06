@@ -20,7 +20,7 @@ import {
   subAgentStatusLabel,
   subAgentTone,
 } from "./subagent-format";
-import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
+import { LiveRailCardTiming } from "./RailCardTiming";
 import { RailStatusChip } from "./RailStatusChip";
 import { subAgentOriginLabel } from "./subagent-kind";
 
@@ -124,7 +124,6 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
   const fastMode = subAgent.preferredFastMode ?? usage?.fastMode;
   const running = !isTerminalSubAgent(subAgent);
-  const now = useNowWhileActive(running);
   const transcriptThreadId =
     subAgent.monitorThreadId &&
     subAgent.monitorThreadId !== props.parentThreadId
@@ -186,9 +185,8 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
                 </span>
               ) : null}
             </p>
-            <RailCardTiming
+            <LiveRailCardTiming
               completedAt={subAgentCompletedAt(subAgent)}
-              now={now}
               running={running}
               startedAt={subAgent.createdAt}
             />

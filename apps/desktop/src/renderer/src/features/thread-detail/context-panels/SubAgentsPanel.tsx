@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useId,
   useState,
@@ -20,7 +21,7 @@ import {
   subAgentTone,
 } from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
-import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
+import { LiveRailCardTiming } from "./RailCardTiming";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
 import {
   type SubAgentLens,
@@ -49,7 +50,7 @@ const SUB_AGENT_LENSES: Array<{
 ];
 
 /** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
-export function SubAgentsPanel(props: SubAgentsPanelProps) {
+export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
   const { onDetailsModalOpenChange } = props;
   const lensControlId = useId();
@@ -91,10 +92,6 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const [detailsForId, setDetailsForId] = useState<string | null>(null);
   const detailsFor =
     subAgents.find((subAgent) => subAgent.monitorId === detailsForId) ?? null;
-  const hasRunningSubAgent = subAgents.some(
-    (subAgent) => !isTerminalSubAgent(subAgent),
-  );
-  const now = useNowWhileActive(hasRunningSubAgent);
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set());
   const [stopErrors, setStopErrors] = useState<Record<string, string>>({});
 
@@ -297,9 +294,8 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                     </span>
                   ) : null}
                 </p>
-                <RailCardTiming
+                <LiveRailCardTiming
                   completedAt={subAgentCompletedAt(subAgent)}
-                  now={now}
                   running={running}
                   startedAt={subAgent.createdAt}
                 />
@@ -374,4 +370,4 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
       ) : null}
     </section>
   );
-}
+});

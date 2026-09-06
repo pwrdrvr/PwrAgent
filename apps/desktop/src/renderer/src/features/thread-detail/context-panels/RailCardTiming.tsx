@@ -16,6 +16,12 @@ type RailCardTimingProps = {
   startedAt: number;
 };
 
+/** Live clocks belong to the timing display, never to its containing panel. */
+export function LiveRailCardTiming(props: Omit<RailCardTimingProps, "now">) {
+  const now = useNowWhileActive(props.running);
+  return <RailCardTiming {...props} now={now} />;
+}
+
 /**
  * Shared start + duration treatment for Pricing and Sub-agent rail cards.
  *

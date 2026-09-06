@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,10 +11,14 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../../lib/desktop-api";
+import * as subAgentFormatting from "../subagent-format";
+import * as railFormatting from "../context-rail-shared";
 import { SubAgentsPanel } from "../SubAgentsPanel";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const thread: NavigationThreadSummary = {
@@ -491,4 +496,22 @@ describe("SubAgentsPanel", () => {
       });
     });
   });
+});
+
+it("updates live timing without rendering the sub-agent list or completed timing", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_800_000_010_000);
+  const status = vi.spyOn(subAgentFormatting, "subAgentStatusLabel");
+  const timestamp = vi.spyOn(railFormatting, "formatTimestamp");
+  const view = render(<SubAgentsPanel thread={thread} />);
+  const before = view.container.querySelector(".rail-card__duration")?.textContent;
+  status.mockClear();
+  timestamp.mockClear();
+  act(() => { vi.advanceTimersByTime(3_000); });
+  expect(view.container.querySelector(".rail-card__duration")?.textContent).not.toBe(before);
+  expect(status).not.toHaveBeenCalled();
+  expect(timestamp.mock.calls.every(([time]) => time === 1_800_000_000_000)).toBe(true);
+  timestamp.mockClear();
+  view.rerender(<SubAgentsPanel thread={thread} />);
+  expect(timestamp).not.toHaveBeenCalled();
 });

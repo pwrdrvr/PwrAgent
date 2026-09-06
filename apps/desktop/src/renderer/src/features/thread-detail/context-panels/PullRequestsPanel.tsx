@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
@@ -27,7 +27,7 @@ type CheckState = NonNullable<PrSummary["checkState"]>;
  * (#number, tooltip, status dot — identical to the sidebar) leads a row of
  * status pills (lifecycle, merge conflict, checks), above the title + repo.
  */
-export function PullRequestsPanel(props: PullRequestsPanelProps) {
+export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequestsPanelProps) {
   const [pendingDetachPr, setPendingDetachPr] = useState<PrSummary>();
   // Newest first. `PrSummary` carries no creation timestamp, so sort by PR
   // number (monotonic with creation within a repo); for the rare multi-repo
@@ -132,7 +132,7 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
       ) : null}
     </section>
   );
-}
+});
 
 function prKey(pr: PrSummary): string {
   return `${pr.provider}/${pr.org}/${pr.repo}#${pr.number}`;

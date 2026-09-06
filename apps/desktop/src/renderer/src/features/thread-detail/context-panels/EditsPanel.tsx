@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { memo, useEffect, useId, useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
   AppServerThreadActivityDetail,
@@ -427,7 +427,7 @@ function FileSizeStat(props: { bytes: number }) {
  * translates with the list — only the groups scroll, their sticky
  * headers pinning to the body's top edge.
  */
-export function EditsPanel(props: EditsPanelProps) {
+export const EditsPanel = memo(function EditsPanel(props: EditsPanelProps) {
   const [view, setView] = useState<EditedFileGroupView>("turns");
   const hasGroups = props.groups.length > 0;
   const showViewToggle = props.groups.length > 1;
@@ -540,7 +540,7 @@ export function EditsPanel(props: EditsPanelProps) {
       </div>
     </section>
   );
-}
+});
 
 function unpublishedCommitsSummary(totalCommits: number): string {
   return `Unpublished ${totalCommits.toLocaleString()} ${
