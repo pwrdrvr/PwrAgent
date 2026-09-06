@@ -47,7 +47,7 @@ import {
  *    reason — do not widen it to "drafts" without giving launchpad text a home.
  */
 export function useThreadDraftIndicators(params: {
-  composerDraftStore: ComposerDraftStore;
+  composerDraftStore?: ComposerDraftStore;
   threads: NavigationThreadSummary[];
 }): Record<string, boolean> {
   const { composerDraftStore, threads } = params;
@@ -55,11 +55,11 @@ export function useThreadDraftIndicators(params: {
   // `useSyncExternalStore` re-subscribes whenever `subscribe` changes identity,
   // and an inline arrow changes on every render.
   const subscribe = useCallback(
-    (listener: () => void) => composerDraftStore.subscribeDraftPresence(listener),
+    (listener: () => void) => composerDraftStore?.subscribeDraftPresence(listener) ?? (() => undefined),
     [composerDraftStore],
   );
   const getSnapshot = useCallback(
-    () => composerDraftStore.getDraftPresenceVersion(),
+    () => composerDraftStore?.getDraftPresenceVersion() ?? 0,
     [composerDraftStore],
   );
   const version = useSyncExternalStore(subscribe, getSnapshot);
@@ -68,7 +68,7 @@ export function useThreadDraftIndicators(params: {
     const indicators: Record<string, boolean> = {};
     for (const thread of threads) {
       if (
-        composerDraftStore.hasDraftContent(
+        composerDraftStore?.hasDraftContent(
           buildThreadComposerScopeKey(thread.source, thread.id),
         )
       ) {

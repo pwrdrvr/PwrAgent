@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationDirectoryRow, NavigationThreadSummary } from "@pwragent/shared";
 import {
   STAR_MAP_NO_PROJECT_KEY,
   groupThreadsByProject,
@@ -462,4 +462,20 @@ describe("groupThreadsByProject summons", () => {
       "stale",
     ]);
   });
+});
+
+
+it("keeps project mass and off-page bodies stable while another row page arrives", () => {
+  const visible = thread({ id: "visible", repoPath: "/repos/large", updatedAt: 1 });
+  const descriptor = (key: string, total: number): NavigationDirectoryRow => ({
+    key, label: key, kind: "directory", counts: { total, active: 0, unread: 0, review: 0 },
+    pinnedRootCount: 0, unpinnedRootCount: total, launchpadPresent: false, latestUpdatedAt: 100,
+  });
+  const descriptors = new Map([["owner", [descriptor(threadProjectKey(visible), 1000), descriptor("off-page", 500)]]]);
+  const first = groupThreadsByProject(new Map([["owner", [visible]]]), { descriptorsByInstance: descriptors, now: 100 });
+  const next = groupThreadsByProject(new Map([["owner", [visible, thread({ id: "next", repoPath: "/repos/large" })]]]),
+    { descriptorsByInstance: descriptors, now: 100 });
+  expect(first.map((project) => [project.key, project.mass, project.totalThreadCount]))
+    .toEqual(next.map((project) => [project.key, project.mass, project.totalThreadCount]));
+  expect(first.find((project) => project.key === "off-page")?.threads).toEqual([]);
 });

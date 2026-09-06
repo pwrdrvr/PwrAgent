@@ -2,6 +2,7 @@ import {
   buildThreadIdentityKey,
   classifyDirectory,
   type NavigationThreadSummary,
+  type NavigationDirectoryRow,
 } from "@pwragent/shared";
 
 export type StarMapProject = {
@@ -17,6 +18,8 @@ export type StarMapProject = {
   mass: number;
   /** Threads pooled from every instance, most recently active first. */
   threads: NavigationThreadSummary[];
+  /** Complete primary-membership count from compact owner geometry. */
+  totalThreadCount?: number;
 };
 
 /**
@@ -92,6 +95,7 @@ export function groupThreadsByProject(
   threadsByInstance: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
   params?: {
     now?: number;
+    descriptorsByInstance?: ReadonlyMap<string, readonly NavigationDirectoryRow[]>;
     /**
      * Identity keys the operator summoned from the ⌘K palette. A project
      * body caps how many cards it seats, and recency is the wrong tie-break
@@ -104,7 +108,23 @@ export function groupThreadsByProject(
   },
 ): StarMapProject[] {
   const projects = new Map<string, StarMapProject>();
-  for (const threads of threadsByInstance.values()) {
+  for (const descriptors of params?.descriptorsByInstance?.values() ?? []) {
+    for (const descriptor of descriptors) {
+      const existing = projects.get(descriptor.key);
+      if (existing) {
+        existing.totalThreadCount = (existing.totalThreadCount ?? 0) + descriptor.counts.total;
+        existing.lastActivityAt = Math.max(existing.lastActivityAt, descriptor.latestUpdatedAt ?? 0);
+      } else {
+        projects.set(descriptor.key, { key: descriptor.key, label: descriptor.label,
+          totalThreadCount: descriptor.counts.total, lastActivityAt: descriptor.latestUpdatedAt ?? 0,
+          mass: 0, threads: [] });
+      }
+    }
+  }
+  const owners = params?.descriptorsByInstance
+    ? [...threadsByInstance.entries()].sort(([left], [right]) => left.localeCompare(right))
+    : threadsByInstance.entries();
+  for (const [, threads] of owners) {
     for (const thread of threads) {
       const key = threadProjectKey(thread);
       const existing = projects.get(key);
@@ -137,14 +157,14 @@ export function groupThreadsByProject(
       const leftSummoned = summoned(left);
       const rightSummoned = summoned(right);
       if (leftSummoned !== rightSummoned) return leftSummoned ? -1 : 1;
-      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+      return params?.descriptorsByInstance ? 0 : (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
     });
-    project.lastActivityAt = project.threads.reduce(
+    if (project.totalThreadCount === undefined) project.lastActivityAt = project.threads.reduce(
       (latest, thread) => Math.max(latest, thread.updatedAt ?? 0),
       0,
     );
     project.mass = projectMass({
-      cardCount: project.threads.length,
+      cardCount: project.totalThreadCount ?? project.threads.length,
       lastActivityAt: project.lastActivityAt,
       now,
     });

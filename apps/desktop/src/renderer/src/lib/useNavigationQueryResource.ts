@@ -40,7 +40,11 @@ export function useNavigationQueryResource(params: {
     const pending = pendingRef.current;
     if (pending?.lifetime === lifetime) return pending.promise;
     const current = currentRef.current;
-    if (!current || !api?.getNavigationQueryPage) return;
+    if (!current) return;
+    if (!api?.getNavigationQueryPage) {
+      publish(failNavigationPageRead(current, current.pendingSequence, new Error("Navigation queries are unavailable. Upgrade this instance.")));
+      return;
+    }
     const cursor = continuation ? current.page?.nextCursor : undefined;
     if (continuation && !cursor) return;
     const started = beginNavigationPageRead(current);
