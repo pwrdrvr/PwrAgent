@@ -85,8 +85,9 @@ transfer even when attribution is full. Reconnects and Federation stop/start do
 not reset counters; exiting the app process does. The legacy health-only ledger
 is also capped at 128 peers.
 
-The hard storage bound is 67 series, each with at most 3600 bucket records and one
-lifetime record. Only the selected series returns chart history over IPC; the
+The hard storage bound is 67 series, each with a fixed 3600-slot numeric ring and one
+lifetime record. A timestamp tag makes expired slots invisible; recording overwrites
+only its one-second slot and never scans or deletes an accumulated event list. Only the selected series returns chart history over IPC; the
 popover requests no chart history. There are no per-event timers or SQLite
 writes. The monitor's added SQLite commit and WAL budget is **0 commits and
 0 MB/day**, independent of event volume. User toggles use the existing settings
@@ -146,3 +147,39 @@ Copy exports the selected attribution/peer as tab-separated plain text through
 the existing clipboard bridge. It includes capture and interval-start timestamps,
 all recent/total columns, size statistics, scaled and exact byte values, and the
 accounting boundaries. It excludes payloads and chart samples.
+
+
+### Performance and write-budget audit
+
+Each transfer updates at most three series (global physical, physical peer, and
+logical endpoint). Recording is O(1) with no peer scan, history scan, serialization,
+logging, or persistence. A ring allocates lazily on its first transfer and holds
+374,400 bytes: 3,600 timestamps and 12 counters per timestamp. The maximum across
+67 series is 25,084,800 bytes for rings plus 3,640,512 bytes for size histograms,
+**28,725,312 bytes total numeric backing storage**, plus small object/map overhead.
+Reset releases those arrays. Old numeric slots remain allocated but cannot appear
+in rolling totals after expiry; no payloads are retained.
+
+Snapshots scan the fixed rings and fixed histograms: O(P × (H + B)), with P ≤ 67,
+H = 3,600 and B = 4 × 1,698. Cost does not increase with message count or process
+age. Only the selected chart's 360 points cross IPC. Each visible activity surface
+polls locally every two seconds, after the previous read finishes. Closed surfaces
+do not poll. The transport byte-length seam reuses existing serialization lengths
+and weak envelope keys, without extending payload lifetime.
+
+A local Node 24 stress audit on 2026-09-05 recorded 40 peers, requests and responses
+in both directions every simulated second for two hours (1,152,000 transfers).
+After both the first and second hour, numeric storage was exactly 28,725,312 bytes.
+The second 576,000 transfers took 383 ms; 30 full snapshots had a 5.2 ms median and
+9.0 ms maximum, with approximately 196 KB JSON per snapshot. These are local
+microbenchmark measurements, not a latency guarantee for all machines. The prior
+object-map representation measured approximately 68 MB retained and 85 ms median
+snapshot time in the same audit; the fixed rings replace that implementation.
+
+Regression coverage fills and wraps every ring with more than one million events,
+asserts the exact storage cap and rolling counts, and checks Reset releases it.
+`federation-activity-write-budget.test.ts` measures 10,000 transfers, reads, and
+Reset with SQLite instrumentation enabled. Its checked-in budget is zero commits,
+zero write statements and zero WAL bytes: **0 MB/day additional monitoring WAL**.
+The monitored path also contains no filesystem or log calls. Explicit configuration
+toggles still use the normal settings write boundary; clipboard export is user-driven.

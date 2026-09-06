@@ -18,11 +18,28 @@ const counts = (): FederationActivityCounts => ({
   dataBytes: 0, wireBytes: 0,
 });
 const totals = (): FederationActivityTotals => ({ sent: counts(), received: counts() });
+const COUNT_FIELDS = ["requests", "responses", "notifications", "other", "dataBytes", "wireBytes"] as const;
+function addCounts(target: FederationActivityCounts, source: FederationActivityCounts) {
+  target.requests += source.requests;
+  target.responses += source.responses;
+  target.notifications += source.notifications;
+  target.other += source.other;
+  target.dataBytes += source.dataBytes;
+  target.wireBytes += source.wireBytes;
+}
 function add(target: FederationActivityTotals, source: FederationActivityTotals) {
+  addCounts(target.sent, source.sent);
+  addCounts(target.received, source.received);
+}
+function addBucket(target: FederationActivityTotals, values: Float64Array, offset: number) {
   for (const direction of ["sent", "received"] as const) {
-    for (const key of Object.keys(target[direction]) as Array<keyof FederationActivityCounts>) {
-      target[direction][key] += source[direction][key];
-    }
+    const value = target[direction];
+    value.requests += values[offset++];
+    value.responses += values[offset++];
+    value.notifications += values[offset++];
+    value.other += values[offset++];
+    value.dataBytes += values[offset++];
+    value.wireBytes += values[offset++];
   }
 }
 class Series {
@@ -31,7 +48,10 @@ class Series {
     sent: { requests: new FederationSizeStatistics(), responses: new FederationSizeStatistics() },
     received: { requests: new FederationSizeStatistics(), responses: new FederationSizeStatistics() },
   };
-  readonly buckets = new Map<number, FederationActivityTotals>();
+  // Fixed ring storage, allocated only after this series receives traffic.
+  // Timestamp tags make idle/expired slots invisible without a per-event sweep.
+  private times?: Float64Array;
+  private values?: Float64Array;
   record(at: number, delta: FederationActivityTotals) {
     add(this.lifetime, delta);
     for (const direction of ["sent", "received"] as const) {
@@ -39,19 +59,19 @@ class Series {
       if (value.requests) this.sizes[direction].requests.record(value.dataBytes);
       if (value.responses) this.sizes[direction].responses.record(value.dataBytes);
     }
-    const bucket = this.buckets.get(at) ?? totals();
-    add(bucket, delta);
-    this.buckets.set(at, bucket);
-    this.expire(at);
-  }
-  expire(at: number) {
-    for (const time of this.buckets.keys()) {
-      if (time > at - HOUR) break;
-      this.buckets.delete(time);
+    this.times ??= new Float64Array(HOUR).fill(-Infinity);
+    this.values ??= new Float64Array(HOUR * 12);
+    const slot = ((at % HOUR) + HOUR) % HOUR;
+    let offset = slot * 12;
+    if (this.times[slot] !== at) {
+      this.values.fill(0, offset, offset + 12);
+      this.times[slot] = at;
+    }
+    for (const direction of ["sent", "received"] as const) {
+      for (const field of COUNT_FIELDS) this.values[offset++] += delta[direction][field];
     }
   }
   snapshot(at: number, includeHistory: boolean): FederationActivitySeries {
-    this.expire(at);
     const windows = { "1m": totals(), "5m": totals(), "10m": totals(), "1h": totals() };
     const history: FederationActivitySeries["history"] = [];
     const first = at - HOUR + 1;
@@ -61,12 +81,17 @@ class Series {
         history.push({ at: start * SECOND, totals: totals() });
       }
     }
-    for (const [time, bucket] of this.buckets) {
-      add(windows["1h"], bucket);
-      if (time > at - 600) add(windows["10m"], bucket);
-      if (time > at - 300) add(windows["5m"], bucket);
-      if (time > at - 60) add(windows["1m"], bucket);
-      if (includeHistory) add(history[Math.floor((time - first) / 10)].totals, bucket);
+    if (this.times && this.values) {
+      for (let slot = 0; slot < HOUR; slot += 1) {
+        const time = this.times[slot];
+        if (time <= at - HOUR || time > at) continue;
+        const offset = slot * 12;
+        addBucket(windows["1h"], this.values, offset);
+        if (time > at - 600) addBucket(windows["10m"], this.values, offset);
+        if (time > at - 300) addBucket(windows["5m"], this.values, offset);
+        if (time > at - 60) addBucket(windows["1m"], this.values, offset);
+        if (includeHistory) addBucket(history[Math.floor((time - first) / 10)].totals, this.values, offset);
+      }
     }
     return {
       lifetime: structuredClone(this.lifetime), windows, history,

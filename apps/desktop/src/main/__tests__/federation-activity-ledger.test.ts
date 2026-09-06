@@ -101,11 +101,14 @@ describe("Federation activity ledger", () => {
     expect(snapshot.peers.reduce((sum, peer) => sum + peer.series.lifetime.sent.requests, 0)).toBe(8_000);
     // Numeric bucket retention remains bounded even without snapshot polling.
     const internals = ledger as unknown as {
-      physical: { buckets: Map<number, unknown> };
-      peers: Map<string, { buckets: Map<number, unknown> }>;
+      physical: { times: Float64Array; values: Float64Array };
+      peers: Map<string, { times: Float64Array; values: Float64Array }>;
     };
-    expect(internals.physical.buckets.size).toBeLessThanOrEqual(3_600);
-    for (const peer of internals.peers.values()) expect(peer.buckets.size).toBeLessThanOrEqual(3_600);
+    for (const series of [internals.physical, ...internals.peers.values()]) {
+      expect(series.times).toHaveLength(3_600);
+      expect(series.values).toHaveLength(3_600 * 12);
+      expect(series.times.byteLength + series.values.byteLength).toBe(374_400);
+    }
     expect(JSON.stringify(snapshot).length).toBeLessThan(180_000);
   });
 
@@ -126,7 +129,7 @@ describe("Federation activity ledger", () => {
     ledger.record({ ...base, envelope: { ...base.envelope, targetInstanceId: "x".repeat(1_000_000) } });
     const snapshot = ledger.snapshot(1_000, { includeHistory: false });
     expect(snapshot.logical[0].peerId).toBe("Unknown endpoint");
-    expect(inspect(ledger, { depth: 12 }).length).toBeLessThan(10_000);
+    expect(inspect(ledger, { depth: 12 })).not.toContain("x".repeat(121));
   });
 
   it("tracks lifetime uncompressed sizes by direction and kind using the same attribution rules", () => {
@@ -174,4 +177,33 @@ it("reset clears all history, peers and size distributions and starts a fresh me
   const next = ledger.snapshot(3_000);
   expect(next.physical.lifetime.sent.requests).toBe(1);
   expect(next.physical.sizes.sent.requests).toEqual({ count: 1, averageBytes: 50, p50Bytes: 50, minBytes: 50, maxBytes: 50 });
+});
+
+
+it("caps all numeric storage at 28.73 MB even when every peer and size histogram is populated", () => {
+  const ledger = new FederationActivityLedger(0);
+  function retainedBytes(value: unknown): number {
+    if (ArrayBuffer.isView(value)) return value.byteLength;
+    if (value instanceof Map) return [...value.values()].reduce((sum, item) => sum + retainedBytes(item), 0);
+    if (value && typeof value === "object") return Object.values(value).reduce<number>((sum, item) => sum + retainedBytes(item), 0);
+    return 0;
+  }
+  for (let second = 0; second < 7_200; second += 1) {
+    for (let peer = 0; peer < 40; peer += 1) {
+      for (const direction of ["sent", "received"] as const) {
+        for (const kind of ["request", "response"] as const) ledger.record({ ...base, at: second * 1_000,
+          peerId: `peer-${peer}`, direction, envelope: { kind,
+            sourceInstanceId: direction === "sent" ? "local" : `peer-${peer}`,
+            targetInstanceId: direction === "sent" ? `peer-${peer}` : "local" },
+        });
+      }
+    }
+    if (second === 0 || second === 3_599 || second === 7_199) expect(retainedBytes(ledger)).toBe(28_725_312);
+  }
+  const snapshot = ledger.snapshot(7_199_000);
+  expect(snapshot.physical.lifetime.sent.requests).toBe(7_200 * 40);
+  expect(snapshot.physical.windows["1h"].sent.requests).toBe(3_600 * 40);
+  expect(snapshot.physical.history.every((bucket) => bucket.totals.sent.requests === 400)).toBe(true);
+  ledger.reset();
+  expect(retainedBytes(ledger)).toBe(0);
 });
