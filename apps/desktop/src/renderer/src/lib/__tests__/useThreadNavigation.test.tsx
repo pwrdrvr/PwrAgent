@@ -23,6 +23,13 @@ import {
 } from "../native-drag-interaction";
 import { useThreadNavigation } from "../useThreadNavigation";
 
+function actionDetailApi(...threads: NavigationThreadSummary[]): Pick<DesktopApi, "getNavigationSelectedDetail"> {
+  return { getNavigationSelectedDetail: vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
+    const thread = threads.find((candidate) => candidate.id === request.ref.threadId && candidate.source === request.ref.backend);
+    return { protocol: 2, ref: request.ref, revision: "fixture-detail", readiness: "ready", identity: thread ? "present" : "unresolved", thread };
+  }) };
+}
+
 /**
  * Create / rename / archive failures leave the hook through
  * `onThreadActionError` instead of a returned string — they render as
@@ -4400,6 +4407,7 @@ describe("useThreadNavigation", () => {
     );
 
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(childA, childB, rootThread),
       getNavigationSnapshot,
       forkThread,
       updateSubthreadOrder,
@@ -4517,6 +4525,7 @@ describe("useThreadNavigation", () => {
       threadIds: request.threadIds,
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(localChild, remoteRoot),
       ensureDirectoryLaunchpad,
       forkThread,
       getNavigationSnapshot: vi.fn(async () => ({
@@ -8990,6 +8999,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       forkThread,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
@@ -9095,6 +9105,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       forkThread,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
@@ -9191,6 +9202,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       forkThread,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
@@ -9290,6 +9302,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
@@ -9397,6 +9410,7 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       updateDirectoryLaunchpad,
       resetDirectoryLaunchpad,
@@ -9493,6 +9507,7 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       updateDirectoryLaunchpad,
       resetDirectoryLaunchpad,
@@ -9983,6 +9998,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
@@ -10117,6 +10133,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
@@ -10220,6 +10237,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       getNavigationSnapshot: async () => ({
         backend: "all" as const,
@@ -10394,6 +10412,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       getNavigationSnapshot,
       onAgentEvent: (callback) => {
@@ -10500,6 +10519,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
@@ -11813,6 +11833,8 @@ describe("useThreadNavigation", () => {
     );
 
     const desktopApi: DesktopApi = {
+      ...actionDetailApi({ id: "thread-1", source: "codex", title: "First thread", titleSource: "explicit", linkedDirectories: [],
+        model: "gpt-5.6-sol", reasoningEffort: "medium", fastMode: false, inbox: { inInbox: true, reason: "new-thread" }, updatedAt: 1000 }),
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
       setThreadModelSettings,

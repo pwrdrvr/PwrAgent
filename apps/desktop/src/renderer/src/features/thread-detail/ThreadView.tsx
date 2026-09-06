@@ -328,6 +328,7 @@ function LaunchpadMaterializeFailure(props: {
 function EnvironmentSetupFailureChoice(props: {
   archiving: boolean;
   continuing: boolean;
+  disabled?: boolean;
   command?: string;
   cwd?: string;
   error?: string;
@@ -404,7 +405,7 @@ function EnvironmentSetupFailureChoice(props: {
       <div className="environment-setup-choice__actions">
         <button
           className="composer__action-button composer__action-button--danger"
-          disabled={props.archiving || props.continuing}
+          disabled={props.disabled || props.archiving || props.continuing}
           type="button"
           onClick={props.onCleanup}
         >
@@ -412,7 +413,7 @@ function EnvironmentSetupFailureChoice(props: {
         </button>
         <button
           className="composer__action-button"
-          disabled={props.archiving || props.continuing}
+          disabled={props.disabled || props.archiving || props.continuing}
           type="button"
           onClick={() => {
             void props.onContinue();
@@ -1929,7 +1930,7 @@ export function ThreadView(props: ThreadViewProps) {
       .catch(() => undefined);
   };
   const continueAfterSetupFailure = async (): Promise<void> => {
-    if (!selectedThread || !selectedThreadKey) {
+    if (!selectedThread || !selectedThreadKey || props.composerDisabled) {
       return;
     }
 
@@ -3523,6 +3524,7 @@ export function ThreadView(props: ThreadViewProps) {
             <EnvironmentSetupFailureChoice
               archiving={setupFailureArchiving}
               continuing={setupFailureContinuing}
+              disabled={props.composerDisabled}
               command={
                 selectedThreadEnvironmentFailurePhase === "action"
                   ? selectedThreadLatestFailedActionRun?.command

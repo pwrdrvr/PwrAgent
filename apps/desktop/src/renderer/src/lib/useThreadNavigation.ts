@@ -1,3 +1,4 @@
+import { readNavigationActionThread } from "./navigation-action-authority";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -3358,6 +3359,7 @@ export function useThreadNavigation(
   const submittedSeenUpdatedAtByThreadKeyRef = useRef(new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
   const mountedRef = useRef(true);
+  const actionAbortControllerRef = useRef(new AbortController());
   const queuedRefreshRef = useRef<
     | {
         forceRefresh?: boolean;
@@ -3418,7 +3420,9 @@ export function useThreadNavigation(
 
   useEffect(() => {
     mountedRef.current = true;
+    if (actionAbortControllerRef.current.signal.aborted) actionAbortControllerRef.current = new AbortController();
     return () => {
+      actionAbortControllerRef.current.abort();
       mountedRef.current = false;
     };
   }, []);
@@ -5929,6 +5933,13 @@ export function useThreadNavigation(
         return;
       }
 
+      try {
+        parent = await readNavigationActionThread({ api: desktopApi, thread: parent, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
+      } catch (error) {
+        setCreateThreadError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+
       const directory = selectThreadWorkspace(parent, mode);
       const launchpadDirectoryPath =
         mode === "new-worktree"
@@ -6085,6 +6096,13 @@ export function useThreadNavigation(
     ): Promise<void> => {
       if (!forkThreadRequest) {
         setCreateThreadError("Desktop bridge is missing forkThread().");
+        return;
+      }
+
+      try {
+        parent = await readNavigationActionThread({ api: desktopApi, thread: parent, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
+      } catch (error) {
+        setCreateThreadError(error instanceof Error ? error.message : String(error));
         return;
       }
 
@@ -7620,11 +7638,18 @@ export function useThreadNavigation(
         return;
       }
 
-      const worktreePath = directory.worktreePath ?? directory.path;
       setWorktreeArchiveError(undefined);
       setArchiveThreadError(undefined);
 
       try {
+        thread = await readNavigationActionThread({ api: desktopApi, thread, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
+        if (thread.federation?.ref.target.scope === "remote") {
+          throw new Error("Open this thread on its owning instance to manage its worktree archives.");
+        }
+        const authoritativeDirectory = thread.linkedDirectories.find((candidate) =>
+          candidate.path === directory.path && candidate.worktreePath === directory.worktreePath);
+        if (!authoritativeDirectory) throw new Error("This worktree is no longer linked to the thread. Refresh before archiving it.");
+        const worktreePath = authoritativeDirectory.worktreePath ?? authoritativeDirectory.path;
         await archiveWorktreeRequest({
           backend: thread.source,
           threadId: thread.id,
@@ -7636,7 +7661,7 @@ export function useThreadNavigation(
         setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
       }
     },
-    [archiveWorktreeRequest, refresh]
+    [desktopApi, archiveWorktreeRequest, refresh]
   );
 
   const restoreWorktree = useCallback(
@@ -7654,6 +7679,10 @@ export function useThreadNavigation(
       setArchiveThreadError(undefined);
 
       try {
+        thread = await readNavigationActionThread({ api: desktopApi, thread, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
+        if (thread.federation?.ref.target.scope === "remote") {
+          throw new Error("Open this thread on its owning instance to manage its worktree archives.");
+        }
         await restoreWorktreeRequest({
           backend: thread.source,
           threadId: thread.id,
@@ -7665,7 +7694,7 @@ export function useThreadNavigation(
         setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
       }
     },
-    [refresh, restoreWorktreeRequest]
+    [desktopApi, refresh, restoreWorktreeRequest]
   );
 
   const handoffThreadWorkspace = useCallback(
@@ -7683,6 +7712,7 @@ export function useThreadNavigation(
       setArchiveThreadError(undefined);
 
       try {
+        thread = await readNavigationActionThread({ api: desktopApi, thread, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
         await handoffThreadWorkspaceRequest({
           ...request,
           backend: thread.source,
@@ -7697,7 +7727,7 @@ export function useThreadNavigation(
         throw error;
       }
     },
-    [handoffThreadWorkspaceRequest, refresh]
+    [desktopApi, handoffThreadWorkspaceRequest, refresh]
   );
 
   const renameThread = useCallback(
@@ -8425,6 +8455,7 @@ export function useThreadNavigation(
       // round-trip without lying about applied state.
 
       try {
+        thread = await readNavigationActionThread({ api: desktopApi, thread, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
         await setThreadExecutionMode({
           backend: thread.source,
           federationTarget: thread.federation?.ref.target ??
@@ -8440,7 +8471,7 @@ export function useThreadNavigation(
         setUpdatingThreadExecutionMode(undefined);
       }
     },
-    [refresh, setThreadExecutionMode]
+    [desktopApi, refresh, setThreadExecutionMode]
   );
 
   const cancelThreadExecutionModeQueue = useCallback(
@@ -8484,6 +8515,13 @@ export function useThreadNavigation(
         setSetThreadModelSettingsError(
           "Desktop bridge is missing setThreadModelSettings()."
         );
+        return;
+      }
+
+      try {
+        thread = await readNavigationActionThread({ api: desktopApi, thread: thread, target: readRendererFederationTarget() });
+      } catch (error) {
+        setSetThreadModelSettingsError(error instanceof Error ? error.message : String(error));
         return;
       }
 
@@ -8532,7 +8570,8 @@ export function useThreadNavigation(
         await refresh(threadSummaryIdentityKey(thread));
       }
     },
-    [refresh, setThreadModelSettings]
+    [
+      desktopApi,refresh, setThreadModelSettings]
   );
 
   const updateThreadPrAutoDispatch = useCallback(
@@ -8638,6 +8677,12 @@ export function useThreadNavigation(
       }
 
       setSetThreadExecutionModeError(undefined);
+      try {
+        thread = await readNavigationActionThread({ api: desktopApi, thread, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
+      } catch (error) {
+        setSetThreadExecutionModeError(error instanceof Error ? error.message : String(error));
+        return;
+      }
       const nextAcpRuntime: NavigationThreadSummary["acpRuntime"] = {
         ...thread.acpRuntime,
         configValues:
@@ -8682,7 +8727,7 @@ export function useThreadNavigation(
         await refresh(threadSummaryIdentityKey(thread));
       }
     },
-    [refresh, setAcpSessionRuntimeOption]
+    [desktopApi, refresh, setAcpSessionRuntimeOption]
   );
 
   const dismissArchiveThreadNotice = useCallback((): void => {
