@@ -93,6 +93,9 @@ describe("DesktopMessagingRuntime", () => {
     expect(adapter.start).toHaveBeenCalledTimes(1);
     expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
+      filter: undefined,
+    }, {
+      onProgress: expect.any(Function),
     });
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
@@ -727,6 +730,9 @@ describe("DesktopMessagingRuntime", () => {
     expect(messagingLog.warn).not.toHaveBeenCalled();
     expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
+      filter: undefined,
+    }, {
+      onProgress: expect.any(Function),
     });
   });
 
@@ -3636,6 +3642,9 @@ describe("DesktopMessagingRuntime", () => {
     expect(replacementTelegramAdapter.start).not.toHaveBeenCalled();
     expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
+      filter: undefined,
+    }, {
+      onProgress: expect.any(Function),
     });
     expect(messagingLog.info).toHaveBeenCalledWith(
       "telegram: hot-applied messaging config",
