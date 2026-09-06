@@ -1859,7 +1859,6 @@ function DesktopAppShell(props: {
     desktopApi,
     onUserRepliedToThread: reportUserRepliedToThread,
     selectedThread: navigation.selectedThread,
-    threads: navigation.threads,
   });
   // Per-thread "Scheduled"/"Queued" chip state, derived from the same
   // queued-turn store useQueuedTurnRelease drains. Keyed by thread identity
