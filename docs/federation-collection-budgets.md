@@ -119,3 +119,24 @@ The common collection client owns deadline/fallback rules for project/archive
 consumers, and the merge partitioner owns arrangement page bounds. Replacement
 snapshots, history pages, and progressive UI publication have different semantics;
 do not collapse them into a generic helper that silently changes those contracts.
+
+### Star Map compact metadata accounting
+
+The renderer's geometry range store and exact-row range store each admit at
+most 8 MiB of retained serialized-equivalent backing and 8 MiB of aggregate
+in-progress backing, across local and remote owners in that renderer process.
+Each store admits at most 256 consumer identities and pending ranges. Replacing
+one owner's complete generation temporarily charges both the retained generation
+and the new in-progress generation. Cancellation keeps temporary backing charged
+until the read settles; cursor restart releases only the abandoned range's charge.
+These counters are separate from the shared main-process 64 MiB query-page pool.
+They measure serialized-equivalent backing, not JavaScript heap size.
+
+Each result still obeys 252 KiB. The counters do not claim that a decoded
+JavaScript object occupies the same bytes. Owner index construction, immutable
+generation backing, and queued IPC delivery/decoding still need separate allocation
+checks; eight physical reads alone do not bound completed responses awaiting delivery.
+`navigation-metadata-budget.test.ts`, `read-navigation-query-range.test.ts`, and
+`navigation-query-pool.test.ts` enforce the accounting and physical admission
+boundaries. `navigation-query-write-budget.test.ts` exercises the real overlay
+read path and records zero SQLite commits for navigation query reads.

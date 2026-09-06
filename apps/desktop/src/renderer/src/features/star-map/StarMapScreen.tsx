@@ -165,6 +165,8 @@ import { StarMapThreadCard } from "./StarMapThreadCard";
 import { useStarMapArrangement } from "./useStarMapArrangement";
 import { useStarMapInstanceLoad } from "./useStarMapInstanceLoad";
 import { useStarMapThreads } from "./useStarMapThreads";
+import { useLocalStarMapThreads } from "./useLocalStarMapThreads";
+import { useThreadDraftIndicators } from "../../lib/useThreadDraftIndicators";
 
 /**
  * DOM-size backstop for a lane column, not a design limit: lanes pan and
@@ -420,8 +422,8 @@ const NO_CARD_TARGETS: readonly StarMapCardTarget[] = [];
 type StarMapScreenProps = {
   composerDraftStore?: ComposerDraftStore;
   desktopApi?: DesktopApi;
-  /** Local navigation snapshot threads (already live in the App shell). */
-  localThreads: readonly NavigationThreadSummary[];
+  /** Explicit fixture rows. Native windows obtain local rows from bounded owner queries. */
+  localThreads?: readonly NavigationThreadSummary[];
   sessionKeys: StarMapSessionKeys;
   /**
    * Threads with unsent composer text in THIS window, keyed by
@@ -1091,6 +1093,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return result;
   }, [chatCards.cards, health?.instanceId]);
+  const demandedLocalIdentities = useMemo(() => chatCards.cards
+    .filter((card) => card.ownerInstanceId === localInstanceId)
+    .map((card) => ({ backend: card.thread.source, threadId: card.thread.id })), [chatCards.cards, localInstanceId]);
+  const localRowsAreOwnerMatched = props.localThreads === undefined;
+  const localFeed = useLocalStarMapThreads({
+    desktopApi: props.desktopApi,
+    enabled: localRowsAreOwnerMatched,
+    filters: filterSelection,
+    demandedIdentities: demandedLocalIdentities,
+  });
+  const localThreads = props.localThreads ?? localFeed.threads;
+  const loadMoreLocal = localFeed.loadMore;
   const remote = useStarMapThreads({
     desktopApi: props.desktopApi,
     peers,
@@ -1099,8 +1113,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
     filters: filterSelection,
     refreshNonce: remoteRefreshNonce,
   });
+  const draftIndicatorThreads = useMemo(() => [
+    ...localThreads, ...[...remote.threadsByInstance.values()].flat(),
+  ], [localThreads, remote.threadsByInstance]);
+  const localDraftThreadKeys = useThreadDraftIndicators({ composerDraftStore: props.composerDraftStore, threads: draftIndicatorThreads });
+  const draftThreadKeys = props.draftThreadKeys ?? localDraftThreadKeys;
   const federationLayoutReady =
-    !props.desktopApi?.readFederationHealth
+    (!localRowsAreOwnerMatched || (localFeed.geometryReady && Boolean(localFeed.counts)) || Boolean(localFeed.error))
+    && (!props.desktopApi?.readFederationHealth
     || (
       health !== undefined
       && (
@@ -1114,7 +1134,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             || remote.unreachableInstanceIds.has(peer.id),
         )
       )
-    );
+    ));
   const refreshRemoteInstance = remote.refreshInstance;
   const loadMoreRemoteInstance = remote.loadMoreInstance;
   const onUserRepliedToThread = props.onUserRepliedToThread;
@@ -1222,7 +1242,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       localInstanceId,
       withLocalEdits(
         selectFilteredThreads({
-          threads: props.localThreads.filter(
+          ownerMatched: localRowsAreOwnerMatched,
+          threads: localThreads.filter(
             (thread) =>
               !thread.federation
               || !isRemoteFederationTarget(thread.federation.ref.target),
@@ -1286,7 +1307,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
     archivedThreadKeys,
     filterSelection,
     localInstanceId,
-    props.localThreads,
+    localThreads,
+    localRowsAreOwnerMatched,
     props.sessionKeys,
     remote,
     renamedTitles,
@@ -1299,7 +1321,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   useEffect(() => {
     if (archivedThreadKeys.size === 0) return;
     const present = new Set<string>();
-    for (const thread of props.localThreads) {
+    for (const thread of localThreads) {
       present.add(buildThreadIdentityKey(thread.source, thread.id));
     }
     for (const threads of remote.threadsByInstance.values()) {
@@ -1315,7 +1337,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // same reference when nothing is released, so identity would be a
     // stable dep too — but size makes the "runs when the set grows or
     // shrinks" intent explicit and cannot loop through its own setState.
-  }, [archivedThreadKeys.size, props.localThreads, remote]);
+  }, [archivedThreadKeys.size, localThreads, remote]);
 
   // Release an optimistic title once a source has moved off the title the
   // rename replaced — to this window's name, to someone else's, or to
@@ -1332,7 +1354,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     for (const [key, summon] of summonedThreads) {
       titleByKey.set(key, summon.title);
     }
-    for (const thread of props.localThreads) {
+    for (const thread of localThreads) {
       titleByKey.set(
         buildThreadIdentityKey(thread.source, thread.id),
         thread.title,
@@ -1355,7 +1377,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // On the map itself rather than its `.size`, unlike the archive
     // release above: a second rename of the same card changes an entry
     // without changing the count, and this effect reads the entries.
-  }, [props.localThreads, remote, renamedTitles, summonedThreads]);
+  }, [localThreads, remote, renamedTitles, summonedThreads]);
 
   /**
    * Orbit-lens project clouds: each instance's threads grouped by project,
@@ -1454,17 +1476,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const toggleClusterExpanded = useCallback(
     (instanceId: string, clusterKey: string) => {
-      if (
-        instanceId !== localInstanceId
-        && !expandedClusters.has(`${instanceId}::${clusterKey}`)
-      ) {
-        void loadMoreRemoteInstance(instanceId);
+      if (!expandedClusters.has(`${instanceId}::${clusterKey}`)) {
+        if (instanceId === localInstanceId) void loadMoreLocal();
+        else void loadMoreRemoteInstance(instanceId);
       }
       toggleClusterExpandedIn(cloudMemory, instanceId, clusterKey);
     },
     [
       expandedClusters,
       loadMoreRemoteInstance,
+      loadMoreLocal,
       localInstanceId,
       toggleClusterExpandedIn,
     ],
@@ -1480,9 +1501,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [toggleClusterExpandedIn],
   );
 
+  const projectDescriptorsByInstance = useMemo(() => {
+    const descriptors = new Map(remote.directoriesByInstance);
+    if (localRowsAreOwnerMatched) descriptors.set(localInstanceId, localFeed.directories);
+    return descriptors;
+  }, [remote.directoriesByInstance, localFeed.directories, localInstanceId, localRowsAreOwnerMatched]);
+  const [projectGeometryTime] = useState(Date.now);
   const projects = useMemo(
-    () => groupThreadsByProject(attentionByInstance, { summonedKeys }),
-    [attentionByInstance, summonedKeys],
+    () => groupThreadsByProject(attentionByInstance, { summonedKeys, now: projectGeometryTime,
+      descriptorsByInstance: projectDescriptorsByInstance }),
+    [attentionByInstance, summonedKeys, projectDescriptorsByInstance, projectGeometryTime],
   );
 
   const projectThreadOwners = useMemo(
@@ -1609,10 +1637,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // Chip counts answer "how many cards is this chip about", measured
   // against whatever the other facets already allow.
   const filterCounts = useMemo(() => {
-    let counts = countFilterMatches({
+    let counts = localFeed.facets?.matches ?? countFilterMatches({
       selection: filterSelection,
       sessionKeys: props.sessionKeys,
-      threads: props.localThreads.filter(
+      threads: localThreads.filter(
         (thread) =>
           !thread.federation
           || !isRemoteFederationTarget(thread.federation.ref.target),
@@ -1622,7 +1650,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       counts = addFilterMatchCounts(counts, facets.matches);
     }
     return counts;
-  }, [filterSelection, props.localThreads, props.sessionKeys, remote]);
+  }, [filterSelection, localThreads, localFeed.facets, props.sessionKeys, remote]);
 
   /**
    * The Attention chip's two indicators.
@@ -1633,10 +1661,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * carry.
    */
   const attentionCounts = useMemo(() => {
-    let counts = countAttentionSignals({
+    let counts = localFeed.facets ? { activeLocal: localFeed.facets.active, activeRemote: 0, unread: localFeed.facets.unread } : countAttentionSignals({
       selection: filterSelection,
       sessionKeys: props.sessionKeys,
-      threads: props.localThreads.filter(
+      threads: localThreads.filter(
         (thread) =>
           !thread.federation
           || !isRemoteFederationTarget(thread.federation.ref.target),
@@ -1646,7 +1674,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       counts = addAttentionCounts(counts, { activeLocal: 0, activeRemote: facets.active, unread: facets.unread });
     }
     return counts;
-  }, [filterSelection, props.localThreads, props.sessionKeys, remote]);
+  }, [filterSelection, localThreads, localFeed.facets, props.sessionKeys, remote]);
 
   /**
    * Whether the Attention chip draws its remote-turn readout.
@@ -2511,7 +2539,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const liveChatCardThreads = useMemo(() => {
     if (chatCards.cards.length === 0) return undefined;
     const byKey = new Map<string, NavigationThreadSummary>();
-    for (const thread of props.localThreads) {
+    for (const thread of localThreads) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       byKey.set(
         starMapWorkspaceCardKey({ instanceId: localInstanceId, threadKey }),
@@ -2528,7 +2556,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [
     chatCards.cards.length,
     localInstanceId,
-    props.localThreads,
+    localThreads,
     remote.threadsByInstance,
   ]);
   const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
@@ -2709,7 +2737,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     setSelection((current) => (current.size > 0 ? new Set() : current));
   }, [localInstanceId]);
 
-  const onRefreshLocalThreads = props.onRefreshLocalThreads;
+  const onRefreshLocalThreads = props.onRefreshLocalThreads ?? localFeed.refresh;
   /**
    * Refresh whichever cloud owns a thread. Archive removes it from the
    * owning instance, so the map has to re-fetch rather than guess.
@@ -3499,12 +3527,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
       seen.add(key);
       rows.push(thread);
     };
-    for (const thread of props.localThreads) add(thread);
+    for (const thread of localThreads) add(thread);
     for (const threads of remote.threadsByInstance.values()) {
       for (const thread of threads) add(thread);
     }
     return rows;
-  }, [jumpOpen, props.localThreads, remote]);
+  }, [jumpOpen, localThreads, remote]);
 
   /**
    * ⌘K opens the palette, and pressing it again backs out of a jump the
@@ -4355,7 +4383,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   ? props.sessionKeys
                   : undefined
               }
-              hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
+              hasUnsentDraft={draftThreadKeys?.[threadKey] === true}
               // Scattered beats over the cards in view, not a sweep over
               // every card that exists. See `cardRiseDelays`.
               riseDelayMs={riseDelays[index]}
@@ -4861,7 +4889,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   <StarMapProjectBody
                     label={project.label}
                     projectKey={project.key}
-                    threadCount={project.threads.length}
+                    threadCount={project.totalThreadCount ?? project.threads.length}
                     // In overview the body is the only thing naming the
                     // project, so it counter-scales to stay readable —
                     // the same treatment instance bodies get.
@@ -4887,7 +4915,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                             : undefined
                         }
                         hasUnsentDraft={
-                          props.draftThreadKeys?.[threadKey] === true
+                          draftThreadKeys?.[threadKey] === true
                         }
                         entering={enteringThreadKeys.has(threadKey)}
                         located={locatedThreadKey === threadKey}
@@ -5179,7 +5207,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               ),
             );
             if (created.instanceId === localInstanceId) {
-              void props.onRefreshLocalThreads?.();
+              void onRefreshLocalThreads();
             } else {
               setRemoteRefreshNonce((nonce) => nonce + 1);
             }
@@ -5241,15 +5269,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }}
         />
       ) : null}
-      {cardError ? (
+      {cardError || localFeed.error ? (
         <p className="star-map__card-error" role="alert">
-          {cardError}
+          {cardError ?? localFeed.error}
           <button
             type="button"
-            aria-label="Dismiss error"
-            onClick={() => setCardError(undefined)}
+            aria-label={cardError ? "Dismiss error" : "Retry navigation"}
+            onClick={() => { if (cardError) setCardError(undefined); else void localFeed.refresh(); }}
           >
-            ×
+            {cardError ? "×" : "Retry"}
           </button>
         </p>
       ) : null}

@@ -15,6 +15,7 @@ import type {
 import {
   buildThreadIdentityKey,
   comparePinnedThreads,
+  classifyDirectory,
   countNavigationStarMapFacets,
   passesNavigationStarMapFilters,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
@@ -321,6 +322,48 @@ function buildDirectoryRows(params: {
   });
 }
 
+/** Project geometry counts primary membership once, independent of loaded cards. */
+function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryRow[] {
+  const projects = new Map<string, NavigationDirectoryRow>();
+  const launchpads = new Set(index.directories.filter((directory) => directory.launchpad).map((directory) => directory.key));
+  const seen = new Set<string>();
+  for (const thread of index.threads) {
+    if (!isStarMapOwnerThread(thread) || seen.has(threadKey(thread))) continue;
+    seen.add(threadKey(thread));
+    const primary = thread.linkedDirectories[0];
+    const descriptor = primary ? classifyDirectory(primary) : undefined;
+    const key = descriptor?.key ?? "__no-project__";
+    let project = projects.get(key);
+    if (!project) {
+      const segments = (descriptor?.path ?? primary?.path)?.split(/[\\/]/).filter(Boolean);
+      project = {
+        key,
+        kind: descriptor?.kind ?? "unlinked",
+        label: descriptor ? (descriptor.label !== primary?.label ? descriptor.label : segments?.at(-1) ?? descriptor.label) : "No project",
+        path: descriptor?.path,
+        counts: { total: 0, active: 0, unread: 0, review: 0 },
+        pinnedRootCount: 0,
+        unpinnedRootCount: 0,
+        launchpadPresent: launchpads.has(key),
+      };
+      projects.set(key, project);
+    }
+    project.counts.total += 1;
+    const active = isActive(thread);
+    if (active) project.counts.active += 1;
+    if (thread.inbox.inInbox) {
+      project.counts.unread += 1;
+      if (!active) project.counts.review += 1;
+    }
+    if (!thread.parentThreadId) {
+      if (thread.pinnedRank !== undefined) project.pinnedRootCount += 1;
+      else project.unpinnedRootCount += 1;
+    }
+    project.latestUpdatedAt = Math.max(project.latestUpdatedAt ?? 0, thread.updatedAt ?? 0);
+  }
+  return [...projects.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
 function normalizeQuery(query: NavigationQuery): NavigationQuery {
   if (query.kind === "star-map") {
     return { kind: "star-map", filters: Object.fromEntries(Object.entries(query.filters)
@@ -572,7 +615,8 @@ export function projectNavigationQuery(params: {
       ),
     } : {}),
     directories: includeDirectories
-      ? buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey })
+      ? (query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
+        : buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey }))
           .filter((directory) => query.kind !== "directory-index"
             || !query.filter?.trim()
             || `${directory.label}\n${directory.path ?? ""}`.toLowerCase()

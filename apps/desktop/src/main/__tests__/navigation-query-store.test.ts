@@ -53,6 +53,28 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it("pages complete project geometry by primary membership rather than loaded cards or secondary links", async () => {
+    const threads = Array.from({ length: 101 }, (_, index) => ({
+      ...thread(String(index)),
+      linkedDirectories: [
+        { id: `primary-${index}`, kind: "local" as const, label: `Project ${index}`, path: `/repos/project-${index}` },
+        { id: `secondary-${index}`, kind: "local" as const, label: "Secondary", path: "/repos/secondary" },
+      ],
+    }));
+    const store = new NavigationQueryStore();
+    const query = request({ query: { kind: "star-map-geometry" }, pageSize: 100 });
+    const first = await store.readPage({ loadIndex: async () => snapshot(threads), request: query, scopeKey: "viewer" });
+    expect(first.directories).toHaveLength(100);
+    expect(first.complete).toBe(false);
+    const last = await store.readPage({ loadIndex: async () => snapshot([]), request: { ...query, cursor: first.nextCursor }, scopeKey: "viewer" });
+    expect(last.directories).toHaveLength(1);
+    expect(last.complete).toBe(true);
+    const descriptors = [...first.directories!, ...last.directories!];
+    expect(descriptors.reduce((total, directory) => total + directory.counts.total, 0)).toBe(101);
+    expect(descriptors.some((directory) => directory.path === "/repos/secondary")).toBe(false);
+    expect(JSON.stringify(descriptors)).not.toContain("threadKeys");
+  });
+
   it("filters Star Map facets on the owner and counts off-page members", async () => {
     const threads = Array.from({ length: 1001 }, (_, index) => ({
       ...thread(String(index)),
