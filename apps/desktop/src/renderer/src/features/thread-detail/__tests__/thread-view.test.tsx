@@ -2185,7 +2185,7 @@ describe("ThreadView", () => {
       directoryLabel: selectedDirectory.label,
       directoryPath: selectedDirectory.path,
       executionMode: "full-access",
-      prompt: "Investigate clipboard filenames",
+      prompt: "Investigate **clipboard filenames**\n\n> Keep the original name.\n\n| File | Status |\n| --- | --- |\n| capture.png | Ready |",
       updatedAt: 1000,
       workMode: "worktree",
       codexEnvironmentId: "environment",
@@ -2261,7 +2261,13 @@ describe("ThreadView", () => {
     const followup = screen.getByRole("textbox", { name: "New thread" });
     expect(followup).toBeEnabled();
     expect(followup).toHaveValue("");
-    expect(screen.getByLabelText("Submitted message")).toHaveTextContent("Investigate clipboard filenames");
+    const submittedMessage = screen.getByLabelText("Submitted message");
+    expect(submittedMessage).toHaveTextContent("Investigate clipboard filenames");
+    expect(within(submittedMessage).getByText("clipboard filenames").tagName).toBe("STRONG");
+    expect(within(submittedMessage).getByText("Keep the original name.").closest("blockquote"))
+      .toBeInTheDocument();
+    expect(within(submittedMessage).getByRole("table")).toHaveTextContent("capture.png");
+    expect(submittedMessage.querySelector(".transcript-message--user")).toBeInTheDocument();
     fireEvent.change(followup, { target: { value: "Also check the tests" } });
     fireEvent.click(screen.getByRole("button", { name: "Queue" }));
     expect(await screen.findByLabelText("Queued message")).toHaveTextContent("Also check the tests");
@@ -2833,6 +2839,46 @@ describe("ThreadView", () => {
     expect(copyText).toHaveBeenCalledWith(
       "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
     );
+  });
+
+  it("opens submitted image previews while the launchpad is materializing", () => {
+    const dataUrl = "data:image/png;base64,aGVsbG8=";
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={{
+          key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
+          threadKeys: [], needsAttentionCount: 0,
+        }}
+        selectedLaunchpad={{
+          backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "Inspect this screenshot", workMode: "worktree", createdAt: 1, updatedAt: 1,
+        }}
+        pendingLaunchpadCreation={{
+          selectionKey: "launchpad:directory:/repo", directoryKey: "directory:/repo",
+          title: "Inspect this screenshot",
+          input: [{ type: "image", url: dataUrl }],
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "blob:expanded-transcript-image");
+    expect(screen.getByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Expanded image" })).not.toBeInTheDocument();
   });
 
   it("opens transcript image previews in a lightbox and dismisses them with Escape", () => {

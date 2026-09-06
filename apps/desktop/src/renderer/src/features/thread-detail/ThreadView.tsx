@@ -20,6 +20,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
+  AppServerThreadMessagePart,
   AppServerThreadPlanEntry,
   AppServerThreadPlanStep,
   AppServerThreadTurnMetadata,
@@ -99,6 +100,7 @@ import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptList } from "./TranscriptList";
+import { TranscriptMessage } from "./TranscriptMessage";
 import { LiveWorkRail } from "./LiveWorkRail";
 import {
   McpInventoryPanel,
@@ -1259,6 +1261,19 @@ export function ThreadView(props: ThreadViewProps) {
   const [localLaunchpadMaterializing, setLaunchpadMaterializing] = useState(false);
   const launchpadMaterializing = Boolean(props.pendingLaunchpadCreation) || localLaunchpadMaterializing;
   const [launchpadSubmittedInput, setLaunchpadSubmittedInput] = useState<AppServerTurnInputItem[]>([]);
+  const launchpadSubmittedMessage = useMemo<AppServerThreadMessageEntry>(() => {
+    const parts = (props.pendingLaunchpadCreation?.input ?? launchpadSubmittedInput)
+      .flatMap<AppServerThreadMessagePart>((item) =>
+        item.type === "text" || item.type === "image" ? [item] : [],
+      );
+    return {
+      id: "launchpad-submitted-message",
+      type: "message",
+      role: "user",
+      text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n\n"),
+      parts,
+    };
+  }, [launchpadSubmittedInput, props.pendingLaunchpadCreation?.input]);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
   // the main process's registry. It cannot live here: ThreadView unmounts on
   // search and on any refresh that flips `threadDetailPending`, which used to
@@ -3216,6 +3231,32 @@ export function ThreadView(props: ThreadViewProps) {
     );
   }
 
+  const imageLightbox = expandedImage ? (
+    <ImageLightbox
+      src={expandedImage.url}
+      alt={expandedImage.alt ?? "Expanded image"}
+      position={expandedImageIndex >= 0 ? expandedImageIndex + 1 : undefined}
+      total={expandedImageIndex >= 0 ? threadImageGallery.length : undefined}
+      onClose={() => {
+        setExpandedImage(undefined);
+      }}
+      onNext={
+        expandedImageIndex >= 0 && expandedImageIndex < threadImageGallery.length - 1
+          ? () => {
+              setExpandedImage(threadImageGallery[expandedImageIndex + 1]);
+            }
+          : undefined
+      }
+      onPrevious={
+        expandedImageIndex > 0
+          ? () => {
+              setExpandedImage(threadImageGallery[expandedImageIndex - 1]);
+            }
+          : undefined
+      }
+    />
+  ) : null;
+
   if (selectedLaunchpad && props.selectedDirectory) {
     const launchpadBackend = props.backends.find(
       (backend) => backend.kind === selectedLaunchpad.backend
@@ -3331,11 +3372,16 @@ export function ThreadView(props: ThreadViewProps) {
               {launchpadMaterializing ? (
                 <div className="thread-view__launchpad-transcript">
                   <article className="launchpad-submitted-message" aria-label="Submitted message">
-                    {(props.pendingLaunchpadCreation?.input ?? launchpadSubmittedInput).map((item, index) =>
-                      item.type === "text" ? <p key={index}>{item.text}</p>
-                        : item.type === "image" ? <img key={index} src={item.url} alt="Submitted attachment" />
-                        : null,
-                    )}
+                    <div className="transcript-list__content">
+                      <TranscriptMessage
+                        applications={props.applications}
+                        desktopApi={props.desktopApi}
+                        message={launchpadSubmittedMessage}
+                        parentThreadId=""
+                        skills={props.skills}
+                        onOpenImage={setExpandedImage}
+                      />
+                    </div>
                   </article>
                   {launchpadMaterializing && launchpadMaterializeError ? (
                     <LaunchpadMaterializeFailure
@@ -3443,6 +3489,7 @@ export function ThreadView(props: ThreadViewProps) {
             pinned={contextRailPinned}
           />
         </div>
+        {imageLightbox}
       </section>
     );
   }
@@ -3862,31 +3909,7 @@ export function ThreadView(props: ThreadViewProps) {
         />
       </div>
 
-      {expandedImage ? (
-        <ImageLightbox
-          src={expandedImage.url}
-          alt={expandedImage.alt ?? "Expanded image"}
-          position={expandedImageIndex >= 0 ? expandedImageIndex + 1 : undefined}
-          total={expandedImageIndex >= 0 ? threadImageGallery.length : undefined}
-          onClose={() => {
-            setExpandedImage(undefined);
-          }}
-          onNext={
-            expandedImageIndex >= 0 && expandedImageIndex < threadImageGallery.length - 1
-              ? () => {
-                  setExpandedImage(threadImageGallery[expandedImageIndex + 1]);
-                }
-              : undefined
-          }
-          onPrevious={
-            expandedImageIndex > 0
-              ? () => {
-                  setExpandedImage(threadImageGallery[expandedImageIndex - 1]);
-                }
-              : undefined
-          }
-        />
-      ) : null}
+      {imageLightbox}
 
       {rewindDialog ? (
         <div className="workspace-handoff-modal">
