@@ -183,6 +183,9 @@ function createComposerDraftStore(): ComposerDraftStore {
   const pendingSteers = new Map<string, ComposerPendingSteerSnapshot>();
   const queuedTurns = new Map<string, ComposerQueuedTurnSnapshot[]>();
   return {
+    hydrationStatus: "memory-only",
+    getDraftScopeKeys: () => [...new Set([...drafts.keys(), ...draftStacks.keys()])],
+    getQueuedScopeKeys: () => [...queuedTurns.keys()],
     delete: (scopeKey) => {
       drafts.delete(scopeKey);
     },
@@ -1548,6 +1551,9 @@ describe("Composer", () => {
     const deleteDraft = vi.fn();
     const recordHistory = vi.fn();
     const draftStore: ComposerDraftStore = {
+      hydrationStatus: "memory-only",
+      getDraftScopeKeys: () => [],
+      getQueuedScopeKeys: () => [],
       delete: deleteDraft,
       recordHistory,
       get: () => undefined,
