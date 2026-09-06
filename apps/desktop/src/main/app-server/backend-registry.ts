@@ -10377,6 +10377,7 @@ export class DesktopBackendRegistry {
     const pending: ThreadListCacheState = {};
     this.threadListCache.set(cacheKey, pending);
     const threads: AppServerThreadSummary[] = [];
+    let providerFailed = false;
     if (
       (!params.backend || params.backend === "codex")
       && !this.isCodexBootstrapDeferredFn()
@@ -10391,6 +10392,16 @@ export class DesktopBackendRegistry {
       }, {
         callerReason: "federation-thread-search",
         ownerId: this.threadListCacheOwnerId,
+      }).catch((error) => {
+        // Aggregate discovery must still reach healthy ACP providers. Explicit
+        // Codex requests retain the provider error, and the deadline check below
+        // still applies to the entire search rather than restarting its budget.
+        if (params.backend === "codex") throw error;
+        providerFailed = true;
+        backendRegistryLog.warn("Codex search discovery failed; continuing aggregate search", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return [];
       });
       threads.push(...this.withPendingStartedThreads("codex", codexThreads, params));
     }
@@ -10432,10 +10443,15 @@ export class DesktopBackendRegistry {
     }
     checkDeadline();
     if (this.threadListCache.get(cacheKey) === pending) {
-      this.threadListCache.set(cacheKey, {
-        threads: result,
-        expiresAt: Date.now() + THREAD_SEARCH_REUSE_WINDOW_MS,
-      });
+      if (providerFailed) {
+        // Do not hide a recovered provider behind a cached partial inventory.
+        this.threadListCache.delete(cacheKey);
+      } else {
+        this.threadListCache.set(cacheKey, {
+          threads: result,
+          expiresAt: Date.now() + THREAD_SEARCH_REUSE_WINDOW_MS,
+        });
+      }
     }
     return result;
   }
