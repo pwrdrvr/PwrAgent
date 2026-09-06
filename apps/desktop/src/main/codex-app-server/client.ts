@@ -2864,7 +2864,7 @@ function extractPlanEntryFromItem(
   const itemType = pickString(item, ["type"]);
   const normalizedItemType = itemType?.trim().toLowerCase();
   const itemId =
-    pickString(item, ["id", "itemId", "item_id", "call_id"]) ?? `plan-${createdAt ?? 0}`;
+    pickString(item, ["id", "itemId", "item_id", "call_id"]) ?? `plan-${createdAt ?? turn?.startedAt ?? 0}`;
   const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt, turn);
   if (nestedPlanEntry) {
     return nestedPlanEntry;
@@ -4268,13 +4268,13 @@ function attachCustomToolOutputImagesToTurn(params: {
   });
 }
 
-function mergeEntryImagePartsIntoReplayMessages(
+function mergeEntryMetadataIntoReplayMessages(
   messages: AppServerThreadReplay["messages"],
   entries: AppServerThreadEntry[],
 ): AppServerThreadReplay["messages"] {
   const entriesById = new Map(
     entries.flatMap((entry) =>
-      entry.type === "message" && entry.parts?.some((part) => part.type === "image")
+      entry.type === "message"
         ? [[entry.id, entry] as const]
         : [],
     ),
@@ -4289,7 +4289,7 @@ function mergeEntryImagePartsIntoReplayMessages(
     const imageParts = entry.parts?.filter(
       (part): part is AppServerThreadImagePart => part.type === "image",
     ) ?? [];
-    return appendImagePartsToMessage(message, imageParts);
+    return appendImagePartsToMessage({ ...message, createdAt: entry.createdAt }, imageParts);
   });
 }
 
@@ -5116,14 +5116,16 @@ function extractThreadEntries(
       suppressedAssistantTexts.add(normalizeSuppressionText(text));
     }
     const pendingActivityItems: Record<string, unknown>[] = [];
+    let pendingActivityCreatedAt: number | undefined;
 
     const flushActivityItems = (): void => {
       const activity = summarizeActivityItems(
         pendingActivityItems,
-        createdAt,
+        pendingActivityCreatedAt,
         turnMetadata
       );
       pendingActivityItems.length = 0;
+      pendingActivityCreatedAt = undefined;
       if (activity) {
         entries.push(activity);
       }
@@ -5143,12 +5145,14 @@ function extractThreadEntries(
           continue;
         }
         const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
+        // Turn start is a prompt boundary, not the send time of every
+        // assistant message in a potentially hours-long turn. Leave unknown
+        // item times absent; the renderer can retain times observed live.
         const messageCreatedAt =
           itemCreatedAt ??
-          (role === "assistant" && phase === "final"
-            ? turnMetadata?.completedAt
-            : undefined) ??
-          createdAt;
+          (role === "assistant"
+            ? phase === "final" ? turnMetadata?.completedAt : undefined
+            : createdAt);
         entries.push({
           type: "message",
           id:
@@ -5164,7 +5168,7 @@ function extractThreadEntries(
         continue;
       }
 
-      const planEntry = extractPlanEntryFromItem(item, createdAt, turnMetadata);
+      const planEntry = extractPlanEntryFromItem(item, itemCreatedAt, turnMetadata);
       if (planEntry) {
         flushActivityItems();
         entries.push(planEntry);
@@ -5216,6 +5220,9 @@ function extractThreadEntries(
 
       const activityItem = extractActivityItemFromReplayItem(item);
       if (activityItem) {
+        if (pendingActivityItems.length === 0) {
+          pendingActivityCreatedAt = itemCreatedAt;
+        }
         pendingActivityItems.push(activityItem);
         continue;
       }
@@ -5267,7 +5274,7 @@ export function extractThreadReplayFromReadResult(
   options: { threadId?: string } = {}
 ): AppServerThreadReplay {
   const entries = extractThreadEntries(value, options);
-  const messages = mergeEntryImagePartsIntoReplayMessages(
+  const messages = mergeEntryMetadataIntoReplayMessages(
     extractConversationMessages(value),
     entries,
   );

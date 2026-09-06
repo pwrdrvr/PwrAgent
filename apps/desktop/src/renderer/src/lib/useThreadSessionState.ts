@@ -1963,22 +1963,27 @@ function carryForwardTranscriptEntryOrder(
     entries = reorderedEntries;
   }
 
-  const originsByMessageId = new Map(
+  const entriesByMessageId = new Map(
     entries
       .filter(
-        (entry): entry is AppServerThreadMessageEntry =>
-          entry.type === "message" && Boolean(entry.origin)
+        (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
       )
-      .map((entry) => [entry.id, entry.origin] as const)
+      .map((entry) => [entry.id, entry] as const)
   );
   const messages = response.replay.messages.map((message) => {
-    const origin = originsByMessageId.get(message.id);
-    if (!origin || message.origin) {
+    const entry = entriesByMessageId.get(message.id);
+    const origin = !message.origin ? entry?.origin : undefined;
+    const createdAt = entry?.createdAt;
+    if (!origin && (createdAt === undefined || createdAt === message.createdAt)) {
       return message;
     }
 
     changed = true;
-    return { ...message, origin };
+    return {
+      ...message,
+      ...(origin ? { origin } : {}),
+      ...(createdAt !== undefined ? { createdAt } : {}),
+    };
   });
 
   const freshCurrentTurnId = latestTranscriptTurnId(response.replay.entries);
