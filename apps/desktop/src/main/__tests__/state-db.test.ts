@@ -1742,6 +1742,147 @@ describe("StateDb", () => {
     });
   });
 
+  it("reprices Astra aggregate rows whose turn context window caps every request under 272K", () => {
+    stateDb.close();
+
+    const dbPath = path.join(
+      tempDir,
+      "astra-context-window-pricing-repair-state.db",
+    );
+    stateDb = StateDb.open(dbPath);
+    const createdAt = Date.UTC(2026, 8, 5, 20, 40);
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_turns (
+          usage_turn_id,
+          provider,
+          backend,
+          thread_id,
+          turn_id,
+          model,
+          observed_at,
+          model_context_window,
+          updated_at
+        ) VALUES (
+          'openai:codex:thread-astra:turn-astra',
+          'openai',
+          'codex',
+          'thread-astra',
+          'turn-astra',
+          'gpt-6-astra',
+          ?,
+          258400,
+          ?
+        )`,
+      )
+      .run(createdAt, createdAt);
+    stateDb.raw
+      .prepare(
+        `INSERT INTO thread_usage_lines (
+          usage_line_id,
+          usage_turn_id,
+          provider,
+          backend,
+          thread_id,
+          turn_id,
+          source,
+          scope,
+          status,
+          created_at,
+          model,
+          fast_mode,
+          input_tokens,
+          cached_input_tokens,
+          uncached_input_tokens,
+          output_tokens,
+          reasoning_output_tokens,
+          total_tokens,
+          price_status,
+          price_unavailable_reason,
+          currency,
+          uncached_input_cost_micros,
+          cached_input_cost_micros,
+          output_cost_micros,
+          total_cost_micros,
+          updated_at
+        ) VALUES (
+          'codex:thread-astra:turn-astra:live-token-usage',
+          'openai:codex:thread-astra:turn-astra',
+          'openai',
+          'codex',
+          'thread-astra',
+          'turn-astra',
+          'live',
+          'turn',
+          'pending',
+          ?,
+          'gpt-6-astra',
+          0,
+          1648011,
+          1527808,
+          120203,
+          9663,
+          1131,
+          1658805,
+          'unpriced',
+          'insufficient-token-breakdown',
+          'USD',
+          0,
+          0,
+          0,
+          0,
+          ?
+        )`,
+      )
+      .run(createdAt, createdAt);
+    stateDb.raw.pragma("user_version = 58");
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    const line = stateDb.raw
+      .prepare(
+        `SELECT price_status, price_unavailable_reason, pricing_rate_id, total_cost_micros
+         FROM thread_usage_lines
+         WHERE usage_line_id = 'codex:thread-astra:turn-astra:live-token-usage'`,
+      )
+      .get() as {
+        price_status: string;
+        price_unavailable_reason: string | null;
+        pricing_rate_id: string | null;
+        total_cost_micros: number;
+      };
+    const summary = stateDb.raw
+      .prepare(
+        `SELECT priced_usage_line_count, unpriced_usage_line_count, total_cost_micros
+         FROM thread_pricing_summaries
+         WHERE provider = 'openai'
+           AND backend = 'codex'
+           AND thread_id = 'thread-astra'
+           AND currency = 'USD'`,
+      )
+      .get() as {
+        priced_usage_line_count: number;
+        total_cost_micros: number;
+        unpriced_usage_line_count: number;
+      };
+
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+    expect(line).toEqual({
+      price_status: "priced",
+      price_unavailable_reason: null,
+      pricing_rate_id: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      total_cost_micros: 3_269_538,
+    });
+    expect(summary).toEqual({
+      priced_usage_line_count: 1,
+      total_cost_micros: 3_269_538,
+      unpriced_usage_line_count: 0,
+    });
+  });
+
   it("reprices existing GPT-5.6 usage rows after the July 30 price reduction", () => {
     stateDb.close();
 

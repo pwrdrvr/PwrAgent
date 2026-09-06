@@ -26680,6 +26680,77 @@ command = "pnpm dev"
     },
   );
 
+  it("prices an Astra aggregate from its context window when a request snapshot was missed", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-6-astra",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    // Two requests land between observations: the cumulative total grows by
+    // more than the single `last` snapshot, so the observed request components
+    // can no longer reproduce the turn total. The 258,400-token window still
+    // proves no request entered the >272K band.
+    for (const [input, cached] of [
+      [200_000, 100_000],
+      [600_000, 300_000],
+    ]) {
+      await codexClient.emit({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          tokenUsage: {
+            model_context_window: 258_400,
+            total_token_usage: {
+              input_tokens: input,
+              cached_input_tokens: cached,
+              output_tokens: input / 20,
+              reasoning_output_tokens: 0,
+              total_tokens: input * 1.05,
+            },
+            last_token_usage: {
+              input_tokens: 200_000,
+              cached_input_tokens: 100_000,
+              output_tokens: 10_000,
+              reasoning_output_tokens: 0,
+              total_tokens: 210_000,
+            },
+          },
+        },
+      });
+    }
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines[0]).toMatchObject({
+      cachedInputTokens: 300_000,
+      inputTokens: 600_000,
+      modelContextWindow: 258_400,
+      outputTokens: 30_000,
+      priceStatus: "priced",
+      pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      totalCostMicros: 4_800_000,
+    });
+    expect(pricing.lines[0]?.pricingBasis).toBeUndefined();
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("prices each Astra request before aggregating a multi-request turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },

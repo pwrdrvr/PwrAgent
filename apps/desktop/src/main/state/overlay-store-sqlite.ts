@@ -1791,34 +1791,46 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         params.threadId,
       ) as ThreadUsageLineRow[];
 
-    // Pricing catalogs can gain rates without changing sqlite's schema. When
-    // the newest card is unpriced, lazily retry this thread in ten-row groups.
-    // A group with no repairs stops the scan, so permanently unknown histories
-    // cost one bounded read rather than a full-ledger walk on every load.
-    if (lineRows[0]?.price_status === "unpriced") {
+    // Pricing catalogs and pricing rules can change without touching sqlite's
+    // schema, and an unpriced row can sit behind newer priced rows. When any
+    // displayed card is unpriced, lazily retry those rows in ten-row groups,
+    // newest first. A group with no repairs stops the scan, so permanently
+    // unknown histories cost one bounded read rather than a full-ledger walk
+    // on every load.
+    const unpricedRows = lineRows.filter(
+      (row) => row.price_status !== "priced",
+    );
+    if (unpricedRows.length > 0) {
+      const candidates = unpricedRows.map((row) => ({
+        existing: row,
+        line: threadUsageLineFromRow(row),
+      }));
+      // The context-window ceiling lives on the turn record, not the line row.
+      this.attachUsageTurnMetadataSync(
+        params.backend,
+        params.threadId,
+        candidates.map((candidate) => candidate.line),
+      );
       const repairs: Array<{
         existing: ThreadUsageLineRow;
         repaired: ThreadUsageLineRecord;
       }> = [];
       for (
         let offset = 0;
-        offset < lineRows.length;
+        offset < candidates.length;
         offset += THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE
       ) {
-        const batch = lineRows.slice(
+        const batch = candidates.slice(
           offset,
           offset + THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE,
         );
         let repairedInBatch = 0;
-        for (const row of batch) {
-          if (row.price_status === "priced") {
-            continue;
-          }
-          const repaired = repriceTokenUsageLine(threadUsageLineFromRow(row));
+        for (const candidate of batch) {
+          const repaired = repriceTokenUsageLine(candidate.line);
           if (repaired.priceStatus !== "priced") {
             continue;
           }
-          repairs.push({ existing: row, repaired });
+          repairs.push({ existing: candidate.existing, repaired });
           repairedInBatch += 1;
         }
         if (repairedInBatch === 0) {
@@ -7407,6 +7419,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
     model: line.model,
     outputTokens: line.outputTokens,
     reasoningOutputTokens: line.reasoningOutputTokens,
+    requestInputTokenCeiling: line.modelContextWindow,
     serviceTier: line.serviceTier,
     uncachedInputTokens: line.uncachedInputTokens,
   });
@@ -7420,6 +7433,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
           inputTokenScope:
             line.scope === "latest-request" ? "request" : "aggregate",
           model: line.model,
+          requestInputTokenCeiling: line.modelContextWindow,
           serviceTier: line.serviceTier,
           uncachedInputTokens: line.uncachedInputTokens,
         });
