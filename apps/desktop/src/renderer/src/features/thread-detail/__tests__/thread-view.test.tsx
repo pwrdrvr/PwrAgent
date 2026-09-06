@@ -2185,7 +2185,7 @@ describe("ThreadView", () => {
       directoryLabel: selectedDirectory.label,
       directoryPath: selectedDirectory.path,
       executionMode: "full-access",
-      prompt: "Investigate clipboard filenames",
+      prompt: "Investigate **clipboard filenames**\n\n> Keep the original name.\n\n| File | Status |\n| --- | --- |\n| capture.png | Ready |",
       updatedAt: 1000,
       workMode: "worktree",
       codexEnvironmentId: "environment",
@@ -2261,7 +2261,13 @@ describe("ThreadView", () => {
     const followup = screen.getByRole("textbox", { name: "New thread" });
     expect(followup).toBeEnabled();
     expect(followup).toHaveValue("");
-    expect(screen.getByLabelText("Submitted message")).toHaveTextContent("Investigate clipboard filenames");
+    const submittedMessage = screen.getByLabelText("Submitted message");
+    expect(submittedMessage).toHaveTextContent("Investigate clipboard filenames");
+    expect(within(submittedMessage).getByText("clipboard filenames").tagName).toBe("STRONG");
+    expect(within(submittedMessage).getByText("Keep the original name.").closest("blockquote"))
+      .toBeInTheDocument();
+    expect(within(submittedMessage).getByRole("table")).toHaveTextContent("capture.png");
+    expect(submittedMessage.querySelector(".transcript-message--user")).toBeInTheDocument();
     fireEvent.change(followup, { target: { value: "Also check the tests" } });
     fireEvent.click(screen.getByRole("button", { name: "Queue" }));
     expect(await screen.findByLabelText("Queued message")).toHaveTextContent("Also check the tests");
