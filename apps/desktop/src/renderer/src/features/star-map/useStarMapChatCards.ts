@@ -83,7 +83,7 @@ export type StarMapChatCardsController = {
   resolveRestoredAnchors: (
     resolve: (
       anchor: StarMapWorkspaceAnchor,
-    ) => StarMapChatCardAnchorResolution | undefined,
+    ) => StarMapChatCardAnchorResolution | null | undefined,
   ) => void;
   toggleContext: (cardKey: string) => void;
   toggleTerminal: (cardKey: string) => void;
@@ -626,13 +626,18 @@ export function useStarMapChatCards(params: {
     (
       resolve: (
         anchor: StarMapWorkspaceAnchor,
-      ) => StarMapChatCardAnchorResolution | undefined,
+      ) => StarMapChatCardAnchorResolution | null | undefined,
     ) => {
       const current = stateRef.current;
       if (!current.cards.some((card) => card.pendingAnchorRestore)) return;
+      let changed = false;
       const cards = current.cards.map((card) => {
         if (!card.pendingAnchorRestore) return card;
         const resolution = resolve(card.anchor);
+        // null means this owner is still loading, not that its anchor is
+        // absent. Other owners can finish independently in the same pass.
+        if (resolution === null) return card;
+        changed = true;
         const offset = resolution?.basis === "instance"
           && card.instanceDx !== undefined
           && card.instanceDy !== undefined
@@ -652,7 +657,7 @@ export function useStarMapChatCards(params: {
           pendingAnchorRestore: false,
         };
       });
-      applyState({ ...current, cards }, false);
+      if (changed) applyState({ ...current, cards }, false);
     },
     [applyState],
   );

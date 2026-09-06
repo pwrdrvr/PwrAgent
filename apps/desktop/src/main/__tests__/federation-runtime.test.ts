@@ -10,6 +10,7 @@ import type {
   FederationEventClass,
   FederationEventSubscription,
   FederationInstanceId,
+  FederationPeerSummary,
   FederationProtocolEnvelope,
   FederationThreadSelection,
   GetNavigationSnapshotTransportRequest,
@@ -58,6 +59,8 @@ import {
 } from "../federation/federation-peer-unavailable-error";
 import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
+import { replacementPages } from "../federation/federation-replacement-pages";
+import * as appState from "../state/app-state";
 
 // `getDesktopBackendRegistry()` is the one construction that opts into real
 // machine ACP discovery, so a test that reaches the singleton inherits it — the
@@ -1359,6 +1362,64 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it("uses replacement pages only on negotiated connections and keeps legacy payloads complete", () => {
+    const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
+    try {
+      const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
+        broadcastPeerDirectory(): void;
+        buildPeerDirectory(): FederationPeerSummary[];
+      };
+      runtime.localInstanceId = "gateway_one";
+      const peers: FederationPeerSummary[] = Array.from({ length: 201 }, (_, index) => ({
+        id: `peer-${index}`, label: `Peer ${index}`, role: "client", status: "connected", capabilities: [],
+      }));
+      vi.spyOn(runtime, "buildPeerDirectory").mockReturnValue(peers);
+      const paged: FederationProtocolEnvelope[] = [];
+      const legacy: FederationProtocolEnvelope[] = [];
+      const router = new FederationRouter({ localInstanceId: "gateway_one" });
+      router.registerConnection({ peerId: "new", capabilities: [], peerDirectoryPaging: true,
+        sendEnvelope: (envelope) => { paged.push(envelope); } });
+      router.registerConnection({ peerId: "old", capabilities: [],
+        sendEnvelope: (envelope) => { legacy.push(envelope); } });
+      runtime.router = router;
+      runtime.broadcastPeerDirectory();
+      expect(paged).toHaveLength(3);
+      expect(paged[0]).toMatchObject({ method: "federation.peerDirectoryPage", params: { index: 0, total: 3 } });
+      expect(paged.every((envelope) => Buffer.byteLength(JSON.stringify(envelope)) <= 256 * 1024)).toBe(true);
+      expect(legacy).toHaveLength(1);
+      expect(legacy[0]).toMatchObject({ method: "federation.peerDirectory", params: { peers } });
+    } finally {
+      initialized.mockRestore();
+    }
+  });
+
+  it("retains complete routes until the last peer-directory page arrives", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "client_one";
+    runtime.store = () => ({ getPeer: () => undefined, listPeers: () => [] });
+    const envelope = (method: string, params: unknown): FederationProtocolEnvelope => ({
+      id: "directory", kind: "notification", method, params,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "gateway_one", targetInstanceId: "client_one", createdAt: 1000,
+    });
+    const old = { id: "old", label: "Old", role: "client" as const,
+      status: "connected" as const, capabilities: ["thread_navigation" as const] };
+    runtime.applyPeerDirectory(envelope("federation.peerDirectory", { peers: [old] }));
+    const peers = Array.from({ length: 101 }, (_, index) => ({ ...old, id: `new-${index}` }));
+    const pages = replacementPages(peers);
+    runtime.applyPeerDirectory(envelope("federation.peerDirectoryPage", pages[0]));
+    expect(runtime.visiblePeers().map((peer) => peer.id)).toEqual(["old"]);
+    const observed: string[][] = [];
+    runtime.onPeerStatusChanged(() => observed.push(runtime.visiblePeers().map((peer) => peer.id)));
+    runtime.applyPeerDirectory(envelope("federation.peerDirectoryPage", pages[1]));
+    expect(runtime.visiblePeers().map((peer) => peer.id)).toEqual(peers.map((peer) => peer.id));
+    expect(observed.length).toBeGreaterThan(0);
+    expect(observed.every((ids) => ids.length === 101 && !ids.includes("old"))).toBe(true);
+    // A legacy complete replacement still works after negotiating pages.
+    runtime.applyPeerDirectory(envelope("federation.peerDirectory", { peers: [old] }));
+    expect(runtime.visiblePeers().map((peer) => peer.id)).toEqual(["old"]);
+  });
+
   it("publishes peer status changes after installing the full directory", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "client_one";
@@ -2104,6 +2165,94 @@ describe("DesktopFederationRuntime", () => {
       },
       { instanceId: "owner_one", method: "starMap/intake/status" },
     ]);
+  });
+
+  it("resumes Star Map subscription bootstrap without rereading or resending completed pages", async () => {
+    const db = openInMemoryStateDb();
+    const overlay = new SqliteOverlayStore(db);
+    setDesktopOverlayStoreForTests(overlay);
+    const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
+    try {
+      await overlay.mergeStarMapArrangement(Array.from({ length: 201 }, (_, index) => ({
+        instanceId: "owner_one", threadKey: `codex:t-${index}`,
+        dx: index % 2 ? null : index, dy: index % 2 ? null : index,
+        updatedAt: 1, by: "owner_one",
+      })));
+      const reads = vi.spyOn(overlay, "readStarMapArrangementPage");
+      const sent: FederationProtocolEnvelope[] = [];
+      const router = new FederationRouter({ localInstanceId: "owner_one" });
+      router.registerConnection({
+        peerId: "viewer_one", capabilities: ["event_subscriptions", "thread_navigation"],
+        sendEnvelope: (envelope) => { sent.push(envelope); },
+      });
+      const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+      runtime.localInstanceId = "owner_one";
+      runtime.router = router;
+      const subscribe = (params: unknown) => runtime.applyEventSubscription({
+        id: "subscribe", kind: "notification", method: "federation.eventSubscription", params,
+        protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1,
+      }, "viewer_one");
+      subscribe({ eventClasses: ["star_map"], starMapBootstrap: { protocol: 1 } });
+      await vi.waitFor(() => expect(sent).toHaveLength(3));
+      const generation = (sent[0] as { params: { bootstrap: { generation: string } } }).params.bootstrap.generation;
+      expect(reads).toHaveBeenCalledTimes(3);
+      subscribe({ eventClasses: [] });
+      sent.length = 0;
+      subscribe({ eventClasses: ["star_map"], starMapBootstrap: { protocol: 1, generation, nextPage: 1 } });
+      await vi.waitFor(() => expect(sent).toHaveLength(2));
+      expect(sent[0]).toMatchObject({ params: { bootstrap: { generation, index: 1 } } });
+      expect(reads).toHaveBeenCalledTimes(3);
+      subscribe({ eventClasses: [] });
+      sent.length = 0;
+      subscribe({ eventClasses: ["star_map"], starMapBootstrap: { protocol: 1, generation, nextPage: 3 } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toEqual([]);
+      expect(reads).toHaveBeenCalledTimes(3);
+    } finally {
+      initialized.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      db.close();
+    }
+  });
+
+  it("cancels an obsolete bootstrap while its shared baseline is loading", async () => {
+    const db = openInMemoryStateDb();
+    const overlay = new SqliteOverlayStore(db);
+    setDesktopOverlayStoreForTests(overlay);
+    const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
+    try {
+      let finish!: (value: { entries: StarMapArrangementEntry[] }) => void;
+      vi.spyOn(overlay, "readStarMapArrangementPage").mockImplementationOnce(() =>
+        new Promise((resolve) => { finish = resolve; }),
+      );
+      const sent: FederationProtocolEnvelope[] = [];
+      const router = new FederationRouter({ localInstanceId: "owner_one" });
+      router.registerConnection({
+        peerId: "viewer_one", capabilities: ["event_subscriptions", "thread_navigation"],
+        sendEnvelope: (envelope) => { sent.push(envelope); },
+      });
+      const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+      runtime.localInstanceId = "owner_one";
+      runtime.router = router;
+      const subscribe = (eventClasses: string[]) => runtime.applyEventSubscription({
+        id: "subscribe", kind: "notification", method: "federation.eventSubscription",
+        params: { eventClasses, starMapBootstrap: { protocol: 1 } },
+        protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1,
+      }, "viewer_one");
+      subscribe(["star_map"]);
+      subscribe([]);
+      subscribe(["star_map"]);
+      finish({ entries: [] });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      // Only the replacement subscription sends, even though both reads
+      // shared the same pending baseline.
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ params: { entries: [], bootstrap: { index: 0, total: 1 } } });
+    } finally {
+      initialized.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      db.close();
+    }
   });
 
   it("sends Star Map arrangement deltas only to star-map subscribers", () => {

@@ -3254,6 +3254,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
       if (anchor.kind === "canvas") {
         return { point: { x: 0, y: 0 }, basis: "anchor" as const };
       }
+      if (props.desktopApi?.readFederationHealth && health === undefined) return null;
+      const owner = peers.find((peer) => peer.id === anchor.instanceId);
+      if (owner?.status === "connected"
+        && owner.capabilities.includes("thread_navigation")
+        && props.desktopApi?.getNavigationSnapshot
+        && !remote.threadsByInstance.has(owner.id)
+        && !remote.unreachableInstanceIds.has(owner.id)) return null;
       if (anchor.kind === "thread") {
         const rect = flightRects.get(
           starMapWorkspaceCardKey({
@@ -3287,13 +3294,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }
         : undefined;
     },
-    [bodies, flightRects],
+    [bodies, flightRects, health, peers, props.desktopApi, remote.threadsByInstance, remote.unreachableInstanceIds],
   );
 
   useLayoutEffect(() => {
-    if (!chatCards.hydrated || !federationLayoutReady) return;
+    if (!chatCards.hydrated) return;
     chatCards.resolveRestoredAnchors(resolveWorkspaceAnchor);
-  }, [chatCards, federationLayoutReady, resolveWorkspaceAnchor]);
+  }, [chatCards, resolveWorkspaceAnchor]);
 
   useEffect(() => {
     if (!pendingFlight) return;

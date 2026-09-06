@@ -225,6 +225,14 @@ import {
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
+  FederationReplacementReceiver,
+  REPLACEMENT_MAX_BYTES,
+  REPLACEMENT_MAX_PAGES,
+  replacementPages,
+  type FederationReplacementPage,
+} from "./federation-replacement-pages";
+import { FederationMergeBootstrap, type FederationBootstrapCursor } from "./federation-merge-bootstrap";
+import {
   createFederationEnrollmentInvite,
   decodeFederationInvite,
   encodeFederationInvite,
@@ -236,7 +244,7 @@ import {
 } from "./federation-host-info";
 import { FederationActivityLedger } from "./federation-activity-ledger";
 import { FederationTransferLedger } from "./federation-transfer-ledger";
-import { lookupFederationArchivedThreads } from "./federation-collection-client";
+import { lookupFederationArchivedThreads, readFederationPinnedSnapshot } from "./federation-collection-client";
 import {
   projectFederationArchivedThreads,
   projectFederationProjectPage,
@@ -349,6 +357,7 @@ const GATEWAY_LAST_ENDPOINT_META_KEY = "federation_gateway_last_endpoint";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
+const FEDERATION_PEER_DIRECTORY_PAGE_METHOD = "federation.peerDirectoryPage";
 const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
 const FEDERATION_STAR_MAP_ARRANGEMENT_METHOD = "federation.starMapArrangement";
 const FEDERATION_EVENT_SUBSCRIPTION_METHOD = "federation.eventSubscription";
@@ -471,6 +480,7 @@ type FederationStarMapArrangementNotification = {
   method: typeof FEDERATION_STAR_MAP_ARRANGEMENT_METHOD;
   params: {
     entries: StarMapArrangementEntry[];
+    bootstrap?: Omit<FederationReplacementPage<StarMapArrangementEntry>, "entries">;
   };
 };
 
@@ -489,6 +499,7 @@ type FederationEventSubscriptionNotification = {
   params: {
     eventClasses: FederationEventClass[];
     threadSelection?: FederationThreadSelection;
+    starMapBootstrap?: FederationBootstrapCursor;
   };
 };
 
@@ -504,6 +515,7 @@ type DesiredEventSubscription = {
 };
 
 type RelayedEventSubscription = IncomingEventSubscription & {
+  starMapBootstrap?: FederationBootstrapCursor;
   sourceInstanceId: FederationInstanceId;
   subscriberInstanceId: FederationInstanceId;
 };
@@ -826,6 +838,9 @@ export class DesktopFederationRuntime {
     Map<string, NavigationSnapshotTransportState>
   >();
   private ownedNavigationSnapshotTransport?: NavigationSnapshotTransport;
+  private readonly peerDirectoryReceivers = new Map<string, FederationReplacementReceiver<FederationPeerSummary>>();
+  private readonly arrangementBootstrap = new FederationMergeBootstrap<StarMapArrangementEntry>();
+  private readonly arrangementBootstrapCursors = new Map<string, FederationBootstrapCursor>();
   private readonly turnInputAttachmentReceiver =
     new FederationTurnInputAttachmentReceiver();
   private readonly remotePeerDirectory = new Map<
@@ -1117,6 +1132,9 @@ export class DesktopFederationRuntime {
     this.remoteNavigationTransportByPeer.clear();
     this.ownedNavigationSnapshotTransport?.clear();
     this.ownedNavigationSnapshotTransport = undefined;
+    this.peerDirectoryReceivers.clear();
+    this.arrangementBootstrap.invalidate();
+    this.arrangementBootstrapCursors.clear();
     // Owner shutdown kills every remote session immediately, mirroring how
     // the local panel's shells die with the app.
     this.ptyService?.disposeAll();
@@ -2296,6 +2314,9 @@ export class DesktopFederationRuntime {
       peers: () => this.connectedPeerTargets(),
       fetchSnapshot: (target, selection, rpcOptions) =>
         this.remoteNavigationSnapshot(target, {}, selection, rpcOptions),
+      fetchPinnedSnapshot: async (target, threadKeys, rpcOptions) =>
+        await this.stampRemoteNavigationSnapshot(target,
+          await readFederationPinnedSnapshot(this.remoteBackend(target), threadKeys, rpcOptions)),
       searchPeer: async (target, request, rpcOptions) => {
         const startedAt = Date.now();
         const backend = this.remoteBackend(target);
@@ -3050,6 +3071,7 @@ export class DesktopFederationRuntime {
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
       capabilities: client.capabilities,
+      peerDirectoryPaging: client.peerDirectoryPaging,
       sendEnvelope: (envelope) => client.sendEnvelope(envelope),
       sendEnvelopeWithBackpressure: async (envelope) => {
         if (client.sendEnvelopeWithBackpressure) {
@@ -3191,6 +3213,7 @@ export class DesktopFederationRuntime {
     this.router?.registerConnection({
       peerId: connection.peerId,
       capabilities: connection.capabilities,
+      peerDirectoryPaging: connection.peerDirectoryPaging,
       sendEnvelope: connection.sendEnvelope,
       sendEnvelopeWithBackpressure: connection.sendEnvelopeWithBackpressure,
     });
@@ -3223,6 +3246,7 @@ export class DesktopFederationRuntime {
   }
 
   private unregisterPeer(peerId: FederationInstanceId): void {
+    this.peerDirectoryReceivers.delete(peerId);
     this.removeEventSubscriptionsForPeer(peerId);
     this.router?.unregisterConnection(peerId);
     // Remote PTY sessions this peer opened get the 10s reap grace; if the
@@ -3533,6 +3557,16 @@ export class DesktopFederationRuntime {
     this.sendEnvelopeToTarget(subscriberInstanceId, envelope);
   }
 
+  private async sendEnvelopeToEventSubscriberWithBackpressure(
+    subscriberInstanceId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ): Promise<void> {
+    if (await this.router?.sendToPeerWithBackpressure(subscriberInstanceId, envelope)) return;
+    const viaPeerId = this.incomingEventSubscriptions.get(subscriberInstanceId)?.viaPeerId;
+    if (viaPeerId && await this.router?.sendToPeerWithBackpressure(viaPeerId, envelope)) return;
+    await this.sendEnvelopeToTargetWithBackpressure(subscriberInstanceId, envelope);
+  }
+
   private visiblePeers(): FederationPeerSummary[] {
     const localInstanceId = this.ensureLocalInstanceId();
     const visible = new Map<FederationInstanceId, FederationPeerSummary>();
@@ -3655,33 +3689,59 @@ export class DesktopFederationRuntime {
     const localInstanceId = this.ensureLocalInstanceId();
 
     for (const connection of router.listConnections()) {
-      connection.sendEnvelope({
-        id: `federation-peers:${randomUUID()}`,
-        kind: "notification",
-        method: FEDERATION_PEER_DIRECTORY_METHOD,
-        params: {
-          peers: this.buildPeerDirectory(connection.peerId),
-        },
-        protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: localInstanceId,
-        targetInstanceId: connection.peerId,
-        createdAt: Date.now(),
-      });
+      const peers = this.buildPeerDirectory(connection.peerId);
+      const paged = connection.peerDirectoryPaging === true;
+      try {
+        const payloads = paged ? replacementPages(peers) : [{ peers }];
+        for (const params of payloads) connection.sendEnvelope({
+          id: `federation-peers:${randomUUID()}`,
+          kind: "notification",
+          method: paged ? FEDERATION_PEER_DIRECTORY_PAGE_METHOD : FEDERATION_PEER_DIRECTORY_METHOD,
+          params,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: localInstanceId,
+          targetInstanceId: connection.peerId,
+          createdAt: Date.now(),
+        });
+      } catch (error) {
+        log.warn("Could not publish Federation peer directory", error);
+      }
     }
   }
 
   private applyPeerDirectory(envelope: FederationProtocolEnvelope): boolean {
     if (
       envelope.kind !== "notification" ||
-      envelope.method !== FEDERATION_PEER_DIRECTORY_METHOD
+      (envelope.method !== FEDERATION_PEER_DIRECTORY_METHOD
+        && envelope.method !== FEDERATION_PEER_DIRECTORY_PAGE_METHOD)
     ) {
       return false;
     }
 
     const notification = envelope as FederationPeerDirectoryNotification & typeof envelope;
+    let peers: FederationPeerSummary[];
+    if (envelope.method === FEDERATION_PEER_DIRECTORY_PAGE_METHOD) {
+      const source = envelope.sourceInstanceId;
+      let receiver = this.peerDirectoryReceivers.get(source);
+      if (!receiver) {
+        // Multiple gateway connections must not mix generations or retain an
+        // unbounded number of incomplete replacements.
+        if (this.peerDirectoryReceivers.size >= 4) {
+          this.peerDirectoryReceivers.delete(this.peerDirectoryReceivers.keys().next().value!);
+        }
+        receiver = new FederationReplacementReceiver();
+        this.peerDirectoryReceivers.set(source, receiver);
+      }
+      const complete = receiver.accept(envelope.params as FederationReplacementPage<FederationPeerSummary>);
+      if (!complete) return true;
+      peers = complete;
+    } else {
+      this.peerDirectoryReceivers.delete(envelope.sourceInstanceId);
+      peers = notification.params.peers;
+    }
     const previousPeers = new Map(this.remotePeerDirectory);
     this.remotePeerDirectory.clear();
-    for (const peer of notification.params.peers) {
+    for (const peer of peers) {
       if (peer.id !== this.ensureLocalInstanceId()) {
         const previous = previousPeers.get(peer.id);
         this.remotePeerDirectory.set(peer.id, {
@@ -4107,6 +4167,7 @@ export class DesktopFederationRuntime {
   broadcastStarMapArrangement(
     entries: StarMapArrangementEntry[],
   ): void {
+    if (entries.length) this.arrangementBootstrap.invalidate();
     if (!this.router || entries.length === 0) return;
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
@@ -4146,6 +4207,7 @@ export class DesktopFederationRuntime {
   /** Subscription convergence: push the full persisted arrangement snapshot. */
   private sendStarMapArrangementSnapshot(
     subscriberInstanceId: FederationInstanceId,
+    cursor?: FederationBootstrapCursor,
   ): void {
     if (!isAppStateInitialized()) return;
     let store: ReturnType<typeof getDesktopOverlayStore>;
@@ -4157,14 +4219,41 @@ export class DesktopFederationRuntime {
     } catch {
       return;
     }
-    void store
-      .readStarMapArrangement()
-      .then((entries) => {
-        const subscription = this.incomingEventSubscriptions
-          .get(subscriberInstanceId);
-        if (!subscription?.eventClasses.has("star_map")) return;
+    const load = async (): Promise<StarMapArrangementEntry[]> => {
+      const entries: StarMapArrangementEntry[] = [];
+      let afterKey: string | undefined;
+      let bytes = 0;
+      for (let index = 0; index <= REPLACEMENT_MAX_PAGES; index += 1) {
+        const page = await store.readStarMapArrangementPage(afterKey);
+        bytes += Buffer.byteLength(JSON.stringify(page.entries));
+        if (bytes > REPLACEMENT_MAX_BYTES || entries.length + page.entries.length > 100 * REPLACEMENT_MAX_PAGES) {
+          throw new Error("Star Map bootstrap exceeds its complete-snapshot budget.");
+        }
+        entries.push(...page.entries);
+        if (page.nextKey === undefined) return encodeStarMapEntriesForProtocolV1(entries);
+        afterKey = page.nextKey;
+      }
+      throw new Error("Star Map bootstrap exceeds its page budget.");
+    };
+    const subscription = this.incomingEventSubscriptions.get(subscriberInstanceId);
+    if (!subscription?.eventClasses.has("star_map")) return;
+    void this.arrangementBootstrap.read(load, cursor ?? { protocol: 1 })
+      .then(async (pages) => {
         try {
-          this.sendStarMapArrangementEntries(subscriberInstanceId, entries);
+          for (const page of pages) {
+            if (this.incomingEventSubscriptions.get(subscriberInstanceId) !== subscription) return;
+            const { entries, ...bootstrap } = page;
+            await this.sendEnvelopeToEventSubscriberWithBackpressure(subscriberInstanceId, {
+              id: `federation-star-map:${randomUUID()}`,
+              kind: "notification",
+              method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
+              params: { entries, ...(cursor ? { bootstrap } : {}) },
+              protocolVersion: FEDERATION_PROTOCOL_VERSION,
+              sourceInstanceId: this.ensureLocalInstanceId(),
+              targetInstanceId: subscriberInstanceId,
+              createdAt: Date.now(),
+            });
+          }
         } catch (error) {
           log.warn("star map arrangement snapshot send failed", {
             error: error instanceof Error ? error.message : String(error),
@@ -4211,11 +4300,27 @@ export class DesktopFederationRuntime {
     const entries = Array.isArray(notification.params?.entries)
       ? notification.params.entries.filter(isStarMapArrangementEntry)
       : [];
-    if (entries.length === 0) return true;
-    void getDesktopOverlayStore()
-      .mergeStarMapArrangement(entries)
+    const bootstrap = notification.params?.bootstrap;
+    void (entries.length
+      ? getDesktopOverlayStore().mergeStarMapArrangement(entries)
+      : Promise.resolve({ accepted: [] as StarMapArrangementEntry[] }))
       .then(({ accepted }) => {
+        if (bootstrap && typeof bootstrap.generation === "string" && bootstrap.generation.length <= 128
+          && Number.isInteger(bootstrap.index) && Number.isInteger(bootstrap.total)
+          && bootstrap.index >= 0 && bootstrap.index < bootstrap.total && bootstrap.total <= REPLACEMENT_MAX_PAGES) {
+          const previous = this.arrangementBootstrapCursors.get(envelope.sourceInstanceId);
+          if (bootstrap.index === 0
+            || (previous?.generation === bootstrap.generation && previous.nextPage === bootstrap.index)) {
+            if (this.arrangementBootstrapCursors.size >= 64 && !previous) {
+              this.arrangementBootstrapCursors.delete(this.arrangementBootstrapCursors.keys().next().value!);
+            }
+            this.arrangementBootstrapCursors.set(envelope.sourceInstanceId, {
+              protocol: 1, generation: bootstrap.generation, nextPage: bootstrap.index + 1,
+            });
+          }
+        }
         if (accepted.length === 0) return;
+        this.arrangementBootstrap.invalidate();
         this.publishStarMapArrangementChanged(accepted);
       })
       .catch((error) => {
@@ -4388,6 +4493,9 @@ export class DesktopFederationRuntime {
         method: FEDERATION_EVENT_SUBSCRIPTION_METHOD,
         params: {
           eventClasses: [...subscription.eventClasses],
+          ...(subscription.eventClasses.has("star_map") ? {
+            starMapBootstrap: this.arrangementBootstrapCursors.get(sourceInstanceId) ?? { protocol: 1 },
+          } : {}),
           ...(supportsSelection
             ? { threadSelection: subscription.threadSelection }
             : {}),
@@ -4451,6 +4559,8 @@ export class DesktopFederationRuntime {
     const requestedThreadSelection = normalizeFederationThreadSelection(
       notification.params?.threadSelection,
     );
+    const starMapBootstrap = notification.params?.starMapBootstrap?.protocol === 1
+      ? notification.params.starMapBootstrap : undefined;
 
     if (sourceInstanceId !== this.ensureLocalInstanceId()) {
       const allowedClasses = requestedClasses.filter((eventClass) =>
@@ -4464,6 +4574,7 @@ export class DesktopFederationRuntime {
         subscriberInstanceId,
       });
       const relayedSubscription: RelayedEventSubscription = {
+        starMapBootstrap,
         eventClasses: new Set(allowedClasses),
         sourceInstanceId,
         subscriberInstanceId,
@@ -4504,7 +4615,7 @@ export class DesktopFederationRuntime {
       allowedClasses.includes("star_map")
       && !previous?.eventClasses.has("star_map")
     ) {
-      this.sendStarMapArrangementSnapshot(subscriberInstanceId);
+      this.sendStarMapArrangementSnapshot(subscriberInstanceId, starMapBootstrap);
     }
     return true;
   }
@@ -4586,6 +4697,8 @@ export class DesktopFederationRuntime {
         method: FEDERATION_EVENT_SUBSCRIPTION_METHOD,
         params: {
           eventClasses: [...desired.eventClasses],
+          ...(desired.eventClasses.has("star_map") && subscription.starMapBootstrap
+            ? { starMapBootstrap: subscription.starMapBootstrap } : {}),
           ...(supportsSelection
             ? { threadSelection: desired.threadSelection }
             : {}),

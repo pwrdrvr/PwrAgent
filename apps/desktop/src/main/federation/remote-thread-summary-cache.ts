@@ -132,6 +132,7 @@ export class RemoteThreadSummaryCache {
     string,
     {
       fetchedAt: number;
+      descendants?: boolean;
       selection: FederationThreadSelection;
       threads: NavigationThreadSummary[];
     }
@@ -140,6 +141,7 @@ export class RemoteThreadSummaryCache {
     string,
     {
       generation: string;
+      descendants?: boolean;
       promise: Promise<NavigationThreadSummary[]>;
       selection: FederationThreadSelection;
     }
@@ -186,6 +188,11 @@ export class RemoteThreadSummaryCache {
       fetchSnapshot: (
         target: FederationRemoteTarget,
         selection: FederationThreadSelection,
+        rpcOptions?: FederationRpcRequestOptions,
+      ) => Promise<NavigationSnapshot>;
+      fetchPinnedSnapshot?: (
+        target: FederationRemoteTarget,
+        threadKeys: string[],
         rpcOptions?: FederationRpcRequestOptions,
       ) => Promise<NavigationSnapshot>;
       /**
@@ -524,14 +531,10 @@ export class RemoteThreadSummaryCache {
         const now = this.options.now?.() ?? Date.now();
         const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
         const cached = this.cache.get(instanceId);
-        // A pinned parent can mount descendants owned by another instance.
-        // Their identities are only discoverable from the owner's full
-        // navigation projection, so a direct-pin selection would silently
-        // drop them on a cold cache. Keep this collection broad until the
-        // Federation protocol can request a server-computed descendant
-        // closure.
-        const requestedSelection = { kind: "all" } as const;
+        const requestedSelection = this.options.fetchPinnedSnapshot
+          ? threadSelection(group.map((pin) => pin.ref)) : { kind: "all" } as const;
         const cacheSatisfies = cached
+          && (cached.selection.kind === "all" || cached.descendants)
           && selectionIncludes(cached.selection, requestedSelection);
         if (
           !cacheSatisfies
@@ -684,7 +687,8 @@ export class RemoteThreadSummaryCache {
     const failedBefore = this.refreshFailures.has(instanceId);
     this.threadsForPeer(
       target,
-      { kind: "all" },
+      this.options.fetchPinnedSnapshot
+        ? threadSelection(pins.map((pin) => pin.ref)) : { kind: "all" },
       "pins",
     ).then(
       async (threads) => {
@@ -871,15 +875,20 @@ export class RemoteThreadSummaryCache {
   ): Promise<NavigationThreadSummary[]> {
     const now = this.options.now?.() ?? Date.now();
     const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
+    const descendants = interestKey === "pins" && Boolean(this.options.fetchPinnedSnapshot);
+    // Keep new-child discovery notifications broad. Sparse payload selection
+    // must not hide a child whose identity has not arrived yet.
+    const interestSelection = descendants ? { kind: "all" } as const : selection;
     this.touchPeerInterest(
       target.instanceId,
       interestKey,
-      selection,
+      interestSelection,
       ttlMs,
     );
     const cached = this.cache.get(target.instanceId);
     if (
       cached
+      && (!descendants || cached.selection.kind === "all" || cached.descendants)
       && selectionIncludes(cached.selection, selection)
       && now - cached.fetchedAt < ttlMs
     ) {
@@ -889,6 +898,7 @@ export class RemoteThreadSummaryCache {
     const pending = this.inFlight.get(target.instanceId);
     if (
       pending?.generation === generation
+      && (!descendants || pending.selection.kind === "all" || pending.descendants)
       && selectionIncludes(pending.selection, selection)
     ) {
       return await this.awaitPeerSnapshot(
@@ -915,9 +925,13 @@ export class RemoteThreadSummaryCache {
     // recorded.
     const nameObservationSequence = this.reserveThreadNameObservation();
     const promise = (async () => {
-      const rpcOptions = deadlineAt !== undefined ? { deadlineAt } : undefined;
+      const rpcOptions = deadlineAt !== undefined ? { deadlineAt }
+        : descendants ? { deadlineAt: Date.now() + REMOTE_SNAPSHOT_PEER_TIMEOUT_MS } : undefined;
       const snapshot = await this.awaitPeerSnapshot(
-        rpcOptions
+        descendants && selection.kind === "threads"
+          ? this.options.fetchPinnedSnapshot!(target, selection.threads.map((thread) =>
+              buildThreadIdentityKey(thread.backend, thread.threadId)), rpcOptions)
+          : rpcOptions
           ? this.options.fetchSnapshot(target, selection, rpcOptions)
           : this.options.fetchSnapshot(target, selection),
         deadlineAt,
@@ -932,6 +946,7 @@ export class RemoteThreadSummaryCache {
       }
       const threads = snapshot.threads;
       this.cache.set(target.instanceId, {
+        descendants,
         fetchedAt: this.options.now?.() ?? Date.now(),
         selection,
         threads,
@@ -944,7 +959,7 @@ export class RemoteThreadSummaryCache {
       this.touchPeerInterest(
         target.instanceId,
         interestKey,
-        selection,
+        interestSelection,
         ttlMs,
       );
       // ANY successful fetch is proof of life, including one the jump
@@ -953,7 +968,7 @@ export class RemoteThreadSummaryCache {
       this.refreshFailures.delete(target.instanceId);
       return threads;
     })();
-    const entry = { generation, promise, selection };
+    const entry = { generation, promise, selection, descendants };
     this.inFlight.set(target.instanceId, entry);
     try {
       return await promise;

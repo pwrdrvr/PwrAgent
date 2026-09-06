@@ -1,5 +1,10 @@
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import {
+  projectNavigationDescendantPage,
+  type FederationNavigationSelectionPage,
+  type FederationNavigationSelectionRequest,
+} from "./federation-navigation-selection";
+import {
   projectFederationArchivedThreads,
   projectFederationProjectPage,
   validateArchivedThreadLookup,
@@ -380,6 +385,7 @@ function authenticateScheduledTurnOrigin<
 
 export const FEDERATION_BACKEND_METHODS = {
   getProjectPage: "backend.getProjectPage",
+  getNavigationDescendantPage: "backend.getNavigationDescendantPage",
   lookupArchivedThreads: "backend.lookupArchivedThreads",
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   searchNavigationThreads: "backend.searchNavigationThreads",
@@ -483,6 +489,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   FederationCapability
 > = {
   [FEDERATION_BACKEND_METHODS.getProjectPage]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.getNavigationDescendantPage]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.lookupArchivedThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchNavigationThreads]: "thread_navigation",
@@ -593,6 +600,10 @@ export function additionalFederationBackendCapabilities(
 }
 
 export type FederationBackendOperations = {
+  getNavigationDescendantPage?(
+    request: FederationNavigationSelectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationNavigationSelectionPage>;
   getProjectPage?(
     request: FederationProjectPageRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -840,6 +851,24 @@ export function registerFederationBackendHandlers(params: {
     // Request selectors never create histories of their own.
     maxScopes: 1,
   });
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.getNavigationDescendantPage,
+    async (envelope) => {
+      const baseline = navigationSnapshotTransport.encode({
+        request: {},
+        scopeKey: "federation-navigation",
+        snapshot: encodeNavigationSnapshotThreadKeysForProtocolV1(
+          await params.backend.getNavigationSnapshot({ refreshMode: "full" }, { deadlineAt: envelope.deadlineAt }),
+        ),
+      });
+      if (baseline.kind !== "full") throw new Error("Navigation selection requires a complete owner baseline.");
+      return projectNavigationDescendantPage(
+        baseline.snapshot,
+        baseline.revision,
+        envelope.params as FederationNavigationSelectionRequest,
+      );
+    },
+  );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.getProjectPage,
     async (envelope) => {
@@ -1673,6 +1702,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<FederationProjectPage> {
     return await this.rpc.request({
       method: FEDERATION_BACKEND_METHODS.getProjectPage,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async getNavigationDescendantPage(
+    request: FederationNavigationSelectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationNavigationSelectionPage> {
+    return await this.rpc.request({
+      method: FEDERATION_BACKEND_METHODS.getNavigationDescendantPage,
       params: request,
       ...rpcOptions,
     });

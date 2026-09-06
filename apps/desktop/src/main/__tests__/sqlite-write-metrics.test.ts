@@ -82,6 +82,23 @@ describe("sqlite write metrics", () => {
       note: "1001 new arrangement entries/tombstones in 11 bounded merge notifications",
       writes,
     });
+    const reading = await measureSqliteWrites(async () => {
+      const readEntries = [];
+      let afterKey: string | undefined;
+      do {
+        const page = await store.readStarMapArrangementPage(afterKey);
+        expect(page.entries.length).toBeLessThanOrEqual(100);
+        readEntries.push(...page.entries);
+        afterKey = page.nextKey;
+      } while (afterKey !== undefined);
+      expect(readEntries).toHaveLength(entries.length);
+      expect(readEntries.filter((entry) => entry.dx === null)).toHaveLength(500);
+    });
+    expectSqliteWriteBudget({
+      scenario: "federation-star-map-bootstrap-page-reads",
+      note: "1001 arrangement entries including tombstones read in SQL pages; no writes",
+      writes: reading.writes,
+    });
     const reconnect = await measureSqliteWrites(async () => {
       for (const page of pages) {
         expect((await store.mergeStarMapArrangement(page)).accepted).toEqual([]);

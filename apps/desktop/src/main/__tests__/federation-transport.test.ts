@@ -127,6 +127,7 @@ describe("federation transport", () => {
         port: 0,
         store,
         onEnvelope: (envelope, connection) => {
+          expect(connection.peerDirectoryPaging).toBe(true);
           connection.sendEnvelope({
             id: "response-1",
             kind: "response",
@@ -531,6 +532,8 @@ describe("federation transport", () => {
     });
 
     expect(client.capabilities).toEqual(["thread_navigation"]);
+    // Paging is negotiated independently of persisted authorization grants.
+    expect(client.peerDirectoryPaging).toBe(true);
     expect(store.getPeer("client_future")).toMatchObject({
       status: "connected",
       capabilities: ["thread_navigation"],
@@ -859,7 +862,10 @@ describe("federation transport", () => {
       port: 0,
       store,
       noiseStatic: gatewayNoise,
-      onConnection: () => resolveConnected?.(),
+      onConnection: (connection) => {
+        expect(connection.peerDirectoryPaging).toBe(false);
+        resolveConnected?.();
+      },
       onDisconnect: () => resolveDisconnected?.(),
     });
     const { url } = await server.start();

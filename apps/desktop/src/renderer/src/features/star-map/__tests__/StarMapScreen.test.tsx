@@ -1032,7 +1032,7 @@ describe("StarMapScreen", () => {
     ).toBe("codex:t-remote");
   });
 
-  it("waits for the owning thread layout before restoring a chat anchor", async () => {
+  it.each([false, true])("waits only for the owning thread layout before restoring an anchor (unrelated slow peer: %s)", async (slowPeer) => {
     type HealthResponse = Awaited<
       ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
     >;
@@ -1044,7 +1044,12 @@ describe("StarMapScreen", () => {
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
       readFederationHealth: vi.fn(() => health.promise),
-      getNavigationSnapshot: vi.fn(() => remoteSnapshot.promise),
+      getNavigationSnapshot: vi.fn((request) =>
+        request?.federationTarget?.scope === "remote"
+          && request.federationTarget.instanceId === "pwr_slow"
+          ? new Promise<SnapshotResponse>(() => {})
+          : remoteSnapshot.promise,
+      ),
       readStarMapWorkspace: vi.fn(async () => ({
         workspace: {
           version: 1 as const,
@@ -1125,6 +1130,10 @@ describe("StarMapScreen", () => {
               status: "connected",
               capabilities: ["thread_navigation"],
             },
+            ...(slowPeer ? [{
+              id: "pwr_slow", label: "Slow Mac", role: "client" as const,
+              status: "connected" as const, capabilities: ["thread_navigation" as const],
+            }] : []),
           ],
         },
       });

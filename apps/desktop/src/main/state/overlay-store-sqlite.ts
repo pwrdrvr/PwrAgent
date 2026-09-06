@@ -3848,6 +3848,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .map(normalizeStarMapArrangementEntry);
   }
 
+  async readStarMapArrangementPage(afterKey?: string): Promise<{
+    entries: StarMapArrangementEntry[];
+    nextKey?: string;
+  }> {
+    const rows = this.stateDb.raw.prepare(
+      "SELECT entry_key, payload FROM star_map_arrangement WHERE entry_key > ? ORDER BY entry_key LIMIT 100",
+    ).all(afterKey ?? "") as { entry_key: string; payload: string }[];
+    return {
+      entries: rows.map((row) => JSON.parse(row.payload) as unknown)
+        .filter(isStarMapArrangementEntry).map(normalizeStarMapArrangementEntry),
+      ...(rows.length === 100 ? { nextKey: rows.at(-1)!.entry_key } : {}),
+    };
+  }
+
   /**
    * LWW-merge arrangement entries into the table. Returns the accepted
    * (newer-than-stored) entries so the federation layer re-broadcasts
