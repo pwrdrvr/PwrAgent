@@ -266,6 +266,7 @@ describe("DesktopMessagingBackendBridge", () => {
       {
         id: "thread-alpha",
         title: "Alpha federation work",
+        summary: "large provider preview".repeat(100_000),
         titleSource: "explicit",
         source: "codex",
         linkedDirectories: [],
@@ -295,6 +296,9 @@ describe("DesktopMessagingBackendBridge", () => {
       .resolves.toMatchObject({ results: [{ id: "thread-alpha" }] });
     await expect(bridge.searchNavigationThreads({ query: "beta" }))
       .resolves.toMatchObject({ results: [{ id: "thread-beta" }] });
+    const wireResponse = await bridge.searchNavigationThreads({ query: "alpha" });
+    expect(Buffer.byteLength(JSON.stringify(wireResponse))).toBeLessThan(8 * 1024);
+    expect(wireResponse.results[0]).not.toHaveProperty("summary");
 
     expect(registry.listThreads).toHaveBeenCalledTimes(1);
     expect(reconcileNavigationSnapshot).toHaveBeenCalledTimes(

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { compactNavigationSearchResult } from "../federation/navigation-search-result";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -455,7 +456,8 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     const limit = Math.max(1, Math.min(request.limit ?? 8, 50));
     const threads = await this.navigationThreadsForSearch();
     return {
-      results: rankThreadJumpMatches(threads, query).slice(0, limit),
+      results: rankThreadJumpMatches(threads, query).slice(0, limit)
+        .map((thread) => compactNavigationSearchResult(thread, query)),
     };
   }
 

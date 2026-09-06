@@ -1,4 +1,5 @@
 import type { FederationProtocolEnvelope } from "@pwragent/shared";
+import { createHash } from "node:crypto";
 
 export type FederationEnvelopeLogFields = Record<string, string | undefined>;
 
@@ -6,7 +7,7 @@ export type FederationEnvelopeLogFields = Record<string, string | undefined>;
  * Keep completed entries briefly: receiving a response precedes forwarding it.
  */
 export class FederationEnvelopeDiagnostics {
-  private readonly requests = new Map<string, { method: string; expiresAt: number }>();
+  private readonly requests = new Map<string, { method: string; queryFingerprint?: string; expiresAt: number }>();
 
   constructor(
     private readonly now = Date.now,
@@ -23,7 +24,11 @@ export class FederationEnvelopeDiagnostics {
     while (this.requests.size >= Math.max(1, this.capacity)) {
       this.requests.delete(this.requests.keys().next().value!);
     }
-    this.requests.set(key, { method: envelope.method, expiresAt: this.now() + this.ttlMs });
+    this.requests.set(key, {
+      method: envelope.method,
+      queryFingerprint: searchQueryFingerprint(envelope),
+      expiresAt: this.now() + this.ttlMs,
+    });
   }
 
   describe(
@@ -46,6 +51,8 @@ export class FederationEnvelopeDiagnostics {
       envelopeId: envelope.id,
       requestId,
       method,
+      queryFingerprint: envelope.kind === "request" ? searchQueryFingerprint(envelope)
+        : request && request.expiresAt > this.now() ? request.queryFingerprint : undefined,
       errorCode: envelope.kind === "error" ? envelope.error.code : undefined,
       notificationMethod: notification && typeof notification === "object"
         && "method" in notification && typeof notification.method === "string"
@@ -56,4 +63,12 @@ export class FederationEnvelopeDiagnostics {
       targetInstanceLabel: envelope.targetInstanceId ? label(envelope.targetInstanceId) : undefined,
     };
   }
+}
+
+function searchQueryFingerprint(envelope: FederationProtocolEnvelope): string | undefined {
+  if (envelope.kind !== "request"
+    || (envelope.method !== "backend.searchNavigationThreads" && envelope.method !== "backend.searchFederatedThreads")) return undefined;
+  const params = envelope.params;
+  if (!params || typeof params !== "object" || !("query" in params) || typeof params.query !== "string") return undefined;
+  return createHash("sha256").update(params.query.trim()).digest("hex").slice(0, 12);
 }

@@ -102,6 +102,22 @@ function pin(params: {
 }
 
 describe("RemoteThreadSummaryCache — searchForJump", () => {
+  it("keeps owner-matched rows whose large matching fields were omitted and compacts older responses", async () => {
+    const thread = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Agent" });
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      searchPeer: async () => [{ ...thread, optimisticUserMessage: { text: "private".repeat(100000) } }],
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+    const response = await cache.searchForJump({ query: "matches omitted agent instructions", limit: 8 });
+    expect(response.results.map((result) => result.id)).toEqual(["t1"]);
+    expect(response.results[0].federation?.ref).toEqual(thread.federation?.ref);
+    expect(response.results[0]).not.toHaveProperty("optimisticUserMessage");
+    expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThan(8 * 1024);
+  });
+
   it("asks each peer for bounded matches instead of fetching its full snapshot", async () => {
     const fetchSnapshot = vi.fn(async () => snapshotOf([]));
     const searchPeer = vi.fn(async () => [

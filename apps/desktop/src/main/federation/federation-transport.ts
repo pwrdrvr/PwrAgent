@@ -1335,6 +1335,11 @@ function sendFrame(
 ): number {
   if (socket.readyState !== WebSocket.OPEN) return 0;
   if (message.kind === "envelope") context?.diagnostics.observe(message.envelope);
+  if (message.kind === "envelope" && message.envelope.kind === "request"
+    && (message.envelope.method === "backend.searchNavigationThreads"
+      || message.envelope.method === "backend.searchFederatedThreads")) {
+    log.info("federation search request queued for send", envelopeLogFields(message.envelope, context));
+  }
   const payload = encodeFederationSocketPayload(message);
   const wireByteLength = transport
     ? transport.encryptedByteLength(payload.byteLength)

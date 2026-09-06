@@ -14,6 +14,17 @@ const response = {
 } satisfies FederationProtocolEnvelope;
 
 describe("federation envelope diagnostics", () => {
+  it("correlates search query fingerprints without logging query text", () => {
+    const diagnostics = new FederationEnvelopeDiagnostics();
+    const search = { ...request, method: "backend.searchNavigationThreads", params: { query: "private search phrase" } };
+    diagnostics.observe(search);
+    const fields = diagnostics.describe(search);
+    expect(fields.queryFingerprint).toMatch(/^[a-f0-9]{12}$/);
+    expect(diagnostics.describe(response).queryFingerprint).toBe(fields.queryFingerprint);
+    expect(diagnostics.describe({ ...search, params: { query: "other phrase" } }).queryFingerprint).not.toBe(fields.queryFingerprint);
+    expect(JSON.stringify(fields)).not.toContain("private search phrase");
+  });
+
   it("correlates both relay legs without retaining or logging payloads", () => {
     const diagnostics = new FederationEnvelopeDiagnostics();
     diagnostics.observe(request);
