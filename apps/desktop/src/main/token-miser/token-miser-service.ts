@@ -358,15 +358,13 @@ export class TokenMiserService {
     const retrieval = hasRetrieval && output.trim().length === 0;
     const maxVisibleBytes =
       payload.max_output_tokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN;
-    const replaceNewParts = (replacement: string) => {
-      let replaced = false;
-      return parts.map((part) => {
-        if (part.retrieval) return part;
-        const text = replaced ? "" : replacement;
-        replaced = true;
-        return { text, retrieval: false };
-      });
-    };
+    // Codex keeps the head and tail when it caps the combined cell. Put the
+    // new result first, never in whitespace between preserved retrievals.
+    // Limit it to the head budget so its recovery reference survives too.
+    const replaceNewParts = (replacement: string) => [
+      { text: replacement, retrieval: false },
+      ...parts.filter((part) => part.retrieval),
+    ];
     const replaceNewOutput = (replacement: string) =>
       replaceNewParts(replacement).map((part) => part.text).join("");
     const visibleNewBytes = (visibleParts: typeof parts) => {
@@ -503,9 +501,7 @@ export class TokenMiserService {
       prompt: buildCodeModeSummaryPrompt(payload, output),
       signal: options.signal,
       baselineParentTokenCap,
-      maxReplacementBytes:
-        payload.max_output_tokens
-        * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN,
+      maxReplacementBytes: hasRetrieval ? Math.floor(maxVisibleBytes / 2) : maxVisibleBytes,
       replacementCharacters: (text) =>
         visibleNewBytes(replaceNewParts(text))
         + payload.model_visible_overhead_characters

@@ -1545,6 +1545,67 @@ describe("TokenMiserService code-mode reduction", () => {
     expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters).toBe(0);
   });
 
+  it.each([
+    { maxOutputTokens: 10_000, character: "a", summaryLength: 100, canFitReference: true },
+    { maxOutputTokens: 1_000, character: "α", summaryLength: 2_500, canFitReference: true },
+    { maxOutputTokens: 25, character: "a", summaryLength: 100, canFitReference: false },
+  ])("keeps the mixed summary and recovery reference visible at a $maxOutputTokens-token cap", async ({ maxOutputTokens, character, summaryLength, canFitReference }) => {
+    const store = await createStore();
+    const source = character.repeat(30_000 / utf8ByteLength(character));
+    const deliveries: string[] = [];
+    for (const toolUseId of ["first-source", "second-source"]) {
+      const metadata = await store.store({
+        threadId: "thread-1", turnId: "turn-1", toolUseId, toolName: "Code Mode",
+        output: source, replacementCharacters: 1,
+        summary: { summary: "Preserved source", usefulDetails: [] },
+      });
+      const delivery = await store.prepareRetrievalDelivery({
+        objectId: metadata.objectId, threadId: "thread-1", visibleText: source,
+      });
+      deliveries.push(delivery!.text);
+    }
+    const service = new TokenMiserService({
+      store, isEnabled: () => true,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize",
+        summary: `NEW_LOG_RESULT ${"s".repeat(summaryLength)}`,
+        usefulDetails: [],
+      } }),
+    });
+    const prepared = await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: `${deliveries[0]}\n${deliveries[1]}\n${"new logs\n".repeat(2_000)}`,
+      }]),
+      max_output_tokens: maxOutputTokens,
+    });
+    if (!canFitReference) {
+      expect(prepared).toBeUndefined();
+      expect(await store.listMetadata()).toHaveLength(2);
+      return;
+    }
+    expect(prepared).toBeDefined();
+    const replacement = prepared!.response.replacement![0]!.text;
+    for (const delivery of deliveries) expect(replacement).toContain(delivery);
+    // Independently simulate Codex's head/tail truncation. Both the new result
+    // and its full recovery reference must survive, not just the old sources.
+    const bytes = Buffer.from(replacement);
+    const maxBytes = maxOutputTokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN;
+    expect(bytes.length).toBeGreaterThan(maxBytes);
+    const visible = Buffer.concat([
+      bytes.subarray(0, Math.floor(maxBytes / 2)),
+      bytes.subarray(bytes.length - Math.ceil(maxBytes / 2)),
+    ]).toString("utf8");
+    expect(visible).toContain("NEW_LOG_RESULT");
+    expect(visible).toContain(`Output reference: ${prepared!.staged.metadata.objectId}`);
+    expect(prepared!.staged.metadata.replacementCharacters).toBeGreaterThan(100);
+    await prepared!.staged.persist();
+    await prepared!.staged.commit();
+    expect((await store.readAll({
+      objectId: prepared!.staged.metadata.objectId, threadId: "thread-1",
+    }))?.text).toContain("new logs");
+  });
+
   it("shares the outer cap between novel output and preserved retrievals", async () => {
     const store = await createStore();
     const original = "α".repeat(15_000);
