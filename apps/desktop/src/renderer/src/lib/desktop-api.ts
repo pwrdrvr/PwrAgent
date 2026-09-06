@@ -364,6 +364,7 @@ import type {
   CompleteOnboardingCodexBootstrapResponse,
   ClearComposerDraftRequest,
   ClearComposerDraftResponse,
+  ListComposerDraftLatestRequest,
   ListComposerDraftLatestResponse,
   ListComposerDraftRecoveryCandidatesRequest,
   ListComposerDraftRecoveryCandidatesResponse,
@@ -1176,7 +1177,7 @@ export type DesktopApi = {
   listComposerDraftRecoveryCandidates?: (
     request: ListComposerDraftRecoveryCandidatesRequest,
   ) => Promise<ListComposerDraftRecoveryCandidatesResponse>;
-  listComposerDraftLatest?: () => Promise<ListComposerDraftLatestResponse>;
+  listComposerDraftLatest?: (request?: ListComposerDraftLatestRequest) => Promise<ListComposerDraftLatestResponse>;
   /**
    * Project-directory picker (issue #223): two-step flow so the renderer
    * can show inline validation errors. `pickDirectoryFromDisk` opens the

@@ -1,3 +1,4 @@
+import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared";
 import type {
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
@@ -31,6 +32,55 @@ const RECOVERABLE_STATUSES = new Set<ComposerDraftLifecycle>([
 
 export class ComposerDraftRecoveryStore {
   constructor(private readonly stateDb: StateDb) {}
+
+  /** One explicit startup migration; unknown or conflicting histories are never reassigned. */
+  migrateKnownOwnerScopes(): number {
+    const db = this.stateDb.raw;
+    const rows = db.prepare("SELECT scope_key, payload FROM composer_draft_latest WHERE scope_kind = 'thread'")
+      .all() as Array<{ scope_key: string; payload: string }>;
+    const candidates = rows.filter((row) => {
+      if (parseOwnedComposerScopeKey(row.scope_key)) return false;
+      try {
+        const draft = JSON.parse(row.payload) as ComposerDraftSnapshotRecord;
+        if (!draft.threadOwner) return false;
+        const scopeKey = buildOwnedComposerScopeKey(draft.threadOwner);
+        return !db.prepare("SELECT 1 FROM composer_draft_latest WHERE scope_key = ? UNION ALL SELECT 1 FROM composer_draft_journal WHERE scope_key = ? LIMIT 1")
+          .get(scopeKey, scopeKey);
+      } catch { return false; }
+    });
+    if (candidates.length === 0) return 0;
+    return db.transaction(() => {
+      let migrated = 0;
+      for (const candidate of candidates) {
+        const current = db.prepare("SELECT payload FROM composer_draft_latest WHERE scope_key = ?")
+          .get(candidate.scope_key) as { payload: string } | undefined;
+        if (!current || current.payload !== candidate.payload) continue;
+        const draft = JSON.parse(current.payload) as ComposerDraftSnapshotRecord;
+        const owner = draft.threadOwner!;
+        const scopeKey = buildOwnedComposerScopeKey(owner);
+        // Even a cleared/sent destination proves this owner already used the new scope.
+        // An older legacy record must not resurrect itself over that history.
+        if (db.prepare("SELECT 1 FROM composer_draft_latest WHERE scope_key = ? UNION ALL SELECT 1 FROM composer_draft_journal WHERE scope_key = ? LIMIT 1")
+          .get(scopeKey, scopeKey)) continue;
+        db.prepare("UPDATE composer_draft_latest SET scope_key = ?, payload = ? WHERE scope_key = ?")
+          .run(scopeKey, JSON.stringify({ ...draft, scopeKey }), candidate.scope_key);
+        const journal = db.prepare("SELECT id, payload FROM composer_draft_journal WHERE scope_key = ?")
+          .all(candidate.scope_key) as Array<{ id: number; payload: string }>;
+        for (const entry of journal) {
+          let record: ComposerDraftSnapshotRecord;
+          try { record = JSON.parse(entry.payload) as ComposerDraftSnapshotRecord; } catch { continue; }
+          if (!record.threadOwner) continue;
+          let recordScope: string;
+          try { recordScope = buildOwnedComposerScopeKey(record.threadOwner); } catch { continue; }
+          if (recordScope !== scopeKey) continue;
+          db.prepare("UPDATE composer_draft_journal SET scope_key = ?, payload = ? WHERE id = ?")
+            .run(scopeKey, JSON.stringify({ ...record, scopeKey }), entry.id);
+        }
+        migrated += 1;
+      }
+      return migrated;
+    })();
+  }
 
   save(request: SaveComposerDraftRequest): ComposerDraftSnapshotRecord {
     const draft = normalizeDraftRecord(request.draft);

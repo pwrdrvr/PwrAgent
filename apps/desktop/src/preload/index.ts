@@ -314,6 +314,7 @@ import type {
   CompleteOnboardingCodexBootstrapResponse,
   ClearComposerDraftRequest,
   ClearComposerDraftResponse,
+  ListComposerDraftLatestRequest,
   ListComposerDraftLatestResponse,
   ListComposerDraftRecoveryCandidatesRequest,
   ListComposerDraftRecoveryCandidatesResponse,
@@ -2087,8 +2088,8 @@ const desktopApi = Object.freeze({
     request: ListComposerDraftRecoveryCandidatesRequest,
   ): Promise<ListComposerDraftRecoveryCandidatesResponse> =>
     await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL, request),
-  listComposerDraftLatest: async (): Promise<ListComposerDraftLatestResponse> =>
-    await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_LATEST_CHANNEL),
+  listComposerDraftLatest: async (request?: ListComposerDraftLatestRequest): Promise<ListComposerDraftLatestResponse> =>
+    await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_LATEST_CHANNEL, request),
   pickDirectoryFromDisk: async (): Promise<PickDirectoryFromDiskResponse> =>
     await ipcRenderer.invoke(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL),
   pickFileFromDisk: async (): Promise<PickFileFromDiskResponse> =>

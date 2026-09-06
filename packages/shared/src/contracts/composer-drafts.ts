@@ -116,6 +116,11 @@ export type ListComposerDraftRecoveryCandidatesResponse = {
   candidates: ComposerDraftRecoveryCandidate[];
 };
 
+export type ListComposerDraftLatestRequest = {
+  /** Explicit startup migration; never infer owners for legacy records. */
+  migrateKnownOwners?: boolean;
+};
+
 export type ListComposerDraftLatestResponse = {
   drafts: ComposerDraftSnapshotRecord[];
 };
