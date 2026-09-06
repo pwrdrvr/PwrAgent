@@ -1,3 +1,4 @@
+import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
@@ -2939,6 +2940,15 @@ function reviewDisplayTextFromTarget(
   }
 }
 
+export type PendingLaunchpadCreation = {
+  federatedSession?: FederatedLaunchpadSession;
+  setupProgress?: LaunchpadEnvironmentSetupProgress;
+  selectionKey: string;
+  directoryKey: string;
+  title: string;
+  input: AppServerTurnInputItem[];
+};
+
 type UseThreadNavigationOptions = {
   enabled?: boolean;
   lightweightNavigationRefresh?: boolean;
@@ -2989,6 +2999,8 @@ export function useThreadNavigation(
   inboxThreads: NavigationThreadSummary[];
   recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
+  pendingLaunchpadCreations: PendingLaunchpadCreation[];
+  selectPendingLaunchpad: (selectionKey: string) => void;
   archiveThreadNotice?: ArchiveThreadNotice;
   dismissArchiveThreadNotice: () => void;
   worktreeArchiveError?: string;
@@ -3005,6 +3017,7 @@ export function useThreadNavigation(
     parentThreadId?: string,
     extraDirectoryPaths?: string[],
     scheduledFor?: number,
+    onMaterialized?: (thread: NavigationThreadSummary) => void,
   ) => Promise<void>;
   /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
   newThreadDirectoryLabel?: string;
@@ -3240,6 +3253,21 @@ export function useThreadNavigation(
   // `onThreadActionError`.
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
+  const pendingLaunchpadCreationsRef = useRef(new Map<string, PendingLaunchpadCreation>());
+  const [pendingLaunchpadCreations, setPendingLaunchpadCreations] =
+    useState<PendingLaunchpadCreation[]>([]);
+  useEffect(() => desktopApi?.onCodexEnvironmentSetupProgress?.((event) => {
+    let changed = false;
+    for (const [key, creation] of pendingLaunchpadCreationsRef.current) {
+      if (creation.directoryKey !== event.directoryKey) continue;
+      pendingLaunchpadCreationsRef.current.set(key, {
+        ...creation,
+        setupProgress: applyLaunchpadEnvironmentSetupProgress(creation.setupProgress, event),
+      });
+      changed = true;
+    }
+    if (changed) setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
+  }), [desktopApi]);
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
   const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
   const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
@@ -5597,6 +5625,13 @@ export function useThreadNavigation(
     setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
   }, []);
 
+  const selectPendingLaunchpad = useCallback((selectionKey: string): void => {
+    const creation = pendingLaunchpadCreationsRef.current.get(selectionKey);
+    if (!creation) return;
+    if (creation.federatedSession) setFederatedLaunchpad(creation.federatedSession);
+    setSelectedItemKey(creation.selectionKey);
+  }, []);
+
   const createThread = useCallback(
     async (
       backend?: AppServerBackendKind,
@@ -7029,6 +7064,7 @@ export function useThreadNavigation(
       parentThreadId?: string,
       extraDirectoryPaths?: string[],
       scheduledFor?: number,
+      onMaterialized?: (thread: NavigationThreadSummary) => void,
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
@@ -7056,262 +7092,281 @@ export function useThreadNavigation(
       const launchpadSelectionKey = federatedSelection
         ? buildFederatedLaunchpadSelectionKey(federatedSelection.target)
         : buildLaunchpadSelectionKey(directoryKey);
-      const selectionKeyAtMaterializationStart = selectedItemKeyRef.current;
-      const materializeParentThreadId =
-        parentThreadId ??
-        launchpad.parentThreadId ??
-        getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
-      const materializeParentThreadBackend =
-        launchpad.parentThreadBackend ?? launchpad.backend;
-      const materializeParentThreadInstanceId =
-        launchpad.parentThreadInstanceId;
-      const federationTarget =
-        launchpad.federationTarget ?? readRendererFederationTarget();
-      let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
+      if (pendingLaunchpadCreationsRef.current.has(launchpadSelectionKey)) {
+        throw new Error("This thread is already starting.");
+      }
+      const pendingCreation: PendingLaunchpadCreation = {
+        federatedSession: federatedSelection,
+        selectionKey: launchpadSelectionKey,
+        directoryKey,
+        title: input?.find((item) => item.type === "text")?.text
+          ?? launchpad.prompt ?? "New thread",
+        input: input ?? [],
+      };
+      pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, pendingCreation);
+      setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
       try {
-        response = await desktopApi.materializeDirectoryLaunchpad({
-          directoryKey,
-          federationTarget,
+        const selectionKeyAtMaterializationStart = selectedItemKeyRef.current;
+        const materializeParentThreadId =
+          parentThreadId ??
+          launchpad.parentThreadId ??
+          getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
+        const materializeParentThreadBackend =
+          launchpad.parentThreadBackend ?? launchpad.backend;
+        const materializeParentThreadInstanceId =
+          launchpad.parentThreadInstanceId;
+        const federationTarget =
+          launchpad.federationTarget ?? readRendererFederationTarget();
+        let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
+        try {
+          response = await desktopApi.materializeDirectoryLaunchpad({
+            directoryKey,
+            federationTarget,
+            launchpad,
+            input,
+            collaborationMode,
+            reviewTarget,
+            scheduledFor,
+            ...(materializeParentThreadId
+              ? {
+                  parentThreadId: materializeParentThreadId,
+                  parentThreadBackend: materializeParentThreadBackend,
+                  ...(materializeParentThreadInstanceId
+                    ? { parentThreadInstanceId: materializeParentThreadInstanceId }
+                    : {}),
+                }
+              : {}),
+          });
+        } catch (error) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+          throw error;
+        }
+        let localDraftResetFailure: string | undefined;
+        if (federationTarget && desktopApi.resetDirectoryLaunchpad) {
+          try {
+            // Remote launchpads are composed and persisted on the viewer, then
+            // sent in full to the owning instance for materialization. The owner
+            // clears its overlay row as part of that operation, but it cannot
+            // clear the viewer's local copy. Remove that copy after success so
+            // reopening the launchpad cannot resurrect the submitted message.
+            await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+          } catch (error) {
+            localDraftResetFailure =
+              error instanceof Error ? error.message : String(error);
+          }
+        }
+        const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
+          directory,
           launchpad,
-          input,
-          collaborationMode,
-          reviewTarget,
-          scheduledFor,
-          ...(materializeParentThreadId
+          backend: response.backend,
+          threadId: response.threadId,
+          federation: federationTarget
+            && isRemoteFederationTarget(federationTarget)
             ? {
-                parentThreadId: materializeParentThreadId,
-                parentThreadBackend: materializeParentThreadBackend,
-                ...(materializeParentThreadInstanceId
-                  ? { parentThreadInstanceId: materializeParentThreadInstanceId }
+                ref: {
+                  backend: response.backend,
+                  target: federationTarget,
+                  threadId: response.threadId,
+                },
+                instanceLabel:
+                  readRendererFederationLabel() ?? federationTarget.instanceId,
+              }
+            : undefined,
+          executionMode: response.executionMode,
+          workMode: response.workMode,
+          codexEnvironmentRuntime: response.codexEnvironmentRuntime,
+          optimisticUserMessage: response.turnStartFailure
+            || response.scheduledAction
+            ? undefined
+            : buildOptimisticUserMessage(input),
+          optimisticActiveTurn: response.turnId && !response.turnStartFailure
+            ? {
+                id: response.turnId,
+                statusText: reviewTarget
+                  ? "Reviewing"
+                  : collaborationMode
+                    ? "Planning"
+                    : "Thinking",
+                startedAt: Date.now(),
+                ...(reviewTarget
+                  ? { reviewDisplayText: reviewDisplayTextFromTarget(reviewTarget) }
                   : {}),
               }
-            : {}),
+            : undefined,
+          parentThreadId: materializeParentThreadId,
+          parentThreadBackend: materializeParentThreadId
+            ? materializeParentThreadBackend
+            : undefined,
+          parentThreadInstanceId: materializeParentThreadId
+            ? materializeParentThreadInstanceId
+            : undefined,
+          pinnedRank: response.pinnedRank,
+          scheduledStart: response.scheduledAction
+            ? {
+                actionId: response.scheduledAction.id,
+                scheduledFor: response.scheduledAction.scheduledFor,
+                state: "scheduled",
+              }
+            : undefined,
         });
-      } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
-        throw error;
-      }
-      let localDraftResetFailure: string | undefined;
-      if (federationTarget && desktopApi.resetDirectoryLaunchpad) {
-        try {
-          // Remote launchpads are composed and persisted on the viewer, then
-          // sent in full to the owning instance for materialization. The owner
-          // clears its overlay row as part of that operation, but it cannot
-          // clear the viewer's local copy. Remove that copy after success so
-          // reopening the launchpad cannot resurrect the submitted message.
-          await desktopApi.resetDirectoryLaunchpad({ directoryKey });
-        } catch (error) {
-          localDraftResetFailure =
-            error instanceof Error ? error.message : String(error);
-        }
-      }
-      const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
-        directory,
-        launchpad,
-        backend: response.backend,
-        threadId: response.threadId,
-        federation: federationTarget
-          && isRemoteFederationTarget(federationTarget)
+        const observedThreadNameEntry = threadNameObservationsRef.current.get(
+          federationTarget
+            ? federatedThreadIdentityKey({
+                backend: response.backend,
+                target: federationTarget,
+                threadId: response.threadId,
+              })
+            : buildThreadIdentityKey(response.backend, response.threadId),
+        );
+        const namedOptimisticMaterializedThread = observedThreadNameEntry
           ? {
+              ...optimisticMaterializedThread,
+              title: observedThreadNameEntry.threadName,
+              titleSource: observedThreadNameEntry.titleSource,
+            }
+          : optimisticMaterializedThread;
+        if (
+          federationTarget
+          && isRemoteFederationTarget(federationTarget)
+          && !readRendererFederationTarget()
+        ) {
+          try {
+            await desktopApi.addRemoteThreadPin?.({
               ref: {
                 backend: response.backend,
                 target: federationTarget,
                 threadId: response.threadId,
               },
+              summary: namedOptimisticMaterializedThread,
               instanceLabel:
-                readRendererFederationLabel() ?? federationTarget.instanceId,
-            }
-          : undefined,
-        executionMode: response.executionMode,
-        workMode: response.workMode,
-        codexEnvironmentRuntime: response.codexEnvironmentRuntime,
-        optimisticUserMessage: response.turnStartFailure
-          || response.scheduledAction
-          ? undefined
-          : buildOptimisticUserMessage(input),
-        optimisticActiveTurn: response.turnId && !response.turnStartFailure
-          ? {
-              id: response.turnId,
-              statusText: reviewTarget
-                ? "Reviewing"
-                : collaborationMode
-                  ? "Planning"
-                  : "Thinking",
-              startedAt: Date.now(),
-              ...(reviewTarget
-                ? { reviewDisplayText: reviewDisplayTextFromTarget(reviewTarget) }
-                : {}),
-            }
-          : undefined,
-        parentThreadId: materializeParentThreadId,
-        parentThreadBackend: materializeParentThreadId
-          ? materializeParentThreadBackend
-          : undefined,
-        parentThreadInstanceId: materializeParentThreadId
-          ? materializeParentThreadInstanceId
-          : undefined,
-        pinnedRank: response.pinnedRank,
-        scheduledStart: response.scheduledAction
-          ? {
-              actionId: response.scheduledAction.id,
-              scheduledFor: response.scheduledAction.scheduledFor,
-              state: "scheduled",
-            }
-          : undefined,
-      });
-      const observedThreadNameEntry = threadNameObservationsRef.current.get(
-        federationTarget
-          ? federatedThreadIdentityKey({
-              backend: response.backend,
-              target: federationTarget,
-              threadId: response.threadId,
-            })
-          : buildThreadIdentityKey(response.backend, response.threadId),
-      );
-      const namedOptimisticMaterializedThread = observedThreadNameEntry
-        ? {
-            ...optimisticMaterializedThread,
-            title: observedThreadNameEntry.threadName,
-            titleSource: observedThreadNameEntry.titleSource,
-          }
-        : optimisticMaterializedThread;
-      if (
-        federationTarget
-        && isRemoteFederationTarget(federationTarget)
-        && !readRendererFederationTarget()
-      ) {
-        try {
-          await desktopApi.addRemoteThreadPin?.({
-            ref: {
-              backend: response.backend,
-              target: federationTarget,
-              threadId: response.threadId,
-            },
-            summary: namedOptimisticMaterializedThread,
-            instanceLabel:
-              namedOptimisticMaterializedThread.federation?.instanceLabel
-              ?? federationTarget.instanceId,
-          });
-        } catch (error) {
-          // Materialization already succeeded on the owner. Keep the created
-          // thread selected even if this viewer cannot persist its list entry.
-          console.warn("Could not add the remote thread to this thread list:", error);
-        }
-      }
-      const nextThreadKey = threadSummaryIdentityKey(
-        namedOptimisticMaterializedThread,
-      );
-      // Sub-thread launchpads drop the new child directly below their source
-      // card. Plain new-thread launchpads have no parent and skip this. Await
-      // so the order write commits before the refresh below reads it back.
-      if (materializeParentThreadId) {
-        const groupRoot = stateRef.current.response?.threads.find(
-          (thread) =>
-            thread.source === materializeParentThreadBackend
-            && thread.id === materializeParentThreadId,
-        );
-        const subthreadOrderTarget = groupRoot
-          ? groupRoot.federation?.ref.target
-          : materializeParentThreadInstanceId
-            ? {
-                scope: "remote" as const,
-                instanceId: materializeParentThreadInstanceId,
-              }
-            : federationTarget;
-        await insertSubthreadBelowSource(
-          materializeParentThreadBackend,
-          materializeParentThreadId,
-          launchpad.sourceThreadId ?? materializeParentThreadId,
-          response.threadId,
-          subthreadOrderTarget,
-        );
-      }
-      if (federatedSelection) {
-        setFederatedLaunchpad((current) =>
-          current
-          && federationTargetsEqual(current.target, federatedSelection.target)
-          && current.launchpad.directoryKey === directoryKey
-            ? undefined
-            : current,
-        );
-      } else {
-        setLocalLaunchpads((current) => {
-          if (!current[directoryKey]) {
-            return current;
-          }
-          const next = { ...current };
-          delete next[directoryKey];
-          return next;
-        });
-      }
-      const shouldSelectMaterializedThread =
-        selectionKeyAtMaterializationStart !== launchpadSelectionKey ||
-        selectedItemKeyRef.current === launchpadSelectionKey;
-      const shouldProjectOptimisticThread =
-        shouldSelectMaterializedThread || !optimisticThreadRef.current;
-      setOptimisticThread((current) =>
-        shouldSelectMaterializedThread || !current
-          ? namedOptimisticMaterializedThread
-          : current
-      );
-      if (shouldSelectMaterializedThread) {
-        setSelectedItemKey(nextThreadKey);
-        setPendingSeenThreadKey(nextThreadKey);
-      }
-      if (response.turnStartFailure) {
-        setLaunchpadError(response.turnStartFailure.message);
-      } else if (response.autoPinFailure) {
-        setLaunchpadError(response.autoPinFailure.message);
-      } else if (localDraftResetFailure) {
-        setLaunchpadError(
-          `Thread started, but the saved launchpad draft could not be cleared: ${localDraftResetFailure}`,
-        );
-      }
-      // Link composer `@`-referenced directories to the just-created
-      // thread before the refresh below so the snapshot comes back with
-      // them. Non-fatal per path — the turn already carries the path as
-      // text, so a failed link only loses the sidebar association.
-      if (extraDirectoryPaths && extraDirectoryPaths.length > 0) {
-        for (const path of extraDirectoryPaths) {
-          try {
-            const attachResult = await desktopApi.attachDirectoryToThread?.({
-              backend: response.backend,
-              federationTarget,
-              threadId: response.threadId,
-              path,
-              preferredBackend: response.backend,
+                namedOptimisticMaterializedThread.federation?.instanceLabel
+                ?? federationTarget.instanceId,
             });
-            if (attachResult && !attachResult.ok) {
-              console.warn(
-                `Could not link referenced directory ${path}: ${attachResult.message}`,
-              );
-            }
           } catch (error) {
-            console.warn(`Could not link referenced directory ${path}:`, error);
+            // Materialization already succeeded on the owner. Keep the created
+            // thread selected even if this viewer cannot persist its list entry.
+            console.warn("Could not add the remote thread to this thread list:", error);
           }
         }
-      }
-      if (!federatedSelection) {
-        setState((current) => ({
-          ...current,
-          response: current.response
-            ? applyLaunchpadReset(
-                current.response,
-                directoryKey,
-                current.response.launchpadDefaults
-              )
-            : current.response,
-        }));
-      }
-      try {
-        await refresh(
-          shouldSelectMaterializedThread ? nextThreadKey : undefined,
-          shouldProjectOptimisticThread
-            ? namedOptimisticMaterializedThread
-            : undefined,
+        const nextThreadKey = threadSummaryIdentityKey(
+          namedOptimisticMaterializedThread,
         );
-      } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        // Sub-thread launchpads drop the new child directly below their source
+        // card. Plain new-thread launchpads have no parent and skip this. Await
+        // so the order write commits before the refresh below reads it back.
+        if (materializeParentThreadId) {
+          const groupRoot = stateRef.current.response?.threads.find(
+            (thread) =>
+              thread.source === materializeParentThreadBackend
+              && thread.id === materializeParentThreadId,
+          );
+          const subthreadOrderTarget = groupRoot
+            ? groupRoot.federation?.ref.target
+            : materializeParentThreadInstanceId
+              ? {
+                  scope: "remote" as const,
+                  instanceId: materializeParentThreadInstanceId,
+                }
+              : federationTarget;
+          await insertSubthreadBelowSource(
+            materializeParentThreadBackend,
+            materializeParentThreadId,
+            launchpad.sourceThreadId ?? materializeParentThreadId,
+            response.threadId,
+            subthreadOrderTarget,
+          );
+        }
+        if (federatedSelection) {
+          setFederatedLaunchpad((current) =>
+            current
+            && federationTargetsEqual(current.target, federatedSelection.target)
+            && current.launchpad.directoryKey === directoryKey
+              ? undefined
+              : current,
+          );
+        } else {
+          setLocalLaunchpads((current) => {
+            if (!current[directoryKey]) {
+              return current;
+            }
+            const next = { ...current };
+            delete next[directoryKey];
+            return next;
+          });
+        }
+        onMaterialized?.(namedOptimisticMaterializedThread);
+        const shouldSelectMaterializedThread =
+          selectionKeyAtMaterializationStart !== launchpadSelectionKey ||
+          selectedItemKeyRef.current === launchpadSelectionKey;
+        const shouldProjectOptimisticThread =
+          shouldSelectMaterializedThread || !optimisticThreadRef.current;
+        setOptimisticThread((current) =>
+          shouldSelectMaterializedThread || !current
+            ? namedOptimisticMaterializedThread
+            : current
+        );
+        if (shouldSelectMaterializedThread) {
+          setSelectedItemKey(nextThreadKey);
+          setPendingSeenThreadKey(nextThreadKey);
+        }
+        if (response.turnStartFailure) {
+          setLaunchpadError(response.turnStartFailure.message);
+        } else if (response.autoPinFailure) {
+          setLaunchpadError(response.autoPinFailure.message);
+        } else if (localDraftResetFailure) {
+          setLaunchpadError(
+            `Thread started, but the saved launchpad draft could not be cleared: ${localDraftResetFailure}`,
+          );
+        }
+        // Link composer `@`-referenced directories to the just-created
+        // thread before the refresh below so the snapshot comes back with
+        // them. Non-fatal per path — the turn already carries the path as
+        // text, so a failed link only loses the sidebar association.
+        if (extraDirectoryPaths && extraDirectoryPaths.length > 0) {
+          for (const path of extraDirectoryPaths) {
+            try {
+              const attachResult = await desktopApi.attachDirectoryToThread?.({
+                backend: response.backend,
+                federationTarget,
+                threadId: response.threadId,
+                path,
+                preferredBackend: response.backend,
+              });
+              if (attachResult && !attachResult.ok) {
+                console.warn(
+                  `Could not link referenced directory ${path}: ${attachResult.message}`,
+                );
+              }
+            } catch (error) {
+              console.warn(`Could not link referenced directory ${path}:`, error);
+            }
+          }
+        }
+        if (!federatedSelection) {
+          setState((current) => ({
+            ...current,
+            response: current.response
+              ? applyLaunchpadReset(
+                  current.response,
+                  directoryKey,
+                  current.response.launchpadDefaults
+                )
+              : current.response,
+          }));
+        }
+        try {
+          await refresh(
+            shouldSelectMaterializedThread ? nextThreadKey : undefined,
+            shouldProjectOptimisticThread
+              ? namedOptimisticMaterializedThread
+              : undefined,
+          );
+        } catch (error) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        pendingLaunchpadCreationsRef.current.delete(launchpadSelectionKey);
+        setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
       }
     },
     [
@@ -8659,6 +8714,7 @@ export function useThreadNavigation(
     inboxThreads,
     recentThreads,
     launchpadError,
+    pendingLaunchpadCreations,
     archiveThreadNotice,
     dismissArchiveThreadNotice,
     worktreeArchiveError,
@@ -8685,6 +8741,7 @@ export function useThreadNavigation(
     resetDirectoryLaunchpad,
     removeDirectory,
     selectDirectoryLaunchpad,
+    selectPendingLaunchpad,
     selectedDirectory,
     selectedItemKey: displaySelectionKey,
     selectedLaunchpad,

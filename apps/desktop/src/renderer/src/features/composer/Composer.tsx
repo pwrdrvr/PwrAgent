@@ -1,3 +1,10 @@
+import {
+  beginLaunchpadComposition,
+  getLaunchpadComposerDestination,
+  notifyLaunchpadAttachmentHandoff,
+  resolveLaunchpadComposerScope,
+  subscribeLaunchpadAttachmentHandoffs,
+} from "./launchpad-composer-handoff";
 import { QueuedMessageInspector } from "./QueuedMessageInspector";
 import { restoreQueuedMessage } from "./queued-message-content";
 import {
@@ -253,6 +260,7 @@ type ComposerProps = {
   draftStore?: ComposerDraftStore;
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
+  launchpadMaterializing?: boolean;
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
@@ -500,6 +508,8 @@ function resolveSelectedCodexEnvironmentActionId(params: {
 
 type QueuedTurnDraft = {
   id: string;
+  waitingForScheduledActionId?: string;
+  steerWhenReady?: boolean;
   backendQueuePending?: boolean;
   queueEntryId?: string;
   scheduledActionId?: string;
@@ -2857,7 +2867,7 @@ export function Composer(props: ComposerProps) {
   const draftStore = props.draftStore ?? localDraftStore;
   const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
   const savedInitialDraft = draftStore.get(composerScopeKey);
-  const savedInitialQueuedTurns = props.thread
+  const savedInitialQueuedTurns = props.thread || props.launchpad
     ? draftStore.getQueuedTurns(composerScopeKey)
     : undefined;
   const savedInitialPendingSteer = props.thread
@@ -2867,7 +2877,7 @@ export function Composer(props: ComposerProps) {
     savedInitialDraft || !props.launchpad
       ? undefined
       : hydrateComposerDraft(
-          props.launchpad.prompt ?? "",
+          props.launchpadMaterializing ? "" : props.launchpad.prompt ?? "",
           props.skills,
           threadLinks,
           pullRequestLinks,
@@ -2883,7 +2893,8 @@ export function Composer(props: ComposerProps) {
       }
     | undefined
   >(undefined);
-  const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
+  const launchpadMaterializingRef = useRef(props.launchpadMaterializing);
+  launchpadMaterializingRef.current = props.launchpadMaterializing;
   const recoveryCycleRef = useRef<{
     activeIndex?: number;
     candidates: ComposerDraftSnapshot[];
@@ -3633,6 +3644,22 @@ export function Composer(props: ComposerProps) {
     setImageAttachments([]);
     setFileAttachments([]);
   };
+  const beginLaunchpadSubmission = (scopeKey: string): ComposerDraftSnapshot => {
+    const submitted = latestDraftSnapshotRef.current.snapshot;
+    resetComposerDraftAndState(scopeKey);
+    const parked = draftStore.popDraft(scopeKey);
+    if (parked) {
+      draftStore.set(scopeKey, parked);
+      latestDraftSnapshotRef.current = { scopeKey, snapshot: parked };
+      setDraft(parked.draft);
+      setEditorDocument(parked.editorDocument);
+      setImageAttachments(parked.imageAttachments);
+      setFileAttachments(parked.fileAttachments ?? []);
+      setSkillTokens(parked.skillTokens);
+    }
+    requestAnimationFrame(() => inputRef.current?.focus());
+    return submitted;
+  };
   const hasLiveComposerContent = (): boolean => {
     const latest = latestDraftSnapshotRef.current;
     return Boolean(
@@ -4003,7 +4030,7 @@ export function Composer(props: ComposerProps) {
     applyRecoveredComposerDraft(cycle.candidates[nextIndex]);
   };
   const isQueuedTurnStoreScope = (scopeKey: string): boolean =>
-    scopeKey.startsWith("thread:");
+    scopeKey.startsWith("thread:") || scopeKey.startsWith("launchpad:");
   const savePendingSteerSnapshot = (
     scopeKey: string,
     state?: ComposerPendingSteerSnapshot,
@@ -4422,65 +4449,13 @@ export function Composer(props: ComposerProps) {
     }
   }, [futureScheduledDraftSendAt, scheduledDraftSendAt]);
 
-  const markComposerDraftSubmitted = (scopeKey: string): void => {
-    if (!isDraftStoreScope(scopeKey)) {
-      return;
-    }
-
-    submittedDraftScopeKeysRef.current.add(scopeKey);
-    clearComposerDraftSnapshot(scopeKey);
-  };
-  const unmarkComposerDraftSubmitted = (scopeKey: string): void => {
-    submittedDraftScopeKeysRef.current.delete(scopeKey);
-  };
-  const clearSubmittedComposerDraft = (scopeKey: string): void => {
-    const emptySnapshot = createEmptyComposerDraftSnapshot();
-
-    const latest = latestDraftSnapshotRef.current;
-    if (latest.scopeKey === scopeKey) {
-      recordComposerDraftHistory(scopeKey, latest.snapshot, "sent");
-    }
-    clearComposerDraftSnapshot(scopeKey);
-    const restoredSnapshot = draftStore.popDraft(scopeKey);
-    submittedDraftScopeKeysRef.current.delete(scopeKey);
-    if (restoredSnapshot) {
-      pendingProgrammaticComposerChangeRef.current = {
-        expectedDraft: restoredSnapshot.draft,
-        expectedSkillTokensSignature: getComposerSkillTokensSignature(
-          restoredSnapshot.skillTokens,
-        ),
-        staleDraft: latest.snapshot.draft,
-        staleSkillTokensSignature: getComposerSkillTokensSignature(
-          latest.snapshot.skillTokens,
-        ),
-      };
-      saveComposerDraftSnapshot(scopeKey, restoredSnapshot);
-      latestDraftSnapshotRef.current = {
-        scopeKey,
-        snapshot: restoredSnapshot,
-      };
-      setDraft(restoredSnapshot.draft);
-      setEditorDocument(restoredSnapshot.editorDocument);
-      setImageAttachments(restoredSnapshot.imageAttachments);
-      setFileAttachments(restoredSnapshot.fileAttachments ?? []);
-      setSkillTokens(restoredSnapshot.skillTokens);
-      return;
-    }
-    latestDraftSnapshotRef.current = {
-      scopeKey,
-      snapshot: emptySnapshot,
-    };
-    clearComposerDraft();
-    setImageAttachments([]);
-    setFileAttachments([]);
-  };
   const persistLaunchpadDraftSnapshot = (
     scopeKey: string,
     snapshot: ComposerDraftSnapshot,
   ): void => {
     const directoryKey = getLaunchpadDirectoryKeyFromScope(scopeKey);
     const updateLaunchpad = launchpadUpdateRef.current;
-    if (!directoryKey || !updateLaunchpad) {
+    if (!directoryKey || !updateLaunchpad || launchpadMaterializingRef.current) {
       return;
     }
 
@@ -4498,11 +4473,7 @@ export function Composer(props: ComposerProps) {
     scopeKey: string,
     snapshot: ComposerDraftSnapshot,
   ): void => {
-    if (submittedDraftScopeKeysRef.current.has(scopeKey)) {
-      clearComposerDraftSnapshot(scopeKey);
-      return;
-    }
-
+    if (resolveLaunchpadComposerScope(draftStore, scopeKey) !== scopeKey) return;
     saveComposerDraftSnapshot(scopeKey, snapshot);
     persistLaunchpadDraftSnapshot(scopeKey, snapshot);
   };
@@ -4849,6 +4820,18 @@ export function Composer(props: ComposerProps) {
     reviewConfig?.target,
   ]);
 
+  useEffect(() => subscribeLaunchpadAttachmentHandoffs(draftStore, (scopeKey) => {
+    if (activeComposerScopeKeyRef.current !== scopeKey) return;
+    const saved = draftStore.get(scopeKey);
+    if (!saved) return;
+    latestDraftSnapshotRef.current = { scopeKey, snapshot: saved };
+    setDraft(saved.draft);
+    setEditorDocument(saved.editorDocument);
+    setSkillTokens(saved.skillTokens);
+    setImageAttachments(saved.imageAttachments);
+    setFileAttachments(saved.fileAttachments ?? []);
+  }), [draftStore]);
+
   useEffect(() => {
     let refreshQueuedTurnsPending = false;
     let disposed = false;
@@ -4981,7 +4964,7 @@ export function Composer(props: ComposerProps) {
       setQueuedTurnsState(savedQueuedTurns);
     } else {
       setPendingSteerState(undefined);
-      setQueuedTurnsState([]);
+      setQueuedTurnsState(draftStore.getQueuedTurns(composerScopeKey));
     }
     updateSending(false);
     setInterrupting(false);
@@ -5177,6 +5160,7 @@ export function Composer(props: ComposerProps) {
     }
 
     hydratedLaunchpadKeyRef.current = props.launchpad?.directoryKey;
+    if (!props.launchpadMaterializing) beginLaunchpadComposition(draftStore, composerScopeKey);
     const saved = draftStore.get(composerScopeKey);
     if (saved) {
       setDraft(saved.draft);
@@ -5184,6 +5168,8 @@ export function Composer(props: ComposerProps) {
       setImageAttachments(saved.imageAttachments);
       setFileAttachments(saved.fileAttachments ?? []);
       setSkillTokens(saved.skillTokens);
+    } else if (props.launchpadMaterializing) {
+      resetComposerDraftAndState(composerScopeKey);
     } else {
       setComposerDraftFromCanonical(props.launchpad?.prompt ?? "");
       setEditorDocument(
@@ -5198,7 +5184,7 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-    setQueuedTurnsState([]);
+    setQueuedTurnsState(draftStore.getQueuedTurns(composerScopeKey));
     setPendingSteer(undefined);
     window.setTimeout(() => {
       inputRef.current?.focus();
@@ -5609,7 +5595,8 @@ export function Composer(props: ComposerProps) {
     }
 
     const timeout = window.setTimeout(() => {
-      if (submittedDraftScopeKeysRef.current.has(composerScopeKey)) {
+      if (launchpadMaterializingRef.current
+        || resolveLaunchpadComposerScope(draftStore, composerScopeKey) !== composerScopeKey) {
         return;
       }
 
@@ -5694,7 +5681,7 @@ export function Composer(props: ComposerProps) {
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
       const submittedScopeKey = composerScopeKey;
-      markComposerDraftSubmitted(submittedScopeKey);
+      const submittedSnapshot = beginLaunchpadSubmission(submittedScopeKey);
       props.onPendingStatusChange?.(
         props.launchpad.codexEnvironmentId &&
           selectedCodexEnvironment?.setupScript
@@ -5717,10 +5704,14 @@ export function Composer(props: ComposerProps) {
             .map((directory) => directory.path)
             .filter((path): path is string => Boolean(path))
         );
-        clearSubmittedComposerDraft(submittedScopeKey);
         setReviewConfig(undefined);
       } catch (error) {
-        unmarkComposerDraftSubmitted(submittedScopeKey);
+        if (!draftStore.get(submittedScopeKey)
+          && activeComposerScopeKeyRef.current === submittedScopeKey) {
+          restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot);
+        } else {
+          draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
+        }
         inFlightReviewSubmissionKeyRef.current = undefined;
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
@@ -6885,25 +6876,10 @@ export function Composer(props: ComposerProps) {
       !props.launchpad
       || !props.onMaterializeLaunchpad
       || props.disabled
+      || sendingRef.current
+      || turnPayloadPreparationInFlightRef.current
     ) {
       return;
-    }
-
-    let input: AppServerTurnInputItem[] | undefined;
-    if (!reviewTarget) {
-      const payloadOrPromise = buildTurnPayload(
-        canonicalDraft,
-        imageAttachments,
-        fileAttachments,
-        skillTokens,
-      );
-      const payload = isPromiseLike(payloadOrPromise)
-        ? await payloadOrPromise
-        : payloadOrPromise;
-      if (payload.input.length === 0) {
-        return;
-      }
-      input = payload.input;
     }
 
     const collaborationMode =
@@ -6916,7 +6892,7 @@ export function Composer(props: ComposerProps) {
           } satisfies AppServerCollaborationModeRequest)
         : undefined;
     const submittedScopeKey = composerScopeKey;
-    markComposerDraftSubmitted(submittedScopeKey);
+    const submittedSnapshot = beginLaunchpadSubmission(submittedScopeKey);
     setSendError(undefined);
     updateSending(true);
     props.onPendingStatusChange?.(
@@ -6925,6 +6901,23 @@ export function Composer(props: ComposerProps) {
         : "Scheduling thread",
     );
     try {
+      let input: AppServerTurnInputItem[] | undefined;
+      if (!reviewTarget) {
+        const payloadOrPromise = buildTurnPayload(
+          canonicalDraft,
+          imageAttachments,
+          fileAttachments,
+          skillTokens,
+        );
+        const payload = isPromiseLike(payloadOrPromise)
+          ? await payloadOrPromise
+          : payloadOrPromise;
+        if (payload.input.length === 0) {
+          restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot);
+          return;
+        }
+        input = payload.input;
+      }
       await props.onMaterializeLaunchpad(
         props.launchpad.directoryKey,
         input,
@@ -6938,7 +6931,6 @@ export function Composer(props: ComposerProps) {
           .filter((path): path is string => Boolean(path)),
         scheduledSendAt,
       );
-      clearSubmittedComposerDraft(submittedScopeKey);
       setReviewConfig(undefined);
       setScheduledDraftSendAt(undefined);
       setScheduleArmed(true);
@@ -6946,7 +6938,12 @@ export function Composer(props: ComposerProps) {
         setPlanModeEnabled(false);
       }
     } catch (error) {
-      unmarkComposerDraftSubmitted(submittedScopeKey);
+      if (!draftStore.get(submittedScopeKey)
+        && activeComposerScopeKeyRef.current === submittedScopeKey) {
+        restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot);
+      } else {
+        draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
+      }
       setSendError(error instanceof Error ? error.message : String(error));
     } finally {
       props.onPendingStatusChange?.(undefined);
@@ -7518,6 +7515,40 @@ export function Composer(props: ComposerProps) {
     ) {
       return;
     }
+    if (props.launchpad && (props.launchpadMaterializing || sendingRef.current)) {
+      if (props.disabled || !hasLiveComposerContent()) return;
+      const scopeKey = composerScopeKey;
+      const destination = getLaunchpadComposerDestination(draftStore, scopeKey);
+      const snapshot = latestDraftSnapshotRef.current.snapshot;
+      const text = canonicalDraft;
+      const queued: QueuedTurnDraft = {
+        id: createQueuedTurnId(),
+        text,
+        backendQueuePending: true,
+        imageAttachments: snapshot.imageAttachments,
+        fileAttachments: snapshot.fileAttachments ?? [],
+      };
+      // Reserve FIFO order before attachment preparation can yield or the
+      // launchpad can become a thread. The destination follows that handoff.
+      enqueueQueuedTurnInScope(scopeKey, queued);
+      resetComposerDraftAndState(scopeKey);
+      try {
+        const payload = await buildTurnPayload(text, imageAttachments, fileAttachments, skillTokens);
+        updateQueuedTurnInScope(destination.scopeKey, queued, (current) => ({
+          ...current,
+          backendQueuePending: false,
+          input: payload.input,
+        }));
+      } catch (error) {
+        updateQueuedTurnInScope(destination.scopeKey, queued, (current) => ({
+          ...current,
+          backendQueuePending: false,
+          manualReleaseRequired: true,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }));
+      }
+      return;
+    }
     if (isCompactCommand) {
       await submitCompactThread();
       return;
@@ -7687,6 +7718,9 @@ export function Composer(props: ComposerProps) {
     // pending time so the toggle doesn't reappear after the immediate send.
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
+    const submittedLaunchpad = props.launchpad && props.onMaterializeLaunchpad && !props.disabled
+      ? { scopeKey: composerScopeKey, snapshot: beginLaunchpadSubmission(composerScopeKey) }
+      : undefined;
     const payloadOrPromise = buildTurnPayload(
       canonicalDraft,
       imageAttachments,
@@ -7700,6 +7734,9 @@ export function Composer(props: ComposerProps) {
       try {
         payload = await payloadOrPromise;
       } catch (error) {
+        if (submittedLaunchpad) {
+          restoreSubmittedComposerDraftInScope(submittedLaunchpad.scopeKey, submittedLaunchpad.snapshot);
+        }
         updateSending(false);
         setSendError(error instanceof Error ? error.message : String(error));
         return;
@@ -7719,6 +7756,9 @@ export function Composer(props: ComposerProps) {
       : undefined;
 
     if (payload.input.length === 0 || props.disabled) {
+      if (submittedLaunchpad) {
+        restoreSubmittedComposerDraftInScope(submittedLaunchpad.scopeKey, submittedLaunchpad.snapshot);
+      }
       updateSending(false);
       return;
     }
@@ -7726,9 +7766,9 @@ export function Composer(props: ComposerProps) {
     setSendError(undefined);
     updateSending(true);
 
-    if (props.launchpad && props.onMaterializeLaunchpad) {
-      const submittedScopeKey = composerScopeKey;
-      markComposerDraftSubmitted(submittedScopeKey);
+    if (props.launchpad && props.onMaterializeLaunchpad && submittedLaunchpad) {
+      const submittedScopeKey = submittedLaunchpad.scopeKey;
+      const submittedSnapshot = submittedLaunchpad.snapshot;
       props.onPendingStatusChange?.(
         props.launchpad.codexEnvironmentId &&
           selectedCodexEnvironment?.setupScript
@@ -7749,14 +7789,22 @@ export function Composer(props: ComposerProps) {
             .map((directory) => directory.path)
             .filter((path): path is string => Boolean(path))
         );
-        clearSubmittedComposerDraft(submittedScopeKey);
+
         if (collaborationMode) {
           setPlanModeEnabled(false);
         }
       } catch (error) {
-        unmarkComposerDraftSubmitted(submittedScopeKey);
+        // Never overwrite a follow-up typed while creation was in flight.
+        if (!draftStore.hasDraftContent(submittedScopeKey)
+          && activeComposerScopeKeyRef.current === submittedScopeKey) {
+          restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot);
+        } else {
+          draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
+        }
         props.onPendingStatusChange?.(undefined);
-        setSendError(error instanceof Error ? error.message : String(error));
+        if (!launchpadMaterializingRef.current) {
+          setSendError(error instanceof Error ? error.message : String(error));
+        }
       } finally {
         updateSending(false);
       }
@@ -8604,6 +8652,7 @@ export function Composer(props: ComposerProps) {
 
   const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
+    const destination = getLaunchpadComposerDestination(draftStore, pasteScope.key);
     const pasteDraft = draft;
     const pasteEditorDocument = editorDocument;
     const pasteImageAttachments = imageAttachments;
@@ -8661,14 +8710,17 @@ export function Composer(props: ComposerProps) {
         })
       );
 
-      if (activeComposerScopeKeyRef.current !== pasteScope.key) {
-        const saved = draftStore.get(pasteScope.key) ?? {
-          draft: pasteDraft,
-          editorDocument: pasteEditorDocument,
-          imageAttachments: pasteImageAttachments,
-          fileAttachments: pasteFileAttachments,
-          skillTokens,
-        };
+      const targetScopeKey = destination.scopeKey;
+      if (targetScopeKey !== pasteScope.key || activeComposerScopeKeyRef.current !== targetScopeKey) {
+        const saved = draftStore.get(targetScopeKey) ?? (targetScopeKey !== pasteScope.key
+          ? createEmptyComposerDraftSnapshot()
+          : {
+              draft: pasteDraft,
+              editorDocument: pasteEditorDocument,
+              imageAttachments: pasteImageAttachments,
+              fileAttachments: pasteFileAttachments,
+              skillTokens,
+            });
         // Drop exact duplicates against the background scope's own attachments
         // (no toast — this composer isn't the one on screen).
         const { unique } = partitionNewImageAttachments(
@@ -8686,8 +8738,9 @@ export function Composer(props: ComposerProps) {
           fileAttachments: saved.fileAttachments,
           skillTokens: saved.skillTokens,
         };
-        saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
-        persistLaunchpadDraftSnapshot(pasteScope.key, nextSnapshot);
+        saveComposerDraftSnapshot(targetScopeKey, nextSnapshot);
+        persistLaunchpadDraftSnapshot(targetScopeKey, nextSnapshot);
+        notifyLaunchpadAttachmentHandoff(draftStore, targetScopeKey);
         return;
       }
 
@@ -9266,7 +9319,7 @@ export function Composer(props: ComposerProps) {
   const supportsSteering =
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false;
-  const launchpadSubmitting = isLaunchpad && sending;
+  const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
   const fiveHourResetAt = getFiveHourRateLimitResetAt({
     backend,
     now: scheduleNow,
@@ -9292,12 +9345,13 @@ export function Composer(props: ComposerProps) {
   const sendButtonDisabled =
     props.disabled ||
     steering ||
-    (!activeTurnId && sending) ||
+    (!activeTurnId && sending && !isLaunchpad) ||
     (!hasComposerContent &&
       imageAttachments.length === 0 &&
       fileAttachments.length === 0);
   const scheduleButtonDisabled =
     sendButtonDisabled ||
+    launchpadSubmitting ||
     (!props.thread && !props.launchpad) ||
     Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
     isCompactCommand;
@@ -9327,6 +9381,7 @@ export function Composer(props: ComposerProps) {
     ? futureScheduledDraftSendAt
     : undefined;
   const submitButtonLabel =
+    launchpadSubmitting ||
     activeTurnId ||
     queuedTurns.some((queued) =>
       Boolean(queued.backendQueuePending || queued.queueEntryId)
@@ -9843,8 +9898,10 @@ export function Composer(props: ComposerProps) {
   // Backend availability gates submission and remote actions, not the draft.
   // Keeping the editor live lets an operator inspect, copy, revise, or remove
   // durable text and attachments while federation reconnects.
-  const composerDisabled = launchpadSubmitting;
-  const composerPlaceholder = isLaunchpad
+  const composerDisabled = false;
+  const composerPlaceholder = launchpadSubmitting
+    ? "Queue a follow-up while this thread starts"
+    : isLaunchpad
     ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
     : "Reply to this thread";
   const handleComposerChange = (
@@ -9856,7 +9913,6 @@ export function Composer(props: ComposerProps) {
       recoveryCycleRef.current = undefined;
       recoveryEligibilityVersionRef.current += 1;
     }
-    unmarkComposerDraftSubmitted(composerScopeKey);
     const pendingProgrammaticChange =
       pendingProgrammaticComposerChangeRef.current;
     if (pendingProgrammaticChange && nextSkillTokens) {
@@ -10416,7 +10472,11 @@ export function Composer(props: ComposerProps) {
           queued.scheduledSendAt,
           scheduleNow,
         );
-        const queuedLabel = queued.manualReleaseRequired
+        const queuedLabel = queued.waitingForScheduledActionId
+          ? "Waiting for scheduled first message"
+          : queued.steerWhenReady
+          ? "Steer when ready"
+          : queued.manualReleaseRequired
           ? "Held for retry"
           : queued.errorMessage
           ? "Failed to send"
@@ -10476,7 +10536,24 @@ export function Composer(props: ComposerProps) {
               load={() => readQueuedMessage(queued)}
               desktopApi={props.desktopApi}
             >
-              {queued.manualReleaseRequired && index === 0 ? (
+              {isLaunchpad ? (
+                supportsSteering ? (
+                  <button
+                    className="composer__secondary-action"
+                    aria-pressed={Boolean(queued.steerWhenReady)}
+                    disabled={queued.backendQueuePending}
+                    type="button"
+                    onClick={() => {
+                      updateQueuedTurnInScope(queuedScopeKey, queued, (current) => ({
+                        ...current,
+                        steerWhenReady: !current.steerWhenReady,
+                      }));
+                    }}
+                  >
+                    Steer when ready
+                  </button>
+                ) : null
+              ) : queued.manualReleaseRequired && index === 0 ? (
                 <button
                   className="composer__secondary-action"
                   disabled={
@@ -10518,7 +10595,7 @@ export function Composer(props: ComposerProps) {
                     {steering ? "Steering..." : "Steer"}
                   </button>
                 ) : null
-              ) : !backendOwned ? (
+              ) : !backendOwned && !queued.waitingForScheduledActionId ? (
                 <button
                   className="composer__secondary-action"
                   disabled={props.disabled || sending}
@@ -12348,7 +12425,7 @@ export function Composer(props: ComposerProps) {
           {props.launchpad && props.onCancelLaunchpad ? (
             <button
               className="button button--ghost"
-              disabled={sending}
+              disabled={launchpadSubmitting}
               type="button"
               onClick={() => {
                 // Cancel empties the launchpad without losing what was typed:

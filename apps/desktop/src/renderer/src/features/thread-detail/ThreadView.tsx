@@ -1,3 +1,4 @@
+import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
 import {
   useCallback,
   useEffect,
@@ -27,7 +28,6 @@ import type {
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
   BackendSummary,
-  CodexEnvironmentSetupProgressEvent,
   CodexEnvironmentActionRun,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
@@ -69,7 +69,7 @@ import type {
   IntegratedTerminalsController,
 } from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
-import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
+import type { PendingForkEnvironmentSetup, PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
@@ -122,19 +122,6 @@ import {
   summarizeActivityStatus,
 } from "./live-transcript-activity";
 import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
-
-type LaunchpadEnvironmentSetupProgress = {
-  command: string;
-  cwd?: string;
-  directoryKey: string;
-  durationMs?: number;
-  environmentId: string;
-  environmentName: string;
-  error?: string;
-  exitCode?: number;
-  output: string;
-  status: "starting" | "running" | "completed" | "failed";
-};
 
 function collectThreadImageGallery(
   entries: Array<AppServerThreadEntry | undefined>,
@@ -201,58 +188,6 @@ const LazyIntegratedTerminal = lazy(async () => {
 
 const noop = (): void => {};
 
-function applyLaunchpadEnvironmentSetupProgress(
-  current: LaunchpadEnvironmentSetupProgress | undefined,
-  event: CodexEnvironmentSetupProgressEvent,
-): LaunchpadEnvironmentSetupProgress {
-  const base =
-    current?.directoryKey === event.directoryKey &&
-    current.environmentId === event.environmentId
-      ? current
-      : {
-          command: event.command,
-          cwd: event.cwd,
-          directoryKey: event.directoryKey,
-          environmentId: event.environmentId,
-          environmentName: event.environmentName,
-          output: "",
-          status: "starting" as const,
-        };
-
-  if (event.phase === "stdout" || event.phase === "stderr") {
-    return {
-      ...base,
-      output: `${base.output}${event.chunk ?? ""}`.slice(-32_000),
-      status: "running",
-    };
-  }
-
-  if (event.phase === "completed") {
-    return {
-      ...base,
-      durationMs: event.durationMs,
-      exitCode: event.exitCode,
-      output: event.output ?? base.output,
-      status: "completed",
-    };
-  }
-
-  if (event.phase === "failed") {
-    return {
-      ...base,
-      durationMs: event.durationMs,
-      error: event.error,
-      exitCode: event.exitCode,
-      output: event.output ?? base.output,
-      status: "failed",
-    };
-  }
-
-  return {
-    ...base,
-    status: "running",
-  };
-}
 
 function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): {
   heading: string;
@@ -383,8 +318,8 @@ function LaunchpadEnvironmentSetupPending(props: {
             <code>{props.command ? `$ ${props.command}` : "$"}</code>
           </pre>
         </div>
-        <div className="launchpad-pending__output" aria-label="Setup output">
-          <div className="launchpad-pending__section-header">
+        <details className="launchpad-pending__output" aria-label="Setup output" open>
+          <summary className="launchpad-pending__section-header">
             <div className="launchpad-pending__command-label">
               {error ? "Output and errors" : "Output"}
             </div>
@@ -396,11 +331,11 @@ function LaunchpadEnvironmentSetupPending(props: {
                 text={renderedOutput}
               />
             ) : null}
-          </div>
+          </summary>
           <pre ref={outputRef}>
             <code>{renderedOutput || "Waiting for output..."}</code>
           </pre>
-        </div>
+        </details>
       </div>
     </section>
   );
@@ -1059,6 +994,7 @@ export type ThreadViewProps = {
   onRefreshNavigation?: () => Promise<void>;
   onReloadThread?: () => Promise<void>;
   onLiveTranscriptEntry?: (entry: AppServerThreadEntry) => void;
+  pendingLaunchpadCreation?: PendingLaunchpadCreation;
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
@@ -1320,7 +1256,9 @@ export function ThreadView(props: ThreadViewProps) {
   const [transcriptTurnPageRequestPending, setTranscriptTurnPageRequestPending] =
     useState(false);
   const [contextRailWidth, setContextRailWidth] = useState(380);
-  const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
+  const [localLaunchpadMaterializing, setLaunchpadMaterializing] = useState(false);
+  const launchpadMaterializing = Boolean(props.pendingLaunchpadCreation) || localLaunchpadMaterializing;
+  const [launchpadSubmittedInput, setLaunchpadSubmittedInput] = useState<AppServerTurnInputItem[]>([]);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
   // the main process's registry. It cannot live here: ThreadView unmounts on
   // search and on any refresh that flips `threadDetailPending`, which used to
@@ -1340,8 +1278,9 @@ export function ThreadView(props: ThreadViewProps) {
   const [setupFailureContinuing, setSetupFailureContinuing] = useState(false);
   const [setupFailureContinueError, setSetupFailureContinueError] =
     useState<string>();
-  const [launchpadSetupProgress, setLaunchpadSetupProgress] =
+  const [localLaunchpadSetupProgress, setLaunchpadSetupProgress] =
     useState<LaunchpadEnvironmentSetupProgress>();
+  const launchpadSetupProgress = props.pendingLaunchpadCreation?.setupProgress ?? localLaunchpadSetupProgress;
   const [dismissedEnvActionRunIds, setDismissedEnvActionRunIds] = useState<
     Set<string>
   >(() => new Set());
@@ -1388,6 +1327,7 @@ export function ThreadView(props: ThreadViewProps) {
     transcriptTurnPageRequestGenerationRef.current += 1;
     setTranscriptTurnPageRequestPending(false);
     setLaunchpadMaterializing(false);
+    setLaunchpadSubmittedInput([]);
     setLaunchpadMaterializeError(undefined);
     setLaunchpadSetupProgress(undefined);
     setSetupFailureContinuing(false);
@@ -3302,6 +3242,7 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       setLaunchpadMaterializing(true);
+      setLaunchpadSubmittedInput(input ?? []);
       setLaunchpadMaterializeError(undefined);
       try {
         await props.onMaterializeLaunchpad(
@@ -3386,96 +3327,107 @@ export function ThreadView(props: ThreadViewProps) {
                 }}
               />
             ) : null}
-            <div className="thread-view__launchpad-composer">
-              {launchpadMaterializing && launchpadMaterializeError ? (
-                <LaunchpadMaterializeFailure
-                  directoryLabel={selectedLaunchpad.directoryLabel}
-                  error={launchpadMaterializeError}
-                  onClose={() => {
-                    setLaunchpadMaterializing(false);
-                    setLaunchpadMaterializeError(undefined);
-                  }}
-                />
-              ) : launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
-                <LaunchpadEnvironmentSetupPending
-                  command={
-                    launchpadSetupProgress?.command ??
-                    selectedLaunchpadCodexEnvironment?.setupScript
-                  }
-                  confirmedCwd={launchpadSetupProgress?.cwd}
-                  cwd={
-                    launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath
-                  }
-                  desktopApi={props.desktopApi}
-                  directoryLabel={selectedLaunchpad.directoryLabel}
-                  environmentName={
-                    launchpadSetupProgress?.environmentName ??
-                    selectedLaunchpadCodexEnvironment?.name
-                  }
-                  progress={launchpadSetupProgress}
-                />
-              ) : launchpadMaterializing ? (
-                <section
-                  className="transcript-panel transcript-panel--pending"
-                  aria-label="Preparing transcript"
-                >
-                  <div className="launchpad-pending">
-                    <p className="eyebrow">Preparing transcript</p>
-                    <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
-                    <p>
-                      Your prompt was sent. The transcript will appear here when
-                      the thread is ready.
-                    </p>
-                  </div>
-                </section>
-              ) : (
-                <Composer
-                  backends={props.backends}
-                  applications={props.applications}
-                  codexFastAllowed={props.codexFastAllowed}
-                  providerModelDefaults={props.providerModelDefaults}
-                  desktopApi={props.desktopApi}
-                  onShowNotice={props.onShowNotice}
-                  onProviderSelected={props.onProviderSelected}
-                  composerImplementation={props.composerImplementation}
-                  draftStore={props.composerDraftStore}
-                  directory={props.selectedDirectory}
-                  directories={props.directories}
-                  disabled={launchpadBackend ? !launchpadBackend.available : false}
-                  unavailableReason={launchpadBackend?.unavailableReason}
-                  launchpad={selectedLaunchpad}
-                  launchpadError={props.launchpadError}
-                  pastedImageMaxPatches={props.pastedImageMaxPatches}
-                  pdfAnalysisEnabled={props.pdfAnalysisEnabled}
-            tokenMiserEnabled={props.tokenMiserEnabled}
-            tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
-                  fullAccessRiskWarningDismissed={
-                    props.fullAccessRiskWarningDismissed
-                  }
-                  onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-                  onDismissFullAccessRiskWarning={
-                    props.onDismissFullAccessRiskWarning
-                  }
-                  onMaterializeLaunchpad={handleMaterializeLaunchpad}
-                  onCancelLaunchpad={props.onCancelLaunchpad}
-                  onUpdateLaunchpad={props.onUpdateLaunchpad}
-                  onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
-                  onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
-                  onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
-                  threads={props.threads}
-                  onPickAndAttachDirectoryToThread={
-                    props.onPickAndAttachDirectoryToThread
-                  }
-                  onPickDirectoryForReference={props.onPickDirectoryForReference}
-                  onClearPickDirectoryError={props.onClearPickDirectoryError}
-                  pickDirectoryError={props.pickDirectoryError}
-                  pickingDirectory={props.pickingDirectory}
-                  skillError={props.skillError}
-                  skillLoading={props.skillLoading}
-                  providerCommands={props.providerCommands ?? []}
-                  skills={props.skills}
-                />
-              )}
+            <div className={`thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`}>
+              {launchpadMaterializing ? (
+                <div className="thread-view__launchpad-transcript">
+                  <article className="launchpad-submitted-message" aria-label="Submitted message">
+                    {(props.pendingLaunchpadCreation?.input ?? launchpadSubmittedInput).map((item, index) =>
+                      item.type === "text" ? <p key={index}>{item.text}</p>
+                        : item.type === "image" ? <img key={index} src={item.url} alt="Submitted attachment" />
+                        : null,
+                    )}
+                  </article>
+                  {launchpadMaterializing && launchpadMaterializeError ? (
+                    <LaunchpadMaterializeFailure
+                      directoryLabel={selectedLaunchpad.directoryLabel}
+                      error={launchpadMaterializeError}
+                      onClose={() => {
+                        setLaunchpadMaterializing(false);
+                        setLaunchpadMaterializeError(undefined);
+                      }}
+                    />
+                  ) : launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
+                    <LaunchpadEnvironmentSetupPending
+                      command={
+                        launchpadSetupProgress?.command ??
+                        selectedLaunchpadCodexEnvironment?.setupScript
+                      }
+                      confirmedCwd={launchpadSetupProgress?.cwd}
+                      cwd={
+                        launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath
+                      }
+                      desktopApi={props.desktopApi}
+                      directoryLabel={selectedLaunchpad.directoryLabel}
+                      environmentName={
+                        launchpadSetupProgress?.environmentName ??
+                        selectedLaunchpadCodexEnvironment?.name
+                      }
+                      progress={launchpadSetupProgress}
+                    />
+                  ) : launchpadMaterializing ? (
+                    <section
+                      className="transcript-panel transcript-panel--pending"
+                      aria-label="Preparing transcript"
+                    >
+                      <div className="launchpad-pending">
+                        <p className="eyebrow">Preparing transcript</p>
+                        <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
+                        <p>
+                          Your prompt was sent. The transcript will appear here when
+                          the thread is ready.
+                        </p>
+                      </div>
+                    </section>
+                  ) : null}
+                </div>
+              ) : null}
+              <Composer
+                backends={props.backends}
+                applications={props.applications}
+                codexFastAllowed={props.codexFastAllowed}
+                providerModelDefaults={props.providerModelDefaults}
+                desktopApi={props.desktopApi}
+                onShowNotice={props.onShowNotice}
+                onProviderSelected={props.onProviderSelected}
+                composerImplementation={props.composerImplementation}
+                draftStore={props.composerDraftStore}
+                directory={props.selectedDirectory}
+                directories={props.directories}
+                disabled={launchpadBackend ? !launchpadBackend.available : false}
+                unavailableReason={launchpadBackend?.unavailableReason}
+                launchpad={selectedLaunchpad}
+                launchpadMaterializing={launchpadMaterializing}
+                launchpadError={props.launchpadError}
+                pastedImageMaxPatches={props.pastedImageMaxPatches}
+                pdfAnalysisEnabled={props.pdfAnalysisEnabled}
+                tokenMiserEnabled={props.tokenMiserEnabled}
+                tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
+                fullAccessRiskWarningDismissed={
+                  props.fullAccessRiskWarningDismissed
+                }
+                onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+                onDismissFullAccessRiskWarning={
+                  props.onDismissFullAccessRiskWarning
+                }
+                onMaterializeLaunchpad={handleMaterializeLaunchpad}
+                onCancelLaunchpad={props.onCancelLaunchpad}
+                onUpdateLaunchpad={props.onUpdateLaunchpad}
+                onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
+                onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
+                onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
+                threads={props.threads}
+                onPickAndAttachDirectoryToThread={
+                  props.onPickAndAttachDirectoryToThread
+                }
+                onPickDirectoryForReference={props.onPickDirectoryForReference}
+                onClearPickDirectoryError={props.onClearPickDirectoryError}
+                pickDirectoryError={props.pickDirectoryError}
+                pickingDirectory={props.pickingDirectory}
+                skillError={props.skillError}
+                skillLoading={props.skillLoading}
+                providerCommands={props.providerCommands ?? []}
+                skills={props.skills}
+              />
             </div>
           </div>
           <ThreadContextPanel
