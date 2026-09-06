@@ -354,6 +354,7 @@ describe("useThreadSessionState", () => {
       .mockResolvedValueOnce(readThreadResponse({ entries, hasPreviousPage: false }))
       .mockResolvedValueOnce(readThreadResponse({
         entries: entries.map(({ createdAt: _createdAt, ...entry }) => entry),
+        fetchedAt: 2_000,
         hasPreviousPage: false,
       }));
     const desktopApi: DesktopApi = { onAgentEvent: () => () => undefined, readThread };
@@ -368,6 +369,7 @@ describe("useThreadSessionState", () => {
     rerender({ updatedAt: 2_000 });
     await waitFor(() => expect(readThread).toHaveBeenCalledTimes(2));
     await waitFor(() => {
+      expect(result.current.response?.fetchedAt).toBe(2_000);
       expect(result.current.entries.map((entry) => entry.createdAt)).toEqual([1_000, 10_801_000]);
       expect(result.current.response?.replay.messages.map((message) => message.createdAt)).toEqual([1_000, 10_801_000]);
     });
