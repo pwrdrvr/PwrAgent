@@ -838,6 +838,14 @@ describe("StarMapScreen", () => {
           }],
         },
       })),
+      getNavigationSelectedDetail: vi.fn(async () => ({
+        protocol: 2, ref: { backend: "codex", threadId: "remote", ownerInstanceId: "pwr_peer" },
+        revision: "detail", identity: "present", readiness: "ready", thread: remoteUnreadThread,
+      })),
+      getNavigationQueueProjection: vi.fn(async () => ({
+        protocol: 2, ref: { backend: "codex", threadId: "remote", ownerInstanceId: "pwr_peer" },
+        revision: "fifo", readiness: "ready", complete: true, entries: [],
+      })),
       getNavigationQueryPage,
       onAgentEvent: vi.fn(() => () => undefined),
       readThread: vi.fn(async () => ({

@@ -33,6 +33,7 @@ import {
   type CompactComposerSettingsMenu,
 } from "../composer/CompactComposer";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
+import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
 import { useIndependentQueueProjection } from "../../lib/useIndependentQueueProjection";
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
@@ -294,12 +295,30 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     composerScopeKey,
     { backend: thread.source, threadId: thread.id, target: federationTarget ?? { scope: "local" } },
   );
-  useIndependentQueueProjection({
+  const queueReadiness = useIndependentQueueProjection({
     composerDraftStore: ownedComposerDraftStore,
     desktopApi,
     selectedThread: thread,
     federationTarget,
   });
+  const selectedDetail = useNavigationSelectedDetail({
+    desktopApi,
+    ref: { backend: thread.source, threadId: thread.id, ownerInstanceId: remoteInstanceId },
+    federationTarget,
+  });
+  const selectedConfiguration = selectedDetail.state?.detail?.thread;
+  const composerReady = selectedDetail.state?.readiness === "ready"
+    && selectedDetail.state.detail?.identity === "present"
+    && queueReadiness.readiness === "ready";
+  const composerReadinessRef = useRef(false);
+  composerReadinessRef.current = composerReady;
+  const configurationRef = useRef(selectedConfiguration);
+  configurationRef.current = selectedConfiguration;
+  const readinessError = selectedDetail.state?.error ?? queueReadiness.error
+    ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
+      ? `This thread is ${selectedDetail.state.detail.identity}.`
+      : undefined);
+
   const subscribeQueuedTurns = useCallback(
     (listener: () => void) =>
       ownedComposerDraftStore?.subscribeQueuedTurns(listener)
@@ -662,6 +681,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
   const submitReviewSetup = useCallback(
     async (request: StarMapReviewRequest): Promise<void> => {
+      if (!composerReadinessRef.current) {
+        setReviewError("Still loading thread configuration and its queue. Try again when ready.");
+        return;
+      }
       if (!supportsReview) {
         setReviewError("Selected backend does not support reviews.");
         return;
@@ -742,6 +765,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       imageAttachments: NavigationLaunchpadImageAttachment[] = [],
       fileAttachments: NavigationLaunchpadFileAttachment[] = [],
     ): Promise<boolean> => {
+      if (!composerReadinessRef.current) {
+        setSendError("Still loading thread configuration and its queue. Try again when ready.");
+        return false;
+      }
       setSendError(undefined);
       setAttachmentError(undefined);
       setSendNotice(undefined);
@@ -1049,12 +1076,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   >({});
   const threadId = thread.id;
   const threadSource = thread.source;
-  const threadModel = optimisticSettings.model ?? thread.model;
+  const threadModel = optimisticSettings.model ?? selectedConfiguration?.model;
   const threadReasoningEffort =
-    optimisticSettings.reasoningEffort ?? thread.reasoningEffort;
-  const threadFastMode = optimisticSettings.fastMode ?? thread.fastMode;
+    optimisticSettings.reasoningEffort ?? selectedConfiguration?.reasoningEffort;
+  const threadFastMode = optimisticSettings.fastMode ?? selectedConfiguration?.fastMode;
   const threadExecutionMode =
-    optimisticSettings.executionMode ?? thread.executionMode;
+    optimisticSettings.executionMode ?? selectedConfiguration?.executionMode;
   const modelOptions = backendSummary?.launchpadOptions?.models ?? [];
   const selectedModelOption =
     modelOptions.find((option) => option.id === threadModel)
@@ -1079,21 +1106,21 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   }, [imagesSupported]);
   useEffect(() => {
     // Via the ref so the effect can key on the four scalar fields alone.
-    const summary = threadRef.current;
+    const summary = configurationRef.current;
     setOptimisticSettings((current) => {
       const kept = Object.entries(current).filter(
         ([key, value]) =>
-          summary[key as keyof NavigationThreadSummary] !== value,
+          summary?.[key as keyof NavigationThreadSummary] !== value,
       );
       return kept.length === Object.keys(current).length
         ? current
         : Object.fromEntries(kept);
     });
   }, [
-    thread.executionMode,
-    thread.fastMode,
-    thread.model,
-    thread.reasoningEffort,
+    selectedConfiguration?.executionMode,
+    selectedConfiguration?.fastMode,
+    selectedConfiguration?.model,
+    selectedConfiguration?.reasoningEffort,
   ]);
 
   /**
@@ -1106,7 +1133,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const applyExecutionMode = useCallback(
     (executionMode: ThreadExecutionMode): void => {
       const setExecutionMode = desktopApi?.setThreadExecutionMode;
-      if (!setExecutionMode) return;
+      if (!setExecutionMode || !composerReadinessRef.current) return;
       setOptimisticSettings((current) => ({
         ...current,
         executionMode,
@@ -1155,7 +1182,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         Pick<NavigationThreadSummary, "model" | "reasoningEffort" | "fastMode">
       >,
     ) => {
-      if (!setModelSettings) return;
+      if (!setModelSettings || !composerReadinessRef.current) return;
       setOptimisticSettings((current) => ({
         ...current,
         ...("model" in patch && patch.model !== undefined
@@ -1531,9 +1558,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           thread={thread}
         />
 
-        {sendError || attachmentError ? (
+        {sendError || attachmentError || readinessError ? (
           <p className="star-map-chat-card__error" role="alert">
-            {sendError ?? attachmentError}
+            {sendError ?? attachmentError ?? readinessError}
+            {readinessError ? <button onClick={() => {
+              void selectedDetail.refresh();
+              void queueReadiness.refresh();
+            }} type="button">Retry thread</button> : undefined}
           </p>
         ) : sendNotice ? (
           <p className="star-map-chat-card__notice" role="status">
@@ -1570,7 +1601,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             !federationTarget || !isRemoteFederationTarget(federationTarget)
           }
           canSteer={canSteer}
-          disabled={reviewSetupOpen || reviewSubmitting}
+          disabled={!composerReady || reviewSetupOpen || reviewSubmitting}
           draftScopeKey={composerScopeKey}
           draftStore={ownedComposerDraftStore}
           executionMode={threadExecutionMode}
