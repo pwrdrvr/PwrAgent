@@ -229,6 +229,7 @@ import {
 } from "../state/recent-file-references-store";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
@@ -5370,8 +5371,9 @@ function localBackendOperations(): FederationBackendOperations {
   return {
     async getNavigationQueryPage(request, rpcOptions) {
       return await getDesktopNavigationQueryStore().readPage({
-        loadSnapshot: async () => await messagingBridge.getNavigationSnapshot({
+        loadIndex: async () => await loadLocalNavigationQueryIndex({
           backend: request.backend,
+          callerReason: "federation-navigation-query",
         }),
         request,
         scopeKey: rpcOptions?.requesterInstanceId

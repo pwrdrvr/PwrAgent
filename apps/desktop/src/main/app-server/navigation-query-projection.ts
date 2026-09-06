@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import type {
   NavigationCounts,
+  NavigationDirectorySummary,
   NavigationDirectoryRow,
   NavigationIdentity,
   NavigationQuery,
   NavigationQueryEntry,
   NavigationQueryRequest,
   NavigationRow,
-  NavigationSnapshot,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
@@ -22,6 +22,12 @@ export type NavigationQueryMaterialization = {
   directories: NavigationDirectoryRow[];
   entries: NavigationQueryEntry[];
   queryKey: string;
+};
+
+/** Complete compact owner inventory used to answer bounded queries. */
+export type NavigationQueryIndex = {
+  directories: NavigationDirectorySummary[];
+  threads: NavigationThreadSummary[];
 };
 
 function hashValue(value: unknown): string {
@@ -238,7 +244,7 @@ function projectNavigationRow(params: {
 }
 
 function projectDirectoryGitStatus(
-  directory: NavigationSnapshot["directories"][number],
+  directory: NavigationDirectorySummary,
 ): NavigationDirectoryRow["gitStatus"] {
   const status = directory.gitStatus;
   if (!status) {
@@ -267,7 +273,7 @@ function projectDirectoryGitStatus(
 }
 
 function buildDirectoryRows(params: {
-  snapshot: NavigationSnapshot;
+  snapshot: NavigationQueryIndex;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
 }): NavigationDirectoryRow[] {
   return params.snapshot.directories.map((directory) => {
@@ -369,11 +375,11 @@ function compareDirectoryMembers(
 
 function selectQueryThreads(params: {
   query: NavigationQuery;
-  snapshot: NavigationSnapshot;
+  index: NavigationQueryIndex;
   threadsByIdentity: Map<string, NavigationThreadSummary>;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
 }): NavigationThreadSummary[] {
-  const ordinaryThreads = params.snapshot.threads.filter(isOrdinaryThread);
+  const ordinaryThreads = params.index.threads.filter(isOrdinaryThread);
   const query = params.query;
   if (query.kind === "directory-index" || query.kind === "star-map-geometry") {
     return [];
@@ -393,7 +399,7 @@ function selectQueryThreads(params: {
       .sort(query.lens === "recents" ? compareCreated : compareUpdated);
   }
   if (query.kind === "directory") {
-    const directory = params.snapshot.directories.find(
+    const directory = params.index.directories.find(
       (candidate) => candidate.key === query.directoryKey,
     );
     if (!directory) return [];
@@ -437,21 +443,21 @@ function selectQueryThreads(params: {
 }
 
 export function projectNavigationQuery(params: {
+  index: NavigationQueryIndex;
   request: NavigationQueryRequest;
-  snapshot: NavigationSnapshot;
 }): NavigationQueryMaterialization {
   const query = params.request.query;
   const threadsByIdentity = new Map(
-    params.snapshot.threads.map((thread) => [threadKey(thread), thread]),
+    params.index.threads.map((thread) => [threadKey(thread), thread]),
   );
   const threadsByLegacyKey = new Map(
-    params.snapshot.threads.map((thread) => [
+    params.index.threads.map((thread) => [
       buildThreadIdentityKey(thread.source, thread.id),
       thread,
     ]),
   );
   const childCountByParent = new Map<string, number>();
-  for (const thread of params.snapshot.threads) {
+  for (const thread of params.index.threads) {
     const parent = parentIdentity(thread);
     if (!parent || !isOrdinaryThread(thread)) continue;
     const key = identityKey(parent);
@@ -459,7 +465,7 @@ export function projectNavigationQuery(params: {
   }
   const selectedThreads = selectQueryThreads({
     query,
-    snapshot: params.snapshot,
+    index: params.index,
     threadsByIdentity,
     threadsByLegacyKey,
   });
@@ -479,7 +485,7 @@ export function projectNavigationQuery(params: {
   const includeDirectories = query.kind === "directory-index"
     || query.kind === "star-map-geometry";
   const countsThreads = query.kind === "directory"
-    ? params.snapshot.directories
+    ? params.index.directories
         .find((directory) => directory.key === query.directoryKey)
         ?.threadKeys
         .map((key) => threadsByLegacyKey.get(key))
@@ -488,11 +494,11 @@ export function projectNavigationQuery(params: {
     : query.kind === "exact"
       || query.kind === "search"
       ? selectedThreads
-      : params.snapshot.threads;
+      : params.index.threads;
   return {
     counts: countsForThreads(countsThreads),
     directories: includeDirectories
-      ? buildDirectoryRows({ snapshot: params.snapshot, threadsByLegacyKey })
+      ? buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey })
       : [],
     entries,
     queryKey: navigationQueryKey(params.request),

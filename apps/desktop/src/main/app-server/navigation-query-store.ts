@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   NavigationQueryPage,
   NavigationQueryRequest,
-  NavigationSnapshot,
 } from "@pwragent/shared";
 import {
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
@@ -12,6 +11,7 @@ import {
 import {
   navigationQueryKey,
   projectNavigationQuery,
+  type NavigationQueryIndex,
   type NavigationQueryMaterialization,
 } from "./navigation-query-projection";
 
@@ -153,7 +153,7 @@ export class NavigationQueryStore {
   ) {}
 
   async readPage(params: {
-    loadSnapshot: () => Promise<NavigationSnapshot>;
+    loadIndex: () => Promise<NavigationQueryIndex>;
     request: NavigationQueryRequest;
     scopeKey: string;
   }): Promise<NavigationQueryPage> {
@@ -182,10 +182,10 @@ export class NavigationQueryStore {
       generation = retained;
       offset = cursor.offset;
     } else {
-      const snapshot = await params.loadSnapshot();
+      const index = await params.loadIndex();
       const materialization = projectNavigationQuery({
+        index,
         request: params.request,
-        snapshot,
       });
       const revision = completeRevision(materialization);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;

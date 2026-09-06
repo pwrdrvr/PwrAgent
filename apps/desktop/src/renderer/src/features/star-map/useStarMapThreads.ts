@@ -1,68 +1,165 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  FederationPeerSummary,
-  NavigationThreadSummary,
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  NAVIGATION_QUERY_PROTOCOL_VERSION,
+  type FederationPeerSummary,
+  type NavigationCounts,
+  type NavigationDirectoryRow,
+  type NavigationIdentity,
+  type NavigationQueryEntry,
+  type NavigationQueryRequest,
+  type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 
-const REMOTE_REFRESH_INTERVAL_MS = 60_000;
+const STAR_MAP_FIRST_PAGE_ROWS = 10;
+const EVENT_REFRESH_DELAY_MS = 250;
+
+type RetainedPeerQuery = {
+  attentionThreads: NavigationThreadSummary[];
+  completeRevision?: string;
+  counts: NavigationCounts;
+  directories: NavigationDirectoryRow[];
+  exactThreads: NavigationThreadSummary[];
+  generation: string;
+  nextCursor?: string;
+  queryKey: string;
+};
 
 export type StarMapRemoteThreads = {
-  /** Owner-clock fetch time for each retained navigation snapshot. */
-  snapshotFetchedAtByInstance: Map<string, number>;
-  /** Per-instance thread lists, retained across peer reconnect churn. */
+  /** Authoritative owner totals, independent of the visible row page. */
+  countsByInstance: Map<string, NavigationCounts>;
+  /** Compact project/group geometry descriptors for each owner. */
+  directoriesByInstance: Map<string, NavigationDirectoryRow[]>;
+  /** Per-instance bounded row pages, retained across peer reconnect churn. */
   threadsByInstance: Map<string, NavigationThreadSummary[]>;
-  /** Instances whose last snapshot fetch failed (rendered as unreachable). */
+  /** Instances whose last bounded query failed (rendered as unreachable). */
   unreachableInstanceIds: Set<string>;
-  /**
-   * Instances whose cards are last-known rather than live: the peer is
-   * enrolled but not currently connected, so its cloud renders dimmed
-   * instead of vanishing.
-   */
+  /** Instances whose retained rows are last-known rather than live. */
   staleInstanceIds: Set<string>;
-  /** Refresh one owning peer and resolve only after its snapshot is applied. */
+  /** Fetch the next explicit row page for an expanded owner cloud. */
+  loadMoreInstance: (instanceId: string) => Promise<void>;
+  /** Refresh one owning peer and resolve only after its first page is applied. */
   refreshInstance: (instanceId: string) => Promise<void>;
 };
 
-type StarMapRemoteThreadState = Omit<
-  StarMapRemoteThreads,
-  "refreshInstance"
->;
+type StarMapRemoteThreadState = {
+  queriesByInstance: Map<string, RetainedPeerQuery>;
+  unreachableInstanceIds: Set<string>;
+  staleInstanceIds: Set<string>;
+};
+
+function attentionRequest(params: {
+  cursor?: string;
+  instanceId: string;
+}): NavigationQueryRequest {
+  return {
+    protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
+    consumer: "star-map",
+    federationTarget: { scope: "remote", instanceId: params.instanceId },
+    query: { kind: "lens", lens: "attention" },
+    pageSize: STAR_MAP_FIRST_PAGE_ROWS,
+    cursor: params.cursor,
+  };
+}
+
+function geometryRequest(instanceId: string): NavigationQueryRequest {
+  return {
+    protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
+    consumer: "star-map",
+    federationTarget: { scope: "remote", instanceId },
+    query: { kind: "star-map-geometry" },
+    pageSize: STAR_MAP_FIRST_PAGE_ROWS,
+  };
+}
+
+function exactRequest(params: {
+  identities: readonly NavigationIdentity[];
+  instanceId: string;
+}): NavigationQueryRequest {
+  return {
+    protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
+    consumer: "star-map",
+    federationTarget: { scope: "remote", instanceId: params.instanceId },
+    query: {
+      kind: "exact",
+      identities: params.identities.slice(0, STAR_MAP_FIRST_PAGE_ROWS),
+      includeAncestry: true,
+    },
+    pageSize: STAR_MAP_FIRST_PAGE_ROWS,
+  };
+}
+
+function threadKey(thread: NavigationThreadSummary): string {
+  return `${thread.source}:${thread.id}`;
+}
+
+function mergeThreads(
+  current: readonly NavigationThreadSummary[],
+  incoming: readonly NavigationThreadSummary[],
+): NavigationThreadSummary[] {
+  const rows = new Map(current.map((thread) => [threadKey(thread), thread]));
+  for (const thread of incoming) {
+    rows.set(threadKey(thread), thread);
+  }
+  return [...rows.values()];
+}
+
+function mergeEntries(
+  current: readonly NavigationThreadSummary[],
+  entries: readonly NavigationQueryEntry[],
+): NavigationThreadSummary[] {
+  const incoming: NavigationThreadSummary[] = [];
+  for (const entry of entries) {
+    // NavigationRow is deliberately a strict structural subset of the legacy
+    // summary. Exact card detail comes from the chat-card session instead.
+    incoming.push(entry.row);
+  }
+  return mergeThreads(current, incoming);
+}
+
+function shouldRefreshForEvent(method: string): boolean {
+  return method === "thread/started"
+    || method === "thread/archived"
+    || method === "thread/unarchived"
+    || method === "thread/status/changed"
+    || method === "thread/turnQueue/updated"
+    || method === "thread/pr/updated"
+    || method === "thread/inbox/changed"
+    || method === "turn/started"
+    || method === "turn/completed";
+}
 
 /**
- * Remote attention-thread feed for the Star Map: one navigation snapshot
- * per connected `thread_navigation` peer, refreshed on a slow tick and on
- * peer reconnects. Per-peer failures degrade that instance's cloud only.
- *
- * Retention rule: a peer's cards are dropped ONLY when the peer leaves the
- * directory entirely (revoked/removed). A peer that merely disconnects
- * keeps its last-known cards, marked stale — the federation reconnect
- * backoff tops out at 30s, so pruning on disconnect made a flapping peer's
- * whole cloud blink out and back on that cadence.
+ * Bounded remote Star Map feed. A connected owner contributes one ten-row
+ * Attention page plus compact geometry descriptors. More rows are fetched
+ * only when the operator expands that owner, while restored/open cards are
+ * requested exactly. There is intentionally no periodic collection poll.
  */
 export function useStarMapThreads(params: {
   desktopApi?: DesktopApi;
   peers: readonly FederationPeerSummary[];
   enabled: boolean;
+  demandedIdentitiesByInstance?: ReadonlyMap<
+    string,
+    readonly NavigationIdentity[]
+  >;
   /** Bump to force an immediate refetch (e.g. after intake creates a thread). */
   refreshNonce?: number;
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
   const [state, setState] = useState<StarMapRemoteThreadState>({
-    snapshotFetchedAtByInstance: new Map(),
-    threadsByInstance: new Map(),
+    queriesByInstance: new Map(),
     unreachableInstanceIds: new Set(),
     staleInstanceIds: new Set(),
   });
-  // Two identity lists as stable strings so effects re-run only when the
-  // sets actually change, not on every health object:
-  //   connected -> who we can fetch from now
-  //   known     -> who still exists at all (retention scope)
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const connectedIds = params.peers
     .filter(
       (peer) =>
         peer.status === "connected"
-        && peer.capabilities.includes("thread_navigation"),
+        && peer.capabilities.includes("thread_navigation")
+        && peer.navigationQueryProtocol === NAVIGATION_QUERY_PROTOCOL_VERSION,
     )
     .map((peer) => peer.id)
     .sort()
@@ -72,55 +169,56 @@ export function useStarMapThreads(params: {
     .sort()
     .join("\n");
   const generationRef = useRef(0);
+  const eventRefreshTimersRef = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
 
-  const refreshInstanceForGeneration = useCallback(
+  const fetchFirstPageForGeneration = useCallback(
     async (instanceId: string, generation: number): Promise<void> => {
-      if (!desktopApi?.getNavigationSnapshot) return;
+      if (!desktopApi?.getNavigationQueryPage) return;
       try {
-        const snapshot = await desktopApi.getNavigationSnapshot({
-          federationTarget: { scope: "remote", instanceId },
-        });
+        const previous = stateRef.current.queriesByInstance.get(instanceId);
+        const baseRequest = attentionRequest({ instanceId });
+        const [page, geometry] = await Promise.all([
+          desktopApi.getNavigationQueryPage({
+            ...baseRequest,
+            completeBaselineRevision: previous?.completeRevision,
+          }),
+          desktopApi.getNavigationQueryPage(geometryRequest(instanceId)),
+        ]);
         if (generationRef.current !== generation) return;
         setState((current) => {
-          const threadsByInstance = new Map(current.threadsByInstance);
-          threadsByInstance.set(instanceId, snapshot.threads);
-          const snapshotFetchedAtByInstance = new Map(
-            current.snapshotFetchedAtByInstance,
-          );
-          if (typeof snapshot.fetchedAt === "number") {
-            snapshotFetchedAtByInstance.set(instanceId, snapshot.fetchedAt);
-          }
-          const unreachableInstanceIds = new Set(
-            current.unreachableInstanceIds,
-          );
+          const queriesByInstance = new Map(current.queriesByInstance);
+          const retained = queriesByInstance.get(instanceId);
+          const attentionThreads = page.unchanged
+            ? retained?.attentionThreads ?? []
+            : mergeEntries([], page.entries);
+          queriesByInstance.set(instanceId, {
+            attentionThreads,
+            completeRevision: page.complete ? page.countsRevision : undefined,
+            counts: page.counts,
+            directories: geometry.directories ?? [],
+            exactThreads: retained?.exactThreads ?? [],
+            generation: page.generation,
+            nextCursor: page.nextCursor,
+            queryKey: page.queryKey,
+          });
+          const unreachableInstanceIds = new Set(current.unreachableInstanceIds);
           unreachableInstanceIds.delete(instanceId);
           const staleInstanceIds = new Set(current.staleInstanceIds);
           staleInstanceIds.delete(instanceId);
-          return {
-            snapshotFetchedAtByInstance,
-            threadsByInstance,
-            unreachableInstanceIds,
-            staleInstanceIds,
-          };
+          return { queriesByInstance, unreachableInstanceIds, staleInstanceIds };
         });
       } catch (error) {
         if (generationRef.current === generation) {
           setState((current) => {
-            const unreachableInstanceIds = new Set(
-              current.unreachableInstanceIds,
-            );
+            const unreachableInstanceIds = new Set(current.unreachableInstanceIds);
             unreachableInstanceIds.add(instanceId);
-            // A failed refresh keeps whatever cards we already had; the
-            // instance card carries the unreachable marker instead.
             const staleInstanceIds = new Set(current.staleInstanceIds);
-            if (current.threadsByInstance.has(instanceId)) {
+            if (current.queriesByInstance.has(instanceId)) {
               staleInstanceIds.add(instanceId);
             }
-            return {
-              ...current,
-              unreachableInstanceIds,
-              staleInstanceIds,
-            };
+            return { ...current, unreachableInstanceIds, staleInstanceIds };
           });
         }
         throw error;
@@ -131,86 +229,152 @@ export function useStarMapThreads(params: {
 
   const refreshInstance = useCallback(
     async (instanceId: string): Promise<void> => {
-      await refreshInstanceForGeneration(instanceId, generationRef.current);
+      await fetchFirstPageForGeneration(instanceId, generationRef.current);
     },
-    [refreshInstanceForGeneration],
+    [fetchFirstPageForGeneration],
   );
 
-  // Retention pass: drop only peers that left the directory, and mark
-  // everything we hold but cannot currently reach as stale.
+  const loadMoreInstance = useCallback(
+    async (instanceId: string): Promise<void> => {
+      const retained = stateRef.current.queriesByInstance.get(instanceId);
+      if (!desktopApi?.getNavigationQueryPage || !retained?.nextCursor) return;
+      const generation = generationRef.current;
+      const page = await desktopApi.getNavigationQueryPage(
+        attentionRequest({ cursor: retained.nextCursor, instanceId }),
+      );
+      if (generationRef.current !== generation) return;
+      setState((current) => {
+        const existing = current.queriesByInstance.get(instanceId);
+        if (!existing || existing.generation !== page.generation) return current;
+        const queriesByInstance = new Map(current.queriesByInstance);
+        queriesByInstance.set(instanceId, {
+          ...existing,
+          completeRevision: page.complete ? page.countsRevision : undefined,
+          counts: page.counts,
+          nextCursor: page.nextCursor,
+          attentionThreads: mergeEntries(existing.attentionThreads, page.entries),
+        });
+        return { ...current, queriesByInstance };
+      });
+    },
+    [desktopApi],
+  );
+
   useEffect(() => {
     const known = new Set(knownIds.length > 0 ? knownIds.split("\n") : []);
     const connected = new Set(
       connectedIds.length > 0 ? connectedIds.split("\n") : [],
     );
     setState((current) => {
-      const nextThreads = new Map(
-        [...current.threadsByInstance].filter(([instanceId]) =>
-          known.has(instanceId),
-        ),
+      const queriesByInstance = new Map(
+        [...current.queriesByInstance].filter(([instanceId]) => known.has(instanceId)),
       );
-      const nextSnapshotFetchedAt = new Map(
-        [...current.snapshotFetchedAtByInstance].filter(([instanceId]) =>
-          known.has(instanceId),
-        ),
+      const unreachableInstanceIds = new Set(
+        [...current.unreachableInstanceIds].filter((instanceId) => known.has(instanceId)),
       );
-      const nextUnreachable = new Set(
-        [...current.unreachableInstanceIds].filter((instanceId) =>
-          known.has(instanceId),
-        ),
+      const staleInstanceIds = new Set(
+        [...queriesByInstance.keys()].filter((instanceId) => !connected.has(instanceId)),
       );
-      const nextStale = new Set(
-        [...nextThreads.keys()].filter(
-          (instanceId) => !connected.has(instanceId),
-        ),
-      );
-      const unchanged =
-        nextThreads.size === current.threadsByInstance.size
-        && nextSnapshotFetchedAt.size
-          === current.snapshotFetchedAtByInstance.size
-        && nextUnreachable.size === current.unreachableInstanceIds.size
-        && nextStale.size === current.staleInstanceIds.size
-        && [...nextStale].every((instanceId) =>
-          current.staleInstanceIds.has(instanceId),
-        );
-      if (unchanged) return current;
-      return {
-        snapshotFetchedAtByInstance: nextSnapshotFetchedAt,
-        threadsByInstance: nextThreads,
-        unreachableInstanceIds: nextUnreachable,
-        staleInstanceIds: nextStale,
-      };
+      return { queriesByInstance, unreachableInstanceIds, staleInstanceIds };
     });
   }, [connectedIds, knownIds]);
 
   useEffect(() => {
-    if (!params.enabled || !desktopApi?.getNavigationSnapshot) {
-      return;
-    }
+    const getNavigationQueryPage = desktopApi?.getNavigationQueryPage;
+    if (!params.enabled || !getNavigationQueryPage) return;
     const instanceIds = connectedIds.length > 0 ? connectedIds.split("\n") : [];
     const generation = (generationRef.current += 1);
-
-    const fetchAll = () => {
-      for (const instanceId of instanceIds) {
-        void refreshInstanceForGeneration(instanceId, generation).catch(
-          () => undefined,
-        );
-      }
-    };
-
-    fetchAll();
-    const timer = setInterval(fetchAll, REMOTE_REFRESH_INTERVAL_MS);
+    for (const instanceId of instanceIds) {
+      void fetchFirstPageForGeneration(instanceId, generation).catch(() => undefined);
+    }
     return () => {
       generationRef.current += 1;
-      clearInterval(timer);
     };
   }, [
     connectedIds,
-    desktopApi?.getNavigationSnapshot,
+    desktopApi?.getNavigationQueryPage,
+    fetchFirstPageForGeneration,
     params.enabled,
     params.refreshNonce,
-    refreshInstanceForGeneration,
   ]);
 
-  return { ...state, refreshInstance };
+  useEffect(() => {
+    const getNavigationQueryPage = desktopApi?.getNavigationQueryPage;
+    if (!params.enabled || !getNavigationQueryPage) return;
+    const generation = generationRef.current;
+    for (const [instanceId, identities] of params.demandedIdentitiesByInstance ?? []) {
+      if (identities.length === 0) continue;
+      void (async () => {
+        if (!stateRef.current.queriesByInstance.has(instanceId)) {
+          await refreshInstance(instanceId);
+        }
+        const page = await getNavigationQueryPage(
+          exactRequest({ identities, instanceId }),
+        );
+        if (generationRef.current !== generation) return;
+        setState((current) => {
+          const existing = current.queriesByInstance.get(instanceId);
+          if (!existing) return current;
+          const queriesByInstance = new Map(current.queriesByInstance);
+          queriesByInstance.set(instanceId, {
+            ...existing,
+            exactThreads: mergeEntries([], page.entries),
+          });
+          return { ...current, queriesByInstance };
+        });
+      })().catch(() => undefined);
+    }
+  }, [
+    desktopApi,
+    params.demandedIdentitiesByInstance,
+    params.enabled,
+    refreshInstance,
+  ]);
+
+  useEffect(() => {
+    if (!params.enabled) return;
+    const unsubscribe = desktopApi?.onAgentEvent?.((event) => {
+      const target = event.federationTarget;
+      if (
+        target?.scope !== "remote"
+        || !shouldRefreshForEvent(event.notification.method)
+      ) return;
+      const instanceId = target.instanceId;
+      const timers = eventRefreshTimersRef.current;
+      if (timers.has(instanceId)) return;
+      timers.set(instanceId, setTimeout(() => {
+        timers.delete(instanceId);
+        void refreshInstance(instanceId).catch(() => undefined);
+      }, EVENT_REFRESH_DELAY_MS));
+    });
+    const timers = eventRefreshTimersRef.current;
+    return () => {
+      unsubscribe?.();
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, [desktopApi, params.enabled, refreshInstance]);
+
+  const result = useMemo(() => {
+    const countsByInstance = new Map<string, NavigationCounts>();
+    const directoriesByInstance = new Map<string, NavigationDirectoryRow[]>();
+    const threadsByInstance = new Map<string, NavigationThreadSummary[]>();
+    for (const [instanceId, query] of state.queriesByInstance) {
+      countsByInstance.set(instanceId, query.counts);
+      directoriesByInstance.set(instanceId, query.directories);
+      threadsByInstance.set(
+        instanceId,
+        mergeThreads(query.attentionThreads, query.exactThreads),
+      );
+    }
+    return { countsByInstance, directoriesByInstance, threadsByInstance };
+  }, [state.queriesByInstance]);
+
+  return {
+    ...result,
+    loadMoreInstance,
+    refreshInstance,
+    staleInstanceIds: state.staleInstanceIds,
+    unreachableInstanceIds: state.unreachableInstanceIds,
+  };
 }

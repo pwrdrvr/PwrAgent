@@ -58,9 +58,9 @@ describe("NavigationQueryStore", () => {
       Array.from({ length: 25 }, (_, index) => thread(String(index + 1))),
     );
     const store = new NavigationQueryStore();
-    const loadSnapshot = async (): Promise<NavigationSnapshot> => owner;
+    const loadIndex = async (): Promise<NavigationSnapshot> => owner;
     const first = await store.readPage({
-      loadSnapshot,
+      loadIndex,
       request: request({ pageSize: 10 }),
       scopeKey: "local-window",
     });
@@ -69,7 +69,7 @@ describe("NavigationQueryStore", () => {
 
     owner = snapshot([thread("26"), ...owner.threads]);
     const second = await store.readPage({
-      loadSnapshot,
+      loadIndex,
       request: request({ cursor: first.nextCursor, pageSize: 10 }),
       scopeKey: "local-window",
     });
@@ -85,16 +85,16 @@ describe("NavigationQueryStore", () => {
   it("unchanged_requires_a_complete_matching_query_baseline", async () => {
     const owner = snapshot([thread("1"), thread("2")]);
     const store = new NavigationQueryStore();
-    const loadSnapshot = async (): Promise<NavigationSnapshot> => owner;
+    const loadIndex = async (): Promise<NavigationSnapshot> => owner;
     const first = await store.readPage({
-      loadSnapshot,
+      loadIndex,
       request: request(),
       scopeKey: "local-window",
     });
     expect(first.complete).toBe(true);
 
     const unchanged = await store.readPage({
-      loadSnapshot,
+      loadIndex,
       request: request({ completeBaselineRevision: first.countsRevision }),
       scopeKey: "local-window",
     });
@@ -106,7 +106,7 @@ describe("NavigationQueryStore", () => {
     expect(Buffer.byteLength(JSON.stringify(unchanged), "utf8")).toBeLessThan(1024);
 
     const otherQuery = await store.readPage({
-      loadSnapshot,
+      loadIndex,
       request: request({
         completeBaselineRevision: first.countsRevision,
         query: { kind: "lens", lens: "inbox" },
@@ -124,7 +124,7 @@ describe("NavigationQueryStore", () => {
         thread(String(index + 1), `Thread ${index + 1} ${"x".repeat(4_000)}`)),
     );
     const page = await store.readPage({
-      loadSnapshot: async () => owner,
+      loadIndex: async () => owner,
       request: request(),
       scopeKey: "local-window",
     });
@@ -134,7 +134,7 @@ describe("NavigationQueryStore", () => {
       .toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
 
     await expect(store.readPage({
-      loadSnapshot: async () => snapshot([thread("large", "x".repeat(300_000))]),
+      loadIndex: async () => snapshot([thread("large", "x".repeat(300_000))]),
       request: request({ query: { kind: "lens", lens: "inbox" } }),
       scopeKey: "local-window",
     })).rejects.toMatchObject({
@@ -149,14 +149,14 @@ describe("NavigationQueryStore", () => {
       Array.from({ length: 5 }, (_, index) => thread(String(index + 1))),
     );
     const first = await store.readPage({
-      loadSnapshot: async () => owner,
+      loadIndex: async () => owner,
       request: request({ pageSize: 1 }),
       scopeKey: "local-window",
     });
     now += 60_001;
 
     await expect(store.readPage({
-      loadSnapshot: async () => owner,
+      loadIndex: async () => owner,
       request: request({ cursor: first.nextCursor, pageSize: 1 }),
       scopeKey: "local-window",
     })).rejects.toMatchObject({
