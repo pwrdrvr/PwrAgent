@@ -1464,6 +1464,261 @@ export type NavigationSnapshotTransportResponse =
   | NavigationSnapshotTransportDelta
   | NavigationSnapshotTransportChanges;
 
+/**
+ * Versioned, bounded replacement for the alpha NavigationSnapshot collection.
+ *
+ * This version belongs to the application read contract. It is deliberately
+ * independent of the federation framing and authorization versions: knowing
+ * how to read a page must never expand a peer's grants.
+ */
+export const NAVIGATION_QUERY_PROTOCOL_VERSION = 2 as const;
+export const NAVIGATION_QUERY_MAX_PAGE_ROWS = 100;
+/** 256 KiB application message minus the reserved 4 KiB outer envelope. */
+export const NAVIGATION_QUERY_MAX_RESULT_BYTES = 252 * 1024;
+
+export type NavigationQueryConsumerClass =
+  | "main-sidebar"
+  | "remote-window"
+  | "star-map"
+  | "search"
+  | "mentions"
+  | "exact-link"
+  | "messaging-browse"
+  | "agent-tool";
+
+export type NavigationIdentity = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Omitted for the instance serving the page. */
+  ownerInstanceId?: FederationInstanceId;
+};
+
+export type NavigationCounts = {
+  /** Distinct ordinary threads. Native workers are not independent rows. */
+  total: number;
+  active: number;
+  unread: number;
+  /** Unread and idle. Active and review are exclusive in sidebar counts. */
+  review: number;
+};
+
+export type NavigationQueryCoverage = {
+  state: "checking" | "degraded" | "complete";
+  failedProviders?: number;
+  pendingProviders?: number;
+};
+
+export type NavigationRowFederation = {
+  ref: FederatedThreadRef;
+  instanceLabel: string;
+  peerStatus?: FederationPeerSummary["status"];
+  capabilities?: FederationCapability[];
+  derivedFromMountedParent?: boolean;
+  celestialIcon?: CelestialIconId;
+};
+
+export type NavigationRowAgent = {
+  name: string;
+  instructionLineCount: number;
+  instructionsTooLong: boolean;
+  updatedAt: number;
+};
+
+/**
+ * Explicit collection row. Keep this an allowlist rather than deriving it
+ * from NavigationThreadSummary: adding a detail field to that legacy type must
+ * not expand cold navigation traffic.
+ *
+ * `id`, `source`, `linkedDirectories`, and `inbox` intentionally retain the
+ * renderer's ordinary row vocabulary during the migration. `ref` is the
+ * durable protocol identity; consumers must use it for owner-routed reads.
+ */
+export type NavigationRow = {
+  ref: NavigationIdentity;
+  rowRevision: string;
+  id: ThreadIdentifier;
+  source: AppServerBackendKind;
+  title: string;
+  titleSource: NavigationThreadSummary["titleSource"];
+  createdAt?: number;
+  updatedAt?: number;
+  archivedAt?: number;
+  threadStatus?: AppServerThreadStatus;
+  inbox: ThreadInboxState;
+  projectKey?: string;
+  linkedDirectories: LinkedDirectorySummary[];
+  linkedDirectoriesTruncated?: boolean;
+  gitBranch?: string;
+  gitOriginUrl?: string;
+  observedGitBranch?: string;
+  gitWorkingState?: ThreadGitWorkingState;
+  gitWorkingStateFetchedAt?: number;
+  primaryGitRepository?: string;
+  federation?: NavigationRowFederation;
+  pinnedRank?: string;
+  parentThreadId?: ThreadIdentifier;
+  parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: FederationInstanceId;
+  ordinaryChildCount: number;
+  nativeSubAgentGroupPresent: boolean;
+  nativeSubAgentCount?: number;
+  subthreadsCollapsed?: boolean;
+  reactions?: string[];
+  reactionsTruncated?: boolean;
+  prs?: PrSummary[];
+  prsTruncated?: boolean;
+  messagingBindings?: MessagingThreadBindingSummary[];
+  messagingBindingsTruncated?: boolean;
+  automationSummary?: AutomationThreadSummary;
+  agent?: NavigationRowAgent;
+  executionMode?: ThreadExecutionMode;
+  model?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+  workspaceHandoff?: {
+    available: boolean;
+    unavailableReason?: string;
+  };
+  queueCount: number;
+  queueState: "unknown" | "ready";
+  queuedExecutionMode?: ThreadExecutionMode;
+  prAutoDispatchEnabled?: boolean;
+  scheduledStart?: ThreadScheduledStart;
+};
+
+export type NavigationDirectoryRow = {
+  key: string;
+  kind: DirectorySummaryKind;
+  label: string;
+  path?: string;
+  localAvailability?: "unconfigured";
+  counts: NavigationCounts;
+  pinnedRootCount: number;
+  unpinnedRootCount: number;
+  latestUpdatedAt?: number;
+  pinnedRank?: string;
+  directoryThreadsCollapsed?: boolean;
+  gitStatus?: {
+    currentBranch?: string;
+    defaultBranch?: string;
+    upstreamBranch?: string;
+    ahead?: number;
+    behind?: number;
+    syncState?: NavigationDirectoryGitStatus["syncState"];
+    statusUnavailableReason?: string;
+    worktreeCreationAvailable?: boolean;
+    worktreeCreationUnavailableReason?: string;
+  };
+  /** Launchpad existence only. Read the launchpad/config resource on demand. */
+  launchpadPresent: boolean;
+};
+
+export type NavigationQuery =
+  | {
+      kind: "directory-index";
+    }
+  | {
+      kind: "lens";
+      lens: "attention" | "inbox" | "recents";
+      filter?: string;
+    }
+  | {
+      kind: "directory";
+      directoryKey: string;
+      /** Parent rows whose children are explicitly disclosed by the viewer. */
+      disclosedParentThreadKeys?: string[];
+    }
+  | {
+      kind: "exact";
+      identities: NavigationIdentity[];
+      includeAncestry?: boolean;
+    }
+  | {
+      kind: "search";
+      text: string;
+    }
+  | {
+      kind: "star-map-geometry";
+    };
+
+export type NavigationQueryRequest = {
+  protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  consumer: NavigationQueryConsumerClass;
+  backend?: AppServerBackendScope;
+  federationTarget?: FederationTarget;
+  query: NavigationQuery;
+  /** At most 100. Owners may return fewer rows to satisfy the byte budget. */
+  pageSize?: number;
+  cursor?: string;
+  /** Unchanged is legal only for a complete baseline of this exact query. */
+  completeBaselineRevision?: string;
+};
+
+export type NavigationQueryPlacement =
+  | { kind: "root" }
+  | { kind: "child"; parent: NavigationIdentity };
+
+export type NavigationQueryEntry = {
+  row: NavigationRow;
+  /** Opaque within this query generation; compare only inside this page set. */
+  orderKey: string;
+  placement: NavigationQueryPlacement;
+};
+
+export type NavigationQueryPage = {
+  protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  queryKey: string;
+  generation: string;
+  ownerEpoch: string;
+  countsRevision: string;
+  coverage: NavigationQueryCoverage;
+  counts: NavigationCounts;
+  entries: NavigationQueryEntry[];
+  directories?: NavigationDirectoryRow[];
+  nextCursor?: string;
+  complete: boolean;
+  unchanged?: boolean;
+};
+
+export type NavigationSelectedDetailRequest = {
+  protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  ref: NavigationIdentity;
+  federationTarget?: FederationTarget;
+  knownRevision?: string;
+};
+
+export type NavigationSelectedDetailResponse = {
+  protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  ref: NavigationIdentity;
+  revision: string;
+  readiness: "ready" | "failed";
+  identity: "present" | "archived" | "deleted" | "denied" | "unresolved";
+  /** Exact-thread compatibility detail; large collections migrate separately. */
+  thread?: NavigationThreadSummary;
+  unchanged?: boolean;
+};
+
+export type NavigationQueueProjectionRequest = {
+  protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  ref: NavigationIdentity;
+  federationTarget?: FederationTarget;
+  knownRevision?: string;
+  cursor?: string;
+};
+
+export type NavigationQueueProjection = {
+  protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  ref: NavigationIdentity;
+  revision: string;
+  readiness: "loading" | "ready" | "failed";
+  complete: boolean;
+  entries: ThreadQueuedTurnSummary[];
+  queuedExecutionMode?: ThreadExecutionMode;
+  nextCursor?: string;
+  unchanged?: boolean;
+};
+
 export type SetNavigationBrowseModeRequest = {
   browseMode: NavigationBrowseMode;
 };
