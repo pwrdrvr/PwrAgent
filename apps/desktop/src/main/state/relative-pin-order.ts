@@ -1,11 +1,11 @@
-import type { NavigationRelativePinMove } from "@pwragent/shared";
+import { comparePinRanks, type NavigationRelativePinMove } from "@pwragent/shared";
 
 /** Resolve an action against owner metadata inside the caller's write transaction. */
 export function moveRelativePin(
   pins: readonly { key: string; rank: string }[],
   move: NavigationRelativePinMove,
 ): string[] {
-  const keys = [...pins].sort((left, right) => Number(left.rank) - Number(right.rank)
+  const keys = [...pins].sort((left, right) => comparePinRanks(left.rank, right.rank)
     || left.key.localeCompare(right.key)).map((pin) => pin.key);
   const index = keys.indexOf(move.key);
   if (index < 0) throw new Error("The pin no longer exists. Refresh navigation and try again.");

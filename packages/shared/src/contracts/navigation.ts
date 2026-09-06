@@ -1580,6 +1580,7 @@ export type NavigationRow = {
     available: boolean;
     unavailableReason?: string;
   };
+  needsInput?: boolean;
   queueCount: number;
   queueState: "unknown" | "ready";
   queuedExecutionMode?: ThreadExecutionMode;
@@ -1614,6 +1615,14 @@ export type NavigationDirectoryRow = {
   launchpadPresent: boolean;
 };
 
+export type NavigationStarMapFilterKey = "attention" | "approval" | "pr" | "unpushed" | "pinned" | "agent";
+export type NavigationStarMapFilterSelection = Partial<Record<NavigationStarMapFilterKey, "neutral" | "include" | "exclude">>;
+export type NavigationStarMapFacetCounts = {
+  matches: Record<NavigationStarMapFilterKey, number>;
+  active: number;
+  unread: number;
+};
+
 export type NavigationQuery =
   | {
       kind: "directory-index";
@@ -1638,6 +1647,10 @@ export type NavigationQuery =
   | {
       kind: "search";
       text: string;
+    }
+  | {
+      kind: "star-map";
+      filters: NavigationStarMapFilterSelection;
     }
   | {
       kind: "star-map-geometry";
@@ -1682,6 +1695,7 @@ export type NavigationQueryPage = {
   countsRevision: string;
   coverage: NavigationQueryCoverage;
   counts: NavigationCounts;
+  facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
   directories?: NavigationDirectoryRow[];
   nextCursor?: string;

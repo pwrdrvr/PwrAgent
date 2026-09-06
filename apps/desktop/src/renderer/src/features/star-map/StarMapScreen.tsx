@@ -1096,6 +1096,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     peers,
     enabled: true,
     demandedIdentitiesByInstance,
+    filters: filterSelection,
     refreshNonce: remoteRefreshNonce,
   });
   const federationLayoutReady =
@@ -1238,6 +1239,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         withLocalEdits(
           selectFilteredThreads({
             threads,
+            ownerMatched: true,
             selection: filterSelection,
             // Peers get the session keys too. Withholding them dropped
             // half of `isThreadActive` for every remote thread — a peer's
@@ -1616,18 +1618,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
           || !isRemoteFederationTarget(thread.federation.ref.target),
       ),
     });
-    for (const threads of remote.threadsByInstance.values()) {
-      counts = addFilterMatchCounts(
-        counts,
-        // See `attentionByInstance`: the counts have to ask the same
-        // question the filter does, or a chip reports a number the map
-        // then declines to draw.
-        countFilterMatches({
-          selection: filterSelection,
-          sessionKeys: props.sessionKeys,
-          threads,
-        }),
-      );
+    for (const facets of remote.facetsByInstance.values()) {
+      counts = addFilterMatchCounts(counts, facets.matches);
     }
     return counts;
   }, [filterSelection, props.localThreads, props.sessionKeys, remote]);
@@ -1650,15 +1642,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
           || !isRemoteFederationTarget(thread.federation.ref.target),
       ),
     });
-    for (const threads of remote.threadsByInstance.values()) {
-      counts = addAttentionCounts(
-        counts,
-        countAttentionSignals({
-          selection: filterSelection,
-          sessionKeys: props.sessionKeys,
-          threads,
-        }),
-      );
+    for (const facets of remote.facetsByInstance.values()) {
+      counts = addAttentionCounts(counts, { activeLocal: 0, activeRemote: facets.active, unread: facets.unread });
     }
     return counts;
   }, [filterSelection, props.localThreads, props.sessionKeys, remote]);

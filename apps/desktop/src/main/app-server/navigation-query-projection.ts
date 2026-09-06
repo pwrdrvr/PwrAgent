@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type {
   NavigationCounts,
+  NavigationStarMapFacetCounts,
+  NavigationStarMapSignals,
   NavigationDirectorySummary,
   NavigationDirectoryRow,
   NavigationIdentity,
@@ -12,6 +14,9 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  comparePinnedThreads,
+  countNavigationStarMapFacets,
+  passesNavigationStarMapFilters,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   rankThreadJumpMatches,
 } from "@pwragent/shared";
@@ -24,6 +29,7 @@ const MAX_ROW_NESTED_RECORDS = 16;
 
 export type NavigationQueryMaterialization = {
   counts: NavigationCounts;
+  facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
   entries: NavigationQueryEntry[];
   queryKey: string;
@@ -33,6 +39,7 @@ export type NavigationQueryMaterialization = {
 export type NavigationQueryIndex = {
   directories: NavigationDirectorySummary[];
   threads: NavigationThreadSummary[];
+  inputRequestThreadKeys?: ReadonlySet<string>;
 };
 
 function hashValue(value: unknown): string {
@@ -129,6 +136,7 @@ function limitRecords<T>(items: readonly T[] | undefined): {
 
 function projectNavigationRow(params: {
   childCount: number;
+  needsInput: boolean;
   thread: NavigationThreadSummary;
 }): NavigationRow {
   const { thread } = params;
@@ -232,6 +240,7 @@ function projectNavigationRow(params: {
     ...(thread.workspaceHandoff
       ? { workspaceHandoff: thread.workspaceHandoff }
       : {}),
+    needsInput: params.needsInput,
     queueCount: thread.queuedTurns?.length ?? 0,
     queueState: thread.queuedTurns ? "ready" as const : "unknown" as const,
     ...(thread.queuedExecutionMode
@@ -313,6 +322,10 @@ function buildDirectoryRows(params: {
 }
 
 function normalizeQuery(query: NavigationQuery): NavigationQuery {
+  if (query.kind === "star-map") {
+    return { kind: "star-map", filters: Object.fromEntries(Object.entries(query.filters)
+      .filter(([, value]) => value !== "neutral").sort(([left], [right]) => left.localeCompare(right))) };
+  }
   if (query.kind === "lens" || query.kind === "directory-index") {
     return {
       ...query,
@@ -372,10 +385,31 @@ function compareDirectoryMembers(
     return left.pinnedRank ? -1 : 1;
   }
   if (left.pinnedRank && right.pinnedRank) {
-    const pinned = left.pinnedRank.localeCompare(right.pinnedRank);
+    const pinned = comparePinnedThreads(left, right);
     if (pinned !== 0) return pinned;
   }
   return compareCreated(left, right);
+}
+
+function isStarMapOwnerThread(thread: NavigationThreadSummary): boolean {
+  return isOrdinaryThread(thread) && thread.archivedAt === undefined
+    && thread.federation?.ref.target.scope !== "remote";
+}
+
+function starMapSignals(thread: NavigationThreadSummary, index: NavigationQueryIndex): NavigationStarMapSignals {
+  const active = isActive(thread);
+  const unread = thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen";
+  return {
+    active,
+    unread,
+    attention: active || unread,
+    approval: !thread.federation && (index.inputRequestThreadKeys?.has(buildThreadIdentityKey(thread.source, thread.id)) ?? false),
+    pr: thread.prs?.some((pr) => pr.state !== "merged" && pr.state !== "closed"
+      && pr.lifecycleState !== "merged" && pr.lifecycleState !== "closed") ?? false,
+    unpushed: (thread.gitWorkingState?.unpushedCommits ?? 0) > 0,
+    pinned: thread.pinnedRank !== undefined,
+    agent: thread.agent !== undefined,
+  };
 }
 
 function selectQueryThreads(params: {
@@ -388,6 +422,16 @@ function selectQueryThreads(params: {
   const query = params.query;
   if (query.kind === "directory-index" || query.kind === "star-map-geometry") {
     return [];
+  }
+  if (query.kind === "star-map") {
+    return ordinaryThreads.filter(isStarMapOwnerThread)
+      .filter((thread) => (thread.pinnedRank !== undefined && query.filters.pinned !== "exclude")
+        || passesNavigationStarMapFilters(starMapSignals(thread, params.index), query.filters))
+      .sort((left, right) => {
+        if ((left.pinnedRank !== undefined) !== (right.pinnedRank !== undefined)) return left.pinnedRank !== undefined ? -1 : 1;
+        return left.pinnedRank !== undefined && right.pinnedRank !== undefined
+          ? comparePinnedThreads(left, right) : compareUpdated(left, right);
+      });
   }
   if (query.kind === "lens") {
     const filter = query.filter?.trim().toLowerCase();
@@ -474,17 +518,24 @@ export function projectNavigationQuery(params: {
     threadsByIdentity,
     threadsByLegacyKey,
   });
-  if (query.kind === "lens" && query.lens === "attention" && params.attentionOrder) {
+  if (((query.kind === "lens" && query.lens === "attention")
+    || (query.kind === "star-map" && query.filters.attention === "include")) && params.attentionOrder) {
     const members = params.attentionOrder.members;
-    selectedThreads.sort((left, right) =>
-      (members.get(navigationAttentionIdentity(right))?.rank ?? 0)
-      - (members.get(navigationAttentionIdentity(left))?.rank ?? 0));
+    selectedThreads.sort((left, right) => {
+      if (query.kind === "star-map") {
+        if ((left.pinnedRank !== undefined) !== (right.pinnedRank !== undefined)) return left.pinnedRank !== undefined ? -1 : 1;
+        if (left.pinnedRank !== undefined && right.pinnedRank !== undefined) return comparePinnedThreads(left, right);
+      }
+      return (members.get(navigationAttentionIdentity(right))?.rank ?? 0)
+        - (members.get(navigationAttentionIdentity(left))?.rank ?? 0);
+    });
   }
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread);
     return {
       row: projectNavigationRow({
         childCount: childCountByParent.get(threadKey(thread)) ?? 0,
+        needsInput: starMapSignals(thread, params.index).approval,
         thread,
       }),
       orderKey: rowOrderKey(index),
@@ -505,12 +556,21 @@ export function projectNavigationQuery(params: {
         .map((key) => threadsByLegacyKey.get(key))
         .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
       ?? []
-    : query.kind === "exact"
+    : query.kind === "star-map"
+      ? params.index.threads.filter(isStarMapOwnerThread)
+      : query.kind === "exact"
       || query.kind === "search"
       ? selectedThreads
       : params.index.threads;
   return {
     counts: countsForThreads(countsThreads),
+    ...(query.kind === "star-map" ? {
+      facets: countNavigationStarMapFacets(
+        [...new Map(params.index.threads.filter(isStarMapOwnerThread).map((thread) => [threadKey(thread), thread])).values()]
+          .map((thread) => starMapSignals(thread, params.index)),
+        query.filters,
+      ),
+    } : {}),
     directories: includeDirectories
       ? buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey })
           .filter((directory) => query.kind !== "directory-index"

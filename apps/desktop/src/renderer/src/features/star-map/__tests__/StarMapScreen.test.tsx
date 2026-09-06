@@ -808,7 +808,7 @@ describe("StarMapScreen", () => {
     const onUserRepliedToThread = vi.fn(() => markSeen.promise);
     let attentionReads = 0;
     const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => {
-      if (request.query.kind !== "lens") return queryPage(request, []);
+      if (request.query.kind !== "star-map") return queryPage(request, []);
       attentionReads += 1;
       return queryPage(
         request,
