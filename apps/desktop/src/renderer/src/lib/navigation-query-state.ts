@@ -94,6 +94,8 @@ export function applyNavigationPage(params: {
     if (page.nextCursor === cursor) throw new Error("Navigation continuation did not advance.");
     const directories = new Map((previous.directories ?? []).map((directory) => [directory.key, directory]));
     for (const directory of page.directories ?? []) directories.set(directory.key, directory);
+    const modelGroups = new Map((previous.modelGroups ?? []).map((group) => [JSON.stringify([group.backend, group.model, group.modelMigrationRevision]), group]));
+    for (const group of page.modelGroups ?? []) modelGroups.set(JSON.stringify([group.backend, group.model, group.modelMigrationRevision]), group);
     return {
       ...state,
       stale: false,
@@ -101,6 +103,7 @@ export function applyNavigationPage(params: {
       page: {
         ...page,
         entries: mergeEntries(previous.entries, page.entries),
+        ...(previous.modelGroups || page.modelGroups ? { modelGroups: [...modelGroups.values()] } : {}),
         ...(previous.directories || page.directories ? { directories: [...directories.values()] } : {}),
       },
     };

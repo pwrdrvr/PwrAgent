@@ -315,9 +315,9 @@ export class NavigationQueryStore {
     ownerEpoch: string;
     pageSize: number;
   }): NavigationQueryPage {
-    const collection = params.generation.materialization.directories.length > 0
-      ? params.generation.materialization.directories
-      : params.generation.materialization.entries;
+    const materialization = params.generation.materialization;
+    const collectionKind = materialization.modelGroups ? "models" : materialization.directories.length > 0 ? "directories" : "entries";
+    const collection = materialization.modelGroups ?? (collectionKind === "directories" ? materialization.directories : materialization.entries);
     if (params.offset > collection.length) {
       throw new NavigationQueryError(
         "navigation_invalid_request",
@@ -330,9 +330,7 @@ export class NavigationQueryStore {
         ownerEpoch: params.ownerEpoch,
       }),
       entries: [],
-      ...(params.generation.materialization.directories.length > 0
-        ? { directories: [] }
-        : {}),
+      ...(collectionKind === "models" ? { modelGroups: [] } : collectionKind === "directories" ? { directories: [] } : {}),
       complete: false,
     };
     let nextOffset = params.offset;
@@ -342,7 +340,9 @@ export class NavigationQueryStore {
       nextOffset += 1
     ) {
       const item = collection[nextOffset]!;
-      const candidate = params.generation.materialization.directories.length > 0
+      const candidate = collectionKind === "models"
+        ? { ...page, modelGroups: [...(page.modelGroups ?? []), item] }
+        : collectionKind === "directories"
         ? {
             ...page,
             directories: [...(page.directories ?? []), item],
@@ -369,7 +369,9 @@ export class NavigationQueryStore {
         }
         break;
       }
-      if (params.generation.materialization.directories.length > 0) {
+      if (collectionKind === "models") {
+        page.modelGroups!.push(item as NonNullable<NavigationQueryPage["modelGroups"]>[number]);
+      } else if (collectionKind === "directories") {
         page.directories!.push(item as NonNullable<NavigationQueryPage["directories"]>[number]);
       } else {
         page.entries.push(item as NavigationQueryPage["entries"][number]);

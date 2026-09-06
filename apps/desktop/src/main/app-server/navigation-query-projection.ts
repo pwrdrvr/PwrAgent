@@ -8,6 +8,7 @@ import type {
   NavigationIdentity,
   NavigationQuery,
   NavigationQueryEntry,
+  NavigationModelInventoryRow,
   NavigationQueryRequest,
   NavigationRow,
   NavigationThreadSummary,
@@ -33,6 +34,7 @@ export type NavigationQueryMaterialization = {
   facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
   entries: NavigationQueryEntry[];
+  modelGroups?: NavigationModelInventoryRow[];
   queryKey: string;
 };
 
@@ -318,6 +320,7 @@ function buildDirectoryRows(params: {
         : {}),
       ...(gitStatus ? { gitStatus } : {}),
       launchpadPresent: Boolean(directory.launchpad),
+      ...(directory.launchpad?.backend ? { launchpadBackend: directory.launchpad.backend } : {}),
     };
   });
 }
@@ -463,7 +466,7 @@ function selectQueryThreads(params: {
 }): NavigationThreadSummary[] {
   const ordinaryThreads = params.index.threads.filter(isOrdinaryThread);
   const query = params.query;
-  if (query.kind === "directory-index" || query.kind === "star-map-geometry") {
+  if (query.kind === "directory-index" || query.kind === "star-map-geometry" || query.kind === "model-inventory") {
     return [];
   }
   if (query.kind === "star-map") {
@@ -533,12 +536,30 @@ function selectQueryThreads(params: {
   return [...selected.values()];
 }
 
+function buildModelInventory(threads: readonly NavigationThreadSummary[]): NavigationModelInventoryRow[] {
+  const groups = new Map<string, NavigationModelInventoryRow>();
+  for (const thread of threads) {
+    const model = thread.model?.trim() || undefined;
+    const key = JSON.stringify([thread.source, model, thread.modelMigrationRevision]);
+    const group = groups.get(key) ?? { backend: thread.source, model, modelMigrationRevision: thread.modelMigrationRevision, threadCount: 0, fastThreadCount: 0 };
+    group.threadCount += 1;
+    if (thread.fastMode === true) group.fastThreadCount += 1;
+    groups.set(key, group);
+  }
+  return [...groups].sort(([left], [right]) => left.localeCompare(right)).map(([, group]) => group);
+}
+
 export function projectNavigationQuery(params: {
   index: NavigationQueryIndex;
   request: NavigationQueryRequest;
   attentionOrder?: NavigationAttentionOrder;
 }): NavigationQueryMaterialization {
   const query = params.request.query;
+  if (query.kind === "model-inventory") {
+    const owned = params.index.threads.filter((thread) => isStarMapOwnerThread(thread)
+      && (!params.request.backend || params.request.backend === "all" || params.request.backend === thread.source));
+    return { counts: countsForThreads(owned), directories: [], entries: [], modelGroups: buildModelInventory(owned), queryKey: navigationQueryKey(params.request) };
+  }
   const threadsByIdentity = new Map(
     params.index.threads.map((thread) => [threadKey(thread), thread]),
   );

@@ -22,7 +22,7 @@ import { NavigationQueryStore } from "../app-server/navigation-query-store";
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("adds zero SQLite commits for real overlay-backed query, facet, cursor and Attention reads", async () => {
+it("adds zero SQLite commits for real overlay-backed query, model inventory, facet, cursor and Attention reads", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const db = openInMemoryStateDb();
   mocks.store = new SqliteOverlayStore(db);
@@ -42,9 +42,13 @@ it("adds zero SQLite commits for real overlay-backed query, facet, cursor and At
       expect(first.facets?.matches.approval).toBe(1);
       await queries.readPage({ loadIndex, request: { ...request, cursor: first.nextCursor }, scopeKey: "viewer" });
       await queries.readPage({ loadIndex, request, scopeKey: "viewer" });
+      const inventory = await queries.readPage({ loadIndex, scopeKey: "settings", request: {
+        protocol: 2, consumer: "settings", backend: "codex", query: { kind: "model-inventory" },
+      } });
+      expect(inventory.modelGroups?.[0]?.threadCount).toBe(1000);
     });
     expectSqliteWriteBudget({ scenario: "navigation-owner-query-reads", writes,
-      note: "1,000 real overlay-backed rows, owner Attention metadata, facet counts, page continuation and repeated query: zero commits; 0 MB/day added WAL" });
+      note: "1,000 real overlay-backed rows, owner Attention metadata, facet counts, model inventory, page continuation and repeated query: zero commits; 0 MB/day added WAL" });
     expect(writes.commits).toBe(0);
   } finally { db.close(); }
 });

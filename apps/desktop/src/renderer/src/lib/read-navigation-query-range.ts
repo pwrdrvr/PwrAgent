@@ -10,7 +10,7 @@ export async function readNavigationQueryRange(params: {
   reserveBytes?: (bytes: number) => void;
   releaseBytes?: (bytes: number) => void;
 }): Promise<NavigationQueryPage> {
-  if (!["directory-index", "star-map-geometry", "exact"].includes(params.request.query.kind)) {
+  if (!["directory-index", "star-map-geometry", "exact", "model-inventory"].includes(params.request.query.kind)) {
     throw new Error("Only compact metadata and explicit identities may request a complete navigation range.");
   }
   const deadlineAt = Math.min(params.request.deadlineAt ?? Infinity, Date.now() + 10_000);
