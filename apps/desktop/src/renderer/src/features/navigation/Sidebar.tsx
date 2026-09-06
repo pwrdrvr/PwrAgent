@@ -202,7 +202,10 @@ function releaseBeforeListChange<Args extends unknown[], Result>(
   };
 }
 
+import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
+
 type SidebarProps = {
+  directoryDisclosure?: NavigationDirectoryDisclosure;
   backends: BackendSummary[];
   browseMode: BrowseMode;
   directories: NavigationDirectorySummary[];
@@ -2088,6 +2091,7 @@ export function Sidebar(props: SidebarProps) {
             <p className="sidebar-error">{props.error}</p>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
+              directoryDisclosure={props.directoryDisclosure}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
               terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
