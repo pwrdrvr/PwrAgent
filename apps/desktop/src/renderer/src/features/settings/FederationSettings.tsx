@@ -1699,15 +1699,18 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   remote_pty: "open a remote terminal",
   event_subscriptions: "stream explicitly subscribed events",
   turn_input_blobs: "transfer turn attachments",
+  // Transport negotiation is informational, not a remote action.
+  transport_brotli: "",
 };
 
 function formatFederationCapabilities(
   capabilities: FederationCapability[],
 ): string {
-  if (capabilities.length === 0) return "no remote actions advertised";
-  return capabilities
+  const labels = capabilities
     .map((capability) => FEDERATION_CAPABILITY_LABELS[capability])
-    .join(" · ");
+    .filter(Boolean);
+  if (labels.length === 0) return "no remote actions advertised";
+  return labels.join(" · ");
 }
 
 /**

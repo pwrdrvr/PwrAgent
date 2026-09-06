@@ -28,6 +28,7 @@ export const FEDERATION_CAPABILITIES = [
   "remote_pty",
   "event_subscriptions",
   "turn_input_blobs",
+  "transport_brotli",
 ] as const;
 
 export type FederationCapability = (typeof FEDERATION_CAPABILITIES)[number];

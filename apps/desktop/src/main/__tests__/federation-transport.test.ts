@@ -630,6 +630,109 @@ describe("federation transport", () => {
     });
   });
 
+  it("carries a compressed logical envelope larger than ws maxPayload through Noise", async () => {
+    const maxFrameBytes = 16 * 1024;
+    const transcript = "repetitive tool output line\n".repeat(12_000);
+    expect(Buffer.byteLength(transcript)).toBeGreaterThan(maxFrameBytes);
+    const gatewayTransfers: Array<{
+      peerId: string;
+      direction: "sent" | "received";
+      byteCount: number;
+    }> = [];
+    const clientTransfers: Array<{
+      direction: "sent" | "received";
+      byteCount: number;
+    }> = [];
+
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    let resolveReceived: ((envelope: FederationProtocolEnvelope) => void) | undefined;
+    const received = new Promise<FederationProtocolEnvelope>((resolve) => {
+      resolveReceived = resolve;
+    });
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-compressed",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      noiseStatic: gatewayNoise,
+      maxFrameBytes,
+      onEnvelopeTransfer: (info) => gatewayTransfers.push(info),
+      onEnvelope: (envelope, connection) => {
+        resolveReceived?.(envelope);
+        connection.sendEnvelope({
+          id: "large-response",
+          kind: "response",
+          requestId: envelope.id,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: "gateway_one",
+          targetInstanceId: connection.peerId,
+          createdAt: 2_000,
+          result: { transcript },
+        });
+      },
+    });
+    const { url } = await server.start();
+
+    const reply = new Promise<FederationProtocolEnvelope>((resolve) => {
+      void connectFederationClient({
+        url,
+        mode: "enroll",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        peerInstanceId: "client_one",
+        privateKeyPem: clientKeyPair.privateKeyPem,
+        publicKeyPem: clientKeyPair.publicKeyPem,
+        capabilities: ["remote_window", "transport_brotli"],
+        inviteToken: invite.token,
+        label: "Client",
+        role: "client",
+        noiseStatic: clientNoise,
+        gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
+        maxFrameBytes,
+        onEnvelope: resolve,
+        onEnvelopeTransfer: (info) => clientTransfers.push(info),
+      }).then((client) => {
+        client.sendEnvelope({
+          id: "large-request",
+          kind: "request",
+          method: "thread.read",
+          params: { transcript },
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: "client_one",
+          targetInstanceId: "gateway_one",
+          createdAt: 1_000,
+        });
+      });
+    });
+
+    await expect(received).resolves.toMatchObject({
+      kind: "request",
+      params: { transcript },
+    });
+    await expect(reply).resolves.toMatchObject({
+      kind: "response",
+      requestId: "large-request",
+      result: { transcript },
+    });
+    const [gatewayReceived, gatewaySent] = gatewayTransfers;
+    const [clientSent, clientReceived] = clientTransfers;
+    expect(gatewayReceived.byteCount).toBe(clientSent.byteCount);
+    expect(clientReceived.byteCount).toBe(gatewaySent.byteCount);
+    expect(clientSent.byteCount).toBeLessThan(maxFrameBytes);
+    expect(gatewaySent.byteCount).toBeLessThan(maxFrameBytes);
+  });
+
   it("carries the encrypted channel over an externally created outer socket", async () => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
