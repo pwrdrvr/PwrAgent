@@ -910,6 +910,83 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("prices an aggregate Astra turn when its context window keeps every request under 272K", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine(buildAstraAggregateOverrides({
+        modelContextWindow: 258_400,
+      })),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "priced",
+      pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      totalCostMicros: 3_269_538,
+    });
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+    expect(pricing.summaries).toEqual([
+      expect.objectContaining({
+        pricedUsageLineCount: 1,
+        totalCostMicros: 3_269_538,
+        unpricedUsageLineCount: 0,
+      }),
+    ]);
+  });
+
+  it("lazily reprices an older aggregate row behind a priced newer row from its turn context window", async () => {
+    // Persisted before the context-window ceiling existed: the aggregate row
+    // stayed unpriced while its turn record already carried the window.
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine(buildAstraAggregateOverrides({
+        createdAt: Date.UTC(2026, 8, 5, 20, 40),
+        turnId: "turn-old",
+        usageLineId: "line-old",
+      })),
+    });
+    stateDb.raw
+      .prepare(
+        `UPDATE thread_usage_turns
+         SET model_context_window = 258400
+         WHERE thread_id = 'thread-1'`,
+      )
+      .run();
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        createdAt: Date.UTC(2026, 8, 5, 21, 0),
+        model: "gpt-6-astra",
+        sourceItemId: "item-new",
+        turnId: "turn-new",
+        usageLineId: "line-new",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines.map((line) => line.usageLineId)).toEqual([
+      "line-new",
+      "line-old",
+    ]);
+    expect(pricing.lines[0]?.priceStatus).toBe("priced");
+    expect(pricing.lines[1]).toMatchObject({
+      priceStatus: "priced",
+      pricingRateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      totalCostMicros: 3_269_538,
+    });
+    expect(pricing.summaries).toEqual([
+      expect.objectContaining({
+        pricedUsageLineCount: 2,
+        unpricedUsageLineCount: 0,
+      }),
+    ]);
+  });
+
   it("uses the usage timestamp when selecting effective pricing rates", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
@@ -1527,6 +1604,34 @@ function buildUsageLine(
     uncachedInputCostMicros: 4_000,
     uncachedInputTokens: 800,
     usageLineId: "line-1",
+    ...overrides,
+  };
+}
+
+function buildAstraAggregateOverrides(
+  overrides: Partial<ThreadUsageLineRecord> = {},
+): Partial<ThreadUsageLineRecord> {
+  // A GPT-6 Astra turn whose 19 requests summed to 1.6M input tokens while
+  // every request stayed under the 258,400-token context window.
+  return {
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 1_527_808,
+    createdAt: Date.UTC(2026, 8, 5),
+    inputTokens: 1_648_011,
+    model: "gpt-6-astra",
+    outputCostMicros: 0,
+    outputTokens: 9_663,
+    priceStatus: "unpriced",
+    priceUnavailableReason: "insufficient-token-breakdown",
+    pricingCatalogId: undefined,
+    pricingCatalogVersion: undefined,
+    pricingRateId: undefined,
+    reasoningOutputTokens: 1_131,
+    scope: "turn",
+    totalCostMicros: 0,
+    totalTokens: 1_658_805,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 120_203,
     ...overrides,
   };
 }

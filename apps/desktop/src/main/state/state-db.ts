@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 58;
+export const CURRENT_STATE_DB_USER_VERSION = 59;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1651,6 +1651,15 @@ export class StateDb {
       if ((db.pragma("user_version", { simple: true }) as number) < 58) {
         db.transaction(() => {
           ensureThreadUsageRequestPricingColumns(db);
+          db.pragma("user_version = 58");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 59) {
+        db.transaction(() => {
+          // Multi-request aggregates above a request-scoped band boundary now
+          // price from the turn's context-window ceiling. Reprice rows that
+          // were persisted as "insufficient-token-breakdown" before that rule.
+          repairTokenUsagePricing(db);
           db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
         })();
       }
@@ -2991,29 +3000,60 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
   }
   ensureThreadUsageRequestPricingColumns(db);
 
+  // The turn record carries the provider-reported context window that lets a
+  // multi-request aggregate price inside a request-scoped band. Older
+  // databases reach this repair before that column exists.
+  const hasTurnContextWindow =
+    tableColumnExists(db, "thread_usage_lines", "usage_turn_id")
+    && tableExists(db, "thread_usage_turns")
+    && tableColumnExists(db, "thread_usage_turns", "model_context_window");
   const now = Date.now();
+  const selectRows = hasTurnContextWindow
+    ? `SELECT
+         lines.usage_line_id,
+         lines.cache_write_input_tokens,
+         lines.cached_input_tokens,
+         lines.created_at,
+         lines.currency,
+         lines.fast_mode,
+         lines.model,
+         lines.output_tokens,
+         lines.price_status,
+         lines.pricing_basis,
+         lines.provider,
+         lines.reasoning_output_tokens,
+         lines.service_tier,
+         lines.scope,
+         lines.uncached_input_tokens,
+         turns.model_context_window
+           AS model_context_window
+       FROM thread_usage_lines AS lines
+       LEFT JOIN thread_usage_turns AS turns ON turns.usage_turn_id = lines.usage_turn_id
+       WHERE lines.provider IN ('openai', 'qwen', 'xai')
+         AND lines.scope != 'fork-baseline'`
+    : `SELECT
+         lines.usage_line_id,
+         lines.cache_write_input_tokens,
+         lines.cached_input_tokens,
+         lines.created_at,
+         lines.currency,
+         lines.fast_mode,
+         lines.model,
+         lines.output_tokens,
+         lines.price_status,
+         lines.pricing_basis,
+         lines.provider,
+         lines.reasoning_output_tokens,
+         lines.service_tier,
+         lines.scope,
+         lines.uncached_input_tokens,
+         NULL
+           AS model_context_window
+       FROM thread_usage_lines AS lines
+       WHERE lines.provider IN ('openai', 'qwen', 'xai')
+         AND lines.scope != 'fork-baseline'`;
   const rows = db
-    .prepare(
-      `SELECT
-         usage_line_id,
-         cache_write_input_tokens,
-         cached_input_tokens,
-         created_at,
-         currency,
-         fast_mode,
-         model,
-         output_tokens,
-         price_status,
-         pricing_basis,
-         provider,
-         reasoning_output_tokens,
-         service_tier,
-         scope,
-         uncached_input_tokens
-       FROM thread_usage_lines
-       WHERE provider IN ('openai', 'qwen', 'xai')
-         AND scope != 'fork-baseline'`,
-    )
+    .prepare(selectRows)
     .all() as Array<{
       cache_write_input_tokens: number;
       cached_input_tokens: number;
@@ -3021,6 +3061,7 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
       currency: string;
       fast_mode: number | null;
       model: string | null;
+      model_context_window: number | null;
       output_tokens: number;
       price_status: string;
       pricing_basis: ThreadUsageLineRecord["pricingBasis"] | null;
@@ -3063,6 +3104,7 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
       model: row.model ?? undefined,
       outputTokens: row.output_tokens,
       reasoningOutputTokens: row.reasoning_output_tokens,
+      requestInputTokenCeiling: row.model_context_window ?? undefined,
       serviceTier: row.service_tier ?? undefined,
       uncachedInputTokens: row.uncached_input_tokens,
     });

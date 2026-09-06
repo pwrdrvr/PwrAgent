@@ -5227,6 +5227,11 @@ function buildLiveThreadUsageLine(params: {
         turnTokenUsage: tokens,
       })
     : undefined;
+  // Without a request breakdown (a missed snapshot, or a re-emitted total after
+  // the per-request fold was dropped), the provider's context window still
+  // bounds every request, so a turn-wide sum can select a band whose ceiling
+  // no request could have crossed.
+  const requestInputTokenCeiling = params.contextWindow?.modelContextWindow;
   const cost = requestComponentsCost ?? estimateTokenUsageCost({
     at: createdAt,
     cacheWriteInputTokens,
@@ -5235,6 +5240,7 @@ function buildLiveThreadUsageLine(params: {
     model: params.model,
     outputTokens,
     reasoningOutputTokens,
+    requestInputTokenCeiling,
     serviceTier: params.serviceTier,
     uncachedInputTokens,
   });
@@ -5245,6 +5251,7 @@ function buildLiveThreadUsageLine(params: {
           cachedInputTokens,
           fastMode: params.fastMode,
           model: params.model,
+          requestInputTokenCeiling,
           serviceTier: params.serviceTier,
           uncachedInputTokens,
         });

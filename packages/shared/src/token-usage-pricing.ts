@@ -879,6 +879,7 @@ export function estimateOpenAiTokenUsageCost(params: {
   model?: string;
   outputTokens: number;
   reasoningOutputTokens?: number;
+  requestInputTokenCeiling?: number;
   serviceTier?: string;
   uncachedInputTokens: number;
 }): TokenUsageCostEstimate | undefined {
@@ -895,6 +896,10 @@ export function estimateTokenUsageCost(params: {
   model?: string;
   outputTokens: number;
   reasoningOutputTokens?: number;
+  // Upper bound on any single request's input tokens, usually the provider's
+  // reported context window. Lets a multi-request aggregate select a band whose
+  // ceiling every request is known to respect.
+  requestInputTokenCeiling?: number;
   serviceTier?: string;
   uncachedInputTokens: number;
 }): TokenUsageCostEstimate | undefined {
@@ -912,6 +917,7 @@ function estimateTokenUsageCostFromCatalog(
     model?: string;
     outputTokens: number;
     reasoningOutputTokens?: number;
+    requestInputTokenCeiling?: number;
     serviceTier?: string;
     uncachedInputTokens: number;
   },
@@ -930,6 +936,7 @@ function estimateTokenUsageCostFromCatalog(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
         params.inputTokenScope,
+        params.requestInputTokenCeiling,
       ),
   );
   const provider = matchingEntries[0]?.provider;
@@ -969,6 +976,7 @@ function estimateTokenUsageCostFromCatalog(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
         params.inputTokenScope,
+        params.requestInputTokenCeiling,
       ),
   );
   const uncachedInputCostMicros = calculateTokenCostMicros(
@@ -1145,6 +1153,10 @@ export function resolveTokenUsagePriceUnavailableReason(params: {
   fastMode?: boolean;
   inputTokenScope?: TokenUsagePricingInputScope;
   model?: string;
+  // Accepted so callers can forward the same parameters they priced with. The
+  // band lookup below deliberately matches by request-scope count, so the
+  // ceiling never changes which entry explains the failure.
+  requestInputTokenCeiling?: number;
   serviceTier?: string;
   uncachedInputTokens: number;
 }): TokenUsagePriceUnavailableReason {
@@ -1315,17 +1327,30 @@ function pricingEntryMatchesInputTokens(
   entry: PricingCatalogEntry,
   inputTokens: number,
   inputTokenScope: TokenUsagePricingInputScope | undefined,
+  requestInputTokenCeiling?: number,
 ): boolean {
+  if (entry.requiresRequestInputTokens && inputTokenScope !== "request") {
+    return false;
+  }
+  if (
+    entry.minimumInputTokens !== undefined
+    && inputTokens < entry.minimumInputTokens
+  ) {
+    return false;
+  }
+  if (
+    entry.maximumInputTokens === undefined
+    || inputTokens <= entry.maximumInputTokens
+  ) {
+    return true;
+  }
+  // A turn-wide sum above the band ceiling still belongs to this band when the
+  // provider's context window proves that no single request could exceed it.
   return (
-    (!entry.requiresRequestInputTokens || inputTokenScope === "request")
-    && (
-      entry.minimumInputTokens === undefined
-      || inputTokens >= entry.minimumInputTokens
-    )
-    && (
-      entry.maximumInputTokens === undefined
-      || inputTokens <= entry.maximumInputTokens
-    )
+    inputTokenScope !== "request"
+    && requestInputTokenCeiling !== undefined
+    && requestInputTokenCeiling > 0
+    && requestInputTokenCeiling <= entry.maximumInputTokens
   );
 }
 

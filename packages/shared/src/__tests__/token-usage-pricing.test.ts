@@ -482,6 +482,50 @@ describe("token usage pricing", () => {
     ).toBe("insufficient-token-breakdown");
   });
 
+  it("prices a multi-request Astra aggregate when the context window caps every request under 272K", () => {
+    // Codex reports a 258,400-token window for GPT-6 Astra (272K at its 95%
+    // effective width). No single request can enter the >272K band, so the
+    // turn-wide sum is priceable at the short-context rate even without the
+    // per-request breakdown.
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 8, 5),
+      cachedInputTokens: 1_527_808,
+      inputTokenScope: "aggregate",
+      model: "gpt-6-astra",
+      outputTokens: 9_663,
+      reasoningOutputTokens: 1_131,
+      requestInputTokenCeiling: 258_400,
+      serviceTier: "standard",
+      uncachedInputTokens: 120_203,
+    });
+
+    expect(cost).toMatchObject({
+      displayName: "GPT-6 Astra Standard (<=272K input)",
+      rateId: "openai:2026-09-04:gpt-6-astra:standard:input-lte-272k",
+      uncachedInputCostMicros: 1_202_030,
+      cachedInputCostMicros: 1_527_808,
+      outputCostMicros: 539_700,
+      totalCostMicros: 3_269_538,
+    });
+  });
+
+  it("keeps an Astra aggregate unpriced when the context window admits requests above 272K", () => {
+    const usage = {
+      at: Date.UTC(2026, 8, 5),
+      cachedInputTokens: 72_001,
+      inputTokenScope: "aggregate" as const,
+      model: "gpt-6-astra",
+      outputTokens: 100_000,
+      requestInputTokenCeiling: 400_000,
+      uncachedInputTokens: 200_000,
+    };
+
+    expect(estimateOpenAiTokenUsageCost(usage)).toBeUndefined();
+    expect(resolveTokenUsagePriceUnavailableReason(usage)).toBe(
+      "insufficient-token-breakdown",
+    );
+  });
+
   it("keeps unsupported GPT-6 Astra billing modes unpriced", () => {
     const usage = {
       cachedInputTokens: 1_000,
