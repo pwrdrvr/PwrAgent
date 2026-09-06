@@ -20,6 +20,7 @@ import {
   STAR_MAP_LOAD_CARD_KEY,
   STAR_MAP_LOAD_CARD_POSITION_KEY,
   type FederationPeerSummary,
+  type NavigationIdentity,
   type NavigationThreadSummary,
   type StarMapWorkspaceAnchor,
 } from "@pwragent/shared";
@@ -32,7 +33,6 @@ import {
 } from "../../lib/keyboard-accel";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
-import { useQueuedTurnProjection } from "../../lib/useQueuedTurnProjection";
 import { SidebarSearchPopup } from "../navigation/SidebarSearchPopup";
 import {
   type StarMapSessionKeys,
@@ -422,8 +422,6 @@ type StarMapScreenProps = {
   desktopApi?: DesktopApi;
   /** Local navigation snapshot threads (already live in the App shell). */
   localThreads: readonly NavigationThreadSummary[];
-  /** Local owner-clock time paired with `localThreads`. */
-  localNavigationSnapshotFetchedAt?: number;
   sessionKeys: StarMapSessionKeys;
   /**
    * Threads with unsent composer text in THIS window, keyed by
@@ -1079,10 +1077,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
     ).length;
   }, [health, preferences.hideOfflineInstances]);
 
+  const demandedIdentitiesByInstance = useMemo(() => {
+    const result = new Map<string, NavigationIdentity[]>();
+    for (const card of chatCards.cards) {
+      if (card.ownerInstanceId === health?.instanceId) continue;
+      const identities = result.get(card.ownerInstanceId) ?? [];
+      identities.push({
+        backend: card.thread.source,
+        threadId: card.thread.id,
+        ownerInstanceId: card.ownerInstanceId,
+      });
+      result.set(card.ownerInstanceId, identities);
+    }
+    return result;
+  }, [chatCards.cards, health?.instanceId]);
   const remote = useStarMapThreads({
     desktopApi: props.desktopApi,
     peers,
     enabled: true,
+    demandedIdentitiesByInstance,
     refreshNonce: remoteRefreshNonce,
   });
   const federationLayoutReady =
@@ -1090,41 +1103,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
     || (
       health !== undefined
       && (
-        !props.desktopApi.getNavigationSnapshot
+        !props.desktopApi.getNavigationQueryPage
         || peers.every(
           (peer) =>
             peer.status !== "connected"
             || !peer.capabilities.includes("thread_navigation")
+            || peer.navigationQueryProtocol !== 2
             || remote.threadsByInstance.has(peer.id)
             || remote.unreachableInstanceIds.has(peer.id),
         )
       )
     );
-  const queueProjectionThreads = useMemo(
-    () => [
-      ...props.localThreads,
-      ...[...remote.threadsByInstance.values()].flat(),
-    ],
-    [props.localThreads, remote.threadsByInstance],
-  );
-  const queueSnapshotFetchedAtForThread = useCallback(
-    (thread: NavigationThreadSummary): number | undefined => {
-      const target = thread.federation?.ref.target;
-      return target && isRemoteFederationTarget(target)
-        ? remote.snapshotFetchedAtByInstance.get(target.instanceId)
-        : props.localNavigationSnapshotFetchedAt;
-    },
-    [
-      props.localNavigationSnapshotFetchedAt,
-      remote.snapshotFetchedAtByInstance,
-    ],
-  );
-  useQueuedTurnProjection({
-    composerDraftStore: props.composerDraftStore,
-    snapshotFetchedAtForThread: queueSnapshotFetchedAtForThread,
-    threads: queueProjectionThreads,
-  });
   const refreshRemoteInstance = remote.refreshInstance;
+  const loadMoreRemoteInstance = remote.loadMoreInstance;
   const onUserRepliedToThread = props.onUserRepliedToThread;
   const reportUserRepliedToThread = useCallback(
     async (thread: NavigationThreadSummary): Promise<void> => {
@@ -1460,9 +1451,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   const toggleClusterExpanded = useCallback(
-    (instanceId: string, clusterKey: string) =>
-      toggleClusterExpandedIn(cloudMemory, instanceId, clusterKey),
-    [toggleClusterExpandedIn],
+    (instanceId: string, clusterKey: string) => {
+      if (
+        instanceId !== localInstanceId
+        && !expandedClusters.has(`${instanceId}::${clusterKey}`)
+      ) {
+        void loadMoreRemoteInstance(instanceId);
+      }
+      toggleClusterExpandedIn(cloudMemory, instanceId, clusterKey);
+    },
+    [
+      expandedClusters,
+      loadMoreRemoteInstance,
+      localInstanceId,
+      toggleClusterExpandedIn,
+    ],
   );
 
   const toggleProjectClusterExpanded = useCallback(
@@ -3238,7 +3241,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const owner = peers.find((peer) => peer.id === anchor.instanceId);
       if (owner?.status === "connected"
         && owner.capabilities.includes("thread_navigation")
-        && props.desktopApi?.getNavigationSnapshot
+        && props.desktopApi?.getNavigationQueryPage
         && !remote.threadsByInstance.has(owner.id)
         && !remote.unreachableInstanceIds.has(owner.id)) return null;
       if (anchor.kind === "thread") {

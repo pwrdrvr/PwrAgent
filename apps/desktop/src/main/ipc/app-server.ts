@@ -305,6 +305,7 @@ import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   isFederationPeerUnavailableError,
@@ -2125,8 +2126,9 @@ class DesktopAppServerService {
       );
     }
     return await getDesktopNavigationQueryStore().readPage({
-      loadSnapshot: async () => await this.getNavigationSnapshot({
+      loadIndex: async () => await loadLocalNavigationQueryIndex({
         backend: request.backend,
+        callerReason: "renderer-navigation-query",
       }),
       request,
       scopeKey: "renderer-local",

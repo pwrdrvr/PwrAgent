@@ -98,7 +98,6 @@ export function StarMapWindow() {
         composerDraftStore={composerDraftStore}
         desktopApi={desktopApi}
         localThreads={navigation.threads}
-        localNavigationSnapshotFetchedAt={navigation.snapshot?.fetchedAt}
         draftThreadKeys={draftThreadKeys}
         sessionKeys={{
           approvalRequestThreadKeys: session.approvalRequestThreadKeys,

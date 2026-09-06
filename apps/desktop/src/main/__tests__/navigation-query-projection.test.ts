@@ -69,7 +69,7 @@ describe("navigation query projection", () => {
 
     const index = projectNavigationQuery({
       request: request({ kind: "directory-index" }),
-      snapshot: source,
+      index: source,
     });
     expect(index.entries).toEqual([]);
     expect(index.directories).toEqual([
@@ -86,7 +86,7 @@ describe("navigation query projection", () => {
         kind: "directory",
         directoryKey: "directory:/repo",
       }),
-      snapshot: source,
+      index: source,
     });
     expect(collapsed.entries.map((entry) => entry.row.id)).toEqual(["1", "2"]);
 
@@ -96,7 +96,7 @@ describe("navigation query projection", () => {
         directoryKey: "directory:/repo",
         disclosedParentThreadKeys: ["codex:2"],
       }),
-      snapshot: source,
+      index: source,
     });
     expect(disclosed.entries.map((entry) => entry.row.id)).toEqual(["1", "3", "2"]);
   });
@@ -135,7 +135,7 @@ describe("navigation query projection", () => {
     ]);
     const page = projectNavigationQuery({
       request: request({ kind: "lens", lens: "recents" }),
-      snapshot: source,
+      index: source,
     });
     const encoded = JSON.stringify(page);
 
@@ -159,7 +159,7 @@ describe("navigation query projection", () => {
     ]);
     const projected = projectNavigationQuery({
       request: request({ kind: "lens", lens: "recents" }),
-      snapshot: source,
+      index: source,
     });
 
     expect(projected.entries[0]).toEqual(expect.objectContaining({
@@ -178,7 +178,7 @@ describe("navigation query projection", () => {
     ]);
     const projected = projectNavigationQuery({
       request: request({ kind: "directory-index" }),
-      snapshot: source,
+      index: source,
     });
 
     expect(projected.directories[0]?.counts).toEqual({
