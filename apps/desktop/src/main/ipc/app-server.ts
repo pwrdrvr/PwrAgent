@@ -309,7 +309,7 @@ import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
-import { NavigationQueryPool } from "../app-server/navigation-query-pool";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -7699,7 +7699,7 @@ function commandLooksLikeGitMutation(command: string): boolean {
 const GIT_MUTATION_COMMAND =
   /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
 
-const navigationQueryPool = new NavigationQueryPool();
+const navigationQueryPool = getDesktopNavigationQueryPool();
 const navigationQueryConsumersBySender = new Map<number, Set<string>>();
 let nextTransientNavigationConsumer = 0;
 const appServerService = new DesktopAppServerService();
