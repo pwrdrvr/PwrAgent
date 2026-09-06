@@ -1713,6 +1713,8 @@ export type NavigationQueueProjectionRequest = {
   federationTarget?: FederationTarget;
   knownRevision?: string;
   cursor?: string;
+  /** One deadline across queue admission, relay and a possible page restart. */
+  deadlineAt?: number;
 };
 
 export type NavigationQueueProjection = {

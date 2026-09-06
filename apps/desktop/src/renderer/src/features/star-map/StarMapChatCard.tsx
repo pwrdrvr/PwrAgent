@@ -33,6 +33,8 @@ import {
   type CompactComposerAction,
   type CompactComposerSettingsMenu,
 } from "../composer/CompactComposer";
+import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
+import { useIndependentQueueProjection } from "../../lib/useIndependentQueueProjection";
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
@@ -307,24 +309,35 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     [remoteInstanceId],
   );
   const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id);
+  const ownedComposerDraftStore = useOwnedComposerDraftStore(
+    props.composerDraftStore,
+    composerScopeKey,
+    { backend: thread.source, threadId: thread.id, target: federationTarget ?? { scope: "local" } },
+  );
+  useIndependentQueueProjection({
+    composerDraftStore: ownedComposerDraftStore,
+    desktopApi,
+    selectedThread: thread,
+    federationTarget,
+  });
   const subscribeQueuedTurns = useCallback(
     (listener: () => void) =>
-      props.composerDraftStore?.subscribeQueuedTurns(listener)
+      ownedComposerDraftStore?.subscribeQueuedTurns(listener)
       ?? (() => undefined),
-    [props.composerDraftStore],
+    [ownedComposerDraftStore],
   );
   const getQueuedTurnVersion = useCallback(
-    () => props.composerDraftStore?.getQueuedTurnVersion() ?? 0,
-    [props.composerDraftStore],
+    () => ownedComposerDraftStore?.getQueuedTurnVersion() ?? 0,
+    [ownedComposerDraftStore],
   );
   useSyncExternalStore(
     subscribeQueuedTurns,
     getQueuedTurnVersion,
   );
   const queuedTurns =
-    props.composerDraftStore?.getQueuedTurns(composerScopeKey) ?? [];
+    ownedComposerDraftStore?.getQueuedTurns(composerScopeKey) ?? [];
   useEffect(() => {
-    if (!desktopApi?.onAgentEvent || !props.composerDraftStore) {
+    if (!desktopApi?.onAgentEvent || !ownedComposerDraftStore) {
       return;
     }
     return desktopApi.onAgentEvent((event) => {
@@ -349,17 +362,17 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       ) {
         return;
       }
-      const current = props.composerDraftStore?.getQueuedTurns(
+      const current = ownedComposerDraftStore?.getQueuedTurns(
         composerScopeKey,
       ) ?? [];
       const next = current.filter(
         (queued) => queued.queueEntryId !== notification.queueEntryId,
       );
       if (next.length !== current.length) {
-        props.composerDraftStore?.setQueuedTurns(composerScopeKey, next);
+        ownedComposerDraftStore?.setQueuedTurns(composerScopeKey, next);
       }
     });
-  }, [composerScopeKey, desktopApi, props.composerDraftStore, thread]);
+  }, [composerScopeKey, desktopApi, ownedComposerDraftStore, thread]);
   /* Every control in the bar is a glyph now, so every one of them needs
      the same hover affordance — a lone tooltip on ↗ reads as the other
      two being broken. The toggles say what the click will DO, which is
@@ -920,9 +933,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         fileAttachments,
         input,
       };
-      if (props.composerDraftStore) {
-        props.composerDraftStore.setQueuedTurns(composerScopeKey, [
-          ...props.composerDraftStore.getQueuedTurns(composerScopeKey),
+      if (ownedComposerDraftStore) {
+        ownedComposerDraftStore.setQueuedTurns(composerScopeKey, [
+          ...ownedComposerDraftStore.getQueuedTurns(composerScopeKey),
           queuedProjection,
         ]);
       }
@@ -938,8 +951,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           queueEntryId,
           input,
         });
-        if (props.composerDraftStore) {
-          const current = props.composerDraftStore.getQueuedTurns(
+        if (ownedComposerDraftStore) {
+          const current = ownedComposerDraftStore.getQueuedTurns(
             composerScopeKey,
           );
           if (response.queueStatus === "queued") {
@@ -951,7 +964,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                 ? { queueEntryCreatedAt: response.queueEntryCreatedAt }
                 : {}),
             };
-            props.composerDraftStore.setQueuedTurns(
+            ownedComposerDraftStore.setQueuedTurns(
               composerScopeKey,
               current.some((queued) => queued.id === queuedProjection.id)
                 ? current.map((queued) =>
@@ -962,7 +975,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                 : [...current, acknowledgedProjection],
             );
           } else {
-            props.composerDraftStore.setQueuedTurns(
+            ownedComposerDraftStore.setQueuedTurns(
               composerScopeKey,
               current.filter((queued) => queued.id !== queuedProjection.id),
             );
@@ -971,10 +984,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         reportAcceptedReply();
         return true;
       } catch (error) {
-        if (props.composerDraftStore) {
-          props.composerDraftStore.setQueuedTurns(
+        if (ownedComposerDraftStore) {
+          ownedComposerDraftStore.setQueuedTurns(
             composerScopeKey,
-            props.composerDraftStore
+            ownedComposerDraftStore
               .getQueuedTurns(composerScopeKey)
               .filter((queued) => queued.id !== queuedProjection.id),
           );
@@ -1000,8 +1013,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       reportAcceptedReply,
       supportsReview,
       thread.id,
+      thread.linkedDirectories,
       thread.source,
-      props.composerDraftStore,
+      ownedComposerDraftStore,
     ],
   );
 
@@ -1598,7 +1612,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           canSteer={canSteer}
           disabled={reviewSetupOpen || reviewSubmitting}
           draftScopeKey={composerScopeKey}
-          draftStore={props.composerDraftStore}
+          draftStore={ownedComposerDraftStore}
           executionMode={threadExecutionMode}
           fastMode={threadFastMode}
           getPathForFile={desktopApi?.getPathForFile}

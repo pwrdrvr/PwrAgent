@@ -6,6 +6,7 @@ import type {
   AppServerTurnInputItem,
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
+  ComposerThreadOwner,
   ListComposerDraftRecoveryCandidatesRequest,
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
@@ -15,6 +16,7 @@ import type {
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 
 export type ComposerDraftSnapshot = {
+  threadOwner?: ComposerThreadOwner;
   draft: string;
   editorDocument?: JSONContent;
   imageAttachments: NavigationLaunchpadImageAttachment[];
@@ -24,6 +26,7 @@ export type ComposerDraftSnapshot = {
 };
 
 export type ComposerQueuedTurnSnapshot = {
+  threadOwner?: ComposerThreadOwner;
   id: string;
   /** Apply this follow-up to the first turn once launchpad setup finishes. */
   steerWhenReady?: boolean;
@@ -121,6 +124,8 @@ export function hasComposerDraftContent(
 export type ComposerDraftHydrationStatus = "memory-only" | "loading" | "ready" | "failed";
 
 export type ComposerDraftStore = {
+  retainScopeOwner?: (scopeKey: string, owner: ComposerThreadOwner) => () => void;
+  getScopeOwner?: (scopeKey: string) => ComposerThreadOwner | undefined;
   delete(scopeKey: string): void;
   get(scopeKey: string): ComposerDraftSnapshot | undefined;
   /**
@@ -223,6 +228,7 @@ export function useComposerDraftStore(): ComposerDraftStore {
   const draftStackStoreRef = useRef(new Map<string, ComposerDraftSnapshot[]>());
   const pendingSteerStoreRef = useRef(new Map<string, ComposerPendingSteerSnapshot>());
   const queuedTurnStoreRef = useRef(new Map<string, ComposerQueuedTurnSnapshot[]>());
+  const scopeOwnersRef = useRef(new Map<string, Map<string, { owner: ComposerThreadOwner; refs: number }>>());
   // Reactivity bridge for the queued-turn Map. The Map itself is a ref
   // (no React state) so composer writes stay cheap, but subscribers like
   // the sidebar need to know when it changes. Every mutation path below
@@ -238,6 +244,24 @@ export function useComposerDraftStore(): ComposerDraftStore {
   const draftPresenceListenersRef = useRef(new Set<() => void>());
 
   return useMemo(() => {
+    const getScopeOwner = (scopeKey: string): ComposerThreadOwner | undefined => {
+      const owners = new Map<string, ComposerThreadOwner>();
+      for (const registration of scopeOwnersRef.current.get(scopeKey)?.values() ?? []) {
+        owners.set(JSON.stringify(registration.owner), registration.owner);
+      }
+      for (const snapshot of [
+        storeRef.current.get(scopeKey),
+        ...(draftStackStoreRef.current.get(scopeKey) ?? []),
+        ...(queuedTurnStoreRef.current.get(scopeKey) ?? []),
+      ]) {
+        if (snapshot?.threadOwner) owners.set(JSON.stringify(snapshot.threadOwner), snapshot.threadOwner);
+      }
+      return owners.size === 1 ? owners.values().next().value : undefined;
+    };
+    const tag = <T extends { threadOwner?: ComposerThreadOwner }>(scopeKey: string, snapshot: T): T => {
+      const threadOwner = snapshot.threadOwner ?? getScopeOwner(scopeKey);
+      return threadOwner && !snapshot.threadOwner ? { ...snapshot, threadOwner } : snapshot;
+    };
     const notifyQueuedTurnChange = (): void => {
       queuedTurnVersionRef.current += 1;
       for (const listener of queuedTurnListenersRef.current) {
@@ -269,6 +293,20 @@ export function useComposerDraftStore(): ComposerDraftStore {
     };
 
     return {
+      getScopeOwner,
+      retainScopeOwner: (scopeKey, owner) => {
+        const key = JSON.stringify(owner);
+        const owners = scopeOwnersRef.current.get(scopeKey) ?? new Map();
+        const registered = owners.get(key) ?? { owner, refs: 0 };
+        registered.refs += 1;
+        owners.set(key, registered);
+        scopeOwnersRef.current.set(scopeKey, owners);
+        return () => {
+          registered.refs -= 1;
+          if (registered.refs === 0) owners.delete(key);
+          if (owners.size === 0) scopeOwnersRef.current.delete(scopeKey);
+        };
+      },
       delete: (scopeKey) => {
         storeRef.current.delete(scopeKey);
         syncDraftPresence(scopeKey);
@@ -307,7 +345,7 @@ export function useComposerDraftStore(): ComposerDraftStore {
       },
       pushDraft: (scopeKey, snapshot) => {
         const current = draftStackStoreRef.current.get(scopeKey) ?? [];
-        draftStackStoreRef.current.set(scopeKey, [...current, snapshot]);
+        draftStackStoreRef.current.set(scopeKey, [...current, tag(scopeKey, snapshot)]);
         syncDraftPresence(scopeKey);
       },
       deletePendingSteer: (scopeKey) => {
@@ -377,19 +415,19 @@ export function useComposerDraftStore(): ComposerDraftStore {
         pendingSteerStoreRef.current.set(scopeKey, snapshot);
       },
       setQueuedTurn: (scopeKey, snapshot) => {
-        queuedTurnStoreRef.current.set(scopeKey, [snapshot]);
+        queuedTurnStoreRef.current.set(scopeKey, [tag(scopeKey, snapshot)]);
         notifyQueuedTurnChange();
       },
       setQueuedTurns: (scopeKey, snapshots) => {
         if (snapshots.length === 0) {
           queuedTurnStoreRef.current.delete(scopeKey);
         } else {
-          queuedTurnStoreRef.current.set(scopeKey, [...snapshots]);
+          queuedTurnStoreRef.current.set(scopeKey, snapshots.map((snapshot) => tag(scopeKey, snapshot)));
         }
         notifyQueuedTurnChange();
       },
       set: (scopeKey, snapshot) => {
-        storeRef.current.set(scopeKey, snapshot);
+        storeRef.current.set(scopeKey, tag(scopeKey, snapshot));
         syncDraftPresence(scopeKey);
       },
     };

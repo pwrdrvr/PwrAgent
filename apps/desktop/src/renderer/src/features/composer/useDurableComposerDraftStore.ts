@@ -274,6 +274,8 @@ export function useDurableComposerDraftStore(
         );
       },
       pushDraft: (scopeKey, snapshot) => {
+        const threadOwner = snapshot.threadOwner ?? baseStore.getScopeOwner?.(scopeKey);
+        if (threadOwner) snapshot = { ...snapshot, threadOwner };
         baseStore.pushDraft(scopeKey, snapshot);
         persistDraftHistory(scopeKey, snapshot, "abandoned", true);
       },
@@ -282,9 +284,13 @@ export function useDurableComposerDraftStore(
         snapshot: ComposerDraftSnapshot,
         status: ComposerDraftLifecycle,
       ): void => {
+        const threadOwner = snapshot.threadOwner ?? baseStore.getScopeOwner?.(scopeKey);
+        if (threadOwner) snapshot = { ...snapshot, threadOwner };
         persistDraftHistory(scopeKey, snapshot, status);
       },
       set: (scopeKey, snapshot) => {
+        const threadOwner = snapshot.threadOwner ?? baseStore.getScopeOwner?.(scopeKey);
+        if (threadOwner) snapshot = { ...snapshot, threadOwner };
         baseStore.set(scopeKey, snapshot);
         if (!desktopApi?.saveComposerDraft) {
           return;
@@ -342,6 +348,7 @@ export function snapshotFromDraftRecord(
   record: ComposerDraftSnapshotRecord,
 ): ComposerDraftSnapshot {
   return {
+    ...(record.threadOwner ? { threadOwner: record.threadOwner } : {}),
     draft: record.text,
     editorDocument: record.editorDocument as JSONContent | undefined,
     imageAttachments: record.imageAttachments,
@@ -363,6 +370,7 @@ function buildDraftRecord(
   const contentHash = hashDraftContent(snapshot);
 
   return {
+    ...(snapshot.threadOwner ? { threadOwner: snapshot.threadOwner } : {}),
     scopeKey,
     scopeKind: scope.scopeKind,
     backend: scope.backend,
@@ -561,6 +569,7 @@ function shouldReplacePreviousUnsentCandidate(
  */
 function hashDraftContent(snapshot: ComposerDraftSnapshot): string {
   const content = JSON.stringify({
+    ...(snapshot.threadOwner ? { threadOwner: snapshot.threadOwner } : {}),
     text: snapshot.draft,
     editorDocument: snapshot.editorDocument,
     skillTokens: snapshot.skillTokens.map((token) => ({
