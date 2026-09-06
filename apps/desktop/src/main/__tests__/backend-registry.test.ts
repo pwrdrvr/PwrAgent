@@ -45508,7 +45508,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("routes archive binding revocation through the messaging archive cleaner when available", async () => {
+  it("continues archive cleanup and reports Token Miser persistence failures", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive me",
@@ -45536,6 +45536,15 @@ script = "printf setup"
       overlayStore: createOverlayStoreMock(),
     });
 
+    Object.assign(registry, { tokenMiserStore: {
+      archiveThread: vi.fn(async () => { throw new Error("fixture retention failure"); }),
+    } });
+    const internals = registry as unknown as {
+      ungroupChildrenOfArchivedThread(params: unknown): Promise<void>;
+      archiveThreadWorktrees(params: unknown): Promise<unknown[]>;
+    };
+    const ungroup = vi.spyOn(internals, "ungroupChildrenOfArchivedThread");
+    const worktrees = vi.spyOn(internals, "archiveThreadWorktrees");
     await registry.archiveThread({
       backend: "codex",
       threadId: "thread-1",
@@ -45553,6 +45562,9 @@ script = "printf setup"
     ]);
     expect(messagingStore.revokedBindingIds).toEqual([]);
 
+    expect(ungroup).toHaveBeenCalledOnce();
+    expect(worktrees).toHaveBeenCalledOnce();
+    expect(mainLoggerMock.warn).toHaveBeenCalledWith("Token Miser archive retention failed", expect.objectContaining({ threadId: "thread-1", error: "fixture retention failure" }));
     await registry.close();
   });
 
@@ -45671,7 +45683,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("clears archive messaging cleanup cache when an unarchive notification arrives", async () => {
+  it("publishes archive notifications and cleans messaging after retention failure", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive me again",
@@ -45701,11 +45713,15 @@ script = "printf setup"
 
     const restoreTokenMiser = vi.fn(async () => {});
     Object.assign(registry, { tokenMiserStore: {
-      archiveThread: vi.fn(async () => {}),
+      archiveThread: vi.fn(async () => { throw new Error("fixture notification retention failure"); }),
       restoreThread: restoreTokenMiser,
     } });
 
-    await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    await codexClient.emit({ method: "thread/archived", params: { threadId: "thread-1" } });
+    expect(events.some((event) => event.notification.method === "thread/archived")).toBe(true);
+    unsubscribe();
     await codexClient.emit({
       method: "thread/unarchived",
       params: { threadId: "thread-1" },

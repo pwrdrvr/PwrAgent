@@ -224,6 +224,7 @@ export type TokenMiserStagedObject = {
 };
 
 export class TokenMiserStore {
+  private readonly archivedThreads = new Set<string>();
   private readonly outputs = new TokenMiserOutputCache();
   private readonly updateLocks = new Map<string, Promise<void>>();
   private readonly pendingRetrievalDeliveries =
@@ -840,6 +841,10 @@ export class TokenMiserStore {
   }
 
   private async isArchived(threadId: string): Promise<boolean> {
+    return this.archivedThreads.has(threadId) || await this.hasArchiveMarker(threadId);
+  }
+
+  private async hasArchiveMarker(threadId: string): Promise<boolean> {
     return await withTokenMiserFileOperation(() => fs.stat(path.join(this.threadRoot(this.threadKey(threadId)), "archived")))
       .then(() => true)
       .catch((error: NodeJS.ErrnoException) => {
@@ -872,18 +877,23 @@ export class TokenMiserStore {
     )).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") throw error;
     });
+    this.archivedThreads.delete(threadId);
   }
 
   async archiveThread(threadId: string): Promise<void> {
     const key = this.threadKey(threadId);
-    await fs.mkdir(this.threadRoot(key), { recursive: true, mode: 0o700 });
-    if (!await this.isArchived(threadId)) await writePrivateFileAtomic(path.join(this.threadRoot(key), "archived"), `${randomUUID()}\n`);
+    this.archivedThreads.add(threadId);
     for (const [objectId, owner] of this.owners) {
       if (owner === key) this.outputs.remove(objectId);
     }
     for (const [id, pending] of this.pendingRetrievalDeliveries) {
       if (pending.threadId === threadId) this.abandonRetrievalDelivery(id);
     }
+    await fs.mkdir(this.threadRoot(key), { recursive: true, mode: 0o700 });
+    if (!await this.hasArchiveMarker(threadId)) await writePrivateFileAtomic(path.join(this.threadRoot(key), "archived"), `${randomUUID()}\n`);
+    // Successful persistence is authoritative across instances, including a
+    // later restore elsewhere. Keep the local guard only on write failure.
+    this.archivedThreads.delete(threadId);
     await this.flushThread(threadId);
   }
 

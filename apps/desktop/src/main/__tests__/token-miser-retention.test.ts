@@ -202,3 +202,25 @@ it("keeps restoration fail-closed if the archive marker cannot be moved", async 
   await store.restoreThread("owner");
   await expect(store.store(params)).resolves.toBeDefined();
 });
+it.each(["marker", "flush"])("invalidates originals and deliveries before archive %s failure", async (failure) => {
+  const { store } = await fixture();
+  const accepted = await store.store(params);
+  const pending = await store.stage(params);
+  await pending.persist();
+  const delivery = await store.prepareRetrievalDelivery({ objectId: accepted.objectId, threadId: "owner", visibleText: params.output });
+  const fail = failure === "marker"
+    ? vi.spyOn(fs, "rename").mockRejectedValue(new Error("fixture marker failure"))
+    : vi.spyOn(store, "flushThread").mockRejectedValue(new Error("fixture flush failure"));
+  try { await expect(store.archiveThread("owner")).rejects.toThrow("fixture"); }
+  finally { fail.mockRestore(); }
+  expect(await store.readAll({ objectId: accepted.objectId, threadId: "owner" })).toBeUndefined();
+  expect(await store.confirmModelVisibleRetrievals({ threadId: "owner", output: delivery!.text })).toBe(0);
+  await expect(pending.commit()).rejects.toThrow("unavailable");
+  expect(await store.listMetadata("owner")).toHaveLength(1);
+});
+it("observes restoration by another instance after successful archive persistence", async () => {
+  const { store, root } = await fixture();
+  await store.archiveThread("owner");
+  await new TokenMiserStore(root).restoreThread("owner");
+  await expect(store.store(params)).resolves.toBeDefined();
+});

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -43,6 +43,44 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await registry.close();
     stateDb.close();
     rmSync(directory, { force: true, recursive: true });
+  });
+
+  it.each([true, false])("migrates history before reconciliation and accounting reads (enabled=%s)", async (enabled) => {
+    const root = path.join(directory, "legacy-objects");
+    await fs.mkdir(root);
+    const legacy = { ...metadata(randomUUID(), "helper-legacy"), replayTrackingVersion: 2 as const };
+    await fs.writeFile(path.join(root, `${legacy.objectId}.json`), JSON.stringify(legacy));
+    await fs.writeFile(path.join(root, `${legacy.objectId}.txt`), "contrived private output");
+    const tokenMiserStore = new TokenMiserStore(root);
+    const internals = registry as unknown as {
+      initializeTokenMiserLedger(): Promise<void>;
+      recordTokenMiserParentModelRequest(event: AgentEvent): Promise<void>;
+      activeTokenMiserReplayEntries: Map<string, Map<string, unknown>>;
+      withTokenMiserAccounting(params: { backend: "codex"; threadId: string; accounting: ThreadToolAccounting }): Promise<ThreadToolAccounting>;
+    };
+    const prepareRuntime = vi.fn();
+    Object.assign(registry, {
+      tokenMiserStore, resolveTokenMiserEnabledFn: () => enabled,
+      prepareTokenMiserRuntime: prepareRuntime,
+    });
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const prune = tokenMiserStore.prune.bind(tokenMiserStore);
+    vi.spyOn(tokenMiserStore, "prune").mockImplementation(async (options) => {
+      await barrier;
+      await prune(options);
+    });
+    const initialized = internals.initializeTokenMiserLedger();
+    const startup = registry.prepareTokenMiserRuntimeAtStartup();
+    const read = internals.withTokenMiserAccounting({ backend: "codex", threadId: legacy.threadId, accounting: await store.readThreadToolAccounting({ backend: "codex", threadId: legacy.threadId }) });
+    release();
+    await Promise.all([initialized, startup]);
+    expect((await read).tokenMiser?.interceptionCount).toBe(1);
+    expect(internals.activeTokenMiserReplayEntries.get(legacy.threadId)?.has(legacy.objectId)).toBe(true);
+    expect(prepareRuntime).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    for (const tokens of [100, 200, 300]) await internals.recordTokenMiserParentModelRequest(parentUsageEvent(tokens));
+    expect((await tokenMiserStore.readMetadata(legacy.objectId))?.cachedReplayCount).toBe(1);
+    await expect(fs.stat(path.join(root, `${legacy.objectId}.txt`))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reads thread metadata once for both accounting and savings", async () => {

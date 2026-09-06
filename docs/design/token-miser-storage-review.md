@@ -204,3 +204,22 @@ or SQLite commit (0 MB/day incremental SQLite traffic). At 100 archive/restore
 cycles per day, marker payload writes are 0.0037 MB/day, excluding filesystem
 journaling.
 No operator profile, app restart, or Codex-owned file was used for validation.
+
+
+### Upgrade ordering and archive persistence failures
+
+Registry initialization now owns migration before ledger reconciliation,
+independently of reducer activation. Accounting readers await storage preparation;
+startup activation awaits reconciliation, so historical replay gates are ready in
+the first resumed session. Managed runtime restart uses the same ordering even
+when Token Miser is disabled. This moves the existing migration rather than
+adding a per-turn or timer write path.
+
+Archive first invalidates local originals, deliveries and pending acknowledgments.
+If its marker cannot be persisted, a local guard keeps retrieval unavailable.
+Once the marker is durable, disk state remains authoritative so restoration by
+another instance works. The registry logs retention persistence failures
+separately and continues messaging revocation, child/worktree cleanup, archive
+bookkeeping and notification publication. A failed durable marker cannot inform
+other processes by itself; the failure remains visible in the log. No new SQLite
+write or periodic filesystem write is introduced by this handling.
