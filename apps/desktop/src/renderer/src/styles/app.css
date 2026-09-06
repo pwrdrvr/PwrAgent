@@ -27106,6 +27106,10 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--bg-panel-elevated);
 }
 
+.composer__queued--message {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .composer__queued--steer {
   border-color: var(--accent-border);
   background: color-mix(in srgb, var(--accent-soft) 48%, var(--bg-panel-elevated));
@@ -33852,7 +33856,21 @@ button.pricing-token-miser__folded:focus-visible {
 
 .federation-activity__sizes { margin-top: 18px; }
 
+.queued-message-inspector-shell {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.queued-message-inspector-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .queued-message-inspector {
+  margin-top: 8px;
   max-height: 320px;
   overflow: auto;
   padding: 8px;
