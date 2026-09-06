@@ -2342,6 +2342,11 @@ function buildUnpricedGrokUsageLine(index: number): ThreadUsageLineRecord {
           draft: {
             scopeKey: "thread:codex:typing",
             scopeKind: "thread",
+            threadOwner: {
+              backend: "codex",
+              threadId: "typing",
+              target: { scope: "remote", instanceId: "draft-owner" },
+            },
             backend: "codex",
             threadId: "typing",
             text,

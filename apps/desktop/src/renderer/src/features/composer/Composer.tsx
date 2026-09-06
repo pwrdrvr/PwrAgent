@@ -220,6 +220,7 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 import { useComposerMentionSources } from "./useComposerMentionSources";
+import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -2865,7 +2866,15 @@ export function Composer(props: ComposerProps) {
       : "empty";
   const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
   const localDraftStore = useComposerDraftStore();
-  const draftStore = props.draftStore ?? localDraftStore;
+  const draftStore = useOwnedComposerDraftStore(
+    props.draftStore ?? localDraftStore,
+    composerScopeKey,
+    props.thread ? {
+      backend: props.thread.source,
+      threadId: props.thread.id,
+      target: props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" },
+    } : undefined,
+  );
   const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
   const savedInitialDraft = draftStore.get(composerScopeKey);
   const savedInitialQueuedTurns = props.thread || props.launchpad

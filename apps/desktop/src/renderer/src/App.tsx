@@ -106,7 +106,7 @@ import { useIntegratedTerminals } from "./lib/useIntegratedTerminals";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActionProjection";
-import { useQueuedTurnProjection } from "./lib/useQueuedTurnProjection";
+import { useIndependentQueueProjection } from "./lib/useIndependentQueueProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { useThreadDraftIndicators } from "./lib/useThreadDraftIndicators";
 import { copyText } from "./lib/copy-text";
@@ -1809,10 +1809,11 @@ function DesktopAppShell(props: {
     baseComposerDraftStore,
     desktopApi,
   );
-  useQueuedTurnProjection({
+  useIndependentQueueProjection({
     composerDraftStore,
-    snapshotFetchedAt: navigation.snapshot?.fetchedAt,
-    threads: navigation.threads,
+    desktopApi,
+    selectedThread: navigation.selectedThread,
+    federationTarget: activeFederationTarget,
   });
   const scheduledActionProjectionSources = useMemo(
     () => readRendererFederationTarget()

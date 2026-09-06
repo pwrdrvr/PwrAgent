@@ -2180,6 +2180,7 @@ class DesktopAppServerService {
       return await getDesktopFederationRuntime().remoteNavigationQueueProjection(
         request.federationTarget,
         request,
+        { deadlineAt: Math.min(request.deadlineAt ?? Date.now() + 10_000, Date.now() + 10_000) },
       );
     }
     return getDesktopNavigationDetailService().readQueueProjection(request);
