@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { FolderIcon, WorktreeIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -38,7 +38,7 @@ type LinkedProjectsPanelProps = {
  * to it. Worktree dirty/clean status is a placeholder pending a
  * main-process `git status --porcelain` IPC (see TODO below).
  */
-export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
+export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
   const [attachError, setAttachError] = useState<string>();
   const [attaching, setAttaching] = useState(false);
   const [detachError, setDetachError] = useState<string>();
@@ -350,7 +350,7 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
       ) : null}
     </section>
   );
-}
+});
 
 function dedupeLinkedProjectDirectories(
   directories: NavigationThreadSummary["linkedDirectories"],

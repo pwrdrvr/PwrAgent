@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type {
   AppServerThreadEntry,
   AutomationDetail,
@@ -43,7 +43,7 @@ type ThreadAutomationsPanelProps = {
   onRefreshNavigation?: () => Promise<void>;
 };
 
-export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
+export const ThreadAutomationsPanel = memo(function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
   const isAgentThread = Boolean(props.thread.agent);
   const automations = useAutomations(props.desktopApi, {
     backend: props.thread.source,
@@ -181,7 +181,7 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
       )}
     </section>
   );
-}
+});
 
 function AutomationSummary(props: {
   automation: AutomationDetail;

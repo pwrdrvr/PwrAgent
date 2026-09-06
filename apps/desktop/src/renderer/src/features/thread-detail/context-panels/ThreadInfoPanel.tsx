@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { formatBackendLabel } from "../../../lib/backend-label";
@@ -34,7 +34,7 @@ type ThreadInfoPanelProps = {
  * Owns its own Agent-save state; tooltip portal state is owned by the rail
  * and threaded in via `showTooltip` / `hideTooltip`.
  */
-export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
+export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPanelProps) {
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentError, setAgentError] = useState<string>();
   const canChangeAgentDesignation = canChangeExistingThreadAgentDesignation(
@@ -193,4 +193,4 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
       </section>
     </>
   );
-}
+});

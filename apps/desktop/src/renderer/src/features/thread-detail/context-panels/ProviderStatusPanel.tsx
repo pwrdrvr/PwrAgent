@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import type { BackendRuntimeBuild, BackendSummary } from "@pwragent/shared";
 import {
   formatBackendAccountText,
@@ -17,7 +17,7 @@ type ProviderStatusPanelProps = {
  * plan, and rate-limit lines for every configured agent backend.
  * Moved out of the old single-scroll context panel into its own tab.
  */
-export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
+export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: ProviderStatusPanelProps) {
   useEffect(() => {
     window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
   }, []);
@@ -100,7 +100,7 @@ export function ProviderStatusPanel(props: ProviderStatusPanelProps) {
       )}
     </section>
   );
-}
+});
 
 function hasProviderMetadata(backend: BackendSummary): boolean {
   return hasIdentityMetadata(backend) || Boolean(backend.rateLimits?.length);

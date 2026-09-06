@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
@@ -168,6 +169,40 @@ const RAIL_MIN_WIDTH = 300;
 const RAIL_MAX_WIDTH = 560;
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
+  const {
+    onOpenToolOutputIncidentExplorer,
+    onActionRunsDockChange,
+    onShowActionRunsAboveComposer,
+  } = props;
+  const threadBackend = props.thread?.source;
+  const openIncidentExplorer = useCallback(() => {
+    onOpenToolOutputIncidentExplorer?.();
+  }, [onOpenToolOutputIncidentExplorer]);
+  const changeActionRunsDock = useCallback((dock: ActionRunsDock) => {
+    onActionRunsDockChange?.(dock);
+    if (dock === "above") {
+      onShowActionRunsAboveComposer?.();
+    }
+  }, [onActionRunsDockChange, onShowActionRunsAboveComposer]);
+  const editedFileGroups = useMemo(
+    () => props.editedFileGroups ?? [],
+    [props.editedFileGroups],
+  );
+  const actionRuns = useMemo(() => props.actionRuns ?? [], [props.actionRuns]);
+  const toolCallsFederationTarget = props.thread?.federation?.ref.target
+    ?? readRendererFederationTarget();
+  const toolCallsInstanceId = toolCallsFederationTarget?.scope === "remote"
+    ? toolCallsFederationTarget.instanceId
+    : undefined;
+  const threadLinkSource = useMemo(() =>
+    threadBackend && toolCallsInstanceId
+      ? { backend: threadBackend, instanceId: toolCallsInstanceId }
+      : undefined,
+    [threadBackend, toolCallsInstanceId],
+  );
+  const openTokenMiserSavings = useCallback(() => {
+    onOpenToolOutputIncidentExplorer?.("savings");
+  }, [onOpenToolOutputIncidentExplorer]);
   const railRef = useRef<HTMLElement>(null);
   const [revealed, setRevealed] = useState(false);
   // A modal portaled to document.body is outside the rail in DOM and pointer
@@ -180,6 +215,20 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const railWidth = props.width ?? 380;
   const [resizing, setResizing] = useState(false);
   const railTooltip = useViewportTooltip({ className: "context-rail__tooltip" });
+  const showTooltip = railTooltip.show;
+  const showRailTooltip = useCallback((
+    event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
+    path: string,
+    maxLength?: number,
+    copyHint = true
+  ): void => {
+    showTooltip(
+      event.currentTarget,
+      buildRailTooltipText(path, maxLength, copyHint),
+    );
+  }, [showTooltip]);
+
+  const hideRailTooltip = railTooltip.hide;
   const pinned = props.pinned;
   const open = pinned || revealed || portaledInteractionOpen;
   const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -676,7 +725,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         return (
           <EditsPanel
             backend={props.thread.source}
-            groups={props.editedFileGroups ?? []}
+            groups={editedFileGroups}
             commitStatesByKey={props.editedFileCommitStates}
             worktreeRoot={editsWorktreeRoot}
             desktopApi={props.desktopApi}
@@ -701,7 +750,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             displayOptions={props.pricingDisplayOptions}
             onOpenTokenMiserSavings={
               props.onOpenToolOutputIncidentExplorer
-                ? () => props.onOpenToolOutputIncidentExplorer?.("savings")
+                ? openTokenMiserSavings
                 : undefined
             }
             onScrollToTurn={props.onScrollToTurn}
@@ -713,9 +762,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         );
       case "tool-calls": {
         if (!props.thread) return null;
-        const toolCallsFederationTarget =
-          props.thread.federation?.ref.target
-          ?? readRendererFederationTarget();
         return (
           <ToolCallsPanel
             entries={props.toolCallEntries}
@@ -727,19 +773,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                a lens inside the window, asks for one. */
             onOpenIncidentExplorer={
               props.onOpenToolOutputIncidentExplorer
-                ? () => props.onOpenToolOutputIncidentExplorer?.()
+                ? openIncidentExplorer
                 : undefined
             }
             onRequestInvocationDetails={props.onRequestToolCallDetails}
             onScrollToTurn={props.onScrollToTurn}
-            threadLinkSource={
-              toolCallsFederationTarget?.scope === "remote"
-                ? {
-                    backend: props.thread.source,
-                    instanceId: toolCallsFederationTarget.instanceId,
-                  }
-                : undefined
-            }
+            threadLinkSource={threadLinkSource}
             toolAccounting={props.toolAccounting}
           />
         );
@@ -750,15 +789,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <ActionRunsPanel
             dock={props.actionRunsDock ?? "above"}
             environmentName={props.actionRunsEnvironmentName}
-            onDockChange={(dock) => {
-              props.onActionRunsDockChange?.(dock);
-              if (dock === "above") {
-                props.onShowActionRunsAboveComposer?.();
-              }
-            }}
+            onDockChange={changeActionRunsDock}
             onDismissRun={props.onDismissEnvActionRun}
             onStopRun={props.onStopEnvActionRun}
-            runs={props.actionRuns ?? []}
+            runs={actionRuns}
           />
         );
       case "subagents":
@@ -814,19 +848,5 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     }
   }
 
-  function showRailTooltip(
-    event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
-    path: string,
-    maxLength?: number,
-    copyHint = true
-  ): void {
-    railTooltip.show(
-      event.currentTarget,
-      buildRailTooltipText(path, maxLength, copyHint),
-    );
-  }
 
-  function hideRailTooltip(): void {
-    railTooltip.hide();
-  }
 }
