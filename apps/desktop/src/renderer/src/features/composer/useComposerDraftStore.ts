@@ -25,6 +25,10 @@ export type ComposerDraftSnapshot = {
 
 export type ComposerQueuedTurnSnapshot = {
   id: string;
+  /** Apply this follow-up to the first turn once launchpad setup finishes. */
+  steerWhenReady?: boolean;
+  /** Wait for positive admission of the scheduled first action, not its due time. */
+  waitingForScheduledActionId?: string;
   /** Submission is in flight to the main-process FIFO. */
   backendQueuePending?: boolean;
   /** Main-process FIFO entry once the renderer has handed off dispatch ownership. */
@@ -184,13 +188,17 @@ export function getNextReleasableQueuedTurn<
     | "queueEntryId"
     | "scheduledActionId"
     | "scheduledSendAt"
+    | "manualReleaseRequired"
+    | "waitingForScheduledActionId"
   >,
 >(queuedTurns: readonly T[], now = Date.now()): T | undefined {
   for (const queuedTurn of queuedTurns) {
     // A backend-owned entry is already in the authoritative FIFO. Local
     // scheduled turns and reviews behind it must not leapfrog that entry.
     if (
-      queuedTurn.backendQueuePending
+      queuedTurn.waitingForScheduledActionId
+      || queuedTurn.manualReleaseRequired
+      || queuedTurn.backendQueuePending
       || queuedTurn.queueEntryId
       || queuedTurn.scheduledActionId
     ) {

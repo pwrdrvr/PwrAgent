@@ -1,3 +1,4 @@
+import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode, useState, type ComponentProps } from "react";
@@ -586,6 +587,103 @@ function createScheduledActionApi(options?: {
 }
 
 describe("Composer", () => {
+  it.each([false, true])("preserves follow-up edits while the first launchpad payload is inspected (scheduled: %s)", async (scheduled) => {
+    const inspection = createDeferred<{ filePaths: string[]; pdfPaths: string[] }>();
+    const inspectPdfReferencePaths = vi.fn(() => inspection.promise);
+    const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(async () => undefined);
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "Read [@notes](/repo/notes.txt)");
+    render(<Composer backends={[backendSummary("codex")]}
+      directory={retargetingPwrSnap} launchpad={launchpad} skills={[]}
+      desktopApi={{ inspectPdfReferencePaths }} onMaterializeLaunchpad={onMaterializeLaunchpad} />);
+    if (scheduled) {
+      fireEvent.click(screen.getByRole("button", { name: "Schedule thread" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Start in 1h" }));
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    }
+    await waitFor(() => expect(inspectPdfReferencePaths).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Keep this follow-up" } });
+    await act(async () => {
+      inspection.resolve({ filePaths: ["/repo/notes.txt"], pdfPaths: [] });
+      await inspection.promise;
+    });
+    await waitFor(() => expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1));
+    expect(onMaterializeLaunchpad.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
+      { type: "text", text: "Read [@notes](/repo/notes.txt)" },
+    ]));
+    expect(screen.getByLabelText("New thread")).toHaveValue("Keep this follow-up");
+  });
+
+  it("retargets an image that finishes normalizing after launchpad handoff", async () => {
+    const normalization = createDeferred<Awaited<ReturnType<typeof normalizeImageFile>>>();
+    vi.mocked(normalizeImageFile).mockImplementationOnce(() => normalization.promise);
+    const store = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
+    const view = render(<Composer backends={[backendSummary("codex")]}
+      directory={retargetingPwrSnap} launchpad={launchpad} launchpadMaterializing
+      draftStore={store} skills={[]} />);
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Follow-up image" } });
+    const file = new File([new Uint8Array([1, 2, 3])], "follow-up.png", { type: "image/png" });
+    fireEvent.paste(screen.getByLabelText("New thread"), {
+      clipboardData: { files: [file], items: [{ kind: "file", type: "image/png", getAsFile: () => file }] },
+    });
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
+    const thread: NavigationThreadSummary = {
+      id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "first-turn" },
+    };
+    act(() => handoffLaunchpadComposer(store, launchpad.directoryKey, thread));
+    view.rerender(<Composer backends={[backendSummary("codex")]} thread={thread}
+      activeTurnId="first-turn" draftStore={store} skills={[]} />);
+    await act(async () => {
+      normalization.resolve({
+        dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
+        mimeType: "image/png", conversionPath: "renderer",
+        original: { height: 24, width: 24, size: 3, mimeType: "image/png", name: "follow-up.png" },
+      });
+      await normalization.promise;
+    });
+    expect(await screen.findByAltText("follow-up.png")).toBeInTheDocument();
+    expect(store.get("thread:codex:materialized")?.imageAttachments).toHaveLength(1);
+    expect(store.get("thread:codex:materialized")?.draft).toBe("Follow-up image");
+    expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
+  });
+
+  it("keeps follow-ups and steering intent when a starting launchpad is remounted", async () => {
+    const draftStore = createComposerDraftStore();
+    const backend = backendSummary("codex");
+    backend.capabilities.steerTurn = true;
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "Already submitted");
+    const onMaterializeLaunchpad = vi.fn();
+    const composer = (
+      <Composer
+        backends={[backend]}
+        directory={retargetingPwrSnap}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        launchpadMaterializing
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        skills={[]}
+      />
+    );
+    const first = render(composer);
+    expect(screen.getByLabelText("New thread")).toHaveValue("");
+    expect(screen.getByLabelText("New thread")).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Correction" } });
+    await clickButton("Queue");
+    const queued = screen.getByLabelText("Queued message");
+    fireEvent.click(within(queued).getByRole("button", { name: "Steer when ready" }));
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Still composing" } });
+    first.unmount();
+    render(composer);
+    expect(screen.getByLabelText("New thread")).toHaveValue("Still composing");
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Correction");
+    expect(within(screen.getByLabelText("Queued message")).getByRole("button", {
+      name: "Steer when ready",
+    })).toHaveAttribute("aria-pressed", "true");
+    expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
+  });
+
   it("persists the Auto-fix PR toggle and shows its global polling gate", async () => {
     const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
     const thread: NavigationThreadSummary = {

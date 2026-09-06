@@ -15996,10 +15996,42 @@ a.button {
   margin-top: auto;
 }
 
-.thread-view__launchpad-composer:has(.transcript-panel--setup) {
+.thread-view__launchpad-composer:has(.transcript-panel--setup),
+.thread-view__launchpad-composer.is-materializing {
   flex: 1 1 0;
   min-height: 0;
   margin-top: 0;
+}
+
+.thread-view__launchpad-transcript {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.thread-view__launchpad-transcript .transcript-panel--setup {
+  min-height: 0;
+}
+
+.thread-view__launchpad-composer.is-materializing > .composer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.launchpad-submitted-message {
+  width: calc(100% - 32px);
+  max-width: var(--chat-column-max);
+  margin: 16px auto;
+  color: var(--text-primary);
+  font-size: var(--transcript-text-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.launchpad-submitted-message img {
+  max-width: 160px;
+  max-height: 120px;
+  object-fit: contain;
 }
 
 .thread-view__launchpad-composer > .composer,
@@ -33917,4 +33949,65 @@ button.pricing-token-miser__folded:focus-visible {
   max-width: 100%;
   max-height: 240px;
   object-fit: contain;
+}
+
+.sidebar-pending-thread {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sidebar-pending-thread[aria-current="true"] {
+  background: var(--bg-row-active);
+}
+
+.sidebar-pending-thread__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+details.launchpad-pending__output {
+  display: block;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+details.launchpad-pending__output > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.launchpad-pending__output > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.launchpad-pending__output > summary::before {
+  content: "▸";
+  color: var(--text-muted);
+}
+
+details.launchpad-pending__output[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+details.launchpad-pending__output pre {
+  max-height: 320px;
+}
+
+details.launchpad-pending__output > summary .launchpad-pending__command-label {
+  flex: 1;
+  margin-left: 8px;
 }

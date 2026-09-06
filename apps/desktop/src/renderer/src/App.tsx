@@ -69,6 +69,7 @@ import {
   type EditedFilesDock,
 } from "./features/thread-detail/context-panels/context-tab";
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
+import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
@@ -2227,6 +2228,9 @@ function DesktopAppShell(props: {
   }, [navigation.selectedThread, session.response?.pricing?.lines]);
 
   const threadViewProps = {
+    pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
+      (creation) => creation.selectionKey === navigation.selectedItemKey,
+    ),
     activeFederationOwnerLabel,
     activeFederationTarget,
     activeTurnId: session.activeTurnId,
@@ -2464,6 +2468,7 @@ function DesktopAppShell(props: {
         undefined,
         extraDirectoryPaths,
         scheduledFor,
+        (thread) => handoffLaunchpadComposer(composerDraftStore, directoryKey, thread, desktopApi),
       ),
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,
@@ -2630,6 +2635,10 @@ function DesktopAppShell(props: {
         style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
       >
         <Sidebar
+          pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
+          onSelectPendingLaunchpad={(creation) => {
+            navigation.selectPendingLaunchpad(creation.selectionKey);
+          }}
           addingProjectDirectory={navigation.pickingDirectory}
           backends={backendSummaries.backends}
           browseMode={navigation.browseMode}

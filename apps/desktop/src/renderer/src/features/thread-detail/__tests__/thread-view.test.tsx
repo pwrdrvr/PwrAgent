@@ -2258,6 +2258,16 @@ describe("ThreadView", () => {
       await screen.findByRole("heading", { name: "Running environment setup" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    const followup = screen.getByRole("textbox", { name: "New thread" });
+    expect(followup).toBeEnabled();
+    expect(followup).toHaveValue("");
+    expect(screen.getByLabelText("Submitted message")).toHaveTextContent("Investigate clipboard filenames");
+    fireEvent.change(followup, { target: { value: "Also check the tests" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    expect(await screen.findByLabelText("Queued message")).toHaveTextContent("Also check the tests");
+    expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1);
+    expect(followup).toHaveValue("");
+
     expect(screen.getAllByText("PwrSnap").length).toBeGreaterThan(0);
     expect(screen.getByText("/repo")).toBeInTheDocument();
     expect(
@@ -2469,7 +2479,7 @@ describe("ThreadView", () => {
     expect(await screen.findByRole("heading", { name: "Could not start PwrAgent" }))
       .toBeInTheDocument();
     expect(
-      screen.getByText(
+      within(screen.getByLabelText("Launch error")).getByText(
         "json-rpc error (500): You have exhausted your capacity on this model.",
       ),
     ).toBeInTheDocument();

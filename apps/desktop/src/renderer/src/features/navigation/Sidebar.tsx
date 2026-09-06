@@ -1,3 +1,4 @@
+import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   MouseEvent as ReactMouseEvent,
@@ -250,6 +251,8 @@ type SidebarProps = {
   revealSelectedThreadRequest?: number;
   onRevealSelectedThreadComplete?: (request: number) => void;
   selectedItemKey?: string;
+  pendingLaunchpadCreations?: PendingLaunchpadCreation[];
+  onSelectPendingLaunchpad?: (creation: PendingLaunchpadCreation) => void;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
@@ -2062,6 +2065,19 @@ export function Sidebar(props: SidebarProps) {
           onPointerOut={hoverStableSnapshot.onPointerOut}
           onPointerOver={hoverStableSnapshot.onPointerOver}
         >
+          {props.pendingLaunchpadCreations?.map((creation) => (
+            <button
+              key={creation.selectionKey}
+              className="sidebar-pending-thread"
+              aria-current={props.selectedItemKey === creation.selectionKey ? "true" : undefined}
+              onClick={() => props.onSelectPendingLaunchpad?.(creation)}
+              type="button"
+            >
+              <span className="pending-spinner" aria-hidden="true" />
+              <span className="sidebar-pending-thread__title">{creation.title || "New thread"}</span>
+              <span>Starting</span>
+            </button>
+          ))}
           {props.loading ? (
             <p className="sidebar-empty">Loading threads…</p>
           ) : props.providerRefresh?.state === "checking"

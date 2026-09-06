@@ -1,3 +1,4 @@
+import { observeLaunchpadScheduledAction } from "../features/composer/launchpad-composer-handoff";
 import { useEffect } from "react";
 import type { FederationTarget, ScheduledThreadAction } from "@pwragent/shared";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
@@ -176,6 +177,7 @@ export function syncScheduledActionProjections(
 ): Set<string> {
   const byScope = new Map<string, ScheduledThreadAction[]>();
   for (const action of actions) {
+    observeLaunchpadScheduledAction(store, action);
     if (!isProjectableAction(action)) continue;
     const scopeKey = scopeKeyForAction(action);
     const current = byScope.get(scopeKey) ?? [];
@@ -253,6 +255,7 @@ export function applyScheduledActionProjection(
   store: ComposerDraftStore,
   action: ScheduledThreadAction,
 ): void {
+  observeLaunchpadScheduledAction(store, action);
   const scopeKey = scopeKeyForAction(action);
   const current = store.getQueuedTurns(scopeKey);
   const withoutAction = current.filter(

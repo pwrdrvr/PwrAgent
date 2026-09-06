@@ -5948,12 +5948,8 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const materializeDirectoryLaunchpad = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "thread-new",
-      executionMode: "default" as const,
-      workMode: "worktree" as const,
-    }));
+    const creation = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>>();
+    const materializeDirectoryLaunchpad = vi.fn(() => creation.promise);
     const setThreadPin: NonNullable<DesktopApi["setThreadPin"]> = vi.fn(
       async (request) => ({
         backend: request.backend ?? "codex",
@@ -5977,11 +5973,29 @@ describe("useThreadNavigation", () => {
       );
     });
 
-    await act(async () => {
-      await result.current.materializeDirectoryLaunchpad(
-        "directory:/Users/fixture-user/github/PwrAgent"
+    const onMaterialized = vi.fn((thread: NavigationThreadSummary) => {
+      expect(thread.id).toBe("thread-new");
+      expect(result.current.selectedThread).toBeUndefined();
+    });
+    let pending: Promise<void>;
+    act(() => {
+      pending = result.current.materializeDirectoryLaunchpad(
+        "directory:/Users/fixture-user/github/PwrAgent",
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        onMaterialized,
       );
     });
+    expect(result.current.pendingLaunchpadCreations).toHaveLength(1);
+    act(() => result.current.selectPendingLaunchpad(result.current.pendingLaunchpadCreations[0]!.selectionKey));
+    expect(result.current.selectedLaunchpad?.directoryLabel).toBe("PwrAgent");
+    await act(async () => {
+      creation.resolve({
+        backend: "codex", threadId: "thread-new", executionMode: "default", workMode: "worktree",
+      });
+      await pending;
+    });
+    expect(onMaterialized).toHaveBeenCalledTimes(1);
+    expect(result.current.pendingLaunchpadCreations).toEqual([]);
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       directoryKey: "directory:/Users/fixture-user/github/PwrAgent",
