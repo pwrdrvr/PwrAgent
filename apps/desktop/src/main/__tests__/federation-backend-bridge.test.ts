@@ -3292,6 +3292,96 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("authenticates the source instance when replacing queued agent input", async () => {
+    const backend: FederationBackendOperations = {
+      listThreads: vi.fn(),
+      readThread: vi.fn(),
+      analyzeThreadToolHistory: vi.fn(),
+      listSkills: vi.fn(),
+      replaceQueuedMessage: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        queueStatus: "queued",
+      })),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "client_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: ["turn_control"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend,
+      resolveSourceInstance: () => ({
+        label: "Gateway Mac",
+        celestialIcon: "moon",
+      }),
+    });
+
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "request-1",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.replaceQueuedMessage,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          queueEntryId: "queue-1",
+          input: [{ type: "text", text: "ship it" }],
+          messageOrigin: {
+            kind: "agent",
+            sourceThread: {
+              backend: "codex",
+              instanceId: "spoofed_instance",
+              instanceLabel: "Spoofed Mac",
+              celestialIcon: "black-hole",
+              threadId: "source-thread",
+            },
+          },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.replaceQueuedMessage).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      queueEntryId: "queue-1",
+      input: [{ type: "text", text: "ship it" }],
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          instanceId: "gateway_one",
+          instanceLabel: "Gateway Mac",
+          celestialIcon: "moon",
+          threadId: "source-thread",
+        },
+      },
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "request-1",
+        result: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+    ]);
+  });
+
   it("resolves an exact thread id through thread_navigation", async () => {
     const resolveThread = vi.fn(async () => ({
       thread: {

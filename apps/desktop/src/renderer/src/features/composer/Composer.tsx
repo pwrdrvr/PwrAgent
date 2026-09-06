@@ -5261,6 +5261,7 @@ export function Composer(props: ComposerProps) {
         event.notification.params !== null
           ? (event.notification.params as {
               displayText?: unknown;
+              inputUpdated?: unknown;
               errorMessage?: unknown;
               manualReleaseRequired?: unknown;
               queueEntryId?: unknown;
@@ -5281,8 +5282,8 @@ export function Composer(props: ComposerProps) {
         // Mirror entries queued by OTHER windows (or other federated
         // viewers) — the FIFO lives in the owning instance's main
         // process and every surface should show its contents, not just
-        // the window that submitted. Known ids and in-flight local
-        // submissions keep their richer local state untouched.
+        // the window that submitted. Preserve richer local state on normal
+        // admission events, but refresh previews when the owner edits input.
         const mirrorScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
@@ -5303,6 +5304,10 @@ export function Composer(props: ComposerProps) {
             index === matchingIndex
               ? {
                   ...queued,
+                  ...(turnQueueRecord.inputUpdated === true
+                    && typeof turnQueueRecord.displayText === "string"
+                    ? { text: turnQueueRecord.displayText }
+                    : {}),
                   manualReleaseRequired,
                   holdReason,
                 }

@@ -5373,6 +5373,9 @@ function localBackendOperations(): FederationBackendOperations {
             queueEntryId: submitted.entry.id,
           };
     },
+    async replaceQueuedMessage(request) {
+      return getDesktopBackendRegistry().replaceQueuedAgentMessage(request);
+    },
     async startReview(
       request: StartReviewRequest,
     ): Promise<StartReviewResponse> {

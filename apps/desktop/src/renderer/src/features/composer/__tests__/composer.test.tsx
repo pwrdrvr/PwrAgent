@@ -1,6 +1,6 @@
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -36,6 +36,7 @@ import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer } from "../Composer";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
+import { useComposerDraftStore } from "../useComposerDraftStore";
 import type {
   ComposerDraftSnapshot,
   ComposerDraftStore,
@@ -7134,6 +7135,42 @@ describe("Composer", () => {
         "Second queued reply",
       );
     });
+  });
+
+  it("refreshes an existing queued preview only when the owner replaces input", async () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const draftStore = result.current;
+    const scopeKey = "thread:codex:thread-1";
+    draftStore.setQueuedTurns(scopeKey, [{
+      id: "backend-queued:owner-entry", queueEntryId: "owner-entry", text: "Original complete findings",
+      imageAttachments: [], fileAttachments: [], manualReleaseRequired: true, holdReason: "Operator hold",
+    }]);
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ onAgentEvent: (listener) => { agentEventHandler = listener; return () => undefined; } }} disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    expect(screen.getByLabelText("Held queued message")).toHaveTextContent("Original complete findings");
+    const refresh = async (displayText: string, inputUpdated?: boolean) => {
+      await act(async () => {
+        agentEventHandler?.({ backend: "codex", notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1", queueEntryId: "owner-entry", origin: "manual", status: "queued",
+            displayText, inputUpdated, manualReleaseRequired: true, errorMessage: "Operator hold",
+          },
+        } });
+      });
+    };
+    await refresh("Original…");
+    expect(screen.getByLabelText("Held queued message")).toHaveTextContent("Original complete findings");
+    await refresh("Consolidated findings from all three updates", true);
+    expect(screen.getByLabelText("Held queued message")).toHaveTextContent("Consolidated findings from all three updates");
+    expect(screen.getByLabelText("Held queued message")).not.toHaveTextContent("Original complete findings");
+    expect(draftStore.getQueuedTurns(scopeKey)).toMatchObject([{
+      id: "backend-queued:owner-entry", queueEntryId: "owner-entry", text: "Consolidated findings from all three updates",
+      manualReleaseRequired: true, holdReason: "Operator hold",
+    }]);
+    expect(draftStore.getQueuedTurns(scopeKey)).toHaveLength(1);
   });
 
   it("inspects and edits mirrored long markdown from authoritative queue input", async () => {

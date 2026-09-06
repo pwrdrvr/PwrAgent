@@ -253,19 +253,31 @@ async function sendToRemoteThread(
     backend: request.backend,
     threadId: request.threadId,
   });
-  const turn = await match.backend.startTurn({
-    backend: request.backend,
-    threadId: request.threadId,
-    input: request.input,
-    messageOrigin: request.messageOrigin,
-    executionMode: request.executionMode,
-    model: request.model,
-    reasoningEffort: request.reasoningEffort,
-    serviceTier: request.serviceTier,
-    fastMode: request.fastMode,
-    approvalPolicy: request.approvalPolicy,
-    sandbox: request.sandbox,
-  });
+  if (request.replaceQueueEntryId && !match.backend.replaceQueuedMessage) {
+    throw new Error("Queued message replacement is unavailable on this instance.");
+  }
+  const turn = request.replaceQueueEntryId
+    ? await match.backend.replaceQueuedMessage!({
+        backend: request.backend,
+        threadId: request.threadId,
+        queueEntryId: request.replaceQueueEntryId,
+        input: request.input,
+        messageOrigin: request.messageOrigin,
+      })
+    : await match.backend.startTurn({
+        backend: request.backend,
+        threadId: request.threadId,
+        input: request.input,
+        messageOrigin: request.messageOrigin,
+        executionMode: request.executionMode,
+        model: request.model,
+        reasoningEffort: request.reasoningEffort,
+        serviceTier: request.serviceTier,
+        fastMode: request.fastMode,
+        approvalPolicy: request.approvalPolicy,
+        sandbox: request.sandbox,
+      });
+
   return {
     backend: turn.backend,
     threadId: turn.threadId,

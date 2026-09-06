@@ -196,6 +196,9 @@ function buildRuntime(params: {
         resolveActiveTurn,
         resolveThread,
         startTurn,
+        replaceQueuedMessage: vi.fn(async (): Promise<StartTurnResponse> => ({
+          backend: "codex", threadId: request.threadId, turnId: "queued-1", queueStatus: "queued", queueEntryId: "queued-1",
+        })),
         steerTurn,
       }] as const;
     }),
@@ -214,6 +217,19 @@ function buildRuntime(params: {
 }
 
 describe("federated thread message service", () => {
+  it("replaces on the owning peer without falling back to a new turn", async () => {
+    const { backends, runtime } = buildRuntime({ peers: [{ instanceId: "owner", label: "Owner", ownsThread: true }] });
+    const handler = createFederatedThreadMessageHandler({ runtime: () => runtime });
+    const backend = backends.get("owner")!;
+    await expect(handler({ ...request, replaceQueueEntryId: "queued-1" })).resolves.toMatchObject({ queueEntryId: "queued-1", queueStatus: "queued" });
+    expect(backend.replaceQueuedMessage).toHaveBeenCalledWith({
+      backend: request.backend, threadId: request.threadId, queueEntryId: "queued-1", input: request.input, messageOrigin: request.messageOrigin,
+    });
+    backend.replaceQueuedMessage.mockRejectedValueOnce(new Error("Unsupported federation method: backend.replaceQueuedMessage"));
+    await expect(handler({ ...request, replaceQueueEntryId: "queued-1" })).rejects.toThrow("Unsupported federation method");
+    expect(backend.startTurn).not.toHaveBeenCalled();
+  });
+
   it("resolves a UUID owner and starts the turn on that peer", async () => {
     const { backends, runtime } = buildRuntime({
       peers: [

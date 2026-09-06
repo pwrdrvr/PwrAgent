@@ -196,6 +196,14 @@ export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
 };
 
+export type FederationReplaceQueuedMessageRequest = {
+  backend: StartTurnRequest["backend"];
+  threadId: string;
+  queueEntryId: string;
+  input: AppServerTurnInputItem[];
+  messageOrigin?: AppServerThreadMessageOrigin;
+};
+
 export type FederationTurnInputBlobReference = {
   type: "federationBlob";
   transferId: string;
@@ -389,6 +397,7 @@ export const FEDERATION_BACKEND_METHODS = {
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
+  replaceQueuedMessage: "backend.replaceQueuedMessage",
   readQueuedTurn: "backend.readQueuedTurn",
   cancelQueuedTurn: "backend.cancelQueuedTurn",
   releaseQueuedTurn: "backend.releaseQueuedTurn",
@@ -493,6 +502,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.replaceQueuedMessage]: "turn_control",
   [FEDERATION_BACKEND_METHODS.readQueuedTurn]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.releaseQueuedTurn]: "turn_control",
@@ -658,6 +668,7 @@ export type FederationBackendOperations = {
     >,
   ): Promise<ForkThreadResponse>;
   startTurn(request: FederationStartTurnRequest): Promise<StartTurnResponse>;
+  replaceQueuedMessage?(request: FederationReplaceQueuedMessageRequest): Promise<StartTurnResponse>;
   readQueuedTurn(
     request: ReadQueuedTurnRequest,
   ): Promise<ReadQueuedTurnResponse>;
@@ -1139,6 +1150,26 @@ export function registerFederationBackendHandlers(params: {
         input,
         ...(messageOrigin ? { messageOrigin } : {}),
       });
+    },
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.replaceQueuedMessage,
+    async (envelope) => {
+      if (!params.backend.replaceQueuedMessage) {
+        throw new Error("Queued message replacement is unavailable on this instance.");
+      }
+      const request = envelope.params as Omit<FederationReplaceQueuedMessageRequest, "input"> & { input: FederationWireTurnInputItem[] };
+      const messageOrigin = authenticateMessageOrigin({
+        messageOrigin: request.messageOrigin,
+        resolveSourceInstance: params.resolveSourceInstance,
+        sourceInstanceId: envelope.sourceInstanceId,
+      });
+      const input = await resolveFederationTurnInput(
+        params.resolveTurnInput,
+        request.input,
+        envelope.sourceInstanceId,
+      );
+      return await params.backend.replaceQueuedMessage({ ...request, input, messageOrigin });
     },
   );
   params.router.registerHandler(
@@ -1848,6 +1879,18 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       : request.input;
     return await this.rpc.request<StartTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.startTurn,
+      params: { ...request, input },
+    });
+  }
+
+  async replaceQueuedMessage(
+    request: FederationReplaceQueuedMessageRequest,
+  ): Promise<StartTurnResponse> {
+    const input = this.prepareTurnInput
+      ? await this.prepareTurnInput(request.input)
+      : request.input;
+    return await this.rpc.request<StartTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.replaceQueuedMessage,
       params: { ...request, input },
     });
   }
