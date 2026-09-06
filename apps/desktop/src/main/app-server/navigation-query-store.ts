@@ -14,10 +14,17 @@ import {
   type NavigationQueryIndex,
   type NavigationQueryMaterialization,
 } from "./navigation-query-projection";
+import {
+  navigationAttentionOrderBytes,
+  reconcileNavigationAttentionOrder,
+  type NavigationAttentionOrder,
+} from "./navigation-attention-order";
 
 const NAVIGATION_QUERY_CURSOR_IDLE_MS = 60_000;
 const NAVIGATION_QUERY_MAX_GENERATIONS = 8;
 const NAVIGATION_QUERY_MAX_RETAINED_BYTES = 32 * 1024 * 1024;
+const NAVIGATION_ATTENTION_MAX_VIEWS = 64;
+const NAVIGATION_ATTENTION_MAX_BYTES = 8 * 1024 * 1024;
 
 export type NavigationQueryErrorCode =
   | "navigation_busy"
@@ -92,6 +99,18 @@ function validateRequest(request: NavigationQueryRequest): void {
     );
   }
   if (
+    request.attentionView !== undefined
+    && (typeof request.attentionView.id !== "string"
+      || request.attentionView.id.length < 1
+      || request.attentionView.id.length > 128
+      || typeof request.attentionView.promoteOnTurnEnd !== "boolean")
+  ) {
+    throw new NavigationQueryError(
+      "navigation_invalid_request",
+      "Navigation Attention requires a bounded view identity and promotion policy.",
+    );
+  }
+  if (
     request.pageSize !== undefined
     && (!Number.isSafeInteger(request.pageSize)
       || request.pageSize < 1
@@ -145,6 +164,10 @@ export class NavigationQueryStore {
   private readonly ownerEpoch = randomUUID();
   private readonly generations = new Map<string, NavigationQueryGeneration>();
   private readonly currentGenerationByScopeAndQuery = new Map<string, string>();
+  private readonly attentionViews = new Map<string, {
+    order: NavigationAttentionOrder;
+    bytes: number;
+  }>();
 
   constructor(
     private readonly options: {
@@ -183,9 +206,11 @@ export class NavigationQueryStore {
       offset = cursor.offset;
     } else {
       const index = await params.loadIndex();
+      const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index);
       const materialization = projectNavigationQuery({
         index,
         request: params.request,
+        attentionOrder,
       });
       const revision = completeRevision(materialization);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
@@ -229,6 +254,42 @@ export class NavigationQueryStore {
       ownerEpoch: this.ownerEpoch,
       pageSize: params.request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS,
     });
+  }
+
+  /** Window teardown releases order lifetime; page expiry deliberately does not. */
+  releaseAttentionView(scopeKey: string, viewId: string): void {
+    for (const promoteOnTurnEnd of [false, true]) {
+      this.attentionViews.delete(JSON.stringify([scopeKey, viewId, promoteOnTurnEnd]));
+    }
+  }
+
+  private reconcileAttentionView(
+    scopeKey: string,
+    request: NavigationQueryRequest,
+    index: NavigationQueryIndex,
+  ): NavigationAttentionOrder | undefined {
+    if (!request.attentionView) return undefined;
+    const { id, promoteOnTurnEnd } = request.attentionView;
+    const key = JSON.stringify([scopeKey, id, promoteOnTurnEnd]);
+    const previous = this.attentionViews.get(key);
+    if (!previous && this.attentionViews.size >= NAVIGATION_ATTENTION_MAX_VIEWS) {
+      throw new NavigationQueryError("navigation_busy", "Attention view budget is occupied.");
+    }
+    const order = reconcileNavigationAttentionOrder({
+      previous: previous?.order,
+      threads: index.threads,
+      promoteOnTurnEnd,
+    });
+    const bytes = navigationAttentionOrderBytes(order);
+    let retainedBytes = bytes;
+    for (const [otherKey, view] of this.attentionViews) {
+      if (otherKey !== key) retainedBytes += view.bytes;
+    }
+    if (retainedBytes > NAVIGATION_ATTENTION_MAX_BYTES) {
+      throw new NavigationQueryError("navigation_busy", "Attention metadata exceeds its retained budget.");
+    }
+    this.attentionViews.set(key, { order, bytes });
+    return order;
   }
 
   private buildPage(params: {

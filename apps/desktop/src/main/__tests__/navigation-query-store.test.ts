@@ -53,6 +53,63 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it("keeps owner Attention ranks across pages, lens changes and cursor expiry", async () => {
+    let now = 1_000;
+    const store = new NavigationQueryStore({ now: () => now });
+    const a = { ...thread("1"), threadStatus: "active" as const };
+    const b = { ...thread("2"), threadStatus: "active" as const };
+    const owner = snapshot([a, b]);
+    const loadIndex = async () => owner;
+    const attention = request({
+      query: { kind: "lens", lens: "attention" },
+      attentionView: { id: "window-a", promoteOnTurnEnd: true },
+      pageSize: 1,
+    });
+    const read = (next = attention) => store.readPage({
+      loadIndex, request: next, scopeKey: "requester",
+    });
+    const first = await read();
+    expect(first.entries[0]?.row.id).toBe("2");
+    a.updatedAt = 100;
+    await read({ ...attention, query: { kind: "lens", lens: "inbox" } });
+    const second = await read({ ...attention, cursor: first.nextCursor });
+    expect(second.entries[0]?.row.id).toBe("1");
+    expect(second.entries[0]?.attentionRank).toBeLessThan(first.entries[0]!.attentionRank!);
+    now += 60_001;
+    const rebaseline = await read();
+    expect(rebaseline.entries[0]?.row.id).toBe("2");
+    expect(rebaseline.entries[0]?.attentionRank).toBe(first.entries[0]?.attentionRank);
+
+    owner.threads = [{ ...a, threadStatus: "idle", inbox: { inInbox: true } }, b];
+    const finished = await read();
+    expect(finished.entries[0]?.row.id).toBe("1");
+    expect(finished.counts).toMatchObject({ active: 1, review: 1 });
+  });
+
+  it("isolates Attention view policies and retains off-page membership", async () => {
+    const store = new NavigationQueryStore();
+    const owner = snapshot([
+      { ...thread("1"), inbox: { inInbox: true } },
+      { ...thread("2"), inbox: { inInbox: true } },
+    ]);
+    const read = (promoteOnTurnEnd: boolean) => store.readPage({
+      loadIndex: async () => owner,
+      request: request({
+        query: { kind: "lens", lens: "attention" },
+        attentionView: { id: "view", promoteOnTurnEnd },
+        pageSize: 1,
+      }),
+      scopeKey: "requester",
+    });
+    await read(true);
+    await read(false);
+    owner.threads[0]!.updatedAt = 100;
+    expect((await read(true)).entries[0]?.row.id).toBe("1");
+    expect((await read(false)).entries[0]?.row.id).toBe("2");
+    store.releaseAttentionView("requester", "view");
+    expect((await read(false)).entries[0]?.row.id).toBe("1");
+  });
+
   it("cursor_preserves_generation_during_owner_activity", async () => {
     let owner = snapshot(
       Array.from({ length: 25 }, (_, index) => thread(String(index + 1))),
