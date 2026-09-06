@@ -63,6 +63,8 @@ export type FederationEventSubscription = {
   eventClasses: FederationEventClass[];
   /** Absent means `all` for peers that predate filtered subscriptions. */
   threadSelection?: FederationThreadSelection;
+  /** Class-specific demand. When present, a missing class has no thread interest. */
+  eventClassSelections?: Partial<Record<FederationEventClass, FederationThreadSelection>>;
 };
 
 export type FederationEventSubscriptionConsumer =

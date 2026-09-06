@@ -1193,6 +1193,11 @@ describe("agent ipc", () => {
     } as AgentEvent);
 
     expect(ownerSend).toHaveBeenCalledTimes(1);
+    expect(federationMock.runtime.rendererWantsRemoteEvent).toHaveBeenCalledWith(
+      2, "owner_one", "transcript", expect.objectContaining({
+        notification: expect.objectContaining({ params: expect.objectContaining({ threadId: "thread-1" }) }),
+      }),
+    );
     expect(localSend).not.toHaveBeenCalled();
     expect(unrelatedSend).not.toHaveBeenCalled();
   });

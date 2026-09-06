@@ -1407,7 +1407,7 @@ function DesktopAppShell(props: {
   }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
   const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
     desktopApi,
-    enabled: !readRendererFederationTarget(),
+    enabled: true,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
   });

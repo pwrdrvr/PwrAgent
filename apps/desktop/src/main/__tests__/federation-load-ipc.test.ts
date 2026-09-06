@@ -3,6 +3,7 @@ import type { FederationLoadStatus } from "@pwragent/shared";
 import {
   FEDERATION_OPEN_WINDOW_CHANNEL,
   FEDERATION_READ_INSTANCE_LOAD_CHANNEL,
+  FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
 } from "../../shared/ipc";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -25,6 +26,8 @@ const runtime = {
   localBackend: vi.fn(),
   connectedPeerTargets: vi.fn(),
   remoteBackend: vi.fn(),
+  setRendererEventSubscriptions: vi.fn(),
+  clearRendererEventSubscriptions: vi.fn(),
 };
 const createFederationWindow = vi.hoisted(() => vi.fn());
 
@@ -73,6 +76,8 @@ describe("federation read-instance-load ipc", () => {
       .mockReturnValue({ getLoadStatus: async () => localLoad });
     runtime.connectedPeerTargets.mockReset().mockReturnValue([]);
     runtime.remoteBackend.mockReset();
+    runtime.setRendererEventSubscriptions.mockReset().mockImplementation((_id, _consumer, subscriptions) => subscriptions);
+    runtime.clearRendererEventSubscriptions.mockReset();
     createFederationWindow.mockReset().mockReturnValue({ id: 7 });
   });
 
@@ -81,6 +86,31 @@ describe("federation read-instance-load ipc", () => {
       load: localLoad,
     });
     expect(runtime.remoteBackend).not.toHaveBeenCalled();
+  });
+
+  it("preserves class-specific renderer demand through IPC and owns cleanup", async () => {
+    const { registerFederationIpcHandlers } = await import("../ipc/federation");
+    registerFederationIpcHandlers();
+    runtime.connectedPeerTargets.mockReturnValue([{
+      target: { scope: "remote", instanceId: "owner_one" },
+      capabilities: ["thread_navigation", "thread_detail", "event_subscriptions"],
+    }]);
+    const subscription = {
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation", "transcript"], threadSelection: { kind: "all" },
+      eventClassSelections: {
+        navigation: { kind: "all" },
+        transcript: { kind: "threads", threads: [{ backend: "codex", threadId: "A" }] },
+      },
+    };
+    const once = vi.fn();
+    await expect(handlers.get(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL)!({
+      sender: { id: 88, once },
+    }, { consumer: "thread_view", subscriptions: [subscription] })).resolves.toEqual({ subscriptions: [subscription] });
+    expect(runtime.setRendererEventSubscriptions).toHaveBeenCalledWith(88, "thread-view", [subscription]);
+    expect(once).toHaveBeenCalledWith("destroyed", expect.any(Function));
+    once.mock.calls[0]![1]();
+    expect(runtime.clearRendererEventSubscriptions).toHaveBeenCalledWith(88);
   });
 
   it("samples locally for the local instance's own id", async () => {

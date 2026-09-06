@@ -25,13 +25,10 @@ export function buildFederationThreadEventSubscriptions(params: {
     selectedTarget && isRemoteFederationTarget(selectedTarget)
       ? selectedTarget.instanceId
       : undefined;
-  const eventClassesByInstance = new Map<
+  type ThreadRefs = Map<string, { backend: NavigationThreadSummary["source"]; threadId: string }>;
+  const selectionsByInstance = new Map<
     string,
-    Set<FederationEventClass>
-  >();
-  const threadsByInstance = new Map<
-    string,
-    Map<string, { backend: NavigationThreadSummary["source"]; threadId: string }>
+    Map<FederationEventClass, ThreadRefs>
   >();
   const threads = params.selectedThread
     ? [...params.threads, params.selectedThread]
@@ -53,8 +50,7 @@ export function buildFederationThreadEventSubscriptions(params: {
       continue;
     }
 
-    const eventClasses = eventClassesByInstance.get(target.instanceId)
-      ?? new Set<FederationEventClass>();
+    const eventClasses = new Set<FederationEventClass>();
     // Main-window remote pins do not inherit the dedicated remote window's
     // subscription. Keep lifecycle events flowing for every pinned owner so
     // background queue and scheduled-action projections can settle.
@@ -64,7 +60,9 @@ export function buildFederationThreadEventSubscriptions(params: {
     if (federation.capabilities.includes("scheduled_actions")) {
       eventClasses.add("scheduled_actions");
     }
-    if (target.instanceId === selectedInstanceId) {
+    if (target.instanceId === selectedInstanceId
+      && thread.source === params.selectedThread?.source
+      && thread.id === params.selectedThread.id) {
       if (federation.capabilities.includes("thread_detail")) {
         eventClasses.add("transcript");
       }
@@ -73,29 +71,37 @@ export function buildFederationThreadEventSubscriptions(params: {
       }
     }
     if (eventClasses.size > 0) {
-      eventClassesByInstance.set(target.instanceId, eventClasses);
-      const selectedThreads = threadsByInstance.get(target.instanceId)
-        ?? new Map();
-      selectedThreads.set(buildThreadIdentityKey(thread.source, thread.id), {
-        backend: thread.source,
-        threadId: thread.id,
-      });
-      threadsByInstance.set(target.instanceId, selectedThreads);
+      const selections = selectionsByInstance.get(target.instanceId) ?? new Map();
+      for (const eventClass of eventClasses) {
+        const refs = selections.get(eventClass) ?? new Map();
+        refs.set(buildThreadIdentityKey(thread.source, thread.id), {
+          backend: thread.source,
+          threadId: thread.id,
+        });
+        selections.set(eventClass, refs);
+      }
+      selectionsByInstance.set(target.instanceId, selections);
     }
   }
 
-  return [...eventClassesByInstance]
+  return [...selectionsByInstance]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([sourceInstanceId, eventClasses]) => ({
-      sourceInstanceId,
-      eventClasses: THREAD_VIEW_EVENT_CLASS_ORDER.filter((eventClass) =>
-        eventClasses.has(eventClass)
-      ),
-      threadSelection: {
-        kind: "threads" as const,
-        threads: [...(threadsByInstance.get(sourceInstanceId)?.values() ?? [])],
-      },
-    }));
+    .map(([sourceInstanceId, selections]) => {
+      const allRefs: ThreadRefs = new Map();
+      for (const refs of selections.values()) {
+        for (const [key, ref] of refs) allRefs.set(key, ref);
+      }
+      const eventClassSelections = Object.fromEntries([...selections].map(([eventClass, refs]) => [
+        eventClass, { kind: "threads" as const, threads: [...refs.values()] },
+      ]));
+      return {
+        sourceInstanceId,
+        eventClasses: THREAD_VIEW_EVENT_CLASS_ORDER.filter((eventClass) => selections.has(eventClass)),
+        threadSelection: { kind: "threads" as const, threads: [...allRefs.values()] },
+        ...([...selections.values()].some((refs) => refs.size !== allRefs.size)
+          ? { eventClassSelections } : {}),
+      };
+    });
 }
 
 export function useFederationThreadEventSubscriptions(params: {
