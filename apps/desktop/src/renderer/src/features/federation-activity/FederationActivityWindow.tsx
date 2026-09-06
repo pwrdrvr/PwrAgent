@@ -197,6 +197,6 @@ export function FederationActivityWindow() {
         <span className="activity-titlebar__current">Activity</span></div>
       <div className="activity-titlebar__spacer" />
     </header>
-    <div className="activity-content"><FederationActivityScreen desktopApi={desktopApi} /></div>
+    <div className="activity-content federation-activity-content"><FederationActivityScreen desktopApi={desktopApi} /></div>
   </section></div>;
 }

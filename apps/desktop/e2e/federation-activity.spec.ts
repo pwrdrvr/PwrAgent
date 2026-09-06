@@ -86,12 +86,18 @@ for (const theme of ["dark", "light"] as const) {
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
       expect(audit.violations).toEqual([]);
       await activity.screenshot({ path: testInfo.outputPath(`federation-activity-${theme}.png`) });
+      const titlebar = activity.locator(".activity-titlebar");
+      const titlebarBeforeScroll = await titlebar.boundingBox();
       const totals = activity.locator(".federation-activity__tables").first();
       await expect(totals.getByRole("columnheader", { name: "Last 10m", exact: true })).toHaveCount(2);
       await totals.scrollIntoViewIfNeeded();
       await activity.screenshot({ path: testInfo.outputPath(`federation-totals-${theme}.png`) });
       const sizes = activity.getByRole("table", { name: "Lifetime request/response sizes · uncompressed", exact: true });
       await sizes.scrollIntoViewIfNeeded();
+      await expect(titlebar).toBeVisible();
+      expect(await titlebar.boundingBox()).toEqual(titlebarBeforeScroll);
+      expect(await activity.locator(".activity-content").evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      expect(await activity.evaluate(() => document.scrollingElement?.scrollTop)).toBe(0);
       await expect(sizes.getByRole("columnheader", { name: "p50 ≈", exact: true })).toBeVisible();
       await activity.screenshot({ path: testInfo.outputPath(`federation-sizes-${theme}.png`) });
       await activity.close();
