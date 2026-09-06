@@ -70,6 +70,7 @@ export function publicPeerSummary(peer: FederationPeerSummary): FederationPeerSu
     capabilities: [...peer.capabilities],
     canRevoke: peer.canRevoke,
     protocolVersion: peer.protocolVersion,
+    navigationQueryProtocol: peer.navigationQueryProtocol,
     endpoint: peer.endpoint,
     profileName: peer.profileName,
     celestialIcon: peer.celestialIcon,

@@ -152,6 +152,12 @@ import {
   type DetachThreadPullRequestResponse,
   type ReorderThreadPinsRequest,
   type ReorderThreadPinsResponse,
+  type NavigationQueryPage,
+  type NavigationQueryRequest,
+  type NavigationQueueProjection,
+  type NavigationQueueProjectionRequest,
+  type NavigationSelectedDetailRequest,
+  type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
   type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
@@ -222,6 +228,8 @@ import {
   recordRecentFileReferencePaths,
 } from "../state/recent-file-references-store";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
   FederationReplacementReceiver,
@@ -293,8 +301,10 @@ import {
 import { FederationRouter } from "./federation-router";
 import {
   FederationRpcEndpoint,
+  hasFederationErrorCode,
   type FederationRpcRequestOptions,
 } from "./federation-rpc";
+import { stampRemoteNavigationQueryPage } from "./federation-navigation-query";
 import {
   FederationPeerUnavailableError,
 } from "./federation-peer-unavailable-error";
@@ -326,6 +336,23 @@ import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 import { federationReconnectDelayMs } from "./federation-reconnect-policy";
 
 const log = getMainLogger("pwragent:federation-runtime");
+
+export class FederationNavigationUpgradeRequiredError extends Error {
+  readonly code = "navigation_upgrade_required";
+
+  constructor(instanceId: FederationInstanceId) {
+    super(
+      `Federation peer ${instanceId} does not support bounded navigation reads. Upgrade that peer before browsing its threads.`,
+    );
+    this.name = "FederationNavigationUpgradeRequiredError";
+  }
+}
+
+function navigationUpgradeRequired(
+  instanceId: FederationInstanceId,
+): FederationNavigationUpgradeRequiredError {
+  return new FederationNavigationUpgradeRequiredError(instanceId);
+}
 
 export function navigationWireResponseThreadCount(
   response: NavigationSnapshot | NavigationSnapshotTransportResponse,
@@ -1144,6 +1171,7 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget;
     label: string;
     capabilities: FederationCapability[];
+    navigationQueryProtocol?: 2;
   }> {
     // Compose display labels against the full visible set so two
     // profiles of the same machine ("Mac-Mini-M4 / default",
@@ -1156,7 +1184,19 @@ export class DesktopFederationRuntime {
         target: { scope: "remote", instanceId: peer.id },
         label: formatFederationPeerDisplayLabel(peer, visible),
         capabilities: [...peer.capabilities],
+        navigationQueryProtocol: peer.navigationQueryProtocol,
       }));
+  }
+
+  private assertRemoteNavigationQueryProtocol(
+    target: FederationRemoteTarget,
+  ): void {
+    const peer = this.visiblePeers().find(
+      (candidate) => candidate.id === target.instanceId,
+    );
+    if (peer?.navigationQueryProtocol !== 2) {
+      throw navigationUpgradeRequired(target.instanceId);
+    }
   }
 
   remoteTargetSupportsCapability(
@@ -2007,6 +2047,115 @@ export class DesktopFederationRuntime {
       this.rpcByPeer.set(target.instanceId, rpc);
     }
     return rpc;
+  }
+
+  async remoteNavigationQueryPage(
+    target: FederationRemoteTarget,
+    request: NavigationQueryRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueryPage> {
+    this.assertRemoteNavigationQueryProtocol(target);
+    const backend = this.remoteBackend(target);
+    if (!backend.getNavigationQueryPage) {
+      throw navigationUpgradeRequired(target.instanceId);
+    }
+    const { federationTarget: _federationTarget, ...ownerRequest } = request;
+    let page: NavigationQueryPage;
+    try {
+      page = await backend.getNavigationQueryPage(ownerRequest, rpcOptions);
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw navigationUpgradeRequired(target.instanceId);
+      }
+      throw error;
+    }
+    const instanceLabel = this.connectedPeerTargets().find(
+      (peer) => peer.target.instanceId === target.instanceId,
+    )?.label ?? target.instanceId;
+    return stampRemoteNavigationQueryPage({ instanceLabel, page, target });
+  }
+
+  async remoteNavigationSelectedDetail(
+    target: FederationRemoteTarget,
+    request: NavigationSelectedDetailRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationSelectedDetailResponse> {
+    this.assertRemoteNavigationQueryProtocol(target);
+    const backend = this.remoteBackend(target);
+    if (!backend.getNavigationSelectedDetail) {
+      throw navigationUpgradeRequired(target.instanceId);
+    }
+    const { federationTarget: _federationTarget, ...ownerRequest } = request;
+    const ownerRef = {
+      backend: ownerRequest.ref.backend,
+      threadId: ownerRequest.ref.threadId,
+    };
+    let response: NavigationSelectedDetailResponse;
+    try {
+      response = await backend.getNavigationSelectedDetail(
+        { ...ownerRequest, ref: ownerRef },
+        rpcOptions,
+      );
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw navigationUpgradeRequired(target.instanceId);
+      }
+      throw error;
+    }
+    const instanceLabel = this.connectedPeerTargets().find(
+      (peer) => peer.target.instanceId === target.instanceId,
+    )?.label ?? target.instanceId;
+    return {
+      ...response,
+      ref: { ...response.ref, ownerInstanceId: target.instanceId },
+      ...(response.thread
+        ? {
+            thread: {
+              ...response.thread,
+              federation: {
+                instanceLabel,
+                ref: buildFederatedThreadRef({
+                  backend: response.thread.source,
+                  instanceId: target.instanceId,
+                  threadId: response.thread.id,
+                }),
+              },
+            },
+          }
+        : {}),
+    };
+  }
+
+  async remoteNavigationQueueProjection(
+    target: FederationRemoteTarget,
+    request: NavigationQueueProjectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueueProjection> {
+    this.assertRemoteNavigationQueryProtocol(target);
+    const backend = this.remoteBackend(target);
+    if (!backend.getNavigationQueueProjection) {
+      throw navigationUpgradeRequired(target.instanceId);
+    }
+    const { federationTarget: _federationTarget, ...ownerRequest } = request;
+    const ownerRef = {
+      backend: ownerRequest.ref.backend,
+      threadId: ownerRequest.ref.threadId,
+    };
+    try {
+      const response = await backend.getNavigationQueueProjection(
+        { ...ownerRequest, ref: ownerRef },
+        rpcOptions,
+      );
+      return {
+        ...response,
+        ref: { ...response.ref, ownerInstanceId: target.instanceId },
+      };
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw navigationUpgradeRequired(target.instanceId);
+      }
+      throw error;
+    }
   }
 
   async remoteNavigationSnapshot(
@@ -3145,6 +3294,7 @@ export class DesktopFederationRuntime {
       peerId: gatewayInstanceId,
       capabilities: client.capabilities,
       peerDirectoryPaging: client.peerDirectoryPaging,
+      navigationQueryProtocol: client.navigationQueryProtocol,
       sendEnvelope: (envelope) => client.sendEnvelope(envelope),
       sendEnvelopeWithBackpressure: async (envelope) => {
         if (client.sendEnvelopeWithBackpressure) {
@@ -3287,6 +3437,7 @@ export class DesktopFederationRuntime {
       peerId: connection.peerId,
       capabilities: connection.capabilities,
       peerDirectoryPaging: connection.peerDirectoryPaging,
+      navigationQueryProtocol: connection.navigationQueryProtocol,
       sendEnvelope: connection.sendEnvelope,
       sendEnvelopeWithBackpressure: connection.sendEnvelopeWithBackpressure,
     });
@@ -3664,6 +3815,7 @@ export class DesktopFederationRuntime {
         role: existing?.role ?? this.defaultPeerRole(connection.peerId),
         status: "connected",
         capabilities: [...connection.capabilities],
+        navigationQueryProtocol: connection.navigationQueryProtocol,
         protocolVersion: existing?.protocolVersion,
         endpoint: existing?.endpoint,
         profileName: existing?.profileName,
@@ -3740,6 +3892,7 @@ export class DesktopFederationRuntime {
         status: "connected",
         capabilities: DEFAULT_CAPABILITIES,
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        navigationQueryProtocol: 2,
         profileName: localProfileName,
         celestialIcon: this.celestialIconFor(localInstanceId),
         notes: this.instanceNotes || undefined,
@@ -5215,6 +5368,25 @@ async function mountRemoteParentForLocalChild(
 function localBackendOperations(): FederationBackendOperations {
   const messagingBridge = new DesktopMessagingBackendBridge();
   return {
+    async getNavigationQueryPage(request, rpcOptions) {
+      return await getDesktopNavigationQueryStore().readPage({
+        loadSnapshot: async () => await messagingBridge.getNavigationSnapshot({
+          backend: request.backend,
+        }),
+        request,
+        scopeKey: rpcOptions?.requesterInstanceId
+          ? `federation:${rpcOptions.requesterInstanceId}`
+          : "federation:unknown",
+      });
+    },
+    async getNavigationSelectedDetail(request) {
+      return await getDesktopNavigationDetailService().readSelectedDetail(
+        request,
+      );
+    },
+    async getNavigationQueueProjection(request) {
+      return getDesktopNavigationDetailService().readQueueProjection(request);
+    },
     async getProjectPage(request, rpcOptions) {
       const threads = await getDesktopBackendRegistry().listThreadSearchCandidates({
         deadlineAt: rpcOptions?.deadlineAt,

@@ -123,6 +123,12 @@ import type {
   CompactThreadResponse,
   CodexEnvironmentSetupProgressEvent,
   CreateAutomationRequest,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationQueueProjection,
+  NavigationQueueProjectionRequest,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
   GetNavigationSnapshotRequest,
   GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
@@ -710,6 +716,9 @@ import {
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
+  NAVIGATION_QUERY_PAGE_CHANNEL,
+  NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+  NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1807,6 +1816,22 @@ const desktopApi = Object.freeze({
       NAVIGATION_SNAPSHOT_CHANNEL,
       request,
     ),
+  getNavigationQueryPage: async (
+    request: NavigationQueryRequest,
+  ): Promise<NavigationQueryPage> =>
+    await invokeWithStartupProfileTiming(
+      "getNavigationQueryPage",
+      NAVIGATION_QUERY_PAGE_CHANNEL,
+      request,
+    ),
+  getNavigationSelectedDetail: async (
+    request: NavigationSelectedDetailRequest,
+  ): Promise<NavigationSelectedDetailResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SELECTED_DETAIL_CHANNEL, request),
+  getNavigationQueueProjection: async (
+    request: NavigationQueueProjectionRequest,
+  ): Promise<NavigationQueueProjection> =>
+    await ipcRenderer.invoke(NAVIGATION_QUEUE_PROJECTION_CHANNEL, request),
   getNavigationSnapshotTransport: async (
     request: GetNavigationSnapshotTransportRequest,
   ): Promise<NavigationSnapshotTransportResponse> =>
