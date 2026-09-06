@@ -586,13 +586,27 @@ describe("GitDirectoryService", () => {
   it("reports at most the newest recent commits for the current branch", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
-    for (let index = 0; index < MAX_TRACKED_COMMITS + 5; index += 1) {
-      execFileSync(
-        "git",
-        ["-C", repoDir, "commit", "--allow-empty", "-m", `Commit ${index}`],
-        { stdio: "ignore" },
-      );
-    }
+    // Build the same linear history in one Git process. Starting a process
+    // for each empty commit can exhaust the test budget on Windows CI before
+    // the service under test gets to read the repository.
+    const seedSha = runGit(repoDir, ["rev-parse", "HEAD"]);
+    const commits = Array.from({ length: MAX_TRACKED_COMMITS + 5 }, (_, index) => {
+      const message = `Commit ${index}`;
+      return [
+        "commit refs/heads/main",
+        `mark :${index + 1}`,
+        `committer PwrAgent Tests <pwragent-tests@example.invalid> ${1_700_000_000 + index} +0000`,
+        `data ${Buffer.byteLength(message)}`,
+        message,
+        `from ${index === 0 ? seedSha : `:${index}`}`,
+        "",
+        "",
+      ].join("\n");
+    }).join("");
+    execFileSync("git", ["-C", repoDir, "fast-import", "--quiet"], {
+      input: commits,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
     const service = new GitDirectoryService();
 
     const status = await service.readDirectoryStatus({ path: repoDir });

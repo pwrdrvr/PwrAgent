@@ -89,6 +89,27 @@ describe("buildCodexMissingThreadsNotice", () => {
     expect(notice?.detail).toContain("2 threads could not be archived");
   });
 
+  it("identifies affected threads on the notice and preserves errors when copied", () => {
+    const notice = buildCodexMissingThreadsNotice({
+      onArchive: vi.fn(),
+      onKeep: vi.fn(),
+      signal: {
+        archivedCount: 0,
+        failedCount: 1,
+        missingCount: 1,
+        profileName: "work",
+        status: "archived",
+        threadIds: ["thread-missing"],
+        totalCount: 10,
+        failures: [{ threadId: "thread-missing", error: "snapshot failed" }],
+      },
+    });
+    expect(notice?.detail).toContain("thread-missing");
+    expect(notice?.copyText).toContain("Missing threads not archived");
+    expect(notice?.copyText).toContain("work");
+    expect(notice?.copyText).toContain("thread-missing: snapshot failed");
+  });
+
   it("produces nothing when there is no thread to report", () => {
     expect(
       buildCodexMissingThreadsNotice({

@@ -1600,6 +1600,7 @@ export type AppServerNotification =
         profileName: string;
         archivedCount?: number;
         failedCount?: number;
+        failures?: { threadId: string; error: string }[];
       };
     }
   | {
