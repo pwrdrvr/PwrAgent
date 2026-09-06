@@ -1,3 +1,4 @@
+import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared";
 import { useEffect } from "react";
 import type { ComposerThreadOwner } from "@pwragent/shared";
 import type { ComposerDraftStore } from "./useComposerDraftStore";
@@ -12,12 +13,18 @@ export function resolveComposerScopeOwner(
   scopeKey: string,
 ): ComposerScopeOwnerResolution {
   const owners = new Map<string, ComposerThreadOwner>();
+  const encodedOwner = parseOwnedComposerScopeKey(scopeKey);
+  if (encodedOwner) owners.set(buildOwnedComposerScopeKey(encodedOwner), encodedOwner);
   const registered = store.getScopeOwner?.(scopeKey);
-  if (registered) owners.set(JSON.stringify([registered.target, registered.backend, registered.threadId]), registered);
+  if (registered) owners.set(buildOwnedComposerScopeKey(registered), registered);
   for (const snapshot of [store.get(scopeKey), ...store.getQueuedTurns(scopeKey)]) {
     const owner = snapshot?.threadOwner;
     if (!owner) continue;
-    owners.set(JSON.stringify([owner.target, owner.backend, owner.threadId]), owner);
+    try {
+      owners.set(buildOwnedComposerScopeKey(owner), owner);
+    } catch {
+      return { state: "unresolved" };
+    }
   }
   if (owners.size > 1) return { state: "ambiguous" };
   const owner = owners.values().next().value;

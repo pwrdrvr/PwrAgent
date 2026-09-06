@@ -1,3 +1,4 @@
+import { buildThreadComposerScopeKey } from "../features/composer/useComposerDraftStore";
 import { observeLaunchpadScheduledAction } from "../features/composer/launchpad-composer-handoff";
 import { useEffect } from "react";
 import type { FederationTarget, ScheduledThreadAction } from "@pwragent/shared";
@@ -92,7 +93,7 @@ function startScheduledThreadActionProjection(params: {
       terminalUpdatedAfter = response.observedAt ?? Date.now();
       for (const [actionId, action] of projectedFailures) {
         const stillProjected = params.composerDraftStore
-          .getQueuedTurns(scopeKeyForAction(action))
+          .getQueuedTurns(scopeKeyForAction(action, params.federationTarget))
           .some((entry) => entry.failedScheduledActionId === actionId);
         if (!stillProjected) {
           dismissedFailures.add(actionId);
@@ -115,6 +116,7 @@ function startScheduledThreadActionProjection(params: {
         params.composerDraftStore,
         visibleActions,
         projectedScopeKeys,
+        params.federationTarget,
       );
       lastWarnedFailure = undefined;
     } catch (error) {
@@ -143,6 +145,7 @@ function startScheduledThreadActionProjection(params: {
       applyScheduledActionProjection(
         params.composerDraftStore,
         action,
+        params.federationTarget,
       );
       if (action.status === "failed") {
         projectedFailures.set(action.id, action);
@@ -174,12 +177,13 @@ export function syncScheduledActionProjections(
   store: ComposerDraftStore,
   actions: readonly ScheduledThreadAction[],
   previousScopeKeys: ReadonlySet<string> = new Set(),
+  target: FederationTarget = { scope: "local" },
 ): Set<string> {
   const byScope = new Map<string, ScheduledThreadAction[]>();
   for (const action of actions) {
-    observeLaunchpadScheduledAction(store, action);
+    observeLaunchpadScheduledAction(store, action, target);
     if (!isProjectableAction(action)) continue;
-    const scopeKey = scopeKeyForAction(action);
+    const scopeKey = scopeKeyForAction(action, target);
     const current = byScope.get(scopeKey) ?? [];
     current.push(action);
     byScope.set(scopeKey, current);
@@ -187,7 +191,7 @@ export function syncScheduledActionProjections(
 
   const projectedScopes = new Set(previousScopeKeys);
   for (const action of actions) {
-    projectedScopes.add(scopeKeyForAction(action));
+    projectedScopes.add(scopeKeyForAction(action, target));
   }
   for (const scopeKey of projectedScopes) {
     const current = store.getQueuedTurns(scopeKey);
@@ -254,9 +258,10 @@ export function syncScheduledActionProjections(
 export function applyScheduledActionProjection(
   store: ComposerDraftStore,
   action: ScheduledThreadAction,
+  target: FederationTarget = { scope: "local" },
 ): void {
-  observeLaunchpadScheduledAction(store, action);
-  const scopeKey = scopeKeyForAction(action);
+  observeLaunchpadScheduledAction(store, action, target);
+  const scopeKey = scopeKeyForAction(action, target);
   const current = store.getQueuedTurns(scopeKey);
   const withoutAction = current.filter(
     (entry) =>
@@ -353,8 +358,8 @@ function isProjectableAction(action: ScheduledThreadAction): boolean {
   );
 }
 
-function scopeKeyForAction(action: ScheduledThreadAction): string {
-  return `thread:${action.backend}:${action.threadId}`;
+function scopeKeyForAction(action: ScheduledThreadAction, target: FederationTarget = { scope: "local" }): string {
+  return buildThreadComposerScopeKey(action.backend, action.threadId, target);
 }
 
 function isScheduledThreadAction(value: unknown): value is ScheduledThreadAction {

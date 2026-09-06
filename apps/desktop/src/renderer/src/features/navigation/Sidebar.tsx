@@ -250,6 +250,7 @@ type SidebarProps = {
    * leaves the machine it was typed on (see useThreadDraftIndicators).
    */
   draftThreadKeys?: Record<string, boolean>;
+  unassignedThreadDraftCount?: number;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
   /** Incremented when the thread title asks the active lens to reveal its row. */
@@ -2074,6 +2075,9 @@ export function Sidebar(props: SidebarProps) {
               <span>Starting</span>
             </button>
           ))}
+          {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
+            <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
+          ) : null}
           {props.loading ? (
             <p className="sidebar-empty">Loading threads…</p>
           ) : props.providerRefresh?.state === "checking"
@@ -2151,7 +2155,9 @@ export function Sidebar(props: SidebarProps) {
                     // text is equally unsent but belongs to a directory rather
                     // than a thread, so this lens cannot show it and must not
                     // claim there is nothing to find.
-                    ? "No unsent replies."
+                    ? props.unassignedThreadDraftCount
+                      ? "Older drafts are available. Use Recover Draft in a composer to choose one."
+                      : "No unsent replies."
                     : "No threads yet."}
               </p>
             ) : (

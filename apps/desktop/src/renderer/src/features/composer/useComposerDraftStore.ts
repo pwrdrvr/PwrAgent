@@ -1,3 +1,4 @@
+import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared";
 import { useMemo, useRef } from "react";
 import type { JSONContent } from "@tiptap/react";
 import type {
@@ -7,6 +8,7 @@ import type {
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
   ComposerThreadOwner,
+  FederationTarget,
   ListComposerDraftRecoveryCandidatesRequest,
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
@@ -95,8 +97,9 @@ export function createQueuedTurnId(): string {
 export function buildThreadComposerScopeKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
+  target: FederationTarget = { scope: "local" },
 ): string {
-  return `thread:${backend}:${threadId}`;
+  return buildOwnedComposerScopeKey({ backend, threadId, target });
 }
 
 /**
@@ -246,20 +249,32 @@ export function useComposerDraftStore(): ComposerDraftStore {
   return useMemo(() => {
     const getScopeOwner = (scopeKey: string): ComposerThreadOwner | undefined => {
       const owners = new Map<string, ComposerThreadOwner>();
+      const encodedOwner = parseOwnedComposerScopeKey(scopeKey);
+      if (encodedOwner) owners.set(buildOwnedComposerScopeKey(encodedOwner), encodedOwner);
       for (const registration of scopeOwnersRef.current.get(scopeKey)?.values() ?? []) {
-        owners.set(JSON.stringify(registration.owner), registration.owner);
+        owners.set(buildOwnedComposerScopeKey(registration.owner), registration.owner);
       }
       for (const snapshot of [
         storeRef.current.get(scopeKey),
         ...(draftStackStoreRef.current.get(scopeKey) ?? []),
         ...(queuedTurnStoreRef.current.get(scopeKey) ?? []),
       ]) {
-        if (snapshot?.threadOwner) owners.set(JSON.stringify(snapshot.threadOwner), snapshot.threadOwner);
+        if (!snapshot?.threadOwner) continue;
+        try {
+          owners.set(buildOwnedComposerScopeKey(snapshot.threadOwner), snapshot.threadOwner);
+        } catch {
+          // Preserve malformed persisted content without authorizing dispatch.
+          return undefined;
+        }
       }
       return owners.size === 1 ? owners.values().next().value : undefined;
     };
     const tag = <T extends { threadOwner?: ComposerThreadOwner }>(scopeKey: string, snapshot: T): T => {
-      const threadOwner = snapshot.threadOwner ?? getScopeOwner(scopeKey);
+      const encodedOwner = parseOwnedComposerScopeKey(scopeKey);
+      if (encodedOwner && snapshot.threadOwner && buildOwnedComposerScopeKey(snapshot.threadOwner) !== scopeKey) {
+        throw new Error("Composer content belongs to another thread owner.");
+      }
+      const threadOwner = snapshot.threadOwner ?? encodedOwner ?? getScopeOwner(scopeKey);
       return threadOwner && !snapshot.threadOwner ? { ...snapshot, threadOwner } : snapshot;
     };
     const notifyQueuedTurnChange = (): void => {
@@ -295,7 +310,9 @@ export function useComposerDraftStore(): ComposerDraftStore {
     return {
       getScopeOwner,
       retainScopeOwner: (scopeKey, owner) => {
-        const key = JSON.stringify(owner);
+        if (!parseOwnedComposerScopeKey(scopeKey)) return () => undefined;
+        if (buildOwnedComposerScopeKey(owner) !== scopeKey) throw new Error("Composer scope belongs to another thread owner.");
+        const key = buildOwnedComposerScopeKey(owner);
         const owners = scopeOwnersRef.current.get(scopeKey) ?? new Map();
         const registered = owners.get(key) ?? { owner, refs: 0 };
         registered.refs += 1;

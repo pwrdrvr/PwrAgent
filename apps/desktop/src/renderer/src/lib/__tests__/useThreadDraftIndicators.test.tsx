@@ -10,6 +10,7 @@ import {
 import {
   selectThreadsWithDrafts,
   useThreadDraftIndicators,
+  useUnassignedThreadDraftCount,
 } from "../useThreadDraftIndicators";
 
 function makeThread(id: string): NavigationThreadSummary {
@@ -38,7 +39,7 @@ function makeSnapshot(
 }
 
 function scopeKey(thread: NavigationThreadSummary): string {
-  return buildThreadComposerScopeKey(thread.source, thread.id);
+  return buildThreadComposerScopeKey(thread.source, thread.id, thread.federation?.ref.target);
 }
 
 function renderIndicators(threads: NavigationThreadSummary[]) {
@@ -209,4 +210,25 @@ describe("selectThreadsWithDrafts", () => {
       [],
     );
   });
+});
+
+it("keeps same-id local and peer drafts separate and reports unassigned recovery", () => {
+  const local = makeThread("same-id");
+  const remote: NavigationThreadSummary = { ...local, federation: {
+    ref: { backend: "codex", threadId: local.id, target: { scope: "remote", instanceId: "peer" } },
+    instanceLabel: "Peer", peerStatus: "connected",
+  } };
+  const { result } = renderHook(() => {
+    const store = useComposerDraftStore();
+    const indicators = useThreadDraftIndicators({ composerDraftStore: store, threads: [local, remote] });
+    const unassigned = useUnassignedThreadDraftCount(store);
+    return { store, indicators, unassigned };
+  });
+  act(() => {
+    result.current.store.set(scopeKey(remote), makeSnapshot({ draft: "For the peer" }));
+    result.current.store.set("thread:codex:same-id", makeSnapshot({ draft: "Unknown historical owner" }));
+  });
+  expect(selectThreadsWithDrafts([local, remote], result.current.indicators)).toEqual([remote]);
+  expect(result.current.unassigned).toBe(1);
+  expect(result.current.store.get("thread:codex:same-id")?.draft).toBe("Unknown historical owner");
 });

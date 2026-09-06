@@ -1,3 +1,4 @@
+import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -658,8 +659,8 @@ describe("Composer", () => {
       await normalization.promise;
     });
     expect(await screen.findByAltText("follow-up.png")).toBeInTheDocument();
-    expect(store.get("thread:codex:materialized")?.imageAttachments).toHaveLength(1);
-    expect(store.get("thread:codex:materialized")?.draft).toBe("Follow-up image");
+    expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.imageAttachments).toHaveLength(1);
+    expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.draft).toBe("Follow-up image");
     expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
   });
 
@@ -6408,7 +6409,7 @@ describe("Composer", () => {
       linkedDirectories: [],
       inbox: { inInbox: false },
     };
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     draftStore.setQueuedTurns(scopeKey, [
       {
         id: "queued-1",
@@ -6470,7 +6471,7 @@ describe("Composer", () => {
 
   it("releases the queued-turn lock when a queued review start fails", async () => {
     const draftStore = createComposerDraftStore();
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     draftStore.setQueuedTurns(scopeKey, [
       {
         id: "queued-review",
@@ -7156,7 +7157,7 @@ describe("Composer", () => {
   it("refreshes an existing queued preview only when the owner replaces input", async () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const draftStore = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     draftStore.setQueuedTurns(scopeKey, [{
       id: "backend-queued:owner-entry", queueEntryId: "owner-entry", text: "Original complete findings",
       imageAttachments: [], fileAttachments: [], manualReleaseRequired: true, holdReason: "Operator hold",
@@ -7197,7 +7198,7 @@ describe("Composer", () => {
       { type: "image" as const, name: "diagram.png", url: "data:image/png;base64,AQID" },
       { type: "file" as const, name: "notes.txt", mimeType: "text/plain", data: "aGVsbG8=" },
     ];
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{ id: "mirror", queueEntryId: "owner-entry", text: "tiny preview…", imageAttachments: [], fileAttachments: [] }]);
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{ id: "mirror", queueEntryId: "owner-entry", text: "tiny preview…", imageAttachments: [], fileAttachments: [] }]);
     const readQueuedTurn = vi.fn().mockRejectedValueOnce(new Error("Owner unavailable"))
       .mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "content-hash", input });
     const cancelQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
@@ -7208,7 +7209,7 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await screen.findByText("Owner unavailable");
     expect(cancelQueuedTurn).not.toHaveBeenCalled();
-    expect(draftStore.getQueuedTurns("thread:codex:thread-1")).toHaveLength(1);
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"))).toHaveLength(1);
     const inspect = screen.getByRole("button", { name: "View full message" });
     expect(inspect).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(inspect);
@@ -7228,7 +7229,7 @@ describe("Composer", () => {
     await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveValue(prompt));
     expect(cancelQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({ queueEntryId: "owner-entry", expectedContentHash: "content-hash" }));
     expect(readQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "thread-1" }));
-    expect(draftStore.getQueuedTurns("thread:codex:thread-1")).toHaveLength(0);
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"))).toHaveLength(0);
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
     await waitFor(() => expect(startTurn).toHaveBeenCalled());
     expect(startTurn.mock.calls[0]?.[0].input).toEqual(input);
@@ -7242,7 +7243,7 @@ describe("Composer", () => {
       { type: "localFile" as const, name: "Authoritative report", path: "/tmp/report.pdf", mimeType: "application/pdf", sizeBytes: 42 },
       { type: "localFile" as const, name: "Authoritative notes", path: "/tmp/notes.txt", mimeType: "text/plain", sizeBytes: 12 },
     ];
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{ id: "mirror", queueEntryId: "owner-entry", text: "preview…", imageAttachments: [], fileAttachments: [] }]);
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{ id: "mirror", queueEntryId: "owner-entry", text: "preview…", imageAttachments: [], fileAttachments: [] }]);
     const readQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "hash", input });
     const cancelQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
     const startTurn = vi.fn().mockResolvedValue({ backend: "codex", threadId: "thread-1", turnId: "new-queue", queueStatus: "queued", queueEntryId: "new-queue" });
@@ -7518,7 +7519,7 @@ describe("Composer", () => {
       "Preserve until admitted",
     );
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1", federationTarget)),
     ).toMatchObject({
       queueEntryId: "queue-entry-1",
       text: "Preserve until admitted",
@@ -7888,7 +7889,7 @@ describe("Composer", () => {
     const request = startTurn.mock.calls[0]?.[0];
     expect(request).toBeDefined();
     if (!request) throw new Error("Expected a queued turn request.");
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const queued = draftStore.getQueuedTurn(scopeKey);
     expect(request.queueEntryId).toBe(queued?.id);
 
@@ -8063,9 +8064,9 @@ describe("Composer", () => {
     });
 
     expect(screen.queryByText("Stay with thread A")).not.toBeInTheDocument();
-    expect(draftStore.getQueuedTurns("thread:codex:thread-2")).toEqual([]);
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-2"))).toEqual([]);
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toMatchObject({
       queueEntryId: "queue-entry-1",
       text: "Stay with thread A",
@@ -8205,14 +8206,14 @@ describe("Composer", () => {
 
     expect(screen.getByLabelText("Reply")).toHaveValue("Keep thread B draft");
     expect(screen.queryByText("thread A start failed")).not.toBeInTheDocument();
-    expect(draftStore.get("thread:codex:thread-1")).toMatchObject({
+    expect(draftStore.get(buildThreadComposerScopeKey("codex", "thread-1"))).toMatchObject({
       draft: "Recover for thread A",
     });
   });
 
   it("preserves a cancelled queued item when its steer target changes", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setQueuedTurn("thread:codex:thread-1", {
+    draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
       id: "queued-steer-1",
       scheduledActionId: "scheduled-action-1",
       text: "Steer the original turn",
@@ -8306,13 +8307,13 @@ describe("Composer", () => {
     expect(steerTurn).not.toHaveBeenCalled();
     expect(screen.getByText("Steer the original turn")).toBeInTheDocument();
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toMatchObject({
       id: "queued-steer-1",
       text: "Steer the original turn",
     });
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1")?.scheduledActionId,
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"))?.scheduledActionId,
     ).toBeUndefined();
   });
 
@@ -8986,7 +8987,7 @@ describe("Composer", () => {
 
   it("keeps a pending steer local-file reference when a terminal event queues it", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setPendingSteer("thread:codex:thread-1", {
+    draftStore.setPendingSteer(buildThreadComposerScopeKey("codex", "thread-1"), {
       id: "pending-jeep",
       expectedTurnId: "turn-1",
       input: [
@@ -9103,7 +9104,7 @@ describe("Composer", () => {
       "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
-      draftStore.setQueuedTurn("thread:codex:thread-1", {
+      draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
         id: "queued-jeep",
         input: [{ type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" }],
         text: "Compare [@Jeep](~/Downloads/Jeep)",
@@ -9225,14 +9226,14 @@ describe("Composer", () => {
       "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
-      draftStore.setQueuedTurn("thread:codex:thread-1", {
+      draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
         id: "queued-jeep",
         input: [{ type: "text", text: "Compare [@QueuedJeep](~/Downloads/Jeep)" }],
         text: "Compare [@QueuedJeep](~/Downloads/Jeep)",
         imageAttachments: [],
         fileAttachments: [],
       });
-      draftStore.setPendingSteer("thread:codex:thread-1", {
+      draftStore.setPendingSteer(buildThreadComposerScopeKey("codex", "thread-1"), {
         id: "steer-jeep",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Compare [@SteerJeep](~/Downloads/Jeep)" }],
@@ -9529,7 +9530,7 @@ describe("Composer", () => {
 
   it("projects the backend-owned fallback when a steer target is no longer active", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{
       id: "backend-queued:older",
       queueEntryId: "older",
       text: "Earlier queued message",
@@ -9793,7 +9794,7 @@ describe("Composer", () => {
 
   it("releases a held backend queue entry only when the operator retries it", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{
       id: "backend-queued:held-1",
       queueEntryId: "held-1",
       manualReleaseRequired: true,
@@ -9848,7 +9849,7 @@ describe("Composer", () => {
 
   it("keeps a scheduled action visible when retry remains held", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{
       id: "scheduled-projection:held-1",
       scheduledActionId: "held-1",
       queueEntryId: "scheduled-turn:held-1",
@@ -10056,7 +10057,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
     expect(screen.getByText("Queued next")).toBeInTheDocument();
 
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const queued = draftStore.getQueuedTurn(scopeKey);
     expect(queued?.text).toBe("Queued elsewhere");
     draftStore.removeQueuedTurnById(scopeKey, queued!.id);
@@ -10078,7 +10079,7 @@ describe("Composer", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
     const draftStore = createComposerDraftStore();
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     draftStore.setQueuedTurns(scopeKey, [
       {
         id: "queued-later",
@@ -10200,7 +10201,7 @@ describe("Composer", () => {
       expect(screen.queryByText("Queued preflight block")).not.toBeInTheDocument();
     });
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toBeUndefined();
     expect(onBeforeStartTurn).not.toHaveBeenCalled();
   });
@@ -17306,7 +17307,7 @@ describe("Composer", () => {
     };
     const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [
       {
-        scopeKey: "thread:codex:thread-1",
+        scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
         scopeKind: "thread",
         backend: "codex",
         threadId: "thread-1",
@@ -17320,7 +17321,7 @@ describe("Composer", () => {
         charCount: "Recovered unsent draft".length,
       },
       {
-        scopeKey: "thread:codex:thread-1",
+        scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
         scopeKind: "thread",
         backend: "codex",
         threadId: "thread-1",
@@ -17366,7 +17367,7 @@ describe("Composer", () => {
     expect(draftStore.listRecoveryCandidates).toHaveBeenCalledWith(
       expect.objectContaining({
         includeSent: true,
-        scopeKey: "thread:codex:thread-1",
+        scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
       }),
     );
 
@@ -17434,7 +17435,7 @@ describe("Composer", () => {
     await act(async () => {
       resolveRecoveryCandidates?.([
         {
-          scopeKey: "thread:codex:thread-1",
+          scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
           scopeKind: "thread",
           backend: "codex",
           threadId: "thread-1",
@@ -17458,7 +17459,7 @@ describe("Composer", () => {
   it("falls back to global recovery candidates from a blank composer", async () => {
     const draftStore = createComposerDraftStore();
     const globalCandidate: ComposerDraftRecoveryCandidate = {
-      scopeKey: "thread:codex:other-thread",
+      scopeKey: buildThreadComposerScopeKey("codex", "other-thread"),
       scopeKind: "thread",
       backend: "codex",
       threadId: "other-thread",
@@ -17506,7 +17507,7 @@ describe("Composer", () => {
       1,
       expect.objectContaining({
         includeSent: true,
-        scopeKey: "thread:codex:thread-1",
+        scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
       }),
     );
     expect(draftStore.listRecoveryCandidates).toHaveBeenNthCalledWith(
@@ -17576,7 +17577,7 @@ describe("Composer", () => {
     });
 
     expect(draftStore.recordHistory).toHaveBeenCalledWith(
-      "thread:codex:thread-1",
+      buildThreadComposerScopeKey("codex", "thread-1"),
       expect.objectContaining({ draft: deletedDraft }),
       "abandoned",
     );
@@ -17677,7 +17678,7 @@ describe("Composer", () => {
     const input = screen.getByLabelText("Reply");
     expect(input).toHaveValue("");
 
-    draftStore.set("thread:codex:thread-1", {
+    draftStore.set(buildThreadComposerScopeKey("codex", "thread-1"), {
       draft: "Hydrated durable draft after startup",
       editorDocument: undefined,
       imageAttachments: [],
@@ -17745,7 +17746,7 @@ describe("Composer", () => {
       ],
     };
     const draftStore = createComposerDraftStore();
-    draftStore.set("thread:codex:thread-1", {
+    draftStore.set(buildThreadComposerScopeKey("codex", "thread-1"), {
       draft,
       editorDocument,
       imageAttachments: [],
@@ -18131,7 +18132,7 @@ describe("Composer", () => {
       inbox: { inInbox: false },
     };
     const draftStore = createComposerDraftStore();
-    draftStore.set("thread:codex:thread-1", {
+    draftStore.set(buildThreadComposerScopeKey("codex", "thread-1"), {
       draft: "## Heading\n\n- List item\n\n**keep bold** replace me",
       editorDocument: {
         type: "doc",
@@ -19981,7 +19982,7 @@ describe("Composer", () => {
       "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
-      draftStore.set("thread:codex:thread-1", {
+      draftStore.set(buildThreadComposerScopeKey("codex", "thread-1"), {
         draft: "Compare [@Jeep](~/Downloads/Jeep)",
         editorDocument: undefined,
         imageAttachments: [],
@@ -20852,7 +20853,7 @@ describe("Composer", () => {
 
   it("releases the queued-turn lock when Stop repairs stale active state", async () => {
     const draftStore = createComposerDraftStore();
-    const scopeKey = "thread:codex:thread-stale-queue";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-stale-queue");
     draftStore.setQueuedTurns(scopeKey, [
       {
         id: "queued-1",
