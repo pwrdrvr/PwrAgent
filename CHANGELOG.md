@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.0-alpha.3 - 2026-09-06
+
+- GPT-6 Astra - Added GPT-6 Astra as a selectable provider model, with correct context-window pricing for multi-request turns.
+- Cross-Platform Updates - Fixed Windows and Linux updater-channel metadata publication, and made installed builds follow their own release feed while clearly showing all Stable/Beta and Latest/Prerelease slots.
+- Federation - Added a network activity monitor and streamed federated jump-search results, making remote-thread discovery more visible and responsive while hardening remote-owner searches and reconnection behavior.
+- macOS Appearance - Added the modern Icon Composer app-icon format, keeping PwrAgent's icon correct on macOS 26 while preserving the legacy icon path for older macOS versions.
+- Performance - Reduced background work by retaining directory mappings until the filesystem changes, loading the PDF runtime only on demand, and bounding Token Miser storage and accounting reads with temporary original-output retention. Added sustained main-process CPU visibility for diagnosis.
+- Thread Reliability - Kept the composer available during thread setup, held queued actions after provider failures, retained live review cards through delayed refreshes, and preserved cross-thread message content and provenance.
+- Usage and Pricing - Added Luna Reserve and Codex credit-balance visibility, refreshed Codex usage limits, surfaced retry and connection warnings, and preserved pricing for failed turns.
+- GitHub Operations - Backed off polling after outages while recovering on reconnect, and stopped repeated pull-request auto-fixer dispatch decisions from creating unnecessary activity.
+- Minor - Improved archive failure visibility, setup-failure recovery, queued-action layout, and provider-action feedback.
+
 ## v1.1.0-alpha.2 - 2026-09-03
 
 - Token Miser - Added a one-click managed runtime, release-safety gate, evaluation controls, a Pricing-rail summary, and per-model spend attribution. Improved accounting and recovery across compaction, active turns, and profile changes.
