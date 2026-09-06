@@ -3008,9 +3008,8 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
     && tableExists(db, "thread_usage_turns")
     && tableColumnExists(db, "thread_usage_turns", "model_context_window");
   const now = Date.now();
-  const rows = db
-    .prepare(
-      `SELECT
+  const selectRows = hasTurnContextWindow
+    ? `SELECT
          lines.usage_line_id,
          lines.cache_write_input_tokens,
          lines.cached_input_tokens,
@@ -3026,17 +3025,35 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
          lines.service_tier,
          lines.scope,
          lines.uncached_input_tokens,
-         ${hasTurnContextWindow ? "turns.model_context_window" : "NULL"}
+         turns.model_context_window
            AS model_context_window
        FROM thread_usage_lines AS lines
-       ${
-         hasTurnContextWindow
-           ? "LEFT JOIN thread_usage_turns AS turns ON turns.usage_turn_id = lines.usage_turn_id"
-           : ""
-       }
+       LEFT JOIN thread_usage_turns AS turns ON turns.usage_turn_id = lines.usage_turn_id
        WHERE lines.provider IN ('openai', 'qwen', 'xai')
-         AND lines.scope != 'fork-baseline'`,
-    )
+         AND lines.scope != 'fork-baseline'`
+    : `SELECT
+         lines.usage_line_id,
+         lines.cache_write_input_tokens,
+         lines.cached_input_tokens,
+         lines.created_at,
+         lines.currency,
+         lines.fast_mode,
+         lines.model,
+         lines.output_tokens,
+         lines.price_status,
+         lines.pricing_basis,
+         lines.provider,
+         lines.reasoning_output_tokens,
+         lines.service_tier,
+         lines.scope,
+         lines.uncached_input_tokens,
+         NULL
+           AS model_context_window
+       FROM thread_usage_lines AS lines
+       WHERE lines.provider IN ('openai', 'qwen', 'xai')
+         AND lines.scope != 'fork-baseline'`;
+  const rows = db
+    .prepare(selectRows)
     .all() as Array<{
       cache_write_input_tokens: number;
       cached_input_tokens: number;
