@@ -14,6 +14,8 @@ export function buildNavigationWindowDemand(params: {
   expandedByKey: Readonly<Record<string, boolean>>;
   unpinnedExpandedByKey: Readonly<Record<string, boolean>>;
   selectedDirectoryKeys?: readonly string[];
+  /** Confirmed owner removals remain hidden while older descriptor pages are retained. */
+  removedDirectoryKeys?: readonly string[];
   selectedRef?: NavigationIdentity;
   selectedRootRef?: NavigationIdentity;
   selectedContextReady?: boolean;
@@ -33,13 +35,14 @@ export function buildNavigationWindowDemand(params: {
       federationTarget: params.selectedRef.ownerInstanceId ? { scope: "remote", instanceId: params.selectedRef.ownerInstanceId } : params.target });
   }
   const loadedDirectoryKeys = params.indexedDirectoryKeys ?? new Set(params.directories.map((directory) => directory.key));
-  const missingSelectedDirectories = (params.selectedDirectoryKeys ?? []).filter((key) => !loadedDirectoryKeys.has(key));
+  const missingSelectedDirectories = (params.selectedDirectoryKeys ?? []).filter((key) => !loadedDirectoryKeys.has(key) && !params.removedDirectoryKeys?.includes(key));
   if (missingSelectedDirectories.length) {
     demand.set("selected-directories", request({ kind: "directory-index", keys: missingSelectedDirectories }, 100));
   }
   if (params.browseMode === "directories") {
     const orderedDirectories = [...params.directories].sort((left, right) => Number(params.selectedDirectoryKeys?.includes(right.key) ?? false) - Number(params.selectedDirectoryKeys?.includes(left.key) ?? false));
     for (const directory of orderedDirectories) {
+      if (params.removedDirectoryKeys?.includes(directory.key)) continue;
       const expanded = params.expandedByKey[directory.key] ?? params.selectedDirectoryKeys?.includes(directory.key) ?? false;
       if (!expanded) continue;
       const selectedDirectory = params.selectedDirectoryKeys?.includes(directory.key);

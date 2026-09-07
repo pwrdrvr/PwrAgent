@@ -2489,7 +2489,7 @@ function mergeHydratedThreadWithOptimisticTitle(
   thread: NavigationThreadSummary,
   optimisticThread: NavigationThreadSummary,
 ): NavigationThreadSummary {
-  if (optimisticThread.titleSource !== "derived") {
+  if (optimisticThread.titleSource === "fallback") {
     return thread;
   }
 
@@ -2502,6 +2502,19 @@ function mergeHydratedThreadWithOptimisticTitle(
     summary: thread.summary ?? optimisticThread.summary,
     title: optimisticThread.title,
     titleSource: optimisticThread.titleSource,
+  };
+}
+
+function mergeHydratedThreadWithOptimisticState(
+  thread: NavigationThreadSummary,
+  optimistic: NavigationThreadSummary,
+): NavigationThreadSummary {
+  return { ...mergeHydratedThreadWithOptimisticTitle(thread, optimistic),
+    codexEnvironmentRuntime: thread.codexEnvironmentRuntime ?? optimistic.codexEnvironmentRuntime,
+    optimisticActiveTurn: thread.optimisticActiveTurn ?? optimistic.optimisticActiveTurn,
+    optimisticUserMessage: thread.optimisticUserMessage ?? optimistic.optimisticUserMessage,
+    pinnedRank: thread.pinnedRank ?? optimistic.pinnedRank,
+    scheduledStart: thread.scheduledStart ?? optimistic.scheduledStart,
   };
 }
 
@@ -3015,6 +3028,7 @@ export function useThreadNavigation(
     | undefined
   >(undefined);
   const suppressedArchivedThreadKeysRef = useRef<Set<string>>(new Set());
+  const removedDirectoryKeysRef = useRef(new Set<string>());
   const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
@@ -3100,7 +3114,7 @@ export function useThreadNavigation(
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined;
   const selectedDetail = useNavigationSelectedDetail({
-    desktopApi,
+    desktopApi, enabled: enabled && viewForeground,
     ref: selectedIdentity,
     federationTarget: selectedIdentity?.ownerInstanceId
       ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
@@ -3126,7 +3140,7 @@ export function useThreadNavigation(
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewForeground, observeEvents: false,
     browseMode, target: rendererFederationTarget, attentionView: { id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true },
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
-    selectedRef: selectedIdentity, selectedDirectoryKeys,
+    selectedRef: selectedIdentity, selectedDirectoryKeys, removedDirectoryKeys: [...removedDirectoryKeysRef.current],
     disclosedParents: loadedThreadRows(state.rows).filter((thread) => !thread.subthreadsCollapsed && Boolean(thread.ordinaryChildCount))
       .map((thread) => ({ backend: thread.source, threadId: thread.id,
         ...(thread.federation?.ref.target.scope === "remote" ? { ownerInstanceId: thread.federation.ref.target.instanceId } : {}) })),
@@ -3153,7 +3167,7 @@ export function useThreadNavigation(
       acceptedPagesRef.current = pages;
       acceptedDefaultsRef.current = launchpadConfiguration.value;
       acceptedDraftHydrationRef.current = draftStore?.hydrationVersion;
-      const directoryRows = indexLoadedDirectoryRows(boundedNavigation.directories.map((directory) => ({ ...directory,
+      const directoryRows = indexLoadedDirectoryRows(boundedNavigation.directories.filter((directory) => !removedDirectoryKeysRef.current.has(directory.key)).map((directory) => ({ ...directory,
         ...(launchpadConfiguration.value?.directoryKey === directory.key && launchpadConfiguration.value.launchpad
           ? { launchpad: { ...launchpadConfiguration.value.launchpad,
               prompt: draftStore?.get(`launchpad:${directory.key}`)?.draft ?? "",
@@ -4409,16 +4423,7 @@ export function useThreadNavigation(
     if (hasHydratedThread) {
       return currentThreads.map((thread) =>
         threadSummaryIdentityKey(thread) === optimisticThreadKey
-          ? {
-              ...mergeHydratedThreadWithOptimisticTitle(thread, optimisticThread),
-              codexEnvironmentRuntime:
-                thread.codexEnvironmentRuntime
-                ?? optimisticThread.codexEnvironmentRuntime,
-              optimisticActiveTurn:
-                thread.optimisticActiveTurn ?? optimisticThread.optimisticActiveTurn,
-              optimisticUserMessage:
-                thread.optimisticUserMessage ?? optimisticThread.optimisticUserMessage,
-            }
+          ? mergeHydratedThreadWithOptimisticState(thread, optimisticThread)
           : thread
       );
     }
@@ -4600,7 +4605,12 @@ export function useThreadNavigation(
 
   const selectedThreadConfigurationReady = selectedDetail.state?.readiness === "ready"
     && selectedDetail.state.detail?.identity === "present";
-  const selectedThread = selectedDetail.state?.detail?.thread ?? selectedRow;
+  const selectedThread = useMemo(() => {
+    const detailThread = selectedDetail.state?.detail?.thread;
+    if (!detailThread) return selectedRow;
+    return optimisticThread && threadSummaryIdentityKey(detailThread) === threadSummaryIdentityKey(optimisticThread)
+      ? mergeHydratedThreadWithOptimisticState(detailThread, optimisticThread) : detailThread;
+  }, [selectedDetail.state?.detail?.thread, selectedRow, optimisticThread]);
 
   const selectedDirectory = useMemo(() => {
     if (activeFederatedLaunchpad) {
@@ -5952,6 +5962,7 @@ export function useThreadNavigation(
         recordPickDirectoryError(result.message);
         return undefined;
       }
+      removedDirectoryKeysRef.current.delete(result.directoryKey);
       setLocalLaunchpads((current) => ({
         ...current,
         [result.directoryKey]: result.launchpad,
@@ -6415,6 +6426,8 @@ export function useThreadNavigation(
         await desktopApi.removeNavigationDirectory({
           directoryKey, federationTarget: readRendererFederationTarget(),
         });
+        removedDirectoryKeysRef.current.add(directoryKey);
+        boundedNavigation.invalidate();
         setLocalLaunchpads((current) => {
           if (!current[directoryKey]) {
             return current;
@@ -6446,7 +6459,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [desktopApi, directories, refresh],
+    [desktopApi, directories, refresh, boundedNavigation.invalidate],
   );
 
   const materializeDirectoryLaunchpad = useCallback(
@@ -6465,6 +6478,7 @@ export function useThreadNavigation(
         return;
       }
 
+      const selectionKeyAtMaterializationStart = selectedItemKeyRef.current;
       const federatedSelection =
         activeFederatedLaunchpad
         && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
@@ -6472,7 +6486,24 @@ export function useThreadNavigation(
           : undefined;
       const directory = federatedSelection?.directory
         ?? directories.find((candidate) => candidate.key === directoryKey);
-      const launchpad = federatedSelection?.launchpad ?? directory?.launchpad;
+      let launchpad = federatedSelection?.launchpad ?? directory?.launchpad;
+      let initialConfiguration: Awaited<ReturnType<NonNullable<DesktopApi["getNavigationLaunchpadConfig"]>>> | undefined;
+      if (!launchpad && directory?.launchpadPresent && desktopApi.getNavigationLaunchpadConfig) {
+        try {
+          initialConfiguration = await desktopApi.getNavigationLaunchpadConfig({ protocol: 2, directoryKey,
+            federationTarget: federatedSelection?.target ?? rendererFederationTarget });
+          if (initialConfiguration.protocol !== 2 || initialConfiguration.unchanged
+            || initialConfiguration.directoryKey !== directoryKey || !initialConfiguration.defaults) {
+            throw new Error("Launchpad configuration is not ready. The draft has been retained.");
+          }
+          const saved = draftStore?.get(`launchpad:${directoryKey}`);
+          if (initialConfiguration.launchpad) launchpad = { ...initialConfiguration.launchpad,
+            prompt: saved?.draft ?? "", imageAttachments: saved?.imageAttachments, fileAttachments: saved?.fileAttachments };
+        } catch (error) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+          throw error;
+        }
+      }
       if (!launchpad) {
         setLaunchpadError(`No launchpad found for ${directoryKey}.`);
         return;
@@ -6500,7 +6531,6 @@ export function useThreadNavigation(
       pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, pendingCreation);
       setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
       try {
-        const selectionKeyAtMaterializationStart = selectedItemKeyRef.current;
         const materializeParentThreadId =
           parentThreadId ??
           launchpad.parentThreadId ??
@@ -6512,7 +6542,7 @@ export function useThreadNavigation(
         const federationTarget =
           launchpad.federationTarget ?? readRendererFederationTarget();
         if (!desktopApi.getNavigationLaunchpadConfig) throw new Error("Upgrade this instance to load launchpad configuration before sending.");
-        const configuration = await desktopApi.getNavigationLaunchpadConfig({ protocol: 2, directoryKey, federationTarget });
+        const configuration = initialConfiguration ?? await desktopApi.getNavigationLaunchpadConfig({ protocol: 2, directoryKey, federationTarget });
         if (configuration.protocol !== 2 || configuration.unchanged || !configuration.defaults || configuration.directoryKey !== directoryKey) {
           throw new Error("Launchpad configuration is not ready. The draft has been retained.");
         }
@@ -6695,8 +6725,7 @@ export function useThreadNavigation(
         }
         onMaterialized?.(namedOptimisticMaterializedThread);
         const shouldSelectMaterializedThread =
-          selectionKeyAtMaterializationStart !== launchpadSelectionKey ||
-          selectedItemKeyRef.current === launchpadSelectionKey;
+          selectedItemKeyRef.current === selectionKeyAtMaterializationStart;
         const shouldProjectOptimisticThread =
           shouldSelectMaterializedThread || !optimisticThreadRef.current;
         setOptimisticThread((current) =>
@@ -6768,7 +6797,7 @@ export function useThreadNavigation(
         setPendingLaunchpadCreations([...pendingLaunchpadCreationsRef.current.values()]);
       }
     },
-    [
+    [draftStore, rendererFederationTarget,
       activeFederatedLaunchpad,
       desktopApi,
       directories,

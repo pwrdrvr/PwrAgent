@@ -1,7 +1,7 @@
 import { threadSummaryIdentityKey, federationTargetsEqual } from "../lib/federated-thread-events";
 import { federatedThreadIdentityKey } from "@pwragent/shared";
 import { applyNavigationSnapshotTransportResponse, buildThreadIdentityKey,
-  type AgentEvent, type NavigationSnapshot, type NavigationSnapshotTransportState } from "@pwragent/shared";
+  type AgentEvent, type NavigationLaunchpadDraft, type NavigationSnapshot, type NavigationSnapshotTransportState } from "@pwragent/shared";
 import type { DesktopApi } from "../lib/desktop-api";
 import { navigationQueryFixture } from "./navigation-query-fixture";
 
@@ -12,7 +12,7 @@ export type NavigationOwnerFixtureApi = DesktopApi & {
 };
 
 /** Reuses historical complete test populations while presenting only the V2 owner API to the hook. */
-export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi): DesktopApi {
+export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onLocalLaunchpads?: (launchpads: NavigationLaunchpadDraft[]) => void): DesktopApi {
   let population: NavigationSnapshot | undefined;
   let pending: Promise<NavigationSnapshot> | undefined;
   let transport: NavigationSnapshotTransportState | undefined;
@@ -29,6 +29,11 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi): De
         population = transport?.snapshot;
       } else if (source.readPopulation) population = await source.readPopulation({});
       if (!population) throw new Error("Owner fixture has no complete population.");
+      // Local fixture data also represents the viewer's historical draft store.
+      // Remote owner populations must never seed the viewer's unsent input.
+      if (!population.federationTarget || population.federationTarget.scope === "local") {
+        onLocalLaunchpads?.(population.directories.flatMap((directory) => directory.launchpad ? [directory.launchpad] : []));
+      }
       return population;
     })();
     const active = pending;

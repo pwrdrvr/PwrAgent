@@ -55,3 +55,47 @@ it("does not invalidate a same-id selection for another owner's event", async ()
   expect(read).toHaveBeenCalledTimes(1);
   unmount();
 });
+
+
+it("disables remote actions on disconnect and coalesces duplicate reconnect notifications", async () => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const remoteRef = { ...ref, ownerInstanceId: "peer" };
+  const remoteDetail = { ...detail("remote"), ref: remoteRef, thread: { ...detail("remote").thread!,
+    federation: { ref: { backend: ref.backend, threadId: ref.threadId, target }, instanceLabel: "Peer", peerStatus: "connected" as const } } };
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockResolvedValue(remoteDetail);
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref: remoteRef, federationTarget: target }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  const notify = (status: "connected" | "disconnected") => listener!({ backend: "codex", federationTarget: target,
+    notification: { method: "federation/peerStatus/changed", params: { instanceId: "peer", status } } });
+  act(() => notify("disconnected"));
+  expect(result.current.state?.readiness).toBe("failed");
+  expect(result.current.state?.detail?.thread?.federation?.peerStatus).toBe("disconnected");
+  await act(() => result.current.refresh());
+  expect(read).toHaveBeenCalledTimes(1);
+  act(() => { notify("connected"); notify("connected"); });
+  expect(result.current.state?.readiness).toBe("loading");
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  expect(read.mock.calls[1]?.[0].knownRevision).toBeUndefined();
+  unmount();
+});
+
+it("does not read hidden detail and revalidates when the window becomes visible", async () => {
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockResolvedValue(detail("visible"));
+  const api: DesktopApi = { getNavigationSelectedDetail: read };
+  const { result, rerender, unmount } = renderHook(({ enabled }) => useNavigationSelectedDetail({ desktopApi: api, ref, enabled }),
+    { initialProps: { enabled: false } });
+  expect(read).not.toHaveBeenCalled();
+  rerender({ enabled: true });
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  rerender({ enabled: false });
+  expect(result.current.state?.readiness).toBe("loading");
+  await act(() => result.current.refresh());
+  expect(read).toHaveBeenCalledTimes(1);
+  rerender({ enabled: true });
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(read.mock.calls[1]?.[0].knownRevision).toBeUndefined();
+  unmount();
+});
