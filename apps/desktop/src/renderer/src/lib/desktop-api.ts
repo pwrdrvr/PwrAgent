@@ -852,12 +852,15 @@ export type DesktopApi = {
   removeNavigationDirectory?: (request: RemoveNavigationDirectoryRequest) => Promise<RemoveNavigationDirectoryResponse>;
   getNavigationLaunchpadConfig?: (
     request: NavigationLaunchpadConfigRequest,
+    consumerId?: string,
   ) => Promise<NavigationLaunchpadConfigResponse>;
   getNavigationSelectedDetail?: (
     request: NavigationSelectedDetailRequest,
+    consumerId?: string,
   ) => Promise<NavigationSelectedDetailResponse>;
   getNavigationQueueProjection?: (
     request: NavigationQueueProjectionRequest,
+    consumerId?: string,
   ) => Promise<NavigationQueueProjection>;
   getNavigationSnapshotTransport?: (
     request: GetNavigationSnapshotTransportRequest,

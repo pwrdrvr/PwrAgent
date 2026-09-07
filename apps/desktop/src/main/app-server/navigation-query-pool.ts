@@ -1,26 +1,42 @@
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { FederationTarget, NavigationIdentity, NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse,
+  NavigationLaunchpadConfigResponse, NavigationQueueProjection } from "@pwragent/shared";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import { navigationQueryKey } from "./navigation-query-projection";
 import { NavigationQueryError } from "./navigation-query-store";
 
 const MAX_QUERIES = 8;
+const MAX_EXACT_RESOURCES = 32;
 const MAX_RETAINED_BYTES = 64 * 1024 * 1024;
 const MAX_ACTIVE_READS = 8;
 const DEADLINE_MS = 10_000;
 const MAX_PENDING_READS = 256;
 const MAX_CONSUMERS = 256;
 
+type ExactResources = {
+  detail: NavigationSelectedDetailResponse;
+  launchpad: NavigationLaunchpadConfigResponse;
+  queue: NavigationQueueProjection;
+};
+type Result = NavigationQueryPage | ExactResources[keyof ExactResources];
+type Load<T extends Result> = (options: { signal: AbortSignal; deadlineAt: number }) => Promise<T>;
 type Read = {
   controller: AbortController;
-  promise: Promise<NavigationQueryPage>;
+  promise: Promise<Result>;
 };
 
 type Query = {
+  kind: "query" | keyof ExactResources;
+  ownerKey: string;
+  threadKey?: string;
   active: boolean;
   consumers: Set<string>;
-  pages: Map<string, { page: NavigationQueryPage; bytes: number }>;
+  pages: Map<string, { page: Result; bytes: number }>;
   reads: Map<string, Read>;
 };
+
+function ownerKey(target?: FederationTarget): string {
+  return JSON.stringify(target?.scope === "remote" ? ["remote", target.instanceId] : ["local"]);
+}
 
 /** Process-owned query admission and cancellation shared by native windows. */
 export class NavigationQueryPool {
@@ -34,29 +50,64 @@ export class NavigationQueryPool {
   async read(params: {
     consumerId: string;
     request: NavigationQueryRequest;
-    load: (options: { signal: AbortSignal; deadlineAt: number }) => Promise<NavigationQueryPage>;
+    load: Load<NavigationQueryPage>;
   }): Promise<NavigationQueryPage> {
+    return this.readOperation({
+      ...params,
+      kind: "query",
+      ownerKey: ownerKey(params.request.federationTarget),
+      key: JSON.stringify(["query", params.request.federationTarget ?? { scope: "local" }, navigationQueryKey(params.request)]),
+      operationKey: JSON.stringify([params.request.cursor ?? null, params.request.anchor ?? null,
+        params.request.completeBaselineRevision ?? null, params.request.pageSize ?? 100]),
+      deadlineAt: params.request.deadlineAt,
+    });
+  }
+
+  readExact<K extends keyof ExactResources>(params: {
+    kind: K;
+    consumerId: string;
+    owner?: FederationTarget;
+    ref?: NavigationIdentity;
+    /** Includes the explicit owner and exact identity, without conditional revision or cursor. */
+    identity: string;
+    operation: string;
+    deadlineAt?: number;
+    load: Load<ExactResources[K]>;
+  }): Promise<ExactResources[K]> {
+    return this.readOperation({ ...params, ownerKey: ownerKey(params.owner),
+      threadKey: params.ref ? JSON.stringify([params.ref.backend, params.ref.threadId]) : undefined,
+      key: JSON.stringify([params.kind, ownerKey(params.owner), params.identity]), operationKey: params.operation });
+  }
+
+  private async readOperation<T extends Result>(params: {
+    kind: Query["kind"];
+    ownerKey: string;
+    threadKey?: string;
+    consumerId: string;
+    key: string;
+    operationKey: string;
+    deadlineAt?: number;
+    load: Load<T>;
+  }): Promise<T> {
     const consumers = new Set(this.admissions.keys());
     for (const query of this.queries.values()) {
       for (const consumer of query.consumers) consumers.add(consumer);
     }
+    const pendingAdmissions = [...this.admissions.values()].reduce((count, entries) => count + entries.size, 0);
     if ((!consumers.has(params.consumerId) && consumers.size >= MAX_CONSUMERS)
-      || this.pendingReads >= MAX_PENDING_READS) {
+      || this.pendingReads + pendingAdmissions >= MAX_PENDING_READS) {
       throw new NavigationQueryError("navigation_busy", "Navigation demand budget is occupied.");
     }
-    if (params.request.deadlineAt !== undefined && !Number.isFinite(params.request.deadlineAt)) {
+    if (params.deadlineAt !== undefined && !Number.isFinite(params.deadlineAt)) {
       throw new NavigationQueryError("navigation_invalid_request", "Navigation deadline must be finite.");
     }
-    const deadlineAt = Math.min(params.request.deadlineAt ?? Infinity, Date.now() + DEADLINE_MS);
+    const deadlineAt = Math.min(params.deadlineAt ?? Infinity, Date.now() + DEADLINE_MS);
     if (deadlineAt <= Date.now()) throw new NavigationQueryError("navigation_busy", "Navigation read deadline expired.");
     const admission = new AbortController();
     const admissions = this.admissions.get(params.consumerId) ?? new Set<AbortController>();
     admissions.add(admission);
     this.admissions.set(params.consumerId, admissions);
-    const key = JSON.stringify([
-      params.request.federationTarget ?? { scope: "local" },
-      navigationQueryKey(params.request),
-    ]);
+    const key = params.key;
     // One consumer token owns one canonical query. Changing a search or exact
     // selection releases the previous query instead of retaining every edit.
     for (const [otherKey, other] of this.queries) {
@@ -69,8 +120,11 @@ export class NavigationQueryPool {
     try {
       while (!query) {
         this.evictUnused();
-        if (this.queries.size < MAX_QUERIES) {
-          query = { active: false, consumers: new Set(), pages: new Map(), reads: new Map() };
+        const isQuery = params.kind === "query";
+        const occupied = [...this.queries.values()].filter((entry) => (entry.kind === "query") === isQuery).length;
+        if (occupied < (isQuery ? MAX_QUERIES : MAX_EXACT_RESOURCES)) {
+          query = { kind: params.kind, ownerKey: params.ownerKey, threadKey: params.threadKey,
+            active: false, consumers: new Set(), pages: new Map(), reads: new Map() };
           this.queries.set(key, query);
           break;
         }
@@ -82,14 +136,17 @@ export class NavigationQueryPool {
       if (admissions.size === 0) this.admissions.delete(params.consumerId);
     }
     query.consumers.add(params.consumerId);
-    const operationKey = JSON.stringify([
-      params.request.cursor ?? null,
-      params.request.anchor ?? null,
-      params.request.completeBaselineRevision ?? null,
-      params.request.pageSize ?? 100,
-    ]);
+    const operationKey = params.operationKey;
     const pending = query.reads.get(operationKey);
-    if (pending) return this.waitForRead(pending.promise, deadlineAt);
+    // Keys are constructed by the typed public entry points and partition result kinds.
+    if (pending && !pending.controller.signal.aborted) {
+      this.pendingReads += 1;
+      // An early waiter deadline does not detach its Promise continuation.
+      // Keep that backing charged until the shared logical read settles.
+      const release = (): void => { this.pendingReads -= 1; this.wake(); };
+      void pending.promise.then(release, release);
+      return this.waitForRead(pending.promise, deadlineAt) as Promise<T>;
+    }
     const controller = new AbortController();
     const retainedQuery = query;
     this.pendingReads += 1;
@@ -101,11 +158,25 @@ export class NavigationQueryPool {
       query: retainedQuery,
     }).finally(() => {
       this.pendingReads -= 1;
-      retainedQuery.reads.delete(operationKey);
+      if (retainedQuery.reads.get(operationKey)?.promise === promise) retainedQuery.reads.delete(operationKey);
+      this.evictUnused();
       this.wake();
     });
     query.reads.set(operationKey, { controller, promise });
     return promise;
+  }
+
+  invalidateExactOwner(target?: FederationTarget, ref?: NavigationIdentity): void {
+    const owner = ownerKey(target);
+    const thread = ref ? JSON.stringify([ref.backend, ref.threadId]) : undefined;
+    for (const query of this.queries.values()) {
+      if (query.kind === "query" || query.ownerKey !== owner) continue;
+      if (thread && query.threadKey !== thread) continue;
+      for (const read of query.reads.values()) read.controller.abort();
+      for (const page of query.pages.values()) this.retainedBytes -= page.bytes;
+      query.pages.clear();
+    }
+    this.wake();
   }
 
   release(consumerId: string): void {
@@ -116,20 +187,22 @@ export class NavigationQueryPool {
         for (const read of query.reads.values()) read.controller.abort();
       }
     }
+    this.evictUnused();
     this.wake();
   }
 
-  getBudgetUsage(): { queries: number; retainedBytes: number; activeReads: number } {
-    return { queries: this.queries.size, retainedBytes: this.retainedBytes, activeReads: this.activeReads };
+  getBudgetUsage(): { queries: number; exactResources: number; retainedBytes: number; activeReads: number } {
+    const queries = [...this.queries.values()].filter((query) => query.kind === "query").length;
+    return { queries, exactResources: this.queries.size - queries, retainedBytes: this.retainedBytes, activeReads: this.activeReads };
   }
 
-  private async fetch(params: {
+  private async fetch<T extends Result>(params: {
     controller: AbortController;
     deadlineAt: number;
-    load: (options: { signal: AbortSignal; deadlineAt: number }) => Promise<NavigationQueryPage>;
+    load: Load<T>;
     operationKey: string;
     query: Query;
-  }): Promise<NavigationQueryPage> {
+  }): Promise<T> {
     const { signal } = params.controller;
     // A query has one owner read, including requests for different pages.
     while (this.activeReads >= MAX_ACTIVE_READS || params.query.active) {
@@ -143,10 +216,17 @@ export class NavigationQueryPool {
     const completion = (async () => {
       const page = await params.load({ signal, deadlineAt: params.deadlineAt });
       signal.throwIfAborted();
-      if (page.unchanged) return page;
       const bytes = Buffer.byteLength(JSON.stringify(page), "utf8");
       if (bytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         throw new NavigationQueryError("navigation_item_too_large", "Navigation page exceeds its result budget.");
+      }
+      if (page.unchanged) return page;
+      // Exact consumers retain their own complete revision. The process pool
+      // needs only the latest admitted result, not every conditional revision
+      // or FIFO cursor visited during an open window's lifetime.
+      if (params.query.kind !== "query") {
+        for (const previous of params.query.pages.values()) this.retainedBytes -= previous.bytes;
+        params.query.pages.clear();
       }
       const previous = params.query.pages.get(params.operationKey);
       this.evictUnused(params.query);
@@ -160,6 +240,7 @@ export class NavigationQueryPool {
       clearTimeout(timer);
       this.activeReads -= 1;
       params.query.active = false;
+      this.evictUnused();
       this.wake();
     });
     // Return by the deadline even if a local provider ignores cancellation.
@@ -167,11 +248,11 @@ export class NavigationQueryPool {
     return this.waitForRead(completion, params.deadlineAt, signal);
   }
 
-  private waitForRead(
-    promise: Promise<NavigationQueryPage>,
+  private waitForRead<T extends Result>(
+    promise: Promise<T>,
     deadlineAt: number,
     signal?: AbortSignal,
-  ): Promise<NavigationQueryPage> {
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
       const cancel = (): void => reject(new NavigationQueryError("navigation_busy", "Navigation read cancelled or its deadline expired."));
       const timer = setTimeout(cancel, Math.max(0, deadlineAt - Date.now()));

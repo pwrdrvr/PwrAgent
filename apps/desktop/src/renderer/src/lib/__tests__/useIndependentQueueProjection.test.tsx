@@ -21,6 +21,19 @@ function deferred<T>() {
 }
 
 describe("selected FIFO readiness", () => {
+  it("releases a pending complete FIFO read when its consumer closes", async () => {
+    const pending = deferred<NavigationQueueProjection>();
+    const read = vi.fn().mockReturnValue(pending.promise);
+    const release = vi.fn(async () => {});
+    const api: DesktopApi = { getNavigationQueueProjection: read, releaseNavigationQuery: release };
+    const hook = renderHook(() => useIndependentQueueProjection({ desktopApi: api, selectedThread: selected() }));
+    const consumer = read.mock.calls[0]![1];
+    expect(consumer).toMatch(/^queue-projection:/);
+    hook.unmount();
+    expect(release).toHaveBeenCalledWith(consumer);
+    await act(async () => pending.resolve(page()));
+  });
+
   it("waits for the complete FIFO even when no draft store is mounted", async () => {
     const pending = deferred<NavigationQueueProjection>();
     const read = vi.fn().mockResolvedValueOnce(page("owner", { complete: false, nextCursor: "next" }))

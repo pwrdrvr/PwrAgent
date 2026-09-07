@@ -11,11 +11,13 @@ it("fences late owner configuration and retains the current baseline after a fai
     defaults: { backend: "codex", executionMode: "default" } };
   const read = vi.fn<NonNullable<DesktopApi["getNavigationLaunchpadConfig"]>>()
     .mockReturnValueOnce(pending).mockResolvedValueOnce(current).mockRejectedValueOnce(new Error("Disconnected"));
-  const api: DesktopApi = { getNavigationLaunchpadConfig: read };
+  const release = vi.fn(async () => {});
+  const api: DesktopApi = { getNavigationLaunchpadConfig: read, releaseNavigationQuery: release };
   const { result, rerender, unmount } = renderHook(({ owner }) => useNavigationLaunchpadConfiguration({ desktopApi: api,
     enabled: true, directoryKey: "directory:/repo", federationTarget: { scope: "remote", instanceId: owner } }),
   { initialProps: { owner: "old" } });
   rerender({ owner: "current" });
+  expect(release).toHaveBeenCalledWith(read.mock.calls[0]![1]);
   await waitFor(() => expect(result.current.ready).toBe(true));
   await act(async () => resolve({ ...current, revision: "late-old-owner" }));
   expect(result.current.value?.revision).toBe("current");
@@ -25,4 +27,5 @@ it("fences late owner configuration and retains the current baseline after a fai
   expect(result.current.value?.revision).toBe("current");
   expect(read.mock.calls[2]?.[0].federationTarget).toEqual({ scope: "remote", instanceId: "current" });
   unmount();
+  expect(release).toHaveBeenCalledTimes(2);
 });

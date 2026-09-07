@@ -14,6 +14,8 @@ import { resolveComposerScopeOwner } from "../features/composer/useOwnedComposer
 import type { DesktopApi } from "./desktop-api";
 import { readCompleteNavigationQueue, reconcileCompleteNavigationQueue } from "./navigation-queue-projection";
 
+let nextQueueConsumer = 0;
+
 export type SelectedQueueReadiness = {
   ownerKey?: string;
   readiness: "loading" | "ready" | "failed";
@@ -53,6 +55,7 @@ export function useIndependentQueueProjection(params: {
     let running = false;
     let dirty = false;
     const baselines = new Map<string, NavigationQueueProjection>();
+    const consumers = new Set<string>();
 
     const refresh = async (): Promise<void> => {
       if (running) { dirty = true; return; }
@@ -88,10 +91,12 @@ export function useIndependentQueueProjection(params: {
             if (!demand) return;
             const [baselineKey, { owner, scopes }] = demand;
             const captured = new Map([...scopes].map((scope) => [scope, composerDraftStore!.getQueuedTurns(scope)]));
+            const consumerId = `queue-projection:${++nextQueueConsumer}`;
+            consumers.add(consumerId);
             try {
               const projection = await readCompleteNavigationQueue({
                 owner,
-                read: desktopApi.getNavigationQueueProjection!,
+                read: (request) => desktopApi.getNavigationQueueProjection!(request, consumerId),
                 previous: baselines.get(baselineKey),
                 isCancelled: () => cancelled,
               });
@@ -111,6 +116,9 @@ export function useIndependentQueueProjection(params: {
                 ownerKey: baselineKey, readiness: "failed", projection: baselines.get(baselineKey),
                 error: error instanceof Error ? error.message : String(error),
               });
+            } finally {
+              consumers.delete(consumerId);
+              void desktopApi.releaseNavigationQuery?.(consumerId).catch(() => {});
             }
           }
         }));
@@ -138,6 +146,8 @@ export function useIndependentQueueProjection(params: {
     const interval = setInterval(schedule, 60_000);
     return () => {
       cancelled = true;
+      for (const consumerId of consumers) void desktopApi.releaseNavigationQuery?.(consumerId).catch(() => {});
+      consumers.clear();
       if (timer !== undefined) clearTimeout(timer);
       clearInterval(interval);
       refreshRef.current = async () => {};

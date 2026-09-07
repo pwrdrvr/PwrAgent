@@ -215,5 +215,27 @@ One cursor restart shares the original ten-second deadline.
 
 These are per-read serialized backing limits, not measurements of aggregate
 renderer heap or physical cancellation of a pending IPC request. Independent
-queue consumers still require shared admission and lifetime accounting. The
-assembly and validation changes perform no persistence writes.
+queue baseline retention across renderer scopes still requires aggregate heap
+accounting. The assembly and validation changes perform no persistence writes.
+
+### Shared exact-read admission
+
+Main-process navigation admission now covers exact selected detail, launchpad
+configuration, and FIFO pages as distinct result types. They share the collection
+pool's eight physical owner-read slots, 256 consumer/pending-read limits, ten-second
+deadline and 64 MiB serialized backing ceiling. Up to 32 exact identities are
+admitted separately from the eight collection queries, so retained sidebar pages
+cannot occupy every selected-configuration slot. Only the latest exact result is
+retained for each identity; historical conditional revisions and queue cursors do
+not accumulate. A released identity drops its backing as soon as its physical
+read settles.
+
+Consumer tokens are qualified by native-window identity. Closing one window does
+not cancel another window's shared read; the final release aborts the owner read.
+An owner that ignores cancellation retains its physical slot until completion.
+Canonical navigation events invalidate matching owner/thread exact reads before
+renderer refresh; streamed text does not invalidate them. A refresh never rejoins
+an already-aborted read. Selected detail and launchpad configuration release on
+selection change, hiding and unmount; FIFO assembly releases on completion or
+unmount, independently of visible navigation. Cache-hit reuse of completed
+results and process-wide decoded heap accounting remain separate requirements.

@@ -1842,16 +1842,19 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, request),
   getNavigationLaunchpadConfig: async (
     request: NavigationLaunchpadConfigRequest,
+    consumerId?: string,
   ): Promise<NavigationLaunchpadConfigResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL, request),
+    await ipcRenderer.invoke(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL, request, consumerId),
   getNavigationSelectedDetail: async (
     request: NavigationSelectedDetailRequest,
+    consumerId?: string,
   ): Promise<NavigationSelectedDetailResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_SELECTED_DETAIL_CHANNEL, request),
+    await ipcRenderer.invoke(NAVIGATION_SELECTED_DETAIL_CHANNEL, request, consumerId),
   getNavigationQueueProjection: async (
     request: NavigationQueueProjectionRequest,
+    consumerId?: string,
   ): Promise<NavigationQueueProjection> =>
-    await ipcRenderer.invoke(NAVIGATION_QUEUE_PROJECTION_CHANNEL, request),
+    await ipcRenderer.invoke(NAVIGATION_QUEUE_PROJECTION_CHANNEL, request, consumerId),
   getNavigationSnapshotTransport: async (
     request: GetNavigationSnapshotTransportRequest,
   ): Promise<NavigationSnapshotTransportResponse> =>

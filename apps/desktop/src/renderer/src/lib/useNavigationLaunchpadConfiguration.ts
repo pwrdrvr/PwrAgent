@@ -3,6 +3,7 @@ import type { FederationTarget, NavigationLaunchpadConfigResponse } from "@pwrag
 import type { DesktopApi } from "./desktop-api";
 
 type ConfigurationState = { key: string; value?: NavigationLaunchpadConfigResponse; error?: string; ready: boolean };
+let nextLaunchpadConsumer = 0;
 
 /** Configuration has its own readiness and never waits for a collection page. */
 export function useNavigationLaunchpadConfiguration(params: {
@@ -15,6 +16,8 @@ export function useNavigationLaunchpadConfiguration(params: {
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const sequenceRef = useRef(0);
+  const consumerRef = useRef<string | undefined>(undefined);
+  if (!consumerRef.current) consumerRef.current = `launchpad-config:${++nextLaunchpadConsumer}`;
   const [state, setState] = useState<ConfigurationState>();
   const refresh = useCallback(async () => {
     const current = paramsRef.current;
@@ -26,7 +29,7 @@ export function useNavigationLaunchpadConfiguration(params: {
       if (!current.desktopApi?.getNavigationLaunchpadConfig) throw new Error("Upgrade this instance to read launchpad configuration.");
       const value = await current.desktopApi.getNavigationLaunchpadConfig({ protocol: 2,
         federationTarget: current.federationTarget, directoryKey: current.directoryKey,
-      });
+      }, consumerRef.current);
       if (sequenceRef.current !== sequence) return;
       if (value.protocol !== 2 || value.unchanged || !value.defaults || value.directoryKey !== current.directoryKey) {
         throw new Error("Launchpad configuration has no matching owner baseline.");
@@ -41,7 +44,10 @@ export function useNavigationLaunchpadConfiguration(params: {
   useEffect(() => {
     if (params.enabled) void refresh();
     else setState((previous) => previous ? { ...previous, ready: false } : previous);
-    return () => { sequenceRef.current += 1; };
+    return () => {
+      sequenceRef.current += 1;
+      void params.desktopApi?.releaseNavigationQuery?.(consumerRef.current!).catch(() => {});
+    };
   }, [params.desktopApi, params.enabled, key, refresh]);
   return { ...(state?.key === key ? state : { key, ready: false }), refresh };
 }

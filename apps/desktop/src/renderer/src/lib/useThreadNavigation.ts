@@ -3086,7 +3086,7 @@ export function useThreadNavigation(
       ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
       : undefined,
   });
-  const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled,
+  const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled: enabled && viewForeground,
     directoryKey: getDirectoryKeyFromLaunchpadSelection(selectedItemKey), federationTarget: rendererFederationTarget,
   });
   const draftStore = options.composerDraftStore;

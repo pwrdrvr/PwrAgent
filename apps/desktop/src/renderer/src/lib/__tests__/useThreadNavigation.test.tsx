@@ -11866,6 +11866,7 @@ describe("useThreadNavigation", () => {
       | undefined;
     // Both threads deliberately share an id: only the federation origin
     // distinguishes them.
+    let remotePrs = [buildPr({})];
     const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -11901,7 +11902,7 @@ describe("useThreadNavigation", () => {
               threadId: "shared-thread-id",
             },
           },
-          prs: [buildPr({})],
+          prs: remotePrs,
         },
       ],
     }));
@@ -11923,6 +11924,7 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
+      remotePrs = [buildPr({ state: "merged", lifecycleState: "merged" })];
       agentEventHandler?.({
         backend: "codex",
         federationTarget,
@@ -11945,6 +11947,7 @@ describe("useThreadNavigation", () => {
     // A peer's attachment-list event must not rewrite the local thread
     // that shares its id.
     await act(async () => {
+      remotePrs = [buildPr({ number: 4242 })];
       agentEventHandler?.({
         backend: "codex",
         federationTarget,
@@ -12770,7 +12773,7 @@ describe("main selected detail authority", () => {
     expect(hook.result.current.selectedThreadConfigurationReady).toBe(false);
     expect(readDetail).toHaveBeenLastCalledWith(expect.objectContaining({
       ref: { backend: "acp:kimi", threadId: "off-page", ownerInstanceId: "peer" }, federationTarget: target,
-    }));
+    }), expect.stringMatching(/^selected-detail:/));
     await act(async () => resolveDetail({
       protocol: 2, ref: { backend: "acp:kimi", threadId: "off-page", ownerInstanceId: "peer" },
       revision: "exact", readiness: "ready", identity: "present", thread,

@@ -11,6 +11,8 @@ import {
   type NavigationSelectionState,
 } from "./navigation-query-state";
 
+let nextDetailConsumer = 0;
+
 /** A row can select a thread; only this exact read can authorize its composer. */
 export function useNavigationSelectedDetail(params: {
   desktopApi?: DesktopApi;
@@ -29,6 +31,8 @@ export function useNavigationSelectedDetail(params: {
   const currentRef = useRef<NavigationSelectionState | undefined>(undefined);
   const pullRequestKeysRef = useRef(new Set<string>());
   const sequenceRef = useRef(0);
+  const consumerRef = useRef<string | undefined>(undefined);
+  if (!consumerRef.current) consumerRef.current = `selected-detail:${++nextDetailConsumer}`;
   const connectionRef = useRef<{ owner: string; status: string } | undefined>(undefined);
   const [state, setState] = useState<NavigationSelectionState>();
   const refresh = useCallback(async () => {
@@ -53,7 +57,7 @@ export function useNavigationSelectedDetail(params: {
         ref: selectedRef,
         federationTarget: currentParams.federationTarget,
         knownRevision: started.stale ? undefined : started.detail?.revision,
-      });
+      }, consumerRef.current);
       if (sequenceRef.current !== sequence) return;
       const next = applyNavigationSelectedDetail({ state: started, sequence, detail });
       pullRequestKeysRef.current = new Set(next.detail?.thread?.prs?.map(buildPullRequestStatusKey));
@@ -87,7 +91,10 @@ export function useNavigationSelectedDetail(params: {
       currentRef.current = undefined;
       setState(undefined);
     }
-    return () => { sequenceRef.current += 1; };
+    return () => {
+      sequenceRef.current += 1;
+      void desktopApi?.releaseNavigationQuery?.(consumerRef.current!).catch(() => {});
+    };
   }, [identityKey, refresh, targetKey, params.enabled]);
   useEffect(() => {
     if (!identityKey || !desktopApi?.getNavigationSelectedDetail) return;

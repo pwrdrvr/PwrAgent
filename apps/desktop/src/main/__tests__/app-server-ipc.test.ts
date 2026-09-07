@@ -141,6 +141,8 @@ const federationMock = vi.hoisted(() => {
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
       remoteNavigationQueryPage: vi.fn(),
+      remoteNavigationSelectedDetail: vi.fn(),
+      onRemoteBackendEvent: vi.fn(() => () => {}),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
       ungroupRemoteChildrenOfArchivedThread: vi.fn(async () => undefined),
     },
@@ -2245,6 +2247,31 @@ describe("app server ipc", () => {
     expect(page.directories[0]?.directoryThreadsCollapsed).toBe(true);
     expect(page.selectionDirectory.directoryThreadsCollapsed).toBe(true);
     expect(directory.directoryThreadsCollapsed).toBe(false);
+  });
+
+  it("shares exact owner reads across native windows and aborts only after the last window releases", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SELECTED_DETAIL_CHANNEL, NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
+    let finish!: (value: unknown) => void;
+    federationMock.runtime.remoteNavigationSelectedDetail.mockReset().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    registerAppServerIpcHandlers();
+    const a = { sender: { id: 90011, once: vi.fn() } };
+    const b = { sender: { id: 90012, once: vi.fn() } };
+    const request = { protocol: 2, federationTarget: { scope: "remote", instanceId: "exact-owner" },
+      ref: { backend: "codex", threadId: "same", ownerInstanceId: "exact-owner" } };
+    const first = handlers.get(NAVIGATION_SELECTED_DETAIL_CHANNEL)!(a, request, "detail");
+    const second = handlers.get(NAVIGATION_SELECTED_DETAIL_CHANNEL)!(b, request, "detail");
+    const settled = Promise.allSettled([first, second]);
+    expect(federationMock.runtime.remoteNavigationSelectedDetail).toHaveBeenCalledTimes(1);
+    const options = federationMock.runtime.remoteNavigationSelectedDetail.mock.calls[0]![2] as { signal: AbortSignal; deadlineAt: number };
+    expect(options.deadlineAt).toBeGreaterThan(Date.now());
+    await handlers.get(NAVIGATION_QUERY_RELEASE_CHANNEL)!(a, "detail");
+    expect(options.signal.aborted).toBe(false);
+    const onDestroyed = b.sender.once.mock.calls.find(([name]) => name === "destroyed")?.[1] as () => void;
+    onDestroyed();
+    expect(options.signal.aborted).toBe(true);
+    expect((await settled).every((result) => result.status === "rejected")).toBe(true);
+    finish({ protocol: 2, ref: request.ref, revision: "late", readiness: "ready", identity: "unresolved" });
   });
 
   it("overlays viewer-owned directory disclosure state on remote snapshots", async () => {

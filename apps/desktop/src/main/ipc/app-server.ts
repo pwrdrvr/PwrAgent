@@ -1,9 +1,11 @@
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { BrowserWindow, dialog, ipcMain } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -2226,36 +2228,66 @@ class DesktopAppServerService {
 
   async getNavigationLaunchpadConfig(
     request: NavigationLaunchpadConfigRequest,
+    consumerId?: string,
   ): Promise<NavigationLaunchpadConfigResponse> {
-    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      return await getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request);
-    }
-    return await getDesktopNavigationDetailService().readLaunchpadConfig(request);
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "launchpad", consumerId: token,
+        owner: request.federationTarget,
+        identity: JSON.stringify([request.directoryKey ?? null]),
+        operation: JSON.stringify([request.knownRevision ?? null]),
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readLaunchpadConfig(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
   }
 
   async getNavigationSelectedDetail(
     request: NavigationSelectedDetailRequest,
+    consumerId?: string,
   ): Promise<NavigationSelectedDetailResponse> {
-    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      return await getDesktopFederationRuntime().remoteNavigationSelectedDetail(
-        request.federationTarget,
-        request,
-      );
-    }
-    return await getDesktopNavigationDetailService().readSelectedDetail(request);
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "detail", consumerId: token,
+        owner: request.federationTarget, ref: request.ref,
+        identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
+        operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true, request.includeWorkspaceConfiguration === true]),
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationSelectedDetail(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readSelectedDetail(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
   }
 
   async getNavigationQueueProjection(
     request: NavigationQueueProjectionRequest,
+    consumerId?: string,
   ): Promise<NavigationQueueProjection> {
-    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      return await getDesktopFederationRuntime().remoteNavigationQueueProjection(
-        request.federationTarget,
-        request,
-        { deadlineAt: Math.min(request.deadlineAt ?? Date.now() + 10_000, Date.now() + 10_000) },
-      );
-    }
-    return getDesktopNavigationDetailService().readQueueProjection(request);
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "queue", consumerId: token,
+        owner: request.federationTarget, ref: request.ref,
+        identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
+        operation: JSON.stringify([request.knownRevision ?? null, request.cursor ?? null]),
+        deadlineAt: request.deadlineAt,
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationQueueProjection(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readQueueProjection(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
   }
 
   async setNavigationBrowseMode(
@@ -7783,6 +7815,34 @@ const GIT_MUTATION_COMMAND =
 const navigationQueryPool = getDesktopNavigationQueryPool();
 const navigationQueryConsumersBySender = new Map<number, Set<string>>();
 let nextTransientNavigationConsumer = 0;
+async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: string | undefined,
+  read: (token: string) => Promise<T>): Promise<T> {
+  if (consumerId !== undefined
+    && (typeof consumerId !== "string" || consumerId.length < 1 || consumerId.length > 128)) {
+    throw new Error("Navigation consumer identity must contain 1 to 128 characters.");
+  }
+  const senderId = event.sender.id;
+  let consumers = navigationQueryConsumersBySender.get(senderId);
+  if (!consumers) {
+    consumers = new Set();
+    navigationQueryConsumersBySender.set(senderId, consumers);
+    event.sender.once("destroyed", () => {
+      for (const token of navigationQueryConsumersBySender.get(senderId) ?? []) navigationQueryPool.release(token);
+      navigationQueryConsumersBySender.delete(senderId);
+      void navigationAttentionViewLeases.releaseSender(senderId);
+    });
+  }
+  const token = JSON.stringify([senderId, consumerId ?? ++nextTransientNavigationConsumer]);
+  if (!consumers.has(token) && consumers.size >= 256) throw new Error("Navigation consumer budget is occupied.");
+  consumers.add(token);
+  try { return await read(token); }
+  finally {
+    if (consumerId === undefined) {
+      consumers.delete(token);
+      navigationQueryPool.release(token);
+    }
+  }
+}
 const appServerService = new DesktopAppServerService();
 const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
 const navigationSnapshotTransport = new NavigationSnapshotTransport();
@@ -7791,13 +7851,25 @@ const navigationSnapshotTransport = new NavigationSnapshotTransport();
 const prPollingFocusCleanupSenderIds = new Set<number>();
 
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
+let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
+
+function invalidateNavigationExactEvent(event: AgentEvent): void {
+  if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
+  const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;
+  const threadId = params?.threadId ?? params?.parentThreadId ?? params?.thread?.id;
+  navigationQueryPool.invalidateExactOwner(event.federationTarget,
+    typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
+}
 
 export function registerAppServerIpcHandlers(): void {
   // Refresh a thread's working-state chips when the agent finishes a turn
   // or a git-mutating command in its worktree. Re-registering tears the
   // previous subscription down first so repeated calls don't stack listeners.
   unsubscribeWorkingStateEvents?.();
+  unsubscribeNavigationRemoteEvents?.();
+  unsubscribeNavigationRemoteEvents = getDesktopFederationRuntime().onRemoteBackendEvent(invalidateNavigationExactEvent);
   unsubscribeWorkingStateEvents = getDesktopBackendRegistry().onEvent((event) => {
+    invalidateNavigationExactEvent(event);
     appServerService.handleAgentEventForWorkingState(event);
     appServerService.handleAgentEventForPrAttachments(event);
   });
@@ -8101,33 +8173,8 @@ export function registerAppServerIpcHandlers(): void {
       request: NavigationQueryRequest,
       consumerId?: string,
     ): Promise<NavigationQueryPage> => {
-      if (consumerId !== undefined
-        && (typeof consumerId !== "string" || consumerId.length < 1 || consumerId.length > 128)) {
-        throw new Error("Navigation consumer identity must contain 1 to 128 characters.");
-      }
-      const senderId = event.sender.id;
-      let consumers = navigationQueryConsumersBySender.get(senderId);
-      if (!consumers) {
-        consumers = new Set();
-        navigationQueryConsumersBySender.set(senderId, consumers);
-        event.sender.once("destroyed", () => {
-          for (const token of navigationQueryConsumersBySender.get(senderId) ?? []) {
-            navigationQueryPool.release(token);
-          }
-          navigationQueryConsumersBySender.delete(senderId);
-          void navigationAttentionViewLeases.releaseSender(senderId);
-        });
-      }
-      const token = JSON.stringify([senderId, consumerId ?? ++nextTransientNavigationConsumer]);
-      consumers.add(token);
-      try {
-        return await appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(senderId, request), token);
-      } finally {
-        if (consumerId === undefined) {
-          consumers.delete(token);
-          navigationQueryPool.release(token);
-        }
-      }
+      return withNavigationConsumer(event, consumerId, (token) =>
+        appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(event.sender.id, request), token));
     },
   );
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
@@ -8149,28 +8196,31 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
     async (
-      _event,
+      event,
       request: NavigationLaunchpadConfigRequest,
+      consumerId?: string,
     ): Promise<NavigationLaunchpadConfigResponse> =>
-      await appServerService.getNavigationLaunchpadConfig(request),
+      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationLaunchpadConfig(request, token)),
   );
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SELECTED_DETAIL_CHANNEL,
     async (
-      _event,
+      event,
       request: NavigationSelectedDetailRequest,
+      consumerId?: string,
     ): Promise<NavigationSelectedDetailResponse> =>
-      await appServerService.getNavigationSelectedDetail(request),
+      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationSelectedDetail(request, token)),
   );
   ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.handle(
     NAVIGATION_QUEUE_PROJECTION_CHANNEL,
     async (
-      _event,
+      event,
       request: NavigationQueueProjectionRequest,
+      consumerId?: string,
     ): Promise<NavigationQueueProjection> =>
-      await appServerService.getNavigationQueueProjection(request),
+      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationQueueProjection(request, token)),
   );
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.handle(
@@ -8907,6 +8957,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
+  unsubscribeNavigationRemoteEvents?.();
+  unsubscribeNavigationRemoteEvents = undefined;
   navigationSnapshotTransport.clear();
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);

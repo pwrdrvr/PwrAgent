@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryPage, NavigationQueryRequest, NavigationLaunchpadConfigResponse } from "@pwragent/shared";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 
 const request: NavigationQueryRequest = {
@@ -20,6 +20,109 @@ const page: NavigationQueryPage = {
 };
 
 describe("NavigationQueryPool", () => {
+  it("bounds coalesced waiters even when all requests reuse one consumer token", async () => {
+    const pool = new NavigationQueryPool();
+    let finish!: (value: NavigationLaunchpadConfigResponse) => void;
+    const load = vi.fn(() => new Promise<NavigationLaunchpadConfigResponse>((resolve) => { finish = resolve; }));
+    const params = { kind: "launchpad" as const, consumerId: "same-window", identity: "directory", operation: "full", load };
+    const pending = Array.from({ length: 256 }, () => pool.readExact(params));
+    await expect(pool.readExact(params)).rejects.toMatchObject({ code: "navigation_busy" });
+    expect(load).toHaveBeenCalledTimes(1);
+    finish({ protocol: 2, revision: "complete" });
+    expect(await Promise.all(pending)).toHaveLength(256);
+    pool.release("same-window");
+  });
+
+  it("replaces exact backing across conditional revisions instead of retaining the window's read history", async () => {
+    const pool = new NavigationQueryPool();
+    const value: NavigationLaunchpadConfigResponse = { protocol: 2, revision: "config" };
+    for (let revision = 0; revision < 20; revision++) {
+      await pool.readExact({ kind: "launchpad", consumerId: "window", identity: "directory", operation: String(revision), load: async () => value });
+      expect(pool.getBudgetUsage().retainedBytes).toBe(Buffer.byteLength(JSON.stringify(value)));
+    }
+    pool.release("window");
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("fences canonical exact reads by owner and thread without cancelling unrelated configuration", async () => {
+    const pool = new NavigationQueryPool();
+    const ref = { backend: "codex" as const, threadId: "same" };
+    const pending: Array<Promise<unknown>> = [];
+    const signals: AbortSignal[] = [];
+    const finish: Array<() => void> = [];
+    for (const instanceId of ["a", "b"]) {
+      pending.push(pool.readExact({ kind: "detail", consumerId: instanceId, identity: "same", operation: "full", ref,
+        owner: { scope: "remote", instanceId }, load: ({ signal }) => {
+          signals.push(signal);
+          return new Promise((resolve) => finish.push(() => resolve({ protocol: 2, ref, revision: "detail", readiness: "ready", identity: "unresolved" })));
+        } }));
+    }
+    pending.push(pool.readExact({ kind: "launchpad", consumerId: "config", identity: "directory", operation: "full",
+      owner: { scope: "remote", instanceId: "a" }, load: ({ signal }) => {
+        signals.push(signal);
+        return new Promise((resolve) => finish.push(() => resolve({ protocol: 2, revision: "config" })));
+      } }));
+    const settled = Promise.allSettled(pending);
+    pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, false, false]);
+    for (const done of finish) done();
+    expect((await settled).map((result) => result.status)).toEqual(["rejected", "fulfilled", "fulfilled"]);
+    for (const consumer of ["a", "b", "config"]) pool.release(consumer);
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("shares eight physical slots between collection and exact configuration reads", async () => {
+    const pool = new NavigationQueryPool();
+    const resolve: Array<(page: NavigationQueryPage) => void> = [];
+    const pending = Array.from({ length: 8 }, (_, index) => pool.read({ consumerId: `page-${index}`,
+      request: { ...request, query: { kind: "search", text: String(index) } },
+      load: () => new Promise<NavigationQueryPage>((done) => { resolve.push(done); }),
+    }));
+    const config: NavigationLaunchpadConfigResponse = { protocol: 2, revision: "config" };
+    const load = vi.fn(async () => config);
+    const exact = pool.readExact({ kind: "launchpad", consumerId: "selected-config", identity: "local-directory", operation: "full", load });
+    expect(load).not.toHaveBeenCalled();
+    expect(pool.getBudgetUsage().activeReads).toBe(8);
+    resolve[0]!(page);
+    await pending[0];
+    await expect(exact).resolves.toEqual(config);
+    expect(load).toHaveBeenCalledTimes(1);
+    for (const done of resolve.slice(1)) done(page);
+    await Promise.all(pending);
+    for (let index = 0; index < 8; index++) pool.release(`page-${index}`);
+    pool.release("selected-config");
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("releases exact consumers independently and never rejoins an aborted physical read", async () => {
+    const pool = new NavigationQueryPool();
+    const config: NavigationLaunchpadConfigResponse = { protocol: 2, revision: "config" };
+    let finish!: (value: NavigationLaunchpadConfigResponse) => void;
+    let signal!: AbortSignal;
+    const load = vi.fn(({ signal: current }: { signal: AbortSignal }) => {
+      signal = current;
+      return new Promise<NavigationLaunchpadConfigResponse>((resolve) => { finish = resolve; });
+    });
+    const params = { kind: "launchpad" as const, identity: "owner-directory", operation: "full", load };
+    const a = pool.readExact({ ...params, consumerId: "window-a" });
+    const b = pool.readExact({ ...params, consumerId: "window-b" });
+    const old = Promise.allSettled([a, b]);
+    pool.release("window-a");
+    expect(signal.aborted).toBe(false);
+    pool.release("window-b");
+    expect(signal.aborted).toBe(true);
+    const freshLoad = vi.fn(async () => ({ ...config, revision: "fresh" }));
+    const fresh = pool.readExact({ ...params, consumerId: "window-c", load: freshLoad });
+    expect(freshLoad).not.toHaveBeenCalled();
+    expect((await old).every((result) => result.status === "rejected")).toBe(true);
+    expect(pool.getBudgetUsage().activeReads).toBe(1);
+    finish(config);
+    await expect(fresh).resolves.toMatchObject({ revision: "fresh" });
+    expect(freshLoad).toHaveBeenCalledTimes(1);
+    pool.release("window-c");
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
   it("returns at the transaction deadline while retaining an unresponsive provider's physical slot", async () => {
     vi.useFakeTimers();
     try {
