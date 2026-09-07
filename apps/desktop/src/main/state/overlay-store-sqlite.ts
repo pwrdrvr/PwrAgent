@@ -3479,9 +3479,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         ) AS compact
       FROM pins
       ) SELECT instance_id, backend, thread_id, directory_count,
-        CASE WHEN length(CAST(compact AS BLOB)) <= ${NAVIGATION_QUERY_MAX_RESULT_BYTES} THEN compact END AS compact
+        CASE WHEN length(CAST(compact AS BLOB)) <= ? THEN compact END AS compact
       FROM projected ORDER BY added_at DESC
-    `).iterate() as Iterable<{ instance_id: string; backend: string; thread_id: string; directory_count: number; compact: string | null }>;
+    `).iterate(NAVIGATION_QUERY_MAX_RESULT_BYTES) as Iterable<{ instance_id: string; backend: string; thread_id: string; directory_count: number; compact: string | null }>;
     const result: NavigationThreadSummary[] = [];
     let retainedBytes = 2;
     for (const row of rows) {
