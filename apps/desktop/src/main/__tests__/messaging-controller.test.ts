@@ -22646,6 +22646,21 @@ describe("MessagingController", () => {
     });
   });
 
+  it("blocks permission changes when exact configuration is unavailable without reading navigation", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.getNavigationSnapshot.mockClear().mockImplementation(() => { throw new Error("Legacy navigation is forbidden"); });
+    harness.getNavigationLaunchpadConfig.mockResolvedValue({ protocol: 2, revision: "missing-defaults" });
+    const before = await harness.store.getBinding("binding:telegram:dm::chat-1:codex:thread-1");
+    await expect(harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "status:set-permissions",
+      value: { executionMode: "full-access" },
+    }))).rejects.toThrow("ready thread configuration and defaults");
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(await harness.store.getBinding("binding:telegram:dm::chat-1:codex:thread-1")).toEqual(before);
+  });
+
   it("uses Kimi config-option permissions in the status picker", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
@@ -24707,6 +24722,7 @@ async function createHarness<
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
   getNavigationSnapshot?: NonNullable<MessagingBackendBridge["getNavigationSnapshot"]>;
   getNavigationSelectedDetail?: NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]>;
+  getNavigationLaunchpadConfig?: NonNullable<MessagingBackendBridge["getNavigationLaunchpadConfig"]>;
   getThreadAdmissionState?: NonNullable<MessagingBackendBridge["getThreadAdmissionState"]>;
   createManagedConversation?: MessagingAdapter["createManagedConversation"];
   closeManagedConversation?: MessagingAdapter["closeManagedConversation"];
@@ -24777,6 +24793,7 @@ async function createHarness<
   ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   getNavigationSelectedDetail: ReturnType<typeof vi.fn>;
+  getNavigationLaunchpadConfig: ReturnType<typeof vi.fn>;
   getThreadAdmissionState: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
@@ -24870,6 +24887,14 @@ async function createHarness<
         && (candidate.federation?.ref.target.scope === "remote" ? candidate.federation.ref.target.instanceId
           : options?.getNavigationSnapshot && request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined) === request.ref.ownerInstanceId);
       return { protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: thread ? "present" : "unresolved", thread };
+    }),
+  );
+  const getNavigationLaunchpadConfig = vi.fn<NonNullable<MessagingBackendBridge["getNavigationLaunchpadConfig"]>>(
+    options?.getNavigationLaunchpadConfig ?? (async (request) => {
+      const population = options?.getNavigationSnapshot
+        ? await options.getNavigationSnapshot({ backend: "all", federationTarget: request.federationTarget })
+        : options?.navigation ?? buildNavigationSnapshot();
+      return { protocol: 2, revision: "fixture", defaults: population.launchpadDefaults };
     }),
   );
   const getThreadAdmissionState = vi.fn(
@@ -25249,6 +25274,7 @@ async function createHarness<
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     getNavigationSelectedDetail,
+    getNavigationLaunchpadConfig,
     getThreadAdmissionState,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
@@ -25332,6 +25358,7 @@ async function createHarness<
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     getNavigationSelectedDetail,
+    getNavigationLaunchpadConfig,
     getThreadAdmissionState,
     handoffThreadWorkspace,
     interruptTurn,
