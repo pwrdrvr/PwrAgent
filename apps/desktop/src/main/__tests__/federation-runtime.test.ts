@@ -1574,7 +1574,7 @@ describe("DesktopFederationRuntime", () => {
     const hugeOutput = "private turn output".repeat(100_000);
     const beforeLarge = ownerFrames.length;
     owner.forwardLocalBackendEvent({ backend: "codex", notification: {
-      method: "turn/completed", params: { threadId: "A", finalText: hugeOutput },
+      method: "turn/completed", params: { threadId: "A", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     } } as AgentEvent);
     expect(ownerFrames).toHaveLength(beforeLarge + 1);
     expect(JSON.stringify(ownerFrames.at(-1))).not.toContain("private turn output");
@@ -1585,11 +1585,11 @@ describe("DesktopFederationRuntime", () => {
       },
     });
     owner.forwardLocalBackendEvent({ backend: "codex", notification: {
-      method: "turn/completed", params: { threadId: "B", finalText: hugeOutput },
+      method: "turn/completed", params: { threadId: "B", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     } } as AgentEvent);
     expect(ownerFrames).toHaveLength(beforeLarge + 3);
     expect(published.at(-1)?.notification).toMatchObject({
-      method: "turn/completed", params: { threadId: "B", finalText: hugeOutput },
+      method: "turn/completed", params: { threadId: "B", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     });
     viewer.setEventSubscriptions("chat", []);
     emit("item/agentMessage/delta", "B");

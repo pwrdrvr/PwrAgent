@@ -16,6 +16,7 @@ export async function readCompleteNavigationQueue(params: {
   read: (request: NavigationQueueProjectionRequest) => Promise<NavigationQueueProjection>;
   previous?: NavigationQueueProjection;
   isCancelled: () => boolean;
+  allocation?: { reserve: (bytes: number) => void; unreserve: (bytes: number) => void };
 }): Promise<NavigationQueueProjection> {
   const deadlineAt = Date.now() + 10_000;
   for (let restart = 0; restart < 2; restart += 1) {
@@ -70,10 +71,11 @@ export async function readCompleteNavigationQueue(params: {
         if (baseline && baseline.revision !== page.revision) {
           throw Object.assign(new Error("Queue changed while paging."), { code: "navigation_cursor_expired" });
         }
-        retainedBytes += pageBytes;
-        if (retainedBytes > NAVIGATION_QUEUE_MAX_BASELINE_BYTES) {
+        if (retainedBytes + pageBytes > NAVIGATION_QUEUE_MAX_BASELINE_BYTES) {
           throw new Error("Queue exceeds the complete-read memory budget; existing queued replies were retained.");
         }
+        params.allocation?.reserve(pageBytes);
+        retainedBytes += pageBytes;
         for (const entry of page.entries) {
           if (entryIds.has(entry.queueEntryId)) throw new Error("Queue pages contain a duplicate entry.");
           entryIds.add(entry.queueEntryId);
@@ -87,7 +89,10 @@ export async function readCompleteNavigationQueue(params: {
         cursors.add(cursor);
       } while (cursor);
     } catch (error) {
-      if (restart === 0 && isNavigationCursorExpired(error)) continue;
+      if (restart === 0 && isNavigationCursorExpired(error)) {
+        params.allocation?.unreserve(retainedBytes);
+        continue;
+      }
       throw error;
     }
   }

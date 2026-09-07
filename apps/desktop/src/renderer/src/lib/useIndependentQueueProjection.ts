@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ComposerThreadOwner,
   FederationTarget,
+  FederationEventSubscription,
   NavigationQueueProjection,
   NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -13,6 +14,7 @@ import {
 import { resolveComposerScopeOwner } from "../features/composer/useOwnedComposerDraftStore";
 import type { DesktopApi } from "./desktop-api";
 import { readCompleteNavigationQueue, reconcileCompleteNavigationQueue } from "./navigation-queue-projection";
+import { navigationQueueBaselineBudget } from "./navigation-metadata-budget";
 
 let nextQueueConsumer = 0;
 
@@ -54,10 +56,19 @@ export function useIndependentQueueProjection(params: {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let running = false;
     let dirty = false;
+    const subscriptionId = String(++nextQueueConsumer);
     const baselines = new Map<string, NavigationQueueProjection>();
+    const budgetKeys = new Set<string>();
     const consumers = new Set<string>();
     const demandedInstances = new Set<string>();
     const peerStatuses = new Map<string, string>();
+    let subscriptions: FederationEventSubscription[] = [];
+    let subscriptionsJson = "";
+    const publishSubscriptions = (): void => {
+      void desktopApi.setFederationEventSubscriptions?.({
+        consumer: "queue_projection", consumerInstanceId: subscriptionId, subscriptions,
+      }).catch(() => {});
+    };
 
     const refresh = async (): Promise<void> => {
       if (running) { dirty = true; return; }
@@ -71,6 +82,7 @@ export function useIndependentQueueProjection(params: {
           const demand = demands.get(key) ?? { owner: resolved.owner, scopes: new Set<string>() };
           demand.scopes.add(scope);
           demands.set(key, demand);
+          if (demands.size > 256) throw new Error("Queue scope admission exceeds 256 owners; existing replies were retained.");
         }
         const selected = current.current.selectedThread;
         if (selected) {
@@ -91,6 +103,21 @@ export function useIndependentQueueProjection(params: {
           if (owner.target.scope === "remote") demandedInstances.add(owner.target.instanceId);
         }
         for (const instanceId of peerStatuses.keys()) if (!demandedInstances.has(instanceId)) peerStatuses.delete(instanceId);
+        const refsByOwner = new Map<string, Array<{ backend: ComposerThreadOwner["backend"]; threadId: string }>>();
+        for (const { owner } of demands.values()) {
+          if (owner.target.scope !== "remote") continue;
+          const refs = refsByOwner.get(owner.target.instanceId) ?? [];
+          refs.push({ backend: owner.backend, threadId: owner.threadId });
+          refsByOwner.set(owner.target.instanceId, refs);
+        }
+        subscriptions = [...refsByOwner].map(([sourceInstanceId, threads]) => ({
+          sourceInstanceId, eventClasses: ["navigation"], threadSelection: { kind: "threads", threads },
+        }));
+        const nextSubscriptionsJson = JSON.stringify(subscriptions);
+        if (subscriptionsJson !== nextSubscriptionsJson) {
+          subscriptionsJson = nextSubscriptionsJson;
+          publishSubscriptions();
+        }
         const pending = [...demands];
         await Promise.all(Array.from({ length: Math.min(8, pending.length) }, async () => {
           while (!cancelled) {
@@ -100,14 +127,20 @@ export function useIndependentQueueProjection(params: {
             const captured = new Map([...scopes].map((scope) => [scope, composerDraftStore!.getQueuedTurns(scope)]));
             const consumerId = `queue-projection:${++nextQueueConsumer}`;
             consumers.add(consumerId);
+            const budgetKey = `queue:${subscriptionId}:${baselineKey}`;
+            let allocation: ReturnType<typeof navigationQueueBaselineBudget.begin> | undefined;
             try {
+              allocation = navigationQueueBaselineBudget.begin(budgetKey);
+              budgetKeys.add(budgetKey);
               const projection = await readCompleteNavigationQueue({
                 owner,
                 read: (request) => desktopApi.getNavigationQueueProjection!(request, consumerId),
                 previous: baselines.get(baselineKey),
                 isCancelled: () => cancelled,
+                allocation,
               });
               if (cancelled) return;
+              if (projection !== baselines.get(baselineKey)) allocation.commit();
               baselines.set(baselineKey, projection);
               if (baselineKey === selectedKey) setSelectedState({ ownerKey: baselineKey, readiness: "ready", projection });
               for (const [scope, atReadStart] of captured) {
@@ -124,13 +157,24 @@ export function useIndependentQueueProjection(params: {
                 error: error instanceof Error ? error.message : String(error),
               });
             } finally {
+              allocation?.dispose();
               consumers.delete(consumerId);
               void desktopApi.releaseNavigationQuery?.(consumerId).catch(() => {});
             }
           }
         }));
         const owners = new Set(demands.keys());
-        for (const key of baselines.keys()) if (!owners.has(key)) baselines.delete(key);
+        for (const key of baselines.keys()) if (!owners.has(key)) {
+          baselines.delete(key);
+          const budgetKey = `queue:${subscriptionId}:${key}`;
+          navigationQueueBaselineBudget.release(budgetKey);
+          budgetKeys.delete(budgetKey);
+        }
+      } catch (error) {
+        if (!cancelled) setSelectedState((previous) => ({
+          ...previous, ownerKey: selectedKey, readiness: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        }));
       } finally {
         running = false;
         if (dirty && !cancelled) { dirty = false; schedule(); }
@@ -150,7 +194,7 @@ export function useIndependentQueueProjection(params: {
         const peer = event.notification.params as { instanceId: string; status: string };
         if (!demandedInstances.has(peer.instanceId) || peerStatuses.get(peer.instanceId) === peer.status) return;
         peerStatuses.set(peer.instanceId, peer.status);
-        if (peer.status === "connected") schedule();
+        if (peer.status === "connected") { publishSubscriptions(); schedule(); }
         return;
       }
       if (method.startsWith("turn/") || method.startsWith("thread/queued")
@@ -162,6 +206,10 @@ export function useIndependentQueueProjection(params: {
     const interval = setInterval(schedule, 60_000);
     return () => {
       cancelled = true;
+      subscriptions = [];
+      publishSubscriptions();
+      for (const key of budgetKeys) navigationQueueBaselineBudget.release(key);
+      budgetKeys.clear();
       for (const consumerId of consumers) void desktopApi.releaseNavigationQuery?.(consumerId).catch(() => {});
       consumers.clear();
       if (timer !== undefined) clearTimeout(timer);

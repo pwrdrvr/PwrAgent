@@ -69,10 +69,13 @@ export type FederationEventSubscription = {
 
 export type FederationEventSubscriptionConsumer =
   | "star_map"
-  | "thread_view";
+  | "thread_view"
+  | "queue_projection";
 
 export type SetFederationEventSubscriptionsRequest = {
   consumer?: FederationEventSubscriptionConsumer;
+  /** Independent mounted queue consumers must not replace one another. */
+  consumerInstanceId?: string;
   subscriptions: FederationEventSubscription[];
 };
 

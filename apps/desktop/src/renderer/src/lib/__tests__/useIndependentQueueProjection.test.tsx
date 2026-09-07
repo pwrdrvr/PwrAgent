@@ -4,6 +4,7 @@ import type { AgentEvent, NavigationQueueProjection, NavigationThreadSummary } f
 import type { ComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "../desktop-api";
 import { useIndependentQueueProjection } from "../useIndependentQueueProjection";
+import { navigationQueueBaselineBudget } from "../navigation-metadata-budget";
 
 function selected(instanceId = "owner"): NavigationThreadSummary {
   return { source: "codex", id: "same", federation: { ref: {
@@ -107,6 +108,57 @@ describe("selected FIFO readiness", () => {
       hook.unmount();
       vi.useRealTimers();
     }
+  });
+
+  it("keeps independent card consumers subscribed and refreshes on compact queue invalidation", async () => {
+    vi.useFakeTimers();
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const subscribe = vi.fn(async () => ({ subscriptions: [] }));
+    const read = vi.fn(async () => page());
+    const api: DesktopApi = {
+      getNavigationQueueProjection: read, setFederationEventSubscriptions: subscribe,
+      onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    const first = renderHook(() => useIndependentQueueProjection({ desktopApi: api, selectedThread: selected() }));
+    const second = renderHook(() => useIndependentQueueProjection({ desktopApi: api, selectedThread: selected() }));
+    try {
+      await act(async () => {});
+      const requests = subscribe.mock.calls as unknown as Array<[{ consumerInstanceId: string; subscriptions: unknown[] }]>;
+      expect(requests[0]![0].consumerInstanceId).not.toBe(requests[1]![0].consumerInstanceId);
+      expect(requests[0]![0]).toMatchObject({ consumer: "queue_projection", subscriptions: [{
+        sourceInstanceId: "owner", eventClasses: ["navigation"],
+        threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "same" }] },
+      }] });
+      first.unmount();
+      expect(requests.at(-1)![0]).toMatchObject({ consumerInstanceId: requests[0]![0].consumerInstanceId, subscriptions: [] });
+      const before = read.mock.calls.length;
+      await act(async () => {
+        for (const listener of listeners) listener({ backend: "codex", federationTarget: { scope: "remote", instanceId: "owner" },
+          notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/turnQueue/updated", threadId: "same" } },
+        });
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(read).toHaveBeenCalledTimes(before + 1);
+    } finally {
+      first.unmount(); second.unmount(); vi.useRealTimers();
+    }
+    expect(navigationQueueBaselineBudget.usage()).toEqual({ retainedBytes: 0, transientBytes: 0 });
+  });
+
+  it("rejects aggregate FIFO retention without publishing an empty authoritative queue", async () => {
+    const occupied = navigationQueueBaselineBudget.begin("another-window");
+    occupied.reserve(8 * 1024 * 1024); occupied.commit();
+    const api: DesktopApi = { getNavigationQueueProjection: vi.fn(async () => page()) };
+    const hook = renderHook(() => useIndependentQueueProjection({ desktopApi: api, selectedThread: selected() }));
+    try {
+      await waitFor(() => expect(hook.result.current.readiness).toBe("failed"));
+      expect(hook.result.current.error).toContain("retained byte budget");
+      expect(hook.result.current.projection).toBeUndefined();
+      navigationQueueBaselineBudget.release("another-window");
+      await act(async () => { await hook.result.current.refresh(); });
+      expect(hook.result.current.readiness).toBe("ready");
+    } finally { hook.unmount(); navigationQueueBaselineBudget.release("another-window"); }
+    expect(navigationQueueBaselineBudget.usage()).toEqual({ retainedBytes: 0, transientBytes: 0 });
   });
 
   it("reports unavailable owner reads as failed instead of an empty ready FIFO", async () => {

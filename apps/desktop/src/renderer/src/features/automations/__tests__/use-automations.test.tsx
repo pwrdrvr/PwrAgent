@@ -58,16 +58,20 @@ describe("useAutomationRunArtifact", () => {
     act(() => {
       listener?.({
         backend: "codex",
-        notification: {
-          method: compact ? "navigation/invalidated" : "automation/run/transcript/updated",
-          params: { runId: "run-1", ...(compact ? { sourceMethod: "automation/run/transcript/updated" } : {}) },
+        notification: compact ? {
+          method: "navigation/invalidated",
+          params: { runId: "run-1", sourceMethod: "automation/run/transcript/updated" },
+        } : {
+          method: "automation/run/transcript/updated", params: { runId: "run-1" },
         },
       });
       listener?.({
         backend: "codex",
-        notification: {
-          method: compact ? "navigation/invalidated" : "automation/run/transcript/updated",
-          params: { runId: "run-1", ...(compact ? { sourceMethod: "automation/run/transcript/updated" } : {}) },
+        notification: compact ? {
+          method: "navigation/invalidated",
+          params: { runId: "run-1", sourceMethod: "automation/run/transcript/updated" },
+        } : {
+          method: "automation/run/transcript/updated", params: { runId: "run-1" },
         },
       });
     });

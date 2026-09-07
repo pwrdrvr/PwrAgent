@@ -72,3 +72,4 @@ export class NavigationMetadataBudget {
 export const navigationGeometryBudget = new NavigationMetadataBudget();
 export const navigationExactRowsBudget = new NavigationMetadataBudget();
 export const navigationAttentionRowsBudget = new NavigationMetadataBudget();
+export const navigationQueueBaselineBudget = new NavigationMetadataBudget();

@@ -1021,11 +1021,19 @@ export class DesktopFederationRuntime {
 
   setRendererEventSubscriptions(
     webContentsId: number,
-    consumerId: "remote-window" | "star-map" | "thread-view",
+    consumerId: "remote-window" | "star-map" | "thread-view" | `queue-projection:${string}`,
     subscriptions: readonly FederationEventSubscription[],
   ): FederationEventSubscription[] {
+    const key = `renderer:${webContentsId}:${consumerId}`;
+    if (subscriptions.length && !this.desiredEventSubscriptions.has(key)
+      && this.desiredEventSubscriptions.size >= 256) {
+      throw new Error("Federation event consumer admission is full. Close another view and retry.");
+    }
+    if (Buffer.byteLength(JSON.stringify(subscriptions)) > 252 * 1024) {
+      throw new Error("Federation event selection exceeds its byte budget.");
+    }
     return this.setEventSubscriptions(
-      `renderer:${webContentsId}:${consumerId}`,
+      key,
       subscriptions,
     );
   }
@@ -1055,7 +1063,7 @@ export class DesktopFederationRuntime {
 
   clearRendererEventSubscriptions(
     webContentsId: number,
-    consumerId?: "remote-window" | "star-map" | "thread-view",
+    consumerId?: "remote-window" | "star-map" | "thread-view" | `queue-projection:${string}`,
   ): void {
     const prefix = `renderer:${webContentsId}:`;
     if (consumerId) {
