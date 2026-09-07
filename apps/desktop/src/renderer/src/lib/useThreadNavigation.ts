@@ -1864,7 +1864,7 @@ function applyPullRequestStatusUpdate(
   }
 
   const index =
-    params.index?.snapshot === snapshot
+    params.index && (params.index.snapshot === snapshot || samePrChipMembership(params.index.snapshot, snapshot))
       ? params.index
       : buildPrChipLocationIndex(snapshot);
   const locations = index.byPrKey.get(params.prKey);
@@ -1907,7 +1907,7 @@ function applyPullRequestStatusUpdate(
 
   const nextSnapshot = {
     ...snapshot,
-    threads,
+    threadRows: indexLoadedThreadRows(threads),
   };
   return {
     snapshot: nextSnapshot,
@@ -1916,6 +1916,13 @@ function applyPullRequestStatusUpdate(
       byPrKey: index.byPrKey,
     },
   };
+}
+
+function samePrChipMembership(left: NavigationLoadedRows, right: NavigationLoadedRows): boolean {
+  const previous = loadedThreadRows(left);
+  const current = loadedThreadRows(right);
+  return previous.length === current.length && previous.every((thread, index) =>
+    threadSummaryIdentityKey(thread) === threadSummaryIdentityKey(current[index]!) && thread.prs === current[index]!.prs);
 }
 
 function buildPrChipLocationIndex(
@@ -3211,7 +3218,11 @@ export function useThreadNavigation(
         }
         const next: NavigationLoadedRows = { threadRows, directoryRows: nextDirectoryRows,
           launchpadDefaults: launchpadConfiguration.value?.defaults, federationTarget: rendererFederationTarget };
-        return { loading, refreshing, error, rows: reconcileLoadedNavigationRows(current.rows, next),
+        const reconciled = reconcileLoadedNavigationRows(current.rows, next);
+        if (!prChipLocationIndexRef.current || !samePrChipMembership(prChipLocationIndexRef.current.snapshot, reconciled)) {
+          prChipLocationIndexRef.current = buildPrChipLocationIndex(reconciled);
+        }
+        return { loading, refreshing, error, rows: reconciled,
           startupSelectionSettled: pages.get("directory-index")?.coverage.state === "complete" };
       });
     } else {
@@ -3575,6 +3586,12 @@ export function useThreadNavigation(
           || method === "thread/parent/cleared"
           || method === "thread/subthreadOrder/updated"
           || method === "thread/subthreadsCollapsed/updated");
+      if (remoteThreadStatePassthrough && navigationQueryEventRequiresRefresh(method)) {
+        // Viewer pages also contain mounted remote identities. A peer event
+        // invalidates their in-flight baseline before its canonical patch lands.
+        boundedNavigation.invalidate();
+        scheduleRefresh();
+      }
       if (
         !remoteThreadStatePassthrough
         && !federationTargetsEqual(event.federationTarget, windowTarget)

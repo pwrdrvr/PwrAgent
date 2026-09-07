@@ -426,14 +426,14 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads[0]?.threadStatus).toBe("idle");
   });
 
-  it("does not let an in-flight remote snapshot overwrite a live status event", async () => {
+  it.each([true, false])("fences an in-flight peer page before canonical refresh (remote window: %s)", async (remoteWindow) => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "instance-m2-max",
     };
     (window as unknown as {
       __pwragentFederationTarget?: unknown;
-    }).__pwragentFederationTarget = federationTarget;
+    }).__pwragentFederationTarget = remoteWindow ? federationTarget : undefined;
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
@@ -472,14 +472,15 @@ describe("useThreadNavigation", () => {
         backend: "codex",
         executionMode: "default",
       },
-      federationTarget,
+      federationTarget: remoteWindow ? federationTarget : undefined,
     });
     const staleRefresh = createDeferred<NavigationSnapshot>();
+    const canonicalRefresh = createDeferred<NavigationSnapshot>();
     const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(snapshot("idle"))
       .mockReturnValueOnce(staleRefresh.promise)
-      .mockResolvedValueOnce(snapshot("idle"));
+      .mockReturnValueOnce(canonicalRefresh.promise);
     const desktopApi: DesktopApi = {
       readPopulation,
       onAgentEvent: (callback) => {
@@ -517,12 +518,13 @@ describe("useThreadNavigation", () => {
 
     await act(async () => {
       staleRefresh.resolve(snapshot("idle"));
-      await refresh;
     });
+    await waitFor(() => expect(readPopulation).toHaveBeenCalledTimes(3));
     expect(result.current.threads[0]?.threadStatus).toBe("active");
 
     await act(async () => {
-      await result.current.refresh();
+      canonicalRefresh.resolve(snapshot("idle"));
+      await refresh;
     });
     expect(result.current.threads[0]?.threadStatus).toBe("idle");
   });
@@ -10416,7 +10418,8 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.selectedThread?.prs?.[0]?.title).toBeUndefined();
+      expect(result.current.selectedThreadConfigurationReady).toBe(true);
+      expect(result.current.selectedThread?.prs).toEqual([initialPr]);
     });
 
     await act(async () => {
