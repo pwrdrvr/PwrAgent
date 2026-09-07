@@ -1657,6 +1657,14 @@ describe("Composer", () => {
     expect(screen.getByText(unavailableReason)).toHaveClass("composer__meta--error");
   });
 
+  it("does not label pending configuration as an unavailable backend", () => {
+    render(<Composer backends={[backendSummary("codex")]} disabled={true} skills={[]}
+      thread={{ id: "thread-1", title: "Loading owner configuration", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false } }} />);
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.queryByText(/backend is unavailable right now/)).not.toBeInTheDocument();
+  });
+
   it("keeps an unavailable thread draft and its images editable", async () => {
     const file = new File([new Uint8Array([1])], "recovery.png", {
       type: "image/png",
@@ -1664,7 +1672,7 @@ describe("Composer", () => {
 
     render(
       <Composer
-        backends={[backendSummary("codex")]}
+        backends={[{ ...backendSummary("codex"), available: false }]}
         desktopApi={{ onAgentEvent: () => () => undefined }}
         disabled={true}
         skills={[]}

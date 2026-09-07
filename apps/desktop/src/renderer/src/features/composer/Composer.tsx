@@ -12193,7 +12193,7 @@ export function Composer(props: ComposerProps) {
           Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
         </p>
       ) : null}
-      {props.disabled ? (
+      {props.disabled && backend?.available === false && !backend.discoveryPending ? (
         <p className="composer__meta">
           {props.launchpad
             ? "This backend is unavailable right now. Your draft stays here until send is available again."
