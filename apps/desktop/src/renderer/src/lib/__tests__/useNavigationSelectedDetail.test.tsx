@@ -130,3 +130,26 @@ it("applies working-directory events to exact detail and fences an older read", 
   expect(result.current.state?.readiness).toBe("loading");
   unmount();
 });
+
+it("invalidates exact configuration at binding-change admission without requiring a row event", async () => {
+  const old = deferred<NavigationSelectedDetailResponse>();
+  let changed!: () => void;
+  const unsubscribe = vi.fn();
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce(detail("initial")).mockReturnValueOnce(old.promise).mockResolvedValue(detail("bindings-current"));
+  const api: DesktopApi = { getNavigationSelectedDetail: read,
+    onMessagingBindingsChanged: (callback) => { changed = () => callback({ at: 1 }); return unsubscribe; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.refresh(); });
+  act(() => { changed(); changed(); });
+  expect(result.current.state?.readiness).toBe("loading");
+  await act(async () => { old.resolve(detail("obsolete-bindings")); await pending; });
+  expect(result.current.state?.detail?.revision).toBe("initial");
+  await waitFor(() => expect(result.current.state?.detail?.revision).toBe("bindings-current"));
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(read.mock.calls[2]?.[0].knownRevision).toBeUndefined();
+  unmount();
+  expect(unsubscribe).toHaveBeenCalledOnce();
+});

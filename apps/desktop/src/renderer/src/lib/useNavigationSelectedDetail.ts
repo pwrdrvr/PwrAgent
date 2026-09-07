@@ -87,9 +87,9 @@ export function useNavigationSelectedDetail(params: {
     return () => { sequenceRef.current += 1; };
   }, [identityKey, refresh, targetKey, params.enabled]);
   useEffect(() => {
-    if (!identityKey || !desktopApi?.onAgentEvent || !desktopApi.getNavigationSelectedDetail) return;
+    if (!identityKey || !desktopApi?.getNavigationSelectedDetail) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribe = desktopApi.onAgentEvent((event) => {
+    const unsubscribe = desktopApi.onAgentEvent?.((event) => {
       const selected = paramsRef.current.ref;
       const target = paramsRef.current.federationTarget;
       const eventOwner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
@@ -141,7 +141,17 @@ export function useNavigationSelectedDetail(params: {
       if (timer !== undefined) return;
       timer = setTimeout(() => { timer = undefined; void refresh(); }, 250);
     });
-    return () => { if (timer !== undefined) clearTimeout(timer); unsubscribe(); };
+    const unsubscribeBindings = desktopApi.onMessagingBindingsChanged?.(() => {
+      const sequence = ++sequenceRef.current;
+      const current = currentRef.current;
+      if (current) {
+        const next: NavigationSelectionState = { ...current, pendingSequence: sequence, readiness: "loading", stale: true };
+        currentRef.current = next;
+        setState(next);
+      }
+      if (timer === undefined) timer = setTimeout(() => { timer = undefined; void refresh(); }, 250);
+    });
+    return () => { if (timer !== undefined) clearTimeout(timer); unsubscribe?.(); unsubscribeBindings?.(); };
   }, [desktopApi, identityKey, refresh, targetKey]);
   // A render for a new owner must never expose the previous owner's ready configuration.
   const visibleState = state && identityKey === navigationIdentityKey(state.ref) ? state : undefined;
