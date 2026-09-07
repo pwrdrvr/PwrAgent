@@ -671,7 +671,7 @@ it("does not spend cursor slots on complete exact reads or one-page lists", asyn
   expect(rest.complete).toBe(true);
 });
 
-it("acknowledges a retained partial range below 1 KiB and renews its continuation after expiry", async () => {
+it("idle_reconciliation_does_not_transfer_unchanged_rows: renews a retained range below 1 KiB after expiry", async () => {
   let now = 1;
   const store = new NavigationQueryStore({ now: () => now });
   const threads = Array.from({ length: 30 }, (_, index) => thread(`t${index}`));

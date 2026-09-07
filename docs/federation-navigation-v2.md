@@ -1,8 +1,9 @@
 # Federation navigation read protocol: replacement contract
 
 Status: the V2 query and independent detail APIs and renderer migration are
-implemented in #2001. Completion budgets, remaining lifecycle regressions, and
-operator acceptance are still in progress; this document defines their contract.
+implemented in #2001. The bounded read budgets and lifecycle regressions are implemented.
+Operator acceptance and CI completion are tracked separately from implementation;
+this document defines the protocol contract.
 
 Local snapshot IPC rejects both raw and V1 transport requests. Incoming Federation
 snapshot methods reject, and the outgoing runtime no longer fetches full snapshots
@@ -175,28 +176,20 @@ content and detail updates must be selected by the threads actually in use.
 An invisible/closed consumer releases its interest without cancelling another
 consumer's interest in the same resource.
 
-Implemented first prerequisite: `eventClassSelections` preserves class/selector
-pairs through aggregation, direct owner delivery, gateway relays and renderer IPC.
-Missing classes in an explicit map have no thread interest. A selected thread's
-transcript/pending requests no longer inherit all pinned threads on its owner.
-Remote-window lifetime demand retains navigation/scheduled actions for the
-current complete projection; selected detail and Star Map belong to mounted
-consumers. Open/restored Star Map chat cards own exact transcript/pending-request
-selectors, including foreign-mounted thread owners, and closing a card releases
-that interest. This is not yet hidden-window teardown or lazy queue demand.
+`eventClassSelections` preserves class/selector pairs through aggregation, direct
+owner delivery, gateway relays and renderer IPC. Missing classes in an explicit
+map have no thread interest. Protocol 2 negotiation gates owners and routes;
+unsupported alpha peers receive an upgrade error. Broad navigation notifications
+carry compact invalidation metadata. Transcript, pending requests and selected
+scheduled-action content belong to mounted consumers. Closing a card or hiding a
+window releases its leases without cancelling another consumer's shared read.
 
-Implemented local preparation: `ComposerDraftStore.getDraftScopeKeys` and
-`getQueuedScopeKeys` enumerate opaque local scopes without navigation rows or
-message content. `hydrationStatus` distinguishes memory-only, loading, ready
-(including successful empty reads), and failed. Existing draft writes, hydration
-merge rules and per-presence notifications are unchanged. These APIs do not yet
-resolve an owner or migrate background queue release / the legacy queue projector;
-those remain prerequisites for the row-query cutover.
-
-The additive alpha field is not a negotiated V2 guarantee. Old owners/gateways
-can ignore/drop it and over-send the legacy union. Updated gateways/viewers
-filter delivery, but cannot recover bytes already transferred. A negotiated
-end-to-end upgrade gate is still required before removing alpha compatibility.
+`ComposerDraftStore.getDraftScopeKeys` and `getQueuedScopeKeys` enumerate local
+scopes independently of navigation rows. Hydration distinguishes loading, ready
+(including successful empty reads), and failed. Explicit owner identity and exact
+resolution connect these scopes to complete independent FIFO projections;
+background accepted queue release does not depend on visible navigation. Failed
+or partial projections preserve mirrors. Draft text never crosses Federation.
 
 Star Map's periodic reconciliation must use its bounded query and revision,
 not unconditional full navigation. Remote windows must not subscribe to every
@@ -213,34 +206,28 @@ event timestamp persistence. Existing measured placement writes are unchanged.
 
 ## Legacy deprecation and the 1.1 beta gate
 
-Deprecated collection contracts:
+Retired collection contracts:
 
-- `backend.getNavigationSnapshot`, including its opt-in v1 delta transport:
-  an unchanged/delta path does not bound its complete baseline.
-- Collection uses of `backend.listThreads`: replace enumeration with the
-  appropriate bounded query; archive proof already has exact-ID lookup.
-- `federation.peerDirectory` single-frame replacement: negotiated atomic pages
-  exist in #2001; keep the compatibility branch only during alpha migration.
+- `backend.getNavigationSnapshot` and its v1 delta transport.
+- `backend.getNavigationDescendantPage`; query pages now own membership reads.
+- Remote `backend.listThreads`; search and exact resolution never fall back to it.
+- Single-frame `federation.peerDirectory`; routes install from atomic bounded pages.
 
-Deprecation is not removal. Existing alpha peers currently have legitimate
-callers, and the new navigation contract is not yet available. Do not remove a
-method before migrating and testing its callers. Equally, do not claim protocol
-completion while a modern caller silently falls back to an unbounded method.
+Rejecting handlers remain to give old callers an actionable upgrade error; they
+never call the former collection implementation. Local owner inventory access is
+still available for bounded projection and search. It is not a remote full-list API.
 
-Before the first 1.1 beta/stable release:
+All participating viewers, owners and gateways must run this cutover before
+operator acceptance across the Federation. Mixed alpha versions cannot provide
+these guarantees and must fail explicitly rather than appear as empty inventories.
 
-1. Migrate local IPC, remote windows, Star Map, messaging browse/resolution,
-   agent tools and pin caches to explicit read contracts. Review remaining
-   skill/application/automation/control-plane collection methods for documented
-   bounds; they are not implicitly exempt because they are not navigation.
-2. Test the full direct/gateway matrix, including a reconnect during paging,
-   changed permissions, stale routes, cursor eviction, owner restart and
-   cancellation. Unsupported old alpha peers get an actionable upgrade result,
-   not an unbounded fallback or a misleading empty collection.
-3. Remove deprecated collection handlers and modern-client compatibility
-   fallbacks once the matrix passes. Add a release check that fails if the
-   retired methods are still registered for beta/stable. Do not manufacture a
-   passing gate while replacements remain unimplemented.
+Regression coverage includes direct/gateway selection, reconnect and cancellation,
+changed permissions, stale routes, cursor expiry/eviction, owner restart and
+late canonical overlays. The source guard prevents modern renderer and exact
+lookup consumers from restoring deprecated calls; RPC tests assert retired
+handlers reject without invoking collection loaders. A future beta/stable release
+must preserve these gates. Passing these tests does not replace live operator
+acceptance or the PR's CI checks.
 
 Required regressions include:
 
@@ -256,5 +243,5 @@ Required regressions include:
 - `modern_consumers_never_call_deprecated_collection_methods`
 
 The existing [collection budget report](federation-collection-budgets.md) remains
-the implementation-status record. This contract is not evidence that those
-acceptance tests or migrations have been completed.
+the measured implementation and validation record. Operator acceptance is a
+separate approval step; this PR must not be merged automatically.

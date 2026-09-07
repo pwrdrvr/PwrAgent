@@ -152,7 +152,7 @@ it("loads one owner lens page and exact selection, preserving complete counts in
   expect(f.release).toHaveBeenCalled();
 });
 
-it("keeps an off-page selection and gates configuration while its exact owner read is pending", async () => {
+it("selected_action_waits_for_authoritative_detail: preserves an off-page selection until exact owner readiness", async () => {
   const f = fixture();
   let resolve!: (value: NavigationSelectedDetailResponse) => void;
   const pending = new Promise<NavigationSelectedDetailResponse>((done) => { resolve = done; });

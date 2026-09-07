@@ -53,7 +53,7 @@ describe("useDurableComposerDraftStore", () => {
     }
   });
 
-  it("enumerates draft and queued scopes independently of navigation rows", () => {
+  it("draft_and_queue_identity_survive_a_partial_cold_index: enumerates scopes without navigation rows", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     act(() => {
       result.current.set("thread:codex:off-page", buildSnapshot("Private unsent input"));
