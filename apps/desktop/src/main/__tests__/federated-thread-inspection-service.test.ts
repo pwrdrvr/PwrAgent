@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationSelectedDetailRequest, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { createFederatedThreadInspectionHandler } from "../federation/federated-thread-inspection-service";
 
@@ -15,7 +15,7 @@ function buildRuntime(params: {
     >;
   }>;
 }) {
-  const threadFromPeer = vi.fn(
+  const readFixtureSummary = vi.fn(
     async (): Promise<NavigationThreadSummary | undefined> => undefined,
   );
   const backends = new Map(
@@ -53,7 +53,12 @@ function buildRuntime(params: {
       return [peer.instanceId, { listThreads, readThread, resolveThread }] as const;
     }),
   );
+  const selectedDetail = vi.fn<DesktopFederationRuntime["remoteNavigationSelectedDetail"]>(async (_target, request) => {
+    const thread = await readFixtureSummary();
+    return { protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: thread ? "present" : "unresolved", thread };
+  });
   const runtime = {
+    remoteNavigationSelectedDetail: selectedDetail,
     connectedPeerTargets: () =>
       params.peers.map((peer) => ({
         target: { scope: "remote" as const, instanceId: peer.instanceId },
@@ -63,9 +68,9 @@ function buildRuntime(params: {
       })),
     remoteBackend: (target: { instanceId: string }) =>
       backends.get(target.instanceId),
-    remoteThreadSummaries: () => ({ threadFromPeer }),
+    remoteThreadSummaries: vi.fn(() => { throw new Error("Legacy navigation cache is forbidden"); }),
   } as unknown as DesktopFederationRuntime;
-  return { backends, runtime, threadFromPeer };
+  return { backends, runtime, readFixtureSummary, selectedDetail };
 }
 
 describe("federated thread inspection service", () => {
@@ -151,14 +156,14 @@ describe("federated thread inspection service", () => {
   });
 
   it("includes the enriched owner navigation summary when available", async () => {
-    const { runtime, threadFromPeer } = buildRuntime({
+    const { runtime, readFixtureSummary, selectedDetail } = buildRuntime({
       peers: [{
         instanceId: "pwr_owner",
         label: "Owner Mac",
         ownsThread: true,
       }],
     });
-    threadFromPeer.mockResolvedValue({
+    readFixtureSummary.mockResolvedValue({
       source: "codex",
       id: threadId,
       title: "Remote collector result",
@@ -197,11 +202,11 @@ describe("federated thread inspection service", () => {
         prs: [{ number: 1317 }],
       },
     });
-    expect(threadFromPeer).toHaveBeenCalledWith({
-      target: { scope: "remote", instanceId: "pwr_owner" },
-      backend: "codex",
-      threadId,
-    });
+    expect(selectedDetail).toHaveBeenCalledWith({ scope: "remote", instanceId: "pwr_owner" }, {
+      protocol: 2, ref: { backend: "codex", threadId, ownerInstanceId: "pwr_owner" },
+      federationTarget: { scope: "remote", instanceId: "pwr_owner" },
+    }, expect.objectContaining({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }));
+    expect(runtime.remoteThreadSummaries).not.toHaveBeenCalled();
   });
 
   it("requires thread_detail on the owning peer", async () => {
@@ -229,6 +234,20 @@ describe("federated thread inspection service", () => {
     );
   });
 
+  it.each(["owner", "thread"])("rejects selected detail with a mismatched %s before reading a transcript", async (mismatch) => {
+    const { runtime, backends, selectedDetail } = buildRuntime({ peers: [{ instanceId: "pwr_owner", label: "Owner", ownsThread: true }] });
+    selectedDetail.mockResolvedValueOnce({ protocol: 2, revision: "wrong", readiness: "ready", identity: "present",
+      ref: { backend: "codex", threadId, ownerInstanceId: mismatch === "owner" ? "another-owner" : "pwr_owner" },
+      thread: { source: "codex", id: mismatch === "thread" ? "another-thread" : threadId, title: "Wrong result",
+        titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } },
+    });
+    const handler = createFederatedThreadInspectionHandler({ runtime: () => runtime });
+    await expect(handler({ backend: "codex", threadId, instanceId: "pwr_owner", limit: 10, includeTurns: true }))
+      .rejects.toThrow("does not match the requested thread owner");
+    expect(backends.get("pwr_owner")?.readThread).not.toHaveBeenCalled();
+    expect(runtime.remoteThreadSummaries).not.toHaveBeenCalled();
+  });
+
   it("resolves an archived thread on its explicit remote owner", async () => {
     const archivedThread = {
       source: "codex" as const,
@@ -237,11 +256,8 @@ describe("federated thread inspection service", () => {
       archivedAt: 3_000,
       linkedDirectories: [],
     };
-    const listThreads = vi.fn(async (request?: { archived?: boolean }) => ({
-      backend: "codex" as const,
-      fetchedAt: 2_000,
-      threads: request?.archived ? [archivedThread] : [],
-    }));
+    const listThreads = vi.fn();
+    const lookupArchivedThreads = vi.fn(async () => ({ threads: [archivedThread] }));
     const readThread = vi.fn(async () => ({
       backend: "codex" as const,
       fetchedAt: 2_000,
@@ -258,6 +274,9 @@ describe("federated thread inspection service", () => {
       threadStatus: "idle" as const,
     }));
     const runtime = {
+      remoteNavigationSelectedDetail: vi.fn(async (_target, request: NavigationSelectedDetailRequest) => ({
+        protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: "archived",
+      })),
       connectedPeerTargets: () => [{
         target: { scope: "remote" as const, instanceId: "pwr_owner" },
         label: "Owner Mac",
@@ -265,6 +284,7 @@ describe("federated thread inspection service", () => {
       }],
       remoteBackend: () => ({
         resolveThread: vi.fn(async () => ({})),
+        lookupArchivedThreads,
         listThreads,
         readThread,
       }),
@@ -283,9 +303,10 @@ describe("federated thread inspection service", () => {
       instanceId: "pwr_owner",
       thread: { id: threadId, archivedAt: 3_000 },
     });
-    expect(listThreads).toHaveBeenCalledWith({
+    expect(listThreads).not.toHaveBeenCalled();
+    expect(lookupArchivedThreads).toHaveBeenCalledWith({
       backend: "codex",
-      archived: true,
+      threadIds: [threadId],
     }, {
       deadlineAt: expect.any(Number),
     });

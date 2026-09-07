@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import type { NavigationThreadSummary } from "@pwragent/shared";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import {
   PwrAgentFederatedThreadInspectionError,
   type PwrAgentFederatedThreadInspectionHandler,
@@ -46,6 +49,26 @@ export function createFederatedThreadInspectionHandler(
         `Federation instance ${match.peer.label} owns thread ${request.threadId} but does not grant thread_detail.`,
       );
     }
+    const ref = { backend: request.backend, threadId: request.threadId, ownerInstanceId: match.peer.target.instanceId };
+    const pool = getDesktopNavigationQueryPool();
+    const consumerId = `inspect-thread:${randomUUID()}`;
+    let summary: NavigationThreadSummary | undefined;
+    try {
+      const detail = await pool.readExact({ kind: "detail", consumerId, owner: match.peer.target, ref,
+        identity: JSON.stringify([ref.backend, ref.threadId]), operation: JSON.stringify([null, false, false]),
+        load: async (rpcOptions) => activeRuntime.remoteNavigationSelectedDetail(match.peer.target,
+          { protocol: 2, ref, federationTarget: match.peer.target }, rpcOptions),
+      });
+      if (detail.protocol !== 2 || detail.ref.backend !== ref.backend || detail.ref.threadId !== ref.threadId
+        || detail.ref.ownerInstanceId !== ref.ownerInstanceId
+        || (detail.thread && (detail.thread.source !== ref.backend || detail.thread.id !== ref.threadId
+          || (detail.thread.federation?.ref.target.scope === "remote" && detail.thread.federation.ref.target.instanceId !== ref.ownerInstanceId)))) {
+        throw new Error("Selected detail does not match the requested thread owner.");
+      }
+      summary = detail.readiness === "ready" && (detail.identity === "present" || detail.identity === "archived") ? detail.thread : undefined;
+    } finally {
+      pool.release(consumerId);
+    }
     const read = await match.backend.readThread({
       backend: request.backend,
       threadId: request.threadId,
@@ -53,11 +76,6 @@ export function createFederatedThreadInspectionHandler(
       ...(request.before ? { before: request.before } : {}),
       limit: request.limit,
       viewOnly: true,
-    });
-    const summary = await activeRuntime.remoteThreadSummaries?.().threadFromPeer({
-      target: match.peer.target,
-      backend: request.backend,
-      threadId: request.threadId,
     });
     return {
       instanceId: match.peer.target.instanceId,
