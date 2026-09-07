@@ -253,6 +253,9 @@ import type {
   PickFileFromDiskResponse,
   PickReferenceFromDiskResponse,
   ConnectPwrSnapResponse,
+  ConnectPwrGitResponse,
+  OpenPwrGitResponse,
+  PwrGitConnectionStatus,
   OpenPwrSnapResponse,
   PwrSnapConnectionStatus,
   ReadPwrSnapConnectionStatusRequest,
@@ -474,6 +477,10 @@ export type DesktopApi = {
   connectPwrSnap?: () => Promise<ConnectPwrSnapResponse>;
   openPwrSnap?: () => Promise<OpenPwrSnapResponse>;
   openPwrSnapDownload?: () => Promise<OpenPwrSnapResponse>;
+  readPwrGitConnectionStatus?: () => Promise<PwrGitConnectionStatus>;
+  connectPwrGit?: () => Promise<ConnectPwrGitResponse>;
+  openPwrGit?: () => Promise<OpenPwrGitResponse>;
+  openPwrGitDownload?: () => Promise<OpenPwrGitResponse>;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
   readAppMetadata?: () => Promise<AppMetadata>;
   readLicenseDocument?: (
