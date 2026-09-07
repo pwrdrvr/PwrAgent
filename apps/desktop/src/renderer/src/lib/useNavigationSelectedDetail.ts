@@ -139,7 +139,14 @@ export function useNavigationSelectedDetail(params: {
           || ("parentThreadId" in notification.params && notification.params.parentThreadId === selected.threadId)
           || (notification.method === "navigation/threadDirectories/updated"
             && Array.isArray(notification.params.threadIds) && notification.params.threadIds.includes(selected.threadId)));
-      if (!exactThreadEvent && patchedThread === currentThread) return;
+      // Main-process owner-wide invalidations cancel all exact reads on that
+      // owner. Admit the same event here so a cancelled read gets a coalesced
+      // replacement instead of leaving its composer permanently unavailable.
+      const ownerWideEvent = !("threadId" in notification.params)
+        && !("parentThreadId" in notification.params)
+        && !("thread" in notification.params && notification.params.thread
+          && typeof notification.params.thread === "object" && "id" in notification.params.thread);
+      if (!exactThreadEvent && !ownerWideEvent && patchedThread === currentThread) return;
       if (!navigationQueryEventRequiresRefresh(notification.method)
         && notification.method !== "thread/codexEnvironment/updated"
         && notification.method !== "thread/acpRuntime/updated") return;

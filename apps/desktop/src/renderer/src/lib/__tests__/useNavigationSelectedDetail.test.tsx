@@ -172,3 +172,21 @@ it("invalidates exact configuration at binding-change admission without requirin
   unmount();
   expect(unsubscribe).toHaveBeenCalledOnce();
 });
+
+it("replaces a cancelled exact read after an owner-wide provider invalidation", async () => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  let reject!: (error: Error) => void;
+  const old = new Promise<NavigationSelectedDetailResponse>((_resolve, failed) => { reject = failed; });
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockReturnValueOnce(old).mockResolvedValue(detail("fresh-owner"));
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+  act(() => listener!({ backend: "codex", notification: { method: "navigation/invalidated", params: {} } } as AgentEvent));
+  await act(async () => reject(new Error("Navigation read cancelled")));
+  expect(result.current.state?.readiness).toBe("loading");
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  expect(result.current.state?.detail?.revision).toBe("fresh-owner");
+  expect(read).toHaveBeenCalledTimes(2);
+  unmount();
+});
