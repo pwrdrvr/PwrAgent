@@ -32,6 +32,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  buildAppendPinRank,
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
 } from "@pwragent/shared";
@@ -470,11 +471,14 @@ export async function startInProcessFederationGateway(params: {
       request: SetThreadPinRequest,
     ): Promise<SetThreadPinResponse> {
       calls.push({ method: "setThreadPin", params: request });
-      pinnedRankByThreadId.set(request.threadId, request.pinnedRank ?? undefined);
+      const pinnedRank = request.pinned === true
+        ? pinnedRankByThreadId.get(request.threadId) ?? buildAppendPinRank([...pinnedRankByThreadId.values()])
+        : request.pinned === false ? undefined : request.pinnedRank ?? undefined;
+      pinnedRankByThreadId.set(request.threadId, pinnedRank);
       return {
         backend: request.backend ?? "codex",
         threadId: request.threadId,
-        ...(request.pinnedRank ? { pinnedRank: request.pinnedRank } : {}),
+        ...(pinnedRank ? { pinnedRank } : {}),
       };
     },
     async readMessagingPlatformStatuses() {

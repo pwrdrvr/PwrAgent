@@ -9,6 +9,7 @@ import {
   HistoryNavButtons,
   type HistoryNavControls,
 } from "../chrome/HistoryNavButtons";
+import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 
 type ThreadPlaceholderLayoutControls = {
@@ -68,6 +69,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
             <p className="sidebar__brand">
               Pwr<span className="sidebar__brand-accent">Agent</span>
             </p>
+            <FederationRemoteBadge />
             <MastheadActions {...props.masthead} />
           </div>
         ) : null}

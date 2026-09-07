@@ -2344,7 +2344,10 @@ function DesktopAppShell(props: {
     providerCommands: skills.providerCommands,
     skills: skills.skills,
     transcriptEntries: session.entries,
-    transcriptError: session.error ?? navigation.selectedThreadConfigurationError ?? selectedQueue.error,
+    // The connection banner owns expected peer outages. Independent detail
+    // and queue readiness still gate actions without replacing the transcript.
+    transcriptError: session.error ?? (remoteReadsSuspended ? undefined
+      : navigation.selectedThreadConfigurationError ?? selectedQueue.error),
     expandedTranscriptActivityIds: session.expandedTranscriptActivityIds,
     expandedTranscriptWorkPhaseGroupIds:
       session.expandedTranscriptWorkPhaseGroupIds,
