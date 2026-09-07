@@ -560,7 +560,7 @@ function resolveExecutionModeForThread(
 
 function resolveExecutionModeForBinding(
   binding: MessagingBindingRecord,
-  navigation?: NavigationSnapshot,
+  navigation?: MessagingNavigationContext,
 ): ExecutionModeResolution {
   return resolveExecutionModeForThread(
     binding,
@@ -570,14 +570,14 @@ function resolveExecutionModeForBinding(
 
 function executionModeForBinding(
   binding: MessagingBindingRecord,
-  navigation?: NavigationSnapshot,
+  navigation?: MessagingNavigationContext,
 ): ThreadExecutionMode | undefined {
   return resolveExecutionModeForBinding(binding, navigation).mode;
 }
 
 function turnSettingsForBinding(
   binding: MessagingBindingRecord,
-  navigation?: NavigationSnapshot,
+  navigation?: MessagingNavigationContext,
 ): {
   executionMode?: ThreadExecutionMode;
   fastMode?: boolean;
@@ -12806,10 +12806,7 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
     if (models.length === 0) {
@@ -12830,7 +12827,7 @@ export class MessagingController {
     const currentModelId =
       thread?.model ??
       binding.preferences?.model ??
-      navigation.launchpadDefaults.model ??
+      navigation.defaults.model ??
       models.find((model) => model.current)?.id;
 
     await this.deliver(
@@ -12855,16 +12852,13 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption =
       models.find((model) => model.id === thread?.model) ??
       models.find((model) => model.id === binding.preferences?.model) ??
-      models.find((model) => model.id === navigation.launchpadDefaults.model) ??
+      models.find((model) => model.id === navigation.defaults.model) ??
       defaultBackendModel(models);
     const efforts = reasoningEffortsForModel(summary, modelOption);
     if (summary && efforts.length === 0) {
@@ -12876,7 +12870,7 @@ export class MessagingController {
       resolveReasoningEffortForModel(summary, modelOption, [
         thread?.reasoningEffort,
         binding.preferences?.reasoningEffort,
-        navigation.launchpadDefaults.reasoningEffort,
+        navigation.defaults.reasoningEffort,
       ]);
 
     await this.deliver(
@@ -12901,9 +12895,7 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const runtimeMode = buildMessagingAcpRuntimeModeSummary({
       backend: summary,
@@ -12942,9 +12934,7 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const currentMode =
       thread?.queuedExecutionMode ??
@@ -13015,10 +13005,7 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption = models.find((candidate) => candidate.id === model);
     if (summary && !modelOption) {
@@ -13043,19 +13030,9 @@ export class MessagingController {
         reasoningEffort,
       });
     }
-    const optimisticNavigation: NavigationSnapshot = {
+    const optimisticNavigation: MessagingThreadContext = {
       ...navigation,
-      threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend &&
-        candidate.id === binding.threadId &&
-        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
-          ? {
-              ...candidate,
-              model,
-              ...(settingsResponse ? { reasoningEffort } : {}),
-            }
-          : candidate,
-      ),
+      thread: { ...navigation.thread, model, ...(settingsResponse ? { reasoningEffort } : {}) },
     };
     await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
     await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
@@ -13074,16 +13051,13 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption =
       models.find((model) => model.id === thread?.model) ??
       models.find((model) => model.id === binding.preferences?.model) ??
-      models.find((model) => model.id === navigation.launchpadDefaults.model) ??
+      models.find((model) => model.id === navigation.defaults.model) ??
       defaultBackendModel(models);
     const efforts = reasoningEffortsForModel(summary, modelOption);
     if (summary && !efforts.includes(reasoningEffort)) {
@@ -13103,15 +13077,9 @@ export class MessagingController {
       reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
     });
-    const optimisticNavigation: NavigationSnapshot = {
+    const optimisticNavigation: MessagingThreadContext = {
       ...navigation,
-      threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend &&
-        candidate.id === binding.threadId &&
-        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
-          ? { ...candidate, reasoningEffort }
-          : candidate,
-      ),
+      thread: { ...navigation.thread, reasoningEffort },
     };
     await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
     await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
@@ -13137,10 +13105,7 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
     const runtimeMode = buildMessagingAcpRuntimeModeSummary({
@@ -13192,9 +13157,7 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
     const acpRuntime: BackendAcpSessionRuntimeState = {
@@ -13222,15 +13185,9 @@ export class MessagingController {
       optionId: selection.optionId,
       value: selection.value,
     });
-    const optimisticNavigation: NavigationSnapshot = {
+    const optimisticNavigation: MessagingThreadContext = {
       ...navigation,
-      threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend &&
-        candidate.id === binding.threadId &&
-        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
-          ? { ...candidate, acpRuntime }
-          : candidate,
-      ),
+      thread: { ...navigation.thread, acpRuntime },
     };
     await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
     await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
@@ -13275,9 +13232,7 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     // When a queued change is already pending we toggle from the
     // *queued* target (so a second click reverses the queue), not from
@@ -13335,9 +13290,7 @@ export class MessagingController {
       await this.deliverInvalidStatusSelection(event);
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const currentMode =
       thread?.queuedExecutionMode ??
@@ -18624,6 +18577,20 @@ export class MessagingController {
       return { ...detail.thread, federation: { ref: { backend: request.ref.backend, threadId: request.ref.threadId, target }, instanceLabel: target.instanceId } };
     }
     return detail.thread;
+  }
+
+  private async readBoundThreadConfiguration(binding: MessagingBindingRecord) {
+    if (!this.options.backend.getNavigationLaunchpadConfig) {
+      throw new Error("Upgrade the owning instance to navigation query protocol 2 before using thread configuration.");
+    }
+    const [thread, configuration] = await Promise.all([
+      this.readBoundNavigationThread(binding),
+      this.options.backend.getNavigationLaunchpadConfig({ protocol: 2, federationTarget: federationTargetForBinding(binding) }),
+    ]);
+    if (!thread || configuration.protocol !== 2 || configuration.unchanged || !configuration.defaults) {
+      throw new Error("The owning instance did not provide ready thread configuration and defaults.");
+    }
+    return { kind: "thread" as const, thread, defaults: configuration.defaults };
   }
 
   private async readBoundNavigationThread(binding: MessagingBindingRecord, probeWorkingStates = false): Promise<NavigationThreadSummary | undefined> {
