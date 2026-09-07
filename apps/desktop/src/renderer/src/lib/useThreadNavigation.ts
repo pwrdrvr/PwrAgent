@@ -32,6 +32,7 @@ import type {
   FederationPeerSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   NavigationThreadSummary,
+  NavigationRelativeChildMove,
   PrSummary,
   ThreadAgentMetadata,
   ThreadExecutionMode,
@@ -2821,7 +2822,7 @@ export function useThreadNavigation(
   unlinkThreads: (threads: NavigationThreadSummary[]) => Promise<void>;
   updateSubthreadOrder: (
     parent: NavigationThreadSummary,
-    threadIds: string[],
+    move: NavigationRelativeChildMove,
   ) => Promise<void>;
   setSubthreadsCollapsed: (
     parent: NavigationThreadSummary,
@@ -5222,13 +5223,14 @@ export function useThreadNavigation(
             parentThreadId: rootThreadId,
             insertAfter: { threadId: newThreadId, sourceThreadId },
           });
-          setState((current) => ({
+          const threadIds = result.threadIds;
+          if (threadIds) setState((current) => ({
             ...current,
             rows: updateSubthreadOrderInLoadedRows(current.rows, {
               backend: result.backend,
               federationTarget,
               parentThreadId: result.parentThreadId,
-              threadIds: result.threadIds,
+              threadIds,
             }),
           }));
         } catch {
@@ -7456,7 +7458,7 @@ export function useThreadNavigation(
   const updateSubthreadOrder = useCallback(
     async (
       parent: NavigationThreadSummary,
-      threadIds: string[],
+      move: NavigationRelativeChildMove,
     ): Promise<void> => {
       if (
         !updateSubthreadOrderRequest
@@ -7467,37 +7469,19 @@ export function useThreadNavigation(
       const federationTarget = parent.federation?.ref.target
         ?? readRendererFederationTarget();
 
-      setState((current) => ({
-        ...current,
-        rows: updateSubthreadOrderInLoadedRows(current.rows, {
-          backend: parent.source,
-          federationTarget,
-          parentThreadId: parent.id,
-          threadIds,
-        }),
-      }));
-
       try {
-        const result = await updateSubthreadOrderRequest({
+        await updateSubthreadOrderRequest({
           backend: parent.source,
           federationTarget,
           parentThreadId: parent.id,
-          threadIds,
+          move,
         });
-        setState((current) => ({
-          ...current,
-          rows: updateSubthreadOrderInLoadedRows(current.rows, {
-            backend: result.backend,
-            federationTarget,
-            parentThreadId: result.parentThreadId,
-            threadIds: result.threadIds,
-          }),
-        }));
+        boundedNavigation.invalidate();
       } catch {
         await refresh(threadSummaryIdentityKey(parent));
       }
     },
-    [refresh, updateSubthreadOrderRequest],
+    [refresh, boundedNavigation.invalidate, updateSubthreadOrderRequest],
   );
 
   const setSubthreadsCollapsed = useCallback(

@@ -16,6 +16,7 @@ import type {
   MessagingThreadBindingSummary,
   NavigationRelativePinMove,
   NavigationThreadSummary,
+  NavigationRelativeChildMove,
   PrSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -326,7 +327,7 @@ type SidebarProps = {
   ) => Promise<void>;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
-    threadIds: string[],
+    move: NavigationRelativeChildMove,
   ) => Promise<void>;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,

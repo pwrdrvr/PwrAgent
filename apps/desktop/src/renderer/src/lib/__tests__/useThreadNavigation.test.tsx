@@ -3966,10 +3966,9 @@ describe("useThreadNavigation", () => {
     await waitFor(() => expect(result.current.threads).toHaveLength(1));
 
     await act(async () => {
-      await result.current.updateSubthreadOrder(remoteParent, [
-        "thread-b",
-        "thread-a",
-      ]);
+      await result.current.updateSubthreadOrder(remoteParent, {
+        threadId: "thread-b", anchorThreadId: "thread-a", placement: "before",
+      });
       await result.current.setSubthreadsCollapsed(remoteParent, true);
     });
 

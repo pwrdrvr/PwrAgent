@@ -31,7 +31,7 @@ export function applyNavigationThreadEvent(thread: NavigationThreadSummary, even
   if (notification.method === "thread/subthreadOrder/updated" || notification.method === "thread/subthreadsCollapsed/updated") {
     if (!agentEventMatchesThread(event, thread, notification.params.parentThreadId)) return thread;
     return notification.method === "thread/subthreadOrder/updated"
-      ? { ...thread, subthreadOrder: notification.params.threadIds }
+      ? notification.params.threadIds ? { ...thread, subthreadOrder: notification.params.threadIds } : thread
       : { ...thread, subthreadsCollapsed: notification.params.collapsed };
   }
   if (!("threadId" in notification.params) || typeof notification.params.threadId !== "string"

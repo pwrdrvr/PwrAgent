@@ -2087,19 +2087,27 @@ export type SetThreadParentResponse = {
   parentThreadInstanceId?: FederationInstanceId;
 };
 
+export type NavigationRelativeChildMove = {
+  threadId: ThreadIdentifier;
+  anchorThreadId: ThreadIdentifier;
+  placement: "before" | "after";
+};
+
 export type UpdateSubthreadOrderRequest = {
   federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
 } & (
-  | { threadIds: ThreadIdentifier[]; insertAfter?: never }
-  | { threadIds?: never; insertAfter: { threadId: ThreadIdentifier; sourceThreadId: ThreadIdentifier } }
+  | { threadIds: ThreadIdentifier[]; insertAfter?: never; move?: never }
+  | { threadIds?: never; move?: never; insertAfter: { threadId: ThreadIdentifier; sourceThreadId: ThreadIdentifier } }
+  | { threadIds?: never; insertAfter?: never; move: NavigationRelativeChildMove }
 );
 
 export type UpdateSubthreadOrderResponse = {
   backend: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
-  threadIds: ThreadIdentifier[];
+  /** Relative moves acknowledge acceptance without returning the complete order. */
+  threadIds?: ThreadIdentifier[];
 };
 
 export type SetSubthreadsCollapsedRequest = {

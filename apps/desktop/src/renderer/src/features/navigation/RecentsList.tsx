@@ -6,10 +6,10 @@ import { Fragment, useState, type MouseEvent } from "react";
 import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
+  NavigationRelativeChildMove,
   PrSummary,
 } from "@pwragent/shared";
 import {
-  moveThreadKey,
   resolveThreadParentKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
@@ -64,7 +64,7 @@ type RecentsListProps = {
   ) => void;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
-    threadIds: string[],
+    move: NavigationRelativeChildMove,
   ) => Promise<void>;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
@@ -155,9 +155,6 @@ export function RecentsList(props: RecentsListProps) {
       return null;
     }
 
-    const childKeys = children.map((child) =>
-      threadSummaryIdentityKey(child),
-    );
     return (
       <div className="subthread-list" role="list" aria-label={`Sub-threads of ${parent.title}`}>
         {/* The parent's own workers lead its tray. Trailing them after every
@@ -240,18 +237,11 @@ export function RecentsList(props: RecentsListProps) {
                 ) {
                   return;
                 }
-                const nextKeys = moveThreadKey(
-                  childKeys,
-                  draggedKey,
-                  childKey,
-                  getDropIndicatorPosition(event),
-                );
-                void props.onUpdateSubthreadOrder?.(
-                  parent,
-                  nextKeys
-                    .map((threadKey) => threadByKey.get(threadKey)?.id)
-                    .filter((threadId): threadId is string => Boolean(threadId)),
-                );
+                void props.onUpdateSubthreadOrder?.(parent, {
+                  threadId: draggedThread.id,
+                  anchorThreadId: child.id,
+                  placement: getDropIndicatorPosition(event),
+                });
               }}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}

@@ -1,4 +1,4 @@
-import { buildAppendPinRank, insertSubthreadIdAfter } from "@pwragent/shared";
+import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import type {
@@ -15,6 +15,7 @@ import type {
   MessagingThreadBindingSummary,
   NavigationBrowseMode,
   NavigationRelativePinMove,
+  NavigationRelativeChildMove,
   ThreadQueuedTurnSummary,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
@@ -4082,6 +4083,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     parentThreadId: string;
     threadIds?: string[];
     insertAfter?: { threadId: string; sourceThreadId: string };
+    move?: NavigationRelativeChildMove;
+    children?: { id: string; createdAt?: number }[];
   }): Promise<string[]> {
     return this.stateDb.raw.transaction(() => {
       const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
@@ -4092,6 +4095,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         extraLinkedDirectories: [],
       };
       let requestedOrder = params.threadIds;
+      if (params.move) {
+        const { threadId, anchorThreadId, placement } = params.move;
+        if (params.threadIds || params.insertAfter || !params.children || !threadId || !anchorThreadId
+          || threadId === anchorThreadId || (placement !== "before" && placement !== "after")
+          || parent.archiveTombstonedAt !== undefined) {
+          throw new Error("A relative child move requires distinct live children and an owner order.");
+        }
+        for (const id of [threadId, anchorThreadId]) {
+          const child = this.getThread(buildThreadIdentityKey(params.backend, id));
+          if (!child || child.archiveTombstonedAt !== undefined || child.parentThreadId !== params.parentThreadId
+            || (child.parentThreadBackend ?? child.backend) !== params.backend || child.parentThreadInstanceId
+            || !params.children.some((entry) => entry.id === id)) {
+            throw new Error("The owning instance no longer places that child in this group.");
+          }
+        }
+        // Re-read manual ranks inside the write transaction, then retain every
+        // live owner child, including siblings absent from the viewer's pages.
+        requestedOrder = sortSubthreadSummaries(parent, params.children).map((child) => child.id)
+          .filter((id) => id !== threadId);
+        const anchor = requestedOrder.indexOf(anchorThreadId);
+        requestedOrder.splice(anchor + Number(placement === "after"), 0, threadId);
+      }
       if (params.insertAfter) {
         if (params.threadIds !== undefined || !params.insertAfter.threadId || !params.insertAfter.sourceThreadId) {
           throw new Error("A relative child move requires exactly one source and child identity.");

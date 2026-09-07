@@ -20,6 +20,7 @@ import type {
   MessagingThreadBindingSummary,
   NavigationRelativePinMove,
   NavigationThreadSummary,
+  NavigationRelativeChildMove,
   PrSummary,
 } from "@pwragent/shared";
 import {
@@ -141,7 +142,7 @@ type DirectoriesListProps = {
   onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
-    threadIds: string[],
+    move: NavigationRelativeChildMove,
   ) => Promise<void>;
   onSetSubthreadsCollapsed?: (
     parent: NavigationThreadSummary,
@@ -1144,9 +1145,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // Wire drag-to-reorder, mirroring RecentsList — see the dedicated
       // `draggedSubthreadKey` state for why it stays isolated from the
       // directory / pinned-thread drag.
-      const childOrderKeys = children.map((child) =>
-        threadSummaryIdentityKey(child),
-      );
       const reorderable =
         threadSupportsFederationCapability(parent, "thread_grouping")
         && children.length > 1
@@ -1245,18 +1243,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   ) {
                     return;
                   }
-                  const nextKeys = moveThreadKey(
-                    childOrderKeys,
-                    draggedKey,
-                    childKey,
-                    getDropIndicatorPosition(event),
-                  );
-                  void props.onUpdateSubthreadOrder?.(
-                    parent,
-                    nextKeys
-                      .map((key) => threadsByKey.get(key)?.id)
-                      .filter((threadId): threadId is string => Boolean(threadId)),
-                  );
+                  void props.onUpdateSubthreadOrder?.(parent, {
+                    threadId: draggedThread.id,
+                    anchorThreadId: child.id,
+                    placement: getDropIndicatorPosition(event),
+                  });
                 }}
                 onOpenContextMenu={props.onOpenThreadContextMenu}
                 onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}

@@ -6978,10 +6978,25 @@ class DesktopAppServerService {
         .updateSubthreadOrder(ownerRequest);
     }
     const backend = request.backend ?? "codex";
+    let children: { id: string; createdAt?: number }[] | undefined;
+    if (request.move) {
+      const index = await loadLocalNavigationQueryIndex({ backend, callerReason: "relative-child-move" });
+      if (index.coverage && index.coverage.state !== "complete") {
+        throw new Error("Wait for complete owner discovery before moving a child.");
+      }
+      if (!index.threads.some((thread) => thread.source === backend && thread.id === request.parentThreadId
+        && !thread.archivedAt && !thread.federation)) throw new Error("The owning group no longer exists.");
+      children = index.threads.filter((thread) => thread.source === backend
+        && thread.parentThreadId === request.parentThreadId
+        && (thread.parentThreadBackend ?? thread.source) === backend
+        && !thread.parentThreadInstanceId && !thread.archivedAt && !thread.federation && !thread.codexNativeSubAgent)
+        .map(({ id, createdAt }) => ({ id, createdAt }));
+    }
     const threadIds = await this.getOverlayStore().updateSubthreadOrder({
       backend,
       parentThreadId: request.parentThreadId,
-      ...(request.insertAfter ? { insertAfter: request.insertAfter } : { threadIds: request.threadIds }),
+      ...(request.move ? { move: request.move, children }
+        : request.insertAfter ? { insertAfter: request.insertAfter } : { threadIds: request.threadIds }),
     });
 
     logDebug("updateSubthreadOrder", {
@@ -6996,12 +7011,12 @@ class DesktopAppServerService {
         method: "thread/subthreadOrder/updated",
         params: {
           parentThreadId: request.parentThreadId,
-          threadIds,
+          ...(request.move ? {} : { threadIds }),
         },
       },
     });
 
-    return { backend, parentThreadId: request.parentThreadId, threadIds };
+    return { backend, parentThreadId: request.parentThreadId, ...(request.move ? {} : { threadIds }) };
   }
 
   async setSubthreadsCollapsed(

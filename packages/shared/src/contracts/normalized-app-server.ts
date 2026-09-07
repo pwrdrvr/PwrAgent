@@ -2165,7 +2165,7 @@ export type AppServerNotification =
       method: "thread/subthreadOrder/updated";
       params: {
         parentThreadId: string;
-        threadIds: string[];
+        threadIds?: string[];
       };
     }
   | {
