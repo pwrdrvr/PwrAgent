@@ -435,6 +435,7 @@ describe("federation backend bridge", () => {
 
   it("rejects grouping RPCs from a legacy thread-navigation peer", async () => {
     const backend = {
+      setThreadParent: vi.fn(),
       updateSubthreadOrder: vi.fn(),
       setSubthreadsCollapsed: vi.fn(),
     } as unknown as FederationBackendOperations;
@@ -451,6 +452,11 @@ describe("federation backend bridge", () => {
     registerFederationBackendHandlers({ router, backend });
 
     for (const [id, method, params] of [
+      [
+        "unlink",
+        FEDERATION_BACKEND_METHODS.setThreadParent,
+        { backend: "codex", threadId: "thread-child", expectedParent: { backend: "codex", threadId: "thread-parent" } },
+      ],
       [
         "order",
         FEDERATION_BACKEND_METHODS.updateSubthreadOrder,
@@ -485,9 +491,15 @@ describe("federation backend bridge", () => {
       });
     }
 
+    expect(backend.setThreadParent).not.toHaveBeenCalled();
     expect(backend.updateSubthreadOrder).not.toHaveBeenCalled();
     expect(backend.setSubthreadsCollapsed).not.toHaveBeenCalled();
     expect(replies).toMatchObject([
+      {
+        kind: "error",
+        requestId: "unlink",
+        error: { code: "capability_denied", message: expect.stringContaining("thread_grouping") },
+      },
       {
         kind: "error",
         requestId: "order",
@@ -2277,7 +2289,7 @@ describe("federation backend bridge", () => {
       FEDERATION_BACKEND_METHOD_CAPABILITIES[
         FEDERATION_BACKEND_METHODS.setThreadParent
       ],
-    ).toBe("thread_navigation");
+    ).toBe("thread_grouping");
     expect(
       FEDERATION_BACKEND_METHOD_CAPABILITIES[
         FEDERATION_BACKEND_METHODS.updateSubthreadOrder

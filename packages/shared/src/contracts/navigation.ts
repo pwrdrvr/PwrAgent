@@ -2066,6 +2066,8 @@ export type SetThreadParentRequest = {
   parentThreadId?: ThreadIdentifier | null;
   parentThreadBackend?: AppServerBackendKind | null;
   parentThreadInstanceId?: FederationInstanceId | null;
+  /** Owner-side compare-and-set guard for a relationship read before an action. */
+  expectedParent?: { threadId: ThreadIdentifier; backend: AppServerBackendKind; instanceId?: FederationInstanceId } | null;
 };
 
 export type SetThreadParentResponse = {

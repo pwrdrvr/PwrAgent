@@ -6691,6 +6691,9 @@ class DesktopAppServerService {
     ) {
       const { federationTarget, ...ownerRequest } = request;
       const federationRuntime = getDesktopFederationRuntime();
+      if (request.expectedParent !== undefined) {
+        federationRuntime.assertRemoteNavigationQueryProtocol(federationTarget);
+      }
       const response = await federationRuntime
         .remoteBackend(federationTarget)
         .setThreadParent(ownerRequest);
@@ -6741,6 +6744,7 @@ class DesktopAppServerService {
       parentThreadId: request.parentThreadId,
       parentThreadBackend: request.parentThreadBackend,
       parentThreadInstanceId: request.parentThreadInstanceId,
+      expectedParent: request.expectedParent,
     });
 
     logDebug("setThreadParent", {

@@ -167,6 +167,26 @@ describe("SqliteOverlayStore — thread pins", () => {
     ).resolves.toMatchObject({ pinnedRank: "2048" });
   });
 
+  it("rejects an unlink when the authoritative parent changed", async () => {
+    await store.setThreadParent({ backend: "codex", threadId: "child", parentThreadId: "new-parent" });
+    await expect(store.setThreadParent({ backend: "codex", threadId: "child",
+      expectedParent: { backend: "codex", threadId: "old-parent" } })).rejects.toThrow("Thread parent changed");
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "child" }))?.parentThreadId).toBe("new-parent");
+    await expect(store.setThreadParent({ backend: "codex", threadId: "child",
+      expectedParent: { backend: "codex", threadId: "new-parent" } })).resolves.toMatchObject({ parentThreadId: undefined });
+  });
+
+  it("compares the parent owner and backend without conflating matching thread IDs", async () => {
+    await store.setThreadParent({ backend: "codex", threadId: "child", parentThreadId: "parent",
+      parentThreadBackend: "acp:gemini", parentThreadInstanceId: "owner-a" });
+    for (const expectedParent of [null, { backend: "codex" as const, threadId: "parent", instanceId: "owner-a" },
+      { backend: "acp:gemini" as const, threadId: "parent", instanceId: "owner-b" }]) {
+      await expect(store.setThreadParent({ backend: "codex", threadId: "child", expectedParent })).rejects.toThrow("Thread parent changed");
+    }
+    await expect(store.setThreadParent({ backend: "codex", threadId: "child",
+      expectedParent: { backend: "acp:gemini", threadId: "parent", instanceId: "owner-a" } })).resolves.toMatchObject({ parentThreadId: undefined });
+  });
+
   it("persists sub-thread parent, order, and collapsed state", async () => {
     const { dbPath, tempDir } = createTempStateDb("pwragent-pins-test-");
     stateDb.close();
