@@ -1955,7 +1955,7 @@ describe("App", () => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
-    expect(screen.getByText("Checking providers…")).toBeInTheDocument();
+    expect(await screen.findByText("Checking providers…")).toBeInTheDocument();
 
     await act(async () => {
       settings.resolve({
