@@ -12,6 +12,8 @@ export type ReplayResponseStep = {
   id: string;
   kind: "response";
   method: ReplayResponseMethod;
+  /** Reuse the preceding response until this causal response has completed. */
+  afterResponseId?: string;
   result?: unknown;
   error?: {
     code?: number;
@@ -70,6 +72,10 @@ export function validateReplayFixture(fixture: ReplayFixture): void {
     ids.add(step.id);
 
     if (step.kind === "response") {
+      if (step.afterResponseId && !fixture.steps.some((candidate) => candidate.kind === "response"
+        && candidate.id === step.afterResponseId && candidate.id !== step.id)) {
+        throw new Error(`Replay response ${step.id} references an unknown causal response`);
+      }
       if (!step.method?.trim()) {
         throw new Error(`Replay response step ${step.id} requires method`);
       }

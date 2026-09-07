@@ -22,6 +22,7 @@ export class ReplayController {
   private readonly steps: ReplayStep[];
   private index = 0;
   private pendingRequest?: ReplayRequestStep;
+  private readonly completedResponses = new Set<string>();
   private readonly reusableResponses = new Map<
     ReplayResponseMethod,
     ReplayResponseStep
@@ -53,6 +54,7 @@ export class ReplayController {
         );
       }
 
+      this.completedResponses.add(matchedStep.id);
       return matchedStep;
     }
 
@@ -130,6 +132,7 @@ export class ReplayController {
         break;
       }
       if (step.method === method) {
+        if (step.afterResponseId && !this.completedResponses.has(step.afterResponseId)) return -1;
         return candidateIndex;
       }
     }
