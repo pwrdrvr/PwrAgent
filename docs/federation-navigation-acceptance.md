@@ -1,9 +1,9 @@
 # Bounded-navigation operator acceptance
 
 PR [#2001](https://github.com/pwrdrvr/PwrAgent/pull/2001) is ready for operator
-acceptance testing. The implementation tested here is `e71397043`; subsequent
-acceptance-document and test-name changes do not change runtime behavior. GitHub
-CI completion and explicit operator merge approval are separate gates. The PR
+acceptance testing after the CI repair checkpoint `0d837ec07`. The earlier live
+host evidence below was collected at `e71397043`. GitHub CI completion and
+explicit operator merge approval are separate gates. The PR
 remains a draft and must not be merged automatically.
 
 ## Upgrade requirement
@@ -22,11 +22,11 @@ cleanly afterwards; no live messages or turns were submitted.
 
 | Check | Result |
 | --- | --- |
-| Full workspace unit suite | 754 files; 10,799 passed, 7 skipped |
+| Full workspace unit suite | 754 files; 10,803 passed, 7 skipped |
 | Workspace typecheck and full ESLint | Passed |
 | Dependency boundaries | Passed; 1,868 modules / 6,470 dependencies |
 | SQL, Codex-storage, colors, licenses, Electron-version checks | Passed |
-| Final Electron E2E | 13 passed; native remote window, Star Map open/jump/history, new-thread transcript readiness, queued-review release |
+| Electron E2E | Initial 13-case remote/window/history set passed; after CI repairs, all 52 affected functional cases passed |
 | Named completion regressions after documentation alignment | 67 passed across the three renamed-test suites |
 | Read-only navigation SQLite budget | Zero commits; 0 MB/day additional WAL |
 
@@ -77,3 +77,21 @@ Electron windows through Playwright instead.
 Selected history retains its existing provider cursor and large-entry behavior.
 The cutover bounds navigation membership and separates history demand; it does
 not silently discard large transcript content to meet navigation byte budgets.
+
+## CI follow-up on 2026-09-07
+
+The watch for `d10139adb` failed on functional and visual E2E assertions, not on
+node_modules cache restoration. Signed repairs through `0d837ec07` bind initial
+selection to accepted primary rows, restore the unlinked breadcrumb, refresh
+exact detail after owner-wide invalidation, and refit autocomplete before paint
+and after composer resize. Replay fixtures now wait for their required initial
+selection/transcript and expose created rows only after creation. Visual fixtures
+pin both sides of IPC to the same clock so absolute deadlines remain valid.
+
+The full suite after these repairs passed 10,803 tests in 754 files (7 skipped).
+Typecheck, full ESLint and dependency boundaries passed. All 52 affected
+functional E2E cases passed, including the queued-review cases that previously
+left Send disabled. Existing visual goldens were not changed: local
+host comparisons still show width differences consistent with scrollbar geometry; their authoritative
+result must come from the macOS CI lane. Do not treat local functional success as
+completed CI or merge approval.
