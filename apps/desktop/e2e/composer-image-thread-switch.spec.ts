@@ -91,6 +91,7 @@ async function createComposerImageThreadSwitchFixture(): Promise<{
           },
           {
             id: "thread-list-2",
+            afterResponseId: "thread-start-1",
             kind: "response",
             method: "thread/list",
             result: [

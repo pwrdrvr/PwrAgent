@@ -584,6 +584,9 @@ for (const theme of AUDIT_THEMES) {
         },
       });
       try {
+        // The initial exact selection owns automatic directory expansion.
+        // Wait for that selection before changing the lens under its startup read.
+        await expect(app.window.getByRole("heading", { level: 2, name: "Directories lens thread 01" })).toBeVisible();
         await app.window.getByRole("tab", { name: "directories" }).click();
 
         // Anchored, because Playwright matches an accessible name as a
