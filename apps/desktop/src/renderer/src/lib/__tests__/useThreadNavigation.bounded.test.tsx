@@ -168,3 +168,19 @@ it("pauses reconciliation after thirty minutes idle and resumes from user activi
     vi.useRealTimers();
   }
 });
+
+it("refreshes exact configuration independently of unchanged collection rows", async () => {
+  const f = fixture();
+  let tokenMiserEnabled = true;
+  f.detail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref, revision: String(tokenMiserEnabled),
+    readiness: "ready", identity: "present", thread: { ...row(request.ref.threadId), updatedAt: 1000, tokenMiserEnabled } }));
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  expect(result.current.selectedThread?.tokenMiserEnabled).toBe(true);
+  tokenMiserEnabled = false;
+  await act(async () => { await result.current.refresh(); });
+  expect(result.current.selectedThread?.tokenMiserEnabled).toBe(false);
+  expect(result.current.selectedThread?.updatedAt).toBe(1000);
+  expect(f.legacy).not.toHaveBeenCalled();
+  unmount();
+});
