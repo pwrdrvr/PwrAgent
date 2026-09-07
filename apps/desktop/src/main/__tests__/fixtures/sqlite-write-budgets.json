@@ -300,6 +300,20 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "owner-pr-candidate-bootstrap": {
+    "commits": 1,
+    "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 120,
+    "statements": 120
+  },
+  "owner-pr-candidate-unchanged-bootstrap": {
+    "commits": 0,
+    "note": "120 unchanged owner PR memberships at a later startup/provider completion: zero commits, statements or timestamp rewrites; 0 MB/day idle WAL",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "provider-thread-snapshot-refresh": {
     "commits": 1,
     "note": "one secret-free provider thread projection per successful full provider list, never per thread",

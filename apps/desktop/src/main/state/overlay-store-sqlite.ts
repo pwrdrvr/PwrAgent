@@ -4789,55 +4789,43 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     prKeys: string[];
     now: number;
   }): Promise<void> {
-    const sync = this.stateDb.raw.transaction(() => {
-      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-      const enabled = this.getThread(threadKey)?.prAutoDispatchEnabled === true;
-      const prKeys = enabled ? [...new Set(params.prKeys)] : [];
-      if (prKeys.length === 0) {
-        this.stateDb.raw
-          .prepare(
-            `DELETE FROM pr_auto_dispatch_candidates
-             WHERE backend = ? AND thread_id = ?`,
-          )
-          .run(params.backend, params.threadId);
-        return;
-      }
+    await this.syncThreadPrAutoDispatchCandidatesBatch({ threads: [params], now: params.now });
+  }
 
-      const retainedPrKeys = new Set(prKeys);
-      const existingCandidates = this.stateDb.raw
-        .prepare(
-          `SELECT pr_key
-           FROM pr_auto_dispatch_candidates
-           WHERE backend = ? AND thread_id = ?`,
-        )
-        .all(params.backend, params.threadId) as Array<{ pr_key: string }>;
-      const removeCandidate = this.stateDb.raw.prepare(
-        `DELETE FROM pr_auto_dispatch_candidates
-         WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
+  async syncThreadPrAutoDispatchCandidatesBatch(params: {
+    threads: Array<{ backend: ThreadOverlayState["backend"]; threadId: string; prKeys: string[] }>;
+    now: number;
+  }): Promise<void> {
+    const existing = this.stateDb.raw.prepare(
+      `SELECT pr_key FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ?`,
+    );
+    const changesFor = (thread: typeof params.threads[number]) => {
+      const enabled = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId))?.prAutoDispatchEnabled === true;
+      const desired = new Set(enabled ? thread.prKeys : []);
+      const retained = new Set((existing.all(thread.backend, thread.threadId) as Array<{ pr_key: string }>).map((row) => row.pr_key));
+      return { add: [...desired].filter((key) => !retained.has(key)), remove: [...retained].filter((key) => !desired.has(key)) };
+    };
+    // Do not create even an empty transaction for an unchanged owner index.
+    if (!params.threads.some((thread) => {
+      const changes = changesFor(thread);
+      return changes.add.length > 0 || changes.remove.length > 0;
+    })) return;
+    this.stateDb.raw.transaction(() => {
+      const remove = this.stateDb.raw.prepare(
+        `DELETE FROM pr_auto_dispatch_candidates WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
       );
-      for (const candidate of existingCandidates) {
-        if (!retainedPrKeys.has(candidate.pr_key)) {
-          removeCandidate.run(candidate.pr_key, params.backend, params.threadId);
-        }
-      }
       const insert = this.stateDb.raw.prepare(
-        `INSERT INTO pr_auto_dispatch_candidates(
-           pr_key, backend, thread_id, eligible_since, updated_at
-         ) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(pr_key, backend, thread_id) DO UPDATE SET
-           updated_at = excluded.updated_at`,
+        `INSERT INTO pr_auto_dispatch_candidates(pr_key, backend, thread_id, eligible_since, updated_at)
+         VALUES (?, ?, ?, ?, ?) ON CONFLICT(pr_key, backend, thread_id) DO NOTHING`,
       );
-      for (const prKey of prKeys) {
-        insert.run(
-          prKey,
-          params.backend,
-          params.threadId,
-          params.now,
-          params.now,
-        );
+      for (const thread of params.threads) {
+        // Revalidate eligibility and membership inside the write transaction;
+        // another process may have changed them after the read-only preflight.
+        const changes = changesFor(thread);
+        for (const key of changes.remove) remove.run(key, thread.backend, thread.threadId);
+        for (const key of changes.add) insert.run(key, thread.backend, thread.threadId, params.now, params.now);
       }
-    });
-    sync();
+    })();
   }
 
   async getPrAutoDispatchCandidateWinner(params: {
@@ -8373,6 +8361,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadMcpConnectionIds"
   | "setThreadPrAutoDispatchEnabled"
   | "syncThreadPrAutoDispatchCandidates"
+  | "syncThreadPrAutoDispatchCandidatesBatch"
   | "getPrAutoDispatchCandidateWinner"
   | "resetThreadPrAutoDispatchForOperator"
   | "scheduleThreadPrAutoDispatch"

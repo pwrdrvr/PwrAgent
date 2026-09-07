@@ -9910,6 +9910,13 @@ export class DesktopBackendRegistry {
    * not advance overlay reconciliation state or retain the thread history.
    */
   rememberCompleteNavigationSnapshot(snapshot: NavigationSnapshot): void {
+    this.rememberNavigationVisibilityIndex(snapshot);
+  }
+
+  rememberNavigationVisibilityIndex(snapshot: {
+    threads: NavigationThreadSummary[];
+    directories: NavigationDirectorySummary[];
+  }): void {
     const threadsByKey = new Map(
       snapshot.threads.map((thread) => [
         buildThreadIdentityKey(thread.source, thread.id),

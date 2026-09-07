@@ -1535,7 +1535,11 @@ class DesktopAppServerService {
   private prAutoDispatchBudgetPausedAt: number | undefined;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
-  /** Visible thread→PR attachments plus the primary workspace's repository. */
+  private ownerNavigationActive = false;
+  private ownerNavigationMetadataVersion = 0;
+  private ownerNavigationMetadataRead: Promise<void> | undefined;
+  private ownerNavigationMetadataAbort: AbortController | undefined;
+  /** Owner thread→PR attachments plus the primary workspace's repository. */
   private readonly attachedPrsByThreadKey = new Map<
     string,
     {
@@ -2190,6 +2194,7 @@ class DesktopAppServerService {
         const index = await loadLocalNavigationQueryIndex({
           backend: request.backend,
           callerReason: "renderer-navigation-query",
+          signal: rpcOptions?.signal,
         });
         rpcOptions?.signal.throwIfAborted();
         if (request.inventory === "viewer") {
@@ -2843,7 +2848,7 @@ class DesktopAppServerService {
 
   private async rememberThreadPrAttachments(
     threads: NavigationSnapshot["threads"],
-    options: { replace: boolean },
+    options: { replace: boolean; isCurrent?: () => boolean },
   ): Promise<void> {
     const primaryRepoResolutionByPath = new Map<
       string,
@@ -2858,7 +2863,9 @@ class DesktopAppServerService {
       ),
     );
     const liveThreadKeys = new Set<string>();
+    const candidates: Array<{ backend: AppServerBackendKind; threadId: string; prKeys: string[] }> = [];
     for (const [index, thread] of threads.entries()) {
+      if (options.isCurrent && !options.isCurrent()) return;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       liveThreadKeys.add(threadKey);
       const primaryRepoKey = primaryRepoKeys[index];
@@ -2867,22 +2874,26 @@ class DesktopAppServerService {
         ...(primaryRepoKey ? { primaryRepoKey } : {}),
         prs: thread.prs ?? [],
       });
-      await this.syncThreadPrAutoDispatchCandidates({
+      candidates.push({
         backend: thread.source,
         threadId: thread.id,
+        prKeys: (thread.prs ?? []).filter((pr) => pullRequestMatchesRepositoryKey(pr, primaryRepoKey)).map(getPrStatusKey),
       });
     }
     if (options.replace) {
       for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+        if (options.isCurrent && !options.isCurrent()) return;
         if (!liveThreadKeys.has(threadKey)) {
           this.attachedPrsByThreadKey.delete(threadKey);
           const identity = parseThreadIdentityKey(threadKey);
           if (identity) {
-            await this.syncThreadPrAutoDispatchCandidates(identity);
+            candidates.push({ ...identity, prKeys: [] });
           }
         }
       }
     }
+    if (options.isCurrent && !options.isCurrent()) return;
+    await this.getOverlayStore().syncThreadPrAutoDispatchCandidatesBatch({ threads: candidates, now: Date.now() });
   }
 
   private async rememberThreadPrAttachmentUpdate(params: {
@@ -3658,7 +3669,15 @@ class DesktopAppServerService {
   }
 
   handleAgentEventForPrAttachments(event: AgentEvent): void {
+    if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    if (event.notification.method === "navigation/providerThreads/refreshed") {
+      if (this.ownerNavigationActive) void this.refreshOwnerNavigationMetadata().catch((error) => {
+        appServerLog.warn("failed to refresh owner navigation metadata", { error: String(error) });
+      });
+      return;
+    }
     if (event.notification.method !== "thread/pullRequests/updated") return;
+    this.ownerNavigationMetadataVersion += 1;
     const params = event.notification.params as {
       threadId: string;
       prs: PrSummary[];
@@ -3674,6 +3693,55 @@ class DesktopAppServerService {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  async startOwnerNavigation(): Promise<void> {
+    this.ownerNavigationActive = true;
+    this.syncPrPollingSchedulerState();
+    const state = getDesktopBackendRegistry().getStartupProviderRefreshStatus()?.state;
+    if (state === "ready" || state === "degraded") {
+      await this.refreshOwnerNavigationMetadata();
+    }
+  }
+
+  private refreshOwnerNavigationMetadata(): Promise<void> {
+    this.ownerNavigationMetadataVersion += 1;
+    if (this.ownerNavigationMetadataRead) {
+      return this.ownerNavigationMetadataAbort?.signal.aborted
+        ? this.ownerNavigationMetadataRead.then(() => this.ownerNavigationActive ? this.refreshOwnerNavigationMetadata() : undefined)
+        : this.ownerNavigationMetadataRead;
+    }
+    const abort = new AbortController();
+    this.ownerNavigationMetadataAbort = abort;
+    const read = (async () => {
+      while (this.ownerNavigationActive) {
+        const version = this.ownerNavigationMetadataVersion;
+        const isCurrent = () => this.ownerNavigationActive && this.ownerNavigationMetadataVersion === version;
+        const index = await loadLocalNavigationQueryIndex({ backend: "all", callerReason: "owner-navigation-metadata", signal: abort.signal });
+        if (!this.ownerNavigationActive) return;
+        if (!isCurrent()) continue;
+        if (index.coverage?.state === "checking") return;
+        await Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()]);
+        if (!isCurrent()) continue;
+        this.seedPrStatusRegistryFromThreads(index.threads);
+        const canonical = this.applyCanonicalPrStatuses(index.threads);
+        const complete = !index.coverage || index.coverage.state === "complete";
+        await this.rememberThreadPrAttachments(canonical.threads, { replace: complete, isCurrent });
+        if (!isCurrent()) continue;
+        this.rememberThreadPrRefreshContexts(canonical.threads);
+        if (complete) {
+          const live = new Set(canonical.threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+          for (const key of this.prRefreshContextByThreadKey.keys()) if (!live.has(key)) this.prRefreshContextByThreadKey.delete(key);
+          getDesktopBackendRegistry().rememberNavigationVisibilityIndex(index);
+        }
+        await this.getPrAutoDispatchCoordinator().resume();
+        if (isCurrent()) return;
+      }
+    })().catch((error: unknown) => { if (!abort.signal.aborted) throw error; }).finally(() => {
+      if (this.ownerNavigationMetadataRead === read) this.ownerNavigationMetadataRead = undefined;
+    });
+    this.ownerNavigationMetadataRead = read;
+    return read;
   }
 
   async markThreadSeen(
@@ -5377,8 +5445,8 @@ class DesktopAppServerService {
 
   /**
    * Start or stop background PR polling and automatic repair dispatch to match
-   * the Git settings. Public + idempotent: called on every navigation snapshot
-   * and after every settings write, so both gates take effect without a restart.
+   * the Git settings. Called at owner startup and after settings writes, so
+   * both gates take effect independently of renderer navigation demand.
    */
   syncPrPollingSchedulerState(): void {
     const settingsSyncGeneration = ++this.prPollingSettingsSyncGeneration;
@@ -5392,10 +5460,8 @@ class DesktopAppServerService {
       };
       let budgetStatus: PrAutoDispatchBudgetStatus | undefined;
       try {
-        // Subscribe lazily on the first sync (which the first navigation
-        // snapshot triggers), so a later toggle re-syncs immediately without a
-        // restart. Done here rather than at IPC-registration time so tests that
-        // don't stub the settings singleton aren't forced to construct it.
+        // Owner startup establishes this subscription even when no renderer
+        // opens a navigation collection.
         if (!this.prPollingSettingsUnsubscribe) {
           this.prPollingSettingsUnsubscribe = getDesktopConfigStore().subscribe(
             ["git"],
@@ -5792,7 +5858,7 @@ class DesktopAppServerService {
    * Every tracked, non-terminal PR the poller should keep fresh, with the
    * threads that display it.
    *
-   * Uses the visible per-thread attachment set populated by navigation and
+   * Uses the owner attachment set populated at startup/provider completion and
    * attachment events. This includes explicit PRs on directoryless threads
    * and excludes detached PRs even though lookup history retains them for
    * non-UI bookkeeping.
@@ -7569,6 +7635,9 @@ class DesktopAppServerService {
   }
 
   async close(): Promise<void> {
+    this.ownerNavigationActive = false;
+    this.ownerNavigationMetadataVersion += 1;
+    this.ownerNavigationMetadataAbort?.abort();
     this.focusedDiffService = null;
     this.prFetcher = undefined;
     this.prPollingScheduler?.stop();
@@ -7869,6 +7938,10 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
   }
 }
 const appServerService = new DesktopAppServerService();
+
+export async function startAppServerOwnerNavigation(): Promise<void> {
+  await appServerService.startOwnerNavigation();
+}
 const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
 const navigationSnapshotTransport = new NavigationSnapshotTransport();
 

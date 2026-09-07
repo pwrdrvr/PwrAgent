@@ -52,7 +52,7 @@ import {
   disposeAutomationIpcHandlers,
   registerAutomationIpcHandlers,
 } from "./ipc/automation-ipc";
-import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
+import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers, startAppServerOwnerNavigation } from "./ipc/app-server";
 import {
   disposeImageNormalizationIpcHandlers,
   registerImageNormalizationIpcHandlers,
@@ -1321,6 +1321,9 @@ export function bootstrapApp(): void {
     wireAppMenuBridge();
     installWindowMenuRefreshHandlers();
     registerAppServerIpcHandlers();
+    void startAppServerOwnerNavigation().catch((error) => {
+      mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
+    });
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
     registerApplicationIpcHandlers();

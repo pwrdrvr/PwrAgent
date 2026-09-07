@@ -1032,6 +1032,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     readPrLookupCache,
     writePrLookupCacheEntry,
     syncThreadPrAutoDispatchCandidates,
+    syncThreadPrAutoDispatchCandidatesBatch: vi.fn(async () => undefined),
     getPrAutoDispatchCandidateWinner,
     resetThreadPrAutoDispatchForOperator,
     getPrAutoDispatchBudgetStatus,
@@ -1124,6 +1125,7 @@ vi.mock("../app-server/backend-registry", () => {
     getQueuedExecutionModeForThread: () => undefined,
     getStartupProviderRefreshStatus,
     rememberCompleteNavigationSnapshot,
+    rememberNavigationVisibilityIndex: rememberCompleteNavigationSnapshot,
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
   return {
@@ -1703,6 +1705,80 @@ describe("app server ipc", () => {
     expect(read).not.toHaveProperty("messagingBindingsByThreadKey");
     expect(read).not.toHaveProperty("queuedTurnsByThreadKey");
     expect(read).not.toHaveProperty("automationsByThreadKey");
+  });
+
+  it("initializes owner PR tracking without requesting a navigation page or snapshot", async () => {
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const pr = githubPr({ number: 91, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Off-page PR",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/91" });
+    listThreads.mockResolvedValueOnce([{ id: "off-page", source: "codex", title: "Off-page", titleSource: "explicit",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git", linkedDirectories: [], prs: [pr] }] as never);
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    registerAppServerIpcHandlers();
+    await startAppServerOwnerNavigation();
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    expect(owner(buildPullRequestStatusKey(pr))).toBe(true);
+    expect(listThreads).toHaveBeenLastCalledWith(expect.objectContaining({ callerReason: "owner-navigation-metadata" }));
+    expect(rememberCompleteNavigationSnapshot).toHaveBeenCalledWith(expect.objectContaining({ threads: expect.any(Array) }));
+    expect(reconcileNavigationSnapshot.mock.calls.at(-1)?.[0]).not.toHaveProperty("queuedTurnsByThreadKey");
+  });
+
+  it("starts owner tracking when providers finish after startup without opening navigation", async () => {
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const pr = githubPr({ number: 92, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Provider PR",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/92" });
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
+    registerAppServerIpcHandlers();
+    await startAppServerOwnerNavigation();
+    expect(listThreads).not.toHaveBeenCalled();
+    listThreads.mockResolvedValueOnce([{ id: "provider-thread", source: "codex", title: "Provider", titleSource: "explicit",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git", linkedDirectories: [], prs: [pr] }] as never);
+    emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: {} } });
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    await vi.waitFor(() => expect(owner(buildPullRequestStatusKey(pr))).toBe(true));
+  });
+
+  it("does not repopulate owner metadata when startup finishes after shutdown", async () => {
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    let finish!: (threads: never[]) => void;
+    const pending = new Promise<never[]>((resolve) => { finish = resolve; });
+    listThreads.mockImplementationOnce(async () => await pending);
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    registerAppServerIpcHandlers();
+    const started = startAppServerOwnerNavigation();
+    await vi.waitFor(() => expect(listThreads).toHaveBeenCalledTimes(1));
+    await disposeAppServerIpcHandlers();
+    finish([]);
+    await started;
+    expect(rememberCompleteNavigationSnapshot).not.toHaveBeenCalled();
+    expect(reconcileNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a newer canonical PR event instead of applying an older startup inventory", async () => {
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const pr = githubPr({ number: 93, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Detached PR",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/93" });
+    const thread = { id: "detached-before-startup-finished", source: "codex", title: "Thread", titleSource: "explicit",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git", linkedDirectories: [], prs: [pr] };
+    let finish!: (threads: never[]) => void;
+    const pending = new Promise<never[]>((resolve) => { finish = resolve; });
+    listThreads.mockImplementationOnce(async () => await pending).mockResolvedValueOnce([{ ...thread, prs: [] }] as never);
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    registerAppServerIpcHandlers();
+    const started = startAppServerOwnerNavigation();
+    await vi.waitFor(() => expect(listThreads).toHaveBeenCalledTimes(1));
+    emitRegistryEvent({ backend: "codex", notification: { method: "thread/pullRequests/updated", params: { threadId: thread.id, prs: [] } } });
+    finish([thread] as never);
+    await started;
+    expect(listThreads).toHaveBeenCalledTimes(2);
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    expect(owner(buildPullRequestStatusKey(pr))).toBe(false);
+    expect(rememberCompleteNavigationSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      threads: [expect.objectContaining({ id: thread.id, prs: [] })],
+    }));
   });
 
   it.each(["checking", "degraded"])("does not apply bulk Auto-fix changes to a %s owner inventory", async (state) => {
