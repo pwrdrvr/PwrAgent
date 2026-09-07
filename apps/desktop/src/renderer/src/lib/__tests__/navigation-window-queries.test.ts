@@ -133,11 +133,29 @@ it("rejects a late page after canonical invalidation and never certifies its sta
   void queries.refresh();
   await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   queries.invalidate();
-  void queries.refresh();
   pending.resolve(page({ countsRevision: "late-old", complete: true, nextCursor: undefined }));
   await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
   expect(read.mock.calls[2]?.[0].completeBaselineRevision).toBeUndefined();
   await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.state.page?.countsRevision).toBe("canonical"));
+  queries.dispose();
+});
+
+it("replaces an invalidated initial page once without polling settled pages", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(page({ countsRevision: "canonical" }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["directory:project", request()]]));
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+  // Git chip events patch accepted rows directly. They do not schedule a
+  // collection refresh, but must not strand the page they invalidate.
+  queries.invalidate();
+  queries.invalidate();
+  pending.resolve(page({ countsRevision: "late-old" }));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory:project")?.state.page?.countsRevision).toBe("canonical"));
+  expect(read).toHaveBeenCalledTimes(2);
+  queries.invalidate();
+  await Promise.resolve();
+  expect(read).toHaveBeenCalledTimes(2);
   queries.dispose();
 });
 

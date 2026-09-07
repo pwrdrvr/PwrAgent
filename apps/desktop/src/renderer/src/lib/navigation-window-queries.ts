@@ -118,6 +118,10 @@ export class NavigationWindowQueries {
   invalidate(id?: string): void {
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
+      // Some canonical events patch settled rows without scheduling a read.
+      // If they fence a pending page, replace that discarded read so initial
+      // readiness and refreshed counts cannot remain stranded indefinitely.
+      if (resource.pending) resource.refreshAfterPending = true;
       resource.value = { ...resource.value, state: { ...resource.value.state,
         pendingSequence: resource.value.state.pendingSequence + 1, stale: true } };
     }
