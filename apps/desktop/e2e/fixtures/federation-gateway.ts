@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +18,14 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
+  NavigationQueryRequest,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
+  NavigationQueueProjectionRequest,
+  NavigationQueueProjection,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
+  NavigationAttentionViewReleaseRequest,
   NavigationThreadSummary,
   SetThreadPinRequest,
   SetThreadPinResponse,
@@ -27,6 +35,7 @@ import {
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
 } from "@pwragent/shared";
+import { NavigationQueryStore } from "../../src/main/app-server/navigation-query-store";
 import { StateDb } from "../../src/main/state/state-db";
 import {
   createFederationEnrollmentInvite,
@@ -295,7 +304,46 @@ export async function startInProcessFederationGateway(params: {
     },
   });
 
+  const revision = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const navigationQueries = new NavigationQueryStore();
+  const launchpads = new Map<string, EnsureDirectoryLaunchpadResponse>();
   const backend = {
+    async getNavigationQueryPage(request: NavigationQueryRequest, options?: { requesterInstanceId?: string }) {
+      calls.push({ method: "getNavigationQueryPage", params: request });
+      return navigationQueries.readPage({
+        request,
+        scopeKey: options?.requesterInstanceId ?? "fixture",
+        loadIndex: async () => {
+          const population = navigationSnapshot();
+          return { threads: population.threads, directories: population.directories };
+        },
+      });
+    },
+    async releaseNavigationAttentionView(request: NavigationAttentionViewReleaseRequest, options?: { requesterInstanceId?: string }) {
+      navigationQueries.releaseAttentionView(options?.requesterInstanceId ?? "fixture", request.viewId);
+    },
+    async getNavigationSelectedDetail(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> {
+      calls.push({ method: "getNavigationSelectedDetail", params: request });
+      const thread = navigationSnapshot().threads.find((entry) => entry.source === request.ref.backend && entry.id === request.ref.threadId);
+      return { protocol: 2, ref: request.ref, revision: revision(thread ?? null), readiness: "ready",
+        identity: thread ? "present" : "unresolved", ...(thread ? { thread } : {}) };
+    },
+    async getNavigationQueueProjection(request: NavigationQueueProjectionRequest): Promise<NavigationQueueProjection> {
+      calls.push({ method: "getNavigationQueueProjection", params: request });
+      return { protocol: 2, ref: request.ref, revision: "empty", readiness: "ready", complete: true, entries: [] };
+    },
+    async getNavigationLaunchpadConfig(request: NavigationLaunchpadConfigRequest): Promise<NavigationLaunchpadConfigResponse> {
+      calls.push({ method: "getNavigationLaunchpadConfig", params: request });
+      const stored = request.directoryKey ? launchpads.get(request.directoryKey) : undefined;
+      let launchpad: NavigationLaunchpadConfigResponse["launchpad"];
+      if (stored) {
+        const { prompt: _prompt, ...configuration } = stored.launchpad;
+        launchpad = configuration;
+      }
+      return { protocol: 2, revision: revision(stored ?? null), defaults: { backend: "codex", executionMode: "default" },
+        ...(request.directoryKey ? { directoryKey: request.directoryKey } : {}),
+        ...(stored ? { launchpad, directoryGitStatus: stored.gitStatus ?? undefined } : {}) };
+    },
     async getNavigationSnapshot(): Promise<NavigationSnapshot> {
       calls.push({ method: "getNavigationSnapshot", params: {} });
       return navigationSnapshot();
@@ -453,7 +501,7 @@ export async function startInProcessFederationGateway(params: {
           || entry.path === request.directoryPath,
       );
       const now = Date.now();
-      return {
+      const result: EnsureDirectoryLaunchpadResponse = {
         launchpad: {
           directoryKey: request.directoryKey,
           directoryKind: request.directoryKind,
@@ -478,6 +526,8 @@ export async function startInProcessFederationGateway(params: {
           baseBranches: ["main", "origin/main"],
         },
       };
+      launchpads.set(request.directoryKey, result);
+      return result;
     },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,
@@ -570,6 +620,8 @@ export async function startInProcessFederationGateway(params: {
         router.registerConnection({
           peerId: connection.peerId,
           capabilities: connection.capabilities,
+          navigationQueryProtocol: connection.navigationQueryProtocol,
+          peerDirectoryPaging: connection.peerDirectoryPaging,
           sendEnvelope: connection.sendEnvelope,
         });
         ptyService?.notifyPeerConnected(connection.peerId);
