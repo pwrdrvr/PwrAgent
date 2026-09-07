@@ -116,6 +116,8 @@ export type ListFederationInstancesResult = {
 
 export type ListInstanceProjectsToolArgs = {
   instanceId: FederationInstanceId;
+  cursor?: string;
+  limit?: number;
 };
 
 export type FederationInstanceProjectSummary = {
@@ -141,6 +143,8 @@ export type ListInstanceProjectsResult = {
   instanceLabel: string;
   isLocal: boolean;
   projects: FederationInstanceProjectSummary[];
+  complete: boolean;
+  nextCursor?: string;
 };
 
 export type CreateInstanceThreadToolArgs = {

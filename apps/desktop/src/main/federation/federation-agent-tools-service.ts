@@ -17,7 +17,10 @@ import type {
   ListInstanceProjectsResult,
   ListInstanceProjectsToolArgs,
   NavigationLaunchpadDraft,
-  NavigationSnapshot,
+  NavigationDirectoryRow,
+  NavigationLaunchpadConfigResponse,
+  NavigationQueryRequest,
+  NavigationQueryPage,
   NavigationThreadSummary,
   PwrAgentFederationErrorCode,
   PwrAgentFederationContext,
@@ -39,7 +42,6 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import { FederatedSearchService } from "./federated-search-service";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
-import { readFederationProjectSnapshot } from "./federation-collection-client";
 import {
   collectFederationHostInfo,
   collectFederationLoadStatus,
@@ -351,24 +353,25 @@ async function listInstanceProjects(
     return resolved.response;
   }
   const instance = resolved.instance;
-  const snapshot = await readFederationProjectSnapshot(backendFor(runtime, instance));
+  const page = await readInstanceNavigation(runtime, instance, {
+    protocol: 2, inventory: "owner", consumer: "agent-tool", query: { kind: "directory-index" },
+    pageSize: args.limit ?? 100, cursor: args.cursor,
+  });
   const result: ListInstanceProjectsResult = {
     instanceId: instance.instanceId,
     instanceLabel: instance.label,
     isLocal: instance.isLocal,
-    projects: snapshot.directories
+    complete: page.complete,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    projects: (page.directories ?? [])
       .filter((directory) => directory.kind !== "unlinked")
       .map((directory) => ({
         key: directory.key,
         label: directory.label,
         kind: directory.kind,
         path: directory.path,
-        hasLaunchpad: Boolean(directory.launchpad),
-        backend:
-          directory.launchpad?.backend ?? snapshot.launchpadDefaults.backend,
-        workMode: directory.launchpad?.workMode,
-        model: directory.launchpad?.model,
-        executionMode: directory.launchpad?.executionMode,
+        hasLaunchpad: directory.launchpadPresent,
+        ...(directory.launchpadBackend ? { backend: directory.launchpadBackend } : {}),
       })),
   };
   return ok(result);
@@ -396,8 +399,10 @@ async function createInstanceThread(
   const instance = resolved.instance;
   const groupingMode = args.groupingMode ?? "none";
   const backend = backendFor(runtime, instance);
-  const snapshot = await readFederationProjectSnapshot(backend, args.projectKey);
-  const directory = snapshot.directories.find(
+  const page = await readInstanceNavigation(runtime, instance, {
+    protocol: 2, inventory: "owner", consumer: "agent-tool", query: { kind: "directory-index", keys: [args.projectKey] }, pageSize: 1,
+  });
+  const directory = page.directories?.find(
     (candidate) => candidate.key === args.projectKey,
   );
   if (!directory) {
@@ -406,8 +411,13 @@ async function createInstanceThread(
       `No project with key ${args.projectKey} on ${instance.label}. Use list_instance_projects for the current project list.`,
     );
   }
-  const projectBackend =
-    directory.launchpad?.backend ?? snapshot.launchpadDefaults.backend;
+  const config = instance.target
+    ? await runtime.remoteNavigationLaunchpadConfig(instance.target, { protocol: 2, directoryKey: args.projectKey })
+    : await backend.getNavigationLaunchpadConfig?.({ protocol: 2, directoryKey: args.projectKey });
+  if (!config || config.protocol !== 2 || config.unchanged || !config.defaults || config.directoryKey !== args.projectKey) {
+    return failure("internal_error", "The owning instance did not provide ready project configuration. Upgrade or reconnect it before creating a thread.");
+  }
+  const projectBackend = config.launchpad?.backend ?? config.defaults.backend;
   if (args.tokenMiserEnabled !== undefined && projectBackend !== "codex") {
     return failure(
       "invalid_arguments",
@@ -424,18 +434,19 @@ async function createInstanceThread(
         "The local federation instance identity is unavailable, so the cross-instance parent relationship cannot be recorded.",
       );
     }
-    const localSnapshot = await runtime.localBackend().getNavigationSnapshot({});
-    groupingParent = resolveGroupingParent(
-      localSnapshot,
-      context,
-      localInstanceId,
-    );
+    const caller = await runtime.localBackend().getNavigationSelectedDetail?.({ protocol: 2,
+      ref: { backend: context.backend, threadId: context.threadId } });
+    if (!caller || caller.protocol !== 2 || caller.unchanged || caller.readiness !== "ready" || caller.identity !== "present"
+      || !caller.thread || caller.thread.id !== context.threadId || caller.thread.source !== context.backend) {
+      return failure("not_found", "The calling thread's exact parent configuration is unavailable. Retry after its owner is ready.");
+    }
+    groupingParent = resolveGroupingParent(caller.thread, context, localInstanceId);
   }
   const parentThreadInstanceId = groupingParent
     && groupingParent.instanceId !== instance.instanceId
     ? groupingParent.instanceId
     : undefined;
-  const draft = buildLaunchpadDraft({ snapshot, directory, args });
+  const draft = buildLaunchpadDraft({ config, directory, args });
   const messageOrigin: AppServerThreadMessageOrigin = {
     kind: "agent",
     sourceThread: {
@@ -710,6 +721,16 @@ async function resolveInstance(
   };
 }
 
+async function readInstanceNavigation(runtime: DesktopFederationRuntime, instance: ResolvedInstance,
+  request: NavigationQueryRequest): Promise<NavigationQueryPage> {
+  if (instance.target) return runtime.remoteNavigationQueryPage(instance.target, request);
+  const backend = runtime.localBackend();
+  if (!backend.getNavigationQueryPage) throw new Error("Upgrade this instance to navigation query protocol 2.");
+  const page = await backend.getNavigationQueryPage(request);
+  if (page.protocol !== 2 || page.unchanged) throw new Error("The owning instance did not provide a fresh navigation query page.");
+  return page;
+}
+
 function backendFor(
   runtime: DesktopFederationRuntime,
   instance: ResolvedInstance,
@@ -726,15 +747,10 @@ function backendFor(
  * falls back to the caller itself, matching the renderer when a root is gone.
  */
 function resolveGroupingParent(
-  snapshot: NavigationSnapshot,
+  caller: NavigationThreadSummary,
   context: PwrAgentFederationContext,
   localInstanceId: FederationInstanceId,
 ): GroupingParent {
-  const caller = snapshot.threads.find(
-    (thread) =>
-      thread.source === context.backend
-      && thread.id === context.threadId,
-  );
   const parentThreadId = caller?.parentThreadId?.trim();
   if (!caller || !parentThreadId) {
     return {
@@ -751,13 +767,13 @@ function resolveGroupingParent(
 }
 
 function buildLaunchpadDraft(params: {
-  snapshot: NavigationSnapshot;
-  directory: NavigationSnapshot["directories"][number];
+  config: NavigationLaunchpadConfigResponse;
+  directory: NavigationDirectoryRow;
   args: CreateInstanceThreadToolArgs;
 }): NavigationLaunchpadDraft {
-  const { snapshot, directory, args } = params;
-  const defaults = snapshot.launchpadDefaults;
-  const stored = directory.launchpad;
+  const { config, directory, args } = params;
+  const defaults = config.defaults!;
+  const stored = config.launchpad;
   // Inherit only the project's *settings* presets from a stored launchpad.
   // The stored prompt/editor document/attachments are the operator's unsent
   // draft — sending them from an agent tool would fire composer text the

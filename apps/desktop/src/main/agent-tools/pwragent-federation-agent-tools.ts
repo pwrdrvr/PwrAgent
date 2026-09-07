@@ -142,6 +142,8 @@ function inputSchemaForOperation(
         additionalProperties: false,
         required: ["instanceId"],
         properties: {
+          cursor: { type: "string", description: "Continuation from the previous bounded project page." },
+          limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum project descriptors, default 100." },
           instanceId: {
             type: "string",
             description:
@@ -333,7 +335,11 @@ function normalizeListInstanceProjectsArgs(
   if (!instanceId) {
     return undefined;
   }
-  return { instanceId };
+  const cursor = readTrimmedString(args.cursor);
+  if (args.cursor !== undefined && (!cursor || cursor.length > 4096)) return undefined;
+  const limit = args.limit;
+  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)) return undefined;
+  return { instanceId, ...(cursor ? { cursor } : {}), ...(typeof limit === "number" ? { limit } : {}) };
 }
 
 function normalizeCreateInstanceThreadArgs(
