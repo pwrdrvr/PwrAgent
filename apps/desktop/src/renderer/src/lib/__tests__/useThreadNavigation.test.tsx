@@ -911,7 +911,7 @@ describe("useThreadNavigation", () => {
           title: "First thread",
           titleSource: "explicit" as const,
           source: "codex" as const,
-          linkedDirectories: [],
+          linkedDirectories: [{ id: "directory:/repo/app", kind: "local" as const, label: "app", path: "/repo/app" }],
           inbox: {
             inInbox: false,
           },
@@ -955,6 +955,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(refreshDirectoryGitStatuses).toHaveBeenCalledWith({
         directoryKeys: ["directory:/repo/app"],
+        federationTarget: { scope: "local" },
         force: true,
       });
     });

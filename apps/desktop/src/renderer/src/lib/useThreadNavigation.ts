@@ -4762,29 +4762,20 @@ export function useThreadNavigation(
 
   const refreshThreadDirectoryGitStatuses = useCallback(
     (threadKey: string): void => {
-      if (!desktopApi?.refreshDirectoryGitStatuses) {
-        return;
-      }
-
-      const directoryKeys = directoryKeysForThread(selectedDetail.state?.detail?.thread
-        && threadSummaryIdentityKey(selectedDetail.state.detail.thread) === threadKey
-        ? selectedDetail.state.detail.thread : undefined);
-      if (directoryKeys.length === 0) {
-        return;
-      }
-
-      void desktopApi.refreshDirectoryGitStatuses({
-        directoryKeys,
-        federationTarget: rendererFederationTarget,
-        force: true,
-      });
+      if (!desktopApi?.refreshDirectoryGitStatuses) return;
+      const ref = navigationIdentityFromThreadKey(threadKey, rendererFederationTarget);
+      if (!ref) return;
+      const target: FederationTarget = ref.ownerInstanceId
+        ? { scope: "remote", instanceId: ref.ownerInstanceId } : { scope: "local" };
+      void readNavigationActionThread({ api: desktopApi, thread: { source: ref.backend, id: ref.threadId }, target })
+        .then(async (thread) => {
+          const directoryKeys = directoryKeysForThread(thread);
+          if (directoryKeys.length) await desktopApi.refreshDirectoryGitStatuses!({ directoryKeys, federationTarget: target, force: true });
+        })
+        .catch((error: unknown) => setState((current) => ({ ...current,
+          error: error instanceof Error ? error.message : "Unable to refresh directory Git status from the owning instance." })));
     },
-    [
-      desktopApi,
-      selectedDetail.state?.detail?.thread,
-      directories,
-      rendererFederationTarget,
-    ]
+    [desktopApi, rendererFederationTarget],
   );
 
   useEffect(() => {
