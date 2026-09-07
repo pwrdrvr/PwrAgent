@@ -30,7 +30,7 @@ function activityFixture(): ReadFederationActivityResponse {
 }
 
 for (const theme of ["dark", "light"] as const) {
-  test(`Federation hover activity and detachable window (${theme})`, async ({}, testInfo) => {
+  test(`Federation hover activity and detachable window (${theme})`, async ({ playwright: _playwright }, testInfo) => {
     const app = await launchElectronApp({
       fixturePath: path.join(specDir, "fixtures/smoke/replay.fixture.json"),
       appearance: { theme },
@@ -120,7 +120,7 @@ for (const theme of ["dark", "light"] as const) {
       await activity.screenshot({ path: testInfo.outputPath(`federation-sizes-${theme}.png`) });
       await activity.getByRole("button", { name: "Copy Federation activity" }).click();
       await expect(activity.getByRole("status")).toHaveText("Federation activity copied");
-      const copied = await app.electronApp.evaluate(({ clipboard }) => clipboard.readText());
+      const copied = (await app.getClipboardSnapshot())?.text ?? "";
       expect(copied).toContain("Last 1m\tLast 10m\tLast 1h\tTotal");
       expect(copied).toContain("Samples\tAvg\tp50 (approx.)\tMin\tMax");
       // Reset still crosses the real preload/IPC bridge, with contrived returned totals.
