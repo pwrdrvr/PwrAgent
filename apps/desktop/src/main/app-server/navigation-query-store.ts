@@ -100,6 +100,12 @@ function validateRequest(request: NavigationQueryRequest): void {
       `Navigation query protocol ${NAVIGATION_QUERY_PROTOCOL_VERSION} is required.`,
     );
   }
+  if (request.inventory !== undefined && request.inventory !== "owner" && request.inventory !== "viewer") {
+    throw new NavigationQueryError("navigation_invalid_request", "Navigation inventory must be owner or viewer.");
+  }
+  if (request.inventory === "viewer" && request.federationTarget?.scope === "remote") {
+    throw new NavigationQueryError("navigation_invalid_request", "Viewer navigation inventory is available only on this machine.");
+  }
   if (
     request.attentionView !== undefined
     && (typeof request.attentionView.id !== "string"

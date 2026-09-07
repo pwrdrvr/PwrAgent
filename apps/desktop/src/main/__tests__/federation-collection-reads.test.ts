@@ -52,6 +52,14 @@ async function request(
 }
 
 describe("bounded Federation collection reads", () => {
+  it("rejects local viewer inventory at the Federation boundary", async () => {
+    const read = vi.fn();
+    const reply = await request({ getNavigationQueryPage: read } as unknown as FederationBackendOperations,
+      "backend.getNavigationQueryPage", { protocol: 2, inventory: "viewer", consumer: "main-sidebar", query: { kind: "directory-index" } });
+    expect(reply?.kind).toBe("error");
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("binds navigation cursors to the authenticated requester", async () => {
     const getNavigationQueryPage = vi.fn(async () => ({
       protocol: 2 as const,

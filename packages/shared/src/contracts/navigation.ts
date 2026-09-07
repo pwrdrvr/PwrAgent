@@ -1681,6 +1681,8 @@ export type NavigationQueryAnchor =
 
 export type NavigationQueryRequest = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  /** Viewer inventory includes this machine's mounts; it is never served over Federation. Defaults to owner. */
+  inventory?: "owner" | "viewer";
   consumer: NavigationQueryConsumerClass;
   backend?: AppServerBackendScope;
   federationTarget?: FederationTarget;

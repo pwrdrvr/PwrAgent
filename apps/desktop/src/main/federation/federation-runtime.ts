@@ -2062,6 +2062,7 @@ export class DesktopFederationRuntime {
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<NavigationQueryPage> {
     this.assertRemoteNavigationQueryProtocol(target);
+    if (request.inventory === "viewer") throw new Error("Viewer navigation inventory is available only on its local machine.");
     const backend = this.remoteBackend(target);
     if (!backend.getNavigationQueryPage) {
       throw navigationUpgradeRequired(target.instanceId);

@@ -3,7 +3,7 @@ import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
-import { buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "./navigation-window-demand";
+import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "./navigation-window-demand";
 import { navigationIdentityKey } from "./navigation-query-state";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import { NavigationWindowQueries, type NavigationWindowQueriesState } from "./navigation-window-queries";
@@ -47,11 +47,12 @@ export function useBoundedNavigationWindow(params: Demand & {
     indexedDirectoryKeys: new Set((state.resources.get("directory-index")?.state.page?.directories ?? []).map((directory) => directory.key)),
   };
   const collections = buildNavigationWindowDemand({ ...demandParams, disclosedParents: [] });
-  const disclosedParents = visibleDisclosedNavigationParents({ collectionIds: collections.keys(),
-    pages: new Map([...state.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : [])),
+  const pages = new Map([...state.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : []));
+  const disclosedParents = visibleDisclosedNavigationParents({ collectionIds: collections.keys(), pages,
     disclosedParents: params.disclosedParents ?? [],
   });
   const demand = buildNavigationWindowDemand({ ...demandParams, disclosedParents });
+  addVisibleMountedOwnerDemand({ demand, pages, target: params.target, selectedRef: params.selectedRef });
   const demandKey = JSON.stringify([...demand]);
   const demandRef = useRef(demand);
   demandRef.current = demand;

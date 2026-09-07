@@ -25,13 +25,14 @@ export function buildNavigationWindowDemand(params: {
 }): Map<string, NavigationQueryRequest> {
   const demand = new Map<string, NavigationQueryRequest>();
   const request = (query: NavigationQueryRequest["query"], pageSize = 10): NavigationQueryRequest => ({
-    protocol: 2, consumer: "main-sidebar", federationTarget: params.target,
+    protocol: 2, inventory: params.target?.scope === "remote" ? "owner" : "viewer",
+    consumer: "main-sidebar", federationTarget: params.target,
     attentionView: params.attentionView, pageSize, query,
   });
   // Descriptors provide authoritative counts for collapsed directories and all lenses.
   demand.set("directory-index", request({ kind: "directory-index" }, 100));
   if (params.selectedRef) {
-    demand.set("selected-context", { ...request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100),
+    demand.set("selected-context", { ...request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100), inventory: "owner",
       federationTarget: params.selectedRef.ownerInstanceId ? { scope: "remote", instanceId: params.selectedRef.ownerInstanceId } : params.target });
   }
   if (params.selectedRef?.ownerInstanceId && params.target?.scope !== "remote") {
@@ -69,7 +70,7 @@ export function buildNavigationWindowDemand(params: {
       for (let offset = 0; offset < refs.length; offset += 100) {
         demand.set(`drafts:${JSON.stringify(owner)}:${offset}`, {
           ...request({ kind: "exact", identities: refs.slice(offset, offset + 100), includeAncestry: true }),
-          federationTarget: owner ? { scope: "remote", instanceId: owner } : undefined,
+          inventory: "owner", federationTarget: owner ? { scope: "remote", instanceId: owner } : undefined,
         });
       }
     }
@@ -78,6 +79,7 @@ export function buildNavigationWindowDemand(params: {
   }
   for (const parent of params.disclosedParents ?? []) {
     demand.set(`children:${navigationIdentityKey(parent)}`, { ...request({ kind: "children", parent }),
+      inventory: parent.ownerInstanceId || params.target?.scope === "remote" ? "owner" : "viewer",
       federationTarget: parent.ownerInstanceId ? { scope: "remote", instanceId: parent.ownerInstanceId } : params.target,
     });
   }
@@ -107,4 +109,35 @@ export function visibleDisclosedNavigationParents(params: {
     }
   }
   return [...visible.values()];
+}
+
+/** Visible viewer mounts resolve row metadata from their explicit owners through the shared query pool. */
+export function addVisibleMountedOwnerDemand(params: {
+  demand: Map<string, NavigationQueryRequest>;
+  pages: ReadonlyMap<string, import("@pwragent/shared").NavigationQueryPage>;
+  target?: FederationTarget;
+  selectedRef?: NavigationIdentity;
+}): void {
+  if (params.target?.scope === "remote") return;
+  const owners = new Map<string, Map<string, NavigationIdentity>>();
+  for (const [id, request] of params.demand) {
+    if (request.federationTarget?.scope === "remote"
+      || !(id === "lens" || id.startsWith("directory:") || id.startsWith("children:"))) continue;
+    for (const { row } of params.pages.get(id)?.entries ?? []) {
+      const owner = row.ref.ownerInstanceId;
+      if (!owner || (params.selectedRef && navigationIdentityKey(params.selectedRef) === navigationIdentityKey(row.ref))) continue;
+      const refs = owners.get(owner) ?? new Map<string, NavigationIdentity>();
+      refs.set(navigationIdentityKey(row.ref), row.ref);
+      owners.set(owner, refs);
+    }
+  }
+  for (const [owner, byKey] of owners) {
+    const refs = [...byKey].sort(([left], [right]) => left.localeCompare(right)).map(([, ref]) => ref);
+    for (let offset = 0; offset < refs.length; offset += 100) {
+      params.demand.set(`visible-owner:${JSON.stringify(owner)}:${offset}`, {
+        protocol: 2, inventory: "owner", consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: owner },
+        query: { kind: "exact", identities: refs.slice(offset, offset + 100) }, pageSize: 100,
+      });
+    }
+  }
 }
