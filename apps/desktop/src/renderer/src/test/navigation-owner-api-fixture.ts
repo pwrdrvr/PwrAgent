@@ -96,6 +96,14 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
     }),
     releaseNavigationQuery: api.releaseNavigationQuery ?? (async () => undefined),
     releaseNavigationAttentionView: api.releaseNavigationAttentionView ?? (async () => undefined),
+    getNavigationQueueProjection: api.getNavigationQueueProjection ?? (async (request) => {
+      const value = await read();
+      const thread = value.threads.find((candidate) => candidate.source === request.ref.backend
+        && candidate.id === request.ref.threadId
+        && federationTargetsEqual(candidate.federation?.ref.target ?? value.federationTarget, request.federationTarget));
+      return { protocol: 2, ref: request.ref, revision: "fixture-fifo", readiness: "ready", complete: true,
+        entries: thread?.queuedTurns ?? [], queuedExecutionMode: thread?.queuedExecutionMode };
+    }),
     getNavigationSelectedDetail: api.getNavigationSelectedDetail ?? (async (request) => {
       // Independent endpoints started in one turn share the private oracle's
       // pending refresh, including collection reads scheduled in a microtask.

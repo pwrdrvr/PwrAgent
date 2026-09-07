@@ -1,4 +1,6 @@
 import "@testing-library/jest-dom/vitest";
+import { navigationOwnerApiFixture } from "../test/navigation-owner-api-fixture";
+import type { DesktopApi } from "../lib/desktop-api";
 import {
   act,
   cleanup,
@@ -23,13 +25,40 @@ import type {
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   App,
   inferReplayCodexProfileModel,
   inferReplayCodexProfileSetup,
   resolveNormalAppEnabled,
 } from "../App";
+
+
+function ownerApi(value: object): DesktopApi {
+  const api = value as DesktopApi;
+  if (!api.getNavigationSnapshot && !api.getNavigationSnapshotTransport) return api;
+  const owners = new Map<string, DesktopApi>();
+  const owner = (target?: FederationTarget): DesktopApi => {
+    const key = target?.scope === "remote" ? target.instanceId : "local";
+    let fixture = owners.get(key);
+    if (!fixture) {
+      fixture = navigationOwnerApiFixture({ ...api,
+        readPopulation: api.getNavigationSnapshot && (() => api.getNavigationSnapshot!({
+          ...(target?.scope === "remote" ? { federationTarget: target } : {}),
+        })),
+        readPopulationTransport: api.getNavigationSnapshotTransport,
+      });
+      owners.set(key, fixture);
+    }
+    return fixture;
+  };
+  return { ...owner(),
+    getNavigationQueryPage: (request) => owner(request.federationTarget).getNavigationQueryPage!(request),
+    getNavigationSelectedDetail: (request) => owner(request.federationTarget).getNavigationSelectedDetail!(request),
+    getNavigationQueueProjection: (request) => owner(request.federationTarget).getNavigationQueueProjection!(request),
+    getNavigationLaunchpadConfig: (request) => owner(request.federationTarget).getNavigationLaunchpadConfig!(request),
+  };
+}
 
 beforeAll(() => {
   const emptyRect = {
@@ -72,6 +101,7 @@ function getComposerValueHost(textbox: HTMLElement): HTMLElement {
 }
 
 async function clickButton(name: string | RegExp): Promise<void> {
+  await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name }));
     await Promise.resolve();
@@ -237,6 +267,10 @@ describe("inferReplayCodexProfileModel", () => {
 });
 
 describe("App", () => {
+  beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  });
+
   afterEach(async () => {
     await flushReactUpdates();
     cleanup();
@@ -271,11 +305,11 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readSettings,
         listBackends,
         getNavigationSnapshot,
-      },
+      }),
     });
 
     render(<App />);
@@ -296,7 +330,7 @@ describe("App", () => {
   it("dismisses quick thread search before opening global search", async () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         platform: "darwin",
         listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
         getNavigationSnapshot: async () => ({
@@ -315,7 +349,7 @@ describe("App", () => {
           await new Promise<never>(() => {
             // Keep the shell mounted without needing a full settings fixture.
           }),
-      },
+      }),
     });
 
     render(<App />);
@@ -360,7 +394,7 @@ describe("App", () => {
       .mockImplementation(() => undefined);
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         platform: "darwin",
         listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
         getNavigationSnapshot: async () => ({
@@ -380,7 +414,7 @@ describe("App", () => {
             // Keep the shell mounted without needing a full settings fixture.
           }),
         // Deliberately absent: `openStarMapWindow`.
-      },
+      }),
     });
 
     try {
@@ -498,7 +532,7 @@ describe("App", () => {
     }));
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         getNavigationSnapshot,
         ensureDirectoryLaunchpad,
         listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
@@ -513,7 +547,7 @@ describe("App", () => {
             threadViewImported.resolve(undefined);
           }
         },
-      },
+      }),
     });
 
     render(<App />);
@@ -650,7 +684,7 @@ describe("App", () => {
     }));
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ensureDirectoryLaunchpad: async () => ({
           launchpad: {
             directoryKey: "workspace:new-thread",
@@ -690,7 +724,7 @@ describe("App", () => {
         },
         openFederationWindow: vi.fn(),
         readFederationHealth,
-      },
+      }),
     });
 
     render(<App />);
@@ -724,7 +758,7 @@ describe("App", () => {
       | undefined;
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),
@@ -748,7 +782,7 @@ describe("App", () => {
           await new Promise<never>(() => {
             // Keep the shell mounted without needing a full settings fixture.
           }),
-      },
+      }),
     });
 
     render(<App />);
@@ -860,13 +894,13 @@ describe("App", () => {
     }));
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         acknowledgeThreadSpendAlert,
         getNavigationSnapshot,
         listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
         onAgentEvent: () => () => undefined,
         onWindowFocus: () => () => undefined,
-      },
+      }),
     });
 
     render(<App />);
@@ -944,7 +978,7 @@ describe("App", () => {
     }
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         copyText,
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
@@ -969,7 +1003,7 @@ describe("App", () => {
           await new Promise<never>(() => {
             // Keep the shell mounted without needing a full settings fixture.
           }),
-      },
+      }),
     });
 
     render(<App />);
@@ -1013,7 +1047,7 @@ describe("App", () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         getNavigationSnapshot: async () => ({
           backend: "all", fetchedAt: Date.now(), unchanged: false,
           inboxThreadKeys: [], threads: [], directories: [],
@@ -1025,7 +1059,7 @@ describe("App", () => {
           return () => { listeners.delete(listener); };
         },
         readSettings: async () => await new Promise<never>(() => {}),
-      },
+      }),
     });
     render(<App />);
     await waitFor(() => expect(listeners.size).toBeGreaterThan(0));
@@ -1056,7 +1090,7 @@ describe("App", () => {
     }));
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),
@@ -1081,7 +1115,7 @@ describe("App", () => {
             // Keep the shell mounted without needing a full settings fixture.
           }),
         openToolOutputIncidentExplorerWindow,
-      },
+      }),
     });
 
     render(<App />);
@@ -1168,7 +1202,7 @@ describe("App", () => {
     const agentEventListeners = new Set<(event: AgentEvent) => void>();
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),
@@ -1192,7 +1226,7 @@ describe("App", () => {
           await new Promise<never>(() => {
             // Keep the shell mounted without needing a full settings fixture.
           }),
-      },
+      }),
     });
     render(<App />);
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
@@ -1271,7 +1305,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         platform: "darwin",
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -1292,7 +1326,7 @@ describe("App", () => {
         pickDirectoryFromDisk,
         registerDirectoryFromDisk,
         onAgentEvent: () => () => undefined,
-      },
+      }),
     });
 
     const { container } = render(<App />);
@@ -1340,7 +1374,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         listBackends: async () => ({
           fetchedAt: Date.now(),
           backends: [],
@@ -1364,7 +1398,7 @@ describe("App", () => {
           };
         },
         trustCodexProject,
-      },
+      }),
     });
 
     render(<App />);
@@ -1434,7 +1468,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         listBackends: async () => ({
           fetchedAt: Date.now(),
           backends: [],
@@ -1453,7 +1487,7 @@ describe("App", () => {
         }),
         getLatestCodexConfigWarning,
         trustCodexProject,
-      },
+      }),
     });
 
     render(<App />);
@@ -1823,11 +1857,11 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readSettings: async () => ({ snapshot }),
         listBackends,
         getNavigationSnapshot,
-      },
+      }),
     });
 
     render(<App />);
@@ -1861,7 +1895,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readConfigBootstrap: vi.fn(async () => ({
           snapshot: {
             version: 1,
@@ -1882,7 +1916,7 @@ describe("App", () => {
         listBackends: vi.fn(() => backends.promise),
         getNavigationSnapshot,
         onAgentEvent: () => () => undefined,
-      },
+      }),
     });
 
     render(<App />);
@@ -2053,7 +2087,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         copyText,
         getRuntimeIdentity: async () => ({
           branch: "codex/fix-thread-naming-ephemeral",
@@ -2181,7 +2215,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1"
         }
-      }
+      })
     });
 
     render(<App />);
@@ -2327,7 +2361,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listSkills,
         listBackends: async () => ({
@@ -2438,7 +2472,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1",
         },
-      },
+      }),
     });
 
     render(<App />);
@@ -2515,7 +2549,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listSkills: async () => ({
           backend: "codex",
@@ -2771,7 +2805,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1"
         }
-      }
+      })
     });
 
     render(<App />);
@@ -2879,7 +2913,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readSettings: async () => ({
           snapshot: {
             general: {
@@ -2946,7 +2980,7 @@ describe("App", () => {
         }),
         ensureDirectoryLaunchpad,
         onAgentEvent: () => () => undefined,
-      },
+      }),
     });
 
     render(<App />);
@@ -3024,7 +3058,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readSettings: async () => ({
           snapshot: {
             general: {
@@ -3081,7 +3115,7 @@ describe("App", () => {
         }),
         ensureDirectoryLaunchpad,
         onAgentEvent: () => () => undefined,
-      },
+      }),
     });
 
     render(<App />);
@@ -3145,7 +3179,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readSettings: async () => ({
           snapshot: {
             general: {
@@ -3216,7 +3250,7 @@ describe("App", () => {
         }),
         onAgentEvent: () => () => undefined,
         onWindowFocus: () => () => undefined,
-      },
+      }),
     });
 
     render(<App />);
@@ -3252,7 +3286,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         replayFixtureActive: true,
         readSettings: async () => ({
           snapshot: {
@@ -3333,7 +3367,7 @@ describe("App", () => {
         }),
         ensureDirectoryLaunchpad,
         onAgentEvent: () => () => undefined,
-      },
+      }),
     });
 
     render(<App />);
@@ -3351,7 +3385,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readSettings: async () => ({
           snapshot: {
             general: {
@@ -3422,7 +3456,7 @@ describe("App", () => {
         }),
         ensureDirectoryLaunchpad,
         onAgentEvent: () => () => undefined,
-      },
+      }),
     });
 
     render(<App />);
@@ -3447,7 +3481,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readSettings: async () => ({
           snapshot: {
             general: {
@@ -3547,7 +3581,7 @@ describe("App", () => {
         }),
         ensureDirectoryLaunchpad,
         onAgentEvent: () => () => undefined,
-      },
+      }),
     });
 
     render(<App />);
@@ -3591,7 +3625,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         readSettings: async () => ({
           snapshot: {
             general: {
@@ -3639,7 +3673,7 @@ describe("App", () => {
             openNewThreadListener = undefined;
           };
         },
-      },
+      }),
     });
 
     render(<App />);
@@ -3668,7 +3702,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         copyText,
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
@@ -3741,7 +3775,7 @@ describe("App", () => {
           messages: [],
           turns: [],
         }),
-      },
+      }),
     });
 
     render(<App />);
@@ -3839,7 +3873,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listSkills: async () => ({
           backend: "codex",
@@ -3955,7 +3989,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1"
         }
-      }
+      })
     });
 
     const { unmount } = render(<App />);
@@ -3964,10 +3998,9 @@ describe("App", () => {
       level: 2,
       name: "Active background thread"
     });
-    // A remote viewer adds peer-connectivity ownership to the selected-thread
-    // feature subscriptions, legitimately taking the renderer past Node's
-    // default EventEmitter warning threshold.
-    expect(agentEventListeners.size).toBeGreaterThan(10);
+    // The owner fixture shares one underlying event subscription across all
+    // renderer consumers; unmount must still release it below.
+    expect(agentEventListeners.size).toBe(1);
 
     pasteComposerText(
       await screen.findByRole("textbox", { name: "Reply" }),
@@ -4060,7 +4093,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listSkills: async () => ({
           backend: "codex",
@@ -4175,7 +4208,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1"
         }
-      }
+      })
     });
 
     render(<App />);
@@ -4239,7 +4272,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listSkills: async () => ({
           backend: "codex",
@@ -4322,7 +4355,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1",
         },
-      },
+      }),
     });
 
     render(<App />);
@@ -4434,7 +4467,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -4566,7 +4599,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1"
         }
-      }
+      })
     });
 
     render(<App />);
@@ -4727,7 +4760,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -4859,7 +4892,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1"
         }
-      }
+      })
     });
 
     render(<App />);
@@ -5027,7 +5060,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         addRemoteThreadPin,
         getNavigationSnapshot,
         listBackends: async () => ({
@@ -5115,7 +5148,7 @@ describe("App", () => {
           },
         }),
         versions: { electron: "41.2.1" },
-      },
+      }),
     });
 
     render(<App />);
@@ -5216,7 +5249,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listSkills: async () => ({
           backend: "codex" as const,
@@ -5312,7 +5345,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1",
         },
-      },
+      }),
     });
 
     render(<App />);
@@ -5390,7 +5423,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listSkills: async () => ({
           backend: "codex" as const,
@@ -5500,7 +5533,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1",
         },
-      },
+      }),
     });
 
     render(<App />);
@@ -5643,7 +5676,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         ping: () => "pong",
         listSkills: async () => ({
           backend: "codex" as const,
@@ -5786,7 +5819,7 @@ describe("App", () => {
         versions: {
           electron: "41.2.1",
         },
-      },
+      }),
     });
 
     render(<App />);
@@ -5894,7 +5927,7 @@ describe("App", () => {
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
-      value: {
+      value: ownerApi({
         copyText: async () => undefined,
         ping: () => "pong",
         listSkills: async () => ({
@@ -5978,7 +6011,7 @@ describe("App", () => {
         platform: "darwin",
         readThread,
         renameThread,
-      },
+      }),
     });
 
     render(<App />);
