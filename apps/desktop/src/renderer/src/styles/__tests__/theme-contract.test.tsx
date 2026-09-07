@@ -660,6 +660,12 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("layers MCP action menus above full-window settings", () => {
+    const menuRule = extractRuleBody(css, ".settings-mcp-context-menu");
+    const settingsRule = extractRuleBody(css, ".app-shell__settings-layer");
+    expect(readZIndex(menuRule)).toBeGreaterThan(readZIndex(settingsRule));
+  });
+
   it("layers Messaging popovers and tooltips above full-window settings", () => {
     const appTitlebarRule = extractRuleBody(css, ".app-titlebar");
     const settingsLayerRule = extractRuleBody(css, ".app-shell__settings-layer");

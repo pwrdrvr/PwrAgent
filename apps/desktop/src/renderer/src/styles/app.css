@@ -6665,6 +6665,11 @@ a.button {
   min-width: 220px;
 }
 
+.settings-mcp-context-menu {
+  /* This menu portals to body, outside the Settings layer at 120. */
+  z-index: 140;
+}
+
 .thread-context-menu button {
   display: flex;
   width: 100%;

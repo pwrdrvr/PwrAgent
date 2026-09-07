@@ -234,6 +234,41 @@ describe("PluginsSettings", () => {
     expect(
       screen.getByRole("button", { name: "More actions for datadog" }),
     ).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "More actions for datadog" });
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menu")).toHaveClass("settings-mcp-context-menu");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menuitem", { name: "Remove datadog" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
+    fireEvent.click(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("does not dismiss an open menu for clicks on its invoker", async () => {
+    render(
+      <PluginsSettings
+        desktopApi={createDesktopApi([
+          server({ name: "pwrsnap" }),
+          server({ name: "context7" }),
+        ])}
+        snapshot={createSnapshot()}
+      />,
+    );
+
+    const trigger = await screen.findByRole("button", { name: "More actions for pwrsnap" });
+    fireEvent.click(trigger);
+    // Exercise an invoker click with the window dismiss listener installed.
+    // Browsers can install it during the opening click, before it reaches
+    // window; fireEvent's act batching postpones that until after dispatch.
+    fireEvent.click(within(trigger).getByText("···"));
+    expect(screen.getByRole("menuitem", { name: "Remove pwrsnap" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More actions for context7" }));
+    expect(screen.queryByRole("menuitem", { name: "Remove pwrsnap" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Remove context7" })).toBeInTheDocument();
   });
 
   it("filters by server name and by tool name", async () => {
