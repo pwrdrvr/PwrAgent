@@ -1,7 +1,7 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
 import type { NavigationSelectedDetailResponse, NavigationThreadSummary } from "@pwragent/shared";
-import { readNavigationActionThread } from "../navigation-action-authority";
+import { readNavigationActionDetail, readNavigationActionThread } from "../navigation-action-authority";
 
 const row: NavigationThreadSummary = { id: "same", source: "codex", title: "Row", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true }, model: "stale-model" };
 
@@ -42,4 +42,13 @@ it("rejects a delayed authority response after the requesting window closes", as
   controller.abort();
   resolve({ protocol: 2, ref: { backend: "codex", threadId: "same" }, revision: "owner", readiness: "ready", identity: "present", thread: row });
   await expect(read).rejects.toMatchObject({ name: "AbortError" });
+});
+
+it("requires explicit owner workspace configuration for workspace actions", async () => {
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+    protocol: 2, ref: request.ref, revision: "old-peer", readiness: "ready", identity: "present", thread: row,
+  }));
+  await expect(readNavigationActionDetail({ thread: row, api: { getNavigationSelectedDetail: read }, includeWorkspaceConfiguration: true }))
+    .rejects.toThrow("Upgrade the owning instance");
+  expect(read).toHaveBeenCalledWith(expect.objectContaining({ includeWorkspaceConfiguration: true, probeWorkingStates: true }));
 });

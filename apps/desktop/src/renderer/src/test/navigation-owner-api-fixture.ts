@@ -71,7 +71,9 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
       const value = withSeen(await read());
       const thread = value.threads.find((thread) => thread.source === request.ref.backend && thread.id === request.ref.threadId
         && federationTargetsEqual(thread.federation?.ref.target, request.federationTarget));
-      return { protocol: 2, ref: request.ref, revision: "fixture-detail", readiness: "ready", identity: thread ? "present" : "unresolved", thread };
+      return { protocol: 2, ref: request.ref, revision: "fixture-detail", readiness: "ready", identity: thread ? "present" : "unresolved", thread,
+        ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: value.directories.filter((directory) =>
+          thread?.linkedDirectories.some((linked) => linked.path === directory.path || linked.worktreePath === directory.path)) } : {}) };
     }),
     getNavigationLaunchpadConfig: api.getNavigationLaunchpadConfig ?? (async (request) => {
       const value = await read();

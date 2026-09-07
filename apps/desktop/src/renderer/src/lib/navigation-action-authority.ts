@@ -1,15 +1,16 @@
 import { buildFederatedThreadRef } from "@pwragent/shared";
-import type { FederationTarget, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationTarget, NavigationSelectedDetailResponse, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationSelectedDetail, selectNavigationIdentity } from "./navigation-query-state";
 
 /** Read action authority from the explicit owner; collection rows only identify the target. */
-export async function readNavigationActionThread(params: {
+export async function readNavigationActionDetail(params: {
   api?: Pick<DesktopApi, "getNavigationSelectedDetail">;
   thread: Pick<NavigationThreadSummary, "id" | "source" | "federation">;
   target?: FederationTarget;
   signal?: AbortSignal;
-}): Promise<NavigationThreadSummary> {
+  includeWorkspaceConfiguration?: boolean;
+}): Promise<NavigationSelectedDetailResponse & { thread: NavigationThreadSummary }> {
   params.signal?.throwIfAborted();
   if (!params.api?.getNavigationSelectedDetail) {
     throw new Error("Upgrade this instance to load authoritative thread configuration before performing this action.");
@@ -19,7 +20,8 @@ export async function readNavigationActionThread(params: {
     ...(target?.scope === "remote" ? { ownerInstanceId: target.instanceId } : {}),
   };
   const started = selectNavigationIdentity(undefined, ref);
-  const detail = await params.api.getNavigationSelectedDetail({ protocol: 2, ref, federationTarget: target });
+  const detail = await params.api.getNavigationSelectedDetail({ protocol: 2, ref, federationTarget: target,
+    ...(params.includeWorkspaceConfiguration ? { includeWorkspaceConfiguration: true, probeWorkingStates: true } : {}) });
   params.signal?.throwIfAborted();
   const state = applyNavigationSelectedDetail({ state: started, sequence: started.pendingSequence, detail });
   if (state.readiness !== "ready" || detail.identity !== "present" || !detail.thread) {
@@ -29,9 +31,17 @@ export async function readNavigationActionThread(params: {
   if (returnedOwner?.scope === "remote" && (target?.scope !== "remote" || returnedOwner.instanceId !== target.instanceId)) {
     throw new Error("Thread configuration belongs to a different owner.");
   }
-  return target?.scope === "remote" ? { ...detail.thread, federation: {
+  if (params.includeWorkspaceConfiguration && !detail.workspaceDirectories) {
+    throw new Error("Upgrade the owning instance to load exact workspace configuration before performing this action.");
+  }
+  const thread = target?.scope === "remote" ? { ...detail.thread, federation: {
     ...detail.thread.federation,
     instanceLabel: detail.thread.federation?.instanceLabel ?? params.thread.federation?.instanceLabel ?? target.instanceId,
     ref: buildFederatedThreadRef({ backend: ref.backend, threadId: ref.threadId, instanceId: target.instanceId }),
   } } : detail.thread;
+  return { ...detail, thread };
+}
+
+export async function readNavigationActionThread(params: Parameters<typeof readNavigationActionDetail>[0]): Promise<NavigationThreadSummary> {
+  return (await readNavigationActionDetail(params)).thread;
 }
