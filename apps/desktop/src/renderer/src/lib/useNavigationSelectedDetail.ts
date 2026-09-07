@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FederationTarget, NavigationIdentity } from "@pwragent/shared";
+import type { FederationTarget, FederationPeerSummary, NavigationIdentity } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationThreadEvent } from "./navigation-thread-event";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
@@ -15,6 +15,7 @@ export function useNavigationSelectedDetail(params: {
   desktopApi?: DesktopApi;
   ref?: NavigationIdentity;
   federationTarget?: FederationTarget;
+  enabled?: boolean;
 }): {
   state?: NavigationSelectionState;
   refresh: () => Promise<void>;
@@ -26,11 +27,14 @@ export function useNavigationSelectedDetail(params: {
   paramsRef.current = params;
   const currentRef = useRef<NavigationSelectionState | undefined>(undefined);
   const sequenceRef = useRef(0);
+  const connectionRef = useRef<{ owner: string; status: string } | undefined>(undefined);
   const [state, setState] = useState<NavigationSelectionState>();
   const refresh = useCallback(async () => {
     const currentParams = paramsRef.current;
     const selectedRef = currentParams.ref;
-    if (!selectedRef) return;
+    if (!selectedRef || currentParams.enabled === false) return;
+    const owner = currentParams.federationTarget?.scope === "remote" ? currentParams.federationTarget.instanceId : selectedRef.ownerInstanceId;
+    if (owner && connectionRef.current?.owner === owner && connectionRef.current.status !== "connected") return;
     const sequence = ++sequenceRef.current;
     const started = {
       ...selectNavigationIdentity(currentRef.current, selectedRef),
@@ -65,13 +69,23 @@ export function useNavigationSelectedDetail(params: {
   }, [desktopApi]);
 
   useEffect(() => {
-    if (paramsRef.current.ref) void refresh();
+    const currentParams = paramsRef.current;
+    const owner = currentParams.federationTarget?.scope === "remote" ? currentParams.federationTarget.instanceId : currentParams.ref?.ownerInstanceId;
+    if (connectionRef.current?.owner !== owner) connectionRef.current = undefined;
+    if (params.enabled === false) {
+      const current = currentRef.current;
+      if (current) {
+        const next: NavigationSelectionState = { ...current, readiness: "loading", stale: true };
+        currentRef.current = next;
+        setState(next);
+      }
+    } else if (paramsRef.current.ref) void refresh();
     else {
       currentRef.current = undefined;
       setState(undefined);
     }
     return () => { sequenceRef.current += 1; };
-  }, [identityKey, refresh, targetKey]);
+  }, [identityKey, refresh, targetKey, params.enabled]);
   useEffect(() => {
     if (!identityKey || !desktopApi?.onAgentEvent || !desktopApi.getNavigationSelectedDetail) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -81,6 +95,26 @@ export function useNavigationSelectedDetail(params: {
       const eventOwner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
       const selectedOwner = target?.scope === "remote" ? target.instanceId : selected?.ownerInstanceId;
       const notification = event.notification;
+      if (notification.method === "federation/peerStatus/changed") {
+        const peer = notification.params as { instanceId: string; status: string };
+        if (!selectedOwner || peer.instanceId !== selectedOwner) return;
+        if (connectionRef.current?.owner === selectedOwner && connectionRef.current.status === peer.status) return;
+        connectionRef.current = { owner: selectedOwner, status: peer.status };
+        const sequence = ++sequenceRef.current;
+        const current = currentRef.current;
+        if (current) {
+          const next: NavigationSelectionState = { ...current, pendingSequence: sequence, stale: true,
+            readiness: peer.status === "connected" ? "loading" : "failed",
+            error: peer.status === "connected" ? undefined : "The owning instance is disconnected. Reconnect before using thread actions.",
+            detail: current.detail?.thread?.federation ? { ...current.detail, thread: { ...current.detail.thread,
+              federation: { ...current.detail.thread.federation, peerStatus: peer.status as FederationPeerSummary["status"] } } } : current.detail };
+          currentRef.current = next;
+          setState(next);
+        }
+        if (timer !== undefined) clearTimeout(timer);
+        timer = peer.status === "connected" ? setTimeout(() => { timer = undefined; void refresh(); }, 250) : undefined;
+        return;
+      }
       if (!selected || event.backend !== selected.backend || eventOwner !== selectedOwner
         || !("threadId" in notification.params) || notification.params.threadId !== selected.threadId) return;
       if (!navigationQueryEventRequiresRefresh(notification.method)
