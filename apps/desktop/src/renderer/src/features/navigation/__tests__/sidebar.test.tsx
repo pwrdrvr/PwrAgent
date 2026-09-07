@@ -7277,10 +7277,7 @@ describe("Sidebar thread pinning Move items", () => {
       metaKey: true,
       shiftKey: true,
     });
-    expect(onReorderThreadPins).toHaveBeenCalledWith([
-      `codex:${pinnedBottom.id}`,
-      `codex:${pinnedTop.id}`,
-    ], { key: `codex:${pinnedTop.id}`, anchorKey: `codex:${pinnedBottom.id}`, placement: "after" });
+    expect(onReorderThreadPins).toHaveBeenCalledWith([], { key: `codex:${pinnedTop.id}`, direction: "down" });
   });
 });
 

@@ -18,6 +18,7 @@ const parentKey = (thread: NavigationThreadSummary) => thread.parentThreadId
   ? navigationThreadSelectionKey({ backend: thread.parentThreadBackend ?? thread.source, threadId: thread.parentThreadId,
       ownerInstanceId: thread.parentThreadInstanceId ?? (thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined) }) : undefined;
 const counts = (threads: readonly NavigationThreadSummary[]) => ({ total: threads.length,
+  ...(threads.some((thread) => thread.pinnedRank) ? { pinned: threads.filter((thread) => thread.pinnedRank).length } : {}),
   active: threads.filter((thread) => thread.threadStatus === "active").length,
   activeRemote: threads.filter((thread) => thread.threadStatus === "active" && thread.federation?.ref.target.scope === "remote").length,
   unread: threads.filter((thread) => thread.inbox.inInbox).length,

@@ -864,15 +864,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
     const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
     const targetKey = pinnedDirectoryKeys[targetIndex];
-    if (!targetKey) return;
-
     reorderDirectoryPins(
-      moveDirectoryKey(
+      targetKey ? moveDirectoryKey(
         pinnedDirectoryKeys,
         directory.key,
         targetKey,
         direction === "up" ? "before" : "after",
-      ),
+      ) : [],
       { key: directory.key, direction },
     );
   };
@@ -940,25 +938,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
   };
 
   const movePinnedThreadByKeyboard = (
-    directory: NavigationDirectorySummary,
+    _directory: NavigationDirectorySummary,
     thread: NavigationThreadSummary,
     direction: "up" | "down",
   ): void => {
-    const threadKey = threadSummaryIdentityKey(thread);
-    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(directory);
-    const currentIndex = directoryPinnedThreadKeys.indexOf(threadKey);
-    if (currentIndex === -1) return;
-
-    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    const targetKey = directoryPinnedThreadKeys[targetIndex];
-    if (!targetKey) return;
-
-    moveDirectoryPin(
-      directory,
-      threadKey,
-      targetKey,
-      direction === "up" ? "before" : "after",
-    );
+    // The adjacent pin can be unloaded. The owner resolves the neighbor and
+    // revalidates membership before changing rank.
+    void props.onReorderThreadPins?.([], { key: threadSummaryIdentityKey(thread), direction });
   };
 
   useEffect(() => {

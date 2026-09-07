@@ -1500,6 +1500,8 @@ export type NavigationCounts = {
   active: number;
   /** Active mounted-peer rows in a viewer-local index; already included in active. */
   activeRemote?: number;
+  /** Owner pin population, independent of retained membership pages. */
+  pinned?: number;
   unread: number;
   /** Unread and idle. Active and review are exclusive in sidebar counts. */
   review: number;
