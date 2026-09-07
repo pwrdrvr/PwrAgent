@@ -52,17 +52,15 @@ export function buildFederationThreadEventSubscriptions(params: {
 
     const eventClasses = new Set<FederationEventClass>();
     // Main-window remote pins do not inherit the dedicated remote window's
-    // subscription. Keep lifecycle events flowing for every pinned owner so
-    // background queue and scheduled-action projections can settle.
+    // subscription. Keep navigation invalidations flowing for every pinned
+    // owner; full scheduled-action events belong to the selected thread.
     if (federation.capabilities.includes("thread_navigation")) {
       eventClasses.add("navigation");
-    }
-    if (federation.capabilities.includes("scheduled_actions")) {
-      eventClasses.add("scheduled_actions");
     }
     if (target.instanceId === selectedInstanceId
       && thread.source === params.selectedThread?.source
       && thread.id === params.selectedThread.id) {
+      if (federation.capabilities.includes("scheduled_actions")) eventClasses.add("scheduled_actions");
       if (federation.capabilities.includes("thread_detail")) {
         eventClasses.add("transcript");
       }

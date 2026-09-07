@@ -1027,8 +1027,8 @@ export class DesktopFederationRuntime {
   }
 
   /**
-   * The legacy complete navigation view still needs source-wide row and
-   * scheduled-action updates. Detail and Star Map interests belong to their
+   * A native window owns only source-wide row invalidations. Scheduled
+   * actions, detail, and Star Map interests belong to their
    * mounted renderer consumers, not to the lifetime of the native window.
    */
   setRemoteWindowEventSubscription(
@@ -1041,7 +1041,7 @@ export class DesktopFederationRuntime {
       "remote-window",
       [{
         sourceInstanceId,
-        eventClasses: (["navigation", "scheduled_actions"] as const).filter((eventClass) =>
+        eventClasses: (["navigation"] as const).filter((eventClass) =>
           eventClassAllowedByCapabilities(eventClass, capabilities)
         ),
         threadSelection: { kind: "all" },

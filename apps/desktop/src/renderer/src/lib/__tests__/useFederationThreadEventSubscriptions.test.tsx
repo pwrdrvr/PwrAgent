@@ -63,7 +63,7 @@ describe("useFederationThreadEventSubscriptions", () => {
     ] };
     expect(subscription.eventClassSelections).toEqual({
       navigation: both,
-      scheduled_actions: both,
+      scheduled_actions: selectedOnly,
       transcript: selectedOnly,
       pending_requests: selectedOnly,
     });
@@ -106,7 +106,7 @@ describe("useFederationThreadEventSubscriptions", () => {
       },
       {
         sourceInstanceId: "owner_two",
-        eventClasses: ["navigation", "scheduled_actions"],
+        eventClasses: ["navigation"],
         threadSelection: {
           kind: "threads",
           threads: [{ backend: "codex", threadId: "background" }],

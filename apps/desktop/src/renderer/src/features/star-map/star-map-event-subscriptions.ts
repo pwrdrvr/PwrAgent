@@ -21,8 +21,6 @@ export function buildStarMapEventSubscriptions(
     const eventClasses: FederationEventClass[] = [
       ...(peer.capabilities.includes("thread_navigation")
         ? ["navigation" as const, "star_map" as const] : []),
-      ...(peer.capabilities.includes("scheduled_actions")
-        ? ["scheduled_actions" as const] : []),
     ];
     const refs = new Map<string, { backend: NavigationThreadSummary["source"]; threadId: string }>();
     for (const card of cards) {
@@ -42,6 +40,7 @@ export function buildStarMapEventSubscriptions(
       };
       for (const [eventClass, capability] of [
         ["transcript", "thread_detail"], ["pending_requests", "pending_request_control"],
+        ["scheduled_actions", "scheduled_actions"],
       ] as const) {
         if (!peer.capabilities.includes(capability)) continue;
         eventClasses.push(eventClass);

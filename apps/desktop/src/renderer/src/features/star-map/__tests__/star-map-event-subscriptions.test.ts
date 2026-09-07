@@ -17,12 +17,12 @@ describe("Star Map event demand", () => {
       { backend: "codex", threadId: "A" }, { backend: "codex", threadId: "B" },
     ] };
     expect(one.eventClassSelections).toEqual({
-      navigation: { kind: "all" }, star_map: { kind: "all" }, scheduled_actions: { kind: "all" },
+      navigation: { kind: "all" }, star_map: { kind: "all" }, scheduled_actions: selected,
       transcript: selected, pending_requests: selected,
     });
     expect(two.eventClasses).not.toContain("transcript");
     const [closed] = buildStarMapEventSubscriptions(peers, []);
-    expect(closed.eventClasses).toEqual(["navigation", "star_map", "scheduled_actions"]);
+    expect(closed.eventClasses).toEqual(["navigation", "star_map"]);
     expect(closed.eventClassSelections).toBeUndefined();
   });
 

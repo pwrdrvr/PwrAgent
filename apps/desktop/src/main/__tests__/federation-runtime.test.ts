@@ -1665,7 +1665,7 @@ describe("DesktopFederationRuntime", () => {
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "pending_requests"))
       .toBe(false);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "scheduled_actions"))
-      .toBe(true);
+      .toBe(false);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_two", "navigation"))
       .toBe(true);
     runtime.clearRendererEventSubscriptions(7, "thread-view");
