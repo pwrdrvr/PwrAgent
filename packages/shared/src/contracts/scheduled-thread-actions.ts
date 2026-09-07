@@ -110,6 +110,9 @@ export type ScheduledThreadActionIdRequest = {
 };
 
 export type ListScheduledThreadActionsRequest = {
+  /** Complete renderer projections use bounded pages, never the legacy list. */
+  projectionProtocol?: 2;
+  cursor?: string;
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId?: ThreadIdentifier;
@@ -122,6 +125,10 @@ export type ListScheduledThreadActionsRequest = {
 
 export type ListScheduledThreadActionsResponse = {
   actions: ScheduledThreadAction[];
+  projectionProtocol?: 2;
+  revision?: string;
+  complete?: boolean;
+  nextCursor?: string;
   /** Scheduler clock cursor for a subsequent terminalUpdatedAfter request. */
   observedAt?: number;
 };

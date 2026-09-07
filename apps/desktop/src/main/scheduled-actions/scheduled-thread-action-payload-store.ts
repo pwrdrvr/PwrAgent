@@ -15,7 +15,7 @@ export type ScheduledThreadActionPayload = Pick<
 
 export interface ScheduledThreadActionPayloadStore {
   delete(ref: string): void;
-  read(ref: string): ScheduledThreadActionPayload;
+  read(ref: string, maxBytes?: number): ScheduledThreadActionPayload;
   write(actionId: string, payload: ScheduledThreadActionPayload): string;
 }
 
@@ -47,10 +47,14 @@ implements ScheduledThreadActionPayloadStore {
     }
   }
 
-  read(ref: string): ScheduledThreadActionPayload {
-    return JSON.parse(
-      fs.readFileSync(this.resolve(ref), "utf8"),
-    ) as ScheduledThreadActionPayload;
+  read(ref: string, maxBytes?: number): ScheduledThreadActionPayload {
+    const file = fs.openSync(this.resolve(ref), "r");
+    try {
+      if (maxBytes !== undefined && fs.fstatSync(file).size > maxBytes) {
+        throw new Error("Scheduled action payload exceeds the bounded projection budget.");
+      }
+      return JSON.parse(fs.readFileSync(file, "utf8")) as ScheduledThreadActionPayload;
+    } finally { fs.closeSync(file); }
   }
 
   delete(ref: string): void {
@@ -79,9 +83,12 @@ implements ScheduledThreadActionPayloadStore {
     return ref;
   }
 
-  read(ref: string): ScheduledThreadActionPayload {
+  read(ref: string, maxBytes?: number): ScheduledThreadActionPayload {
     const payload = this.payloads.get(ref);
     if (!payload) throw new Error("Scheduled action payload not found.");
+    if (maxBytes !== undefined && Buffer.byteLength(JSON.stringify(payload)) > maxBytes) {
+      throw new Error("Scheduled action payload exceeds the bounded projection budget.");
+    }
     return structuredClone(payload);
   }
 

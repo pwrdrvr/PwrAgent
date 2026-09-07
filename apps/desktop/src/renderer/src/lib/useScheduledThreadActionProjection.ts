@@ -1,12 +1,15 @@
 import { buildThreadComposerScopeKey } from "../features/composer/useComposerDraftStore";
 import { observeLaunchpadScheduledAction } from "../features/composer/launchpad-composer-handoff";
-import { useEffect } from "react";
+import { useEffect, useReducer } from "react";
 import type { FederationTarget, ScheduledThreadAction } from "@pwragent/shared";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
+import { readScheduledActionProjection } from "./read-scheduled-action-projection";
+import { navigationScheduledProjectionBudget } from "./navigation-metadata-budget";
+import { resolveComposerScopeOwner } from "../features/composer/useOwnedComposerDraftStore";
 
-const SCHEDULED_ACTION_RECONCILIATION_INTERVAL_MS = 5_000;
+let nextScheduledProjection = 0;
 
 export type ScheduledThreadActionProjectionSource = {
   federationTarget?: FederationTarget;
@@ -28,11 +31,30 @@ export function useScheduledThreadActionProjection(params: {
    */
   suspended?: boolean;
 }): void {
+  const [, scopesChanged] = useReducer((value: number) => value + 1, 0);
+  useEffect(() => {
+    const owners = (): string => JSON.stringify([...new Set(params.composerDraftStore.getQueuedScopeKeys().map((scope) => {
+      const resolved = resolveComposerScopeOwner(params.composerDraftStore, scope);
+      return resolved.state === "known" ? JSON.stringify(resolved.owner.target) : "";
+    }).filter(Boolean))].sort());
+    let previous = owners();
+    return params.composerDraftStore.subscribeQueuedTurns(() => {
+      const next = owners();
+      if (next !== previous) { previous = next; scopesChanged(); }
+    });
+  }, [params.composerDraftStore]);
+  const sources = [...(params.sources ?? [{
+    federationTarget: params.federationTarget, suspended: params.suspended,
+  }])];
+  for (const scope of params.composerDraftStore.getQueuedScopeKeys()) {
+    const resolved = resolveComposerScopeOwner(params.composerDraftStore, scope);
+    if (resolved.state !== "known") continue;
+    if (!sources.some((source) => federationTargetsEqual(source.federationTarget, resolved.owner.target))) {
+      sources.push({ federationTarget: resolved.owner.target });
+    }
+  }
   const sourcesJson = JSON.stringify(
-    params.sources ?? [{
-      federationTarget: params.federationTarget,
-      suspended: params.suspended,
-    }],
+    sources,
   );
 
   useEffect(() => {
@@ -78,18 +100,35 @@ function startScheduledThreadActionProjection(params: {
   let terminalUpdatedAfter: number | undefined;
   let lastWarnedFailure: string | undefined;
   let cancelled = false;
+  let running = false;
+  let dirty = false;
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  const budgetKey = `scheduled:${++nextScheduledProjection}`;
 
   const refresh = async (): Promise<void> => {
+    if (running) { dirty = true; refreshSequence += 1; return; }
+    running = true;
     const sequence = refreshSequence + 1;
     refreshSequence = sequence;
+    let allocation: ReturnType<typeof navigationScheduledProjectionBudget.begin> | undefined;
     try {
-      const response = await params.listScheduledThreadActions({
-        federationTarget: params.federationTarget,
-        ...(terminalUpdatedAfter === undefined
-          ? { includeFailed: true }
-          : { terminalUpdatedAfter }),
+      allocation = navigationScheduledProjectionBudget.begin(budgetKey);
+      const response = await readScheduledActionProjection({
+        request: { federationTarget: params.federationTarget,
+          ...(terminalUpdatedAfter === undefined ? { includeFailed: true } : { terminalUpdatedAfter }),
+        },
+        read: params.listScheduledThreadActions,
+        allocation,
+        isCancelled: () => cancelled || sequence !== refreshSequence,
       });
       if (cancelled || sequence !== refreshSequence) return;
+      // Retained failed actions survive subsequent terminal windows and must
+      // remain charged when the new response no longer includes them.
+      const responseIds = new Set(response.actions.map((action) => action.id));
+      for (const action of projectedFailures.values()) if (!responseIds.has(action.id)) {
+        allocation.reserve(new TextEncoder().encode(JSON.stringify(action)).byteLength);
+      }
+      allocation.commit();
       terminalUpdatedAfter = response.observedAt ?? Date.now();
       for (const [actionId, action] of projectedFailures) {
         const stillProjected = params.composerDraftStore
@@ -120,6 +159,7 @@ function startScheduledThreadActionProjection(params: {
       );
       lastWarnedFailure = undefined;
     } catch (error) {
+      if (cancelled || sequence !== refreshSequence) return;
       // A persistent failure (peer offline, backend down) repeats on
       // every 5s reconciliation tick — warn once per distinct failure
       // instead of spamming the console/log for the same condition.
@@ -128,11 +168,30 @@ function startScheduledThreadActionProjection(params: {
         lastWarnedFailure = message;
         console.warn("Failed to load scheduled thread actions", error);
       }
+    } finally {
+      allocation?.dispose();
+      running = false;
+      if (dirty && !cancelled) { dirty = false; schedule(); }
     }
+  };
+  const schedule = (): void => {
+    if (cancelled || refreshTimer !== undefined) return;
+    refreshTimer = setTimeout(() => { refreshTimer = undefined; void refresh(); }, 100);
   };
 
   void refresh();
   const unsubscribe = params.desktopApi.onAgentEvent?.((event) => {
+    if (event.notification.method === "federation/peerStatus/changed"
+      && params.federationTarget?.scope === "remote"
+      && event.notification.params.instanceId === params.federationTarget.instanceId
+      && event.notification.params.status === "connected") { schedule(); return; }
+    if (event.notification.method === "navigation/invalidated"
+      && event.notification.params.sourceMethod === "thread/scheduledAction/updated"
+      && federationTargetsEqual(event.federationTarget, params.federationTarget)) {
+      refreshSequence += 1;
+      schedule();
+      return;
+    }
     if (event.notification.method === "thread/scheduledAction/updated") {
       if (!federationTargetsEqual(
         event.federationTarget,
@@ -159,16 +218,14 @@ function startScheduledThreadActionProjection(params: {
       ) {
         params.onThreadLifecycleChanged?.();
       }
-      void refresh();
+      refreshSequence += 1;
+      schedule();
     }
   });
-  const reconciliationTimer = setInterval(
-    () => void refresh(),
-    SCHEDULED_ACTION_RECONCILIATION_INTERVAL_MS,
-  );
   return () => {
     cancelled = true;
-    clearInterval(reconciliationTimer);
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+    navigationScheduledProjectionBudget.release(budgetKey);
     unsubscribe?.();
   };
 }

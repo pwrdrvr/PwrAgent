@@ -363,6 +363,13 @@
     "rowsChanged": 8,
     "statements": 8
   },
+  "scheduled-bounded-projection-reads": {
+    "commits": 0,
+    "note": "205 payload-backed schedules, complete bounded paging and external version observation: zero commits; 0 MB/day added WAL",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "star-map-intake-launchpad-initialization": {
     "commits": 2,
     "note": "initialize one missing directory launchpad for its first Star Map intake",

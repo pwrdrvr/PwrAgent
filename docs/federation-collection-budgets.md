@@ -294,3 +294,35 @@ remain visible when remote counts are unavailable. Unknown counts do not cause
 zero-count filters to disappear. Complete metadata range reads reject incomplete
 coverage, uncertified unchanged replies, oversized wire pages and responses that
 arrive after their original deadline.
+
+### Compact event and scheduled projection cutover
+
+Broad remote navigation subscriptions now carry `navigation/invalidated` with
+bounded identity fields. Turn output, queue input and configuration payloads
+remain in exact transcript/scheduled-action subscriptions. The direct/gateway
+regression sends a multi-megabyte off-page turn and verifies a sub-1-KiB
+navigation frame, then verifies the selected thread receives its full result.
+Native remote windows retain navigation demand only. Each mounted FIFO reader
+owns a distinct event consumer, including off-page queued scope owners, and
+releases it on unmount. FIFO baselines share 8 MiB retained and 8 MiB transient
+serialized-equivalent budgets per renderer process.
+
+Scheduled renderer projections request protocol 2 pages: at most 100 actions
+and 252 KiB per response, 128 pages and 8 MiB per complete generation. Owner
+reads stream a metadata digest, admit at most 8 MiB of metadata before payload
+hydration, and stat immutable payload files before decoding them. A changed
+revision expires the cursor; a renderer rebaselines once within its original
+10-second deadline and publishes only a complete generation. Concurrent
+refreshes coalesce. Failed/partial reads retain existing mirrors. Scheduled
+projections share an 8 MiB retained/transient renderer budget; retained failed
+actions remain charged across terminal-watermark windows.
+
+The renderer no longer polls scheduled payload lists every five seconds.
+Canonical events refresh demand. The scheduler's existing ten-second owner
+heartbeat observes SQLite `data_version` for cross-process changes, compares
+compact scheduled metadata only after a version change, and emits a compact
+invalidation when needed. This observation does not write SQLite or load
+scheduled input files. The 205-action paging and observation regression records
+zero commits, or 0 MB/day added WAL. These are serialized backing budgets, not
+an assertion about the JavaScript engine's total heap usage. Legacy explicit
+control-plane list callers remain separate from renderer projection reads.

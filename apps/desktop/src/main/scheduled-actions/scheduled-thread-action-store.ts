@@ -1,6 +1,8 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type {
   ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
   ScheduledThreadActionKind,
   ScheduledThreadActionOrigin,
@@ -145,6 +147,93 @@ export class ScheduledThreadActionStore {
   }
 
   list(request: ListScheduledThreadActionsRequest = {}): ScheduledThreadAction[] {
+    const { clause, values } = this.listPredicate(request);
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT ${ROW_COLUMNS} FROM scheduled_thread_actions
+         ${clause}
+         ORDER BY scheduled_for ASC, created_at ASC`,
+      )
+      .all(...values) as ScheduledThreadActionRow[];
+    return rows.map((row) => this.actionFromRow(row));
+  }
+
+  listProjectionPage(request: ListScheduledThreadActionsRequest): ListScheduledThreadActionsResponse {
+    const { clause, values } = this.listPredicate(request);
+    const revision = (): string => this.readProjectionRevision(request);
+    const currentRevision = revision();
+    let offset = 0;
+    if (request.cursor) {
+      if (request.cursor.length > 256) throw new Error("Invalid scheduled action cursor.");
+      const match = /^([a-f0-9]{64}):([0-9]{1,6})$/.exec(request.cursor);
+      if (!match) throw new Error("Invalid scheduled action cursor.");
+      if (match[1] !== currentRevision) throw new Error("[navigation_cursor_expired] Scheduled actions changed while paging.");
+      offset = Number(match[2]);
+    }
+    const rows = this.stateDb.raw.prepare(
+      `SELECT ${ROW_COLUMNS} FROM scheduled_thread_actions ${clause}
+       ORDER BY scheduled_for ASC, created_at ASC, action_id ASC LIMIT ? OFFSET ?`,
+    ).all(...values, 101, offset) as ScheduledThreadActionRow[];
+    const actions: ScheduledThreadAction[] = [];
+    let bytes = 0;
+    for (const row of rows.slice(0, 100)) {
+      const action = this.actionFromRow(row, 248 * 1024);
+      const actionBytes = Buffer.byteLength(JSON.stringify(action));
+      if (actionBytes > 248 * 1024) throw new Error("Scheduled action exceeds the bounded projection budget.");
+      if (bytes + actionBytes > 248 * 1024) break;
+      actions.push(action);
+      bytes += actionBytes;
+    }
+    if (revision() !== currentRevision) throw new Error("[navigation_cursor_expired] Scheduled actions changed while paging.");
+    const complete = actions.length === rows.length;
+    return { actions, projectionProtocol: 2, revision: currentRevision, complete,
+      ...(!complete ? { nextCursor: `${currentRevision}:${offset + actions.length}` } : {}),
+    };
+  }
+
+  private externalDataVersion?: number;
+  private externalProjectionRevision?: string;
+
+  observeExternalProjectionChange(): boolean {
+    const version = this.stateDb.raw.pragma("data_version", { simple: true }) as number;
+    if (version === this.externalDataVersion) return false;
+    const revision = this.readProjectionRevision({ includeTerminal: true });
+    const changed = this.externalProjectionRevision !== undefined && this.externalProjectionRevision !== revision;
+    this.externalDataVersion = version;
+    this.externalProjectionRevision = revision;
+    return changed;
+  }
+
+  private readProjectionRevision(request: ListScheduledThreadActionsRequest): string {
+    const { clause, values } = this.listPredicate(request);
+    const admission = this.stateDb.raw.prepare(
+      `SELECT COALESCE(SUM(
+         length(CAST(action_id AS BLOB)) + length(CAST(thread_id AS BLOB))
+         + COALESCE(length(CAST(error_message AS BLOB)), 0)
+         + COALESCE(length(CAST(payload_ref AS BLOB)), 0)
+         + COALESCE(length(CAST(queue_entry_id AS BLOB)), 0)
+         + COALESCE(length(CAST(turn_id AS BLOB)), 0) + 512
+       ), 0) AS bytes FROM scheduled_thread_actions ${clause}`,
+    ).get(...values) as { bytes: number };
+    if (admission.bytes > 8 * 1024 * 1024) throw new Error("Scheduled action index exceeds its byte budget.");
+    const hash = createHash("sha256").update(JSON.stringify([clause, values]));
+    let bytes = 0;
+    // Stream compact rows; neither hash construction nor cursor validation
+    // loads scheduled inputs or retains an owner-wide payload collection.
+    for (const row of this.stateDb.raw.prepare(
+      `SELECT action_id, backend, thread_id, kind, origin, status, scheduled_for,
+        queue_entry_id, turn_id, error_message, payload_ref, created_at, updated_at
+       FROM scheduled_thread_actions ${clause} ORDER BY action_id`,
+    ).iterate(...values)) {
+      const json = JSON.stringify(row);
+      bytes += Buffer.byteLength(json);
+      if (bytes > 8 * 1024 * 1024) throw new Error("Scheduled action index exceeds its byte budget.");
+      hash.update(json);
+    }
+    return hash.digest("hex");
+  }
+
+  private listPredicate(request: ListScheduledThreadActionsRequest): { clause: string; values: unknown[] } {
     const where: string[] = [];
     const values: unknown[] = [];
     if (request.backend) {
@@ -170,14 +259,7 @@ export class ScheduledThreadActionStore {
       values.push(...ACTIVE_STATUSES);
     }
     const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
-    const rows = this.stateDb.raw
-      .prepare(
-        `SELECT ${ROW_COLUMNS} FROM scheduled_thread_actions
-         ${clause}
-         ORDER BY scheduled_for ASC, created_at ASC`,
-      )
-      .all(...values) as ScheduledThreadActionRow[];
-    return rows.map((row) => this.actionFromRow(row));
+    return { clause, values };
   }
 
   nextScheduledAt(): number | undefined {
@@ -537,12 +619,12 @@ export class ScheduledThreadActionStore {
     }
   }
 
-  private actionFromRow(row: ScheduledThreadActionRow): ScheduledThreadAction {
+  private actionFromRow(row: ScheduledThreadActionRow, maxBytes?: number): ScheduledThreadAction {
     if (!row.payload_ref) {
       throw new Error(`Scheduled action ${row.action_id} has no payload reference.`);
     }
     return {
-      ...this.payloadStore.read(row.payload_ref),
+      ...this.payloadStore.read(row.payload_ref, maxBytes),
       id: row.action_id,
       backend: row.backend,
       threadId: row.thread_id,

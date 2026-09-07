@@ -80,6 +80,7 @@ export class ScheduledThreadActionService {
   private leaseTimer: ReturnType<typeof setInterval> | null = null;
   private readonly ownerId: string;
   private lastHistoryCleanupAt = 0;
+  private projectionObservationError?: string;
   private unsubscribeRegistryEvents?: () => void;
 
   constructor(private readonly options: ScheduledThreadActionServiceOptions) {
@@ -89,6 +90,7 @@ export class ScheduledThreadActionService {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.observeExternalScheduledChanges();
     activeSchedulerOwnerIds.add(this.ownerId);
     this.cleanupExpiredHistory();
     this.recoverExpiredClaims(this.now());
@@ -122,6 +124,9 @@ export class ScheduledThreadActionService {
     request: ListScheduledThreadActionsRequest = {},
   ): ListScheduledThreadActionsResponse {
     const observedAt = this.now();
+    if (request.projectionProtocol === 2) return {
+      ...this.options.store.listProjectionPage(request), observedAt,
+    };
     return {
       actions: this.options.store.list(request),
       observedAt,
@@ -568,9 +573,28 @@ export class ScheduledThreadActionService {
     };
   }
 
+  private observeExternalScheduledChanges(): void {
+    try {
+      if (this.options.store.observeExternalProjectionChange()) {
+        void this.options.registry.publishLocalEvent({ backend: "codex", notification: {
+          method: "navigation/invalidated", params: { sourceMethod: "thread/scheduledAction/updated" },
+        } });
+      }
+      this.projectionObservationError = undefined;
+    } catch (error) {
+      // A viewer's projection budget must never stop accepted scheduled work.
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== this.projectionObservationError) {
+        this.projectionObservationError = message;
+        scheduledActionLog.warn("Scheduled projection observation unavailable", { error: message });
+      }
+    }
+  }
+
   private startLeaseHeartbeat(): void {
     const callback = (): void => {
       if (!this.running) return;
+      this.observeExternalScheduledChanges();
       const params = this.claimParams();
       this.options.store.renewClaims(
         params.ownerId,

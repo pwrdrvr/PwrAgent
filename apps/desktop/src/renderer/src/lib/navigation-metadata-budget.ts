@@ -73,3 +73,4 @@ export const navigationGeometryBudget = new NavigationMetadataBudget();
 export const navigationExactRowsBudget = new NavigationMetadataBudget();
 export const navigationAttentionRowsBudget = new NavigationMetadataBudget();
 export const navigationQueueBaselineBudget = new NavigationMetadataBudget();
+export const navigationScheduledProjectionBudget = new NavigationMetadataBudget();

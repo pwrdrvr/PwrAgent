@@ -552,6 +552,7 @@ type RelayedEventSubscription = IncomingEventSubscription & {
 };
 
 const NAVIGATION_EVENT_METHODS = new Set<string>([
+  "thread/scheduledAction/updated",
   "automation/run/transcript/updated",
   "automation/run/updated",
   "directory/pin/added",
@@ -4895,6 +4896,7 @@ export class DesktopFederationRuntime {
       // Identity fields are bounded independently of the provider's payload.
       const params = event.notification.params as Record<string, unknown>;
       const thread = params.thread as Record<string, unknown> | undefined;
+      const action = params.action as Record<string, unknown> | undefined;
       const identity = (value: unknown): string | undefined =>
         typeof value === "string" && value.length <= 1_024 ? value : undefined;
       this.forwardLocalBackendEvent({
@@ -4903,7 +4905,7 @@ export class DesktopFederationRuntime {
           method: "navigation/invalidated",
           params: {
             sourceMethod: event.notification.method,
-            threadId: identity(params.threadId ?? thread?.id),
+            threadId: identity(params.threadId ?? thread?.id ?? action?.threadId),
             automationId: identity(params.automationId),
             runId: identity(params.runId),
           },

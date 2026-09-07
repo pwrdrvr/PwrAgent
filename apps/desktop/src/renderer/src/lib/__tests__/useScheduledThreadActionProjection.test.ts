@@ -124,7 +124,7 @@ describe("scheduled thread action projections", () => {
       desktopApi: {
         listScheduledThreadActions: vi.fn(async () => ({
           actions: [],
-          observedAt: 1_000,
+          projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 1_000,
         })),
         onAgentEvent: (handler: (event: AgentEvent) => void) => {
           agentEventHandler = handler;
@@ -175,18 +175,19 @@ describe("scheduled thread action projections", () => {
     ).toBeUndefined();
   });
 
-  it("periodically reconciles actions changed by another process", async () => {
+  it("reconciles compact invalidations without idle full-list polling", async () => {
+    let listener!: (event: AgentEvent) => void;
     vi.useFakeTimers();
     const { result } = renderHook(() => useComposerDraftStore());
     const listScheduledThreadActions = vi.fn()
-      .mockResolvedValueOnce({ actions: [], observedAt: 1_000 })
+      .mockResolvedValueOnce({ actions: [], projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 1_000 })
       .mockResolvedValueOnce({
         actions: [scheduledAction()],
-        observedAt: 2_000,
+        projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 2_000,
       });
     const desktopApi = {
       listScheduledThreadActions,
-      onAgentEvent: () => () => undefined,
+      onAgentEvent: (next: (event: AgentEvent) => void) => { listener = next; return () => {}; },
     } as unknown as DesktopApi;
     const projection = renderHook(() => useScheduledThreadActionProjection({
       composerDraftStore: result.current,
@@ -197,16 +198,21 @@ describe("scheduled thread action projections", () => {
       await Promise.resolve();
     });
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
-      federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, federationTarget: undefined,
       includeFailed: true,
     });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
+    expect(listScheduledThreadActions).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      listener({ backend: "codex", notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/scheduledAction/updated" } } });
+      await vi.advanceTimersByTimeAsync(100);
+    });
     expect(listScheduledThreadActions).toHaveBeenCalledTimes(2);
     expect(listScheduledThreadActions).toHaveBeenLastCalledWith({
-      federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, federationTarget: undefined,
       terminalUpdatedAfter: 1_000,
     });
     expect(
@@ -231,14 +237,12 @@ describe("scheduled thread action projections", () => {
         && request.federationTarget.instanceId === "owner-two"
           ? [ownerTwoAction]
           : request.federationTarget ? [] : [scheduledAction()],
-      observedAt: 1_000,
+      projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 1_000,
     }));
+    const desktopApi = { listScheduledThreadActions, onAgentEvent: () => () => undefined } as unknown as DesktopApi;
     const projection = renderHook(() => useScheduledThreadActionProjection({
       composerDraftStore: result.current,
-      desktopApi: {
-        listScheduledThreadActions,
-        onAgentEvent: () => () => undefined,
-      } as unknown as DesktopApi,
+      desktopApi,
       sources: [
         { federationTarget: undefined },
         {
@@ -262,6 +266,7 @@ describe("scheduled thread action projections", () => {
 
     expect(listScheduledThreadActions).toHaveBeenCalledTimes(3);
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
+      projectionProtocol: 2, cursor: undefined,
       federationTarget: {
         scope: "remote",
         instanceId: "owner-two",
@@ -284,7 +289,7 @@ describe("scheduled thread action projections", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const listScheduledThreadActions = vi.fn(async () => ({
       actions: [],
-      observedAt: 1_000,
+      projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 1_000,
     }));
     const federationTarget = {
       scope: "remote" as const,
@@ -332,7 +337,7 @@ describe("scheduled thread action projections", () => {
         status: "failed",
         errorMessage: "failed before mount",
       })],
-      observedAt: 2_000,
+      projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 2_000,
     }));
     const projection = renderHook(() => useScheduledThreadActionProjection({
       composerDraftStore: result.current,
@@ -347,7 +352,7 @@ describe("scheduled thread action projections", () => {
     });
 
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
-      federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, federationTarget: undefined,
       includeFailed: true,
     });
     expect(
