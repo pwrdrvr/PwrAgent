@@ -176,6 +176,23 @@ describe("NavigationQueryPool", () => {
     expect(pool.getBudgetUsage().retainedBytes).toBe(Buffer.byteLength(JSON.stringify(page)));
   });
 
+  it("shares physical admission but never shares results across authenticated requester scopes", async () => {
+    const pool = new NavigationQueryPool();
+    const completions: (() => void)[] = [];
+    const load = vi.fn(() => new Promise<NavigationQueryPage>((resolve) => completions.push(() => resolve(page))));
+    const first = pool.read({ consumerId: "peer-a-1", scopeKey: "federation:a", request, load });
+    const duplicate = pool.read({ consumerId: "peer-a-2", scopeKey: "federation:a", request, load });
+    const other = pool.read({ consumerId: "peer-b", scopeKey: "federation:b", request, load });
+    const local = pool.read({ consumerId: "window", request, load });
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(pool.getBudgetUsage().activeReads).toBe(3);
+    for (const complete of completions) complete();
+    await Promise.all([first, duplicate, other, local]);
+    for (const consumer of ["peer-a-1", "peer-a-2", "peer-b", "window"]) pool.release(consumer);
+    expect(pool.getBudgetUsage().activeReads).toBe(0);
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
   it("aborts the owner read only after the last consumer releases", async () => {
     const pool = new NavigationQueryPool();
     let ownerSignal!: AbortSignal;

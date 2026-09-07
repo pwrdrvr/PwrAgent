@@ -1726,6 +1726,11 @@ test.describe("federation remote window", () => {
     const launchMarkerPath = path.join(protocolDir, "fake-codex.launched");
     await mkdir(protocolDir, { recursive: true });
 
+    const navigationDiagnostics: string[] = [];
+    const recordDiagnostic = (message: string) => {
+      navigationDiagnostics.push(message.slice(0, 4000));
+      if (navigationDiagnostics.length > 100) navigationDiagnostics.shift();
+    };
     let owner: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
     let viewer: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
     try {
@@ -1871,6 +1876,9 @@ test.describe("federation remote window", () => {
         )
         .toContain('"status":"connected"');
 
+      for (const [name, instance] of [["owner", owner], ["viewer", viewer]] as const) {
+        instance.electronApp.process().stderr?.on("data", (data) => recordDiagnostic(`${name}: ${String(data)}`));
+      }
       const remoteWindowPromise = viewer.electronApp.waitForEvent("window");
       await viewer.window.evaluate(async (instanceId) => {
         const api = (window as typeof window & {
@@ -1886,6 +1894,7 @@ test.describe("federation remote window", () => {
         });
       }, enrollment.gatewayInstanceId);
       const remote = await remoteWindowPromise;
+      remote.on("console", (message) => recordDiagnostic(`renderer: ${message.text()}`));
       await remote.waitForLoadState("domcontentloaded");
 
       const remoteKimiParent = remote.getByRole("button", {
@@ -2011,6 +2020,9 @@ test.describe("federation remote window", () => {
       expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
       expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at);
     } finally {
+      if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach("navigation-diagnostics", {
+        body: navigationDiagnostics.join("\n"), contentType: "text/plain",
+      });
       if (existsSync(requestLogPath)) {
         await testInfo.attach("fake-codex-protocol", {
           path: requestLogPath,

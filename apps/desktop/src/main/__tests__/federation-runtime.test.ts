@@ -62,6 +62,7 @@ import type { FederationGatewayConnection } from "../federation/federation-trans
 import { replacementPages } from "../federation/federation-replacement-pages";
 import * as appState from "../state/app-state";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 
 // `getDesktopBackendRegistry()` is the one construction that opts into real
 // machine ACP discovery, so a test that reaches the singleton inherits it — the
@@ -995,6 +996,35 @@ describe("DesktopFederationRuntime", () => {
         },
       },
     });
+  });
+
+  it("releases an incoming owner read only after its final authenticated consumer cancels", async () => {
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({} as never);
+    const signals: AbortSignal[] = [];
+    const source = vi.spyOn(navigationQuerySource, "loadLocalNavigationQueryIndex").mockImplementation(({ signal }) => {
+      signals.push(signal!);
+      return new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+    });
+    const first = new AbortController();
+    const second = new AbortController();
+    const pool = getDesktopNavigationQueryPool();
+    const initial = pool.getBudgetUsage().activeReads;
+    try {
+      const backend = new DesktopFederationRuntime().localBackend();
+      const query = { protocol: 2 as const, consumer: "main-sidebar" as const,
+        query: { kind: "search" as const, text: "incoming-cancellation" } };
+      const a = backend.getNavigationQueryPage!(query, { requesterInstanceId: "cancel-peer", signal: first.signal });
+      const b = backend.getNavigationQueryPage!(query, { requesterInstanceId: "cancel-peer", signal: second.signal });
+      const completed = Promise.allSettled([a, b]);
+      await vi.waitFor(() => expect(source).toHaveBeenCalledTimes(1));
+      first.abort();
+      expect(signals[0]?.aborted).toBe(false);
+      second.abort();
+      expect(signals[0]?.aborted).toBe(true);
+      expect((await completed).every((result) => result.status === "rejected")).toBe(true);
+      await vi.waitFor(() => expect(pool.getBudgetUsage().activeReads).toBe(initial));
+    } finally { first.abort(); second.abort(); source.mockRestore(); registry.mockRestore(); }
   });
 
   it("serves owner project pages without full navigation reconciliation or SQLite writes", async () => {

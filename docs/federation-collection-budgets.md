@@ -238,6 +238,13 @@ accounting. The assembly and validation changes perform no persistence writes.
 
 ### Shared exact-read admission
 
+Incoming Federation query, detail, launchpad, and FIFO reads use the same process
+pool as native windows. Authenticated requester identity partitions deduplication
+and cursor ownership; two peers cannot share a retained result. Each RPC releases
+its consumer on completion or cancellation. The final consumer aborts the shared
+owner read, and a provider that ignores cancellation retains its physical slot
+until it settles.
+
 Main-process navigation admission now covers exact selected detail, launchpad
 configuration, and FIFO pages as distinct result types. They share the collection
 pool's eight physical owner-read slots, 256 consumer/pending-read limits, ten-second

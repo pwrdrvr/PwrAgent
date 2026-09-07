@@ -5484,20 +5484,42 @@ async function mountRemoteParentForLocalChild(
   });
 }
 
+let nextFederationNavigationConsumer = 0;
+
+async function withFederationNavigationConsumer<T>(
+  options: FederationRpcRequestOptions | undefined,
+  read: (consumerId: string, scopeKey: string) => Promise<T>,
+): Promise<T> {
+  const pool = getDesktopNavigationQueryPool();
+  const scopeKey = `federation:${options?.requesterInstanceId ?? "unknown"}`;
+  const consumerId = `${scopeKey}:read:${++nextFederationNavigationConsumer}`;
+  options?.signal?.throwIfAborted();
+  const release = () => pool.release(consumerId);
+  options?.signal?.addEventListener("abort", release, { once: true });
+  try {
+    const result = await read(consumerId, scopeKey);
+    options?.signal?.throwIfAborted();
+    return result;
+  } finally {
+    options?.signal?.removeEventListener("abort", release);
+    release();
+  }
+}
+
 function localBackendOperations(): FederationBackendOperations {
   const messagingBridge = new DesktopMessagingBackendBridge();
   return {
     async getNavigationQueryPage(request, rpcOptions) {
-      return await getDesktopNavigationQueryStore().readPage({
-        loadIndex: async () => await loadLocalNavigationQueryIndex({
-          backend: request.backend,
-          callerReason: "federation-navigation-query",
-        }),
-        request,
-        scopeKey: rpcOptions?.requesterInstanceId
-          ? `federation:${rpcOptions.requesterInstanceId}`
-          : "federation:unknown",
-      });
+      return withFederationNavigationConsumer(rpcOptions, (consumerId, scopeKey) =>
+        getDesktopNavigationQueryPool().read({ consumerId, scopeKey,
+          request: { ...request, deadlineAt: rpcOptions?.deadlineAt === undefined ? request.deadlineAt
+            : Math.min(request.deadlineAt ?? rpcOptions.deadlineAt, rpcOptions.deadlineAt) },
+          load: ({ signal }) => getDesktopNavigationQueryStore().readPage({
+            loadIndex: () => loadLocalNavigationQueryIndex({ backend: request.backend,
+              callerReason: "federation-navigation-query", signal }),
+            request, scopeKey,
+          }),
+        }));
     },
     async releaseNavigationAttentionView(request, rpcOptions) {
       getDesktopNavigationQueryStore().releaseAttentionView(rpcOptions?.requesterInstanceId
@@ -5509,16 +5531,31 @@ function localBackendOperations(): FederationBackendOperations {
     async removeNavigationDirectory(request) {
       return removeLocalNavigationDirectory(request);
     },
-    async getNavigationLaunchpadConfig(request) {
-      return await getDesktopNavigationDetailService().readLaunchpadConfig(request);
+    async getNavigationLaunchpadConfig(request, rpcOptions) {
+      return withFederationNavigationConsumer(rpcOptions, (consumerId, scopeKey) =>
+        getDesktopNavigationQueryPool().readExact({ kind: "launchpad", consumerId, scopeKey,
+          identity: JSON.stringify([request.directoryKey ?? null]), operation: JSON.stringify([request.knownRevision ?? null]),
+          deadlineAt: rpcOptions?.deadlineAt,
+          load: () => getDesktopNavigationDetailService().readLaunchpadConfig(request),
+        }));
     },
-    async getNavigationSelectedDetail(request) {
-      return await getDesktopNavigationDetailService().readSelectedDetail(
-        request,
-      );
+    async getNavigationSelectedDetail(request, rpcOptions) {
+      return withFederationNavigationConsumer(rpcOptions, (consumerId, scopeKey) =>
+        getDesktopNavigationQueryPool().readExact({ kind: "detail", consumerId, scopeKey, ref: request.ref,
+          identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
+          operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true,
+            request.includeWorkspaceConfiguration === true]), deadlineAt: rpcOptions?.deadlineAt,
+          load: () => getDesktopNavigationDetailService().readSelectedDetail(request),
+        }));
     },
-    async getNavigationQueueProjection(request) {
-      return getDesktopNavigationDetailService().readQueueProjection(request);
+    async getNavigationQueueProjection(request, rpcOptions) {
+      return withFederationNavigationConsumer(rpcOptions, (consumerId, scopeKey) =>
+        getDesktopNavigationQueryPool().readExact({ kind: "queue", consumerId, scopeKey, ref: request.ref,
+          identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
+          operation: JSON.stringify([request.knownRevision ?? null, request.cursor ?? null]),
+          deadlineAt: rpcOptions?.deadlineAt ?? request.deadlineAt,
+          load: async () => getDesktopNavigationDetailService().readQueueProjection(request),
+        }));
     },
     async getProjectPage(request, rpcOptions) {
       const threads = await getDesktopBackendRegistry().listThreadSearchCandidates({

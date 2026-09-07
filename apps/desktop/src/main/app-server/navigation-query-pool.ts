@@ -49,6 +49,8 @@ export class NavigationQueryPool {
 
   async read(params: {
     consumerId: string;
+    /** Authenticated owner-side request scope; never taken from query payloads. */
+    scopeKey?: string;
     request: NavigationQueryRequest;
     load: Load<NavigationQueryPage>;
   }): Promise<NavigationQueryPage> {
@@ -56,7 +58,7 @@ export class NavigationQueryPool {
       ...params,
       kind: "query",
       ownerKey: ownerKey(params.request.federationTarget),
-      key: JSON.stringify(["query", params.request.federationTarget ?? { scope: "local" }, navigationQueryKey(params.request)]),
+      key: JSON.stringify(["query", params.scopeKey ?? "renderer", params.request.federationTarget ?? { scope: "local" }, navigationQueryKey(params.request)]),
       operationKey: JSON.stringify([params.request.cursor ?? null, params.request.anchor ?? null,
         params.request.completeBaselineRevision ?? null, params.request.pageSize ?? 100]),
       deadlineAt: params.request.deadlineAt,
@@ -66,6 +68,7 @@ export class NavigationQueryPool {
   readExact<K extends keyof ExactResources>(params: {
     kind: K;
     consumerId: string;
+    scopeKey?: string;
     owner?: FederationTarget;
     ref?: NavigationIdentity;
     /** Includes the explicit owner and exact identity, without conditional revision or cursor. */
@@ -76,7 +79,7 @@ export class NavigationQueryPool {
   }): Promise<ExactResources[K]> {
     return this.readOperation({ ...params, ownerKey: ownerKey(params.owner),
       threadKey: params.ref ? JSON.stringify([params.ref.backend, params.ref.threadId]) : undefined,
-      key: JSON.stringify([params.kind, ownerKey(params.owner), params.identity]), operationKey: params.operation });
+      key: JSON.stringify([params.kind, params.scopeKey ?? "renderer", ownerKey(params.owner), params.identity]), operationKey: params.operation });
   }
 
   private async readOperation<T extends Result>(params: {
