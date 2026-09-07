@@ -3,7 +3,7 @@ import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
-import { buildNavigationWindowDemand } from "./navigation-window-demand";
+import { buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "./navigation-window-demand";
 import { navigationIdentityKey } from "./navigation-query-state";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import { NavigationWindowQueries, type NavigationWindowQueriesState } from "./navigation-window-queries";
@@ -42,10 +42,16 @@ export function useBoundedNavigationWindow(params: Demand & {
   const selectedRoot = selectedContext?.entries.find((entry) => entry.placement.kind === "root");
   const selectedDirectoryKeys = selectedRoot?.row.linkedDirectories.length
     ? selectedRoot.row.linkedDirectories.map((directory) => classifyDirectory(directory).key) : params.selectedDirectoryKeys;
-  const demand = buildNavigationWindowDemand({ ...params, directories, selectedDirectoryKeys,
+  const demandParams = { ...params, directories, selectedDirectoryKeys,
     selectedRootRef: selectedRoot?.row.ref, selectedContextReady: Boolean(selectedContext),
     indexedDirectoryKeys: new Set((state.resources.get("directory-index")?.state.page?.directories ?? []).map((directory) => directory.key)),
+  };
+  const collections = buildNavigationWindowDemand({ ...demandParams, disclosedParents: [] });
+  const disclosedParents = visibleDisclosedNavigationParents({ collectionIds: collections.keys(),
+    pages: new Map([...state.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : [])),
+    disclosedParents: params.disclosedParents ?? [],
   });
+  const demand = buildNavigationWindowDemand({ ...demandParams, disclosedParents });
   const demandKey = JSON.stringify([...demand]);
   const demandRef = useRef(demand);
   demandRef.current = demand;
