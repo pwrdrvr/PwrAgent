@@ -19,46 +19,79 @@ export function joinCpuProfiles(
     children: [],
   };
   const nodes = [root];
+  const nodesById = new Map([[root.id, root]]);
+  const metaIds = new Map<string, number>();
+  const metaNames = new Set(["(garbage collector)", "(idle)", "(program)"]);
   const samples: number[] = [];
   const timeDeltas: number[] = [];
   const startTime = profiles[0].startTime;
   let sampleTime = startTime;
   let nextId = 2;
   let gapId: number | undefined;
+  let previousEndTime: number | undefined;
+  const appendSample = (id: number, timestamp: number): void => {
+    samples.push(id);
+    timeDeltas.push(timestamp - sampleTime);
+    sampleTime = timestamp;
+  };
   for (const profile of profiles) {
     const ids = new Map<number, number>();
     const profileRoot = profile.nodes[0];
+    const topLevelIds = new Set(profileRoot.children);
     for (const node of profile.nodes) {
-      ids.set(node.id, node === profileRoot ? root.id : nextId++);
+      if (node === profileRoot) {
+        ids.set(node.id, root.id);
+      } else if (topLevelIds.has(node.id) && metaNames.has(node.callFrame.functionName)) {
+        // DevTools keeps only one reference for each V8 meta node. In
+        // particular, every GC sample must use its selected GC node's id.
+        const name = node.callFrame.functionName;
+        const id = metaIds.get(name) ?? nextId++;
+        metaIds.set(name, id);
+        ids.set(node.id, id);
+      } else {
+        ids.set(node.id, nextId++);
+      }
     }
     for (const node of profile.nodes) {
       const children = node.children?.map((id) => ids.get(id)!);
-      if (node === profileRoot) {
-        root.children!.push(...(children ?? []));
+      const id = ids.get(node.id)!;
+      const existing = nodesById.get(id);
+      if (existing) {
+        existing.children = [...new Set([...(existing.children ?? []), ...(children ?? [])])];
+        if (existing !== root && node.hitCount !== undefined) {
+          existing.hitCount = (existing.hitCount ?? 0) + node.hitCount;
+        }
       } else {
-        nodes.push({ ...node, id: ids.get(node.id)!, children });
+        const merged = { ...node, id, children };
+        nodes.push(merged);
+        nodesById.set(id, merged);
       }
     }
-    if (profile.startTime > sampleTime) {
-      if (gapId === undefined) {
-        gapId = nextId++;
-        nodes.push({
-          id: gapId,
-          callFrame: { ...root.callFrame, functionName: "(unrecorded)" },
-        });
-        root.children!.push(gapId);
+    if (previousEndTime !== undefined) {
+      if (profile.startTime > previousEndTime) {
+        if (gapId === undefined) {
+          gapId = nextId++;
+          nodes.push({
+            id: gapId,
+            callFrame: { ...root.callFrame, functionName: "(unrecorded)" },
+          });
+          root.children!.push(gapId);
+        }
+        // Samples describe the frame FROM their timestamp until the next
+        // sample. Close the preceding stack when its recorder stopped.
+        appendSample(gapId, previousEndTime);
       }
-      samples.push(gapId);
-      timeDeltas.push(profile.startTime - sampleTime);
-      sampleTime = profile.startTime;
+      // End the gap exactly when recording resumed. The root boundary also
+      // prevents a previous window's stack carrying into this window's first
+      // sampling interval (or into a GC sample with no interrupted JS stack).
+      appendSample(root.id, profile.startTime);
     }
     let timestamp = profile.startTime;
     for (let index = 0; index < (profile.samples?.length ?? 0); index += 1) {
       timestamp += profile.timeDeltas![index];
-      samples.push(ids.get(profile.samples![index])!);
-      timeDeltas.push(timestamp - sampleTime);
-      sampleTime = timestamp;
+      appendSample(ids.get(profile.samples![index])!, timestamp);
     }
+    previousEndTime = profile.endTime;
   }
   return { nodes, startTime, endTime: profiles.at(-1)!.endTime, samples, timeDeltas };
 }
