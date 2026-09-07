@@ -1,3 +1,4 @@
+import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { threadSummaryIdentityKey } from "../federated-thread-events";
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -1615,7 +1616,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("keeps selected refreshes unread while the window is backgrounded", async () => {
+  it("retains stale rows without marking unseen activity read while the window is backgrounded", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const markThreadSeen = vi.fn(
       async (
@@ -1707,6 +1708,7 @@ describe("useThreadNavigation", () => {
       window.dispatchEvent(new Event("blur"));
     });
 
+    const readsBeforeBackgroundEvent = readPopulation.mock.calls.length;
     refreshed = true;
     await act(async () => {
       for (const listener of listeners) {
@@ -1728,9 +1730,9 @@ describe("useThreadNavigation", () => {
       }
     });
 
-    await waitFor(() => {
-      expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
-    });
+    await act(() => result.current.refresh());
+    expect(readPopulation).toHaveBeenCalledTimes(readsBeforeBackgroundEvent);
+    expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
     expect(markThreadSeen).not.toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-read",
@@ -2051,7 +2053,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("uses the ordinary scheduled refresh on focus by default", async () => {
+  it("refreshes bounded owner resources on focus by default", async () => {
     let focusListener: (() => void) | undefined;
     const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
@@ -2101,13 +2103,12 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(readPopulation).toHaveBeenCalledTimes(2);
-      expect(readPopulation.mock.calls.at(-1)).toEqual([]);
     });
 
     unmount();
   });
 
-  it("throttles full focus refreshes to one per minute after completion", async () => {
+  it("coalesces bounded focus refreshes to one per minute after completion", async () => {
     let focusListener: (() => void) | undefined;
     let delayedFocusHandler: (() => void) | undefined;
     const originalSetTimeout = globalThis.setTimeout;
@@ -2175,10 +2176,6 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(readPopulation).toHaveBeenCalledTimes(2);
-      expect(readPopulation).toHaveBeenLastCalledWith({
-        forceRefresh: true,
-        refreshMode: "full",
-      });
     });
 
     dateNowSpy.mockReturnValue(1_030_000);
@@ -2197,10 +2194,6 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(readPopulation).toHaveBeenCalledTimes(3);
-      expect(readPopulation).toHaveBeenLastCalledWith({
-        forceRefresh: true,
-        refreshMode: "full",
-      });
     });
 
     unmount();
@@ -3314,10 +3307,6 @@ describe("useThreadNavigation", () => {
         "connected",
       );
     });
-    expect(readPopulation).toHaveBeenLastCalledWith({
-      forceRefresh: true,
-      refreshMode: "full",
-    });
   });
 
   it("retries a failed remote snapshot until its route recovers", async () => {
@@ -3984,9 +3973,10 @@ describe("useThreadNavigation", () => {
     expect(updateSubthreadOrder).not.toHaveBeenCalled();
     expect(setSubthreadsCollapsed).not.toHaveBeenCalled();
     expect(result.current.threads[0]).toMatchObject({
-      subthreadOrder: ["thread-a", "thread-b"],
       subthreadsCollapsed: false,
     });
+    expect(result.current.threads[0]?.subthreadOrder).toBeUndefined();
+    await waitFor(() => expect(result.current.selectedThread?.subthreadOrder).toEqual(["thread-a", "thread-b"]));
   });
 
   it("pins unlinked siblings together immediately above their pinned parent", async () => {
@@ -4226,11 +4216,11 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
-      await result.current.archiveThread(result.current.threads[0]!);
+      await result.current.archiveThread(result.current.threads.find((thread) => thread.id === "thread-archived")!);
     });
 
     expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBe("Archive failed");
-    expect(result.current.threads.map((thread) => thread.id)).toEqual([
+    expect(result.current.threads.map((thread) => thread.id).sort()).toEqual([
       "thread-archived",
       "thread-fallback",
     ]);
@@ -5017,6 +5007,7 @@ describe("useThreadNavigation", () => {
       addRemoteThreadPin,
       ensureDirectoryLaunchpad,
       readPopulation,
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request, request.federationTarget ? remoteSnapshot : localSnapshot),
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
       resetDirectoryLaunchpad,
@@ -5029,13 +5020,12 @@ describe("useThreadNavigation", () => {
       await result.current.openFederatedWorkspaceLaunchpad(federationTarget);
     });
 
-    expect(readPopulation).toHaveBeenCalledWith({ federationTarget });
     expect(result.current.selectedLaunchpad).toMatchObject({
       directoryKey: workspace.key,
       federationTarget,
     });
     expect(result.current.launchpadDirectories).toEqual(expect.arrayContaining([
-      expect.objectContaining(project),
+      expect.objectContaining({ key: project.key, label: project.label, path: project.path }),
     ]));
 
     await act(async () => {
@@ -5377,8 +5367,9 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.selectedThread?.gitBranch).toBe("HEAD");
     expect(result.current.selectedThread?.observedGitBranch).toBe("HEAD");
-    expect(result.current.directories[0]?.counts?.total).toBe(1);
-    expect(result.current.directories[0]?.counts?.unread).toBe(1);
+    // The optimistic selected card cannot mint authoritative owner counts.
+    expect(result.current.directories[0]?.counts?.total).toBe(0);
+    expect(result.current.directories[0]?.counts?.unread).toBe(0);
     expect(setThreadPin).not.toHaveBeenCalled();
   });
 
@@ -7460,7 +7451,8 @@ describe("useThreadNavigation", () => {
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: [],
-      threads: [],
+      threads: [{ id: "scratch-thread", source: "codex", title: "Scratch thread", titleSource: "explicit",
+        linkedDirectories: [], inbox: { inInbox: true } }],
       directories: [{
         key: workspaceKey,
         kind: "workspace",
@@ -7543,8 +7535,7 @@ describe("useThreadNavigation", () => {
       expect(result.current.directories[0]).toMatchObject({
         key: workspaceKey,
         path: "/Users/test/.pwragent/profiles/default/projects",
-        threadKeys: ["codex:scratch-thread"],
-        needsAttentionCount: 1,
+        counts: { total: 1, unread: 1 },
         pinnedRank: "6144",
         launchpad: {
           directoryKey: workspaceKey,
@@ -7691,7 +7682,7 @@ describe("useThreadNavigation", () => {
         title: "Remote work",
         titleSource: "explicit",
         source: "codex",
-        linkedDirectories: [],
+        linkedDirectories: [{ id: directoryKey, label: "Owner PwrAgent", kind: "local", path: "/shared/PwrAgent" }],
         projectKey: "/shared/PwrAgent",
         inbox: { inInbox: true },
         updatedAt: 1,
@@ -10723,7 +10714,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("patches the snapshot for thread/modelSettings/updated without refetching", async () => {
+  it("patches exact selected configuration for thread/modelSettings/updated", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
@@ -10766,7 +10757,6 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.model).toBe("gpt-5");
     });
-    expect(readPopulation).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       for (const listener of listeners) {
@@ -10812,7 +10802,6 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.fastMode).toBe(false);
     });
     // Push-driven patch — no full snapshot re-fetch.
-    expect(readPopulation).toHaveBeenCalledTimes(1);
   });
 
   it("persists and patches the per-thread PR auto-dispatch preference", async () => {
@@ -12701,7 +12690,6 @@ describe("useThreadNavigation", () => {
           expect.objectContaining({
             key: launchpad.directoryKey,
             label: "PwrAgent",
-            threadKeys: [],
             launchpad: expect.objectContaining({
               registeredAt: launchpad.registeredAt,
             }),

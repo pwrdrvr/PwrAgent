@@ -61,10 +61,14 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
       listeners.add(listener);
       if (!unsubscribeSource) unsubscribeSource = api.onAgentEvent?.((event) => {
         if (population) {
+          const populationTarget = population.federationTarget;
           population = { ...population, threads: population.threads.map((thread) => {
             if (event.notification.method === "pullRequest/status/updated"
               && (typeof event.notification.params.prKey !== "string" || !prKeys.get(thread)?.has(event.notification.params.prKey))) return thread;
-            const next = applyNavigationThreadEvent(thread, event);
+            const ownerEvent = !thread.federation && populationTarget?.scope === "remote"
+              && federationTargetsEqual(event.federationTarget, populationTarget)
+              ? { ...event, federationTarget: undefined } : event;
+            const next = applyNavigationThreadEvent(thread, ownerEvent);
             if (next !== thread) prKeys.set(next, next.prs === thread.prs
               ? prKeys.get(thread) ?? new Set() : new Set(next.prs?.map(buildPullRequestStatusKey)));
             return next;
@@ -97,8 +101,12 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
       // pending refresh, including collection reads scheduled in a microtask.
       await Promise.resolve();
       const value = withSeen(await read());
-      const thread = value.threads.find((thread) => thread.source === request.ref.backend && thread.id === request.ref.threadId
-        && federationTargetsEqual(thread.federation?.ref.target, request.federationTarget));
+      const candidate = value.threads.find((thread) => thread.source === request.ref.backend && thread.id === request.ref.threadId
+        && federationTargetsEqual(thread.federation?.ref.target ?? value.federationTarget, request.federationTarget));
+      const target = request.federationTarget;
+      const thread = candidate && !candidate.federation && target?.scope === "remote"
+        ? { ...candidate, federation: { ref: { backend: candidate.source, threadId: candidate.id, target }, instanceLabel: target.instanceId } }
+        : candidate;
       return { protocol: 2, ref: request.ref, revision: "fixture-detail", readiness: "ready", identity: thread ? "present" : "unresolved", thread,
         ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: value.directories.filter((directory) =>
           thread?.linkedDirectories.some((linked) => linked.path === directory.path || linked.worktreePath === directory.path)) } : {}) };

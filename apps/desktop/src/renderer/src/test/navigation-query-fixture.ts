@@ -2,6 +2,7 @@ import { threadSummaryIdentityKey } from "../lib/federated-thread-events";
 import { navigationThreadSelectionKey } from "../lib/navigation-query-state";
 import {
   classifyDirectory,
+  buildThreadIdentityKey,
   rankThreadJumpMatches,
   type NavigationDirectorySummary,
   type NavigationQueryPage,
@@ -50,7 +51,9 @@ export function navigationQueryFixture(
     return candidates.length === 1 ? key(candidates[0]!) : declared;
   };
   const inDirectory = (directory: FixtureDirectory) => all.filter((thread) =>
-    directory.threadKeys?.includes(key(thread)) || thread.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key));
+    directory.threadKeys?.includes(key(thread))
+      || (target?.scope === "remote" && !hasMountedRows && directory.threadKeys?.includes(buildThreadIdentityKey(thread.source, thread.id)))
+      || thread.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key));
   let threads = all;
   if (query.kind === "group-members") {
     threads = [];
