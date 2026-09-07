@@ -4064,13 +4064,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   async readRemoteDirectoryOverlays(params: {
     instanceId: string;
+    directoryKeys?: string[];
   }): Promise<Record<string, DirectoryOverlayState>> {
-    const rows = this.stateDb.raw
-      .prepare(
+    const keys = params.directoryKeys ? [...new Set(params.directoryKeys)] : undefined;
+    if (keys && keys.length > 101) throw new Error("Remote directory overlay lookup exceeds the bounded page budget.");
+    if (keys && !keys.length) return {};
+    const rows = (keys
+      ? this.stateDb.raw.prepare(
         `SELECT directory_key, payload FROM remote_directory_overlay
-         WHERE instance_id = ?`,
-      )
-      .all(params.instanceId) as Array<{
+         WHERE instance_id = ? AND directory_key IN (SELECT value FROM json_each(?))`,
+      ).all(params.instanceId, JSON.stringify(keys))
+      : this.stateDb.raw.prepare(
+        `SELECT directory_key, payload FROM remote_directory_overlay WHERE instance_id = ?`,
+      ).all(params.instanceId)) as Array<{
         directory_key: string;
         payload: string;
       }>;

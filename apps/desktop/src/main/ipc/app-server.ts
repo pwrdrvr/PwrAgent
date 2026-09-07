@@ -91,6 +91,8 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type NavigationDirectorySummary,
+  type NavigationDirectoryRow,
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationQueryPage,
@@ -2153,11 +2155,32 @@ class DesktopAppServerService {
     rpcOptions?: { deadlineAt: number; signal: AbortSignal },
   ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      return await getDesktopFederationRuntime().remoteNavigationQueryPage(
+      const page = await getDesktopFederationRuntime().remoteNavigationQueryPage(
         request.federationTarget,
-        request,
+        // Owner revisions cannot certify viewer-owned directory disclosure.
+        // Always fetch the bounded page before applying that independent state.
+        { ...request, completeBaselineRevision: undefined },
         rpcOptions,
       );
+      rpcOptions?.signal.throwIfAborted();
+      const directoryKeys = [...new Set([...(page.directories ?? []).map((directory) => directory.key),
+        ...(page.selectionDirectory ? [page.selectionDirectory.key] : [])])];
+      if (!directoryKeys.length) return page;
+      const overlays = await this.getOverlayStore().readRemoteDirectoryOverlays({
+        instanceId: request.federationTarget.instanceId, directoryKeys,
+      });
+      rpcOptions?.signal.throwIfAborted();
+      const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
+        const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
+        return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
+          ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
+      };
+      const result = { ...page, directories: page.directories?.map(apply),
+        selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
+      if (Buffer.byteLength(JSON.stringify(result), "utf8") > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+        throw new Error("Navigation page with viewer preferences exceeds the byte budget. Request a smaller page.");
+      }
+      return result;
     }
     return await getDesktopNavigationQueryStore().readPage({
       loadIndex: async () => {

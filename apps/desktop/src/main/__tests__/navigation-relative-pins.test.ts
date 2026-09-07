@@ -8,6 +8,28 @@ import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 afterEach(() => vi.unstubAllEnvs());
 
+it("reads only requested remote directory preferences with zero writes", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    for (let index = 0; index < 150; index += 1) {
+      await store.setRemoteDirectoryThreadsCollapsed({ instanceId: "peer", directoryKey: `directory:${index}`, collapsed: true });
+    }
+    const { result, writes } = await measureSqliteWrites(() => store.readRemoteDirectoryOverlays({
+      instanceId: "peer", directoryKeys: ["directory:100", "directory:100"],
+    }));
+    expect(Object.keys(result)).toEqual(["directory:100"]);
+    expect(result["directory:100"]?.directoryThreadsCollapsed).toBe(true);
+    expectSqliteWriteBudget({ scenario: "navigation-remote-directory-preference-read", writes,
+      note: "Exact viewer directory preference reads for a bounded remote page add zero commits and 0 MB/day WAL" });
+    await expect(store.readRemoteDirectoryOverlays({ instanceId: "peer", directoryKeys: [] })).resolves.toEqual({});
+    await expect(store.readRemoteDirectoryOverlays({ instanceId: "other-peer", directoryKeys: ["directory:100"] })).resolves.toEqual({});
+    await expect(store.readRemoteDirectoryOverlays({ instanceId: "peer", directoryKeys: Array.from({ length: 102 }, (_, i) => String(i)) }))
+      .rejects.toThrow("bounded page budget");
+  } finally { db.close(); }
+});
+
 it("unlinks and places one child without rewriting unloaded pins, with a bounded write cost", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const db = openInMemoryStateDb();

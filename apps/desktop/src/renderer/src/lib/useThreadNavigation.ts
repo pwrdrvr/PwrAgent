@@ -3008,9 +3008,6 @@ export function useThreadNavigation(
   const focusRefreshQueuedRef = useRef(false);
   const lastFocusRefreshCompletedAtRef = useRef(0);
   const remotePeerDisconnectedRef = useRef(false);
-  const remoteDirectoryThreadsCollapsedOverridesRef = useRef(
-    new Map<string, boolean>(),
-  );
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
@@ -4358,17 +4355,13 @@ export function useThreadNavigation(
           directoryKey: string;
           collapsed: boolean;
         };
-        const viewerCollapsed = windowTarget
-          && isRemoteFederationTarget(windowTarget)
-          ? remoteDirectoryThreadsCollapsedOverridesRef.current.get(directoryKey)
-          : undefined;
         setState((current) => ({
           ...current,
           rows: updateDirectoryThreadsCollapsedInLoadedRows(
             current.rows,
             {
               directoryKey,
-              collapsed: viewerCollapsed ?? collapsed,
+              collapsed,
             },
           ),
         }));
@@ -4448,7 +4441,10 @@ export function useThreadNavigation(
           upsertLaunchpadDirectory(nextDirectories, launchpad, {
             preserveExistingDirectoryAuthority: Boolean(rendererFederationTarget),
           }),
-        loadedDirectoryRows(state.rows) ?? [],
+        loadedDirectoryRows(state.rows).map((directory) => {
+          const expanded = directoryDisclosure.unpinnedExpandedByKey[directory.key];
+          return expanded === undefined ? directory : { ...directory, directoryThreadsCollapsed: !expanded };
+        }),
       );
 
       if (!optimisticThread) {
@@ -4470,6 +4466,7 @@ export function useThreadNavigation(
       optimisticThread,
       state.rows,
       rendererFederationTarget,
+      directoryDisclosure.unpinnedExpandedByKey,
     ]
   );
 
@@ -7642,12 +7639,7 @@ export function useThreadNavigation(
       }
 
       const federationTarget = readRendererFederationTarget();
-      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
-        remoteDirectoryThreadsCollapsedOverridesRef.current.set(
-          directory.key,
-          collapsed,
-        );
-      }
+      directoryDisclosure.setUnpinnedExpandedByKey((current) => ({ ...current, [directory.key]: !collapsed }));
 
       setState((current) => ({
         ...current,
@@ -7676,16 +7668,13 @@ export function useThreadNavigation(
             },
           ),
         }));
-      } catch {
-        if (federationTarget && isRemoteFederationTarget(federationTarget)) {
-          remoteDirectoryThreadsCollapsedOverridesRef.current.delete(
-            directory.key,
-          );
-        }
-        await refresh();
+      } catch (error) {
+        // Disclosure still controls this window's query demand if saving the
+        // preference fails. Owner configuration cannot undo a viewer choice.
+        setSetThreadModelSettingsError(error instanceof Error ? error.message : String(error));
       }
     },
-    [refresh, setDirectoryThreadsCollapsedRequest],
+    [setDirectoryThreadsCollapsedRequest, directoryDisclosure.setUnpinnedExpandedByKey],
   );
 
   const updateThreadExecutionMode = useCallback(

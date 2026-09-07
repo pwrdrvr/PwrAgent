@@ -82,6 +82,34 @@ it("rejects partial full-order vectors before sending a pin mutation", async () 
   expect(reorderDirectoryPins).not.toHaveBeenCalled();
 });
 
+it("uses viewer directory disclosure for page demand across owner refresh and preference-save failure", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  const key = "directory:/project";
+  f.read.mockImplementation(async (request) => {
+    const page = await originalRead(request);
+    return request.query.kind === "directory-index" ? { ...page, directories: [{ key, kind: "directory", label: "Project", path: "/project",
+      counts, pinnedRootCount: 1, unpinnedRootCount: 999, launchpadPresent: false, directoryThreadsCollapsed: false }] } : page;
+  });
+  const setDirectoryThreadsCollapsed = vi.fn<NonNullable<DesktopApi["setDirectoryThreadsCollapsed"]>>(async () => {
+    throw new Error("Preference storage unavailable");
+  });
+  const api = { ...f.api, setDirectoryThreadsCollapsed };
+  const { result } = renderHook(() => useThreadNavigation(api));
+  await waitFor(() => expect(result.current.directories.some((directory) => directory.key === key)).toBe(true));
+  act(() => {
+    result.current.setBrowseMode("directories");
+    result.current.directoryDisclosure.setExpandedByKey({ [key]: true });
+  });
+  await waitFor(() => expect(f.read.mock.calls.some(([request]) => request.query.kind === "directory" && request.query.roots === "all")).toBe(true));
+  await act(() => result.current.setDirectoryThreadsCollapsed(result.current.directories.find((directory) => directory.key === key)!, true));
+  await waitFor(() => expect(f.read.mock.calls.some(([request]) => request.query.kind === "directory" && request.query.roots === "pinned")).toBe(true));
+  await act(() => result.current.refresh());
+  expect(result.current.directories.find((directory) => directory.key === key)?.directoryThreadsCollapsed).toBe(true);
+  expect(result.current.pagedNavigation.resources.get(`directory:${key}`)?.state.request.query).toMatchObject({ roots: "pinned" });
+  expect(f.legacy).not.toHaveBeenCalled();
+});
+
 it("loads one owner lens page and exact selection, preserving complete counts independently", async () => {
   const f = fixture();
   const { result, unmount } = renderHook(() => useThreadNavigation(f.api));

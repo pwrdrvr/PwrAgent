@@ -140,6 +140,7 @@ const federationMock = vi.hoisted(() => {
       remoteBackend: vi.fn(() => remoteBackend),
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
+      remoteNavigationQueryPage: vi.fn(),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
       ungroupRemoteChildrenOfArchivedThread: vi.fn(async () => undefined),
     },
@@ -2219,6 +2220,31 @@ describe("app server ipc", () => {
     await expect(
       handler?.({}, { federationTarget, forceRefresh: true, refreshMode: "full" }),
     ).resolves.toBe(snapshot);
+  });
+
+  it("overlays only a bounded remote page's viewer directory preferences without accepting owner-only unchanged proof", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "peer_v2_disclosure" };
+    const directoryKey = "directory:/remote/project";
+    readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } });
+    const counts = { total: 100, active: 0, unread: 0, review: 0 };
+    const directory = { key: directoryKey, kind: "directory", label: "Project", counts,
+      pinnedRootCount: 0, unpinnedRootCount: 100, launchpadPresent: true, directoryThreadsCollapsed: false };
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2, queryKey: "directories", generation: "g",
+      ownerEpoch: "owner", countsRevision: "r", counts, coverage: { state: "complete" }, entries: [],
+      directories: [directory], selectionDirectory: directory, complete: true });
+    registerAppServerIpcHandlers();
+    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)?.({ sender: { id: 90001, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", federationTarget, query: { kind: "directory-index" },
+      completeBaselineRevision: "owner-only-revision",
+    }) as { directories: Array<{ directoryThreadsCollapsed: boolean }>; selectionDirectory: { directoryThreadsCollapsed: boolean } };
+    expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenLastCalledWith(federationTarget,
+      expect.objectContaining({ completeBaselineRevision: undefined }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(readRemoteDirectoryOverlays).toHaveBeenLastCalledWith({ instanceId: federationTarget.instanceId, directoryKeys: [directoryKey] });
+    expect(page.directories[0]?.directoryThreadsCollapsed).toBe(true);
+    expect(page.selectionDirectory.directoryThreadsCollapsed).toBe(true);
+    expect(directory.directoryThreadsCollapsed).toBe(false);
   });
 
   it("overlays viewer-owned directory disclosure state on remote snapshots", async () => {
