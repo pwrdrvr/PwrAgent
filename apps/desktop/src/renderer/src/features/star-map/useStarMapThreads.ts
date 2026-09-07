@@ -190,6 +190,7 @@ export function useStarMapThreads(params: {
   const nextOwnerGeneration = useRef(0);
   const ownerGenerations = useRef(new Map<string, number>());
   const firstPageReads = useRef(new Map<string, { generation: number; ownerGeneration: number; promise: Promise<void> }>());
+  const exactDemands = useRef(new Map<string, { key: string; cancelled: boolean; consumerId?: string }>());
   const connectedIdsRef = useRef(connectedIds);
   connectedIdsRef.current = connectedIds;
   const eventRefreshTimersRef = useRef(
@@ -395,8 +396,17 @@ export function useStarMapThreads(params: {
     const getNavigationQueryPage = desktopApi?.getNavigationQueryPage;
     if (!params.enabled || !getNavigationQueryPage) return;
     const generation = generationRef.current;
-    let cancelled = false;
-    const exactConsumers = new Set<string>();
+    const demandKey = (instanceId: string, identities: readonly NavigationIdentity[]) => JSON.stringify([
+      generation, ownerGenerations.current.get(instanceId),
+      identities.map((ref) => JSON.stringify([ref.backend, ref.threadId, ref.ownerInstanceId ?? null])).sort(),
+    ]);
+    for (const [instanceId, demand] of exactDemands.current) {
+      const identities = params.demandedIdentitiesByInstance?.get(instanceId);
+      if (identities?.length && ownerGenerations.current.has(instanceId) && demand.key === demandKey(instanceId, identities)) continue;
+      demand.cancelled = true;
+      if (demand.consumerId) void desktopApi?.releaseNavigationQuery?.(demand.consumerId).catch(() => undefined);
+      exactDemands.current.delete(instanceId);
+    }
     for (const instanceId of stateRef.current.queriesByInstance.keys()) {
       if (!params.demandedIdentitiesByInstance?.get(instanceId)?.length) navigationExactRowsBudget.release(`${viewId}:${instanceId}:exact`);
     }
@@ -415,11 +425,16 @@ export function useStarMapThreads(params: {
       if (identities.length === 0) continue;
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       if (ownerGeneration === undefined) continue;
+      if (exactDemands.current.has(instanceId)) continue;
+      const demand: { key: string; cancelled: boolean; consumerId?: string } = { key: demandKey(instanceId, identities), cancelled: false };
+      exactDemands.current.set(instanceId, demand);
+      const isCancelled = () => demand.cancelled || generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration;
       void withQueryConsumer(instanceId, async (consumerId) => {
-        exactConsumers.add(consumerId);
+        demand.consumerId = consumerId;
         if (!stateRef.current.queriesByInstance.has(instanceId)) {
           await refreshInstance(instanceId);
         }
+        if (isCancelled()) return;
         const key = `${viewId}:${instanceId}:exact`;
         metadataKeys.current.add(key);
         const lease = navigationExactRowsBudget.begin(key);
@@ -432,7 +447,7 @@ export function useStarMapThreads(params: {
             const page = await readNavigationQueryRange({
               request: { ...exactRequest({ identities: identities.slice(offset, offset + 100), instanceId }), deadlineAt },
               read: (request) => getNavigationQueryPage(request, consumerId),
-              isCancelled: () => cancelled || generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration,
+              isCancelled,
               maxBytes: remainingBytes,
               reserveBytes: lease.reserve,
               releaseBytes: lease.unreserve,
@@ -440,7 +455,7 @@ export function useStarMapThreads(params: {
             remainingBytes -= encoder.encode(JSON.stringify(page)).byteLength;
             exactThreads = mergeEntries(exactThreads, page.entries);
           }
-          if (cancelled || generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration) return;
+          if (isCancelled()) return;
           lease.commit();
           setState((current) => {
             const existing = current.queriesByInstance.get(instanceId);
@@ -455,19 +470,27 @@ export function useStarMapThreads(params: {
         } finally { lease.dispose(); }
       }).catch(() => undefined);
     }
-    return () => {
-      cancelled = true;
-      for (const consumerId of exactConsumers) void desktopApi?.releaseNavigationQuery?.(consumerId).catch(() => undefined);
-    };
   }, [
     desktopApi,
     viewId,
     connectedIds,
     params.demandedIdentitiesByInstance,
     params.enabled,
+    params.refreshNonce,
     refreshInstance,
     withQueryConsumer,
   ]);
+
+  useEffect(() => {
+    const demands = exactDemands.current;
+    return () => {
+      for (const demand of demands.values()) {
+        demand.cancelled = true;
+        if (demand.consumerId) void desktopApi?.releaseNavigationQuery?.(demand.consumerId).catch(() => undefined);
+      }
+      demands.clear();
+    };
+  }, [desktopApi, params.enabled, readFirstPageForGeneration]);
 
   useEffect(() => {
     if (!params.enabled) return;

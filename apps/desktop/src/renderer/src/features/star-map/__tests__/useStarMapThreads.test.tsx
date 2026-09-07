@@ -82,6 +82,37 @@ function buildDesktopApi(): DesktopApi {
 }
 
 describe("useStarMapThreads", () => {
+  it("keeps another owner's pending card query through a peer reconnect", async () => {
+    const desktopApi = buildDesktopApi();
+    const normal = desktopApi.getNavigationQueryPage!;
+    let finish!: (page: NavigationQueryPage) => void;
+    const pending = new Promise<NavigationQueryPage>((resolve) => { finish = resolve; });
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>((request) => {
+      const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : "local";
+      if (request.query.kind === "exact") return owner === "b" ? pending : Promise.resolve(queryPage({ instanceId: owner, threadId: `card-${owner}` }));
+      return normal(request);
+    });
+    const release = vi.fn(async () => {});
+    desktopApi.getNavigationQueryPage = read;
+    desktopApi.releaseNavigationQuery = release;
+    const demands = new Map(["a", "b"].map((owner) => [owner, [{ backend: "codex" as const, threadId: `card-${owner}`, ownerInstanceId: owner }]]));
+    const hook = renderHook(({ peers }) => useStarMapThreads({ desktopApi, peers, enabled: true, demandedIdentitiesByInstance: demands }), {
+      initialProps: { peers: [peer("a", "connected"), peer("b", "connected")] },
+    });
+    const cardReads = () => read.mock.calls.filter(([request]) => request.query.kind === "exact"
+      && request.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "b");
+    await waitFor(() => expect(cardReads()).toHaveLength(1));
+    const consumer = cardReads()[0]![1];
+    hook.rerender({ peers: [peer("a", "disconnected"), peer("b", "connected")] });
+    hook.rerender({ peers: [peer("a", "connected"), peer("b", "connected")] });
+    await waitFor(() => expect(hook.result.current.staleInstanceIds.has("a")).toBe(false));
+    expect(cardReads()).toHaveLength(1);
+    expect(release).not.toHaveBeenCalledWith(consumer);
+    await act(async () => finish(queryPage({ instanceId: "b", threadId: "card-b" })));
+    await waitFor(() => expect(hook.result.current.threadsByInstance.get("b")?.some((thread) => thread.id === "card-b")).toBe(true));
+    hook.unmount();
+  });
+
   it("reloads only the peer that reconnects and ignores duplicate peer-directory updates", async () => {
     const desktopApi = buildDesktopApi();
     const read = vi.mocked(desktopApi.getNavigationQueryPage!);
