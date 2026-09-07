@@ -24,6 +24,8 @@ export type NavigationSelectionState = {
   pendingSequence: number;
   readiness: "loading" | "ready" | "failed";
   detail?: NavigationSelectedDetailResponse;
+  /** A canonical event invalidated this detail revision. */
+  stale?: boolean;
   error?: string;
 };
 
@@ -140,7 +142,7 @@ export function selectNavigationIdentity(
     pendingSequence: (current?.pendingSequence ?? 0) + 1,
     readiness: "loading",
     ...(current && navigationIdentityKey(current.ref) === navigationIdentityKey(ref)
-      ? { detail: current.detail }
+      ? { detail: current.detail, stale: current.stale }
       : {}),
   };
 }
@@ -156,7 +158,7 @@ export function applyNavigationSelectedDetail(params: {
     throw new Error("Selected detail does not match the requested owner and thread.");
   }
   if (detail.unchanged) {
-    if (!state.detail || state.detail.revision !== detail.revision) {
+    if (state.stale || !state.detail || state.detail.revision !== detail.revision) {
       throw new Error("Selected detail unchanged response has no matching baseline.");
     }
     return { ...state, readiness: state.detail.readiness, error: undefined };
@@ -167,5 +169,5 @@ export function applyNavigationSelectedDetail(params: {
   if (detail.readiness === "ready" && detail.identity === "present" && !detail.thread) {
     throw new Error("Selected thread configuration is not ready.");
   }
-  return { ...state, detail, readiness: detail.readiness, error: undefined };
+  return { ...state, detail, stale: false, readiness: detail.readiness, error: undefined };
 }
