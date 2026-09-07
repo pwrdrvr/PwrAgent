@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FederationTarget, FederationPeerSummary, NavigationIdentity } from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationThreadEvent } from "./navigation-thread-event";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
@@ -26,6 +27,7 @@ export function useNavigationSelectedDetail(params: {
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const currentRef = useRef<NavigationSelectionState | undefined>(undefined);
+  const pullRequestKeysRef = useRef(new Set<string>());
   const sequenceRef = useRef(0);
   const connectionRef = useRef<{ owner: string; status: string } | undefined>(undefined);
   const [state, setState] = useState<NavigationSelectionState>();
@@ -54,6 +56,7 @@ export function useNavigationSelectedDetail(params: {
       });
       if (sequenceRef.current !== sequence) return;
       const next = applyNavigationSelectedDetail({ state: started, sequence, detail });
+      pullRequestKeysRef.current = new Set(next.detail?.thread?.prs?.map(buildPullRequestStatusKey));
       currentRef.current = next;
       setState(next);
     } catch (error) {
@@ -116,8 +119,13 @@ export function useNavigationSelectedDetail(params: {
         return;
       }
       if (!selected || eventOwner !== selectedOwner) return;
+      if (notification.method === "pullRequest/status/updated"
+        && (typeof notification.params.prKey !== "string" || !pullRequestKeysRef.current.has(notification.params.prKey))) return;
       const currentThread = currentRef.current?.detail?.thread;
       const patchedThread = currentThread ? applyNavigationThreadEvent(currentThread, event) : undefined;
+      if (patchedThread && notification.method === "thread/pullRequests/updated") {
+        pullRequestKeysRef.current = new Set(patchedThread.prs?.map(buildPullRequestStatusKey));
+      }
       const exactThreadEvent = event.backend === selected.backend
         && (("threadId" in notification.params && notification.params.threadId === selected.threadId)
           || ("parentThreadId" in notification.params && notification.params.parentThreadId === selected.threadId)
