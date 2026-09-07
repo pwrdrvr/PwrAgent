@@ -35,6 +35,7 @@ const MAX_ROW_NESTED_RECORDS = 16;
 export type NavigationQueryMaterialization = {
   coverage: NavigationQueryCoverage;
   counts: NavigationCounts;
+  collectionSize?: number;
   facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
   entries: NavigationQueryEntry[];
@@ -388,6 +389,11 @@ function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryR
 }
 
 function normalizeQuery(query: NavigationQuery): NavigationQuery {
+  if (query.kind === "messaging-threads" || query.kind === "messaging-projects") {
+    return { ...query, filter: query.filter?.trim().toLowerCase() || undefined,
+      ...(query.allowedBackends ? { allowedBackends: [...new Set(query.allowedBackends)].sort() } : {}) };
+  }
+
   if (query.kind === "star-map") {
     return { kind: "star-map", filters: Object.fromEntries(Object.entries(query.filters)
       .filter(([, value]) => value !== "neutral").sort(([left], [right]) => left.localeCompare(right))) };
@@ -490,6 +496,23 @@ function selectQueryThreads(params: {
 }): NavigationThreadSummary[] {
   const ordinaryThreads = params.index.threads.filter(isOrdinaryThread);
   const query = params.query;
+  if (query.kind === "messaging-threads" || query.kind === "messaging-projects") {
+    const directory = query.directoryKey ? params.index.directories.find((candidate) => candidate.key === query.directoryKey) : undefined;
+    const members = directory ? new Set(directory.threadKeys.flatMap((key) => {
+      const thread = params.threadsByLegacyKey.get(key);
+      return thread ? [threadKey(thread)] : [];
+    })) : undefined;
+    const filter = query.kind === "messaging-threads" ? query.filter?.trim().toLowerCase() : undefined;
+    return ordinaryThreads.filter((thread) => {
+      if (query.agentOnly && !thread.agent) return false;
+      if (query.excludeFullAccess && thread.executionMode === "full-access") return false;
+      if (query.allowedBackends && !query.allowedBackends.includes(thread.source)) return false;
+      if (query.directoryKey && (!members || !members.has(threadKey(thread)))) return false;
+      return !filter || [thread.id, thread.title, thread.summary, thread.agent?.name, thread.agent?.instructions, thread.projectKey,
+        ...thread.linkedDirectories.flatMap((linked) => [linked.label, linked.path, linked.worktreePath])]
+        .some((value) => value?.toLowerCase().includes(filter));
+    }).sort(compareUpdated);
+  }
   if (query.kind === "directory-index" || query.kind === "star-map-geometry" || query.kind === "model-inventory") {
     return [];
   }
@@ -637,6 +660,28 @@ export function projectNavigationQuery(params: {
         - (members.get(navigationAttentionIdentity(left))?.rank ?? 0);
     });
   }
+  if (query.kind === "messaging-projects") {
+    const eligibleKeys = new Set(selectedThreads.map(threadKey));
+    const eligibleByLegacyKey = new Map([...threadsByLegacyKey].filter(([, thread]) => eligibleKeys.has(threadKey(thread))));
+    let sourceDirectories = params.index.directories;
+    if (query.scratchpadFirst) {
+      const scratchpads = sourceDirectories.filter((directory) => directory.kind === "workspace")
+        .sort((left, right) => (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0) || left.key.localeCompare(right.key));
+      if (scratchpads.length > 1) {
+        sourceDirectories = [{ ...scratchpads[0]!, threadKeys: [...new Set(scratchpads.flatMap((directory) => directory.threadKeys))] },
+          ...sourceDirectories.filter((directory) => directory.kind !== "workspace")];
+      }
+    }
+    const filter = query.filter?.trim().toLowerCase();
+    const directories = buildDirectoryRows({ snapshot: { ...params.index, directories: sourceDirectories }, threadsByLegacyKey: eligibleByLegacyKey })
+      .filter((directory) => !filter || [directory.key, directory.label, directory.path,
+        query.scratchpadFirst && directory.kind === "workspace" ? "Workspaces Scratchpad" : undefined]
+        .some((value) => value?.toLowerCase().includes(filter)))
+      .sort((left, right) => (query.scratchpadFirst ? Number(right.kind === "workspace") - Number(left.kind === "workspace") : 0)
+        || (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0) || left.label.localeCompare(right.label));
+    return { coverage: params.index.coverage ?? { state: "complete" }, counts: countsForThreads(selectedThreads),
+      collectionSize: directories.length, directories, entries: [], queryKey: navigationQueryKey(params.request) };
+  }
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread, parentCandidates);
     return {
@@ -667,12 +712,14 @@ export function projectNavigationQuery(params: {
       ? params.index.threads.filter(isStarMapOwnerThread)
       : query.kind === "exact"
       || query.kind === "search"
+      || query.kind === "messaging-threads"
       || query.kind === "children"
       ? selectedThreads
       : params.index.threads;
   return {
     coverage: params.index.coverage ?? { state: "complete" },
     counts: countsForThreads(countsThreads),
+    ...(query.kind === "messaging-threads" ? { collectionSize: entries.length } : {}),
     ...(query.kind === "star-map" ? {
       facets: countNavigationStarMapFacets(
         [...new Map(params.index.threads.filter(isStarMapOwnerThread).map((thread) => [threadKey(thread), thread])).values()]

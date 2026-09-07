@@ -142,6 +142,14 @@ function validateRequest(request: NavigationQueryRequest): void {
       throw new NavigationQueryError("navigation_invalid_request", "Invalid Star Map filter selection.");
     }
   }
+  if (request.query.kind === "messaging-threads" || request.query.kind === "messaging-projects") {
+    const query = request.query;
+    if ((query.allowedBackends !== undefined && (!Array.isArray(query.allowedBackends) || query.allowedBackends.length > 64
+      || query.allowedBackends.some((backend) => typeof backend !== "string" || !backend)))
+      || (query.filter !== undefined && (typeof query.filter !== "string" || query.filter.length > 256))) {
+      throw new NavigationQueryError("navigation_invalid_request", "Messaging queries accept at most 64 backends and a 256-character filter.");
+    }
+  }
   if (request.query.kind === "directory-index" && request.query.keys !== undefined
     && (!Array.isArray(request.query.keys) || request.query.keys.length > 100
       || request.query.keys.some((key) => typeof key !== "string" || !key))) {
@@ -187,6 +195,7 @@ function pageBase(params: {
     countsRevision: generation.completeRevision,
     coverage: generation.materialization.coverage,
     counts: generation.materialization.counts,
+    ...(generation.materialization.collectionSize !== undefined ? { collectionSize: generation.materialization.collectionSize } : {}),
     ...(generation.materialization.facets ? { facets: generation.materialization.facets } : {}),
   };
 }

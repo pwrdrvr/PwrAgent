@@ -54,6 +54,47 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it("filters messaging eligibility before paging and reports the complete collection count", async () => {
+    const threads = Array.from({ length: 100 }, (_, index) => ({ ...thread(String(index)),
+      executionMode: index % 2 ? "full-access" as const : "default" as const,
+      summary: "private selected-only text", agent: { name: "Agent", instructionLineCount: 0, instructionsTooLong: false, updatedAt: 1 },
+    }));
+    const index = snapshot(threads);
+    index.directories = [{ key: "repo", kind: "directory", label: "Repo", threadKeys: threads.map((row) => `codex:${row.id}`), needsAttentionCount: 0 }];
+    const store = new NavigationQueryStore();
+    const read = (cursor?: string) => store.readPage({ scopeKey: "messaging", loadIndex: async () => index,
+      request: request({ consumer: "messaging-browse", pageSize: 8, cursor,
+        query: { kind: "messaging-threads", agentOnly: true, excludeFullAccess: true, allowedBackends: ["codex"], directoryKey: "repo" } }) });
+    const first = await read();
+    expect(first.collectionSize).toBe(50);
+    expect(first.counts.total).toBe(50);
+    expect(first.entries).toHaveLength(8);
+    expect(first.entries.every(({ row }) => row.executionMode === "default")).toBe(true);
+    expect(JSON.stringify(first)).not.toContain("private selected-only text");
+    const second = await read(first.nextCursor);
+    expect(second.collectionSize).toBe(50);
+    expect(second.rangeStart).toBe(8);
+    expect(second.entries.some(({ row }) => first.entries.some((entry) => entry.row.id === row.id))).toBe(false);
+  });
+
+  it("pages compact messaging projects with complete counts and a single owner scratchpad", async () => {
+    const index = snapshot([thread("one"), thread("two")]);
+    index.directories = [
+      { key: "workspace:old", kind: "workspace", label: "Workspaces", path: "/old", threadKeys: ["codex:one"], needsAttentionCount: 0, latestUpdatedAt: 1 },
+      { key: "workspace:new", kind: "workspace", label: "Workspaces", path: "/new", threadKeys: ["codex:one", "codex:two"], needsAttentionCount: 0, latestUpdatedAt: 2 },
+      ...Array.from({ length: 20 }, (_, value) => ({ key: `repo:${value}`, kind: "directory" as const, label: `Repo ${value}`, threadKeys: [], needsAttentionCount: 0 })),
+    ];
+    const store = new NavigationQueryStore();
+    const page = await store.readPage({ scopeKey: "messaging", loadIndex: async () => index,
+      request: request({ consumer: "messaging-browse", pageSize: 8, query: { kind: "messaging-projects", scratchpadFirst: true } }) });
+    expect(page.collectionSize).toBe(21);
+    expect(page.directories).toHaveLength(8);
+    expect(page.directories?.[0]).toMatchObject({ key: "workspace:new", counts: { total: 2 } });
+    expect(page.directories?.[0]).not.toHaveProperty("threadKeys");
+    expect(page.entries).toEqual([]);
+    expect(page.nextCursor).toBeDefined();
+  });
+
   it("returns compact owner model counts without thread or launchpad contents", async () => {
     const threads = Array.from({ length: 1001 }, (_, index) => ({
       ...thread(String(index), "private thread contents".repeat(1000)), model: "owner-model",
