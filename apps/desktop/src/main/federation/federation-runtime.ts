@@ -5378,7 +5378,9 @@ async function mountRemoteParentForLocalChild(
     query: { kind: "exact", identities: [{ backend: parentBackend, threadId: parentThreadId, ownerInstanceId: parentInstanceId }],
       includeAncestry: false },
   });
-  if (parentPage.protocol !== 2 || parentPage.coverage.state !== "complete" || !parentPage.complete
+  // An explicitly returned identity is usable while unrelated providers are
+  // still discovering. Incomplete coverage only prevents inferring absence.
+  if (parentPage.protocol !== 2 || !parentPage.complete
     || parentPage.unchanged || parentPage.nextCursor) {
     return;
   }
@@ -5426,7 +5428,7 @@ async function mountRemoteParentForLocalChild(
         query: { kind: "directory-index", keys: launchpadDirectoryKey ? [launchpadDirectoryKey] : [],
           paths: launchpadDirectoryPath ? [launchpadDirectoryPath] : [] } })
     : undefined;
-  const directories = directoryPage?.protocol === 2 && directoryPage.coverage.state === "complete"
+  const directories = directoryPage?.protocol === 2
     && directoryPage.complete && !directoryPage.nextCursor && !directoryPage.unchanged ? directoryPage.directories ?? [] : [];
   const childDirectory = directories.find(
     (directory) => directory.key === launchpadDirectoryKey,

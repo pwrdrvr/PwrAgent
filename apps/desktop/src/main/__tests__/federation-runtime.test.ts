@@ -1107,7 +1107,7 @@ describe("DesktopFederationRuntime", () => {
     }
   });
 
-  it("mounts a remote parent when accepting a cross-instance child", async () => {
+  it.each(["complete", "checking"] as const)("mounts a remote parent when accepting a cross-instance child with %s coverage", async (coverageState) => {
     await disposeDesktopFederationRuntime();
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const tempDir = mkdtempSync(path.join(
@@ -1186,13 +1186,14 @@ describe("DesktopFederationRuntime", () => {
         },
       ],
       threads: [],
+      coverage: { state: coverageState },
     });
     vi.spyOn(runtime, "health").mockResolvedValue({
       instanceId: "child-peer",
     } as never);
     const parentQuery = vi.spyOn(runtime, "remoteNavigationQueryPage").mockResolvedValue({
       protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
-      counts: { total: 1, active: 0, unread: 1, review: 0 }, coverage: { state: "complete" }, complete: true,
+      counts: { total: 1, active: 0, unread: 1, review: 0 }, coverage: { state: coverageState }, complete: true,
       entries: [{ row: parentSummary, orderKey: "0", placement: { kind: "root" } }],
     });
     const threadFromPeer = vi.spyOn(runtime.remoteThreadSummaries(), "threadFromPeer");
