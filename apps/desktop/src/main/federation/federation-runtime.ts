@@ -2474,6 +2474,20 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /** Stamp cached viewer rows from current routing state without any remote read. */
+  stampViewerNavigationPins(threads: readonly NavigationThreadSummary[]): NavigationThreadSummary[] {
+    const byOwner = new Map<string, NavigationThreadSummary[]>();
+    for (const thread of threads) {
+      const target = thread.federation?.ref.target;
+      if (target?.scope !== "remote") continue;
+      const ownerRows = byOwner.get(target.instanceId) ?? [];
+      ownerRows.push(thread);
+      byOwner.set(target.instanceId, ownerRows);
+    }
+    return [...byOwner].flatMap(([instanceId, ownerRows]) =>
+      this.stampRemoteNavigationThreads({ scope: "remote", instanceId }, ownerRows).threads);
+  }
+
   private stampRemoteNavigationThreads(
     target: FederationRemoteTarget,
     responseThreads: readonly NavigationThreadSummary[],

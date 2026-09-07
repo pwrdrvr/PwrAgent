@@ -3,7 +3,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef, type NavigationThreadSummary } from "@pwragent/shared";
 
 const mocks = vi.hoisted(() => ({
   store: undefined as unknown as SqliteOverlayStore,
@@ -31,8 +31,13 @@ it("adds zero SQLite commits for real overlay-backed query, model inventory, fac
     createdAt: index + 1, updatedAt: index + 1, threadStatus: "active", linkedDirectories: [], inbox: { inInbox: true },
   }));
   try {
+    await mocks.store.addRemoteThreadPin({ ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer" }),
+      instanceLabel: "Peer", summary: { ...mocks.threads[0]!, id: "remote", summary: "Selected-only data".repeat(10_000) } });
     const queries = new NavigationQueryStore();
     const { writes } = await measureSqliteWrites(async () => {
+      const pins = await mocks.store.readRemoteThreadPinNavigationRows();
+      expect(pins).toHaveLength(1);
+      expect(pins[0]).not.toHaveProperty("summary");
       const loadIndex = () => loadLocalNavigationQueryIndex({ callerReason: "navigation-write-budget" });
       const request = { protocol: 2 as const, consumer: "star-map" as const,
         query: { kind: "star-map" as const, filters: {} }, pageSize: 10,

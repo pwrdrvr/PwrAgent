@@ -3359,6 +3359,56 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return pins;
   }
 
+  /** Viewer membership only: never materialize cached detail, FIFO, bindings or draft payloads. */
+  async readRemoteThreadPinNavigationRows(): Promise<NavigationThreadSummary[]> {
+    const rows = this.stateDb.raw.prepare(`
+      WITH pins AS (
+        SELECT instance_id, backend, thread_id, added_at,
+          CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS data
+        FROM remote_thread_pins WHERE revoked_at IS NULL
+      )
+      SELECT instance_id, backend, thread_id,
+        json_object(
+          'title', substr(COALESCE(json_extract(data, '$.summary.title'), thread_id), 1, 2048),
+          'titleSource', COALESCE(json_extract(data, '$.summary.titleSource'), 'fallback'),
+          'createdAt', json_extract(data, '$.summary.createdAt'),
+          'updatedAt', json_extract(data, '$.summary.updatedAt'),
+          'archivedAt', json_extract(data, '$.summary.archivedAt'),
+          'threadStatus', json_extract(data, '$.summary.threadStatus'),
+          'projectKey', json_extract(data, '$.summary.projectKey'),
+          'gitBranch', json_extract(data, '$.summary.gitBranch'),
+          'parentThreadId', json_extract(data, '$.summary.parentThreadId'),
+          'parentThreadBackend', json_extract(data, '$.summary.parentThreadBackend'),
+          'parentThreadInstanceId', json_extract(data, '$.summary.parentThreadInstanceId'),
+          'subthreadsCollapsed', json_extract(data, '$.summary.subthreadsCollapsed'),
+          'pinnedRank', json_extract(data, '$.localPinnedRank'),
+          'inbox', json_object(
+            'inInbox', json(CASE WHEN json_extract(data, '$.summary.inbox.inInbox') = 1 THEN 'true' ELSE 'false' END),
+            'reason', json_extract(data, '$.summary.inbox.reason'),
+            'lastSeenUpdatedAt', json_extract(data, '$.summary.inbox.lastSeenUpdatedAt')
+          ),
+          'linkedDirectories', json((SELECT json_group_array(json_object(
+            'id', json_extract(value, '$.id'), 'kind', json_extract(value, '$.kind'),
+            'label', json_extract(value, '$.label'), 'path', json_extract(value, '$.path'),
+            'worktreePath', json_extract(value, '$.worktreePath')
+          )) FROM json_each(data, '$.summary.linkedDirectories') WHERE key < 16)),
+          'instanceLabel', substr(COALESCE(json_extract(data, '$.instanceLabel'), instance_id), 1, 512)
+        ) AS compact
+      FROM pins ORDER BY added_at DESC
+    `).all() as Array<{ instance_id: string; backend: string; thread_id: string; compact: string }>;
+    return rows.map((row) => {
+      const parsed = JSON.parse(row.compact) as NavigationThreadSummary & { instanceLabel: string };
+      const { instanceLabel, ...fields } = parsed;
+      // SQLite JSON null represents an absent cached optional field. Do not
+      // pass it to consumers that distinguish absence from an explicit value.
+      const summary = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null)) as NavigationThreadSummary;
+      const ref = buildFederatedThreadRef({ backend: row.backend as FederatedThreadRef["backend"],
+        instanceId: row.instance_id, threadId: row.thread_id });
+      return { ...summary, id: row.thread_id, source: ref.backend,
+        federation: { ref, instanceLabel, peerStatus: "disconnected" } };
+    });
+  }
+
   async updateRemoteThreadPinSnapshots(
     entries: Array<{
       ref: FederatedThreadRef;

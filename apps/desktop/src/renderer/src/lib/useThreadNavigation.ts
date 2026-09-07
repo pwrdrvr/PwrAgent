@@ -3162,7 +3162,7 @@ export function useThreadNavigation(
       : browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
-      const changedPages = [...pages].filter(([id, page]) => acceptedPagesRef.current.get(id) !== page).map(([, page]) => page);
+      const changedPages = [...pages].filter(([id, page]) => acceptedPagesRef.current.get(id) !== page);
       const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
       acceptedPagesRef.current = pages;
       acceptedDefaultsRef.current = launchpadConfiguration.value;
@@ -3178,9 +3178,23 @@ export function useThreadNavigation(
         // Unchanged resource pages must not roll back canonical row events or
         // resurrect tombstones when another resource finishes loading.
         const threadRows = new Map([...current.rows?.threadRows ?? []].filter(([key]) => retainedKeys.has(key)));
-        for (const page of changedPages) for (const { row } of page.entries) {
+        // Local query resources own viewer pin ranks. Remote exact context
+        // supplies thread metadata but cannot import the owner's pin order.
+        const orderedPages = [...changedPages].sort(([left], [right]) =>
+          Number(boundedNavigation.resources.get(left)?.state.request.federationTarget?.scope !== "remote")
+          - Number(boundedNavigation.resources.get(right)?.state.request.federationTarget?.scope !== "remote"));
+        const remoteContextKeys = new Set([...boundedNavigation.resources.values()]
+          .filter((resource) => resource.state.request.federationTarget?.scope === "remote")
+          .flatMap((resource) => resource.state.page?.entries.map(({ row }) => threadSummaryIdentityKey(row)) ?? []));
+        for (const [id, page] of orderedPages) for (const { row } of page.entries) {
           const key = threadSummaryIdentityKey(row);
-          if (!suppressedArchivedThreadKeysRef.current.has(key)) threadRows.set(key, row);
+          const ownerPage = boundedNavigation.resources.get(id)?.state.request.federationTarget?.scope === "remote";
+          const previous = threadRows.get(key);
+          const presentedRow = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
+            ? ownerPage ? { ...row, pinnedRank: previous?.pinnedRank }
+              : previous && remoteContextKeys.has(key) ? { ...previous, pinnedRank: row.pinnedRank } : row
+            : row;
+          if (!suppressedArchivedThreadKeysRef.current.has(key)) threadRows.set(key, presentedRow);
         }
         for (const key of suppressedArchivedThreadKeysRef.current) threadRows.delete(key);
         const next: NavigationLoadedRows = { threadRows, directoryRows,
@@ -4611,9 +4625,11 @@ export function useThreadNavigation(
   const selectedThread = useMemo(() => {
     const detailThread = selectedDetail.state?.detail?.thread;
     if (!detailThread) return selectedRow;
-    return optimisticThread && threadSummaryIdentityKey(detailThread) === threadSummaryIdentityKey(optimisticThread)
+    const configured = optimisticThread && threadSummaryIdentityKey(detailThread) === threadSummaryIdentityKey(optimisticThread)
       ? mergeHydratedThreadWithOptimisticState(detailThread, optimisticThread) : detailThread;
-  }, [selectedDetail.state?.detail?.thread, selectedRow, optimisticThread]);
+    return rendererFederationTarget?.scope !== "remote" && configured.federation?.ref.target.scope === "remote"
+      ? { ...configured, pinnedRank: selectedRow?.pinnedRank } : configured;
+  }, [selectedDetail.state?.detail?.thread, selectedRow, optimisticThread, rendererFederationTarget]);
 
   const selectedDirectory = useMemo(() => {
     if (activeFederatedLaunchpad) {
