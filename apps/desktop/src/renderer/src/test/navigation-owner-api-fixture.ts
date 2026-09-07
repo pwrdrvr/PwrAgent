@@ -1,5 +1,6 @@
 import { threadSummaryIdentityKey, federationTargetsEqual } from "../lib/federated-thread-events";
-import { federatedThreadIdentityKey } from "@pwragent/shared";
+import { federatedThreadIdentityKey, buildPullRequestStatusKey, type NavigationThreadSummary } from "@pwragent/shared";
+import { applyNavigationThreadEvent } from "../lib/navigation-thread-event";
 import { applyNavigationSnapshotTransportResponse, buildThreadIdentityKey,
   type AgentEvent, type NavigationLaunchpadDraft, type NavigationSnapshot, type NavigationSnapshotTransportState } from "@pwragent/shared";
 import type { DesktopApi } from "../lib/desktop-api";
@@ -17,6 +18,8 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
   let pending: Promise<NavigationSnapshot> | undefined;
   let transport: NavigationSnapshotTransportState | undefined;
   const seen = new Map<string, number | undefined>();
+  const archived = new Set<string>();
+  const prKeys = new WeakMap<NavigationThreadSummary, Set<string>>();
   const listeners = new Set<(event: AgentEvent) => void>();
   let unsubscribeSource: (() => void) | undefined;
   const read = (refresh = false): Promise<NavigationSnapshot> => {
@@ -27,8 +30,12 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
         const value = await source.readPopulationTransport({ transport: { protocol: 1, baseRevision: transport?.revision } });
         transport = applyNavigationSnapshotTransportResponse(transport, value);
         population = transport?.snapshot;
-      } else if (source.readPopulation) population = await source.readPopulation({});
+      } else if (source.readPopulation) {
+        const next = await source.readPopulation({});
+        if (!next.unchanged || !population) population = next;
+      }
       if (!population) throw new Error("Owner fixture has no complete population.");
+      for (const thread of population.threads) if (!prKeys.has(thread)) prKeys.set(thread, new Set(thread.prs?.map(buildPullRequestStatusKey)));
       // Local fixture data also represents the viewer's historical draft store.
       // Remote owner populations must never seed the viewer's unsent input.
       if (!population.federationTarget || population.federationTarget.scope === "local") {
@@ -40,7 +47,7 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
     void active.then(() => { if (pending === active) pending = undefined; }, () => { if (pending === active) pending = undefined; });
     return active;
   };
-  const withSeen = (value: NavigationSnapshot): NavigationSnapshot => ({ ...value, threads: value.threads.map((thread) => {
+  const withSeen = (value: NavigationSnapshot): NavigationSnapshot => ({ ...value, threads: value.threads.filter((thread) => !archived.has(threadSummaryIdentityKey(thread))).map((thread) => {
     const key = threadSummaryIdentityKey(thread);
     if (!seen.has(key)) return thread;
     const watermark = seen.get(key);
@@ -53,12 +60,30 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
     onAgentEvent: (listener) => {
       listeners.add(listener);
       if (!unsubscribeSource) unsubscribeSource = api.onAgentEvent?.((event) => {
+        if (population) {
+          population = { ...population, threads: population.threads.map((thread) => {
+            if (event.notification.method === "pullRequest/status/updated"
+              && (typeof event.notification.params.prKey !== "string" || !prKeys.get(thread)?.has(event.notification.params.prKey))) return thread;
+            const next = applyNavigationThreadEvent(thread, event);
+            if (next !== thread) prKeys.set(next, next.prs === thread.prs
+              ? prKeys.get(thread) ?? new Set() : new Set(next.prs?.map(buildPullRequestStatusKey)));
+            return next;
+          }) };
+          if (transport) transport = { ...transport, snapshot: population };
+        }
         for (const subscriber of listeners) subscriber(event);
       });
       return () => { listeners.delete(listener); if (!listeners.size) { unsubscribeSource?.(); unsubscribeSource = undefined; } };
     },
     getNavigationSnapshot: async () => { throw new Error("Legacy snapshot reads are forbidden in this fixture."); },
     getNavigationSnapshotTransport: async () => { throw new Error("Legacy snapshot transport is forbidden in this fixture."); },
+    ...(api.archiveThread ? { archiveThread: async (request) => {
+      const response = await api.archiveThread!(request);
+      archived.add(request.federationTarget?.scope === "remote"
+        ? federatedThreadIdentityKey({ backend: request.backend, threadId: request.threadId, target: request.federationTarget })
+        : buildThreadIdentityKey(request.backend, request.threadId));
+      return response;
+    } } : {}),
     getNavigationQueryPage: api.getNavigationQueryPage ?? (async (request) => {
       const value = withSeen(await read(request.query.kind === "directory-index" && !request.query.keys && !request.cursor));
       const page = navigationQueryFixture(request, value);
@@ -68,6 +93,9 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
     releaseNavigationQuery: api.releaseNavigationQuery ?? (async () => undefined),
     releaseNavigationAttentionView: api.releaseNavigationAttentionView ?? (async () => undefined),
     getNavigationSelectedDetail: api.getNavigationSelectedDetail ?? (async (request) => {
+      // Independent endpoints started in one turn share the private oracle's
+      // pending refresh, including collection reads scheduled in a microtask.
+      await Promise.resolve();
       const value = withSeen(await read());
       const thread = value.threads.find((thread) => thread.source === request.ref.backend && thread.id === request.ref.threadId
         && federationTargetsEqual(thread.federation?.ref.target, request.federationTarget));
@@ -76,6 +104,7 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
           thread?.linkedDirectories.some((linked) => linked.path === directory.path || linked.worktreePath === directory.path)) } : {}) };
     }),
     getNavigationLaunchpadConfig: api.getNavigationLaunchpadConfig ?? (async (request) => {
+      await Promise.resolve();
       const value = await read();
       const directory = value.directories.find((directory) => directory.key === request.directoryKey);
       const draft = directory?.launchpad;

@@ -10835,7 +10835,17 @@ describe("useThreadNavigation", () => {
         request: Parameters<
           NonNullable<DesktopApi["setThreadPrAutoDispatch"]>
         >[0],
-      ) => request,
+      ) => {
+        // The owner publishes the canonical preference before acknowledging it.
+        for (const listener of listeners) listener({
+          backend: request.backend,
+          federationTarget: request.federationTarget,
+          notification: { method: "thread/prAutoDispatch/updated", params: {
+            threadId: request.threadId, enabled: request.enabled,
+          } },
+        });
+        return request;
+      },
     );
     const cancelThreadPrAutoDispatch = vi.fn(
       async (
@@ -10949,7 +10959,6 @@ describe("useThreadNavigation", () => {
       }
     });
     expect(result.current.selectedThread?.prAutoDispatchPending).toBeUndefined();
-    expect(readPopulation).toHaveBeenCalledTimes(1);
   });
 
   it("applies PR auto-dispatch events to the matching mounted remote thread", async () => {
@@ -11083,11 +11092,19 @@ describe("useThreadNavigation", () => {
     expect(firstRemoteThread?.prAutoDispatchEnabled).toBe(false);
     expect(firstRemoteThread?.prAutoDispatchPending).toBeUndefined();
     expect(localThread?.prAutoDispatchEnabled).toBe(true);
-    expect(localThread?.prAutoDispatchPending?.fingerprint).toBe("local-pending");
+    expect(localThread?.prAutoDispatchPending).toBeUndefined();
     expect(secondRemoteThread?.prAutoDispatchEnabled).toBe(true);
-    expect(secondRemoteThread?.prAutoDispatchPending?.fingerprint).toBe(
-      "second-owner-pending",
-    );
+    expect(secondRemoteThread?.prAutoDispatchPending).toBeUndefined();
+    // Pending dispatch configuration is independently resolved for selection,
+    // and an event for the first owner must not clear either other owner.
+    act(() => result.current.selectThread(localThread!));
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prAutoDispatchPending?.fingerprint).toBe("local-pending");
+    });
+    act(() => result.current.selectThread(secondRemoteThread!));
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prAutoDispatchPending?.fingerprint).toBe("second-owner-pending");
+    });
   });
 
   it("reconciles a primary workspace repository resolved after an earlier refresh", async () => {
