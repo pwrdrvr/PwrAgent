@@ -5034,7 +5034,7 @@ export function Composer(props: ComposerProps) {
     });
   }, [activeAutocompleteIndex, autocompleteKind]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!autocompleteKind) {
       return;
     }
@@ -5055,14 +5055,19 @@ export function Composer(props: ComposerProps) {
       const available = placement === "above" ? availableAbove : availableBelow;
       setAutocompleteLayout({
         placement,
-        maxHeight: Math.max(140, Math.min(320, available)),
+        maxHeight: Math.max(0, Math.min(320, available)),
       });
     };
 
     updateAutocompleteLayout();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateAutocompleteLayout);
+    if (inputWrapRef.current) observer?.observe(inputWrapRef.current);
     window.addEventListener("resize", updateAutocompleteLayout);
+    window.addEventListener("scroll", updateAutocompleteLayout, true);
     return () => {
+      observer?.disconnect();
       window.removeEventListener("resize", updateAutocompleteLayout);
+      window.removeEventListener("scroll", updateAutocompleteLayout, true);
     };
   }, [activeAutocompleteIndex, autocompleteKind]);
 

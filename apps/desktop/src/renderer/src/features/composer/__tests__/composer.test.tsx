@@ -21110,3 +21110,33 @@ describe("Composer", () => {
     });
   });
 });
+
+it("refits skill autocomplete when its composer resizes without a window resize", async () => {
+  let resized: (() => void) | undefined;
+  const disconnect = vi.fn();
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { resized = callback; }
+    observe() {}
+    disconnect = disconnect;
+  });
+  try {
+    renderComposerWithRegressionSkills();
+    const wrap = document.querySelector(".composer__input-wrap")!;
+    let top = 400;
+    vi.spyOn(wrap, "getBoundingClientRect").mockImplementation(() => ({
+      top, bottom: 740, left: 0, right: 500, width: 500, height: 740 - top,
+      x: 0, y: top, toJSON: () => ({}),
+    }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "$" } });
+    const listbox = await screen.findByRole("listbox", { name: "Skills" });
+    const previous = Number.parseFloat(listbox.style.maxHeight);
+    top = 100;
+    act(() => resized?.());
+    expect(Number.parseFloat(listbox.style.maxHeight)).toBeLessThan(previous);
+    expect(Number.parseFloat(listbox.style.maxHeight)).toBeLessThanOrEqual(top - 10);
+    cleanup();
+    expect(disconnect).toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
