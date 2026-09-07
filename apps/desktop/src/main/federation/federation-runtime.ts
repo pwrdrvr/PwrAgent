@@ -235,6 +235,7 @@ import {
 } from "../state/recent-file-references-store";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
@@ -5332,7 +5333,6 @@ async function resolveFederatedWorktreeGitReadContext(request: {
 async function mountRemoteParentForLocalChild(
   request: MaterializeDirectoryLaunchpadRequest,
   response: MaterializeDirectoryLaunchpadResponse,
-  sourceInstanceId?: FederationInstanceId,
 ): Promise<void> {
   const parentThreadId = request.parentThreadId?.trim();
   const parentInstanceId = request.parentThreadInstanceId?.trim();
@@ -5349,39 +5349,43 @@ async function mountRemoteParentForLocalChild(
     scope: "remote" as const,
     instanceId: parentInstanceId,
   };
-  const parentSummary = await runtime.remoteThreadSummaries().threadFromPeer({
-    target,
-    backend: parentBackend,
-    threadId: parentThreadId,
+  const pool = getDesktopNavigationQueryPool();
+  const deadlineAt = Date.now() + 10_000;
+  const readPage = async (requestedQuery: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+    const query = { ...requestedQuery, deadlineAt };
+    const consumerId = `created-child-parent:${randomUUID()}`;
+    try {
+      return await pool.read({ consumerId, request: query, load: async ({ signal, deadlineAt }) => {
+        signal.throwIfAborted();
+        if (query.federationTarget && isRemoteFederationTarget(query.federationTarget)) {
+          return await runtime.remoteNavigationQueryPage(query.federationTarget, query, { signal, deadlineAt });
+        }
+        return await getDesktopNavigationQueryStore().readPage({
+          request: query, scopeKey: "renderer-local",
+          loadIndex: async () => {
+            const index = await loadLocalNavigationQueryIndex({ backend: query.backend, callerReason: "created-child-parent" });
+            signal.throwIfAborted();
+            return index;
+          },
+        });
+      } });
+    } finally {
+      pool.release(consumerId);
+    }
+  };
+  const parentPage = await readPage({ protocol: 2, consumer: "exact-link", inventory: "owner",
+    federationTarget: target, pageSize: 1,
+    query: { kind: "exact", identities: [{ backend: parentBackend, threadId: parentThreadId, ownerInstanceId: parentInstanceId }],
+      includeAncestry: false },
   });
-  if (!parentSummary && parentInstanceId !== sourceInstanceId) {
+  if (parentPage.protocol !== 2 || parentPage.coverage.state !== "complete" || !parentPage.complete
+    || parentPage.unchanged || parentPage.nextCursor) {
     return;
   }
-  const fallbackLinkedDirectory = response.linkedDirectory
-    ?? (
-      request.launchpad?.directoryPath
-      && request.launchpad.directoryKind !== "workspace"
-        ? {
-            id: `federated-parent:${request.launchpad.directoryKey}`,
-            label: request.launchpad.directoryLabel,
-            path: request.launchpad.directoryPath,
-            kind: response.workMode === "worktree"
-              ? "worktree" as const
-              : "local" as const,
-          }
-        : undefined
-    );
-  const fallbackParent: NavigationThreadSummary = {
-    source: parentBackend,
-    id: parentThreadId,
-    title: parentThreadId,
-    titleSource: "fallback",
-    linkedDirectories: fallbackLinkedDirectory
-      ? [fallbackLinkedDirectory]
-      : [],
-    inbox: { inInbox: false },
-  };
-  const summary = parentSummary ?? fallbackParent;
+  const summary = parentPage.entries.find(({ row }) => row.ref.backend === parentBackend
+    && row.ref.threadId === parentThreadId && row.ref.ownerInstanceId === parentInstanceId
+    && row.source === parentBackend && row.id === parentThreadId)?.row;
+  if (!summary || summary.archivedAt !== undefined) return;
   const ref = buildFederatedThreadRef({
     backend: parentBackend,
     instanceId: parentInstanceId,
@@ -5389,15 +5393,8 @@ async function mountRemoteParentForLocalChild(
   });
   const overlayStore = getDesktopOverlayStore();
   const instanceLabel =
-    parentSummary?.federation?.instanceLabel ?? parentInstanceId;
-  const existingPins = await overlayStore.listRemoteThreadPins();
-  const existingPin = existingPins.find(
-    (pin) =>
-      pin.ref.backend === ref.backend
-      && pin.ref.threadId === ref.threadId
-      && isRemoteFederationTarget(pin.ref.target)
-      && pin.ref.target.instanceId === parentInstanceId,
-  );
+    summary.federation?.instanceLabel ?? parentInstanceId;
+  const existingPin = await overlayStore.hasRemoteThreadPin({ ref });
   if (existingPin) {
     // Snapshot refreshes must not replace viewer-owned rank or provenance.
     // In particular, creating another child cannot demote an explicit pin to
@@ -5416,19 +5413,24 @@ async function mountRemoteParentForLocalChild(
     });
   }
 
-  const snapshot = await new DesktopMessagingBackendBridge()
-    .getNavigationSnapshot({});
   const launchpadDirectoryKey =
     request.launchpad?.directoryKey ?? request.directoryKey;
   const launchpadDirectoryPath = request.launchpad?.directoryPath?.trim();
   const normalizedLaunchpadDirectoryPath = launchpadDirectoryPath
     ? path.resolve(launchpadDirectoryPath)
     : undefined;
-  const childDirectory = snapshot.directories.find(
+  const directoryPage = launchpadDirectoryKey || normalizedLaunchpadDirectoryPath
+    ? await readPage({ protocol: 2, consumer: "exact-link", inventory: "owner", pageSize: 2,
+        query: { kind: "directory-index", keys: launchpadDirectoryKey ? [launchpadDirectoryKey] : [],
+          paths: normalizedLaunchpadDirectoryPath ? [normalizedLaunchpadDirectoryPath] : [] } })
+    : undefined;
+  const directories = directoryPage?.protocol === 2 && directoryPage.coverage.state === "complete"
+    && directoryPage.complete && !directoryPage.nextCursor && !directoryPage.unchanged ? directoryPage.directories ?? [] : [];
+  const childDirectory = directories.find(
     (directory) => directory.key === launchpadDirectoryKey,
   ) ?? (
     normalizedLaunchpadDirectoryPath
-      ? snapshot.directories.find(
+      ? directories.find(
           (directory) =>
             directory.path
             && path.resolve(directory.path) === normalizedLaunchpadDirectoryPath,
@@ -6223,7 +6225,6 @@ function localBackendOperations(): FederationBackendOperations {
         await mountRemoteParentForLocalChild(
           request,
           response,
-          options?.sourceInstanceId,
         );
       } catch (error) {
         log.warn("failed to mount remote parent for local child", {

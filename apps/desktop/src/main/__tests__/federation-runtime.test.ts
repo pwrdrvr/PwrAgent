@@ -61,6 +61,7 @@ import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
 import { replacementPages } from "../federation/federation-replacement-pages";
 import * as appState from "../state/app-state";
+import * as navigationQuerySource from "../app-server/navigation-query-source";
 
 // `getDesktopBackendRegistry()` is the one construction that opts into real
 // machine ACP discovery, so a test that reaches the singleton inherits it — the
@@ -1110,6 +1111,12 @@ describe("DesktopFederationRuntime", () => {
     } as never);
     const registry = getDesktopBackendRegistry();
     const parentSummary = {
+      ref: { backend: "codex" as const, threadId: "parent", ownerInstanceId: "parent-peer" },
+      rowRevision: "parent-revision",
+      ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false,
+      queueCount: 0,
+      queueState: "ready" as const,
       source: "codex" as const,
       id: "parent",
       title: "Remote parent",
@@ -1128,14 +1135,10 @@ describe("DesktopFederationRuntime", () => {
       .mockResolvedValue(materializeResponse as never);
     const publish = vi.spyOn(registry, "publishLocalEvent")
       .mockResolvedValue(undefined);
-    const navigationSnapshot = vi.spyOn(
-      DesktopMessagingBackendBridge.prototype,
-      "getNavigationSnapshot",
+    const navigationIndex = vi.spyOn(
+      navigationQuerySource,
+      "loadLocalNavigationQueryIndex",
     ).mockResolvedValue({
-      backend: "all",
-      fetchedAt: 1_000,
-      unchanged: false,
-      browseMode: "directories",
       directories: [
         {
           key: "directory:/other",
@@ -1144,6 +1147,7 @@ describe("DesktopFederationRuntime", () => {
           path: "/other",
           threadKeys: [buildThreadIdentityKey("codex", "child")],
           directoryThreadsCollapsed: false,
+          needsAttentionCount: 0,
         },
         {
           key: "directory:/repo",
@@ -1152,19 +1156,21 @@ describe("DesktopFederationRuntime", () => {
           path: "/repo",
           threadKeys: [buildThreadIdentityKey("codex", "child")],
           directoryThreadsCollapsed: true,
+          needsAttentionCount: 0,
         },
       ],
       threads: [],
-      launchpadDefaults: {} as never,
-      federationPeers: [],
-    } as never);
+    });
     vi.spyOn(runtime, "health").mockResolvedValue({
       instanceId: "child-peer",
     } as never);
-    const threadFromPeer = vi.spyOn(
-      runtime.remoteThreadSummaries(),
-      "threadFromPeer",
-    ).mockResolvedValue(parentSummary);
+    const parentQuery = vi.spyOn(runtime, "remoteNavigationQueryPage").mockResolvedValue({
+      protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+      counts: { total: 1, active: 0, unread: 1, review: 0 }, coverage: { state: "complete" }, complete: true,
+      entries: [{ row: parentSummary, orderKey: "0", placement: { kind: "root" } }],
+    });
+    const threadFromPeer = vi.spyOn(runtime.remoteThreadSummaries(), "threadFromPeer");
+    const navigationSnapshot = vi.spyOn(DesktopMessagingBackendBridge.prototype, "getNavigationSnapshot");
 
     try {
       const existingRemoteRef = buildFederatedThreadRef({
@@ -1220,11 +1226,12 @@ describe("DesktopFederationRuntime", () => {
       });
 
       expect(materialize).toHaveBeenCalledTimes(1);
-      expect(threadFromPeer).toHaveBeenCalledWith({
-        target: { scope: "remote", instanceId: "parent-peer" },
-        backend: "codex",
-        threadId: "parent",
-      });
+      expect(parentQuery).toHaveBeenCalledWith({ scope: "remote", instanceId: "parent-peer" }, expect.objectContaining({
+        protocol: 2, consumer: "exact-link", inventory: "owner", pageSize: 1,
+        query: { kind: "exact", identities: [{ backend: "codex", threadId: "parent", ownerInstanceId: "parent-peer" }], includeAncestry: false },
+      }), expect.objectContaining({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }));
+      expect(threadFromPeer).not.toHaveBeenCalled();
+      expect(navigationSnapshot).not.toHaveBeenCalled();
       const pin = (await overlayStore.listRemoteThreadPins()).find(
         (candidate) => candidate.ref.threadId === "parent",
       );
@@ -1274,6 +1281,19 @@ describe("DesktopFederationRuntime", () => {
         localPinnedRank: "4096",
         summary: parentSummary,
       });
+      parentQuery.mockResolvedValueOnce({ protocol: 2, queryKey: "parent-exact", generation: "g2", ownerEpoch: "owner",
+        countsRevision: "r2", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" },
+        complete: true, entries: [] });
+      navigationIndex.mockClear();
+      await expect(runtime.localBackend().materializeDirectoryLaunchpad({
+        directoryKey: "directory:/repo", parentThreadId: "parent", parentThreadBackend: "codex",
+        parentThreadInstanceId: "parent-peer",
+      } as never, { sourceInstanceId: "parent-peer" })).resolves.toEqual(materializeResponse);
+      expect(navigationIndex).not.toHaveBeenCalled();
+      expect((await overlayStore.listRemoteThreadPins()).find((candidate) => candidate.ref.threadId === "parent"))
+        .toEqual(preserved);
+      expect(threadFromPeer).not.toHaveBeenCalled();
+      expect(navigationSnapshot).not.toHaveBeenCalled();
       expect(publish).toHaveBeenCalledWith({
         backend: "codex",
         notification: {
@@ -1289,6 +1309,9 @@ describe("DesktopFederationRuntime", () => {
       materialize.mockRestore();
       publish.mockRestore();
       navigationSnapshot.mockRestore();
+      navigationIndex.mockRestore();
+      parentQuery.mockRestore();
+      threadFromPeer.mockRestore();
       settings.mockRestore();
       configStore.mockRestore();
       resetDesktopOverlayStoreForTests();
