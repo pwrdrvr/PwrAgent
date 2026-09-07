@@ -25,6 +25,7 @@ import { CelestialIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
+import { hashReferenceThreadIdentity } from "../../lib/hash-references";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -541,7 +542,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           };
         }),
       ],
-      currentThreadKey: buildThreadIdentityKey(thread.source, thread.id),
+      currentThreadKey: hashReferenceThreadIdentity(thread),
       directories: navigationSources.directories,
       ensureNavigationLoaded,
       releaseNavigationLoaded: navigationSources.release,
@@ -566,8 +567,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       supportsReview,
       threadSkills.providerCommands,
       threadSkills.skills,
-      thread.id,
-      thread.source,
+      thread,
     ],
   );
 

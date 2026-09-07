@@ -117,6 +117,7 @@ import {
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
   hashReferenceAnchorKey,
+  hashReferenceThreadIdentity,
   HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
@@ -4607,18 +4608,19 @@ export function Composer(props: ComposerProps) {
     }
     return buildHashReferenceOptions({
       currentThreadKey: props.thread
-        ? buildThreadIdentityKey(props.thread.source, props.thread.id)
+        ? hashReferenceThreadIdentity(props.thread)
         : undefined,
       localThreads: mentionNavigation.threads,
       localOwnerMatched: mentionNavigation.settledQuery === hashReferenceTrigger.query.trim().toLowerCase(),
       query: hashReferenceTrigger.query,
       remoteThreads: federatedHashSearchResults,
+      remoteOwnerMatched: federatedHashSearchSettledQuery === hashReferenceTrigger.query.trim(),
     });
   }, [
     federatedHashSearchResults,
+    federatedHashSearchSettledQuery,
     hashReferenceTrigger,
-    props.thread?.id,
-    props.thread?.source,
+    props.thread,
     mentionNavigation.threads,
     mentionNavigation.settledQuery,
   ]);

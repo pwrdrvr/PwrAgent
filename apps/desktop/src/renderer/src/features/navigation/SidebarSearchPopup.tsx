@@ -18,6 +18,7 @@ import {
 } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
 import { getDesktopApi } from "../../lib/desktop-api";
+import { useNavigationOwnerSearch } from "../../lib/useNavigationOwnerSearch";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
   FEDERATED_THREAD_SEARCH_LIMIT,
@@ -80,12 +81,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   }, []);
 
   const trimmed = query.trim();
+  const ownerSearch = useNavigationOwnerSearch({ query: trimmed, desktopApi: getDesktopApi() });
 
   const results = useMemo(() => {
     if (!trimmed) {
       return [];
     }
-    return props.threads
+    const immediate = props.threads
       .filter((thread) => threadMatchesQuery(thread, trimmed))
       .sort(
         (left, right) =>
@@ -93,7 +95,9 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           - Number(threadHasExactPrNumberMatch(left, trimmed)),
       )
       .slice(0, MAX_RESULTS);
-  }, [trimmed, props.threads]);
+    const ownerKeys = new Set(ownerSearch.rows.map(threadSummaryIdentityKey));
+    return [...ownerSearch.rows, ...immediate.filter((thread) => !ownerKeys.has(threadSummaryIdentityKey(thread)))].slice(0, MAX_RESULTS);
+  }, [trimmed, props.threads, ownerSearch.rows]);
 
   const {
     available: remoteSearchAvailable,
@@ -112,14 +116,14 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   // hit; don't show it twice.
   const remoteRows = useMemo(() => {
     const localKeys = new Set(
-      props.threads.map((thread) =>
+      results.map((thread) =>
         threadSummaryIdentityKey(thread),
       ),
     );
     return remoteResults.filter(
       (thread) => !localKeys.has(threadSummaryIdentityKey(thread)),
     );
-  }, [remoteResults, props.threads]);
+  }, [remoteResults, results]);
 
   const combinedRows = useMemo(
     () => [...results, ...remoteRows],
@@ -396,9 +400,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           {/* Peer latency lives in the footer rather than as a list row: a
               status line that grows and vanishes between keystrokes would push
               results under the operator's cursor mid-selection. */}
-          {remoteLoading ? (
+          {ownerSearch.error ? <span className="jump-palette__foot-remote" title={ownerSearch.error} role="status">
+            {ownerSearch.error}
+          </span> : null}
+          {remoteLoading || ownerSearch.loading ? (
             <span className="jump-palette__foot-remote">
-              Searching other instances…
+              {remoteLoading ? "Searching other instances…" : "Searching threads…"}
               {remoteTotalPeerCount > 0
                 ? ` ${remoteCompletedPeerCount}/${remoteTotalPeerCount}`
                 : ""}

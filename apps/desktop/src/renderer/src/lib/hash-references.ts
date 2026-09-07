@@ -1,6 +1,7 @@
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
   type ThreadJumpCandidate,
@@ -285,17 +286,23 @@ export type HashReferenceOption =
  *     otherwise appear twice once a peer answers;
  *   - remote pull requests already offered by a local thread.
  */
+export function hashReferenceThreadIdentity(thread: ThreadJumpCandidate): string {
+  return thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
+    : buildThreadIdentityKey(thread.source, thread.id);
+}
+
 export function buildHashReferenceOptions(params: {
   currentThreadKey?: string;
   localThreads: readonly ThreadJumpCandidate[];
   localOwnerMatched?: boolean;
+  remoteOwnerMatched?: boolean;
   query: string;
   remoteThreads?: readonly ThreadJumpCandidate[];
 }): HashReferenceOption[] {
   const { currentThreadKey, localThreads, query } = params;
   const isCurrentThread = (thread: ThreadJumpCandidate): boolean =>
     currentThreadKey !== undefined
-    && buildThreadIdentityKey(thread.source, thread.id) === currentThreadKey;
+    && hashReferenceThreadIdentity(thread) === currentThreadKey;
   const localCandidates = filterHashReferenceCandidates(
     localThreads.filter((thread) => !isCurrentThread(thread)),
     query,
@@ -303,7 +310,7 @@ export function buildHashReferenceOptions(params: {
   );
   const localThreadKeys = new Set(
     localThreads.map((thread) =>
-      buildThreadIdentityKey(thread.source, thread.id),
+      hashReferenceThreadIdentity(thread),
     ),
   );
   const remoteCandidates = filterHashReferenceCandidates(
@@ -312,10 +319,11 @@ export function buildHashReferenceOptions(params: {
         thread.federation?.ref.target.scope === "remote"
         && !isCurrentThread(thread)
         && !localThreadKeys.has(
-          buildThreadIdentityKey(thread.source, thread.id),
+          hashReferenceThreadIdentity(thread),
         ),
     ),
     query,
+    params.remoteOwnerMatched,
   );
   const localPullRequestKeys = new Set(
     localCandidates.pullRequests.map(buildPullRequestStatusKey),
