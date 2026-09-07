@@ -31,6 +31,7 @@ const shellOpenExternalMock = vi.fn();
 const clipboardWriteTextMock = vi.fn();
 const addWordToSpellCheckerDictionaryMock = vi.fn();
 const replaceMisspellingMock = vi.fn();
+const copyImageAtMock = vi.fn();
 const menuPopupMock = vi.fn();
 const buildFromTemplateMock = vi.fn((template: MenuItemConstructorOptions[]) => ({
   popup: menuPopupMock,
@@ -139,6 +140,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
         })
       ),
       replaceMisspelling: replaceMisspellingMock,
+      copyImageAt: copyImageAtMock,
       session: {
         addWordToSpellCheckerDictionary: addWordToSpellCheckerDictionaryMock,
       },
@@ -238,6 +240,7 @@ describe("createMainWindow", () => {
     clipboardWriteTextMock.mockReset();
     addWordToSpellCheckerDictionaryMock.mockReset();
     replaceMisspellingMock.mockReset();
+    copyImageAtMock.mockReset();
     menuPopupMock.mockReset();
     buildFromTemplateMock.mockClear();
     RendererHeapMonitorMock.mockClear();
@@ -445,6 +448,49 @@ describe("createMainWindow", () => {
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(
       "file:///Users/fixture-user/project/AGENTS.md:12"
     );
+  });
+
+  it("copies loaded images through the native context menu, including linked images", async () => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    emitWebContentsEvent("context-menu", {}, {
+      mediaType: "image",
+      hasImageContents: true,
+      srcURL: "blob:http://localhost/fixture-image",
+      linkURL: "https://example.com/image",
+      x: 123,
+      y: 456,
+    });
+
+    const template = buildFromTemplateMock.mock.calls[0]?.[0];
+    expect(template).toEqual([
+      expect.objectContaining({ label: "Copy Image", click: expect.any(Function) }),
+      { type: "separator" },
+      expect.objectContaining({ label: "Copy Link", click: expect.any(Function) }),
+    ]);
+    expect(menuPopupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ x: 123, y: 456 }),
+    );
+    expect(copyImageAtMock).not.toHaveBeenCalled();
+    const click = template?.[0]?.click as () => void;
+    click();
+    expect(copyImageAtMock).toHaveBeenCalledExactlyOnceWith(123, 456);
+    expect(clipboardWriteTextMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { mediaType: "image", hasImageContents: false },
+    { mediaType: "none", hasImageContents: false },
+    { mediaType: "video", hasImageContents: true },
+  ])("omits image copying for unavailable or non-image content: %j", async (params) => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    emitWebContentsEvent("context-menu", {}, { ...params, x: 12, y: 34 });
+
+    expect(buildFromTemplateMock).not.toHaveBeenCalled();
+    expect(copyImageAtMock).not.toHaveBeenCalled();
   });
 
   it("shows native spelling suggestions when editable text is right-clicked", async () => {
