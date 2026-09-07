@@ -72,7 +72,7 @@ describe("resolveFederatedThreadTarget", () => {
     expect(maximum).toBe(8);
   });
 
-  it("uses exact list scanning only when an older peer lacks resolveThread", async () => {
+  it("requires an upgrade when an older peer lacks exact resolution", async () => {
     const listThreads = vi.fn(async () => ({
       backend: "codex" as const,
       fetchedAt: 1_000,
@@ -94,10 +94,8 @@ describe("resolveFederatedThreadTarget", () => {
         instanceId: "pwr_remote",
         threadId: thread.id,
       },
-    })).resolves.toMatchObject({ thread: { id: thread.id } });
-    expect(listThreads).toHaveBeenCalledExactlyOnceWith(
-      { backend: "codex" }, { deadlineAt: expect.any(Number) },
-    );
+    })).rejects.toThrow("Upgrade this PwrAgent peer");
+    expect(listThreads).not.toHaveBeenCalled();
   });
 
   it.each([

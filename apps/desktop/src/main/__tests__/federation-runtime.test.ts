@@ -156,10 +156,8 @@ type RuntimeHarness = {
     getNavigationSnapshotTransport?: (
       request: GetNavigationSnapshotTransportRequest,
     ) => Promise<NavigationSnapshot | NavigationSnapshotTransportResponse>;
-    listThreads: (request: { backend: "codex" }) => Promise<{
-      backend: "codex";
-      fetchedAt: number;
-      threads: [];
+    resolveThread: (request: { backend: "codex"; threadId: string }) => Promise<{
+      thread?: { source: "codex"; id: string; linkedDirectories: [] };
     }>;
   };
   remoteNavigationSnapshot: (
@@ -1249,7 +1247,7 @@ describe("DesktopFederationRuntime", () => {
     const pending = runtime.remoteBackend({
       scope: "remote",
       instanceId: "client_two",
-    }).listThreads({ backend: "codex" });
+    }).resolveThread({ backend: "codex", threadId: "thread-1" });
     const request = sentToGateway[0]!;
 
     await runtime.receiveEnvelope(
@@ -1262,15 +1260,13 @@ describe("DesktopFederationRuntime", () => {
         targetInstanceId: "client_one",
         createdAt: 2_000,
         hopCount: 1,
-        result: { backend: "codex", fetchedAt: 2_000, threads: [] },
+        result: { thread: { source: "codex", id: "thread-1", linkedDirectories: [] } },
       },
       "gateway_one",
     );
 
     await expect(pending).resolves.toEqual({
-      backend: "codex",
-      fetchedAt: 2_000,
-      threads: [],
+      thread: { source: "codex", id: "thread-1", linkedDirectories: [] },
     });
   });
 

@@ -106,7 +106,7 @@ describe("FederatedSearchService", () => {
     expect(remoteListThreads).not.toHaveBeenCalled();
   });
 
-  it("falls back to exact list scanning only when bounded search is missing", async () => {
+  it("reports unsupported bounded search for an exact-id query", async () => {
     const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
     const service = new FederatedSearchService({
       includeLocal: false,
@@ -139,15 +139,8 @@ describe("FederatedSearchService", () => {
     await expect(
       service.search({ query: threadId, backend: "codex" }),
     ).resolves.toMatchObject({
-      results: [
-        {
-          ref: {
-            target: { scope: "remote", instanceId: "pwr_older" },
-            threadId,
-          },
-        },
-      ],
-      failures: [],
+      results: [],
+      failures: [{ instanceId: "pwr_older", error: expect.stringContaining("Upgrade this PwrAgent peer") }],
     });
   });
 
@@ -349,7 +342,7 @@ describe("FederatedSearchService", () => {
     });
   });
 
-  it("uses full-list compatibility only for a method_not_found old peer", async () => {
+  it("reports an actionable upgrade without full-list compatibility", async () => {
     const listThreads = vi.fn(async (request?: {
       archived?: boolean;
       backend?: string;
@@ -394,21 +387,15 @@ describe("FederatedSearchService", () => {
       updatedBefore: 6_000,
       limit: 1,
     })).resolves.toMatchObject({
-      results: [{ thread: { id: "archived-match", archivedAt: 6_000 } }],
-      totalCount: 1,
+      results: [],
+      totalCount: 0,
       truncated: false,
+      failures: [{ instanceId: "pwr_remote", error: expect.stringContaining("Upgrade this PwrAgent peer") }],
     });
-    expect(listThreads).toHaveBeenNthCalledWith(1, {
-      backend: "codex",
-      archived: false,
-    }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
-    expect(listThreads).toHaveBeenNthCalledWith(2, {
-      backend: "codex",
-      archived: true,
-    }, expect.objectContaining({ deadlineAt: expect.any(Number) }));
+    expect(listThreads).not.toHaveBeenCalled();
   });
 
-  it("keeps one absolute deadline through the old-peer list fallback", async () => {
+  it("keeps the bounded search deadline without retrying an old peer with full lists", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const searchFederatedThreads = vi.fn(
@@ -453,14 +440,13 @@ describe("FederatedSearchService", () => {
     await expect(search).resolves.toMatchObject({
       failures: [{
         instanceId: "pwr_older",
-        error: "Federated search timed out after 0s.",
+        error: expect.stringContaining("Upgrade this PwrAgent peer"),
       }],
     });
     expect(searchFederatedThreads.mock.calls[0]?.[1]).toEqual({
       deadlineAt: 1_100,
     });
-    expect(listThreads.mock.calls[0]?.[1]).toEqual({ deadlineAt: 1_100 });
-    expect(listThreads.mock.calls[1]?.[1]).toEqual({ deadlineAt: 1_100 });
+    expect(listThreads).not.toHaveBeenCalled();
   });
 
   it("forwards filters and the global limit to bounded owner-side search", async () => {

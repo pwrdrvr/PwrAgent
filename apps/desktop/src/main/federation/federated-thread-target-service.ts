@@ -188,11 +188,7 @@ async function resolveThreadOnPeer(
     if (!hasFederationErrorCode(error, "method_not_found")) {
       throw error;
     }
-    // Mixed-version peers may predate backend.resolveThread. Their unfiltered
-    // list still provides an exact-ID compatibility path.
-    thread = (
-      await backend.listThreads({ backend: request.backend }, rpcOptions)
-    ).threads.find((candidate) => candidate.id === request.threadId);
+    throw new Error("Upgrade this PwrAgent peer and its gateways: bounded exact thread resolution is required.");
   }
   if (!thread) {
     checkDeadline();

@@ -20,5 +20,15 @@ it("modern_consumers_never_call_deprecated_collection_methods", () => {
     }
   }
   visit(root);
+  for (const filename of [
+    "federated-thread-target-service.ts",
+    "federated-thread-message-service.ts",
+    "federation-collection-client.ts",
+  ]) {
+    const source = readFileSync(new URL(`../federation/${filename}`, import.meta.url), "utf8");
+    if (/\.(?:getNavigationSnapshot|listThreads)\s*\(/.test(source)) {
+      violations.push(filename);
+    }
+  }
   expect(violations).toEqual([]);
 });

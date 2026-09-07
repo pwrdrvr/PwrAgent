@@ -1008,10 +1008,9 @@ export function registerFederationBackendHandlers(params: {
   }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
-    async (envelope) =>
-      await params.backend.listThreads(
-        (envelope.params ?? {}) as AppServerListThreadsRequest,
-      ),
+    async () => {
+      throw new Error("Upgrade the requesting PwrAgent instance: full federation thread lists are retired; use bounded navigation queries or exact resolution.");
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.resolveThread,
@@ -1868,14 +1867,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   }
 
   async listThreads(
-    request: AppServerListThreadsRequest = {},
-    rpcOptions?: FederationRpcRequestOptions,
+    _request: AppServerListThreadsRequest = {},
+    _rpcOptions?: FederationRpcRequestOptions,
   ): Promise<AppServerListThreadsResponse> {
-    return await this.rpc.request<AppServerListThreadsResponse>({
-      method: FEDERATION_BACKEND_METHODS.listThreads,
-      params: request,
-      ...rpcOptions,
-    });
+    throw new Error("Upgrade the requesting PwrAgent instance: full federation thread lists are retired; use bounded navigation queries or exact resolution.");
   }
 
   async resolveThread(

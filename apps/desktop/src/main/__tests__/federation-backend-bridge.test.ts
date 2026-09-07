@@ -1154,7 +1154,7 @@ describe("federation backend bridge", () => {
       },
     });
 
-    expect(backend.listThreads).toHaveBeenCalledWith({ backend: "codex" });
+    expect(backend.listThreads).not.toHaveBeenCalled();
     expect(backend.archiveThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -1187,12 +1187,9 @@ describe("federation backend bridge", () => {
     );
     expect(replies).toMatchObject([
       {
-        kind: "response",
+        kind: "error",
         requestId: "request-1",
-        result: {
-          backend: "codex",
-          threads: [],
-        },
+        error: { message: expect.stringContaining("full federation thread lists are retired") },
       },
       {
         kind: "response",
@@ -2366,13 +2363,15 @@ describe("federation backend bridge", () => {
       now: () => 1_000,
     });
     const client = new FederationRemoteBackendClient(rpc);
-    const pending = client.listThreads({ backend: "codex" });
+    await expect(client.listThreads({ backend: "codex" })).rejects.toThrow("full federation thread lists are retired");
+    expect(sent).toEqual([]);
+    const pending = client.resolveThread({ backend: "codex", threadId: "thread-1" });
 
     expect(sent).toMatchObject([
       {
         kind: "request",
-        method: FEDERATION_BACKEND_METHODS.listThreads,
-        params: { backend: "codex" },
+        method: FEDERATION_BACKEND_METHODS.resolveThread,
+        params: { backend: "codex", threadId: "thread-1" },
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
       },
@@ -2387,15 +2386,12 @@ describe("federation backend bridge", () => {
       targetInstanceId: "gateway_one",
       createdAt: 1_100,
       result: {
-        backend: "codex",
-        fetchedAt: 1_100,
-        threads: [],
+        thread: { source: "codex", id: "thread-1", linkedDirectories: [] },
       },
     });
 
     await expect(pending).resolves.toMatchObject({
-      backend: "codex",
-      threads: [],
+      thread: { source: "codex", id: "thread-1" },
     });
 
     const archivePending = client.archiveThread({

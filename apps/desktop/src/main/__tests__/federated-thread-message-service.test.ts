@@ -307,13 +307,9 @@ describe("federated thread message service", () => {
       runtime: () => runtime,
     });
 
-    await expect(handler(request)).resolves.toBeUndefined();
+    await expect(handler(request)).rejects.toThrow("Upgrade this PwrAgent peer");
     expect(startTurn).not.toHaveBeenCalled();
-    expect(listThreads).toHaveBeenCalledWith({ backend: "codex" });
-    expect(listThreads).not.toHaveBeenCalledWith({
-      backend: "codex",
-      archived: true,
-    });
+    expect(listThreads).not.toHaveBeenCalled();
   });
 
   it("preserves queued delivery metadata from the owning peer", async () => {
@@ -517,7 +513,7 @@ describe("federated thread message service", () => {
     await expect(handler(request)).resolves.toBeUndefined();
   });
 
-  it("falls back to exact list scanning for a mixed-version peer", async () => {
+  it("requires an upgrade without scanning or sending for a mixed-version peer", async () => {
     const { backends, runtime } = buildRuntime({
       peers: [
         {
@@ -532,13 +528,9 @@ describe("federated thread message service", () => {
       runtime: () => runtime,
     });
 
-    await expect(handler(request)).resolves.toMatchObject({
-      instanceId: "pwr_older",
-      turnId: "remote-turn-1",
-    });
-    expect(backends.get("pwr_older")?.listThreads).toHaveBeenCalledWith({
-      backend: "codex",
-    });
+    await expect(handler(request)).rejects.toThrow("Upgrade this PwrAgent peer");
+    expect(backends.get("pwr_older")?.listThreads).not.toHaveBeenCalled();
+    expect(backends.get("pwr_older")?.startTurn).not.toHaveBeenCalled();
   });
 
   it("does not amplify a resolve failure into a full thread-list scan", async () => {

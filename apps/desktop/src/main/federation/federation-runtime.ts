@@ -106,7 +106,6 @@ import {
   pickCelestialIcon,
   resolveThreadTerminalCwd,
   type AppServerListSkillsRequest,
-  type AppServerListThreadsRequest,
   type AppServerReadThreadRequest,
   type AppServerBackendKind,
   type AttachDirectoryToThreadRequest,
@@ -5344,20 +5343,8 @@ function localBackendOperations(): FederationBackendOperations {
     async searchFederatedThreads(request, rpcOptions) {
       return await messagingBridge.searchFederatedThreads(request, rpcOptions);
     },
-    async listThreads(
-      request: AppServerListThreadsRequest = {},
-    ): Promise<AppServerListThreadsResponse> {
-      const threads = await getDesktopBackendRegistry().listThreads({
-        backend: request.backend,
-        archived: request.archived,
-        callerReason: "federation-list-threads",
-        filter: request.filter,
-      });
-      return {
-        backend: request.backend ?? "all",
-        fetchedAt: Date.now(),
-        threads,
-      };
+    async listThreads(): Promise<AppServerListThreadsResponse> {
+      throw new Error("Upgrade the requesting PwrAgent instance: full federation thread lists are retired; use bounded navigation queries or exact resolution.");
     },
     async resolveThread(request) {
       const thread = await getDesktopBackendRegistry().resolveThread(request);

@@ -203,11 +203,7 @@ export class FederatedSearchService {
       if (!hasFederationErrorCode(error, "method_not_found")) {
         throw error;
       }
-      ownerResponse = await searchFederatedThreadsOnOwner(
-        peer.backend,
-        buildOwnerSearchRequest(query, request),
-        rpcOptions,
-      );
+      throw new Error("Upgrade this PwrAgent peer and its gateways: bounded federated search is required.");
     }
     return {
       results: ownerResponse.threads.map((thread) => ({
