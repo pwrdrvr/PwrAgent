@@ -4280,19 +4280,9 @@ export function useThreadNavigation(
       }
 
       if (method === "thread/subthreadOrder/updated") {
-        const { parentThreadId, threadIds } = event.notification.params as {
-          parentThreadId: string;
-          threadIds: string[];
-        };
-        setState((current) => ({
-          ...current,
-          rows: updateSubthreadOrderInLoadedRows(current.rows, {
-            backend: event.backend,
-            federationTarget: event.federationTarget,
-            parentThreadId,
-            threadIds,
-          }),
-        }));
+        // The independently paged child collection owns placement/order.
+        // Exact selected detail consumes this event's complete configuration.
+        scheduleRefresh();
         return;
       }
 

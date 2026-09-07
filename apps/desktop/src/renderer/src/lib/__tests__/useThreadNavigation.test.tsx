@@ -12204,6 +12204,10 @@ describe("useThreadNavigation", () => {
     await waitFor(() => expect(result.current.threads).toHaveLength(4));
 
     act(() => {
+      remoteParent.subthreadOrder = ["remote-child"];
+      remoteParent.subthreadsCollapsed = true;
+      remoteChild.parentThreadId = "shared-parent";
+      remoteChild.parentThreadBackend = "codex";
       agentEventHandler?.({
         backend: "codex",
         federationTarget,
@@ -12243,20 +12247,24 @@ describe("useThreadNavigation", () => {
     const localRows = result.current.threads.filter((thread) => !thread.federation);
     const remoteRows = result.current.threads.filter((thread) => thread.federation);
     expect(localRows.find((thread) => thread.id === "shared-parent")).toMatchObject({
-      subthreadOrder: ["local-child"],
       subthreadsCollapsed: false,
     });
-    expect(localRows.find((thread) => thread.id === "shared-child"))
-      .not.toHaveProperty("parentThreadId");
+    expect(localRows.find((thread) => thread.id === "shared-parent")?.subthreadOrder).toBeUndefined();
+    expect(localRows.find((thread) => thread.id === "shared-child")?.parentThreadId).toBeUndefined();
     expect(remoteRows.find((thread) => thread.id === "shared-parent")).toMatchObject({
-      subthreadOrder: ["remote-child"],
       subthreadsCollapsed: true,
     });
+    expect(remoteRows.find((thread) => thread.id === "shared-parent")?.subthreadOrder).toBeUndefined();
     expect(remoteRows.find((thread) => thread.id === "shared-child"))
       .toMatchObject({
         parentThreadId: "shared-parent",
         parentThreadBackend: "codex",
       });
+    act(() => result.current.selectThread(localRows.find((thread) => thread.id === "shared-parent")!));
+    await waitFor(() => expect(result.current.selectedThread?.subthreadOrder).toEqual(["local-child"]));
+    act(() => result.current.selectThread(remoteRows.find((thread) => thread.id === "shared-parent")!));
+    await waitFor(() => expect(result.current.selectedThread?.subthreadOrder).toEqual(["remote-child"]));
+
   });
 
   describe("pickAndRegisterDirectory (issue #223)", () => {
