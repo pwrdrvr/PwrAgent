@@ -27245,6 +27245,60 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it.each(["explicit", "turnless"])(
+    "preserves an earlier turn when a %s snapshot includes a newer turn's usage",
+    async (attribution) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/read"] },
+      });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex", threadId: "thread-1", executionMode: "default",
+            extraLinkedDirectories: [], model: "gpt-6-astra", serviceTier: "standard",
+          },
+        },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const emitUsage = async (turnId: string | undefined, total: number, last: number) => {
+        const tokens = (inputTokens: number) => ({
+          inputTokens, cachedInputTokens: 0, outputTokens: 0,
+          reasoningOutputTokens: 0, totalTokens: inputTokens,
+        });
+        await codexClient.emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1", ...(turnId ? { turnId } : {}),
+            tokenUsage: { total: tokens(total), last: tokens(last) },
+          },
+        });
+      };
+      const readLines = async () => (await overlayStore.readThreadPricing({
+        backend: "codex", threadId: "thread-1",
+      })).lines;
+
+      await emitUsage("turn-1", 1_000, 1_000);
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      });
+      // A resumed stream can expose turn 2 usage without its start event.
+      await emitUsage("turn-2", 101_000, 10_000);
+      const earlier = (await readLines()).find((line) => line.turnId === "turn-1");
+      await emitUsage(attribution === "explicit" ? "turn-1" : undefined, 102_000, 1_000);
+      expect((await readLines()).find((line) => line.turnId === "turn-1")).toEqual(earlier);
+      await emitUsage("turn-2", 103_000, 1_000);
+      const lines = await readLines();
+      expect(lines).toHaveLength(2);
+      expect(lines.find((line) => line.turnId === "turn-2")?.inputTokens).toBe(102_000);
+      expect(lines.reduce((sum, line) => sum + line.inputTokens, 0)).toBe(103_000);
+      await registry.close();
+    },
+  );
+
   it("does not regress Codex cumulative usage on a late older-turn snapshot", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
