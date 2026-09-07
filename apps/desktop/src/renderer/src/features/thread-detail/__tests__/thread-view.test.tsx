@@ -2863,7 +2863,6 @@ describe("ThreadView", () => {
         messageCount={0}
         selectedDirectory={{
           key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
-          threadKeys: [], needsAttentionCount: 0,
         }}
         selectedLaunchpad={{
           backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",

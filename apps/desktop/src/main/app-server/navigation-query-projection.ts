@@ -17,6 +17,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   comparePinnedThreads,
   classifyDirectory,
   countNavigationStarMapFacets,
@@ -79,12 +80,21 @@ function threadKey(thread: NavigationThreadSummary): string {
 
 function parentIdentity(
   thread: NavigationThreadSummary,
+  candidatesByOwner: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
 ): NavigationIdentity | undefined {
   if (!thread.parentThreadId) {
     return undefined;
   }
+  const ownerInstanceId = thread.parentThreadInstanceId
+    ?? (thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined);
+  const candidates = candidatesByOwner.get(JSON.stringify([ownerInstanceId ?? null, thread.parentThreadId])) ?? [];
+  // Older overlays omitted the backend. Resolve only against complete owner
+  // membership; an absent or ambiguous parent remains an unresolved child.
+  const parent = !thread.parentThreadBackend
+    ? candidates.find((candidate) => candidate.source === thread.source) ?? (candidates.length === 1 ? candidates[0] : undefined)
+    : undefined;
   return {
-    backend: thread.parentThreadBackend ?? thread.source,
+    backend: thread.parentThreadBackend ?? parent?.source ?? thread.source,
     threadId: thread.parentThreadId,
     ...(thread.parentThreadInstanceId
       ? { ownerInstanceId: thread.parentThreadInstanceId }
@@ -111,18 +121,21 @@ function countsForThreads(threads: readonly NavigationThreadSummary[]): Navigati
     distinct.set(threadKey(thread), thread);
   }
   let active = 0;
+  let activeRemote = 0;
   let unread = 0;
   let review = 0;
   for (const thread of distinct.values()) {
     const threadActive = isActive(thread);
     const threadUnread = thread.inbox.inInbox;
     if (threadActive) active += 1;
+    if (threadActive && thread.federation?.ref.target.scope === "remote") activeRemote += 1;
     if (threadUnread) unread += 1;
     if (threadUnread && !threadActive) review += 1;
   }
   return {
     total: distinct.size,
     active,
+    ...(activeRemote ? { activeRemote } : {}),
     unread,
     review,
   };
@@ -469,6 +482,7 @@ function selectQueryThreads(params: {
   index: NavigationQueryIndex;
   threadsByIdentity: Map<string, NavigationThreadSummary>;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
+  parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
 }): NavigationThreadSummary[] {
   const ordinaryThreads = params.index.threads.filter(isOrdinaryThread);
   const query = params.query;
@@ -509,7 +523,7 @@ function selectQueryThreads(params: {
       .map((key) => params.threadsByLegacyKey.get(key))
       .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
       .filter((thread) => {
-        const parent = parentIdentity(thread);
+        const parent = parentIdentity(thread, params.parentCandidates);
         if (parent) return disclosedParents.has(buildThreadIdentityKey(parent.backend, parent.threadId));
         return query.roots === "pinned" ? thread.pinnedRank !== undefined
           : query.roots === "unpinned" ? thread.pinnedRank === undefined : true;
@@ -519,7 +533,7 @@ function selectQueryThreads(params: {
   if (query.kind === "children") {
     const parentThread = params.threadsByIdentity.get(identityKey(query.parent));
     const children = ordinaryThreads.filter((thread) => {
-      const parent = parentIdentity(thread);
+      const parent = parentIdentity(thread, params.parentCandidates);
       return parent && identityKey(parent) === identityKey(query.parent);
     });
     return sortSubthreadSummaries(parentThread ?? {}, children);
@@ -537,7 +551,7 @@ function selectQueryThreads(params: {
     const key = threadKey(thread);
     if (selected.has(key) || visiting.has(key)) return;
     visiting.add(key);
-    const parent = parentIdentity(thread);
+    const parent = parentIdentity(thread, params.parentCandidates);
     if (query.includeAncestry && parent) {
       const parentThread = params.threadsByIdentity.get(identityKey(parent));
       if (parentThread) addWithAncestry(parentThread);
@@ -581,13 +595,21 @@ export function projectNavigationQuery(params: {
   );
   const threadsByLegacyKey = new Map(
     params.index.threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      thread.federation?.ref.target.scope === "remote" ? federatedThreadIdentityKey(thread.federation.ref) : buildThreadIdentityKey(thread.source, thread.id),
       thread,
     ]),
   );
+  const parentCandidates = new Map<string, NavigationThreadSummary[]>();
+  for (const thread of params.index.threads) {
+    const ref = navigationIdentity(thread);
+    const key = JSON.stringify([ref.ownerInstanceId ?? null, ref.threadId]);
+    const candidates = parentCandidates.get(key) ?? [];
+    candidates.push(thread);
+    parentCandidates.set(key, candidates);
+  }
   const childCountByParent = new Map<string, number>();
   for (const thread of params.index.threads) {
-    const parent = parentIdentity(thread);
+    const parent = parentIdentity(thread, parentCandidates);
     if (!parent || !isOrdinaryThread(thread)) continue;
     const key = identityKey(parent);
     childCountByParent.set(key, (childCountByParent.get(key) ?? 0) + 1);
@@ -597,6 +619,7 @@ export function projectNavigationQuery(params: {
     index: params.index,
     threadsByIdentity,
     threadsByLegacyKey,
+    parentCandidates,
   });
   if (((query.kind === "lens" && query.lens === "attention")
     || (query.kind === "star-map" && query.filters.attention === "include")) && params.attentionOrder) {
@@ -611,7 +634,7 @@ export function projectNavigationQuery(params: {
     });
   }
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
-    const parent = parentIdentity(thread);
+    const parent = parentIdentity(thread, parentCandidates);
     return {
       row: projectNavigationRow({
         childCount: childCountByParent.get(threadKey(thread)) ?? 0,

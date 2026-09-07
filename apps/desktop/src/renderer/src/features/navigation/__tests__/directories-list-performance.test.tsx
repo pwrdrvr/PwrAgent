@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { DirectoriesList } from "../DirectoriesList";
+import { FixtureDirectoriesList as DirectoriesList } from "../../../test/navigation-presentation-fixture";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";
 
 const threadRowRender = vi.hoisted(() => vi.fn());

@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   useEffect,
   useId,
@@ -11,7 +12,6 @@ import {
 import { flushSync } from "react-dom";
 import type {
   AppServerSkillSummary,
-  NavigationDirectorySummary,
   ThreadJumpCandidate,
 } from "@pwragent/shared";
 import { FolderIcon, PullRequestIcon, ThreadIcon } from "../../icons";

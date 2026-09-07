@@ -1977,8 +1977,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Remote repo",
             path: "/remote/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
           },
         ]}
         disabled={false}
@@ -2044,8 +2042,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Owner project",
           path: "/owner/project",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
         }]}
         disabled={false}
         onPickDirectoryForReference={onPickDirectoryForReference}
@@ -2672,8 +2668,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo/PwrAgent",
@@ -3398,8 +3392,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Repo",
             path: "/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
           }}
           draftStore={createComposerDraftStore()}
           launchpad={launchpad}
@@ -3648,8 +3640,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Repo",
             path: "/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
           }}
           draftStore={createComposerDraftStore()}
           launchpad={launchpad}
@@ -3698,8 +3688,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={createComposerDraftStore()}
         launchpad={launchpad}
@@ -4817,8 +4805,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Repo",
             path: "/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
             gitStatus: {
               currentBranch: "feature/provider-memory",
               branches: ["feature/provider-memory", "main"],
@@ -6048,8 +6034,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo/PwrAgent",
@@ -11712,8 +11696,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -11772,8 +11754,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -11828,8 +11808,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -11889,8 +11867,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -11958,8 +11934,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/review-base-default-submit",
             defaultBranch: "fix/review-base-default-submit",
@@ -12020,8 +11994,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/pr-chip-tooltip-dismiss",
             defaultBranch: "fix/pr-chip-tooltip-dismiss",
@@ -12065,8 +12037,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "catalog-service",
           path: "/Users/example/Projects/catalog-service",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "search-gha-deploy-cutover",
             defaultBranch: "search-gha-deploy-cutover",
@@ -12185,8 +12155,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "catalog-service",
           path: "/Users/example/Projects/catalog-service",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "channelsv2-get-tagged-channels-by-asset-id",
             defaultBranch: "develop",
@@ -12256,8 +12224,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "catalog-service",
           path: "/Users/example/Projects/catalog-service",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "develop",
             defaultBranch: "develop",
@@ -12500,8 +12466,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -12584,8 +12548,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -12699,8 +12661,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/review-base-default-submit",
             defaultBranch: "fix/review-base-default-submit",
@@ -12773,8 +12733,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/review-base-default-submit",
             defaultBranch: "fix/review-base-default-submit",
@@ -13454,8 +13412,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feat/thread-workspace-handoff-plan",
             defaultBranch: "main",
@@ -13585,8 +13541,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             defaultBranch: "main",
@@ -13948,8 +13902,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/handoff",
             defaultBranch: "main",
@@ -14017,8 +13969,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/handoff",
             defaultBranch: "main",
@@ -14141,8 +14091,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             branches: ["main", "release"],
@@ -14196,8 +14144,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "subthread:codex:thread-parent:new-worktree",
@@ -14251,8 +14197,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpad}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -14275,8 +14219,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{ ...launchpad, prompt: "/review", updatedAt: 2 }}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -14297,8 +14239,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/.codex/worktrees/mpsmzvdh/PwrAgnt",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "subthread:codex:thread-parent:same-worktree",
@@ -14338,8 +14278,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Projects",
           path: "/Users/fixture-user/.pwragent/projects",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/Users/fixture-user/.pwragent/projects",
@@ -14381,8 +14319,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "UnbornRepo",
           path: "/Users/fixture-user/pwrdrvr/UnbornRepo",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             defaultBranch: "seed",
             branches: ["seed"],
@@ -14436,8 +14372,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "develop",
             branches: [
@@ -14508,8 +14442,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             branches: ["main", "releases/1.0"],
@@ -14573,8 +14505,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             branches: ["main", "releases/1.0"],
@@ -14618,8 +14548,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "catalog-service",
           path: "/missing/catalog-service",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             syncState: "status-unavailable",
             statusUnavailableReason: "fatal: unable to enumerate refs",
@@ -14666,8 +14594,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "app",
           path: "/repo/app",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             syncState: "status-unavailable",
             statusUnavailableReason: "fatal: unable to enumerate refs",
@@ -14716,8 +14642,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             defaultBranch: "main",
@@ -14793,8 +14717,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "ExampleApp",
           path: "/Users/fixture-user/.codex/profiles/work/worktrees/mqs3ew3f/ExampleApp",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/upload-mp4-compression",
             defaultBranch: "main",
@@ -14878,8 +14800,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "develop",
             defaultBranch: "main",
@@ -14941,8 +14861,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/.codex/worktrees/mq8mwn78/PwrAgnt",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             defaultBranch: "main",
             branches: ["fix/layout-chord-single-owner", "main", "release"],
@@ -15009,8 +14927,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             branches: ["main", "feature/handoff"],
@@ -15097,8 +15013,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
         }}
         onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         skills={[]}
@@ -15190,8 +15104,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo A",
           path: "/repo-a",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15243,8 +15155,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo B",
           path: "/repo-b",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-b")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15261,8 +15171,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo A",
           path: "/repo-a",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15457,8 +15365,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo A",
           path: "/repo-a",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15490,8 +15396,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo B",
           path: "/repo-b",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-b")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15522,8 +15426,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo A",
           path: "/repo-a",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15559,8 +15461,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpad}
         onUpdateLaunchpad={async () => undefined}
@@ -15582,8 +15482,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           ...launchpad,
@@ -15693,8 +15591,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -15960,8 +15856,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Repo",
             path: "/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
           }}
           directories={[]}
           draftStore={createComposerDraftStore()}
@@ -16622,8 +16516,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -16657,8 +16549,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -16698,8 +16588,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -16733,8 +16621,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -16767,8 +16653,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -16854,8 +16738,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -16915,8 +16797,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -16964,8 +16844,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -17013,8 +16891,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",

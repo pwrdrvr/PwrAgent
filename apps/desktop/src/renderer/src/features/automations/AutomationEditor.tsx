@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
@@ -17,7 +18,6 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
   MessagingSenderSuggestion,
-  NavigationDirectorySummary,
   NavigationThreadSummary,
   ThreadExecutionMode,
   ThreadIdentifier,

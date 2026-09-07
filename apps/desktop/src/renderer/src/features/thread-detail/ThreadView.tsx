@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
 import {
   useCallback,
@@ -38,7 +39,6 @@ import type {
   HandoffThreadWorkspaceRequest,
   MarkdownFileViewerContext,
   MessagingChannelKind,
-  NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
   PendingRequestAction,
@@ -787,6 +787,7 @@ export type ThreadViewProps = {
   >;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
+  launchpadConfigurationReady?: boolean;
   composerDraftStore?: ComposerDraftStore;
   composerImplementation?: DesktopChatReplyComposer;
   desktopApi?: DesktopApi;
@@ -3387,7 +3388,7 @@ export function ThreadView(props: ThreadViewProps) {
                 draftStore={props.composerDraftStore}
                 directory={props.selectedDirectory}
                 directories={props.directories}
-                disabled={launchpadBackend ? !launchpadBackend.available : false}
+                disabled={props.launchpadConfigurationReady === false || !launchpadBackend?.available}
                 unavailableReason={launchpadBackend?.unavailableReason}
                 launchpad={selectedLaunchpad}
                 launchpadMaterializing={launchpadMaterializing}

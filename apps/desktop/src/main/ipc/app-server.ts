@@ -3640,6 +3640,9 @@ class DesktopAppServerService {
       seenUpdatedAt: request.seenUpdatedAt ?? null,
     });
 
+    await getDesktopBackendRegistry().publishLocalEvent({ backend, notification: {
+      method: "navigation/thread/seen", params: { threadId: request.threadId, seenUpdatedAt: request.seenUpdatedAt },
+    } });
     return response;
   }
 

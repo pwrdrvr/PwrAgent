@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { classifyDirectory } from "@pwragent/shared";
 import type { NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import { buildNavigationWindowDemand } from "./navigation-window-demand";
+import { navigationIdentityKey } from "./navigation-query-state";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import { NavigationWindowQueries, type NavigationWindowQueriesState } from "./navigation-window-queries";
 
@@ -14,6 +16,7 @@ export function useBoundedNavigationWindow(params: Demand & {
   desktopApi?: DesktopApi;
   enabled: boolean;
   visible: boolean;
+  observeEvents?: boolean;
 }) {
   const { desktopApi, enabled, visible } = params;
   const [state, setState] = useState<NavigationWindowQueriesState>(EMPTY);
@@ -30,7 +33,17 @@ export function useBoundedNavigationWindow(params: Demand & {
     }
     return [...descriptors.values()];
   }, [state.resources]);
-  const demand = buildNavigationWindowDemand({ ...params, directories,
+  const selectedResource = state.resources.get("selected-context");
+  const selectedQuery = selectedResource?.state.request.query;
+  const selectedContext = params.selectedRef && selectedQuery?.kind === "exact"
+    && selectedQuery.identities.length === 1
+    && navigationIdentityKey(selectedQuery.identities[0]!) === navigationIdentityKey(params.selectedRef)
+    ? selectedResource?.state.page : undefined;
+  const selectedRoot = selectedContext?.entries.find((entry) => entry.placement.kind === "root");
+  const selectedDirectoryKeys = selectedRoot?.row.linkedDirectories.length
+    ? selectedRoot.row.linkedDirectories.map((directory) => classifyDirectory(directory).key) : params.selectedDirectoryKeys;
+  const demand = buildNavigationWindowDemand({ ...params, directories, selectedDirectoryKeys,
+    selectedRootRef: selectedRoot?.row.ref, selectedContextReady: Boolean(selectedContext),
     indexedDirectoryKeys: new Set((state.resources.get("directory-index")?.state.page?.directories ?? []).map((directory) => directory.key)),
   });
   const demandKey = JSON.stringify([...demand]);
@@ -82,19 +95,21 @@ export function useBoundedNavigationWindow(params: Demand & {
         setConnection((previous) => previous?.target === next.target && previous.connected === next.connected ? previous : next);
         return;
       }
+      if (paramsRef.current.observeEvents === false) return;
       if (federationTargetsEqual(event.federationTarget, target)
         && navigationQueryEventRequiresRefresh(event.notification.method)) schedule();
     });
     const bindings = desktopApi?.onMessagingBindingsChanged?.(() => {
-      if (!paramsRef.current.target || paramsRef.current.target.scope === "local") schedule();
+      if (paramsRef.current.observeEvents !== false && (!paramsRef.current.target || paramsRef.current.target.scope === "local")) schedule();
     });
     return () => { unsubscribe?.(); bindings?.(); if (timer) clearTimeout(timer); };
   }, [desktopApi]);
 
+  const invalidate = useCallback(() => controllerRef.current?.invalidate(), []);
   const refresh = useCallback(() => controllerRef.current?.refresh() ?? Promise.resolve(), []);
   const loadMore = useCallback((id: string) => controllerRef.current?.loadMore(id) ?? Promise.resolve(), []);
   const rebaseline = useCallback((id: string, anchor: NavigationQueryAnchor) => controllerRef.current?.rebaseline(id, anchor) ?? Promise.resolve(), []);
   const restart = useCallback((id: string) => controllerRef.current?.restart(id) ?? Promise.resolve(), []);
   const setVisibleAnchor = useCallback((id: string, anchor: NavigationQueryAnchor | undefined) => controllerRef.current?.setVisibleAnchor(id, anchor), []);
-  return { ...state, directories, connected, refresh, loadMore, rebaseline, restart, setVisibleAnchor };
+  return { ...state, directories, selectedDirectoryKeys, connected, invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor };
 }

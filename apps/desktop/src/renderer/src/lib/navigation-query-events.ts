@@ -1,6 +1,6 @@
 const ROW_CHANGE_METHODS = new Set([
   "thread/started", "thread/archived", "thread/unarchived", "thread/status/changed",
-  "thread/inbox/changed", "thread/name/updated", "thread/rewound",
+  "navigation/thread/seen", "thread/name/updated", "thread/rewound",
   "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated",
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered",
   "thread/agent/updated", "thread/parent/set", "thread/parent/cleared", "thread/turnQueue/updated",

@@ -1,3 +1,9 @@
+import { navigationIdentityKey } from "../../lib/navigation-query-state";
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
+import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
+import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
+import { classifyDirectory } from "@pwragent/shared";
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   useEffect,
   Fragment,
@@ -11,7 +17,6 @@ import {
 import type {
   AppServerBackendKind,
   MessagingThreadBindingSummary,
-  NavigationDirectorySummary,
   NavigationRelativePinMove,
   NavigationThreadSummary,
   PrSummary,
@@ -66,11 +71,6 @@ import {
   formatActiveThreadCount,
   formatReviewThreadCount,
 } from "./ThreadRowStatus";
-import {
-  buildDirectoryThreadRenderModel,
-  DIRECTORY_UNPINNED_THREAD_CAP,
-  type ExpandedDirectoryThreadRenderModel,
-} from "./directory-thread-render-model";
 
 import {
   useNavigationDirectoryDisclosure,
@@ -78,6 +78,8 @@ import {
 } from "../../lib/useNavigationDirectoryDisclosure";
 
 type DirectoriesListProps = {
+  pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
+  selectedThreadDirectoryKeys?: readonly string[];
   directoryDisclosure?: NavigationDirectoryDisclosure;
   approvalRequestThreadKeys?: Record<string, boolean>;
   /** Thread keys with a live integrated terminal in the main process. */
@@ -198,16 +200,13 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
 const POINTER_DRAG_ACTIVATION_PX = 4;
 
-const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: ExpandedDirectoryThreadRenderModel = {
-  cappedUnpinnedThreads: [],
+const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
+  unpinnedThreads: [],
   childThreadsByParentKey: new Map(),
   directoryPinnedThreads: [],
   directoryThreadsCollapsed: false,
   directoryUnpinnedThreadCount: 0,
-  hiddenUnpinnedCount: 0,
-  overflowUnpinnedThreads: [],
   selectionOrder: [],
-  unpinnedExpanded: false,
 };
 
 /**
@@ -485,7 +484,7 @@ function DirectoryCount(props: {
 export function DirectoriesList(props: DirectoriesListProps) {
   const localDisclosure = useNavigationDirectoryDisclosure();
   const {
-    expandedByKey, setExpandedByKey, unpinnedExpandedByKey, setUnpinnedExpandedByKey,
+    expandedByKey, setExpandedByKey,
     previousSelectedItemKeyRef, handledRevealRequestRef,
   } =
     props.directoryDisclosure ?? localDisclosure;
@@ -889,7 +888,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     directory: NavigationDirectorySummary,
   ): string[] =>
     pinnedThreadKeys.filter((threadKey) =>
-      directory.threadKeys.includes(threadKey),
+      threadsByKey.get(threadKey)?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key),
     );
 
   const moveDirectoryPin = (
@@ -898,7 +897,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     targetKey: string,
     position: "before" | "after",
   ): void => {
-    if (!directory.threadKeys.includes(draggedKey)) return;
+    if (!threadsByKey.get(draggedKey)?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)) return;
 
     const draggedThread = threadsByKey.get(draggedKey);
     const targetThread = threadsByKey.get(targetKey);
@@ -922,7 +921,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     directory: NavigationDirectorySummary,
     draggedKey: string,
   ): void => {
-    if (!directory.threadKeys.includes(draggedKey)) return;
+    if (!threadsByKey.get(draggedKey)?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)) return;
 
     const draggedThread = threadsByKey.get(draggedKey);
     if (!draggedThread) return;
@@ -971,7 +970,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const matchingDirectory = visibleDirectories.find(
       (directory) =>
         selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
-        directory.threadKeys.includes(selectedItemKey),
+        props.selectedThreadDirectoryKeys?.includes(directory.key),
     );
     if (!matchingDirectory) {
       return;
@@ -1013,7 +1012,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const matchingDirectory = visibleDirectories.find(
       (directory) =>
         selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
-        directory.threadKeys.includes(selectedItemKey),
+        props.selectedThreadDirectoryKeys?.includes(directory.key),
     );
     if (!matchingDirectory) {
       // showThread() can select before a refreshed navigation snapshot adds
@@ -1032,7 +1031,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       return;
     }
 
-    const directoryThreadKeys = new Set(matchingDirectory.threadKeys);
+    const directoryThreadKeys = new Set([...threadsByKey.values()].filter((thread) => thread.linkedDirectories.some((linked) => classifyDirectory(linked).key === matchingDirectory.key)).map(threadSummaryIdentityKey));
     let topLevelThread = selectedThread;
     const visited = new Set<string>();
     while (topLevelThread.parentThreadId) {
@@ -1056,39 +1055,21 @@ export function DirectoriesList(props: DirectoriesListProps) {
     }
 
     // The selected child is rendered with its top-level ancestor. Reveal that
-    // ancestor through both directory-only layers: the sticky pinned/unpinned
-    // disclosure and the ten-row overflow cap. ThreadRow scrolls the selected
-    // child into view when these state changes mount it.
+    // ancestor through the pinned/unpinned disclosure and its owner page.
+    // ThreadRow scrolls the selected child into view after that page arrives.
     if (matchingDirectory.directoryThreadsCollapsed === true) {
       void setDirectoryThreadsCollapsed?.(matchingDirectory, false);
     }
 
-    const topLevelUnpinnedThreads = matchingDirectory.threadKeys
-      .map((threadKey) => threadsByKey.get(threadKey))
-      .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
-      .filter((thread) => {
-        if (!thread.parentThreadId) {
-          return true;
-        }
-        const parentKey = resolveThreadParentKey(thread, threadsByKey);
-        return !parentKey || !directoryThreadKeys.has(parentKey);
-      })
-      .filter((thread) => !isPinnedThread(thread));
-    const topLevelThreadKey = threadSummaryIdentityKey(topLevelThread);
-    if (
-      topLevelUnpinnedThreads.findIndex(
-        (thread) => threadSummaryIdentityKey(thread) === topLevelThreadKey,
-      ) >= DIRECTORY_UNPINNED_THREAD_CAP
-    ) {
-      setUnpinnedExpandedByKey((current) => ({
-        ...current,
-        [matchingDirectory.key]: true,
-      }));
-    }
+    // Reveal the exact ancestor at an explicit owner cursor anchor, including off-page pins.
+    const resourceId = `directory:${matchingDirectory.key}`;
+    const rootIdentity = { backend: topLevelThread.source, threadId: topLevelThread.id,
+      ownerInstanceId: topLevelThread.federation?.ref.target.scope === "remote" ? topLevelThread.federation.ref.target.instanceId : undefined };
+    void props.pagedNavigation?.rebaseline(resourceId, { kind: "thread", ref: rootIdentity });
+
   }, [
     handledRevealRequestRef,
     setExpandedByKey,
-    setUnpinnedExpandedByKey,
     revealSelectedThreadRequest,
     selectedItemKeyForReveal,
     setDirectoryThreadsCollapsed,
@@ -1127,25 +1108,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const selectedDirectory = selectedLaunchpad || Boolean(
       props.selectedDirectoryKeys?.has(directory.key),
     );
-    const selectedThreadInDirectory = directory.threadKeys.includes(
-      props.selectedItemKey ?? ""
-    );
+    const selectedThreadInDirectory = props.selectedThreadDirectoryKeys?.includes(directory.key) ?? false;
     const expanded =
       expandedByKey[directory.key] ??
       (selectedLaunchpad || selectedThreadInDirectory);
-    const threadModel = buildDirectoryThreadRenderModel({
-      directory,
-      expanded,
-      selectedItemKey: props.selectedItemKey,
-      thinkingThreadKeys: props.thinkingThreadKeys,
-      threadsByKey,
-      unpinnedExpanded: unpinnedExpandedByKey[directory.key],
-    });
-    const {
-      activeThreadCount,
-      reviewThreadCount,
-      visibleThreadCount,
-    } = threadModel;
+    const activeThreadCount = directory.counts?.active ?? 0;
+    const reviewThreadCount = directory.counts?.review ?? 0;
+    const visibleThreadCount = directory.counts?.total ?? 0;
+    const rootResourceId = `directory:${directory.key}`;
+    const rootResource = props.pagedNavigation?.resources.get(rootResourceId);
     const directorySummaryLabel = [
       directory.label,
       directoryUnconfigured ? "not configured on this instance" : undefined,
@@ -1155,15 +1126,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
       .filter((label): label is string => Boolean(label))
       .join(", ");
     const expandedThreadModel =
-      threadModel.expanded ?? EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
+      expanded ? buildPagedDirectoryPresentation({ directory, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
     const { childThreadsByParentKey } = expandedThreadModel;
-    const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
+    const renderStaticSubthreads = (parent: NavigationPresentedThread): ReactElement | null => {
       const parentKey = threadSummaryIdentityKey(parent);
       const children = sortSubthreadSummaries(parent, childThreadsByParentKey.get(parentKey) ?? []);
-      const nativeSubAgentCount = parent.codexNativeSubAgents?.length ?? 0;
+      const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
+      const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
+        ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
+      const childResource = props.pagedNavigation?.resources.get(childResourceId);
       const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
       if (
-        (children.length === 0 && nativeSubAgentCount === 0)
+        ((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
         || subthreadsCollapsed
       ) {
         return null;
@@ -1314,28 +1288,28 @@ export function DirectoriesList(props: DirectoriesListProps) {
               ) : null,
               ];
             })}
+            {childResource?.state.error ? <p role="alert">{childResource.state.error}</p> : null}
+            {childResource?.loading ? <p>Loading sub-threads…</p> : null}
+            {childResource?.state.rebaselineRequired ? (
+              <button type="button" onClick={() => void props.pagedNavigation?.restart(childResourceId)}>Reload sub-threads</button>
+            ) : childResource?.state.page?.nextCursor ? (
+              <button type="button" disabled={childResource.loading} onClick={() => void props.pagedNavigation?.loadMore(childResourceId)}>Load more sub-threads</button>
+            ) : null}
           </div>
         </div>
       );
     };
     const {
-      cappedUnpinnedThreads,
+      unpinnedThreads,
       directoryPinnedThreads,
       directoryThreadsCollapsed,
       directoryUnpinnedThreadCount,
-      hiddenUnpinnedCount,
-      overflowUnpinnedThreads,
       selectionOrder,
-      unpinnedExpanded,
     } = expandedThreadModel;
     const renderPinnedAppendTarget = Boolean(
       props.onReorderThreadPins
       && directoryUnpinnedThreadCount > 0
     );
-    // Render one unpinned thread row. Shared by the always-shown capped
-    // slice and the overflow slice so the "Show more / Show less" toggle
-    // sits at a fixed pivot between them — collapsing never makes the
-    // user scroll to the bottom of an expanded directory to find it.
     const renderUnpinnedRow = (
       thread: NavigationThreadSummary,
     ): ReactElement => {
@@ -1868,7 +1842,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
-                    {directoryPinnedThreads.length > 0 &&
+                    {(directory.pinnedRootCount ?? 0) > 0 &&
                     directoryUnpinnedThreadCount > 0 ? (
                       <div className="directory-row__threads-slot" role="listitem">
                         <button
@@ -1916,33 +1890,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
                     {directoryThreadsCollapsed
                       ? null
-                      : cappedUnpinnedThreads.map(renderUnpinnedRow)}
-                    {!directoryThreadsCollapsed && hiddenUnpinnedCount > 0 ? (
-                      <div className="directory-row__threads-slot" role="listitem">
-                        <button
-                          type="button"
-                          className="directory-row__show-more"
-                          aria-expanded={unpinnedExpanded}
-                          onClick={() =>
-                            setUnpinnedExpandedByKey((prev) => ({
-                              ...prev,
-                              [directory.key]: !unpinnedExpanded,
-                            }))
-                          }
-                        >
-                          {unpinnedExpanded
-                            ? "Show less"
-                            : `Show ${hiddenUnpinnedCount} more`}
-                        </button>
-                      </div>
-                    ) : null}
-                    {!directoryThreadsCollapsed && unpinnedExpanded
-                      ? overflowUnpinnedThreads.map(renderUnpinnedRow)
-                      : null}
+                      : unpinnedThreads.map(renderUnpinnedRow)}
                   </div>
                 ) : (
-                  <p className="sidebar-empty directory-row__empty">No threads in this directory yet.</p>
+                  <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
                 )}
+                {rootResource?.state.error ? <p className="sidebar-error">{rootResource.state.error}</p> : null}
+                {rootResource?.loading ? <p className="sidebar-empty">Loading threads…</p> : null}
+                {rootResource?.state.rebaselineRequired ? (
+                  <button type="button" className="directory-row__show-more" onClick={() => void props.pagedNavigation?.restart(rootResourceId)}>Reload this directory</button>
+                ) : rootResource?.state.page?.nextCursor ? (
+                  <button type="button" className="directory-row__show-more" disabled={rootResource.loading} onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)}>Load more threads</button>
+                ) : null}
               </div>
             ) : null}
           </section>

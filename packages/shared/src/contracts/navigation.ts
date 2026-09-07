@@ -1498,6 +1498,8 @@ export type NavigationCounts = {
   /** Distinct ordinary threads. Native workers are not independent rows. */
   total: number;
   active: number;
+  /** Active mounted-peer rows in a viewer-local index; already included in active. */
+  activeRemote?: number;
   unread: number;
   /** Unread and idle. Active and review are exclusive in sidebar counts. */
   review: number;

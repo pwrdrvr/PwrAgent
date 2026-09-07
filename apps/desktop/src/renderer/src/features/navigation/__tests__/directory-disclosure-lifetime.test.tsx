@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { useNavigationDirectoryDisclosure } from "../../../lib/useNavigationDirectoryDisclosure";
-import { DirectoriesList } from "../DirectoriesList";
+import { FixtureDirectoriesList as DirectoriesList } from "../../../test/navigation-presentation-fixture";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";
 
 const fixture = buildLargeDirectoryFixture({ pinnedThreadsPerDirectory: 2, unpinnedThreadsPerDirectory: 12, directoryThreadsCollapsed: false });

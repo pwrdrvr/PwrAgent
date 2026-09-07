@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import "@testing-library/jest-dom/vitest";
 import {
   fireEvent,
@@ -12,7 +13,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { BrowseMode } from "../../../lib/useThreadNavigation";
-import { Sidebar } from "../Sidebar";
+import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 
 function thread(params: {
   createdAt?: number;
@@ -73,7 +74,7 @@ function renderSidebar(params: {
   draftThreadKeys?: Record<string, boolean>;
   inboxThreads?: NavigationThreadSummary[];
   onOpenLaunchpad?: (
-    directory: NavigationDirectorySummary,
+    directory: NavigationDirectoryView,
   ) => Promise<void>;
   onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
   onSelectThread?: (thread: NavigationThreadSummary) => void;
