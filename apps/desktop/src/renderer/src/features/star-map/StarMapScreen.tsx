@@ -89,7 +89,7 @@ import {
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
-  instanceIdByThreadKey,
+  projectThreadOwner,
 } from "./star-map-projects";
 import {
   computeProjectLayout,
@@ -1542,11 +1542,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [attentionByInstance, summonedKeys, projectDescriptorsByInstance, projectGeometryTime],
   );
 
-  const projectThreadOwners = useMemo(
-    () => instanceIdByThreadKey(attentionByInstance),
-    [attentionByInstance],
-  );
-
   /**
    * Card key for a thread in the Projects lens.
    *
@@ -1558,10 +1553,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const projectCardKey = useCallback(
     (thread: NavigationThreadSummary) => {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const owner = projectThreadOwners.get(threadKey) ?? localInstanceId;
+      const owner = projectThreadOwner(thread) ?? localInstanceId;
       return `${owner ?? "project"}::${threadKey}`;
     },
-    [localInstanceId, projectThreadOwners],
+    [localInstanceId],
   );
 
   /**
@@ -2622,7 +2617,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       const target = thread.federation?.ref.target;
       const remoteOwner = target && isRemoteFederationTarget(target);
-      const ownerInstanceId = remoteOwner ? target.instanceId : localInstanceId;
+      const ownerInstanceId = projectThreadOwner(thread)
+        ?? (remoteOwner ? target.instanceId : localInstanceId);
       const sourceKey = starMapWorkspaceCardKey({
         instanceId: ownerInstanceId,
         threadKey,
@@ -3250,7 +3246,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         const slot = cloud.slots[index];
         if (!slot) return;
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-        const owner = projectThreadOwners.get(threadKey) ?? localInstanceId;
+        const owner = projectThreadOwner(thread) ?? localInstanceId;
         // See `cardRects`: an unmeasured card reports 0, and a zero-height
         // rect would centre the camera on the card's top edge.
         const height =
@@ -3273,7 +3269,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
     projectClouds,
     projectLayout,
     projects,
-    projectThreadOwners,
     projectsMode,
   ]);
 
@@ -4951,10 +4946,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     // the owner is always present; fall back to the local
                     // instance rather than inventing an empty id.
                     const owner =
-                      projectThreadOwners.get(threadKey) ?? localInstanceId;
+                      projectThreadOwner(thread) ?? localInstanceId;
                     return (
                       <StarMapThreadCard
-                        key={threadKey}
+                        key={projectCardKey(thread)}
                         thread={thread}
                         sessionKeys={
                           owner === localInstanceId

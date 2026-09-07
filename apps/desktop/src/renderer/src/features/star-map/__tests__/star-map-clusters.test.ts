@@ -9,6 +9,8 @@ import {
   ORBIT_MAX_CARDS_PER_GROUP,
 } from "../star-map-clusters";
 
+import { groupThreadsByProject, projectThreadOwner } from "../star-map-projects";
+
 const NOW = 1_000_000;
 
 function thread(
@@ -905,5 +907,23 @@ describe("resolveCloudDrop", () => {
       thread: chain[0],
     });
     expect(drop.kind).toBe("none");
+  });
+});
+
+describe("project clouds with multiple owners", () => {
+  it("keeps duplicate ids and parents in their owning instance", () => {
+    const [project] = groupThreadsByProject(new Map([
+      ["local", [thread("parent"), thread("child", { parentId: "parent" })]],
+      ["peer", [thread("parent"), thread("child", { parentId: "parent" })]],
+    ]));
+    const clusters = buildInstanceClusters({ threads: project.threads });
+    expect(clusters).toHaveLength(2);
+    for (const cluster of clusters) {
+      expect(cluster.threads.map((entry) => entry.id)).toEqual(["parent", "child"]);
+      expect(new Set(cluster.threads.map(projectThreadOwner)).size).toBe(1);
+    }
+    const cloud = computeClusterCloud({ clusters, cardWidth: 200, heightForThread: height });
+    expect(cloud.threads).toHaveLength(4);
+    expect(new Set(cloud.slots.map((slot) => `${slot.dx}:${slot.dy}`)).size).toBe(4);
   });
 });

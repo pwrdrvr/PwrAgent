@@ -3,7 +3,8 @@ import type { NavigationDirectoryRow, NavigationThreadSummary } from "@pwragent/
 import {
   STAR_MAP_NO_PROJECT_KEY,
   groupThreadsByProject,
-  instanceIdByThreadKey,
+  projectThreadOwner,
+  starMapThreadKey,
   projectMass,
   threadProjectKey,
 } from "../star-map-projects";
@@ -134,32 +135,17 @@ describe("groupThreadsByProject", () => {
   });
 });
 
-describe("instanceIdByThreadKey", () => {
-  const local = thread({ id: "l1", repoPath: "/repos/A" });
-  const remote = thread({ id: "r1", repoPath: "/repos/A" });
-  const byInstance = new Map([
-    ["local", [local]],
-    ["peer", [remote]],
-  ]);
-
-  it("maps each thread to its owning instance", () => {
-    const owners = instanceIdByThreadKey(byInstance);
-    expect(owners.get("codex:r1")).toBe("peer");
-    expect(owners.get("codex:l1")).toBe("local");
-  });
-
-  it("has no entry for a thread from nowhere", () => {
-    expect(instanceIdByThreadKey(byInstance).get("codex:gone")).toBeUndefined();
-  });
-
-  it("keys on thread identity, not object identity", () => {
-    // A clone must resolve the same way — the previous implementation
-    // scanned with `===` and would have missed this entirely.
-    const owners = instanceIdByThreadKey(byInstance);
-    const clone = { ...remote } as typeof remote;
-    expect(
-      owners.get(`${clone.source}:${clone.id}`),
-    ).toBe("peer");
+describe("project owner identity", () => {
+  it("preserves equal backend/thread ids from separate owners, including clones", () => {
+    const source = thread({ id: "same", repoPath: "/repos/A" });
+    const [project] = groupThreadsByProject(new Map([
+      ["local", [source]], ["peer", [{ ...source }]],
+    ]));
+    expect(project.threads.map((entry) => projectThreadOwner({ ...entry })))
+      .toEqual(["local", "peer"]);
+    expect(project.threads.map(starMapThreadKey))
+      .toEqual(["local::codex:same", "peer::codex:same"]);
+    expect(projectThreadOwner(source)).toBeUndefined();
   });
 });
 

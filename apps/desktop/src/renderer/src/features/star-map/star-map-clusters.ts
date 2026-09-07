@@ -9,6 +9,8 @@ import {
 import { STAR_MAP_INSTANCE_KEEPOUT } from "./star-map-orbit";
 import {
   STAR_MAP_NO_PROJECT_KEY,
+  projectThreadOwner,
+  starMapThreadKey,
   threadProjectKey,
   threadProjectLabel,
 } from "./star-map-projects";
@@ -131,15 +133,17 @@ export type StarMapClusterCloud = {
 };
 
 function threadKeyOf(thread: NavigationThreadSummary): string {
-  return buildThreadIdentityKey(thread.source, thread.id);
+  return starMapThreadKey(thread);
 }
 
 function parentKeyOf(thread: NavigationThreadSummary): string | undefined {
   if (!thread.parentThreadId) return undefined;
-  return buildThreadIdentityKey(
+  const key = buildThreadIdentityKey(
     thread.parentThreadBackend ?? thread.source,
     thread.parentThreadId,
   );
+  const owner = projectThreadOwner(thread);
+  return owner === undefined ? key : `${thread.parentThreadInstanceId ?? owner}::${key}`;
 }
 
 /** Stable [0,1) from a string, for deterministic willy-nilly. */

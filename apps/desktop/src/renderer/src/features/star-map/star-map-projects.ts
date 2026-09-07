@@ -5,6 +5,24 @@ import {
   type NavigationDirectoryRow,
 } from "@pwragent/shared";
 
+/** Presentation identity retained when a project pools multiple owners. */
+export type StarMapProjectThread = NavigationThreadSummary & {
+  starMapOwnerInstanceId: string;
+};
+
+export function projectThreadOwner(thread: NavigationThreadSummary): string | undefined {
+  return "starMapOwnerInstanceId" in thread
+    && typeof thread.starMapOwnerInstanceId === "string"
+    ? thread.starMapOwnerInstanceId
+    : undefined;
+}
+
+export function starMapThreadKey(thread: NavigationThreadSummary): string {
+  const key = buildThreadIdentityKey(thread.source, thread.id);
+  const owner = projectThreadOwner(thread);
+  return owner === undefined ? key : `${owner}::${key}`;
+}
+
 export type StarMapProject = {
   /** Stable identity: the repo root path, or a sentinel when there is none. */
   key: string;
@@ -17,7 +35,7 @@ export type StarMapProject = {
    */
   mass: number;
   /** Threads pooled from every instance, most recently active first. */
-  threads: NavigationThreadSummary[];
+  threads: StarMapProjectThread[];
   /** Complete primary-membership count from compact owner geometry. */
   totalThreadCount?: number;
 };
@@ -124,8 +142,9 @@ export function groupThreadsByProject(
   const owners = params?.descriptorsByInstance
     ? [...threadsByInstance.entries()].sort(([left], [right]) => left.localeCompare(right))
     : threadsByInstance.entries();
-  for (const [, threads] of owners) {
-    for (const thread of threads) {
+  for (const [instanceId, threads] of owners) {
+    for (const sourceThread of threads) {
+      const thread: StarMapProjectThread = { ...sourceThread, starMapOwnerInstanceId: instanceId };
       const key = threadProjectKey(thread);
       const existing = projects.get(key);
       if (existing) {
@@ -177,22 +196,3 @@ export function groupThreadsByProject(
   );
 }
 
-/**
- * Owning instance per thread, for the card's instance chip.
- *
- * Built once and looked up by identity key rather than scanned per card:
- * a per-card scan is O(instances x threads) on every render, and matching
- * on object identity would break silently the moment any layer cloned a
- * summary instead of passing the same reference through.
- */
-export function instanceIdByThreadKey(
-  threadsByInstance: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
-): Map<string, string> {
-  const owners = new Map<string, string>();
-  for (const [instanceId, threads] of threadsByInstance) {
-    for (const thread of threads) {
-      owners.set(buildThreadIdentityKey(thread.source, thread.id), instanceId);
-    }
-  }
-  return owners;
-}
