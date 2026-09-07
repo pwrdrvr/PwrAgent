@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ComposerThreadOwner, NavigationQueueProjection } from "@pwragent/shared";
 import type { ComposerQueuedTurnSnapshot } from "../../features/composer/useComposerDraftStore";
-import { readCompleteNavigationQueue, reconcileCompleteNavigationQueue } from "../navigation-queue-projection";
+import { NAVIGATION_QUEUE_MAX_PAGES, readCompleteNavigationQueue, reconcileCompleteNavigationQueue } from "../navigation-queue-projection";
 
 const owner: ComposerThreadOwner = {
   backend: "codex", threadId: "thread", target: { scope: "remote", instanceId: "owner" },
@@ -22,6 +22,42 @@ function queued(id: string): ComposerQueuedTurnSnapshot {
 }
 
 describe("independent complete FIFO projection", () => {
+  it("rejects a complete page that arrives after the original deadline", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const read = vi.fn(async () => { now.mockReturnValue(11_000); return projection(); });
+      await expect(readCompleteNavigationQueue({ owner, read, isCancelled: () => false })).rejects.toThrow("deadline expired");
+    } finally { now.mockRestore(); }
+  });
+
+  it("bounds an endless sequence of advancing cursors", async () => {
+    let count = 0;
+    const read = vi.fn(async () => projection({ complete: false, nextCursor: `cursor-${++count}` }));
+    await expect(readCompleteNavigationQueue({ owner, read, isCancelled: () => false })).rejects.toThrow("page budget");
+    expect(read).toHaveBeenCalledTimes(NAVIGATION_QUEUE_MAX_PAGES);
+  });
+
+  it("rejects oversized wire pages and complete baselines before publishing either", async () => {
+    const entry = { queueEntryId: "large", createdAt: 1, displayText: "x".repeat(260_000), origin: "manual" as const, position: 0 };
+    await expect(readCompleteNavigationQueue({ owner, read: async () => projection({ entries: [entry] }), isCancelled: () => false }))
+      .rejects.toThrow("protocol budget");
+    let index = 0;
+    const read = vi.fn(async () => projection({ complete: false, nextCursor: `cursor-${++index}`,
+      entries: [{ ...entry, queueEntryId: `entry-${index}`, displayText: "x".repeat(200_000), position: index }] }));
+    await expect(readCompleteNavigationQueue({ owner, read, isCancelled: () => false })).rejects.toThrow("memory budget");
+    expect(read.mock.calls.length).toBeLessThan(NAVIGATION_QUEUE_MAX_PAGES);
+  });
+
+  it("rejects duplicate entries across pages and another owner's unchanged baseline", async () => {
+    const entries = [{ queueEntryId: "same", createdAt: 1, displayText: "reply", origin: "manual" as const, position: 0 }];
+    const read = vi.fn().mockResolvedValueOnce(projection({ complete: false, nextCursor: "next", entries }))
+      .mockResolvedValueOnce(projection({ entries }));
+    await expect(readCompleteNavigationQueue({ owner, read, isCancelled: () => false })).rejects.toThrow("duplicate entry");
+    await expect(readCompleteNavigationQueue({ owner, read: async () => projection({ unchanged: true }),
+      previous: projection({ ref: { backend: "codex", threadId: "thread", ownerInstanceId: "other" } }),
+      isCancelled: () => false })).rejects.toThrow("no complete matching baseline");
+  });
+
   it("never prunes from an incomplete FIFO or a concurrent acknowledgement", () => {
     const before = queued("before");
     const newEntry = queued("new");

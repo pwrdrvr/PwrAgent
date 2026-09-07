@@ -1,9 +1,13 @@
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS, NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
   ComposerThreadOwner,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
 } from "@pwragent/shared";
 import type { ComposerQueuedTurnSnapshot } from "../features/composer/useComposerDraftStore";
+
+export const NAVIGATION_QUEUE_MAX_BASELINE_BYTES = 8 * 1024 * 1024;
+export const NAVIGATION_QUEUE_MAX_PAGES = 128;
 
 /** A complete FIFO baseline has no dependency on a row page or its timestamp. */
 export async function readCompleteNavigationQueue(params: {
@@ -17,10 +21,14 @@ export async function readCompleteNavigationQueue(params: {
     let cursor: string | undefined;
     let baseline: NavigationQueueProjection | undefined;
     const cursors = new Set<string>();
+    const entryIds = new Set<string>();
+    let retainedBytes = 0;
+    let pageCount = 0;
     try {
       do {
         if (params.isCancelled()) throw new Error("Queue read cancelled.");
         if (Date.now() >= deadlineAt) throw new Error("Queue read deadline expired.");
+        if (++pageCount > NAVIGATION_QUEUE_MAX_PAGES) throw new Error("Queue exceeds the complete-read page budget; existing queued replies were retained.");
         const page = await params.read({
           protocol: 2,
           ref: {
@@ -36,6 +44,11 @@ export async function readCompleteNavigationQueue(params: {
           deadlineAt,
         });
         if (params.isCancelled()) throw new Error("Queue read cancelled.");
+        if (Date.now() >= deadlineAt) throw new Error("Queue read deadline expired.");
+        const pageBytes = new TextEncoder().encode(JSON.stringify(page)).byteLength;
+        if (pageBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES || page.entries.length > NAVIGATION_QUERY_MAX_PAGE_ROWS) {
+          throw new Error("Queue page exceeds the bounded protocol budget.");
+        }
         if (page.protocol !== 2 || page.readiness !== "ready"
           || page.ref.backend !== params.owner.backend
           || page.ref.threadId !== params.owner.threadId
@@ -44,7 +57,11 @@ export async function readCompleteNavigationQueue(params: {
           throw new Error("Queue projection is not authoritative for this thread.");
         }
         if (page.unchanged) {
-          if (!params.previous?.complete || params.previous.revision !== page.revision || cursor) {
+          if (!params.previous?.complete || params.previous.revision !== page.revision || cursor
+            || !page.complete || page.entries.length || page.nextCursor
+            || params.previous.ref.backend !== page.ref.backend
+            || params.previous.ref.threadId !== page.ref.threadId
+            || params.previous.ref.ownerInstanceId !== page.ref.ownerInstanceId) {
             throw new Error("Queue unchanged response has no complete matching baseline.");
           }
           return params.previous;
@@ -52,7 +69,17 @@ export async function readCompleteNavigationQueue(params: {
         if (baseline && baseline.revision !== page.revision) {
           throw Object.assign(new Error("Queue changed while paging."), { code: "navigation_cursor_expired" });
         }
-        baseline = { ...page, entries: [...(baseline?.entries ?? []), ...page.entries] };
+        retainedBytes += pageBytes;
+        if (retainedBytes > NAVIGATION_QUEUE_MAX_BASELINE_BYTES) {
+          throw new Error("Queue exceeds the complete-read memory budget; existing queued replies were retained.");
+        }
+        for (const entry of page.entries) {
+          if (entryIds.has(entry.queueEntryId)) throw new Error("Queue pages contain a duplicate entry.");
+          entryIds.add(entry.queueEntryId);
+        }
+        const entries = baseline?.entries ?? [];
+        entries.push(...page.entries);
+        baseline = { ...page, entries };
         if (page.complete) return baseline;
         cursor = page.nextCursor;
         if (!cursor || cursors.has(cursor)) throw new Error("Queue cursor did not advance.");

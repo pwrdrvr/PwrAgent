@@ -285,6 +285,11 @@ export class NavigationDetailService {
       const candidate = {
         ...response,
         entries: [...response.entries, entries[nextOffset]!],
+        complete: nextOffset + 1 >= entries.length,
+        ...(nextOffset + 1 < entries.length ? { nextCursor: encodeQueueCursor({
+          offset: nextOffset + 1,
+          revision: queueRevision,
+        }) } : {}),
       };
       if (responseBytes(candidate) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         if (nextOffset === offset) {

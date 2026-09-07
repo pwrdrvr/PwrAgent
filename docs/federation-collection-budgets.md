@@ -201,3 +201,19 @@ at most 256 records / 256 KiB; closed records expire after 60 seconds and preven
 late reads from recreating released ranks. These operations add no SQLite writes.
 Hidden views retain their Attention lifetime without polling. Releasing a query
 page or changing a lens does not release the view.
+
+### Independent FIFO read assembly
+
+Each renderer FIFO read admits at most 128 pages and 8 MiB of cumulative
+serialized page bytes for one complete revision. Every page must fit 100 entries
+and the 252 KiB application response limit. The owner includes its continuation
+cursor in that wire-byte check. Entries append into one private array rather
+than copying the accumulated array for every page; only a complete revision is
+published. Duplicate entries, an unchanged response for another owner, an expired
+deadline, or budget exhaustion reject the read and retain existing queue mirrors.
+One cursor restart shares the original ten-second deadline.
+
+These are per-read serialized backing limits, not measurements of aggregate
+renderer heap or physical cancellation of a pending IPC request. Independent
+queue consumers still require shared admission and lifetime accounting. The
+assembly and validation changes perform no persistence writes.

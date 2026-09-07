@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -41,6 +42,20 @@ function thread(id: string): NavigationThreadSummary {
 }
 
 describe("NavigationDetailService", () => {
+  it("includes a continuation cursor in the queue wire-byte admission check", () => {
+    const entries: ThreadQueuedTurnSummary[] = [{ queueEntryId: "first", createdAt: 1, displayText: "", origin: "manual", position: 0 }];
+    const service = new NavigationDetailService({
+      getQueuedTurnsForThread: () => entries,
+      getQueuedExecutionModeForThread: () => undefined,
+    } as unknown as DesktopBackendRegistry);
+    const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: "thread" } };
+    const overhead = Buffer.byteLength(JSON.stringify(service.readQueueProjection(request)));
+    entries[0]!.displayText = "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES - overhead - 10);
+    expect(Buffer.byteLength(JSON.stringify(service.readQueueProjection(request)))).toBeLessThan(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+    entries.push({ queueEntryId: "second", createdAt: 2, displayText: "next", origin: "manual", position: 1 });
+    expect(() => service.readQueueProjection(request)).toThrow("One queue entry exceeds the result budget");
+  });
+
   beforeEach(() => {
     mocks.reconcileNavigationSnapshot.mockReset();
     mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
