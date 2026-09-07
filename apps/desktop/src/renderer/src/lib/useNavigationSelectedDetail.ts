@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FederationTarget, NavigationIdentity } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { applyNavigationThreadEvent } from "./navigation-thread-event";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import {
   applyNavigationSelectedDetail,
@@ -45,7 +46,7 @@ export function useNavigationSelectedDetail(params: {
         protocol: 2,
         ref: selectedRef,
         federationTarget: currentParams.federationTarget,
-        knownRevision: started.detail?.revision,
+        knownRevision: started.stale ? undefined : started.detail?.revision,
       });
       if (sequenceRef.current !== sequence) return;
       const next = applyNavigationSelectedDetail({ state: started, sequence, detail });
@@ -83,8 +84,19 @@ export function useNavigationSelectedDetail(params: {
       if (!selected || event.backend !== selected.backend || eventOwner !== selectedOwner
         || !("threadId" in notification.params) || notification.params.threadId !== selected.threadId) return;
       if (!navigationQueryEventRequiresRefresh(notification.method)
-        && !notification.method.startsWith("thread/model")
-        && !notification.method.startsWith("thread/executionMode")) return;
+        && notification.method !== "thread/codexEnvironment/updated"
+        && notification.method !== "thread/acpRuntime/updated") return;
+      // Fence an already-running read at event admission, not when the coalesced
+      // refresh eventually starts. Its revision no longer describes this detail.
+      const sequence = ++sequenceRef.current;
+      const current = currentRef.current;
+      if (current) {
+        const next: NavigationSelectionState = { ...current, pendingSequence: sequence, readiness: "loading", stale: true,
+          detail: current.detail?.thread ? { ...current.detail,
+            thread: applyNavigationThreadEvent(current.detail.thread, event) } : current.detail };
+        currentRef.current = next;
+        setState(next);
+      }
       if (timer !== undefined) return;
       timer = setTimeout(() => { timer = undefined; void refresh(); }, 250);
     });
