@@ -488,13 +488,6 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
   "remote-thread-summary-cache";
 
-type FederationPeerDirectoryNotification = {
-  method: typeof FEDERATION_PEER_DIRECTORY_METHOD;
-  params: {
-    peers: FederationPeerSummary[];
-  };
-};
-
 type FederationCelestialIconsNotification = {
   method: typeof FEDERATION_CELESTIAL_ICONS_METHOD;
   params: {
@@ -3762,14 +3755,20 @@ export class DesktopFederationRuntime {
     const localInstanceId = this.ensureLocalInstanceId();
 
     for (const connection of router.listConnections()) {
-      const peers = this.buildPeerDirectory(connection.peerId);
-      const paged = connection.peerDirectoryPaging === true;
       try {
-        const payloads = paged ? replacementPages(peers) : [{ peers }];
+        if (connection.peerDirectoryPaging !== true) {
+          connection.sendEnvelope({ id: `federation-peers:${randomUUID()}`, kind: "error",
+            error: { code: "navigation_upgrade_required",
+              message: "Upgrade this PwrAgent peer and its gateways: bounded peer-directory paging is required." },
+            protocolVersion: FEDERATION_PROTOCOL_VERSION, sourceInstanceId: localInstanceId,
+            targetInstanceId: connection.peerId, createdAt: Date.now() });
+          continue;
+        }
+        const payloads = replacementPages(this.buildPeerDirectory(connection.peerId));
         for (const params of payloads) connection.sendEnvelope({
           id: `federation-peers:${randomUUID()}`,
           kind: "notification",
-          method: paged ? FEDERATION_PEER_DIRECTORY_PAGE_METHOD : FEDERATION_PEER_DIRECTORY_METHOD,
+          method: FEDERATION_PEER_DIRECTORY_PAGE_METHOD,
           params,
           protocolVersion: FEDERATION_PROTOCOL_VERSION,
           sourceInstanceId: localInstanceId,
@@ -3791,9 +3790,11 @@ export class DesktopFederationRuntime {
       return false;
     }
 
-    const notification = envelope as FederationPeerDirectoryNotification & typeof envelope;
+    if (envelope.method === FEDERATION_PEER_DIRECTORY_METHOD) {
+      throw new Error("Upgrade the PwrAgent gateway: legacy peer-directory snapshots are retired; bounded paging is required.");
+    }
     let peers: FederationPeerSummary[];
-    if (envelope.method === FEDERATION_PEER_DIRECTORY_PAGE_METHOD) {
+    {
       const source = envelope.sourceInstanceId;
       let receiver = this.peerDirectoryReceivers.get(source);
       if (!receiver) {
@@ -3808,9 +3809,6 @@ export class DesktopFederationRuntime {
       const complete = receiver.accept(envelope.params as FederationReplacementPage<FederationPeerSummary>);
       if (!complete) return true;
       peers = complete;
-    } else {
-      this.peerDirectoryReceivers.delete(envelope.sourceInstanceId);
-      peers = notification.params.peers;
     }
     const previousPeers = new Map(this.remotePeerDirectory);
     this.remotePeerDirectory.clear();

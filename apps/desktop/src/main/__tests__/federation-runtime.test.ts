@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -728,9 +729,10 @@ describe("DesktopFederationRuntime", () => {
     const handled = runtime.applyPeerDirectory({
       id: "peers-1",
       kind: "notification",
-      method: "federation.peerDirectory",
+      method: "federation.peerDirectoryPage",
       params: {
-        peers: [
+        generation: randomUUID(), index: 0, total: 1,
+        entries: [
           {
             id: "gateway_one",
             label: "Studio",
@@ -783,7 +785,7 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
-  it("uses replacement pages only on negotiated connections and keeps legacy payloads complete", () => {
+  it("requires negotiated peer-directory pages and sends an upgrade error instead of a legacy snapshot", () => {
     const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
     try {
       const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness & {
@@ -808,7 +810,8 @@ describe("DesktopFederationRuntime", () => {
       expect(paged[0]).toMatchObject({ method: "federation.peerDirectoryPage", params: { index: 0, total: 3 } });
       expect(paged.every((envelope) => Buffer.byteLength(JSON.stringify(envelope)) <= 256 * 1024)).toBe(true);
       expect(legacy).toHaveLength(1);
-      expect(legacy[0]).toMatchObject({ method: "federation.peerDirectory", params: { peers } });
+      expect(legacy[0]).toMatchObject({ kind: "error", error: { code: "navigation_upgrade_required", message: expect.stringContaining("Upgrade") } });
+      expect(JSON.stringify(legacy[0])).not.toContain("peer-200");
     } finally {
       initialized.mockRestore();
     }
@@ -825,7 +828,7 @@ describe("DesktopFederationRuntime", () => {
     });
     const old = { id: "old", label: "Old", role: "client" as const,
       status: "connected" as const, capabilities: ["thread_navigation" as const] };
-    runtime.applyPeerDirectory(envelope("federation.peerDirectory", { peers: [old] }));
+    runtime.applyPeerDirectory(envelope("federation.peerDirectoryPage", replacementPages([old])[0]));
     const peers = Array.from({ length: 101 }, (_, index) => ({ ...old, id: `new-${index}` }));
     const pages = replacementPages(peers);
     runtime.applyPeerDirectory(envelope("federation.peerDirectoryPage", pages[0]));
@@ -836,9 +839,10 @@ describe("DesktopFederationRuntime", () => {
     expect(runtime.visiblePeers().map((peer) => peer.id)).toEqual(peers.map((peer) => peer.id));
     expect(observed.length).toBeGreaterThan(0);
     expect(observed.every((ids) => ids.length === 101 && !ids.includes("old"))).toBe(true);
-    // A legacy complete replacement still works after negotiating pages.
-    runtime.applyPeerDirectory(envelope("federation.peerDirectory", { peers: [old] }));
-    expect(runtime.visiblePeers().map((peer) => peer.id)).toEqual(["old"]);
+    // A stale alpha frame cannot replace a newer complete route generation.
+    expect(() => runtime.applyPeerDirectory(envelope("federation.peerDirectory", { peers: [old] })))
+      .toThrow("Upgrade the PwrAgent gateway");
+    expect(runtime.visiblePeers().map((peer) => peer.id)).toEqual(peers.map((peer) => peer.id));
   });
 
   it("publishes peer status changes after installing the full directory", () => {
@@ -857,9 +861,10 @@ describe("DesktopFederationRuntime", () => {
     ): FederationProtocolEnvelope => ({
       id,
       kind: "notification",
-      method: "federation.peerDirectory",
+      method: "federation.peerDirectoryPage",
       params: {
-        peers: peers.map((peer) => ({
+        generation: randomUUID(), index: 0, total: 1,
+        entries: peers.map((peer) => ({
           ...peer,
           role: peer.id === "gateway_one" ? "gateway" : "client",
           status: "connected",
@@ -928,9 +933,10 @@ describe("DesktopFederationRuntime", () => {
     ): FederationProtocolEnvelope => ({
       id,
       kind: "notification",
-      method: "federation.peerDirectory",
+      method: "federation.peerDirectoryPage",
       params: {
-        peers: status
+        generation: randomUUID(), index: 0, total: 1,
+        entries: status
           ? [{
               id: "viewer_one",
               label: "Viewer",
@@ -1036,9 +1042,10 @@ describe("DesktopFederationRuntime", () => {
     runtime.applyPeerDirectory({
       id: "peers-1",
       kind: "notification",
-      method: "federation.peerDirectory",
+      method: "federation.peerDirectoryPage",
       params: {
-        peers: [
+        generation: randomUUID(), index: 0, total: 1,
+        entries: [
           {
             id: "gateway_one",
             label: "Mac Mini",
@@ -1075,9 +1082,10 @@ describe("DesktopFederationRuntime", () => {
     runtime.applyPeerDirectory({
       id: "peers-1",
       kind: "notification",
-      method: "federation.peerDirectory",
+      method: "federation.peerDirectoryPage",
       params: {
-        peers: [
+        generation: randomUUID(), index: 0, total: 1,
+        entries: [
           {
             id: "gateway_one",
             label: "Studio",
