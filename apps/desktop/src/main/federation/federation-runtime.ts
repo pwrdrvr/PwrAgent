@@ -5415,10 +5415,12 @@ async function mountRemoteParentForLocalChild(
   const normalizedLaunchpadDirectoryPath = launchpadDirectoryPath
     ? path.resolve(launchpadDirectoryPath)
     : undefined;
+  // Query the owner with its supplied path. Resolving a POSIX-shaped path on
+  // Windows adds a drive prefix and changes this exact directory-index filter.
   const directoryPage = launchpadDirectoryKey || normalizedLaunchpadDirectoryPath
     ? await readPage({ protocol: 2, consumer: "exact-link", inventory: "owner", pageSize: 2,
         query: { kind: "directory-index", keys: launchpadDirectoryKey ? [launchpadDirectoryKey] : [],
-          paths: normalizedLaunchpadDirectoryPath ? [normalizedLaunchpadDirectoryPath] : [] } })
+          paths: launchpadDirectoryPath ? [launchpadDirectoryPath] : [] } })
     : undefined;
   const directories = directoryPage?.protocol === 2 && directoryPage.coverage.state === "complete"
     && directoryPage.complete && !directoryPage.nextCursor && !directoryPage.unchanged ? directoryPage.directories ?? [] : [];
