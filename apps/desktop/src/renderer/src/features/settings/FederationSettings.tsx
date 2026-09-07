@@ -608,14 +608,24 @@ export function FederationSettings(props: FederationSettingsProps) {
             label="Gateway endpoints"
             sub={
               dialsGateway
-                ? "Endpoints for one pinned gateway, one per line in fallback order. ws://, wss://, and ssh:// (user@host, optional ?forward=host:port) are supported."
-                : "Only used when Mode is client or dual."
+                ? "Connection paths on this client, one per line in fallback order. Add or reorder them after enrollment without re-inviting."
+                : "Edit these connection paths on the enrolled client, where Mode is client or dual."
+            }
+            help={
+              <>
+                Direct Tailscale example: {" "}
+                <code>ws://gateway.tailnet.ts.net:47830</code>. Include the
+                listener port and bind the gateway to <code>0.0.0.0</code>.
+                Tailscale Serve instead uses {" "}
+                <code>wss://gateway.tailnet.ts.net/pwragent-federation</code>.
+              </>
             }
             control={
               <textarea
                 aria-label="Gateway endpoints"
                 rows={3}
                 value={gatewayEndpointsText}
+                placeholder="ws://gateway.tailnet.ts.net:47830"
                 disabled={props.saving || !dialsGateway}
                 onChange={(event) => setGatewayEndpointsText(event.target.value)}
               />
@@ -623,12 +633,23 @@ export function FederationSettings(props: FederationSettingsProps) {
           />
           <SettingsField
             label="Advertised endpoints"
-            sub="Gateway mode: endpoints written into new enrollment invites, one per line. Leave empty to advertise this machine's name, its tailnet name, and its current addresses — names keep working after the address changes."
+            sub="Gateway mode: endpoints written into new enrollment invites, one per line. Existing clients keep their current list."
+            help={
+              <>
+                Direct Tailscale example: {" "}
+                <code>ws://gateway.tailnet.ts.net:47830</code>. Include {" "}
+                <code>ws://</code> and the listener port. Leave empty to
+                advertise this machine&apos;s name, tailnet name, and current
+                addresses. To update an enrolled client, add the URL to Gateway
+                endpoints on that client.
+              </>
+            }
             control={
               <textarea
                 aria-label="Advertised endpoints"
                 rows={3}
                 value={advertisedEndpointsText}
+                placeholder="ws://gateway.tailnet.ts.net:47830"
                 disabled={props.saving}
                 onChange={(event) =>
                   setAdvertisedEndpointsText(event.target.value)
