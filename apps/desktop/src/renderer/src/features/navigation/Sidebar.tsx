@@ -1337,6 +1337,12 @@ export function Sidebar(props: SidebarProps) {
     [props.directories],
   );
 
+  const indexState = props.pagedNavigation?.resources.get("directory-index")?.state;
+  const completeDirectoryIndex = Boolean(indexState?.page?.complete && !indexState.stale
+    && (indexState.page.rangeStart ?? 0) === 0 && indexState.page.coverage.state === "complete");
+  const completeThreadPinOrder = completeDirectoryIndex && indexState?.page?.counts.pinned !== undefined
+    && pinnedThreadKeysInOrder.length === indexState.page.counts.pinned;
+
   const moveThreadFromContextMenu = (
     thread: NavigationThreadSummary,
     direction: "up" | "down",
@@ -1347,14 +1353,13 @@ export function Sidebar(props: SidebarProps) {
     if (currentIndex === -1) return;
     const targetIndex =
       direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= ordered.length) return;
-    const targetKey = ordered[targetIndex]!;
-    const nextKeys = moveThreadKey(
+    const targetKey = ordered[targetIndex];
+    const nextKeys = targetKey ? moveThreadKey(
       ordered,
       threadKey,
       targetKey,
       direction === "up" ? "before" : "after",
-    );
+    ) : [];
     // Intentionally do NOT dismiss the menu after a Move — the
     // user often wants several reorder taps in a row, and
     // re-right-clicking between every one is a UX downgrade vs
@@ -1375,14 +1380,13 @@ export function Sidebar(props: SidebarProps) {
     if (currentIndex === -1) return;
     const targetIndex =
       direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= ordered.length) return;
-    const targetKey = ordered[targetIndex]!;
-    const nextKeys = moveDirectoryKey(
+    const targetKey = ordered[targetIndex];
+    const nextKeys = targetKey ? moveDirectoryKey(
       ordered,
       directory.key,
       targetKey,
       direction === "up" ? "before" : "after",
-    );
+    ) : [];
     // See `moveThreadFromContextMenu` for why we don't dismiss
     // the menu here.
     void hoverReleasedListHandlers.reorderDirectoryPins?.(nextKeys, { key: directory.key, direction });
@@ -1608,11 +1612,11 @@ export function Sidebar(props: SidebarProps) {
     : -1;
   const contextMenuPinnedThreadCount = pinnedThreadKeysInOrder.length;
   const contextMenuCanMoveUp =
-    contextMenuShowMoveItems && contextMenuPinnedThreadIndex > 0;
+    contextMenuShowMoveItems && (contextMenuPinnedThreadIndex > 0 || !completeThreadPinOrder);
   const contextMenuCanMoveDown =
     contextMenuShowMoveItems &&
     contextMenuPinnedThreadIndex >= 0 &&
-    contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1;
+    (contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1 || !completeThreadPinOrder);
   const contextMenuHasPinAction = contextMenuCanPin;
   const contextMenuHasCreationActions =
     contextMenuCanCreateSubthread || contextMenuCanFork;
@@ -1708,11 +1712,11 @@ export function Sidebar(props: SidebarProps) {
     ? pinnedDirectoryKeysInOrder.indexOf(directoryContextMenu.directory.key)
     : -1;
   const directoryMenuCanMoveUp =
-    directoryMenuShowMoveItems && directoryMenuPinnedIndex > 0;
+    directoryMenuShowMoveItems && (directoryMenuPinnedIndex > 0 || !completeDirectoryIndex);
   const directoryMenuCanMoveDown =
     directoryMenuShowMoveItems &&
     directoryMenuPinnedIndex >= 0 &&
-    directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1;
+    (directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1 || !completeDirectoryIndex);
   const directoryMenuHasPinActions =
     directoryMenuCanPin || directoryMenuShowMoveItems;
 

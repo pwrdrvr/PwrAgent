@@ -122,6 +122,7 @@ function countsForThreads(threads: readonly NavigationThreadSummary[]): Navigati
   }
   let active = 0;
   let activeRemote = 0;
+  let pinned = 0;
   let unread = 0;
   let review = 0;
   for (const thread of distinct.values()) {
@@ -129,6 +130,7 @@ function countsForThreads(threads: readonly NavigationThreadSummary[]): Navigati
     const threadUnread = thread.inbox.inInbox;
     if (threadActive) active += 1;
     if (threadActive && thread.federation?.ref.target.scope === "remote") activeRemote += 1;
+    if (thread.pinnedRank) pinned += 1;
     if (threadUnread) unread += 1;
     if (threadUnread && !threadActive) review += 1;
   }
@@ -136,6 +138,7 @@ function countsForThreads(threads: readonly NavigationThreadSummary[]): Navigati
     total: distinct.size,
     active,
     ...(activeRemote ? { activeRemote } : {}),
+    ...(pinned ? { pinned } : {}),
     unread,
     review,
   };

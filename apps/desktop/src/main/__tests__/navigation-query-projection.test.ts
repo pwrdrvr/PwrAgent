@@ -74,7 +74,7 @@ describe("navigation query projection", () => {
     expect(index.entries).toEqual([]);
     expect(index.directories).toEqual([
       expect.objectContaining({
-        counts: { total: 3, active: 0, unread: 0, review: 0 },
+        counts: { total: 3, pinned: 1, active: 0, unread: 0, review: 0 },
         pinnedRootCount: 1,
         unpinnedRootCount: 1,
       }),
