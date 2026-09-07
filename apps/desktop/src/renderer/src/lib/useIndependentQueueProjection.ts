@@ -143,7 +143,9 @@ export function useIndependentQueueProjection(params: {
     refreshRef.current = refresh;
     const unsubscribeQueue = composerDraftStore?.subscribeQueuedTurns(schedule);
     const unsubscribeEvents = desktopApi.onAgentEvent?.((event) => {
-      const method = event.notification.method;
+      const method = event.notification.method === "navigation/invalidated"
+        && typeof event.notification.params.sourceMethod === "string"
+        ? event.notification.params.sourceMethod : event.notification.method;
       if (method === "federation/peerStatus/changed") {
         const peer = event.notification.params as { instanceId: string; status: string };
         if (!demandedInstances.has(peer.instanceId) || peerStatuses.get(peer.instanceId) === peer.status) return;

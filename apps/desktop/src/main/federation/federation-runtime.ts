@@ -561,6 +561,10 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "navigation/directoryGitStatus/updated",
   "navigation/threadDirectories/updated",
   "navigation/threadGitWorkingState/updated",
+  "navigation/providerThreads/refreshed",
+  "navigation/thread/seen",
+  "navigation/directory/seen",
+  "navigation/directory/removed",
   "pullRequest/status/updated",
   "thread/acpRuntime/updated",
   "thread/agent/updated",
@@ -638,7 +642,7 @@ export function federationEventClassForMethod(
   ) {
     return "star_map";
   }
-  if (NAVIGATION_EVENT_METHODS.has(method)) {
+  if (method === "navigation/invalidated") {
     return "navigation";
   }
   // Fail closed: newly introduced notification methods do not reach
@@ -4877,14 +4881,30 @@ export class DesktopFederationRuntime {
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
     if (!this.router) return;
+    if (NAVIGATION_EVENT_METHODS.has(event.notification.method)) {
+      // Never broadcast the source payload: turn output, queue input, agent
+      // configuration and complete child orders belong to exact detail demand.
+      // Identity fields are bounded independently of the provider's payload.
+      const params = event.notification.params as Record<string, unknown>;
+      const thread = params.thread as Record<string, unknown> | undefined;
+      const identity = (value: unknown): string | undefined =>
+        typeof value === "string" && value.length <= 1_024 ? value : undefined;
+      this.forwardLocalBackendEvent({
+        backend: event.backend,
+        notification: {
+          method: "navigation/invalidated",
+          params: {
+            sourceMethod: event.notification.method,
+            threadId: identity(params.threadId ?? thread?.id),
+            automationId: identity(params.automationId),
+            runId: identity(params.runId),
+          },
+        },
+      });
+    }
     const ownerInstanceId = this.ensureLocalInstanceId();
-    const federatedEvent = rewriteLiveTranscriptImagesForFederation(
-      event,
-      ownerInstanceId,
-    );
-    const eventClass = federationEventClassForMethod(
-      federatedEvent.notification.method,
-    );
+    const eventClass = federationEventClassForMethod(event.notification.method);
+    let federatedEvent: AgentEvent | undefined;
 
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
@@ -4892,13 +4912,14 @@ export class DesktopFederationRuntime {
       if (
         eventClass !== "star_map"
         && !eventMatchesThreadSelection(
-          federatedEvent,
+          event,
           eventClass,
           selectionForEventClass(subscription, eventClass),
         )
       ) {
         continue;
       }
+      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(event, ownerInstanceId);
       try {
         this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
           id: `federation-event:${randomUUID()}`,
@@ -4969,12 +4990,15 @@ export class DesktopFederationRuntime {
     if (!this.wantsRemoteEvent(sourceInstanceId, eventClass, event)) {
       return true;
     }
+    const sourceMethod = event.notification.method === "navigation/invalidated"
+        && typeof event.notification.params.sourceMethod === "string"
+      ? event.notification.params.sourceMethod : event.notification.method;
     if (
-      event.notification.method === "thread/pullRequests/updated"
-      || event.notification.method === "thread/reactions/updated"
-      || event.notification.method === "thread/name/updated"
+      sourceMethod === "thread/pullRequests/updated"
+      || sourceMethod === "thread/reactions/updated"
+      || sourceMethod === "thread/name/updated"
       || REMOTE_THREAD_SUMMARY_LIFECYCLE_METHODS.has(
-        event.notification.method,
+        sourceMethod,
       )
     ) {
       this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);

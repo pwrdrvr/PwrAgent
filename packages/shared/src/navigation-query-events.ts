@@ -1,4 +1,5 @@
 const ROW_CHANGE_METHODS = new Set([
+  "navigation/invalidated",
   "thread/started", "thread/archived", "thread/unarchived", "thread/status/changed",
   "navigation/thread/seen", "thread/name/updated", "thread/rewound",
   "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated",

@@ -1791,6 +1791,15 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "navigation/invalidated";
+      params: {
+        sourceMethod: string;
+        threadId?: string;
+        automationId?: string;
+        runId?: string;
+      };
+    }
+  | {
       method: "navigation/providerThreads/refreshed";
       params: {
         failedProviders: number;

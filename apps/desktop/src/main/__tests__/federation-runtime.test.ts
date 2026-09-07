@@ -1360,7 +1360,7 @@ describe("DesktopFederationRuntime", () => {
       },
     });
     expect(forwarded[1]).toMatchObject({
-      params: { notification: { method: "pullRequest/status/updated" } },
+      params: { notification: { method: "navigation/invalidated", params: { sourceMethod: "pullRequest/status/updated" } } },
     });
   });
 
@@ -1547,7 +1547,7 @@ describe("DesktopFederationRuntime", () => {
     emit("thread/status/changed", "B");
     expect(ownerFrames).toHaveLength(2);
     expect(published.map((event) => event.notification.method)).toEqual([
-      "item/agentMessage/delta", "thread/status/changed",
+      "item/agentMessage/delta", "navigation/invalidated",
     ]);
     // Same union of IDs/classes, different matrix: the changed selector must publish.
     viewer.setEventSubscriptions("chat", [chat("B")]);
@@ -1567,10 +1567,33 @@ describe("DesktopFederationRuntime", () => {
     emit("thread/status/changed", "B");
     emit("item/agentMessage/delta", "A");
     emit("item/agentMessage/delta", "B");
-    expect(ownerFrames).toHaveLength(4);
+    expect(ownerFrames).toHaveLength(5);
+    viewer.setEventSubscriptions("map", [{
+      sourceInstanceId: "owner_one", eventClasses: ["navigation"], threadSelection: { kind: "all" },
+    }]);
+    const hugeOutput = "private turn output".repeat(100_000);
+    const beforeLarge = ownerFrames.length;
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+      method: "turn/completed", params: { threadId: "A", finalText: hugeOutput },
+    } } as AgentEvent);
+    expect(ownerFrames).toHaveLength(beforeLarge + 1);
+    expect(JSON.stringify(ownerFrames.at(-1))).not.toContain("private turn output");
+    expect(Buffer.byteLength(JSON.stringify(ownerFrames.at(-1)))).toBeLessThan(1_024);
+    expect(published.at(-1)?.notification).toEqual({
+      method: "navigation/invalidated", params: {
+        sourceMethod: "turn/completed", threadId: "A", automationId: undefined, runId: undefined,
+      },
+    });
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+      method: "turn/completed", params: { threadId: "B", finalText: hugeOutput },
+    } } as AgentEvent);
+    expect(ownerFrames).toHaveLength(beforeLarge + 3);
+    expect(published.at(-1)?.notification).toMatchObject({
+      method: "turn/completed", params: { threadId: "B", finalText: hugeOutput },
+    });
     viewer.setEventSubscriptions("chat", []);
     emit("item/agentMessage/delta", "B");
-    expect(ownerFrames).toHaveLength(4);
+    expect(ownerFrames).toHaveLength(beforeLarge + 3);
   });
 
   it("fails closed for missing or malformed per-class selectors", () => {
@@ -1716,11 +1739,11 @@ describe("DesktopFederationRuntime", () => {
       createdAt: 2_000,
     }, sourceInstanceId);
 
-    publish("owner_one", "thread/status/changed");
+    publish("owner_one", "navigation/invalidated");
     publish("owner_one", "item/agentMessage/delta");
     publish("owner_one", "thread/scheduledAction/updated");
     publish("owner_one", "starMap/intake/status");
-    publish("owner_two", "thread/status/changed");
+    publish("owner_two", "navigation/invalidated");
 
     expect(published.map((event) => ({
       instanceId: event.federationTarget?.scope === "remote"
@@ -1728,7 +1751,7 @@ describe("DesktopFederationRuntime", () => {
         : undefined,
       method: event.notification.method,
     }))).toEqual([
-      { instanceId: "owner_one", method: "thread/status/changed" },
+      { instanceId: "owner_one", method: "navigation/invalidated" },
       {
         instanceId: "owner_one",
         method: "thread/scheduledAction/updated",
@@ -2338,8 +2361,9 @@ describe("DesktopFederationRuntime", () => {
         params: {
           backend: "codex",
           notification: {
-            method: "thread/pullRequests/updated",
+            method: "navigation/invalidated",
             params: {
+              sourceMethod: "thread/pullRequests/updated",
               threadId: "thread-1",
               prs: [],
             },
@@ -2382,8 +2406,9 @@ describe("DesktopFederationRuntime", () => {
         params: {
           backend: "codex",
           notification: {
-            method: "thread/reactions/updated",
+            method: "navigation/invalidated",
             params: {
+              sourceMethod: "thread/reactions/updated",
               threadId: "thread-1",
               reactions: ["✋", "👀"],
             },
@@ -2426,8 +2451,9 @@ describe("DesktopFederationRuntime", () => {
         params: {
           backend: "codex",
           notification: {
-            method: "thread/name/updated",
+            method: "navigation/invalidated",
             params: {
+              sourceMethod: "thread/name/updated",
               threadId: "thread-1",
               threadName: "Sync generated names over federation",
             },
@@ -2480,8 +2506,9 @@ describe("DesktopFederationRuntime", () => {
         params: {
           backend: "codex",
           notification: {
-            method,
+            method: "navigation/invalidated",
             params: {
+              sourceMethod: method,
               threadId: "thread-1",
               turnId: "turn-1",
             },
