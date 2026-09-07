@@ -6523,14 +6523,31 @@ class DesktopAppServerService {
       if (await overlayStore.hasRemoteThreadPin({ ref: parentRef })) {
         return parentRef;
       }
-      const parentSummary = await getDesktopFederationRuntime()
-        .remoteThreadSummaries()
-        .threadFromPeer({
-          target: { scope: "remote", instanceId: parentInstanceId },
-          backend: parentBackend,
-          threadId: parentThreadId,
-        });
-      if (!parentSummary) {
+      const consumer = `pin-parent:${randomUUID()}`;
+      let page: NavigationQueryPage;
+      try {
+        page = await this.getNavigationQueryPage({
+          protocol: 2,
+          consumer: "exact-link",
+          inventory: "owner",
+          federationTarget: { scope: "remote", instanceId: parentInstanceId },
+          query: {
+            kind: "exact",
+            identities: [{ backend: parentBackend, threadId: parentThreadId, ownerInstanceId: parentInstanceId }],
+            includeAncestry: false,
+          },
+          pageSize: 1,
+        }, consumer);
+      } finally {
+        navigationQueryPool.release(consumer);
+      }
+      if (page.protocol !== 2 || page.coverage.state !== "complete" || !page.complete || page.nextCursor || page.unchanged) {
+        return undefined;
+      }
+      const parentSummary = page.entries.find(({ row }) => row.ref.backend === parentBackend
+        && row.ref.threadId === parentThreadId && row.ref.ownerInstanceId === parentInstanceId
+        && row.source === parentBackend && row.id === parentThreadId)?.row;
+      if (!parentSummary || parentSummary.archivedAt !== undefined) {
         return undefined;
       }
       await overlayStore.addRemoteThreadPin({

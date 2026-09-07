@@ -3321,6 +3321,8 @@ describe("app server ipc", () => {
     hasRemoteThreadPin.mockClear();
     hasRemoteThreadPin.mockResolvedValueOnce(false);
     const parentSummary = {
+      ref: { backend: "codex", threadId: "parent-1", ownerInstanceId: "peer-parent" },
+      rowRevision: "parent-revision",
       source: "codex" as const,
       id: "parent-1",
       title: "MCP registration",
@@ -3328,9 +3330,11 @@ describe("app server ipc", () => {
       linkedDirectories: [],
       inbox: { inInbox: false },
     };
-    federationMock.remoteThreadSummaries.threadFromPeer.mockResolvedValueOnce(
-      parentSummary,
-    );
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({
+      protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+      counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+      entries: [{ row: parentSummary, orderKey: "0", placement: { kind: "root" } }],
+    });
 
     registerAppServerIpcHandlers();
 
@@ -3369,12 +3373,12 @@ describe("app server ipc", () => {
       pinnedVia: "companion",
     });
     expect(
-      federationMock.remoteThreadSummaries.threadFromPeer,
-    ).toHaveBeenCalledWith({
-      target: { scope: "remote", instanceId: "peer-parent" },
-      backend: "codex",
-      threadId: "parent-1",
-    });
+      federationMock.runtime.remoteNavigationQueryPage,
+    ).toHaveBeenLastCalledWith({ scope: "remote", instanceId: "peer-parent" }, expect.objectContaining({
+      protocol: 2, consumer: "exact-link", inventory: "owner", pageSize: 1,
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "parent-1", ownerInstanceId: "peer-parent" }], includeAncestry: false },
+    }), expect.objectContaining({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }));
+    expect(federationMock.remoteThreadSummaries.threadFromPeer).not.toHaveBeenCalled();
   });
 
   it("does not companion-pin an already-pinned or unreachable parent", async () => {
@@ -3409,19 +3413,52 @@ describe("app server ipc", () => {
     await handler?.({}, childRequest("child-1"));
     expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(1);
 
-    // Parent missing from the peer snapshot (archived / peer gone): no
+    // Parent missing from the exact owner query (archived / peer gone): no
     // phantom row.
     addRemoteThreadPinStore.mockClear();
     hasRemoteThreadPin.mockResolvedValueOnce(false);
-    federationMock.remoteThreadSummaries.threadFromPeer.mockResolvedValueOnce(
-      undefined,
-    );
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({
+      protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+      counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true, entries: [],
+    });
     await handler?.({}, childRequest("child-2"));
     expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(1);
     expect(addRemoteThreadPinStore.mock.calls[0][0]).toMatchObject({
       pinnedVia: "explicit",
     });
   });
+
+  it.each(["wrong-owner", "wrong-backend", "archived", "incomplete", "unchanged", "cursor"])(
+    "keeps the explicit pin without accepting a %s companion parent page", async (failure) => {
+      const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
+      const { buildFederatedThreadRef } = await import("@pwragent/shared");
+      registerAppServerIpcHandlers();
+      addRemoteThreadPinStore.mockClear();
+      hasRemoteThreadPin.mockResolvedValueOnce(false);
+      const parent = {
+        ref: { backend: failure === "wrong-backend" ? "acp:test" : "codex", threadId: "parent-1",
+          ownerInstanceId: failure === "wrong-owner" ? "another-peer" : "peer-laptop" },
+        rowRevision: "r", source: "codex", id: "parent-1", title: "Parent", titleSource: "explicit",
+        linkedDirectories: [], inbox: { inInbox: false }, archivedAt: failure === "archived" ? 1 : undefined,
+      };
+      federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({
+        protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+        counts: { total: 1, active: 0, unread: 0, review: 0 },
+        coverage: { state: failure === "incomplete" ? "checking" : "complete" }, complete: true,
+        unchanged: failure === "unchanged", nextCursor: failure === "cursor" ? "next" : undefined,
+        entries: [{ row: parent, orderKey: "0", placement: { kind: "root" } }],
+      });
+      await handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+        ref: buildFederatedThreadRef({ backend: "codex", instanceId: "peer-laptop", threadId: "child-1" }),
+        instanceLabel: "Laptop",
+        summary: { source: "codex", id: "child-1", title: "Child", titleSource: "explicit", parentThreadId: "parent-1",
+          linkedDirectories: [], inbox: { inInbox: false } },
+      });
+      expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(1);
+      expect(addRemoteThreadPinStore.mock.calls[0][0]).toMatchObject({ pinnedVia: "explicit" });
+      expect(federationMock.remoteThreadSummaries.threadFromPeer).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects malformed pin refs at the service boundary", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
