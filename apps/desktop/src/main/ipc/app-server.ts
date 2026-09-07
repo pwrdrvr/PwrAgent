@@ -318,6 +318,7 @@ import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
+import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -2165,10 +2166,15 @@ class DesktopAppServerService {
           callerReason: "renderer-navigation-query",
         });
         rpcOptions?.signal.throwIfAborted();
+        if (request.consumer === "main-sidebar") {
+          const pins = await getDesktopOverlayStore().readRemoteThreadPinNavigationRows();
+          rpcOptions?.signal.throwIfAborted();
+          return pins.length ? appendViewerNavigationPins(index, getDesktopFederationRuntime().stampViewerNavigationPins(pins)) : index;
+        }
         return index;
       },
       request,
-      scopeKey: "renderer-local",
+      scopeKey: request.consumer === "main-sidebar" ? "renderer-viewer" : "renderer-local",
     });
   }
 
@@ -2177,6 +2183,7 @@ class DesktopAppServerService {
       return getDesktopFederationRuntime().remoteReleaseNavigationAttentionView(request.federationTarget, request);
     }
     getDesktopNavigationQueryStore().releaseAttentionView("renderer-local", request.viewId);
+    getDesktopNavigationQueryStore().releaseAttentionView("renderer-viewer", request.viewId);
   }
 
   async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {

@@ -589,3 +589,23 @@ CREATE TABLE remote_thread_pins (
     expect(t2?.summary?.title).toBe("Stale too");
   });
 });
+
+describe("compact viewer navigation pins", () => {
+  it("reads only bounded cached row fields and excludes revoked memberships", async () => {
+    await store.addRemoteThreadPin({ ref: ref("visible"), instanceLabel: "Laptop", summary: summary({ id: "visible",
+      title: "Visible", titleSource: "explicit", inbox: { inInbox: true }, pinnedRank: "owner-rank",
+      summary: "private detail".repeat(100_000),
+      linkedDirectories: Array.from({ length: 100 }, (_, i) => ({ id: `directory:${i}`, kind: "local", label: String(i), path: `/repo/${i}` })),
+    }) });
+    await store.addRemoteThreadPin({ ref: ref("revoked", "revoked-peer"), instanceLabel: "Revoked", summary: summary() });
+    await store.tombstoneRemoteThreadPinsForInstance({ instanceId: "revoked-peer", revokedAt: 100 });
+    const rows = await store.readRemoteThreadPinNavigationRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: "visible", source: "codex", title: "Visible", inbox: { inInbox: true },
+      federation: { ref: ref("visible"), instanceLabel: "Laptop" } });
+    expect(rows[0]?.pinnedRank).toBeUndefined();
+    expect(rows[0]?.linkedDirectories).toHaveLength(16);
+    expect(rows[0]).not.toHaveProperty("summary");
+    expect(JSON.stringify(rows).length).toBeLessThan(8_000);
+  });
+});
