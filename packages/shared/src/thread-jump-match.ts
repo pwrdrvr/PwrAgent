@@ -81,7 +81,7 @@ export function agentMetadataMatchesQuery(
 /**
  * Relevance test for the thread-list quick jump (⌘K): matches title, Agent
  * metadata, thread id, linked PR number, git branch, and linked-directory
- * label. PR numbers match with or without the leading "#"; thread ids only
+ * label/path. PR numbers match with or without the leading "#"; thread ids only
  * match sufficiently deliberate UUID-like fragments or longer pasted ids.
  *
  * Shared between the renderer (instant local filtering) and the main process
@@ -116,7 +116,8 @@ export function threadMatchesQuery(
     return true;
   }
   return (thread.linkedDirectories ?? []).some((directory) =>
-    (directory.label ?? "").toLowerCase().includes(needle),
+    [directory.label, directory.path, directory.worktreePath]
+      .some((value) => value?.toLowerCase().includes(needle)),
   );
 }
 

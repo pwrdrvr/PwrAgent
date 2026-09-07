@@ -36,6 +36,14 @@ describe("threadMatchesQuery", () => {
     linkedDirectories: [{ id: "d", label: "PwrAgent", path: "/x", kind: "local" }],
   });
 
+  it("matches owner directory and worktree paths even when the display label differs", () => {
+    const candidate = { ...t, linkedDirectories: [{ id: "workspace", kind: "worktree" as const,
+      label: "Project", path: "/owner/projects/fleet-navigation", worktreePath: "/owner/worktrees/cutover" }] };
+    expect(threadMatchesQuery(candidate, "FLEET-NAVIGATION")).toBe(true);
+    expect(threadMatchesQuery(candidate, "/worktrees/cutover")).toBe(true);
+    expect(threadMatchesQuery(candidate, "/viewer/unrelated")).toBe(false);
+  });
+
   it("matches id, title, branch, PR number (with or without #), and directory", () => {
     expect(threadMatchesQuery(t, "7f2f4bd1-8e7b")).toBe(true);
     expect(threadMatchesQuery(t, "messaging")).toBe(true);
