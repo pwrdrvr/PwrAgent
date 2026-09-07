@@ -4411,7 +4411,7 @@ export function useThreadNavigation(
     });
   }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh, state.rows]);
 
-  // Bindings live in the navigation snapshot but are mutated outside
+  // Binding chips are projected in row pages but can be mutated outside
   // the agent-event bus (a Telegram callback creates a binding, a
   // /sync name renames it, a /detach revokes it — none of those emit
   // backend notifications). Without this hook the binding chip stays
