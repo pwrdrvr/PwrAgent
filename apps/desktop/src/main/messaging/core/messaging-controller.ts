@@ -143,6 +143,8 @@ import {
   normalizeMonitorIntervalMs,
   normalizeMonitorThreadLimit,
   selectMonitorThreads,
+  type MessagingMonitorNavigation,
+  type MessagingMonitorRows,
 } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import {
@@ -2107,7 +2109,7 @@ export class MessagingController {
         await this.renderAutomaticBindingStatus(
           binding,
           undefined,
-          await this.navigationSnapshotWithThreadNameFromEvent(event),
+          await this.threadContextWithNameFromEvent(binding, event),
         );
         continue;
       }
@@ -11399,12 +11401,19 @@ export class MessagingController {
       return;
     }
 
-    const snapshot = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const snapshot = await this.readMonitorRows();
     const selected = selectMonitorThreads({ navigation: snapshot }).threads.slice(0, 3);
     const created: string[] = [];
     const reused: string[] = [];
     const failed: string[] = [];
-    for (const thread of selected) {
+    for (const row of selected) {
+      const target = federationTargetForThread(row);
+      const thread = await this.readExactNavigationThread({ ref: { backend: row.source, threadId: row.id,
+        ...(target?.scope === "remote" ? { ownerInstanceId: target.instanceId } : {}) }, federationTarget: target });
+      if (!thread || thread.archivedAt) {
+        failed.push(row.title);
+        continue;
+      }
       const existing = await this.options.store.findThreadTopicLink({
         backend: thread.source,
         channel: event.channel.channel,
@@ -14953,57 +14962,43 @@ export class MessagingController {
     return await this.renderBindingStatus(binding, event, targetedNavigation);
   }
 
-  private async navigationSnapshotWithThreadNameFromEvent(
+  private async threadContextWithNameFromEvent(
+    binding: MessagingBindingRecord,
     event: AgentEvent,
-  ): Promise<NavigationSnapshot> {
-    const snapshot = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
-    const params = event.notification.params as {
-      threadId?: unknown;
-      threadName?: unknown;
-      titleSource?: unknown;
-    };
-    if (
-      typeof params.threadId !== "string" ||
-      typeof params.threadName !== "string" ||
-      !params.threadName.trim()
-    ) {
-      return snapshot;
+  ): Promise<MessagingThreadContext> {
+    const thread = await this.readBoundNavigationThread(binding);
+    const params = event.notification.params as { threadId?: unknown; threadName?: unknown; titleSource?: unknown };
+    if (!thread || params.threadId !== thread.id || typeof params.threadName !== "string" || !params.threadName.trim()) {
+      return { kind: "thread", thread };
     }
-    const threadId = params.threadId;
-    const threadName = params.threadName.trim();
-    // The new name's own provenance. Carrying the row's previous source over
-    // to a new title is the orphaned pair the thread information store
-    // refuses to hold: the status and monitor cards read `derived` to decide
-    // whether to shorten a title, so a stale source formats the same rename
-    // two different ways depending on what the row said before.
-    const titleSource = normalizeRenamedTitleSource(params.titleSource);
+    return { kind: "thread", thread: { ...thread, title: params.threadName.trim(),
+      titleSource: normalizeRenamedTitleSource(params.titleSource) } };
+  }
 
-    return {
-      ...snapshot,
-      threads: snapshot.threads.map((thread) =>
-        thread.source === event.backend && thread.id === threadId
-          ? {
-              ...thread,
-              title: threadName,
-              titleSource,
-            }
-          : thread,
-      ),
-    };
+  private async readMonitorRows(monitor?: MessagingMonitorState, federationTarget?: FederationTarget): Promise<MessagingMonitorRows> {
+    const read = this.options.backend.getNavigationQueryPage?.bind(this.options.backend);
+    if (!read) throw new Error("Upgrade the owning instance to navigation query protocol 2 before opening a monitor.");
+    const sections = [
+      { pinned: "include" as const, size: normalizeMonitorThreadLimit(monitor?.pinnedThreadLimit, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT) },
+      { pinned: "exclude" as const, size: normalizeMonitorThreadLimit(monitor?.recentThreadLimit, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT) },
+    ];
+    const pages = await Promise.all(sections.filter((section) => section.size > 0).map(async (section) => {
+      const page = await read({ protocol: 2, consumer: "agent-tool", federationTarget,
+        query: { kind: "star-map", filters: { pinned: section.pinned } }, pageSize: section.size });
+      if (page.protocol !== 2 || page.unchanged) throw new Error("The owning instance did not provide a monitor row page.");
+      return page.entries.map((entry) => entry.row);
+    }));
+    return { kind: "bounded-monitor", threads: pages.flat() };
   }
 
   private async renderMonitorStatus(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
-    navigation?: NavigationSnapshot,
+    navigation?: MessagingMonitorNavigation,
   ): Promise<MessagingBindingRecord> {
     const snapshot =
       navigation ??
-      (await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      }));
+      (await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding)));
     const now = this.now();
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
@@ -15051,13 +15046,11 @@ export class MessagingController {
   private async renderChannelMonitorStatus(
     subscription: MessagingMonitorSubscriptionRecord,
     event?: MessagingInboundEvent,
-    navigation?: NavigationSnapshot,
+    navigation?: MessagingMonitorNavigation,
   ): Promise<MessagingMonitorSubscriptionRecord> {
     const snapshot =
       navigation ??
-      (await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      }));
+      (await this.readMonitorRows(subscription.monitor));
     const now = this.now();
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
@@ -15244,7 +15237,7 @@ export class MessagingController {
   }
 
   private async resolveMonitorActiveTurns(
-    navigation: NavigationSnapshot,
+    navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
     const activeTurns = new Map(this.activeTurnsByThreadKey);
@@ -15293,7 +15286,7 @@ export class MessagingController {
   }
 
   private async resolveMonitorSnippets(
-    navigation: NavigationSnapshot,
+    navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
   ): Promise<ReadonlyMap<string, string>> {
     const snippets = new Map<string, string>();

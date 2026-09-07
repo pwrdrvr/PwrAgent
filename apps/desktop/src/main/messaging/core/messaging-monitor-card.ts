@@ -7,6 +7,7 @@ import {
 import type {
   NavigationDirectorySummary,
   NavigationSnapshot,
+  NavigationRow,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type {
@@ -39,12 +40,16 @@ export const MESSAGING_MONITOR_SNIPPET_LENGTH = 100;
 
 const MONITOR_MIN_ACTIONS = 1;
 
+export type MessagingMonitorThread = NavigationRow | NavigationThreadSummary;
+export type MessagingMonitorRows = { kind: "bounded-monitor"; threads: NavigationRow[] };
+export type MessagingMonitorNavigation = MessagingMonitorRows | NavigationSnapshot;
+
 export type MessagingMonitorThreadSelection = {
   pinnedThreadLimit: number;
-  pinnedThreads: NavigationThreadSummary[];
+  pinnedThreads: MessagingMonitorThread[];
   recentThreadLimit: number;
-  recentThreads: NavigationThreadSummary[];
-  threads: NavigationThreadSummary[];
+  recentThreads: MessagingMonitorThread[];
+  threads: MessagingMonitorThread[];
 };
 
 export function buildMonitorStatusIntent(params: {
@@ -56,7 +61,7 @@ export function buildMonitorStatusIntent(params: {
   id: string;
   monitor?: MessagingMonitorState;
   monitorSurface?: MessagingSurfaceRef;
-  navigation: NavigationSnapshot;
+  navigation: MessagingMonitorNavigation;
   snippetsByThreadKey?: ReadonlyMap<string, string>;
   threadLimit?: number;
   topicControls?: boolean;
@@ -122,7 +127,7 @@ export function buildMonitorStatusIntent(params: {
 
 export function selectMonitorThreads(params: {
   monitor?: MessagingMonitorState;
-  navigation: NavigationSnapshot;
+  navigation: MessagingMonitorNavigation;
   threadLimit?: number;
 }): MessagingMonitorThreadSelection {
   const pinnedThreadLimit = normalizeMonitorThreadLimit(
@@ -284,7 +289,7 @@ function buildMonitorActions(params: {
 
 function formatMonitorThreadSections(params: {
   activeTurns: ReadonlyMap<string, MessagingActiveTurnSummary>;
-  navigation: NavigationSnapshot;
+  navigation: MessagingMonitorNavigation;
   now: number;
   selection: MessagingMonitorThreadSelection;
   showSnippets: boolean;
@@ -351,12 +356,12 @@ function formatMonitorThreadSections(params: {
 function formatThreadLine(params: {
   index: number;
   labelPrefix?: string;
-  navigation: NavigationSnapshot;
+  navigation: MessagingMonitorNavigation;
   now: number;
   showSnippet: boolean;
   showStatusLine: boolean;
   snippet?: string;
-  thread: NavigationThreadSummary;
+  thread: MessagingMonitorThread;
   turn?: MessagingActiveTurnSummary;
 }): string {
   const title = formatThreadTitle(params.thread);
@@ -379,7 +384,7 @@ function formatThreadLine(params: {
   return details.length > 0 ? [firstLine, ...details].join("\n") : firstLine;
 }
 
-function formatThreadTitle(thread: NavigationThreadSummary): string {
+function formatThreadTitle(thread: MessagingMonitorThread): string {
   const title = (thread.titleSource === "derived"
     ? shortenDerivedThreadTitle(thread.title ?? "")
     : thread.title) ?? "";
@@ -391,8 +396,8 @@ function formatThreadTitle(thread: NavigationThreadSummary): string {
 }
 
 function projectLabelForThread(
-  navigation: NavigationSnapshot,
-  thread: NavigationThreadSummary,
+  navigation: MessagingMonitorNavigation,
+  thread: MessagingMonitorThread,
 ): string | undefined {
   const linked =
     thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
@@ -401,6 +406,7 @@ function projectLabelForThread(
   if (linked?.label) {
     return linked.label;
   }
+  if ("kind" in navigation) return undefined;
   const threadKey = buildThreadIdentityKey(thread.source, thread.id);
   return navigation.directories.find((directory: NavigationDirectorySummary) =>
     directory.threadKeys.includes(threadKey),
@@ -408,7 +414,7 @@ function projectLabelForThread(
 }
 
 function formatThreadState(
-  thread: NavigationThreadSummary,
+  thread: MessagingMonitorThread,
   turn: MessagingActiveTurnSummary | undefined,
 ): string {
   if (turn?.status === "working") {
