@@ -1,7 +1,7 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
 import type { NavigationSelectedDetailResponse, NavigationThreadSummary } from "@pwragent/shared";
-import { readNavigationActionDetail, readNavigationActionThread } from "../navigation-action-authority";
+import { readNavigationActionDetail, readNavigationActionThread, resolveNavigationActionGroupRoot } from "../navigation-action-authority";
 
 const row: NavigationThreadSummary = { id: "same", source: "codex", title: "Row", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true }, model: "stale-model" };
 
@@ -51,4 +51,38 @@ it("requires explicit owner workspace configuration for workspace actions", asyn
   await expect(readNavigationActionDetail({ thread: row, api: { getNavigationSelectedDetail: read }, includeWorkspaceConfiguration: true }))
     .rejects.toThrow("Upgrade the owning instance");
   expect(read).toHaveBeenCalledWith(expect.objectContaining({ includeWorkspaceConfiguration: true, probeWorkingStates: true }));
+});
+
+
+it("resolves an unloaded group root through its explicit owner", async () => {
+  const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+    protocol: 2, ref: request.ref, revision: "owner", readiness: "ready", identity: "present",
+    thread: { ...row, id: "root" },
+  }));
+  const root = await resolveNavigationActionGroupRoot({ api: { getNavigationSelectedDetail },
+    thread: { ...row, parentThreadId: "root", parentThreadInstanceId: "peer" } });
+  expect(root.id).toBe("root");
+  expect(root.federation?.ref.target).toEqual({ scope: "remote", instanceId: "peer" });
+  expect(getNavigationSelectedDetail).toHaveBeenCalledWith(expect.objectContaining({
+    ref: { backend: "codex", threadId: "root", ownerInstanceId: "peer" },
+  }));
+});
+
+it.each(["archived", "deleted", "unresolved", "denied"] as const)("distinguishes %s ancestors from unloaded ancestors", async (identity) => {
+  const child = { ...row, parentThreadId: "root" };
+  const read = resolveNavigationActionGroupRoot({ thread: child, api: { getNavigationSelectedDetail: async (request) => ({
+    protocol: 2, ref: request.ref, revision: "owner", readiness: "ready", identity,
+  }) } });
+  if (identity === "archived" || identity === "deleted") expect(await read).toBe(child);
+  else await expect(read).rejects.toThrow(identity);
+});
+
+it("rejects cyclic owner ancestry without unbounded exact reads", async () => {
+  const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+    protocol: 2, ref: request.ref, revision: "owner", readiness: "ready", identity: "present",
+    thread: { ...row, id: "root", parentThreadId: "root" },
+  }));
+  await expect(resolveNavigationActionGroupRoot({ thread: { ...row, parentThreadId: "root" },
+    api: { getNavigationSelectedDetail } })).rejects.toThrow("cycle");
+  expect(getNavigationSelectedDetail).toHaveBeenCalledTimes(1);
 });

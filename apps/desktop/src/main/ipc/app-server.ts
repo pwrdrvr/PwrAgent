@@ -6790,7 +6790,7 @@ class DesktopAppServerService {
     const threadIds = await this.getOverlayStore().updateSubthreadOrder({
       backend,
       parentThreadId: request.parentThreadId,
-      threadIds: request.threadIds,
+      ...(request.insertAfter ? { insertAfter: request.insertAfter } : { threadIds: request.threadIds }),
     });
 
     logDebug("updateSubthreadOrder", {
