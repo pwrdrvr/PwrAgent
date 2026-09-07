@@ -444,4 +444,54 @@ describe("useStarMapThreads", () => {
     });
     expect(desktopApi.getNavigationQueryPage).not.toHaveBeenCalled();
   });
+
+  it("does not extend the refresh deadline while waiting for an older owner read", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    let finishInitial!: (page: NavigationQueryPage) => void;
+    const pending = new Promise<NavigationQueryPage>((resolve) => { finishInitial = resolve; });
+    let rowReads = 0;
+    const desktopApi: DesktopApi = { getNavigationQueryPage: vi.fn(async (request) => {
+      if (request.query.kind !== "lens") return queryPage({ instanceId: "a" });
+      rowReads += 1;
+      return await pending;
+    }) };
+    const hook = renderHook(() => useStarMapThreads({ desktopApi, peers: [peer("a", "connected")], enabled: true }));
+    try {
+      await waitFor(() => expect(rowReads).toBe(1));
+      now.mockReturnValue(2_000);
+      const refresh = hook.result.current.refreshInstance("a");
+      const failed = expect(refresh).rejects.toThrow("deadline");
+      now.mockReturnValue(12_001);
+      await act(async () => {
+        finishInitial(queryPage({ instanceId: "a", threadId: "too-late" }));
+        await failed;
+      });
+      expect(rowReads).toBe(1);
+      expect(hook.result.current.countsByInstance.has("a")).toBe(false);
+    } finally { hook.unmount(); now.mockRestore(); }
+  });
+
+  it("coalesces post-reply refreshes into a fresh read after the pending initial page", async () => {
+    let finishInitial!: (page: NavigationQueryPage) => void;
+    const pending = new Promise<NavigationQueryPage>((resolve) => { finishInitial = resolve; });
+    const deadlines: number[] = [];
+    let rowReads = 0;
+    const desktopApi: DesktopApi = { getNavigationQueryPage: vi.fn(async (request) => {
+      if (request.query.kind !== "lens") return queryPage({ instanceId: "a" });
+      deadlines.push(request.deadlineAt!);
+      return ++rowReads === 1 ? await pending : queryPage({ instanceId: "a", threadId: "after-reply" });
+    }) };
+    const hook = renderHook(() => useStarMapThreads({ desktopApi, peers: [peer("a", "connected")], enabled: true }));
+    await waitFor(() => expect(rowReads).toBe(1));
+    const refreshes = [hook.result.current.refreshInstance("a"), hook.result.current.refreshInstance("a")];
+    expect(rowReads).toBe(1);
+    await act(async () => {
+      finishInitial(queryPage({ instanceId: "a", threadId: "before-reply" }));
+      await Promise.all(refreshes);
+    });
+    expect(rowReads).toBe(2);
+    expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("after-reply");
+    expect(deadlines.every(Number.isFinite)).toBe(true);
+    hook.unmount();
+  });
 });

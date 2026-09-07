@@ -204,7 +204,7 @@ export function useStarMapThreads(params: {
   );
 
   const readFirstPageForGeneration = useCallback(
-    async (instanceId: string, generation: number): Promise<void> => {
+    async (instanceId: string, generation: number, deadlineAt: number): Promise<void> => {
       if (!desktopApi?.getNavigationQueryPage) return;
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       if (ownerGeneration === undefined) throw new Error("This owner is not connected with navigation query protocol 2.");
@@ -213,9 +213,11 @@ export function useStarMapThreads(params: {
       const previous = stateRef.current.queriesByInstance.get(instanceId);
       const rows = withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!({
         ...attentionRequest({ instanceId, filters, attentionView }),
+        deadlineAt,
         completeBaselineRevision: previous?.completeRevision,
       }, consumerId)).then((page) => {
         if (!isCurrent()) return;
+        if (Date.now() >= deadlineAt) throw new Error("Navigation refresh exceeded its deadline. Refresh this owner again.");
         if (page.unchanged && (!previous?.completeRevision || previous.completeRevision !== page.countsRevision)) {
           throw new Error("Navigation unchanged response has no matching complete owner baseline.");
         }
@@ -261,7 +263,7 @@ export function useStarMapThreads(params: {
             return { ...current, geometryByInstance };
           });
           const page = await withQueryConsumer(instanceId, (consumerId) => readNavigationQueryRange({
-            request: { ...geometryRequest(instanceId), pageSize: 100 },
+            request: { ...geometryRequest(instanceId), pageSize: 100, deadlineAt },
             read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
             isCancelled: () => !isCurrent(),
             maxBytes: 8 * 1024 * 1024,
@@ -291,12 +293,12 @@ export function useStarMapThreads(params: {
     [desktopApi, filters, attentionView, viewId, withQueryConsumer],
   );
 
-  const fetchFirstPageForGeneration = useCallback((instanceId: string, generation: number): Promise<void> => {
+  const fetchFirstPageForGeneration = useCallback((instanceId: string, generation: number, deadlineAt = Date.now() + 10_000): Promise<void> => {
     const ownerGeneration = ownerGenerations.current.get(instanceId);
     if (ownerGeneration === undefined) return Promise.reject(new Error("This owner is not connected with navigation query protocol 2."));
     const pending = firstPageReads.current.get(instanceId);
     if (pending?.generation === generation && pending.ownerGeneration === ownerGeneration) return pending.promise;
-    const promise = readFirstPageForGeneration(instanceId, generation).finally(() => {
+    const promise = readFirstPageForGeneration(instanceId, generation, deadlineAt).finally(() => {
       if (firstPageReads.current.get(instanceId)?.promise === promise) firstPageReads.current.delete(instanceId);
     });
     firstPageReads.current.set(instanceId, { generation, ownerGeneration, promise });
@@ -305,7 +307,21 @@ export function useStarMapThreads(params: {
 
   const refreshInstance = useCallback(
     async (instanceId: string): Promise<void> => {
-      await fetchFirstPageForGeneration(instanceId, generationRef.current);
+      const generation = generationRef.current;
+      const ownerGeneration = ownerGenerations.current.get(instanceId);
+      const deadlineAt = Date.now() + 10_000;
+      const pending = firstPageReads.current.get(instanceId);
+      if (pending?.generation === generation && pending.ownerGeneration === ownerGeneration) {
+        // A reply or canonical event happened after this read began. Its
+        // completion cannot acknowledge that change; coalesce a fresh read
+        // after it, keeping the original refresh deadline.
+        await pending.promise.catch(() => undefined);
+      }
+      if (generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration) {
+        throw new Error("Navigation owner changed while refreshing. Refresh the connected owner again.");
+      }
+      if (Date.now() >= deadlineAt) throw new Error("Navigation refresh exceeded its deadline. Refresh this owner again.");
+      await fetchFirstPageForGeneration(instanceId, generation, deadlineAt);
     },
     [fetchFirstPageForGeneration],
   );
