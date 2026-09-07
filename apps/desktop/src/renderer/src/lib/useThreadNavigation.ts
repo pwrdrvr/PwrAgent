@@ -3156,7 +3156,7 @@ export function useThreadNavigation(
       || acceptedDefaultsRef.current !== launchpadConfiguration.value
       || acceptedDraftHydrationRef.current !== draftStore?.hydrationVersion;
     const resources = [...boundedNavigation.resources.values()];
-    const error = boundedNavigation.admissionError ?? resources.find((resource) => resource.state.error)?.state.error;
+    const error = boundedNavigation.connectionError ?? boundedNavigation.admissionError ?? resources.find((resource) => resource.state.error)?.state.error;
     const refreshing = resources.some((resource) => resource.loading);
     const primary = resources.filter((resource) => browseMode === "directories" ? resource.id === "directory-index"
       : browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
@@ -3191,7 +3191,7 @@ export function useThreadNavigation(
     } else {
       setState((current) => ({ ...current, loading, refreshing, error }));
     }
-  }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore]);
+  }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore]);
 
   const performRefresh = useCallback(async (
     preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,
@@ -3611,10 +3611,8 @@ export function useThreadNavigation(
               status,
             ),
           }));
-          scheduleRefresh(undefined, undefined, false, {
-            forceRefresh: true,
-            refreshMode: "full",
-          });
+          // The bounded window owns this remote connection lifetime and
+          // resumes its resources exactly once, even for duplicate events.
           return;
         }
         remotePeerDisconnectedRef.current = true;

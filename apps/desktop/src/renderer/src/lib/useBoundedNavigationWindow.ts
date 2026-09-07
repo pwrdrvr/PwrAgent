@@ -23,7 +23,7 @@ export function useBoundedNavigationWindow(params: Demand & {
   const controllerRef = useRef<NavigationWindowQueries | undefined>(undefined);
   const paramsRef = useRef(params);
   paramsRef.current = params;
-  const [connection, setConnection] = useState<{ target: string; connected: boolean }>();
+  const [connection, setConnection] = useState<{ target: string; connected: boolean; error?: string }>();
   const targetKey = JSON.stringify(params.target ?? { scope: "local" });
   const connected = connection?.target !== targetKey || connection.connected;
   const directories = useMemo(() => {
@@ -88,11 +88,12 @@ export function useBoundedNavigationWindow(params: Demand & {
     const unsubscribe = desktopApi?.onAgentEvent?.((event) => {
       const target = paramsRef.current.target;
       if (event.notification.method === "federation/peerStatus/changed") {
-        const peer = event.notification.params as { instanceId: string; status: string };
+        const peer = event.notification.params as { instanceId: string; status: string; unavailableReason?: string };
         if (target?.scope !== "remote" || target.instanceId !== peer.instanceId) return;
-        const next = { target: JSON.stringify(target), connected: peer.status === "connected" };
+        const next = { target: JSON.stringify(target), connected: peer.status === "connected",
+          error: peer.status === "connected" ? undefined : peer.unavailableReason ?? `Federation peer ${peer.instanceId} is ${peer.status}.` };
         if (!next.connected) controllerRef.current?.invalidate();
-        setConnection((previous) => previous?.target === next.target && previous.connected === next.connected ? previous : next);
+        setConnection((previous) => previous?.target === next.target && previous.connected === next.connected && previous.error === next.error ? previous : next);
         return;
       }
       if (paramsRef.current.observeEvents === false) return;
@@ -111,5 +112,6 @@ export function useBoundedNavigationWindow(params: Demand & {
   const rebaseline = useCallback((id: string, anchor: NavigationQueryAnchor) => controllerRef.current?.rebaseline(id, anchor) ?? Promise.resolve(), []);
   const restart = useCallback((id: string) => controllerRef.current?.restart(id) ?? Promise.resolve(), []);
   const setVisibleAnchor = useCallback((id: string, anchor: NavigationQueryAnchor | undefined) => controllerRef.current?.setVisibleAnchor(id, anchor), []);
-  return { ...state, directories, selectedDirectoryKeys, connected, invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor };
+  const connectionError = !connected && connection?.target === targetKey ? connection.error : undefined;
+  return { ...state, directories, selectedDirectoryKeys, connected, ...(connectionError ? { connectionError } : {}), invalidate, refresh, loadMore, rebaseline, restart, setVisibleAnchor };
 }

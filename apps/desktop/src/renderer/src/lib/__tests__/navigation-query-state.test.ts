@@ -81,6 +81,19 @@ describe("distinct navigation page state", () => {
     })).toBe(next);
   });
 
+  it("preserves exact owner routing when a native detail omits viewer presentation metadata", () => {
+    const ref = { backend: "codex" as const, threadId: "same", ownerInstanceId: "peer" };
+    const state = selectNavigationIdentity(undefined, ref);
+    const detail = { protocol: 2 as const, ref, revision: "detail", readiness: "ready" as const, identity: "present" as const,
+      thread: { id: "same", source: "codex" as const, title: "Thread", titleSource: "explicit" as const,
+        linkedDirectories: [], inbox: { inInbox: false } } };
+    const accepted = applyNavigationSelectedDetail({ state, sequence: state.pendingSequence, detail });
+    expect(accepted.detail?.thread?.federation?.ref).toEqual({ backend: "codex", threadId: "same", target: { scope: "remote", instanceId: "peer" } });
+    expect(() => applyNavigationSelectedDetail({ state, sequence: state.pendingSequence,
+      detail: { ...detail, thread: { ...detail.thread, federation: { instanceLabel: "Other", ref: { backend: "codex", threadId: "same",
+        target: { scope: "remote", instanceId: "foreign" } } } } } })).toThrow("another owner");
+  });
+
   it("distinguishes owners even when backend and thread id collide", () => {
     const ref = { backend: "codex" as const, threadId: "same" };
     expect(navigationIdentityKey(ref)).not.toBe(navigationIdentityKey({ ...ref, ownerInstanceId: "peer" }));
