@@ -3665,14 +3665,14 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.threads.map((thread) => thread.id)).toEqual([
-        "thread-parent",
+      expect(result.current.threads.map((thread) => thread.id).sort()).toEqual([
         "thread-child",
+        "thread-parent",
       ]);
     });
 
     await act(async () => {
-      await result.current.archiveThread(result.current.threads[0]!, {
+      await result.current.archiveThread(result.current.threads.find((thread) => thread.id === "thread-parent")!, {
         includeSubthreads: true,
       });
     });

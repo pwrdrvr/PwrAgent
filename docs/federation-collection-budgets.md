@@ -88,6 +88,17 @@ proposal for twelve stacked PRs. They distinguish small wire-shape fixes from
 protocol/readiness changes that should not be called complete merely because a
 socket has a maximum frame size.
 
+### Group archive planning
+
+Group archive discovery reads child-first `group-members` pages of ten rows.
+The viewer index supplies discovery hints; each member's owner supplies its
+current parent. Planning retains at most 1,000 compact identities and parent
+relationships, 1 MiB, eight owners, and 32 ancestry levels, with one ten-second
+discovery deadline. An incomplete, unavailable, expired, or over-budget read
+fails before archive mutations begin. Each archive revalidates the expected
+parent on its owner; an earlier successful archive stays suppressed if a later
+member fails. Query reads add zero SQLite commits (0 MB/day added WAL).
+
 ## Regression map
 
 - `federation-collection-reads.test.ts`: page rows/UTF-8 bytes, exact selection,

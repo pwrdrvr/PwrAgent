@@ -390,6 +390,7 @@ function buildProjectGeometry(index: NavigationQueryIndex): NavigationDirectoryR
 }
 
 function normalizeQuery(query: NavigationQuery): NavigationQuery {
+  if (query.kind === "group-members") return { ...query, roots: [...query.roots].sort((left, right) => identityKey(left).localeCompare(identityKey(right))) };
   if (query.kind === "messaging-threads" || query.kind === "messaging-projects") {
     return { ...query, filter: query.filter?.trim().toLowerCase() || undefined,
       ...(query.allowedBackends ? { allowedBackends: [...new Set(query.allowedBackends)].sort() } : {}) };
@@ -559,6 +560,34 @@ function selectQueryThreads(params: {
       })
       .sort(compareDirectoryMembers);
   }
+  if (query.kind === "group-members") {
+    const ordinary = new Set(ordinaryThreads);
+    const children = new Map<string, NavigationThreadSummary[]>();
+    for (const thread of ordinaryThreads) {
+      const parent = parentIdentity(thread, params.parentCandidates);
+      if (!parent) continue;
+      const key = identityKey(parent);
+      const members = children.get(key) ?? [];
+      members.push(thread);
+      children.set(key, members);
+    }
+    const result: NavigationThreadSummary[] = [];
+    const visited = new Set<string>();
+    const visiting = new Set<string>();
+    const visit = (ref: NavigationIdentity, depth: number): void => {
+      const key = identityKey(ref);
+      if (visited.has(key)) return;
+      if (visiting.has(key) || depth > 32) throw new Error("Thread group has a cycle or exceeds the 32-level group budget.");
+      visiting.add(key);
+      for (const child of children.get(key) ?? []) visit(navigationIdentity(child), depth + 1);
+      visiting.delete(key);
+      visited.add(key);
+      const thread = params.threadsByIdentity.get(key);
+      if (thread && ordinary.has(thread)) result.push(thread);
+    };
+    for (const root of query.roots) visit(root, 0);
+    return result;
+  }
   if (query.kind === "children") {
     const parentThread = params.threadsByIdentity.get(identityKey(query.parent));
     const children = ordinaryThreads.filter((thread) => {
@@ -716,6 +745,7 @@ export function projectNavigationQuery(params: {
       || query.kind === "search"
       || query.kind === "messaging-threads"
       || query.kind === "children"
+      || query.kind === "group-members"
       ? selectedThreads
       : params.index.threads;
   return {

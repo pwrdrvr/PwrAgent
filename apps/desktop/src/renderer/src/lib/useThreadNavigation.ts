@@ -1,5 +1,6 @@
 import { readNavigationQueryRange } from "./read-navigation-query-range";
 import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
+import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navigation-archive-group";
 import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
@@ -1300,42 +1301,6 @@ function ungroupChildThreadsInLoadedRows(
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
-function collectDescendantThreads(
-  threads: NavigationThreadSummary[],
-  parent: NavigationThreadSummary,
-): NavigationThreadSummary[] {
-  const descendants: NavigationThreadSummary[] = [];
-  const threadByKey = new Map(
-    threads.map((thread) => [
-      threadSummaryIdentityKey(thread),
-      thread,
-    ]),
-  );
-  const parentKey = threadSummaryIdentityKey(parent);
-  const queue = threads.filter(
-    (thread) => resolveThreadParentKey(thread, threadByKey) === parentKey,
-  );
-  const seen = new Set<string>();
-
-  while (queue.length > 0) {
-    const thread = queue.shift()!;
-    const key = threadSummaryIdentityKey(thread);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    descendants.push(thread);
-    const currentKey = threadSummaryIdentityKey(thread);
-    queue.push(
-      ...threads.filter(
-        (candidate) =>
-          resolveThreadParentKey(candidate, threadByKey) === currentKey,
-      ),
-    );
-  }
-
-  return descendants;
-}
 
 function updateSubthreadOrderInLoadedRows(
   snapshot: NavigationLoadedRows | undefined,
@@ -6930,9 +6895,15 @@ export function useThreadNavigation(
       const optimisticThreadKey = optimisticThread
         ? threadSummaryIdentityKey(optimisticThread)
         : undefined;
-      const targetThreads = options?.includeSubthreads
-        ? [...collectDescendantThreads(threads, thread).reverse(), thread]
-        : [thread];
+      let targetThreads: NavigationArchiveMember[];
+      try {
+        targetThreads = options?.includeSubthreads
+          ? await readNavigationArchiveGroup({ api: desktopApi ?? {}, thread, windowTarget: readRendererFederationTarget() })
+          : [thread];
+      } catch (error) {
+        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        return;
+      }
       const targetThreadKeys = new Set(
         targetThreads.map((target) =>
           threadSummaryIdentityKey(target)
@@ -6987,6 +6958,7 @@ export function useThreadNavigation(
           : current
       );
 
+      const archivedKeys = new Set<string>();
       try {
         for (const target of targetThreads) {
           const federationTarget = target.federation?.ref.target
@@ -6994,9 +6966,11 @@ export function useThreadNavigation(
           const response = await archiveThreadRequest({
             backend: target.source,
             threadId: target.id,
+            ...(target.expectedParent !== undefined ? { expectedParent: target.expectedParent } : {}),
             ...(federationTarget ? { federationTarget } : {}),
           });
           const cleanupNotice = formatArchiveCleanupNotice(response.cleanup);
+          archivedKeys.add(threadSummaryIdentityKey(target));
           if (cleanupNotice) {
             setArchiveThreadNotice(cleanupNotice);
           }
@@ -7012,19 +6986,19 @@ export function useThreadNavigation(
         await refresh();
       } catch (error) {
         for (const targetKey of targetThreadKeys) {
-          suppressedArchivedThreadKeysRef.current.delete(targetKey);
+          if (!archivedKeys.has(targetKey)) suppressedArchivedThreadKeysRef.current.delete(targetKey);
         }
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
-        await refresh(threadKey, undefined, true);
+        await refresh(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey));
       }
     },
     [
       archiveThreadRequest,
+      desktopApi,
       optimisticThread,
       refresh,
       removeRemoteThreadPinRequest,
       state.rows,
-      threads,
     ]
   );
 

@@ -12440,6 +12440,16 @@ export class DesktopBackendRegistry {
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
+    if (request.expectedParent !== undefined) {
+      const overlay = await this.overlayStore?.getThreadOverlayState({ backend, threadId: request.threadId });
+      const expected = request.expectedParent;
+      if (expected === null ? Boolean(overlay?.parentThreadId)
+        : overlay?.parentThreadId !== expected.threadId
+          || (overlay.parentThreadBackend ?? backend) !== expected.backend
+          || overlay.parentThreadInstanceId !== expected.instanceId) {
+        throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
+      }
+    }
     if (isAcpBackendId(backend)) {
       return await this.archiveAcpThread({
         backend,

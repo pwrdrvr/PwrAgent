@@ -51,6 +51,10 @@ it("adds zero SQLite commits for real overlay-backed query, model inventory, fac
         protocol: 2, consumer: "settings", backend: "codex", query: { kind: "model-inventory" },
       } });
       expect(inventory.modelGroups?.[0]?.threadCount).toBe(1000);
+      const group = await queries.readPage({ loadIndex, scopeKey: "archive", request: {
+        protocol: 2, consumer: "main-sidebar", query: { kind: "group-members", roots: [{ backend: "codex", threadId: "thread-0" }] }, pageSize: 10,
+      } });
+      expect(group.entries.map(({ row }) => row.id)).toEqual(["thread-0"]);
     });
     expectSqliteWriteBudget({ scenario: "navigation-owner-query-reads", writes,
       note: "1,000 real overlay-backed rows, owner Attention metadata, facet counts, model inventory, page continuation and repeated query: zero commits; 0 MB/day added WAL" });

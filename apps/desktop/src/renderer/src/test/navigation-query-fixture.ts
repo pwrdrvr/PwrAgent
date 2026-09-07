@@ -35,8 +35,11 @@ export function navigationQueryFixture(
   const query = request.query;
   const target = request.federationTarget;
   const hasMountedRows = population.threads?.some((thread) => thread.federation);
-  const all: NavigationThreadSummary[] = [...population.threads ?? []].map((thread) => target?.scope === "remote" && !hasMountedRows
+  let all: NavigationThreadSummary[] = [...population.threads ?? []].map((thread) => target?.scope === "remote" && !hasMountedRows
     ? { ...thread, federation: { ref: { backend: thread.source, threadId: thread.id, target }, instanceLabel: target.instanceId, peerStatus: "connected" } } : thread);
+  if (query.kind === "group-members" && request.inventory !== "viewer") all = all.filter((thread) =>
+    (thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined)
+      === (target?.scope === "remote" ? target.instanceId : undefined));
   const byKey = new Map(all.map((thread) => [key(thread), thread]));
   const resolveParentKey = (thread: NavigationThreadSummary) => {
     const declared = parentKey(thread);
@@ -49,6 +52,18 @@ export function navigationQueryFixture(
   const inDirectory = (directory: FixtureDirectory) => all.filter((thread) =>
     directory.threadKeys?.includes(key(thread)) || thread.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key));
   let threads = all;
+  if (query.kind === "group-members") {
+    threads = [];
+    const visited = new Set<string>();
+    const visit = (id: string) => {
+      if (visited.has(id)) return;
+      visited.add(id);
+      for (const child of all.filter((thread) => !thread.codexNativeSubAgent && resolveParentKey(thread) === id)) visit(key(child));
+      const root = byKey.get(id);
+      if (root && !root.codexNativeSubAgent) threads.push(root);
+    };
+    for (const root of query.roots) visit(navigationThreadSelectionKey(root));
+  }
   if (query.kind === "search") threads = rankThreadJumpMatches(all, query.text);
   if (query.kind === "lens") {
     if (query.lens === "attention") threads = all.filter((thread) => thread.threadStatus === "active" || thread.inbox.inInbox);

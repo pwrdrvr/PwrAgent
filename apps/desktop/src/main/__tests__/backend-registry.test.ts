@@ -44511,6 +44511,17 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("rejects a group archive when the owner parent changed before admission", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list", "thread/archive"] }, threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: { "codex:child": { backend: "codex", threadId: "child",
+        parentThreadId: "new-parent", parentThreadBackend: "codex", extraLinkedDirectories: [] } } }) });
+    await expect(registry.archiveThread({ backend: "codex", threadId: "child",
+      expectedParent: { backend: "codex", threadId: "old-parent" } })).rejects.toThrow("grouping changed");
+    expect(codexClient.lastArchiveThreadParams).toBeUndefined();
+    await registry.close();
+  });
+
   it("snapshots and removes linked worktrees when archiving a thread", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
