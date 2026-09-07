@@ -317,3 +317,38 @@ it("keeps viewer pins and cross-owner child counts separate from remote owner de
   });
   unmount();
 });
+
+it("selects the first lens row when directory readiness precedes lens publication", async () => {
+  const f = fixture();
+  const original = f.read.getMockImplementation()!;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  f.read.mockImplementation(async (request, consumer) => {
+    if (request.query.kind === "lens") await pending;
+    const page = await original(request, consumer);
+    if (request.query.kind === "directory-index") page.directories = [{ key: "project", kind: "workspace", label: "Project", path: "/project", counts, pinnedRootCount: 0, unpinnedRootCount: 10, launchpadPresent: true }];
+    return page;
+  });
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.state.page?.coverage.state).toBe("complete"));
+  expect(result.current.selectedItemKey).toBeUndefined();
+  await act(async () => release());
+  await waitFor(() => expect(result.current.threads.length).toBeGreaterThan(0));
+  await waitFor(() => expect(result.current.selectedThreadKey).toBe("codex:thread-0"));
+  unmount();
+});
+
+it("keeps the unlinked directory breadcrumb for an exact selected thread", async () => {
+  const f = fixture();
+  const original = f.read.getMockImplementation()!;
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await original(request, consumer);
+    if (request.query.kind === "directory-index") page.directories = [{ key: "unlinked", kind: "unlinked", label: "No linked directory", counts, pinnedRootCount: 0, unpinnedRootCount: 10, launchpadPresent: false }];
+    return page;
+  });
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  expect(result.current.selectedDirectory?.key).toBe("unlinked");
+  expect(result.current.pagedNavigation.selectedDirectoryKeys).toEqual(["unlinked"]);
+  unmount();
+});

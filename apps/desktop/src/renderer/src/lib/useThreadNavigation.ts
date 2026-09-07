@@ -484,7 +484,10 @@ function upsertLaunchpadDirectory(
 }
 
 function directoryKeysForThread(thread?: NavigationThreadSummary): string[] {
-  return thread?.linkedDirectories.map((directory) => classifyDirectory(directory).key) ?? [];
+  if (!thread) return [];
+  return thread.linkedDirectories.length
+    ? thread.linkedDirectories.map((directory) => classifyDirectory(directory).key)
+    : ["unlinked"];
 }
 
 function resolveCreateThreadTargetDirectory(args: {
@@ -3104,8 +3107,8 @@ export function useThreadNavigation(
       ...(owner.target.scope === "remote" ? { ownerInstanceId: owner.target.instanceId } : {}) }];
   }), [draftStore, draftVersion, rendererFederationTarget]);
   const selectedConfiguration = selectedDetail.state?.detail?.thread;
-  const selectedDirectoryKeys = selectedConfiguration?.linkedDirectories.map((directory) => classifyDirectory(directory).key)
-    ?? (getDirectoryKeyFromLaunchpadSelection(selectedItemKey) ? [getDirectoryKeyFromLaunchpadSelection(selectedItemKey)!] : []);
+  const selectedDirectoryKeys = selectedConfiguration ? directoryKeysForThread(selectedConfiguration)
+    : (getDirectoryKeyFromLaunchpadSelection(selectedItemKey) ? [getDirectoryKeyFromLaunchpadSelection(selectedItemKey)!] : []);
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewForeground, observeEvents: false,
     browseMode, target: rendererFederationTarget, attentionView: { id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true },
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
@@ -3198,7 +3201,7 @@ export function useThreadNavigation(
           prChipLocationIndexRef.current = buildPrChipLocationIndex(reconciled);
         }
         return { loading, refreshing, error, rows: reconciled,
-          startupSelectionSettled: pages.get("directory-index")?.coverage.state === "complete" };
+          startupSelectionSettled: primary.length > 0 && primary.every((resource) => pages.get(resource.id)?.coverage.state === "complete") };
       });
     } else {
       setState((current) => ({ ...current, loading, refreshing, error }));
@@ -4530,6 +4533,7 @@ export function useThreadNavigation(
       selectedItemKey
       || initialSelectionEstablishedRef.current
       || !state.rows
+      || !state.startupSelectionSettled
     ) {
       return undefined;
     }
@@ -4544,7 +4548,7 @@ export function useThreadNavigation(
         ? threadSummaryIdentityKey(optimisticThread)
         : undefined,
     );
-  }, [directories, optimisticThread, selectedItemKey, state.rows, threads]);
+  }, [directories, optimisticThread, selectedItemKey, state.rows, state.startupSelectionSettled, threads]);
   const displaySelectionKey = selectedItemKey ?? initialFallbackSelectionKey;
   useEffect(() => {
     if (selectedItemKey) {
@@ -4555,14 +4559,12 @@ export function useThreadNavigation(
       if (
         state.rows
         && state.startupSelectionSettled
-        && boundedNavigation.resources.get(browseMode === "directories" ? "directory-index" : "lens")?.state.page?.coverage.state === "complete"
       ) {
-        // An empty settled full startup is still a completed selection
-        // decision. A progressive active-recent page is explicitly unsettled:
-        // even if provider refresh has already reached "ready", its empty row
-        // set cannot close the selection window before the queued full page.
-        // Once the full page settles, do not let a later operator action that
-        // adds a directory turn into implicit navigation to its launchpad.
+        // Readiness belongs to the same accepted primary page as these rows.
+        // A newer resource response must not certify the previous empty rows
+        // as a settled empty selection while their replacement is publishing.
+        // Once an empty primary page settles, later additions must not cause
+        // implicit navigation.
         initialSelectionEstablishedRef.current = true;
       }
       return;
@@ -4775,7 +4777,7 @@ export function useThreadNavigation(
         ? { scope: "remote", instanceId: ref.ownerInstanceId } : { scope: "local" };
       void readNavigationActionThread({ api: desktopApi, thread: { source: ref.backend, id: ref.threadId }, target })
         .then(async (thread) => {
-          const directoryKeys = directoryKeysForThread(thread);
+          const directoryKeys = directoryKeysForThread(thread).filter((key) => key !== "unlinked");
           if (directoryKeys.length) await desktopApi.refreshDirectoryGitStatuses!({ directoryKeys, federationTarget: target, force: true });
         })
         .catch((error: unknown) => setState((current) => ({ ...current,
