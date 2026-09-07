@@ -56,6 +56,7 @@ export function useNavigationSelectedDetail(params: {
         protocol: 2,
         ref: selectedRef,
         federationTarget: currentParams.federationTarget,
+        includeWorkspaceConfiguration: true,
         knownRevision: started.stale ? undefined : started.detail?.revision,
       }, consumerRef.current);
       if (sequenceRef.current !== sequence) return;

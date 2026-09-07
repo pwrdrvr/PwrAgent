@@ -4635,15 +4635,20 @@ export function useThreadNavigation(
       return undefined;
     }
 
-    return directories.find((directory) =>
+    const directory = directories.find((directory) =>
       directoryKeysForThread(selectedDetail.state?.detail?.thread).includes(directory.key)
     );
+    const workspace = selectedDetail.state?.detail?.workspaceDirectories?.find((candidate) =>
+      candidate.path === directory?.path,
+    );
+    return directory && workspace?.gitStatus ? { ...directory, gitStatus: workspace.gitStatus } : directory;
   }, [
     activeFederatedLaunchpad,
     directories,
     displaySelectionKey,
     selectedThreadKey,
     selectedDetail.state?.detail?.thread,
+    selectedDetail.state?.detail?.workspaceDirectories,
   ]);
   const selectedLaunchpad = useMemo(() => {
     if (activeFederatedLaunchpad) {
@@ -7080,13 +7085,14 @@ export function useThreadNavigation(
           threadId: thread.id,
         });
         await refresh(threadSummaryIdentityKey(thread));
+        if (selectedItemKeyRef.current === threadSummaryIdentityKey(thread)) await selectedDetail.refresh();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setWorktreeArchiveError(message);
         throw error;
       }
     },
-    [desktopApi, handoffThreadWorkspaceRequest, refresh]
+    [desktopApi, handoffThreadWorkspaceRequest, refresh, selectedDetail.refresh]
   );
 
   const renameThread = useCallback(

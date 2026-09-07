@@ -12959,6 +12959,17 @@ export class DesktopBackendRegistry {
       });
     }
 
+    // Publish only after workspace replacement and CWD/branch synchronization
+    // finish, so every selected-detail consumer can revalidate the new owner
+    // configuration without depending on a full navigation refresh.
+    await this.publishLocalEvent({
+      backend: request.backend,
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: { reason: "selected-thread", threadIds: [request.threadId] },
+      },
+    });
+
     return workspaceCwdSyncPending
       ? {
           ...result,

@@ -17,6 +17,25 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+it("revalidates exact workspace configuration after an owner handoff event", async () => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce({ ...detail("local"), workspaceDirectories: [{ key: "repo", path: "/repo", label: "Repo" }] })
+    .mockResolvedValue({ ...detail("worktree"), workspaceDirectories: [{ key: "worktree", path: "/repo/worktree", label: "Repo" }] });
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  expect(read.mock.calls[0]?.[0].includeWorkspaceConfiguration).toBe(true);
+  act(() => listener!({ backend: "codex", notification: {
+    method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: [ref.threadId] },
+  } }));
+  expect(result.current.state?.readiness).toBe("loading");
+  await waitFor(() => expect(result.current.state?.detail?.revision).toBe("worktree"));
+  expect(result.current.state?.detail?.workspaceDirectories?.[0]?.path).toBe("/repo/worktree");
+  expect(read.mock.calls[1]?.[0].knownRevision).toBeUndefined();
+  unmount();
+});
+
 it("fences a late selected-detail response at canonical event admission", async () => {
   const old = deferred<NavigationSelectedDetailResponse>();
   const fresh = deferred<NavigationSelectedDetailResponse>();

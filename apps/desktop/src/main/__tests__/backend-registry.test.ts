@@ -46579,6 +46579,8 @@ script = "printf setup"
       } as never,
     });
 
+    const publish = vi.spyOn(registry, "publishLocalEvent");
+
     const response = await registry.handoffThreadWorkspace({
       backend: "codex",
       threadId: "thread-1",
@@ -46594,6 +46596,13 @@ script = "printf setup"
       repositoryPath: "/repo/app",
       sourcePath: "/repo/app",
       sourceBranch: undefined,
+    });
+    expect(publish).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: { reason: "selected-thread", threadIds: ["thread-1"] },
+      },
     });
     expect(response.workMode).toBe("worktree");
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
