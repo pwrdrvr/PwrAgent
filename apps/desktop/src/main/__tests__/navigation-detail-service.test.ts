@@ -71,6 +71,7 @@ describe("NavigationDetailService", () => {
 
   it("loads authoritative selected detail independently of a row page", async () => {
     const selected = thread("selected");
+    selected.linkedDirectories = [{ id: "selected-repo", kind: "local", label: "Selected", path: "/repo/selected" }];
     selected.queuedTurns = [{ queueEntryId: "independent", origin: "manual", displayText: "Private FIFO", createdAt: 1, position: 0 }];
     selected.agent = {
       name: "Operator",
@@ -90,6 +91,7 @@ describe("NavigationDetailService", () => {
       params,
     } satisfies NavigationSnapshot & { params: unknown }));
     const registry = {
+      readSelectedWorkspaceGitStatus: vi.fn(async () => ({ currentBranch: "feature", handoffBranches: ["main"] })),
       getCachedThreadSummary: vi.fn(() => undefined),
       resolveThread: vi.fn(async () => thread("selected")),
       getQueuedExecutionModeForThread: vi.fn(() => undefined),
@@ -122,6 +124,13 @@ describe("NavigationDetailService", () => {
     });
     expect(unchanged).toMatchObject({ unchanged: true });
     expect(unchanged.thread).toBeUndefined();
+    expect(registry.readSelectedWorkspaceGitStatus).not.toHaveBeenCalled();
+    const workspace = await service.readSelectedDetail({ protocol: 2, ref: first.ref,
+      includeWorkspaceConfiguration: true, knownRevision: first.revision });
+    expect(workspace.unchanged).not.toBe(true);
+    expect(workspace.workspaceDirectories).toEqual([{ key: "selected-repo", label: "Selected", path: "/repo/selected",
+      gitStatus: { currentBranch: "feature", handoffBranches: ["main"] } }]);
+    expect(registry.readSelectedWorkspaceGitStatus).toHaveBeenCalledExactlyOnceWith("/repo/selected");
   });
 
   it("pages a complete FIFO projection with its own revision", () => {

@@ -23374,6 +23374,7 @@ describe("MessagingController", () => {
   it("runs a local-to-worktree handoff from the status menu", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23426,9 +23427,11 @@ describe("MessagingController", () => {
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), false);
     harness.getNavigationSnapshot.mockResolvedValueOnce(
       buildLocalHandoffNavigationSnapshot(),
     );
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), true);
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: confirm.id,
@@ -23466,6 +23469,7 @@ describe("MessagingController", () => {
       handoffBranches: Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`),
     };
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    setHandoffDetailFixture(harness, navigation, false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23523,6 +23527,7 @@ describe("MessagingController", () => {
   it("runs a detached-head worktree handoff without asking for a leave-local branch", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23544,9 +23549,11 @@ describe("MessagingController", () => {
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), false);
     harness.getNavigationSnapshot.mockResolvedValueOnce(
       buildLocalHandoffNavigationSnapshot(),
     );
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), true);
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: confirm.id,
@@ -23577,6 +23584,7 @@ describe("MessagingController", () => {
       },
     };
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    setHandoffDetailFixture(harness, navigation, false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23605,6 +23613,7 @@ describe("MessagingController", () => {
   it("runs a worktree-to-local handoff from the status menu", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23628,9 +23637,11 @@ describe("MessagingController", () => {
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
     harness.getNavigationSnapshot.mockResolvedValue(buildNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildNavigationSnapshot(), false);
     harness.getNavigationSnapshot.mockResolvedValueOnce(
       buildWorktreeHandoffNavigationSnapshot(),
     );
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), true);
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: confirm.id,
@@ -23660,6 +23671,7 @@ describe("MessagingController", () => {
   it("rejects stale handoff confirmations when workspace metadata changes", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23683,6 +23695,7 @@ describe("MessagingController", () => {
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
 
     harness.getNavigationSnapshot.mockResolvedValue(buildNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildNavigationSnapshot(), false);
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: confirm.id,
@@ -23700,6 +23713,7 @@ describe("MessagingController", () => {
   it("rejects handoff confirmations while a turn is active", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23756,6 +23770,7 @@ describe("MessagingController", () => {
   it("reports handoff as unavailable when the backend bridge does not expose it", async () => {
     const harness = await createHarness({ handoff: false });
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23787,7 +23802,8 @@ describe("MessagingController", () => {
     const harness = await createHarness({ setConversationTitle });
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.title = "Renamed in Desktop";
-    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    harness.getNavigationSelectedDetail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref,
+      revision: "renamed", readiness: "ready", identity: "present", thread: navigation.threads[0] }));
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(
@@ -24689,6 +24705,22 @@ describe("send_messaging_file agent tool", () => {
   });
 });
 
+function setHandoffDetailFixture(
+  harness: { getNavigationSelectedDetail: ReturnType<typeof vi.fn> },
+  population: NavigationSnapshot,
+  once: boolean,
+): void {
+  const read: NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]> = async (request) => {
+    const thread = population.threads.find((candidate) => candidate.source === request.ref.backend && candidate.id === request.ref.threadId);
+    return { protocol: 2, ref: request.ref, revision: "handoff-fixture", readiness: "ready",
+      identity: thread ? "present" : "unresolved", thread,
+      ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: population.directories.filter((directory) =>
+        thread?.linkedDirectories.some((linked) => linked.path === directory.path)) } : {}) };
+  };
+  if (once) harness.getNavigationSelectedDetail.mockImplementationOnce(read);
+  else harness.getNavigationSelectedDetail.mockImplementation(read);
+}
+
 async function createHarness<
   Store extends MessagingControllerOptions["store"] = MessagingStore,
 >(options?: {
@@ -24886,7 +24918,9 @@ async function createHarness<
       const thread = population.threads.find((candidate) => candidate.source === request.ref.backend && candidate.id === request.ref.threadId
         && (candidate.federation?.ref.target.scope === "remote" ? candidate.federation.ref.target.instanceId
           : options?.getNavigationSnapshot && request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined) === request.ref.ownerInstanceId);
-      return { protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: thread ? "present" : "unresolved", thread };
+      return { protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: thread ? "present" : "unresolved", thread,
+        ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: population.directories.filter((directory) =>
+          thread?.linkedDirectories.some((linked) => linked.path === directory.path)) } : {}) };
     }),
   );
   const getNavigationLaunchpadConfig = vi.fn<NonNullable<MessagingBackendBridge["getNavigationLaunchpadConfig"]>>(

@@ -188,7 +188,6 @@ export type MessagingBackendBridge = {
     instanceId?: FederationInstanceId;
     includeRemote?: boolean;
   }): Promise<{
-    navigation: NavigationSnapshot;
     thread: NavigationThreadSummary;
     federatedThread?: FederatedThreadRef;
   } | undefined>;

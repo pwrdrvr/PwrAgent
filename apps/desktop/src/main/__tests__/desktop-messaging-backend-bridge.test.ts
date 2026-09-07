@@ -1241,6 +1241,9 @@ describe("DesktopMessagingBackendBridge", () => {
       onRemoteBackendEvent: () => () => undefined,
       remoteBackend: () => ({ resolveThread } as unknown as FederationBackendOperations),
       remoteNavigationSnapshot: vi.fn(async () => remoteNavigation),
+      remoteNavigationSelectedDetail: vi.fn<NonNullable<DesktopMessagingFederationBridge["remoteNavigationSelectedDetail"]>>(async (_target, request) => ({
+        protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: "present", thread: remoteThread,
+      })),
     } satisfies DesktopMessagingFederationBridge;
     const registry = {
       listThreads: vi.fn(async () => []),
