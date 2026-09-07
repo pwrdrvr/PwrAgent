@@ -279,6 +279,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "navigation-unlink-relative-pin": {
+    "commits": 3,
+    "note": "One explicit unlink plus owner pin and relative placement: three commits; 100 children/day at ~4 KiB/commit is ~1.2 MB/day; no idle writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "provider-thread-snapshot-refresh": {
     "commits": 1,
     "note": "one secret-free provider thread projection per successful full provider list, never per thread",

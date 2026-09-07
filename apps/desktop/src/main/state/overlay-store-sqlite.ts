@@ -3756,6 +3756,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     parentThreadId?: string | null;
     parentThreadBackend?: ThreadOverlayState["backend"] | null;
     parentThreadInstanceId?: string | null;
+    expectedParent?: { threadId: string; backend: ThreadOverlayState["backend"]; instanceId?: string } | null;
   }): Promise<ThreadOverlayState> {
     if (
       params.parentThreadId === params.threadId
@@ -3763,45 +3764,56 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ) {
       throw new Error("A thread cannot be its own parent.");
     }
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const parentThreadId = params.parentThreadId?.trim();
-    const parentThreadBackend = parentThreadId
-      ? params.parentThreadBackend ?? params.backend
-      : undefined;
-    const parentThreadInstanceId = parentThreadId
-      ? params.parentThreadInstanceId?.trim() || undefined
-      : undefined;
-    const nextState: ThreadOverlayState = {
-      ...current,
-      parentThreadId: parentThreadId || undefined,
-      parentThreadBackend,
-      parentThreadInstanceId,
-      pinnedRank: parentThreadId ? undefined : current.pinnedRank,
-    };
-    this.putThread(threadKey, nextState);
-    if (parentThreadId && !parentThreadInstanceId) {
-      const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
-      const parent = this.getThread(parentKey) ?? {
-        backend: parentThreadBackend!,
-        threadId: parentThreadId,
+    return this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
         executionMode: "default" as const,
         extraLinkedDirectories: [],
       };
-      this.putThread(parentKey, {
-        ...parent,
-        subthreadOrder: [
-          ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
-          params.threadId,
-        ],
-      });
-    }
-    return nextState;
+      if (params.expectedParent !== undefined) {
+        const expected = params.expectedParent;
+        if (expected === null ? Boolean(current.parentThreadId)
+          : current.parentThreadId !== expected.threadId
+            || (current.parentThreadBackend ?? params.backend) !== expected.backend
+            || current.parentThreadInstanceId !== expected.instanceId) {
+          throw new Error("Thread parent changed. Refresh the group before changing its relationship.");
+        }
+      }
+      const parentThreadId = params.parentThreadId?.trim();
+      const parentThreadBackend = parentThreadId
+        ? params.parentThreadBackend ?? params.backend
+        : undefined;
+      const parentThreadInstanceId = parentThreadId
+        ? params.parentThreadInstanceId?.trim() || undefined
+        : undefined;
+      const nextState: ThreadOverlayState = {
+        ...current,
+        parentThreadId: parentThreadId || undefined,
+        parentThreadBackend,
+        parentThreadInstanceId,
+        pinnedRank: parentThreadId ? undefined : current.pinnedRank,
+      };
+      this.putThread(threadKey, nextState);
+      if (parentThreadId && !parentThreadInstanceId) {
+        const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
+        const parent = this.getThread(parentKey) ?? {
+          backend: parentThreadBackend!,
+          threadId: parentThreadId,
+          executionMode: "default" as const,
+          extraLinkedDirectories: [],
+        };
+        this.putThread(parentKey, {
+          ...parent,
+          subthreadOrder: [
+            ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
+            params.threadId,
+          ],
+        });
+      }
+      return nextState;
+    })();
   }
 
   async updateSubthreadOrder(params: {

@@ -5,6 +5,7 @@ import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadCon
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
+import { readNavigationUnlinkPlan } from "./navigation-unlink-plan";
 import { readNavigationActionDetail, readNavigationActionThread, resolveNavigationActionGroupRoot } from "./navigation-action-authority";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -44,7 +45,6 @@ import {
   buildThreadIdentityKey,
   classifyDirectory,
   parseOwnedComposerScopeKey,
-  comparePinnedThreads,
   compareThreadsByCreatedAtDesc,
   DEFAULT_NAVIGATION_BROWSE_MODE,
   federatedThreadIdentityKey,
@@ -54,7 +54,6 @@ import {
   normalizeRenamedTitleSource,
   resolveThreadParentKey,
   shortenDerivedThreadTitle,
-  sortSubthreadSummaries,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "./useNavigationDirectoryDisclosure";
@@ -7391,140 +7390,52 @@ export function useThreadNavigation(
 
   const unlinkThreads = useCallback(
     async (threadsToUnlink: NavigationThreadSummary[]): Promise<void> => {
-      if (!setThreadParentRequest || threadsToUnlink.length === 0) {
-        return;
-      }
-      const snapshot = stateRef.current.rows;
-      if (!snapshot) {
-        return;
-      }
-      const threadByKey = new Map(
-        loadedThreadRows(snapshot).map((thread) => [
-          threadSummaryIdentityKey(thread),
-          thread,
-        ]),
-      );
-      const childKeysByPinnedParent = new Map<string, string[]>();
-      for (const thread of threadsToUnlink) {
-        const parentKey = resolveThreadParentKey(thread, threadByKey);
-        const parent = parentKey ? threadByKey.get(parentKey) : undefined;
-        if (!parentKey || !parent?.pinnedRank) {
-          continue;
-        }
-        const childKeys = childKeysByPinnedParent.get(parentKey) ?? [];
-        childKeys.push(threadSummaryIdentityKey(thread));
-        childKeysByPinnedParent.set(parentKey, childKeys);
-      }
-      for (const [parentKey, childKeys] of childKeysByPinnedParent) {
-        const parent = threadByKey.get(parentKey);
-        const selectedChildren = childKeys
-          .map((threadKey) => threadByKey.get(threadKey))
-          .filter(
-            (thread): thread is NavigationThreadSummary => Boolean(thread),
-          );
-        if (parent) {
-          childKeysByPinnedParent.set(
-            parentKey,
-            sortSubthreadSummaries(parent, selectedChildren).map((thread) =>
-              threadSummaryIdentityKey(thread)
-            ),
-          );
-        }
-      }
-      const selectedKeys = new Set(
-        threadsToUnlink.map((thread) =>
-          threadSummaryIdentityKey(thread)
-        ),
-      );
-      const currentPinnedKeys = loadedThreadRows(snapshot)
-        .filter((thread) => thread.pinnedRank && !selectedKeys.has(
-          threadSummaryIdentityKey(thread),
-        ))
-        .sort(comparePinnedThreads)
-        .map((thread) => threadSummaryIdentityKey(thread));
-      const nextPinnedKeys = currentPinnedKeys.flatMap((threadKey) => [
-        ...(childKeysByPinnedParent.get(threadKey) ?? []),
-        threadKey,
-      ]);
-      const pinnedRanksByThreadKey = buildPinnedRanks(nextPinnedKeys);
-
-      setState((current) => ({
-        ...current,
-        rows: updateThreadPinsInLoadedRows(
-          threadsToUnlink.reduce(
-            (response, thread) => updateThreadParentInLoadedRows(response, {
-              backend: thread.source,
-              federationTarget: thread.federation?.ref.target
-                ?? readRendererFederationTarget(),
-              threadId: thread.id,
-              parentThreadId: undefined,
-            }),
-            current.rows,
-          ),
-          { pinnedRanksByThreadKey },
-        ),
-      }));
-
-      const successfullyUnlinkedPinnedKeys = new Set<string>();
-      for (const thread of threadsToUnlink) {
-        try {
-          if (
-            thread.federation?.derivedFromMountedParent
-            && !readRendererFederationTarget()
-          ) {
-            if (!desktopApi?.addRemoteThreadPin) {
-              throw new Error(
-                "Desktop bridge cannot preserve this derived remote child.",
-              );
-            }
-            // Derived children ride along with a mounted parent and have no
-            // viewer-side pin row of their own. Persist one before clearing the
-            // owner relationship or the next refresh would drop the child.
-            await desktopApi.addRemoteThreadPin({
-              ref: thread.federation.ref,
-              instanceLabel: thread.federation.instanceLabel,
-              summary: thread,
-            });
-          }
-          await setThreadParentRequest({
-            backend: thread.source,
-            federationTarget: thread.federation?.ref.target ??
-              readRendererFederationTarget(),
-            threadId: thread.id,
-          });
-          const threadKey = threadSummaryIdentityKey(thread);
-          const parentKey = resolveThreadParentKey(thread, threadByKey);
-          if (parentKey && childKeysByPinnedParent.has(parentKey)) {
-            successfullyUnlinkedPinnedKeys.add(threadKey);
-          }
-        } catch (error) {
-          console.warn(`Could not unlink thread ${thread.id}:`, error);
-        }
-      }
-      const nextSuccessfulPinnedKeys = currentPinnedKeys.flatMap(
-        (threadKey) => [
-          ...(childKeysByPinnedParent.get(threadKey) ?? []).filter(
-            (childKey) => successfullyUnlinkedPinnedKeys.has(childKey),
-          ),
-          threadKey,
-        ],
-      );
+      if (!desktopApi || !setThreadParentRequest || threadsToUnlink.length === 0) return;
+      setSetThreadModelSettingsError(undefined);
       try {
-        if (
-          successfullyUnlinkedPinnedKeys.size > 0
-          && reorderThreadPinsRequest
-        ) {
-          await reorderThreadPinsRequest({
-            federationTarget: readRendererFederationTarget(),
-            threadKeys: nextSuccessfulPinnedKeys,
-          });
+        const windowTarget = readRendererFederationTarget();
+        const members = await readNavigationUnlinkPlan({ api: desktopApi, threads: threadsToUnlink,
+          windowTarget, signal: actionAbortControllerRef.current.signal });
+        if (members.some((member) => member.pinBefore) && (!reorderThreadPinsRequest || !setThreadPinRequest)) {
+          throw new Error("Upgrade this instance to preserve group pin placement when unlinking.");
+        }
+        if (!windowTarget && members.some((member) => member.pinBefore && member.thread.federation)
+          && !setRemoteThreadLocalPinRequest) throw new Error("Desktop bridge cannot preserve remote child pins locally.");
+        for (const { thread, target, expectedParent, pinBefore } of members) {
+          if (thread.federation?.derivedFromMountedParent && !windowTarget) {
+            if (!desktopApi.addRemoteThreadPin) throw new Error("Desktop bridge cannot preserve this derived remote child.");
+            await desktopApi.addRemoteThreadPin({ ref: thread.federation.ref,
+              instanceLabel: thread.federation.instanceLabel, summary: thread });
+          }
+          await setThreadParentRequest({ backend: thread.source, threadId: thread.id,
+            federationTarget: target, expectedParent });
+          boundedNavigation.invalidate();
+          setState((current) => ({ ...current, rows: updateThreadParentInLoadedRows(current.rows, {
+            backend: thread.source, threadId: thread.id, federationTarget: target,
+          }) }));
+          if (!pinBefore) continue;
+          if (thread.federation && !windowTarget) {
+            if (!setRemoteThreadLocalPinRequest) throw new Error("Desktop bridge cannot pin this remote child locally.");
+            await setRemoteThreadLocalPinRequest({ ref: thread.federation.ref, pinned: true });
+          } else {
+            await setThreadPinRequest!({ backend: thread.source, threadId: thread.id, federationTarget: target, pinned: true });
+          }
+          // Each owner resolves the anchor against its complete pin order.
+          // Repeating before the parent in canonical sibling order keeps the group together.
+          const result = await reorderThreadPinsRequest!({ federationTarget: windowTarget ?? { scope: "local" },
+            move: { key: threadSummaryIdentityKey(thread), anchorKey: pinBefore, placement: "before" } });
+          boundedNavigation.invalidate();
+          setState((current) => ({ ...current, rows: updateThreadPinsInLoadedRows(current.rows, {
+            pinnedRanksByThreadKey: result.pinnedRanks,
+          }) }));
         }
       } catch (error) {
-        console.warn("Could not pin the unlinked threads above their parent:", error);
+        setSetThreadModelSettingsError(error instanceof Error ? error.message : String(error));
       }
       await refresh();
     },
-    [desktopApi, refresh, reorderThreadPinsRequest, setThreadParentRequest],
+    [desktopApi, refresh, boundedNavigation.invalidate, reorderThreadPinsRequest, setThreadParentRequest,
+      setThreadPinRequest, setRemoteThreadLocalPinRequest],
   );
 
   const updateSubthreadOrder = useCallback(

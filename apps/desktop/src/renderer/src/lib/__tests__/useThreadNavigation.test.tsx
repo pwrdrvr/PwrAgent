@@ -4053,6 +4053,7 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
       reorderThreadPins,
       setThreadParent,
+      setThreadPin: async (request) => ({ backend: "codex", threadId: request.threadId, pinnedRank: "10000" }),
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
     await waitFor(() => expect(result.current.threads).toHaveLength(4));
@@ -4062,18 +4063,17 @@ describe("useThreadNavigation", () => {
     });
 
     expect(setThreadParent.mock.calls.map(([request]) => request)).toEqual([
-      { backend: "codex", federationTarget: undefined, threadId: "thread-child-b" },
-      { backend: "codex", federationTarget: undefined, threadId: "thread-child-a" },
+      { backend: "codex", federationTarget: { scope: "local" }, threadId: "thread-child-a",
+        expectedParent: { backend: "codex", threadId: "thread-parent", instanceId: "parent-owner" } },
+      { backend: "codex", federationTarget: { scope: "local" }, threadId: "thread-child-b",
+        expectedParent: { backend: "codex", threadId: "thread-parent", instanceId: "parent-owner" } },
     ]);
-    expect(reorderThreadPins).toHaveBeenCalledWith({
-      federationTarget: undefined,
-      threadKeys: [
-        "codex:thread-before",
-        "codex:thread-child-a",
-        "codex:thread-child-b",
-        "remote:parent-owner:codex:thread-parent",
-      ],
-    });
+    expect(reorderThreadPins.mock.calls).toEqual([
+      [{ federationTarget: { scope: "local" }, move: { key: "codex:thread-child-a",
+        anchorKey: "remote:parent-owner:codex:thread-parent", placement: "before" } }],
+      [{ federationTarget: { scope: "local" }, move: { key: "codex:thread-child-b",
+        anchorKey: "remote:parent-owner:codex:thread-parent", placement: "before" } }],
+    ]);
   });
 
   it("routes remote-child unlinking to its owner", async () => {
@@ -4097,6 +4097,7 @@ describe("useThreadNavigation", () => {
       pinnedRank: undefined,
       parentThreadId: "thread-parent",
       parentThreadBackend: "codex",
+      parentThreadInstanceId: "viewer",
       federation: {
         ref: {
           backend: "codex",
@@ -4131,6 +4132,9 @@ describe("useThreadNavigation", () => {
     const reorderThreadPins = vi.fn(async () => ({ pinnedRanks: {} }));
     const desktopApi: DesktopApi = {
       addRemoteThreadPin,
+      readFederationHealth: async () => ({ health: { enabled: true, role: "client", status: "connected", instanceId: "viewer", peers: [] } }),
+      setThreadPin: async (request) => ({ backend: "codex", threadId: request.threadId, pinnedRank: "2048" }),
+      setRemoteThreadLocalPin: async () => ({ ref: child.federation!.ref, pinnedRank: "2048" }),
       readPopulation: vi.fn(async () => snapshot),
       onAgentEvent: () => () => undefined,
       reorderThreadPins,
@@ -4147,6 +4151,7 @@ describe("useThreadNavigation", () => {
       backend: "codex",
       federationTarget: remoteTarget,
       threadId: "thread-child",
+      expectedParent: { backend: "codex", threadId: "thread-parent", instanceId: "viewer" },
     });
     expect(addRemoteThreadPin).toHaveBeenCalledWith({
       ref: child.federation?.ref,
@@ -4157,11 +4162,8 @@ describe("useThreadNavigation", () => {
       setThreadParent.mock.invocationCallOrder[0]!,
     );
     expect(reorderThreadPins).toHaveBeenCalledWith({
-      federationTarget: undefined,
-      threadKeys: [
-        "remote:child-owner:codex:thread-child",
-        "codex:thread-parent",
-      ],
+      federationTarget: { scope: "local" },
+      move: { key: "remote:child-owner:codex:thread-child", anchorKey: "codex:thread-parent", placement: "before" },
     });
   });
 

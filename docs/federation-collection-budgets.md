@@ -99,6 +99,22 @@ fails before archive mutations begin. Each archive revalidates the expected
 parent on its owner; an earlier successful archive stays suppressed if a later
 member fails. Query reads add zero SQLite commits (0 MB/day added WAL).
 
+### Group unlink planning
+
+Unlink planning accepts at most 100 selected children across eight owners and
+retains at most 1 MiB of exact child and parent configuration. One ten-second
+planning deadline covers the lookups. Each parent pin lookup requests one exact
+row from the window's pin owner, independently of the relationship owner.
+Sibling order comes from exact parent configuration. Mutations compare the
+expected parent inside the owner's SQLite transaction and require the
+`thread_grouping` grant. Pin creation followed by a relative move preserves
+unloaded pins; no renderer sends a partial complete-order vector.
+
+`navigation-unlink-relative-pin` measures three commits for one pinned child:
+unlink, pin, and relative placement. At 100 children/day and approximately
+4 KiB/commit, this is approximately 1.2 MB/day. A rejected parent comparison
+writes nothing. There are no timer or idle writes.
+
 ## Regression map
 
 - `federation-collection-reads.test.ts`: page rows/UTF-8 bytes, exact selection,
