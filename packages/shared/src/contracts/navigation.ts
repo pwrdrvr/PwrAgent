@@ -1654,6 +1654,8 @@ export type NavigationQuery =
       filter?: string;
       /** Exact compact descriptors for off-page selected directories, at most 100. */
       keys?: string[];
+      /** Exact owner paths for a path-only link; never a fuzzy path match. */
+      paths?: string[];
     }
   | {
       kind: "lens";
@@ -1736,6 +1738,7 @@ export type NavigationQueryPage = {
   counts: NavigationCounts;
   /** Exact item count for the queried collection, distinct from thread facet counts. */
   collectionSize?: number;
+  selectionDirectory?: NavigationDirectoryRow;
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
   /** Offset of this page in its immutable owner generation. Omitted means zero. */

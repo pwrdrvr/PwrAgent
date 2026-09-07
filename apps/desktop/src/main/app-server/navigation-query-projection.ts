@@ -36,6 +36,7 @@ export type NavigationQueryMaterialization = {
   coverage: NavigationQueryCoverage;
   counts: NavigationCounts;
   collectionSize?: number;
+  selectionDirectory?: NavigationDirectoryRow;
   facets?: NavigationStarMapFacetCounts;
   directories: NavigationDirectoryRow[];
   entries: NavigationQueryEntry[];
@@ -402,6 +403,7 @@ function normalizeQuery(query: NavigationQuery): NavigationQuery {
     return {
       ...query,
       ...(query.kind === "directory-index" && query.keys ? { keys: [...new Set(query.keys)].sort() } : {}),
+      ...(query.kind === "directory-index" && query.paths ? { paths: [...new Set(query.paths)].sort() } : {}),
       ...(query.filter?.trim().toLowerCase()
         ? { filter: query.filter.trim().toLowerCase() }
         : { filter: undefined }),
@@ -497,7 +499,7 @@ function selectQueryThreads(params: {
   const ordinaryThreads = params.index.threads.filter(isOrdinaryThread);
   const query = params.query;
   if (query.kind === "messaging-threads" || query.kind === "messaging-projects") {
-    const directory = query.directoryKey ? params.index.directories.find((candidate) => candidate.key === query.directoryKey) : undefined;
+    const directory = query.directoryKey ? params.index.directories.find((candidate) => candidate.key === query.directoryKey || candidate.path === query.directoryKey) : undefined;
     const members = directory ? new Set(directory.threadKeys.flatMap((key) => {
       const thread = params.threadsByLegacyKey.get(key);
       return thread ? [threadKey(thread)] : [];
@@ -719,7 +721,10 @@ export function projectNavigationQuery(params: {
   return {
     coverage: params.index.coverage ?? { state: "complete" },
     counts: countsForThreads(countsThreads),
-    ...(query.kind === "messaging-threads" ? { collectionSize: entries.length } : {}),
+    ...(query.kind === "messaging-threads" ? { collectionSize: entries.length,
+      ...(query.directoryKey ? { selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index, directories: params.index.directories.filter((directory) =>
+          directory.key === query.directoryKey || directory.path === query.directoryKey) }, threadsByLegacyKey })
+        .find((directory) => directory.key === query.directoryKey || directory.path === query.directoryKey) } : {}) } : {}),
     ...(query.kind === "star-map" ? {
       facets: countNavigationStarMapFacets(
         [...new Map(params.index.threads.filter(isStarMapOwnerThread).map((thread) => [threadKey(thread), thread])).values()]
@@ -730,7 +735,8 @@ export function projectNavigationQuery(params: {
     directories: includeDirectories
       ? (query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
         : buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey }))
-          .filter((directory) => query.kind !== "directory-index" || !query.keys || query.keys.includes(directory.key))
+          .filter((directory) => query.kind !== "directory-index" || ((!query.keys && !query.paths)
+            || query.keys?.includes(directory.key) || (directory.path !== undefined && query.paths?.includes(directory.path))))
           .filter((directory) => query.kind !== "directory-index"
             || !query.filter?.trim()
             || `${directory.label}\n${directory.path ?? ""}`.toLowerCase()

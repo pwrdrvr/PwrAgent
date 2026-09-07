@@ -1,3 +1,5 @@
+import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
+import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { rememberBoundedMap } from "../../bounded-map";
 import { createHash, randomUUID } from "node:crypto";
@@ -204,7 +206,7 @@ import {
 } from "../../../shared/review-command.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
-  buildResumeIntent,
+  buildBoundedResumeIntent,
   directoryForProjectSelection as legacyDirectoryForProjectSelection,
   isNewAgentThreadLaunchAction,
   isNewThreadLaunchAction,
@@ -1111,6 +1113,12 @@ export class MessagingController {
   // handle open, which blocks the test harness from deleting the temp profile
   // dir. Gate re-scheduling on this flag so a disposed controller stays quiet.
   private disposed = false;
+  private readonly browseRenderGenerations = new Map<string, symbol>();
+  private readonly browseQueryPool = new MessagingBrowseQueryPool((request) => {
+    const read = this.options.backend.getNavigationQueryPage;
+    if (!read) throw new Error("Upgrade this instance to support bounded messaging navigation.");
+    return read.call(this.options.backend, request);
+  }, () => this.now());
   private readonly progressiveBrowseByConversation = new Map<string, symbol>();
   private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
@@ -7754,6 +7762,8 @@ export class MessagingController {
   dispose(): void {
     this.disposed = true;
     this.progressiveBrowseByConversation.clear();
+    this.browseQueryPool.clear();
+    this.browseRenderGenerations.clear();
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
@@ -7883,11 +7893,7 @@ export class MessagingController {
       if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
         return;
       }
-      const selectedDirectory = parsed.cwd
-        ? navigation.directories.find(
-            (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
-          )
-        : undefined;
+      const selectedDirectory = navigation.directory;
       const preferences = parsed.preferences
         ? {
             ...parsed.preferences,
@@ -7904,11 +7910,12 @@ export class MessagingController {
         updatedAt: this.now(),
         expiresAt: this.now() + this.pendingIntentTtlMs,
         launchAction: parsed.launchAction,
-        mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
+        mode: parsed.cwd && parsed.mode === "recents" ? "project_threads" : parsed.mode,
         pageIndex: 0,
         pageSize: resumeBrowserPageSize(this.capabilityProfile),
         preferences,
         query: parsed.query,
+        directorySelector: parsed.cwd,
         returnTo: parsed.launchAction === "start_new_thread"
           ? {
               launchAction: "resume_thread",
@@ -7916,6 +7923,7 @@ export class MessagingController {
               pageIndex: 0,
               preferences,
               query: parsed.query,
+        directorySelector: parsed.cwd,
             }
           : undefined,
         selectedProject: selectedDirectory
@@ -7971,11 +7979,7 @@ export class MessagingController {
       if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
         return;
       }
-      const selectedDirectory = parsed.cwd
-        ? navigation.directories.find(
-            (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
-          )
-        : undefined;
+      const selectedDirectory = navigation.directory;
       const session: MessagingBrowseSessionRecord = {
         id: this.newIntentId("browse"),
         allowedActorIds: [event.actor.platformUserId],
@@ -7998,6 +8002,7 @@ export class MessagingController {
             }
           : undefined,
         query: parsed.query,
+        directorySelector: parsed.cwd,
         selectedProject: selectedDirectory
           ? {
               directoryKey: selectedDirectory.key,
@@ -8014,55 +8019,17 @@ export class MessagingController {
 
   private async presentProgressiveBrowse(
     event: MessagingInboundEvent,
-    request: Parameters<MessagingBackendBridge["getNavigationSnapshot"]>[0],
-    initial: (
-      navigation: NavigationSnapshot,
-      current: () => boolean,
-    ) => Promise<MessagingBrowseSessionRecord | undefined>,
-    requestedDirectory?: string,
+    _request: { backend?: "all"; filter?: string },
+    initial: (navigation: MessagingLaunchpadContext, current: () => boolean) => Promise<MessagingBrowseSessionRecord | undefined>,
+    _requestedDirectory?: string,
   ): Promise<void> {
     const key = buildMessagingConversationKey(event.channel);
     const generation = Symbol("browse");
     this.progressiveBrowseByConversation.set(key, generation);
-    let started = false;
-    let session: MessagingBrowseSessionRecord | undefined;
-    const current = (): boolean => !this.disposed
-      && this.progressiveBrowseByConversation.get(key) === generation;
-    const onProgress = async (navigation: NavigationSnapshot): Promise<void> => {
-      if (!current()) return;
-      if (!started) {
-        started = true;
-        session = await initial(navigation, current);
-        return;
-      }
-      if (!session) return;
-      const stored = await this.options.store.getBrowseSession(session.id, { now: this.now() });
-      if (!stored || !current()) return;
-      // A --cwd selector may name a directory absent from the initial local
-      // publication. Retain it for this refresh, without replacing a project
-      // already selected or reviving a browse invalidated by an actor action.
-      const directory = requestedDirectory && !stored.selectedProject
-        ? navigation.directories.find((candidate) =>
-            candidate.path === requestedDirectory || candidate.key === requestedDirectory,
-          )
-        : undefined;
-      const updated = directory
-        ? {
-            ...stored,
-            mode: stored.mode === "recents" ? "project_threads" as const : stored.mode,
-            selectedProject: {
-              directoryKey: directory.key,
-              label: directory.label,
-              path: directory.path,
-            },
-          }
-        : stored;
-      await this.renderResumeBrowser(updated, navigation, event, current);
-    };
+    const current = (): boolean => !this.disposed && this.progressiveBrowseByConversation.get(key) === generation;
     try {
-      const navigation = await this.options.backend.getNavigationSnapshot(request, { onProgress });
-      // Non-desktop adapters may not implement incremental publication.
-      if (!started) await onProgress(navigation);
+      const configuration = await readMessagingLaunchpadContext({ backend: this.options.backend });
+      if (current()) await initial(configuration, current);
     } finally {
       if (current()) this.progressiveBrowseByConversation.delete(key);
     }
@@ -8111,9 +8078,7 @@ export class MessagingController {
       );
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend });
     const session: MessagingBrowseSessionRecord = {
       id: this.newIntentId("default-agent-browse"),
       allowedActorIds: [event.actor.platformUserId],
@@ -8252,10 +8217,8 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      filter: session.query,
-    });
+    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend,
+      ...(actionId.startsWith("browse:new:") ? { project: session.selectedProject } : {}) });
     const nextSession = {
       ...session,
       updatedAt: this.now(),
@@ -8288,6 +8251,7 @@ export class MessagingController {
             ? session.returnTo ?? resumeReturnTargetForSession(session)
             : undefined,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8305,6 +8269,7 @@ export class MessagingController {
             ? session.returnTo ?? resumeReturnTargetForSession(session)
             : undefined,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8319,6 +8284,7 @@ export class MessagingController {
           mode: "agents",
           pageIndex: 0,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8347,6 +8313,7 @@ export class MessagingController {
           pageIndex: 0,
           returnTo: session.returnTo ?? resumeReturnTargetForSession(nextSession),
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8372,6 +8339,7 @@ export class MessagingController {
           mode: "new_project",
           pageIndex: 0,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8397,6 +8365,7 @@ export class MessagingController {
           mode: "new_project",
           pageIndex: 0,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8415,6 +8384,7 @@ export class MessagingController {
           query: target?.query,
           returnTo: undefined,
           selectedProject: target?.selectedProject,
+          directorySelector: target?.directorySelector,
           workMode: undefined,
           branchName: undefined,
         },
@@ -8467,6 +8437,7 @@ export class MessagingController {
           mode: "project_threads",
           pageIndex: 0,
           selectedProject: project,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8918,12 +8889,10 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
-      const targetThread = navigation.threads.find(
-        (thread) =>
-          thread.source === target.backend &&
-          thread.id === target.threadId &&
-          federationRefsMatch(thread.federation?.ref, target.federatedThread),
-      );
+      if (!await this.requireRemoteScope(event, target.federatedThread?.target, "resume:select:remote-instance")) return;
+      const targetThread = await this.readExactNavigationThread({ ref: { backend: target.backend, threadId: target.threadId,
+        ...(target.federatedThread?.target.scope === "remote" ? { ownerInstanceId: target.federatedThread.target.instanceId } : {}) },
+        federationTarget: target.federatedThread?.target });
       if (session.mode === "agents" && !targetThread?.agent) {
         await this.deliverInvalidBrowseSelection(event);
         return;
@@ -9046,7 +9015,7 @@ export class MessagingController {
         undefined,
         event,
       );
-      await this.renderBindingStatus(updatedBinding, event, navigation);
+      await this.renderBindingStatus(updatedBinding, event);
       await this.repostLastAssistantMessageForResume(updatedBinding);
       return;
     }
@@ -9077,6 +9046,7 @@ export class MessagingController {
   private async retireBrowseSession(
     session: MessagingBrowseSessionRecord,
   ): Promise<void> {
+    this.browseQueryPool.release(session.id);
     this.clearPendingNewThreadPrompt(session.id);
     this.pendingFullAccessNewThreadPrompts.delete(session.id);
     await this.options.store.deleteBrowseSession(session.id);
@@ -9105,6 +9075,9 @@ export class MessagingController {
     patch: UpdateDirectoryLaunchpadRequest["patch"],
     stickySettingsChanged = true,
   ): Promise<void> {
+    // Remote launch choices remain in this viewer's browse session; the final
+    // materialization carries them to the explicit owner.
+    if (session.selectedProject?.federationTarget?.scope === "remote") return;
     const directoryKey = session.selectedProject?.directoryKey;
     if (!directoryKey || !this.options.backend.updateDirectoryLaunchpad) {
       return;
@@ -9241,44 +9214,70 @@ export class MessagingController {
 
   private async renderResumeBrowser(
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    _navigation: MessagingNewThreadNavigation,
     event: MessagingInboundEvent,
     stillCurrent: () => boolean = () => true,
   ): Promise<void> {
     if (!stillCurrent()) return;
-    await this.options.store.upsertBrowseSession(session);
-    const browseNavigation = this.filterRemoteThreadsForActor(
-      event,
-      await this.navigationForResumeBrowser(session, navigation),
-    );
-    const intent = buildResumeIntent({
-      id: this.newIntentId("resume"),
-      createdAt: this.now(),
-      navigation: browseNavigation,
-      session,
-    });
-    if (!stillCurrent()) return;
-    await this.storePendingIntent(intent, undefined, event);
-    if (!stillCurrent()) return;
-    const result = await this.deliver(intent, undefined, event);
-    if (!result.surface) {
-      return;
+    const parentCurrent = stillCurrent;
+    const token = Symbol("browse-render");
+    this.browseRenderGenerations.set(session.id, token);
+    stillCurrent = () => parentCurrent() && this.browseRenderGenerations.get(session.id) === token;
+    const inventory = await this.options.backend.listNavigationOwners?.() ?? { owners: [{ label: "This instance" }], omitted: 0 };
+    const canReadRemote = this.actorHasPermission(event, "federation.remote_control");
+    let owners = inventory.owners.filter((owner) => !owner.target || (canReadRemote && session.launchAction !== "assign_default_agent"));
+    if (!session.directorySelector && session.selectedProject && session.mode !== "projects" && session.mode !== "new_project") {
+      const target = session.selectedProject.federationTarget;
+      owners = target?.scope === "remote"
+        ? (canReadRemote ? [{ target, label: inventory.owners.find((owner) => owner.target?.instanceId === target.instanceId)?.label ?? target.instanceId }] : [])
+        : owners.filter((owner) => !owner.target);
     }
+    const backendSummaries = session.launchAction === "assign_default_agent" ? await this.loadDefaultAgentBackendSummaries() : undefined;
+    const eligibility = {
+      filter: session.query,
+      agentOnly: session.mode === "agents" || session.launchAction === "assign_default_agent",
+      ...(session.launchAction === "assign_default_agent" ? { allowedBackends: ["codex" as const,
+        ...(backendSummaries ?? []).filter((backend) => backend.kind !== "codex" && defaultAgentBackendSupport(backend.kind, backendSummaries) === "supported")
+          .map((backend) => backend.kind)] } : {}),
+      excludeFullAccess: session.launchAction === "resume_thread" && !await this.canResumeFullAccessThreads(),
+    };
+    const query: NavigationQuery = session.mode === "projects" || session.mode === "new_project"
+      ? { kind: "messaging-projects", ...eligibility, scratchpadFirst: isNewThreadLaunchAction(session.launchAction) }
+      : { kind: "messaging-threads", ...eligibility, directoryKey: session.directorySelector ?? session.selectedProject?.directoryKey };
+    const publish = async (page: Awaited<ReturnType<MessagingBrowseQueryPool["read"]>>): Promise<void> => {
+      if (!stillCurrent()) return;
+      session = { ...session, pageIndex: page.pageIndex, ...(page.selectedProject ? { selectedProject: page.selectedProject } : {}) };
+      await this.options.store.upsertBrowseSession(session);
+      const intent = buildBoundedResumeIntent({ id: this.newIntentId("resume"), createdAt: this.now(), page, session });
+      if (!stillCurrent()) return;
+      await this.storePendingIntent(intent, undefined, event);
+      if (!stillCurrent()) return;
+      const result = await this.deliver(intent, undefined, event);
+      if (!stillCurrent() || !result.surface) {
+        return;
+      }
 
-    await this.options.store.upsertBrowseSession({
-      ...session,
-      surface: result.surface,
-      updatedAt: this.now(),
-    });
-    await this.options.store.upsertPendingIntent({
-      id: intent.id,
-      channel: event.channel,
-      intent,
-      allowedActorIds: [event.actor.platformUserId],
-      createdAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
-      surface: result.surface,
-    });
+      session = { ...session, surface: result.surface, updatedAt: this.now() };
+      await this.options.store.upsertBrowseSession(session);
+      await this.options.store.upsertPendingIntent({
+        id: intent.id,
+        channel: event.channel,
+        intent,
+        allowedActorIds: [event.actor.platformUserId],
+        createdAt: this.now(),
+        expiresAt: this.now() + this.pendingIntentTtlMs,
+        surface: result.surface,
+      });
+    };
+    try {
+      const page = await this.browseQueryPool.read({ sessionId: session.id, query, owners,
+        omittedOwners: canReadRemote ? inventory.omitted : 0, pageSize: session.pageSize, pageIndex: session.pageIndex, onProgress: publish });
+      await publish(page);
+    } catch (error) {
+      if (stillCurrent()) throw error;
+    } finally {
+      if (this.browseRenderGenerations.get(session.id) === token) this.browseRenderGenerations.delete(session.id);
+    }
   }
 
   private async startNewThreadFromProject(
@@ -9287,6 +9286,7 @@ export class MessagingController {
     navigation: MessagingNewThreadNavigation,
     project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
   ): Promise<void> {
+    if (!await this.requireRemoteScope(event, project.federationTarget, "messaging-project-create")) return;
     if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
       await this.deliver(
         buildErrorIntent({
@@ -9302,6 +9302,8 @@ export class MessagingController {
       return;
     }
 
+    navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project });
+    project = { ...project, directoryKey: navigation.directory?.key ?? project.directoryKey };
     const directory = directoryForProjectSelection(navigation, project);
     const selectedBackend = await this.resolveNewThreadBackendForSession(
       {
@@ -10380,6 +10382,7 @@ export class MessagingController {
       return;
     }
 
+    if (!await this.requireRemoteScope(event, bundle.session.selectedProject?.federationTarget, "messaging-project-create")) return;
     const prepared = await this.prepareTurnInput(bundle.events, undefined, event);
     if (!prepared) {
       return;
@@ -10515,6 +10518,8 @@ export class MessagingController {
       const binding = await this.bindChannelToThread(event, {
         backend: started.backend,
         threadId: started.threadId,
+        ...(project.federationTarget?.scope === "remote" ? { federatedThread: buildFederatedThreadRef({
+          backend: started.backend, threadId: started.threadId, instanceId: project.federationTarget.instanceId }) } : {}),
         targetKind: isNewAgentThreadLaunchAction(session.launchAction)
           ? "agent_thread"
           : undefined,
@@ -10582,6 +10587,7 @@ export class MessagingController {
         ? await this.options.backend.materializeDirectoryLaunchpad(
             {
               directoryKey: messagingLaunchpadMaterializationKey(session),
+              ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
               agent: agentForNewThreadSession(session),
               launchpad,
               ...(startFirstTurnAfterEnvironmentSetup
@@ -10609,6 +10615,7 @@ export class MessagingController {
       await environmentSetupReporter?.stop();
     }
     const started = materialized ?? (await this.options.backend.startThread!({
+      ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
       backend: selectedBackend.kind,
       cwd: directory?.path ?? project.path,
       directoryKey: directory?.key,
@@ -10809,32 +10816,6 @@ export class MessagingController {
       params.binding,
       params.event,
     );
-  }
-
-  private async navigationForResumeBrowser(
-    session: MessagingBrowseSessionRecord,
-    navigation: NavigationSnapshot,
-  ): Promise<NavigationSnapshot> {
-    if (session.launchAction === "assign_default_agent") {
-      const backendSummaries = await this.loadDefaultAgentBackendSummaries();
-      const threads = navigation.threads.filter(
-        (thread) =>
-          Boolean(thread.agent)
-          && defaultAgentBackendSupport(thread.source, backendSummaries)
-            === "supported",
-      );
-      return filterNavigationToThreads(navigation, threads);
-    }
-    if (session.launchAction !== "resume_thread") {
-      return navigation;
-    }
-    if (await this.canResumeFullAccessThreads()) {
-      return navigation;
-    }
-    const threads = navigation.threads.filter(
-      (thread) => thread.executionMode !== "full-access",
-    );
-    return filterNavigationToThreads(navigation, threads);
   }
 
   private async loadDefaultAgentBackendSummaries(): Promise<
@@ -13576,10 +13557,7 @@ export class MessagingController {
         if (context.kind === "new-thread") {
           this.pendingFullAccessNewThreadPrompts.delete(session.id);
         }
-        const navigation = await this.options.backend.getNavigationSnapshot({
-          backend: "all",
-          filter: session.query,
-        });
+        const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
         if (context.kind === "new-thread") {
           await this.presentNewThreadPromptGate(
             this.withNewThreadPromptCaptureExpiry(session),
@@ -13761,9 +13739,7 @@ export class MessagingController {
           await this.deliverStaleFullAccessWarning(event);
           return;
         }
-        const navigation = await this.options.backend.getNavigationSnapshot({
-          backend: "all",
-        });
+        const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
         await this.presentNewThreadPromptGate(session, event, navigation);
         return;
       }
@@ -13798,9 +13774,7 @@ export class MessagingController {
         await this.deliverStaleFullAccessWarning(event);
         return;
       }
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
       await this.applyNewThreadAcpRuntimeMode(session, event, navigation, context);
       return;
     }
@@ -14308,7 +14282,7 @@ export class MessagingController {
       updatedBinding,
       event,
     );
-    await this.renderBindingStatus(updatedBinding, event, navigation);
+    await this.renderBindingStatus(updatedBinding, event);
   }
 
   private async cycleToolUpdateMode(
@@ -18812,29 +18786,6 @@ export class MessagingController {
    * they can't touch it. Filtering here keeps the menu honest — every row it
    * shows is a row the actor may actually bind.
    */
-  private filterRemoteThreadsForActor<T extends NavigationSnapshot>(
-    event: MessagingInboundEvent,
-    navigation: T,
-  ): T {
-    if (this.actorHasPermission(event, "federation.remote_control")) {
-      return navigation;
-    }
-    const localThreads = navigation.threads.filter(
-      (thread) => federationTargetForThread(thread) === undefined,
-    );
-    if (localThreads.length === navigation.threads.length) {
-      return navigation;
-    }
-    const localKeys = new Set(localThreads.map(threadKeyForNavigationThread));
-    return {
-      ...navigation,
-      threads: localThreads,
-      inboxThreadKeys: navigation.inboxThreadKeys.filter((key) =>
-        localKeys.has(key),
-      ),
-    };
-  }
-
   /** `requireRemoteScope` for an already-resolved binding. */
   private async requireRemoteScopeForBinding(
     event: MessagingInboundEvent,
@@ -20052,27 +20003,6 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
     .join("\n");
 }
 
-function filterNavigationToThreads(
-  navigation: NavigationSnapshot,
-  threads: NavigationThreadSummary[],
-): NavigationSnapshot {
-  const allowedThreadKeys = new Set(
-    threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
-  );
-  return {
-    ...navigation,
-    threads,
-    directories: navigation.directories.map((directory) => ({
-      ...directory,
-      threadKeys: directory.threadKeys.filter((threadKey) =>
-        allowedThreadKeys.has(threadKey)
-      ),
-    })),
-    inboxThreadKeys: navigation.inboxThreadKeys.filter((threadKey) =>
-      allowedThreadKeys.has(threadKey)
-    ),
-  };
-}
 
 function normalizeNewThreadSessionForBackend(
   session: MessagingBrowseSessionRecord,
@@ -22380,6 +22310,9 @@ function buildMessagingStartedThreadContext(params: {
     thread: {
       id: params.threadId,
       source: params.backend,
+      ...(params.project.federationTarget?.scope === "remote" ? { federation: {
+        instanceLabel: params.project.federationTarget.instanceId,
+        ref: buildFederatedThreadRef({ backend: params.backend, threadId: params.threadId, instanceId: params.project.federationTarget.instanceId }) } } : {}),
       title: params.threadId,
       titleSource: "fallback",
       projectKey: directoryPath,

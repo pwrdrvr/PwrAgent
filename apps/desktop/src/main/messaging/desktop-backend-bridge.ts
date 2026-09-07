@@ -243,6 +243,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     };
   }
 
+  async listNavigationOwners(): Promise<{ owners: Array<{ target?: FederationRemoteTarget; label: string }>; omitted: number }> {
+    const peers = this.federation?.connectedPeerTargets().filter((peer) => peer.capabilities.includes("messaging_route")) ?? [];
+    return { owners: [{ label: "This instance" }, ...peers.slice(0, 7).map((peer) => ({ target: peer.target, label: peer.label }))],
+      omitted: Math.max(0, peers.length - 7) };
+  }
+
   async getNavigationQueryPage(request: NavigationQueryRequest): Promise<NavigationQueryPage> {
     if (request.inventory === "viewer") throw new Error("Messaging navigation requires owner inventory.");
     const consumerId = `messaging-query:${randomUUID()}`;

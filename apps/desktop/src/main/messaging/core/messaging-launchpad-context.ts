@@ -27,11 +27,20 @@ export async function readMessagingLaunchpadContext(params: {
   const readConfig = params.backend.getNavigationLaunchpadConfig;
   const readPage = params.backend.getNavigationQueryPage;
   if (!readConfig || (params.project && !readPage)) throw new Error("Upgrade this instance to load selected launchpad configuration.");
+  const target = params.project?.federationTarget;
+  if (params.project && !params.project.directoryKey && params.project.path) {
+    const page = await readPage!.call(params.backend, { protocol: 2, consumer: "messaging-browse", federationTarget: target,
+      query: { kind: "directory-index", paths: [params.project.path] }, pageSize: 2 });
+    if (page.protocol !== 2 || page.unchanged || !page.complete || page.directories?.length !== 1) {
+      throw new Error("Select the project again to resolve its exact owner directory identity.");
+    }
+    return readMessagingLaunchpadContext({ ...params, project: { ...params.project, directoryKey: page.directories[0]!.key } });
+  }
   const key = params.project?.directoryKey ?? params.project?.path;
   if (params.project && !key) throw new Error("Select the project again to resolve its owner directory identity.");
   const [configuration, page] = await Promise.all([
-    readConfig.call(params.backend, { protocol: 2, directoryKey: key }),
-    key ? readPage!.call(params.backend, { protocol: 2, consumer: "messaging-browse", query: { kind: "directory-index", keys: [key] }, pageSize: 1 }) : undefined,
+    readConfig.call(params.backend, { protocol: 2, directoryKey: key, federationTarget: target }),
+    key ? readPage!.call(params.backend, { protocol: 2, consumer: "messaging-browse", federationTarget: target, query: { kind: "directory-index", keys: [key] }, pageSize: 1 }) : undefined,
   ]);
   if (configuration.protocol !== 2 || configuration.unchanged || !configuration.defaults || configuration.directoryKey !== key) {
     throw new Error("Selected launchpad configuration is not ready. Refresh the project before continuing.");
@@ -43,7 +52,7 @@ export async function readMessagingLaunchpadContext(params: {
   if (configuration.launchpad && configuration.launchpad.directoryKey !== key) throw new Error("Launchpad configuration belongs to another project.");
   if (params.ensureBackend && descriptor) {
     if (!params.backend.ensureDirectoryLaunchpad) throw new Error("This instance cannot prepare the selected launchpad.");
-    await params.backend.ensureDirectoryLaunchpad({ directoryKey: descriptor.key, directoryKind: descriptor.kind,
+    await params.backend.ensureDirectoryLaunchpad({ ...(target ? { federationTarget: target } : {}), directoryKey: descriptor.key, directoryKind: descriptor.kind,
       directoryLabel: descriptor.label, directoryPath: descriptor.path, preferredBackend: params.ensureBackend });
     return readMessagingLaunchpadContext({ backend: params.backend, project: params.project });
   }
