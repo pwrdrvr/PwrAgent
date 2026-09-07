@@ -35,7 +35,7 @@ test("review command asks for target and preserves transcript order", async () =
     const reviewTarget = app.window.getByRole("group", { name: "Review target" });
     await expect(reviewTarget).toBeVisible();
     await expect
-      .poll(async () => await app.getLastStartReview())
+      .poll(async () => await app.getLastStartTurn())
       .toBeUndefined();
 
     await reviewTarget.getByRole("combobox", { name: "Base branch" }).click();
@@ -43,11 +43,15 @@ test("review command asks for target and preserves transcript order", async () =
     await reviewTarget.getByRole("button", { name: "Start review" }).click();
 
     await expect
-      .poll(async () => await app.getLastStartReview())
+      .poll(async () => await app.getLastStartTurn())
       .toMatchObject({
         threadId: "thread-review-command",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
+        input: [{
+          type: "text",
+          text: expect.stringMatching(
+            /<user_action><action>review<\/action><\/user_action>[\s\S]*base branch 'main'/,
+          ),
+        }],
       });
 
     const transcript = app.window.getByRole("region", { name: "Transcript" });
