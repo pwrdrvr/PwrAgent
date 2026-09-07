@@ -7960,6 +7960,7 @@ let unsubscribeWorkingStateEvents: (() => void) | undefined;
 let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
 
 function invalidateNavigationExactEvent(event: AgentEvent): void {
+  getDesktopNavigationQueryStore().observeAttentionEvent(event);
   if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
   const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;
   const threadId = params?.threadId ?? params?.parentThreadId ?? params?.thread?.id;

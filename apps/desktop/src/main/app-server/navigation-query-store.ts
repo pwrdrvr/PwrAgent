@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  AgentEvent,
   NavigationQueryPage,
   NavigationQueryRequest,
 } from "@pwragent/shared";
@@ -16,6 +17,8 @@ import {
 } from "./navigation-query-projection";
 import {
   navigationAttentionOrderBytes,
+  navigationAttentionIdentity,
+  observeNavigationAttentionTurn,
   reconcileNavigationAttentionOrder,
   type NavigationAttentionOrder,
 } from "./navigation-attention-order";
@@ -209,6 +212,7 @@ function pageBase(params: {
 }
 
 export class NavigationQueryStore {
+  private attentionEventVersion = 0;
   private readonly ownerEpoch = randomUUID();
   private readonly attentionLifetimes = new Map<string, { closedAt?: number }>();
   private readonly generations = new Map<string, NavigationQueryGeneration>();
@@ -216,6 +220,10 @@ export class NavigationQueryStore {
   private readonly attentionViews = new Map<string, {
     order: NavigationAttentionOrder;
     bytes: number;
+    promoteOnTurnEnd: boolean;
+    backend: NavigationQueryRequest["backend"];
+    remoteMembers: Set<string>;
+    failed?: boolean;
   }>();
 
   constructor(
@@ -272,7 +280,13 @@ export class NavigationQueryStore {
       generation = retained;
       offset = cursor.offset;
     } else {
-      const index = await params.loadIndex();
+      let eventVersion = this.attentionEventVersion;
+      let index = await params.loadIndex();
+      if (eventVersion !== this.attentionEventVersion) {
+        eventVersion = this.attentionEventVersion;
+        index = await params.loadIndex();
+        if (eventVersion !== this.attentionEventVersion) throw new NavigationQueryError("navigation_busy", "Navigation changed during its owner read. Refresh the retained range.");
+      }
       if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
       const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index);
       const materialization = projectNavigationQuery({
@@ -357,6 +371,7 @@ export class NavigationQueryStore {
     const { id, promoteOnTurnEnd } = request.attentionView;
     const key = JSON.stringify([scopeKey, id]);
     const previous = this.attentionViews.get(key);
+    if (previous?.failed) throw new NavigationQueryError("navigation_busy", "Attention metadata exceeded its budget. Close this view and open a new one.");
     if (!previous && this.attentionViews.size >= NAVIGATION_ATTENTION_MAX_VIEWS) {
       throw new NavigationQueryError("navigation_busy", "Attention view budget is occupied.");
     }
@@ -366,7 +381,9 @@ export class NavigationQueryStore {
       complete: !index.coverage || index.coverage.state === "complete",
       promoteOnTurnEnd,
     });
-    const bytes = navigationAttentionOrderBytes(order);
+    const remoteMembers = index.coverage && index.coverage.state !== "complete" ? new Set(previous?.remoteMembers) : new Set<string>();
+    for (const thread of index.threads) if (thread.federation?.ref.target.scope === "remote") remoteMembers.add(navigationAttentionIdentity(thread));
+    const bytes = navigationAttentionOrderBytes(order) + serializedBytes([...remoteMembers]);
     let retainedBytes = bytes;
     for (const [otherKey, view] of this.attentionViews) {
       if (otherKey !== key) retainedBytes += view.bytes;
@@ -374,8 +391,50 @@ export class NavigationQueryStore {
     if (retainedBytes > NAVIGATION_ATTENTION_MAX_BYTES) {
       throw new NavigationQueryError("navigation_busy", "Attention metadata exceeds its retained budget.");
     }
-    this.attentionViews.set(key, { order, bytes });
+    this.attentionViews.set(key, { order, bytes, promoteOnTurnEnd, backend: request.backend, remoteMembers });
     return order;
+  }
+
+  /** Boundary events maintain session ranks even while the viewer browses another lens. */
+  observeAttentionEvent(event: AgentEvent): void {
+    const method = event.notification.method;
+    const status = "status" in event.notification.params ? event.notification.params.status as { type?: unknown } | undefined : undefined;
+    const active = method === "turn/started" ? true
+      : ["turn/completed", "turn/failed", "turn/cancelled"].includes(method) ? false
+      : method === "thread/status/changed" ? status?.type === "active" ? true : status?.type === "idle" ? false : undefined : undefined;
+    const remove = method === "thread/archived";
+    const seen = method === "navigation/thread/seen";
+    if (active === undefined && !remove && !seen) return;
+    const params = event.notification.params as { threadId?: string; turnId?: string; turn?: { id?: string } };
+    if (typeof params.threadId !== "string") return;
+    const owner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : null;
+    const key = JSON.stringify([owner, event.backend, params.threadId]);
+    if (owner && ![...this.attentionViews.values()].some((view) => view.remoteMembers.has(key))) return;
+    this.attentionEventVersion += 1;
+    let retainedBytes = [...this.attentionViews.values()].reduce((sum, view) => sum + view.bytes, 0);
+    for (const view of this.attentionViews.values()) {
+      if (view.failed || (view.backend && view.backend !== "all" && view.backend !== event.backend)
+        || (owner && !view.remoteMembers.has(key))) continue;
+      const member = view.order.members.get(key);
+      let order = view.order;
+      if (remove || (seen && member && !member.active)) {
+        if (!member) continue;
+        order = { ...order, members: new Map(order.members) };
+        order.members.delete(key);
+      } else if (active !== undefined) {
+        order = observeNavigationAttentionTurn({ previous: order, key, active,
+          turnId: params.turnId ?? params.turn?.id, promoteOnTurnEnd: view.promoteOnTurnEnd });
+      }
+      if (order === view.order) continue;
+      const bytes = navigationAttentionOrderBytes(order) + serializedBytes([...view.remoteMembers]);
+      if (retainedBytes - view.bytes + bytes > NAVIGATION_ATTENTION_MAX_BYTES) {
+        view.failed = true;
+        continue;
+      }
+      retainedBytes += bytes - view.bytes;
+      view.order = order;
+      view.bytes = bytes;
+    }
   }
 
   private buildPage(params: {

@@ -1,6 +1,7 @@
 import { navigationRequestForOwner, stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
 import { describe, expect, it } from "vitest";
 import type {
+  AgentEvent,
   NavigationQueryRequest,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -54,6 +55,71 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it.each([true, false])("records off-page turn boundaries independently of reads with promotion=%s", async (promoteOnTurnEnd) => {
+    const store = new NavigationQueryStore();
+    const threads = Array.from({ length: 30 }, (_, i) => ({ ...thread(`thread-${i}`), inbox: { inInbox: true }, threadStatus: "idle" as "idle" | "active" }));
+    const view = request({ query: { kind: "lens", lens: "attention" }, pageSize: 10,
+      attentionView: { id: "window", promoteOnTurnEnd } });
+    const read = (cursor?: string) => store.readPage({ scopeKey: "viewer", loadIndex: async () => snapshot(threads), request: { ...view, cursor } });
+    const initial = await read();
+    const event = (id: number, active: boolean) => store.observeAttentionEvent({ backend: "codex",
+      notification: { method: active ? "turn/started" : "turn/completed", params: { threadId: `thread-${id}`, turnId: `turn-${id}` } },
+    } as AgentEvent);
+    event(0, true);
+    event(1, true);
+    event(0, false);
+    event(0, false);
+    threads[0]!.updatedAt = 1000;
+    threads[1]!.threadStatus = "active";
+    const next = await read();
+    expect(next.entries.slice(0, 2).map(({ row }) => row.id)).toEqual(promoteOnTurnEnd ? ["thread-0", "thread-1"] : ["thread-1", "thread-0"]);
+    expect(next.counts.active).toBe(1);
+    const frozenCursor = await read(initial.nextCursor);
+    expect(frozenCursor.generation).toBe(initial.generation);
+    expect(frozenCursor.counts.active).toBe(0);
+    threads[0]!.updatedAt += 1;
+    const overlay = await read();
+    expect(overlay.entries.map(({ row, attentionRank }) => [row.id, attentionRank])).toEqual(next.entries.map(({ row, attentionRank }) => [row.id, attentionRank]));
+  });
+
+  it("rereads a late owner baseline after a canonical turn boundary instead of undoing its rank", async () => {
+    const store = new NavigationQueryStore();
+    const original = [{ ...thread("first"), threadStatus: "idle" as const, inbox: { inInbox: true } }];
+    const view = request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "window", promoteOnTurnEnd: true } });
+    await store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => snapshot(original) });
+    let resolve!: (value: NavigationSnapshot) => void;
+    const pending = new Promise<NavigationSnapshot>((done) => { resolve = done; });
+    let reads = 0;
+    const read = store.readPage({ scopeKey: "viewer", request: view,
+      loadIndex: () => ++reads === 1 ? pending : Promise.resolve(snapshot([{ ...original[0]!, threadStatus: "active" }])),
+    });
+    store.observeAttentionEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: "first", turnId: "new-turn" } } } as AgentEvent);
+    resolve(snapshot(original));
+    const result = await read;
+    expect(reads).toBe(2);
+    expect(result.counts.active).toBe(1);
+    expect(result.entries[0]?.attentionRank).toBe(2);
+  });
+
+  it("admits remote event ranks only for the exact viewer-owned mounted identity", async () => {
+    const store = new NavigationQueryStore();
+    const local = thread("same-id");
+    const remote: NavigationThreadSummary = { ...local, federation: {
+      instanceLabel: "Mounted owner", ref: { backend: "codex", threadId: local.id, target: { scope: "remote", instanceId: "mounted" } },
+    } };
+    const view = request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "window", promoteOnTurnEnd: true } });
+    const read = () => store.readPage({ scopeKey: "viewer", request: view, loadIndex: async () => snapshot([local, remote]) });
+    await read();
+    for (const instanceId of ["unmounted", "mounted"]) store.observeAttentionEvent({ backend: "codex",
+      federationTarget: { scope: "remote", instanceId },
+      notification: { method: "turn/started", params: { threadId: local.id, turnId: "turn-1" } },
+    } as AgentEvent);
+    remote.threadStatus = "active";
+    const result = await read();
+    expect(result.entries.map((entry) => [entry.row.ref.ownerInstanceId, entry.attentionRank])).toEqual([["mounted", 1]]);
+    expect(result.counts.active).toBe(1);
+  });
+
   it("pages a complete group child-first and discovers children of foreign roots absent from the local index", async () => {
     const children = Array.from({ length: 121 }, (_, index) => ({ ...thread(`child-${index}`), parentThreadId: "root", parentThreadBackend: "codex" as const }));
     const foreignChild = { ...thread("foreign-child"), parentThreadId: "foreign-root", parentThreadBackend: "codex" as const, parentThreadInstanceId: "peer" };
