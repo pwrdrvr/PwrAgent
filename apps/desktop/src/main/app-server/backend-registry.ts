@@ -8307,6 +8307,13 @@ export class DesktopBackendRegistry {
       usage: TaskMonitorTokenUsageBreakdown;
     }
   >();
+  // Once another turn consumes usage, the preceding cumulative snapshot is
+  // the upper bound for the older turn. Keep it across start/completion events
+  // so a replay cannot charge a later turn's tokens to an earlier ledger row.
+  private readonly liveCodexThreadUsageCeilings = new Map<
+    string,
+    TaskMonitorTokenUsageBreakdown
+  >();
   private readonly liveThreadUsageAggregates = new Map<
     string,
     LiveThreadUsageAggregate
@@ -25331,6 +25338,17 @@ export class DesktopBackendRegistry {
         )
       )
     ) {
+      if (priorCumulative && priorCumulative.turnId !== params.turnId) {
+        const priorTurnKey = [
+          params.backend,
+          params.threadId,
+          priorCumulative.turnId,
+          "live-token-usage",
+        ].join(":");
+        if (!this.liveCodexThreadUsageCeilings.has(priorTurnKey)) {
+          this.liveCodexThreadUsageCeilings.set(priorTurnKey, priorCumulative.usage);
+        }
+      }
       this.liveCodexThreadCumulativeUsage.set(cumulativeKey, {
         observationSequence,
         turnId: params.turnId,
@@ -25740,6 +25758,22 @@ export class DesktopBackendRegistry {
       }
 
       const tokenUsage = notification.params.tokenUsage;
+      const usageCeiling = event.backend === "codex" && turnId
+        ? this.liveCodexThreadUsageCeilings.get(
+            [event.backend, threadId, turnId, "live-token-usage"].join(":"),
+          )
+        : undefined;
+      const cumulativeUsage = readTaskMonitorTokenUsageRecords(tokenUsage)?.totalUsage;
+      if (
+        usageCeiling
+        && cumulativeUsage
+        && cumulativeUsage.totalTokens > usageCeiling.totalTokens
+      ) {
+        // A stale turn id (including the turnless completion fallback) cannot
+        // own a thread snapshot that already includes a subsequent turn.
+        // Reject before advancing pricing, request, and replay cursors.
+        return;
+      }
       derivedUsage = this.deriveLiveThreadTokenUsage({
         appendLatestUsage: Boolean(recentlyCompletedTurn),
         backend: event.backend,
