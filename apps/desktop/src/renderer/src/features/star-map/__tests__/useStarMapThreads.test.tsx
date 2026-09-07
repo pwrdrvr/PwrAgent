@@ -116,6 +116,7 @@ describe("useStarMapThreads", () => {
     const hook = renderHook(() => useStarMapThreads({ enabled: true, peers: [peer("a", "connected")], desktopApi }));
     try {
       await waitFor(() => expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("first"));
+      expect(hook.result.current.hasMoreInstanceIds.has("a")).toBe(true);
       const other = navigationAttentionRowsBudget.begin("another-cloud");
       other.reserve(NAVIGATION_METADATA_MAX_RETAINED_BYTES - navigationAttentionRowsBudget.usage().retainedBytes);
       other.commit();
@@ -125,6 +126,7 @@ describe("useStarMapThreads", () => {
       navigationAttentionRowsBudget.release("another-cloud");
       await act(async () => { await hook.result.current.loadMoreInstance("a"); });
       expect(hook.result.current.threadsByInstance.get("a")?.map((thread) => thread.id)).toEqual(["first", "next"]);
+      expect(hook.result.current.hasMoreInstanceIds.has("a")).toBe(false);
     } finally { navigationAttentionRowsBudget.release("another-cloud"); hook.unmount(); }
     expect(navigationAttentionRowsBudget.usage()).toEqual({ retainedBytes: 0, transientBytes: 0 });
   });

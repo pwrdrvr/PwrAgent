@@ -29,6 +29,19 @@ describe("StarMapInstanceCard", () => {
     cleanup();
   });
 
+  it("offers explicit continuation without requiring a loaded cluster to expand", () => {
+    const onLoadMoreThreads = vi.fn();
+    renderCard({ profileName: "work", onLoadMoreThreads });
+    fireEvent.click(screen.getByRole("button", { name: "Load more threads on Studio Mac / work" }));
+    expect(onLoadMoreThreads).toHaveBeenCalledTimes(1);
+    cleanup();
+    renderCard({ profileName: "work", onLoadMoreThreads, loadingThreads: true });
+    const button = screen.getByRole("button", { name: "Load more threads on Studio Mac / work" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onLoadMoreThreads).toHaveBeenCalledTimes(1);
+  });
+
   it("selects the instance on body click instead of opening a window", () => {
     const onSelect = vi.fn();
     const onOpen = vi.fn();

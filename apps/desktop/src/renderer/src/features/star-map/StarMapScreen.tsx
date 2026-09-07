@@ -1141,6 +1141,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
     ));
   const refreshRemoteInstance = remote.refreshInstance;
   const loadMoreRemoteInstance = remote.loadMoreInstance;
+  const [loadingThreadInstances, setLoadingThreadInstances] = useState<Set<string>>(new Set());
+  const loadMoreThreadInstances = useRef(new Set<string>());
+  const loadMoreOwnerThreads = useCallback((instanceId: string) => {
+    if (loadMoreThreadInstances.current.has(instanceId)) return;
+    loadMoreThreadInstances.current.add(instanceId);
+    setLoadingThreadInstances(new Set(loadMoreThreadInstances.current));
+    const read = instanceId === localInstanceId ? loadMoreLocal() : loadMoreRemoteInstance(instanceId);
+    void read.catch((error: unknown) => setCardError(error instanceof Error ? error.message : String(error))).finally(() => {
+      loadMoreThreadInstances.current.delete(instanceId);
+      setLoadingThreadInstances(new Set(loadMoreThreadInstances.current));
+    });
+  }, [localInstanceId, loadMoreLocal, loadMoreRemoteInstance]);
   const onUserRepliedToThread = props.onUserRepliedToThread;
   const reportUserRepliedToThread = useCallback(
     async (thread: NavigationThreadSummary): Promise<void> => {
@@ -1510,6 +1522,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
     if (localRowsAreOwnerMatched) descriptors.set(localInstanceId, localFeed.directories);
     return descriptors;
   }, [remote.directoriesByInstance, localFeed.directories, localInstanceId, localRowsAreOwnerMatched]);
+  const projectPageOwners = useMemo(() => {
+    const owners = new Map<string, string[]>();
+    for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
+      const hasMore = instanceId === localInstanceId ? localFeed.hasMore : remote.hasMoreInstanceIds.has(instanceId);
+      if (!hasMore || remote.unreachableInstanceIds.has(instanceId)) continue;
+      for (const descriptor of descriptors) {
+        const instances = owners.get(descriptor.key) ?? [];
+        if (!instances.includes(instanceId)) instances.push(instanceId);
+        owners.set(descriptor.key, instances);
+      }
+    }
+    return owners;
+  }, [projectDescriptorsByInstance, localInstanceId, localFeed.hasMore, remote.hasMoreInstanceIds, remote.unreachableInstanceIds]);
   const [projectGeometryTime] = useState(Date.now);
   const projects = useMemo(
     () => groupThreadsByProject(attentionByInstance, { summonedKeys, now: projectGeometryTime,
@@ -4797,6 +4822,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   )
                 }
                 onOpen={() => openInstance(position.instanceId)}
+                onLoadMoreThreads={
+                  (position.instanceId === localInstanceId ? localFeed.hasMore : remote.hasMoreInstanceIds.has(position.instanceId))
+                    && (position.instanceId === localInstanceId || entry.peer?.status === "connected")
+                    ? () => loadMoreOwnerThreads(position.instanceId) : undefined
+                }
+                loadingThreads={loadingThreadInstances.has(position.instanceId)}
                 onToggleLoad={
                   props.desktopApi?.readFederationInstanceLoad
                   && health
@@ -4902,6 +4933,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     label={project.label}
                     projectKey={project.key}
                     threadCount={project.totalThreadCount ?? project.threads.length}
+                    onLoadMoreThreads={projectPageOwners.has(project.key)
+                      ? () => { for (const owner of projectPageOwners.get(project.key)!) loadMoreOwnerThreads(owner); }
+                      : undefined}
+                    loadingThreads={projectPageOwners.get(project.key)?.some((owner) => loadingThreadInstances.has(owner))}
                     // In overview the body is the only thing naming the
                     // project, so it counter-scales to stay readable —
                     // the same treatment instance bodies get.

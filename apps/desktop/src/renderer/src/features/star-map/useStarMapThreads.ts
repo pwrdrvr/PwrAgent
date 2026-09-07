@@ -51,6 +51,7 @@ export type StarMapRemoteThreads = {
   staleInstanceIds: Set<string>;
   /** Fetch the next explicit row page for an expanded owner cloud. */
   loadMoreInstance: (instanceId: string) => Promise<void>;
+  hasMoreInstanceIds: Set<string>;
   /** Refresh one owning peer and resolve only after its first page is applied. */
   refreshInstance: (instanceId: string) => Promise<void>;
 };
@@ -633,7 +634,9 @@ export function useStarMapThreads(params: {
     const geometryReadyInstanceIds = new Set<string>();
     const geometryErrorsByInstance = new Map<string, string>();
     const threadsByInstance = new Map<string, NavigationThreadSummary[]>();
+    const hasMoreInstanceIds = new Set<string>();
     for (const [instanceId, query] of state.queriesByInstance) {
+      if (query.nextCursor) hasMoreInstanceIds.add(instanceId);
       if (query.countsReady) countsByInstance.set(instanceId, query.counts);
       if (query.countsReady && query.facets) facetsByInstance.set(instanceId, query.facets);
       threadsByInstance.set(instanceId, query.attentionThreads);
@@ -644,7 +647,7 @@ export function useStarMapThreads(params: {
       if (geometry.error) geometryErrorsByInstance.set(instanceId, geometry.error);
     }
     for (const [instanceId, exact] of state.exactThreadsByInstance) threadsByInstance.set(instanceId, mergeThreads(threadsByInstance.get(instanceId) ?? [], exact));
-    return { countsByInstance, queriedInstanceIds, facetsByInstance, directoriesByInstance, geometryReadyInstanceIds, geometryErrorsByInstance, threadsByInstance };
+    return { countsByInstance, queriedInstanceIds, facetsByInstance, directoriesByInstance, geometryReadyInstanceIds, geometryErrorsByInstance, threadsByInstance, hasMoreInstanceIds };
   }, [state.queriesByInstance, state.geometryByInstance, state.exactThreadsByInstance]);
 
   return {
