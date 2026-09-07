@@ -4158,7 +4158,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         if (parent.archiveTombstonedAt !== undefined || threadId === params.parentThreadId || threadId === sourceThreadId) {
           throw new Error("The relative child move targets an invalid group identity.");
         }
-        requestedOrder = insertSubthreadIdAfter(parent.subthreadOrder ?? [], sourceThreadId, threadId);
+        const ownerOrder = params.children
+          ? sortSubthreadSummaries(parent, params.children).map((child) => child.id)
+          : parent.subthreadOrder ?? [];
+        requestedOrder = insertSubthreadIdAfter(ownerOrder, sourceThreadId, threadId);
       }
       if (!requestedOrder) throw new Error("A child order or relative insertion is required.");
       const seen = new Set<string>();

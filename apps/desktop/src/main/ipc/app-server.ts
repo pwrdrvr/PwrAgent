@@ -7001,7 +7001,7 @@ class DesktopAppServerService {
     }
     const backend = request.backend ?? "codex";
     let children: { id: string; createdAt?: number }[] | undefined;
-    if (request.move) {
+    if (request.move || request.insertAfter) {
       const index = await loadLocalNavigationQueryIndex({ backend, callerReason: "relative-child-move" });
       if (index.coverage && index.coverage.state !== "complete") {
         throw new Error("Wait for complete owner discovery before moving a child.");
@@ -7018,7 +7018,7 @@ class DesktopAppServerService {
       backend,
       parentThreadId: request.parentThreadId,
       ...(request.move ? { move: request.move, children }
-        : request.insertAfter ? { insertAfter: request.insertAfter } : { threadIds: request.threadIds }),
+        : request.insertAfter ? { insertAfter: request.insertAfter, children } : { threadIds: request.threadIds }),
     });
 
     logDebug("updateSubthreadOrder", {
@@ -7033,12 +7033,12 @@ class DesktopAppServerService {
         method: "thread/subthreadOrder/updated",
         params: {
           parentThreadId: request.parentThreadId,
-          ...(request.move ? {} : { threadIds }),
+          ...(request.move || request.insertAfter ? {} : { threadIds }),
         },
       },
     });
 
-    return { backend, parentThreadId: request.parentThreadId, ...(request.move ? {} : { threadIds }) };
+    return { backend, parentThreadId: request.parentThreadId, ...(request.move || request.insertAfter ? {} : { threadIds }) };
   }
 
   async setSubthreadsCollapsed(

@@ -67,3 +67,19 @@ it("rejects a same-id child owned by another parent instance", async () => {
       insertAfter: { threadId: "new", sourceThreadId: "root" } })).rejects.toThrow("no longer places");
   } finally { db.close(); }
 });
+
+it("inserts among unranked owner siblings without replacing their order with visible rows", async () => {
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  try {
+    const children = Array.from({ length: 100 }, (_, i) => ({ id: `child-${i}`, createdAt: i }));
+    for (const id of [...children.map((child) => child.id), "new"]) {
+      await store.setThreadParent({ backend: "codex", threadId: id, parentThreadId: "root" });
+    }
+    await store.updateSubthreadOrder({ backend: "codex", parentThreadId: "root", threadIds: ["child-0"] });
+    const result = await store.updateSubthreadOrder({ backend: "codex", parentThreadId: "root", children,
+      insertAfter: { threadId: "new", sourceThreadId: "child-50" } });
+    expect(result).toEqual(["child-0", ...children.slice(50).reverse().map((child) => child.id), "new",
+      ...children.slice(1, 50).reverse().map((child) => child.id)]);
+  } finally { db.close(); }
+});
