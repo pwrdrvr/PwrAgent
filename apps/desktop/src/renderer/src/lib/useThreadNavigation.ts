@@ -3246,8 +3246,8 @@ export function useThreadNavigation(
     [performRefresh]
   );
   const refreshNavigation = useCallback(async (): Promise<void> => {
-    await refresh();
-  }, [refresh]);
+    await Promise.all([refresh(), selectedDetail.refresh(), launchpadConfiguration.refresh()]);
+  }, [refresh, selectedDetail.refresh, launchpadConfiguration.refresh]);
 
   const takePendingDirectoryGitStatus = useCallback(
     (directoryKey: string): NavigationDirectoryGitStatus | null | undefined => {
