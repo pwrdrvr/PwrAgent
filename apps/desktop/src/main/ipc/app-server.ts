@@ -411,6 +411,7 @@ type DirectoryGitRefreshTarget = Pick<NavigationDirectoryRow, "key" | "path" | "
 type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
     SqliteOverlayStore,
+    | "initializeNavigationUnreadBaseline"
     | "readDirectoryGitStatusCache"
     | "writeDirectoryGitStatusCacheEntry"
     | "readThreadGitWorkingStateCache"
@@ -3748,6 +3749,9 @@ class DesktopAppServerService {
         if (!this.ownerNavigationActive) return;
         if (!isCurrent()) continue;
         if (index.coverage?.state === "checking") return;
+        if (!index.coverage || index.coverage.state === "complete") {
+          this.getOverlayStore().initializeNavigationUnreadBaseline(index.threads);
+        }
         await Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()]);
         if (!isCurrent()) continue;
         this.seedPrStatusRegistryFromThreads(index.threads);

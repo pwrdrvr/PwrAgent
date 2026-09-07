@@ -627,6 +627,9 @@ function stripFederationStamp(
   return rest;
 }
 
+const NAVIGATION_UNREAD_BASELINE_KEY = "navigation-unread-baseline-v2";
+type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
+
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private managedSubAgentCache?: {
     dataVersion: number;
@@ -638,6 +641,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     state: { knownThreadKeys: string[]; lastSnapshotHash?: string };
   };
 
+  private navigationUnreadBaseline?: NavigationUnreadBaseline;
   constructor(private readonly stateDb: StateDb) {}
 
   /**
@@ -774,6 +778,36 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return result;
   }
 
+  /** Owner startup initializes this once; ordinary navigation reads never persist a baseline. */
+  initializeNavigationUnreadBaseline(threads: readonly NavigationThreadSummary[]): boolean {
+    if (this.readNavigationUnreadBaseline()) return false;
+    const legacy = this.getBackend("all");
+    const baseline: NavigationUnreadBaseline = legacy?.lastSnapshotHash
+      ? { seenUpdatedAt: {}, knownThreadKeys: legacy.knownThreadKeys }
+      : { seenUpdatedAt: Object.fromEntries(threads.map((thread) => [
+          buildThreadIdentityKey(thread.source, thread.id), thread.updatedAt ?? 0,
+        ])), knownThreadKeys: [] };
+    const serialized = JSON.stringify(baseline);
+    if (Buffer.byteLength(serialized, "utf8") > 8 * 1024 * 1024) {
+      throw new Error("Initial navigation unread baseline exceeds its 8 MiB metadata budget.");
+    }
+    // A concurrent process sharing this profile must not replace the first
+    // owner's baseline with later provider versions and clear unread work.
+    const result = this.stateDb.raw.prepare("INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)")
+      .run(NAVIGATION_UNREAD_BASELINE_KEY, serialized);
+    this.navigationUnreadBaseline = result.changes ? baseline : this.readNavigationUnreadBaseline();
+    return result.changes > 0;
+  }
+
+  private readNavigationUnreadBaseline(): NavigationUnreadBaseline | undefined {
+    if (this.navigationUnreadBaseline) return this.navigationUnreadBaseline;
+    const value = this.stateDb.getMeta(NAVIGATION_UNREAD_BASELINE_KEY);
+    if (!value) return undefined;
+    if (Buffer.byteLength(value, "utf8") > 8 * 1024 * 1024) throw new Error("Navigation unread baseline exceeds its metadata budget.");
+    this.navigationUnreadBaseline = JSON.parse(value) as NavigationUnreadBaseline;
+    return this.navigationUnreadBaseline;
+  }
+
   /** Complete owner index inputs. Selected configuration and payload collections never enter this read. */
   readNavigationQueryIndex(params: {
     backend: AppServerBackendScope;
@@ -781,6 +815,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     workspaceRoots?: string[];
   }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[] } {
     const backendState = this.getBackend(params.backend);
+    const baseline = this.readNavigationUnreadBaseline();
     const managed = this.listManagedSubAgentThreadKeys();
     // Explicit projection before materialization prevents provider additions
     // from silently expanding retained navigation metadata.
@@ -879,8 +914,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       launchpads[row.directory_path] = Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as DirectoryLaunchpadOverlayState;
       launchpadPresenceKeys.add(row.directory_path);
     }
+    for (const thread of providerRows) {
+      const key = buildThreadIdentityKey(thread.source, thread.id);
+      const seenUpdatedAt = baseline?.seenUpdatedAt[key];
+      if (seenUpdatedAt !== undefined && overlays[key]?.lastSeenUpdatedAt === undefined) {
+        overlays[key] = { backend: thread.source, threadId: thread.id, executionMode: thread.executionMode ?? "default",
+          extraLinkedDirectories: [], ...overlays[key], lastSeenUpdatedAt: seenUpdatedAt };
+      }
+    }
     const threads = materializeNavigationThreads({ threads: providerRows, overlayByThreadKey: overlays,
-      firstSnapshot: !backendState?.lastSnapshotHash, previousKnownThreadKeys: backendState?.knownThreadKeys ?? [] }).map((thread) => ({ ...thread,
+      firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
+      previousKnownThreadKeys: baseline?.knownThreadKeys ?? backendState?.knownThreadKeys ?? [] }).map((thread) => ({ ...thread,
         nativeSubAgentCount: nativeCounts.get(buildThreadIdentityKey(thread.source, thread.id)) ?? 0 }));
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
       directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots });

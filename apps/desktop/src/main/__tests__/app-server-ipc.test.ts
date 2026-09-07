@@ -1026,6 +1026,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot,
     readNavigationQueryIndex,
+    initializeNavigationUnreadBaseline: vi.fn(() => false),
     markThreadSeen,
     getThreadOverlayState,
     getThreadOverlayStates,

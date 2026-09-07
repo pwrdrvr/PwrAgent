@@ -300,6 +300,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "navigation-unread-initial-baseline": {
+    "commits": 1,
+    "note": "One profile-lifetime startup commit for 1,000 initial seen versions; no periodic writes or query writes; 0 MB/day recurring WAL",
+    "observedWalBytes": 0,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "owner-pr-candidate-bootstrap": {
     "commits": 1,
     "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes",

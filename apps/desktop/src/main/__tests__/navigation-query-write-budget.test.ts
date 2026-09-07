@@ -103,3 +103,51 @@ it("builds the owner index without materializing private provider, overlay, or l
     expect(writes.commits).toBe(0);
   } finally { legacy.mockRestore(); db.close(); }
 });
+
+it("initializes unread once at owner startup and preserves off-page updates across restart", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const db = openInMemoryStateDb();
+  mocks.store = new SqliteOverlayStore(db);
+  mocks.threads = Array.from({ length: 1000 }, (_, i) => ({ source: "codex", id: `initial-${i}`,
+    title: String(i), titleSource: "explicit", linkedDirectories: [], updatedAt: 1, inbox: { inInbox: false } }));
+  try {
+    const initial = await loadLocalNavigationQueryIndex({ callerReason: "startup-baseline" });
+    expect(initial.threads.every((thread) => !thread.inbox.inInbox)).toBe(true);
+    const { writes } = await measureSqliteWrites(async () => {
+      expect(mocks.store.initializeNavigationUnreadBaseline(initial.threads)).toBe(true);
+    });
+    expectSqliteWriteBudget({ scenario: "navigation-unread-initial-baseline", writes,
+      note: "One profile-lifetime startup commit for 1,000 initial seen versions; no periodic writes or query writes; 0 MB/day recurring WAL" });
+    mocks.threads[999] = { ...mocks.threads[999]!, updatedAt: 2 };
+    mocks.threads.push({ ...mocks.threads[0]!, id: "new-thread" });
+    // New store instance represents a restarted owner reading the persisted baseline.
+    mocks.store = new SqliteOverlayStore(db);
+    const { writes: queryWrites } = await measureSqliteWrites(async () => {
+      const updated = await loadLocalNavigationQueryIndex({ callerReason: "after-restart" });
+      expect(updated.threads.find((thread) => thread.id === "initial-999")?.inbox).toMatchObject({ inInbox: true, reason: "updated-since-seen" });
+      expect(updated.threads.find((thread) => thread.id === "initial-0")?.inbox.inInbox).toBe(false);
+      expect(updated.threads.find((thread) => thread.id === "new-thread")?.inbox).toMatchObject({ inInbox: true, reason: "new-thread" });
+      expect(mocks.store.initializeNavigationUnreadBaseline(updated.threads)).toBe(false);
+    });
+    expect(queryWrites.commits).toBe(0);
+    await mocks.store.markThreadSeen({ backend: "codex", threadId: "initial-999", seenUpdatedAt: 2 });
+    const seen = await loadLocalNavigationQueryIndex({ callerReason: "accepted-reply" });
+    expect(seen.threads.find((thread) => thread.id === "initial-999")?.inbox.inInbox).toBe(false);
+  } finally { db.close(); }
+});
+
+it("preserves unread state when initializing a profile with a legacy baseline", async () => {
+  const db = openInMemoryStateDb();
+  mocks.store = new SqliteOverlayStore(db);
+  mocks.threads = [{ source: "codex", id: "existing", title: "Existing", titleSource: "explicit",
+    linkedDirectories: [], updatedAt: 1, inbox: { inInbox: false } }];
+  try {
+    await mocks.store.reconcileNavigationSnapshot({ backend: "all", fetchedAt: 1, threads: mocks.threads });
+    mocks.threads[0] = { ...mocks.threads[0]!, updatedAt: 2 };
+    const before = await loadLocalNavigationQueryIndex({ callerReason: "legacy-upgrade" });
+    expect(before.threads[0]?.inbox.inInbox).toBe(true);
+    mocks.store.initializeNavigationUnreadBaseline(before.threads);
+    const after = await loadLocalNavigationQueryIndex({ callerReason: "modern-baseline" });
+    expect(after.threads[0]?.inbox).toEqual(before.threads[0]?.inbox);
+  } finally { db.close(); }
+});

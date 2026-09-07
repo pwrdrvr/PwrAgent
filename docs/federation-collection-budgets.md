@@ -203,6 +203,14 @@ The owner publishes one directory invalidation after acceptance.
 
 ### Attention view lifetimes
 
+The owner initializes unread watermarks once per profile after complete provider
+discovery. This startup baseline admits at most 8 MiB of serialized metadata and
+uses one SQLite commit. Subsequent queries and restarts make no baseline writes,
+so its recurring write cost is 0 MB/day. The checked-in 1,000-thread budget uses
+an in-memory database; its zero observed WAL bytes are not a disk-volume
+measurement. Existing legacy unread state and explicit seen watermarks survive
+initialization, and later off-page updates remain unread across restart.
+
 The main process qualifies renderer view IDs into unique owner-visible lifetimes.
 Its lease directory admits at most 256 views and 256 KiB of serialized key/value
 backing, separately from query pages. Window teardown and explicit view release
