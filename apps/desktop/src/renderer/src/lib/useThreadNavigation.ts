@@ -3136,11 +3136,11 @@ export function useThreadNavigation(
       const directoryRows = indexLoadedDirectoryRows(boundedNavigation.directories.filter((directory) => !removedDirectoryKeysRef.current.has(directory.key)).map((directory) => ({ ...directory,
         ...(launchpadConfiguration.value?.directoryKey === directory.key && launchpadConfiguration.value.directoryGitStatus
           ? { gitStatus: launchpadConfiguration.value.directoryGitStatus } : {}),
-        ...(launchpadConfiguration.value?.directoryKey === directory.key && launchpadConfiguration.value.launchpad
-          ? { launchpad: { ...launchpadConfiguration.value.launchpad,
+        ...(launchpadConfiguration.value?.directoryKey === directory.key
+          ? { launchpad: launchpadConfiguration.value.launchpad ? { ...launchpadConfiguration.value.launchpad,
               prompt: draftStore?.get(`launchpad:${directory.key}`)?.draft ?? "",
               imageAttachments: draftStore?.get(`launchpad:${directory.key}`)?.imageAttachments,
-              fileAttachments: draftStore?.get(`launchpad:${directory.key}`)?.fileAttachments } } : {}),
+              fileAttachments: draftStore?.get(`launchpad:${directory.key}`)?.fileAttachments } : undefined } : {}),
       })));
       setState((current) => {
         // Unchanged resource pages must not roll back canonical row events or

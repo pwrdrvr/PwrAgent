@@ -3309,7 +3309,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("retries a failed remote snapshot until its route recovers", async () => {
+  it("recovers bounded remote reads after its route reconnects", async () => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "remote-instance",
@@ -3317,8 +3317,10 @@ describe("useThreadNavigation", () => {
     (window as unknown as {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget = federationTarget;
+    const listeners = new Set<(event: AgentEvent) => void>();
     const snapshot = {
       backend: "all" as const,
+      federationTarget,
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: ["codex:thread-remote"],
@@ -3343,23 +3345,24 @@ describe("useThreadNavigation", () => {
       .mockResolvedValue(snapshot);
     const desktopApi: DesktopApi = {
       readPopulation,
-      onAgentEvent: () => () => undefined,
+      onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
       expect(result.current.error).toBe("Unexpected server response: 502");
     });
+    for (const status of ["disconnected", "connected"] as const) {
+      await act(async () => {
+        for (const listener of listeners) listener({ backend: "codex", federationTarget,
+          notification: { method: "federation/peerStatus/changed", params: { instanceId: federationTarget.instanceId, status } } });
+      });
+    }
     await waitFor(() => {
       expect(result.current.selectedThread?.title).toBe("Recovered remotely");
       expect(result.current.error).toBeUndefined();
-    }, { timeout: 2_500 });
-    expect(readPopulation).toHaveBeenCalledTimes(2);
-    expect(readPopulation).toHaveBeenLastCalledWith({
-      federationTarget,
-      forceRefresh: true,
-      refreshMode: "full",
     });
+    expect(readPopulation).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces archive worktree cleanup failures returned by the desktop bridge", async () => {
@@ -8110,7 +8113,7 @@ describe("useThreadNavigation", () => {
     );
   });
 
-  it("removes server-backed launchpads when a refreshed snapshot omits them", async () => {
+  it("clears removed owner launchpad configuration while preserving the viewer draft", async () => {
     const directoryKey = "directory:/Users/test/PwrAgent";
     const snapshotWithLaunchpad: NavigationSnapshot = {
       backend: "all",
@@ -8168,7 +8171,11 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    let draftStore!: ReturnType<typeof useComposerDraftStore>;
+    const { result } = renderHook(() => {
+      draftStore = useComposerDraftStore();
+      return useThreadNavigation(desktopApi, { composerDraftStore: draftStore });
+    });
 
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad?.prompt).toBe(
@@ -8183,6 +8190,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad).toBeUndefined();
       expect(result.current.selectedLaunchpad).toBeUndefined();
+      expect(draftStore.get(`launchpad:${directoryKey}`)?.draft).toBe("Build the feature");
     });
   });
 
