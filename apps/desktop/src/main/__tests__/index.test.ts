@@ -9,6 +9,7 @@ const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const mainWindowHandlers = new Map<string, (...args: unknown[]) => void>();
 const createMainWindowMock = vi.fn();
 const registerAppServerIpcHandlersMock = vi.fn();
+const startAppServerOwnerNavigationMock = vi.fn(async () => undefined);
 const disposeAppServerIpcHandlersMock = vi.fn();
 const registerAgentIpcHandlersMock = vi.fn();
 const disposeAgentIpcHandlersMock = vi.fn();
@@ -309,6 +310,7 @@ vi.mock("../quit-manager", () => ({
 
 vi.mock("../ipc/app-server", () => ({
   registerAppServerIpcHandlers: registerAppServerIpcHandlersMock,
+  startAppServerOwnerNavigation: startAppServerOwnerNavigationMock,
   disposeAppServerIpcHandlers: disposeAppServerIpcHandlersMock,
 }));
 
@@ -622,6 +624,7 @@ describe("bootstrapApp", () => {
       isVisible: () => false,
     }));
     registerAppServerIpcHandlersMock.mockReset();
+    startAppServerOwnerNavigationMock.mockClear();
     disposeAppServerIpcHandlersMock.mockReset();
     registerAgentIpcHandlersMock.mockReset();
     disposeAgentIpcHandlersMock.mockReset();
@@ -872,6 +875,7 @@ describe("bootstrapApp", () => {
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(startAppServerOwnerNavigationMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerScheduledActionIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
