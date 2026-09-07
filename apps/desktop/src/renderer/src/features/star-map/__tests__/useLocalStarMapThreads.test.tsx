@@ -9,7 +9,8 @@ function thread(id: string): NavigationThreadSummary {
   return { id, source: "codex", title: id, titleSource: "derived", linkedDirectories: [], inbox: { inInbox: false } };
 }
 function page(request: NavigationQueryRequest, ids: string[] = []): NavigationQueryPage {
-  return navigationQueryFixture(request, { threads: ids.map(thread) });
+  // The caller supplies one page; its opaque cursor must not slice that page a second time.
+  return navigationQueryFixture({ ...request, cursor: undefined }, { threads: ids.map(thread) });
 }
 
 it("reads local pages and complete geometry without a snapshot, and releases all leases on close", async () => {

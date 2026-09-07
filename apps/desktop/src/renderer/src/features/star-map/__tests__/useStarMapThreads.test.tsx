@@ -82,6 +82,46 @@ function buildDesktopApi(): DesktopApi {
 }
 
 describe("useStarMapThreads", () => {
+  it("releases pending row and geometry reads when the map closes", async () => {
+    let finish!: (page: NavigationQueryPage) => void;
+    const pending = new Promise<NavigationQueryPage>((resolve) => { finish = resolve; });
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>().mockReturnValue(pending);
+    const release = vi.fn(async () => {});
+    const desktopApi: DesktopApi = { getNavigationQueryPage: read, releaseNavigationQuery: release };
+    const hook = renderHook(() => useStarMapThreads({ desktopApi, peers: [peer("a", "connected")], enabled: true }));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    const consumers = read.mock.calls.map(([, consumerId]) => consumerId);
+    expect(new Set(consumers).size).toBe(2);
+    hook.unmount();
+    for (const consumer of consumers) expect(release).toHaveBeenCalledWith(consumer);
+    await act(async () => finish(queryPage({ instanceId: "a" })));
+  });
+
+  it("releases an exact-card query when the card demand disappears", async () => {
+    const desktopApi = buildDesktopApi();
+    const readInitial = desktopApi.getNavigationQueryPage!;
+    let finish!: (page: NavigationQueryPage) => void;
+    const pending = new Promise<NavigationQueryPage>((resolve) => { finish = resolve; });
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>((request) => request.query.kind === "exact" ? pending : readInitial(request));
+    const release = vi.fn(async () => {});
+    desktopApi.getNavigationQueryPage = read;
+    desktopApi.releaseNavigationQuery = release;
+    const demand = new Map([["a", [{ backend: "codex" as const, threadId: "card", ownerInstanceId: "a" }]]]);
+    const empty = new Map();
+    const hook = renderHook(({ open }) => useStarMapThreads({ desktopApi, peers: [peer("a", "connected")], enabled: true,
+      demandedIdentitiesByInstance: open ? demand : empty,
+    }), { initialProps: { open: false } });
+    await waitFor(() => expect(hook.result.current.threadsByInstance.has("a")).toBe(true));
+    hook.rerender({ open: true });
+    await waitFor(() => expect(read.mock.calls.some(([request]) => request.query.kind === "exact")).toBe(true));
+    const consumer = read.mock.calls.find(([request]) => request.query.kind === "exact")![1];
+    hook.rerender({ open: false });
+    expect(release).toHaveBeenCalledWith(consumer);
+    await act(async () => finish(queryPage({ instanceId: "a", threadId: "card" })));
+    expect(hook.result.current.threadsByInstance.get("a")?.some((thread) => thread.id === "card")).toBe(false);
+    hook.unmount();
+  });
+
   it("keeps a disconnected peer's bounded rows, marked stale", async () => {
     const desktopApi = buildDesktopApi();
     const { result, rerender } = renderHook(
@@ -234,6 +274,7 @@ describe("useStarMapThreads", () => {
     expect(desktopApi.getNavigationSnapshot).not.toHaveBeenCalled();
     expect(vi.mocked(desktopApi.getNavigationQueryPage!)).toHaveBeenCalledWith(
       expect.objectContaining({ pageSize: 10, protocol: 2 }),
+      expect.stringContaining(":remote-query:"),
     );
   });
 

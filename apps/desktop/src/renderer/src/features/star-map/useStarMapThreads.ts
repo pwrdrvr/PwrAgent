@@ -149,6 +149,17 @@ export function useStarMapThreads(params: {
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
   const viewId = useId();
+  const nextQueryConsumer = useRef(0);
+  const queryConsumers = useRef(new Set<string>());
+  const withQueryConsumer = useCallback(async <T>(read: (consumerId: string) => Promise<T>): Promise<T> => {
+    const consumerId = `${viewId}:remote-query:${++nextQueryConsumer.current}`;
+    queryConsumers.current.add(consumerId);
+    try { return await read(consumerId); }
+    finally {
+      queryConsumers.current.delete(consumerId);
+      void desktopApi?.releaseNavigationQuery?.(consumerId).catch(() => undefined);
+    }
+  }, [desktopApi, viewId]);
   const attentionOwnersRef = useRef(new Set<string>());
   const metadataKeys = useRef(new Set<string>());
   const attentionView = useMemo(() => ({ id: viewId, promoteOnTurnEnd: params.attentionPromoteOnTurnEnd ?? true }),
@@ -187,23 +198,24 @@ export function useStarMapThreads(params: {
       try {
         const key = `${viewId}:${instanceId}:geometry`;
         metadataKeys.current.add(key);
-        geometryLease = navigationGeometryBudget.begin(key);
+        const lease = navigationGeometryBudget.begin(key);
+        geometryLease = lease;
         const previous = stateRef.current.queriesByInstance.get(instanceId);
         attentionOwnersRef.current.add(instanceId);
         const baseRequest = attentionRequest({ instanceId, filters, attentionView });
         const [rowResult, geometryResult] = await Promise.allSettled([
-          desktopApi.getNavigationQueryPage({
+          withQueryConsumer((consumerId) => desktopApi.getNavigationQueryPage!({
             ...baseRequest,
             completeBaselineRevision: previous?.completeRevision,
-          }),
-          readNavigationQueryRange({
+          }, consumerId)),
+          withQueryConsumer((consumerId) => readNavigationQueryRange({
             request: { ...geometryRequest(instanceId), pageSize: 100 },
-            read: (request) => desktopApi.getNavigationQueryPage!(request),
+            read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
             isCancelled: () => generationRef.current !== generation,
             maxBytes: 8 * 1024 * 1024,
-            reserveBytes: geometryLease.reserve,
-            releaseBytes: geometryLease.unreserve,
-          }),
+            reserveBytes: lease.reserve,
+            releaseBytes: lease.unreserve,
+          })),
         ]);
         if (rowResult.status === "rejected") throw rowResult.reason;
         if (geometryResult.status === "rejected") throw geometryResult.reason;
@@ -249,7 +261,7 @@ export function useStarMapThreads(params: {
         throw error;
       } finally { geometryLease?.dispose(); }
     },
-    [desktopApi, filters, attentionView, viewId],
+    [desktopApi, filters, attentionView, viewId, withQueryConsumer],
   );
 
   const refreshInstance = useCallback(
@@ -264,9 +276,10 @@ export function useStarMapThreads(params: {
       const retained = stateRef.current.queriesByInstance.get(instanceId);
       if (!desktopApi?.getNavigationQueryPage || !retained?.nextCursor) return;
       const generation = generationRef.current;
-      const page = await desktopApi.getNavigationQueryPage(
+      const page = await withQueryConsumer((consumerId) => desktopApi.getNavigationQueryPage!(
         attentionRequest({ cursor: retained.nextCursor, instanceId, filters, attentionView }),
-      );
+        consumerId,
+      ));
       if (generationRef.current !== generation) return;
       setState((current) => {
         const existing = current.queriesByInstance.get(instanceId);
@@ -282,7 +295,7 @@ export function useStarMapThreads(params: {
         return { ...current, queriesByInstance };
       });
     },
-    [desktopApi, filters, attentionView],
+    [desktopApi, filters, attentionView, withQueryConsumer],
   );
 
   useEffect(() => {
@@ -317,16 +330,19 @@ export function useStarMapThreads(params: {
     const getNavigationQueryPage = desktopApi?.getNavigationQueryPage;
     if (!params.enabled || !getNavigationQueryPage) return;
     const instanceIds = connectedIds.length > 0 ? connectedIds.split("\n") : [];
+    const consumers = queryConsumers.current;
     const generation = (generationRef.current += 1);
     for (const instanceId of instanceIds) {
       void fetchFirstPageForGeneration(instanceId, generation).catch(() => undefined);
     }
     return () => {
       generationRef.current += 1;
+      for (const consumerId of consumers) void desktopApi?.releaseNavigationQuery?.(consumerId).catch(() => undefined);
+      consumers.clear();
     };
   }, [
     connectedIds,
-    desktopApi?.getNavigationQueryPage,
+    desktopApi,
     fetchFirstPageForGeneration,
     params.enabled,
     params.refreshNonce,
@@ -337,6 +353,7 @@ export function useStarMapThreads(params: {
     if (!params.enabled || !getNavigationQueryPage) return;
     const generation = generationRef.current;
     let cancelled = false;
+    const exactConsumers = new Set<string>();
     for (const instanceId of stateRef.current.queriesByInstance.keys()) {
       if (!params.demandedIdentitiesByInstance?.get(instanceId)?.length) navigationExactRowsBudget.release(`${viewId}:${instanceId}:exact`);
     }
@@ -353,7 +370,8 @@ export function useStarMapThreads(params: {
     });
     for (const [instanceId, identities] of params.demandedIdentitiesByInstance ?? []) {
       if (identities.length === 0) continue;
-      void (async () => {
+      void withQueryConsumer(async (consumerId) => {
+        exactConsumers.add(consumerId);
         if (!stateRef.current.queriesByInstance.has(instanceId)) {
           await refreshInstance(instanceId);
         }
@@ -368,7 +386,7 @@ export function useStarMapThreads(params: {
           for (let offset = 0; offset < identities.length; offset += 100) {
             const page = await readNavigationQueryRange({
               request: { ...exactRequest({ identities: identities.slice(offset, offset + 100), instanceId }), deadlineAt },
-              read: getNavigationQueryPage,
+              read: (request) => getNavigationQueryPage(request, consumerId),
               isCancelled: () => cancelled || generationRef.current !== generation,
               maxBytes: remainingBytes,
               reserveBytes: lease.reserve,
@@ -390,9 +408,12 @@ export function useStarMapThreads(params: {
             return { ...current, queriesByInstance };
           });
         } finally { lease.dispose(); }
-      })().catch(() => undefined);
+      }).catch(() => undefined);
     }
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      for (const consumerId of exactConsumers) void desktopApi?.releaseNavigationQuery?.(consumerId).catch(() => undefined);
+    };
   }, [
     desktopApi,
     viewId,
@@ -400,6 +421,7 @@ export function useStarMapThreads(params: {
     params.demandedIdentitiesByInstance,
     params.enabled,
     refreshInstance,
+    withQueryConsumer,
   ]);
 
   useEffect(() => {
