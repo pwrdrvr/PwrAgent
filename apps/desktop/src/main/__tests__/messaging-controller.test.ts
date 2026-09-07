@@ -7527,8 +7527,7 @@ describe("MessagingController", () => {
   });
 
   it("uses the materialized worktree path in the optimistic status for messaging-started threads", async () => {
-    const harness = await createHarness();
-    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeLaunchpadNavigationSnapshot());
+    const harness = await createHarness({ navigation: buildWorktreeLaunchpadNavigationSnapshot() });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
     await harness.controller.handleInboundEvent(
@@ -11542,6 +11541,15 @@ describe("MessagingController", () => {
       ...navigation.directories[0]!,
       launchpad: {
         ...navigation.directories[0]!.launchpad!,
+        directoryKey: navigation.directories[0]!.key,
+        directoryKind: navigation.directories[0]!.kind,
+        directoryLabel: navigation.directories[0]!.label,
+        directoryPath: navigation.directories[0]!.path,
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 1000,
         backend: "codex",
         codexEnvironmentId: "codex-environment",
         codexEnvironmentExecutionTarget: "local",
@@ -24973,7 +24981,13 @@ async function createHarness<
       const population = options?.getNavigationSnapshot
         ? await options.getNavigationSnapshot({ backend: "all", federationTarget: request.federationTarget })
         : options?.navigation ?? buildNavigationSnapshot();
-      return { protocol: 2, revision: "fixture", defaults: population.launchpadDefaults };
+      const directory = population.directories.find((candidate) => candidate.key === request.directoryKey);
+      const ensured = [...ensureDirectoryLaunchpad.mock.results].reverse().find((result, index) =>
+        ensureDirectoryLaunchpad.mock.calls[ensureDirectoryLaunchpad.mock.results.length - index - 1]?.[0]?.directoryKey === request.directoryKey
+        && result.type === "return");
+      const launchpad = ensured ? (await ensured.value).launchpad : directory?.launchpad;
+      return { protocol: 2, revision: "fixture", defaults: population.launchpadDefaults,
+        directoryKey: request.directoryKey, launchpad, directoryGitStatus: directory?.gitStatus };
     }),
   );
   const navigationQueryStore = new NavigationQueryStore();

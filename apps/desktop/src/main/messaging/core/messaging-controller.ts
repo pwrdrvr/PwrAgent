@@ -1,3 +1,4 @@
+import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { rememberBoundedMap } from "../../bounded-map";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -65,6 +66,7 @@ import type {
   PwrAgentMessagingResponse,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
+  NavigationLaunchpadConfiguration,
   NavigationSelectedDetailRequest,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -203,7 +205,7 @@ import {
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildResumeIntent,
-  directoryForProjectSelection,
+  directoryForProjectSelection as legacyDirectoryForProjectSelection,
   isNewAgentThreadLaunchAction,
   isNewThreadLaunchAction,
   parseResumeCommandArgs,
@@ -4731,7 +4733,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
-    navigation?: NavigationSnapshot;
+    navigation?: MessagingNavigationContext;
     pdfAttachments?: PendingPdfAttachment[];
     privateResponseRequested?: boolean;
     preview: string;
@@ -5075,7 +5077,7 @@ export class MessagingController {
   private async adoptStartedTurn(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
-    navigation: NavigationSnapshot;
+    navigation: MessagingNavigationContext;
     turnId: string;
   }): Promise<void> {
     const currentTurn = this.getActiveTurn(params.binding);
@@ -9123,7 +9125,7 @@ export class MessagingController {
 
   private async resolveNewThreadToolUpdateMode(
     session: MessagingBrowseSessionRecord,
-    directory?: NavigationDirectorySummary,
+    directory?: MessagingLaunchpadDirectory,
   ): Promise<MessagingToolUpdateMode> {
     if (session.preferences?.toolUpdateMode) {
       return session.preferences.toolUpdateMode;
@@ -9218,66 +9220,12 @@ export class MessagingController {
 
   private async ensureNewThreadProjectLaunchpad(
     session: MessagingBrowseSessionRecord,
-    navigation: NavigationSnapshot,
+    _navigation: MessagingNewThreadNavigation,
     preferredBackend?: AppServerBackendKind,
-  ): Promise<{
-    directory?: NavigationDirectorySummary;
-    navigation: NavigationSnapshot;
-  }> {
-    if (!session.selectedProject || !this.options.backend.ensureDirectoryLaunchpad) {
-      return {
-        directory: session.selectedProject
-          ? directoryForProjectSelection(navigation, session.selectedProject)
-          : undefined,
-        navigation,
-      };
-    }
-
-    const directory = directoryForProjectSelection(navigation, session.selectedProject);
-    const directoryKey =
-      session.selectedProject.directoryKey ??
-      directory?.key ??
-      session.selectedProject.path ??
-      session.selectedProject.label;
-    try {
-      const response = await this.options.backend.ensureDirectoryLaunchpad({
-        directoryKey,
-        directoryKind: directory?.kind ?? "directory",
-        directoryLabel: directory?.label ?? session.selectedProject.label,
-        ...((directory?.path ?? session.selectedProject.path)
-          ? { directoryPath: directory?.path ?? session.selectedProject.path }
-          : {}),
-        ...(directory?.gitStatus?.currentBranch
-          ? { currentBranch: directory.gitStatus.currentBranch }
-          : {}),
-        ...(preferredBackend ? { preferredBackend } : {}),
-      });
-      const nextDirectories = navigation.directories.map((candidate) =>
-        candidate.key === directoryKey
-          ? {
-              ...candidate,
-              launchpad: response.launchpad,
-            }
-          : candidate,
-      );
-      const nextNavigation = {
-        ...navigation,
-        directories: nextDirectories,
-      };
-      return {
-        directory: nextDirectories.find((candidate) => candidate.key === directoryKey),
-        navigation: nextNavigation,
-      };
-    } catch (error) {
-      this.logger.debug?.("messaging new-thread launchpad ensure failed", {
-        directoryKey,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
-        directory,
-        navigation,
-      };
-    }
+  ): Promise<{ directory?: MessagingLaunchpadDirectory; navigation: MessagingLaunchpadContext }> {
+    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend,
+      project: session.selectedProject, ensureBackend: preferredBackend ?? session.backend });
+    return { directory: navigation.directory, navigation };
   }
 
   private async resolveCallbackHandleForEvent(
@@ -9336,7 +9284,7 @@ export class MessagingController {
   private async startNewThreadFromProject(
     event: MessagingInboundCallbackEvent,
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: MessagingNewThreadNavigation,
     project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
   ): Promise<void> {
     if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
@@ -9382,7 +9330,7 @@ export class MessagingController {
           pageIndex: 0,
           workMode,
           branchName: workMode === "worktree" ? session.branchName : undefined,
-          selectedProject: project,
+          selectedProject: { ...project, directoryKey: directory?.key ?? project.directoryKey },
           updatedAt: this.now(),
           expiresAt: this.now() + this.pendingIntentTtlMs,
         }),
@@ -9419,10 +9367,10 @@ export class MessagingController {
   private async presentNewThreadPromptGate(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation?: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    _navigation?: MessagingNewThreadNavigation,
   ): Promise<void> {
-    let snapshot = navigation ?? await this.options.backend.getNavigationSnapshot({
-      backend: "all",
+    let snapshot: MessagingNewThreadNavigation = await readMessagingLaunchpadContext({
+      backend: this.options.backend, project: session.selectedProject,
     });
     const backendChoices = await this.loadNewThreadBackendChoices(event);
     if (!backendChoices) {
@@ -9670,7 +9618,7 @@ export class MessagingController {
   private async presentNewThreadBackendPicker(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const choices = await this.loadNewThreadBackendChoices(event);
     if (!choices) {
@@ -9742,7 +9690,7 @@ export class MessagingController {
 
   private async presentNewThreadBranchPicker(
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: MessagingNewThreadNavigation,
     event: MessagingInboundEvent,
     pageIndex = 0,
   ): Promise<void> {
@@ -9884,7 +9832,7 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
     backend: AppServerBackendKind,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const summary = await this.getBackendSummary(backend);
     if (!summary) {
@@ -9980,7 +9928,7 @@ export class MessagingController {
   private async presentNewThreadPermissionsPicker(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const directory = session.selectedProject
       ? directoryForProjectSelection(navigation, session.selectedProject)
@@ -10052,7 +10000,7 @@ export class MessagingController {
   private async setNewThreadPermissions(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundCallbackEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const executionMode = readThreadExecutionModeValue(event.value);
     if (!executionMode) {
@@ -10100,7 +10048,7 @@ export class MessagingController {
   private async presentNewThreadEnvironmentPicker(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const ensured = await this.ensureNewThreadProjectLaunchpad(
       session,
@@ -10142,7 +10090,7 @@ export class MessagingController {
   private async setNewThreadEnvironment(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundCallbackEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const ensured = await this.ensureNewThreadProjectLaunchpad(
       session,
@@ -10194,7 +10142,7 @@ export class MessagingController {
   private async setNewThreadAcpRuntimeMode(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundCallbackEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const source = readAcpRuntimeOptionSource(event.value);
     const optionId = readStringValue(event.value, "optionId");
@@ -10263,7 +10211,7 @@ export class MessagingController {
   private async applyNewThreadAcpRuntimeMode(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
     selection: AcpRuntimeRiskWarningContext & { kind: "new-thread" },
   ): Promise<void> {
     const backend = session.backend ?? navigation.launchpadDefaults.backend;
@@ -10452,8 +10400,8 @@ export class MessagingController {
       return;
     }
 
-    let navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
+    let navigation: MessagingNewThreadNavigation = await readMessagingLaunchpadContext({
+      backend: this.options.backend, project: bundle.session.selectedProject,
     });
     let selectedBackend: BackendSummary | undefined;
     if (bundle.session.backend) {
@@ -10543,7 +10491,7 @@ export class MessagingController {
     let boundThread:
       | {
           binding: MessagingBindingRecord;
-          navigation: NavigationSnapshot;
+          navigation: MessagingThreadContext;
         }
       | undefined;
     let browseSessionRetired = false;
@@ -10559,7 +10507,7 @@ export class MessagingController {
       started: StartedLaunchpadThread,
     ): Promise<{
       binding: MessagingBindingRecord;
-      navigation: NavigationSnapshot;
+      navigation: MessagingThreadContext;
     }> => {
       if (boundThread) {
         return boundThread;
@@ -10582,7 +10530,7 @@ export class MessagingController {
           updatedAt: this.now(),
         });
       }
-      const optimisticNavigation = navigationWithStartedThread({
+      const optimisticNavigation = buildMessagingStartedThreadContext({
         backend: started.backend,
         directory,
         executionMode: started.executionMode,
@@ -19849,6 +19797,16 @@ function branchPageIndexFromValue(value: MessagingJsonValue | undefined): number
     : 0;
 }
 
+function directoryForProjectSelection(
+  navigation: MessagingNewThreadNavigation,
+  selectedProject: Parameters<typeof legacyDirectoryForProjectSelection>[1],
+): MessagingLaunchpadDirectory | undefined {
+  if (!isMessagingLaunchpadContext(navigation)) return legacyDirectoryForProjectSelection(navigation, selectedProject);
+  const directory = navigation.directory;
+  return directory && (selectedProject.directoryKey ? directory.key === selectedProject.directoryKey : directory.path === selectedProject.path)
+    ? directory : undefined;
+}
+
 function findNavigationDirectory(
   navigation: NavigationSnapshot,
   linkedDirectory: LinkedDirectorySummary,
@@ -20299,8 +20257,8 @@ type NewThreadOptionsSummary = {
 
 function newThreadOptionsForSession(
   session: MessagingBrowseSessionRecord,
-  navigation: NavigationSnapshot,
-  directory: NavigationDirectorySummary | undefined,
+  navigation: MessagingNewThreadNavigation,
+  directory: MessagingLaunchpadDirectory | undefined,
   streamingResponsesDefault: boolean,
   backend: BackendSummary,
 ): NewThreadOptionsSummary {
@@ -20408,7 +20366,7 @@ function newThreadOptionsForSession(
 }
 
 function canCreateNewThreadWorktree(
-  directory: NavigationDirectorySummary | undefined,
+  directory: MessagingLaunchpadDirectory | undefined,
 ): boolean {
   if (!directory?.path || directory.kind !== "directory") {
     return false;
@@ -20425,7 +20383,7 @@ function canCreateNewThreadWorktree(
 
 function resolveNewThreadWorkMode(params: {
   requestedWorkMode: LaunchpadWorkMode;
-  directory: NavigationDirectorySummary | undefined;
+  directory: MessagingLaunchpadDirectory | undefined;
 }): LaunchpadWorkMode {
   return params.requestedWorkMode === "worktree" &&
     canCreateNewThreadWorktree(params.directory)
@@ -20481,7 +20439,7 @@ function newThreadPromptGateBody(
 
 function resolveNewThreadCodexEnvironmentId(
   session: MessagingBrowseSessionRecord,
-  launchpad: NavigationLaunchpadDraft | undefined,
+  launchpad: Pick<NavigationLaunchpadConfiguration, "codexEnvironmentId"> | undefined,
 ): string | null | undefined {
   if (session.preferences?.codexEnvironmentId === null) {
     return null;
@@ -20568,8 +20526,8 @@ function formatDurationMs(durationMs: number | undefined): string | undefined {
 
 function resolveNewThreadBaseBranch(
   session: MessagingBrowseSessionRecord,
-  navigation: NavigationSnapshot,
-  directory?: NavigationDirectorySummary,
+  navigation: MessagingNewThreadNavigation,
+  directory?: MessagingLaunchpadDirectory,
 ): string {
   const selectedDirectory =
     directory ??
@@ -20588,8 +20546,8 @@ function resolveNewThreadBaseBranch(
 
 function newThreadBranchChoices(
   session: MessagingBrowseSessionRecord,
-  navigation: NavigationSnapshot,
-  directory: NavigationDirectorySummary | undefined,
+  navigation: MessagingNewThreadNavigation,
+  directory: MessagingLaunchpadDirectory | undefined,
 ): string[] {
   const defaultBranch = resolveNewThreadBaseBranch(session, navigation, directory);
   const branches = [
@@ -22384,17 +22342,17 @@ type TurnLifecycleParams = {
   };
 };
 
-function navigationWithStartedThread(params: {
+function buildMessagingStartedThreadContext(params: {
   acpRuntime?: BackendAcpSessionRuntimeState;
   agent?: ReturnType<typeof agentForNewThreadSession>;
   backend: AppServerBackendKind;
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
-  directory?: NavigationDirectorySummary;
+  directory?: MessagingLaunchpadDirectory;
   executionMode?: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
   fastMode?: boolean;
   model?: string;
-  navigation: NavigationSnapshot;
+  navigation: MessagingNewThreadNavigation;
   now: number;
   preferences?: MessagingBrowseSessionRecord["preferences"];
   project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
@@ -22403,16 +22361,7 @@ function navigationWithStartedThread(params: {
   threadId: ThreadIdentifier;
   worktreePath?: string;
   workMode: LaunchpadWorkMode;
-}): NavigationSnapshot {
-  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-  if (
-    params.navigation.threads.some(
-      (thread) => thread.source === params.backend && thread.id === params.threadId,
-    )
-  ) {
-    return params.navigation;
-  }
-
+}): MessagingThreadContext {
   const directoryPath = params.directory?.path ?? params.project.path;
   const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
     ? params.linkedDirectory ?? {
@@ -22425,56 +22374,40 @@ function navigationWithStartedThread(params: {
     : undefined;
 
   return {
-    ...params.navigation,
-    unchanged: false,
-    threads: [
-      {
-        id: params.threadId,
-        source: params.backend,
-        title: params.threadId,
-        titleSource: "fallback",
-        projectKey: directoryPath,
-        createdAt: params.now,
-        updatedAt: params.now,
-        executionMode: params.executionMode,
-        acpRuntime: params.acpRuntime,
-        codexEnvironmentRuntime: params.codexEnvironmentRuntime,
-        agent: params.agent
-          ? {
-              ...params.agent,
-              instructionLineCount: params.agent.instructions
-                ? params.agent.instructions.split(/\r?\n/).length
-                : 0,
-              instructionsTooLong: false,
-              updatedAt: params.now,
-            }
-          : undefined,
-        model: params.model,
-        reasoningEffort: params.reasoningEffort,
-        serviceTier: params.serviceTier,
-        fastMode: params.fastMode,
-        linkedDirectories: linkedDirectory ? [linkedDirectory] : [],
-        inbox: {
-          inInbox: true,
-          reason: "new-thread",
-        },
-      },
-      ...params.navigation.threads,
-    ],
-    directories: params.navigation.directories.map((directory) =>
-      directory.key === params.directory?.key
+    kind: "thread",
+    defaults: params.navigation.launchpadDefaults,
+    directory: params.directory,
+    thread: {
+      id: params.threadId,
+      source: params.backend,
+      title: params.threadId,
+      titleSource: "fallback",
+      projectKey: directoryPath,
+      createdAt: params.now,
+      updatedAt: params.now,
+      executionMode: params.executionMode,
+      acpRuntime: params.acpRuntime,
+      codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+      agent: params.agent
         ? {
-            ...directory,
-            threadKeys: directory.threadKeys.includes(threadKey)
-              ? directory.threadKeys
-              : [threadKey, ...directory.threadKeys],
-            latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, params.now),
+            ...params.agent,
+            instructionLineCount: params.agent.instructions
+              ? params.agent.instructions.split(/\r?\n/).length
+              : 0,
+            instructionsTooLong: false,
+            updatedAt: params.now,
           }
-        : directory,
-    ),
-    inboxThreadKeys: params.navigation.inboxThreadKeys.includes(threadKey)
-      ? params.navigation.inboxThreadKeys
-      : [threadKey, ...params.navigation.inboxThreadKeys],
+        : undefined,
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+      serviceTier: params.serviceTier,
+      fastMode: params.fastMode,
+      linkedDirectories: linkedDirectory ? [linkedDirectory] : [],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread",
+      },
+    },
   };
 }
 
@@ -22482,8 +22415,8 @@ function launchpadForMessagingProject(params: {
   acpRuntime?: BackendAcpSessionRuntimeState;
   backend: AppServerBackendKind;
   branchName: string;
-  directory?: NavigationDirectorySummary;
-  navigation: NavigationSnapshot;
+  directory?: MessagingLaunchpadDirectory;
+  navigation: MessagingNewThreadNavigation;
   now: number;
   options: NewThreadOptionsSummary;
   preferences?: MessagingBrowseSessionRecord["preferences"];
@@ -22492,7 +22425,7 @@ function launchpadForMessagingProject(params: {
 }): NavigationLaunchpadDraft {
   const defaults = params.navigation.launchpadDefaults;
   const directoryPath = params.directory?.path ?? params.project.path;
-  const base: NavigationLaunchpadDraft = params.directory?.launchpad ?? {
+  const base: NavigationLaunchpadConfiguration = params.directory?.launchpad ?? {
     directoryKey:
       params.directory?.key ??
       params.project.directoryKey ??
@@ -22507,7 +22440,6 @@ function launchpadForMessagingProject(params: {
     reasoningEffort: defaults.reasoningEffort,
     serviceTier: defaults.serviceTier,
     fastMode: defaults.fastMode,
-    prompt: "",
     workMode: params.workMode,
     branchName: params.branchName,
     createdAt: params.now,
