@@ -455,6 +455,10 @@ describe("codex environment runtime", () => {
   it("falls back when the hydrated shell path is stale", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-shell-fallback-"));
     const outputPath = path.join(root, "env.txt");
+    let resolveDetachedExit!: (event: { exitCode: number | null }) => void;
+    const detachedExit = new Promise<{ exitCode: number | null }>((resolve) => {
+      resolveDetachedExit = resolve;
+    });
 
     try {
       const result = await startLocalCodexEnvironmentAction({
@@ -464,6 +468,7 @@ describe("codex environment runtime", () => {
           ...process.env,
           SHELL: path.join(root, "missing-shell"),
         },
+        onDetachedExit: resolveDetachedExit,
         runtime: {
           environmentId: "env",
           environmentName: "Env",
@@ -486,17 +491,22 @@ describe("codex environment runtime", () => {
           status: "started",
         }),
       ]);
-      await expect(
-        expectEventually(async () => await readFile(outputPath, "utf8")),
-      ).resolves.toBe("fallback");
+      // Redirection creates the file before printf writes it. Wait for the
+      // command owner to exit before reading output or removing its cwd.
+      await expect(detachedExit).resolves.toMatchObject({ exitCode: 0 });
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("fallback");
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  });
+  }, DETACHED_ACTION_TEST_TIMEOUT_MS);
 
   it("falls back when the stale hydrated shell is a Windows absolute path", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-win-shell-fallback-"));
     const outputPath = path.join(root, "env.txt");
+    let resolveDetachedExit!: (event: { exitCode: number | null }) => void;
+    const detachedExit = new Promise<{ exitCode: number | null }>((resolve) => {
+      resolveDetachedExit = resolve;
+    });
 
     try {
       const result = await startLocalCodexEnvironmentAction({
@@ -506,6 +516,7 @@ describe("codex environment runtime", () => {
           ...process.env,
           SHELL: "C:\\Users\\operator\\missing-shell.exe",
         },
+        onDetachedExit: resolveDetachedExit,
         runtime: {
           environmentId: "env",
           environmentName: "Env",
@@ -528,13 +539,14 @@ describe("codex environment runtime", () => {
           status: "started",
         }),
       ]);
-      await expect(
-        expectEventually(async () => await readFile(outputPath, "utf8")),
-      ).resolves.toBe("fallback");
+      // Redirection creates the file before printf writes it. Wait for the
+      // command owner to exit before reading output or removing its cwd.
+      await expect(detachedExit).resolves.toMatchObject({ exitCode: 0 });
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("fallback");
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  });
+  }, DETACHED_ACTION_TEST_TIMEOUT_MS);
 
   it("chooses the command shell from the provided hydrated environment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-shell-"));
