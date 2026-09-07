@@ -9,6 +9,7 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useStarMapThreads } from "../useStarMapThreads";
+import { navigationAttentionRowsBudget, NAVIGATION_METADATA_MAX_RETAINED_BYTES } from "../../../lib/navigation-metadata-budget";
 
 function peer(
   id: string,
@@ -87,7 +88,7 @@ describe("useStarMapThreads", () => {
     const read = vi.fn(async (request: NavigationQueryRequest) => {
       if (request.query.kind !== "lens") return queryPage({ instanceId: "a" });
       if (request.cursor) throw new Error("Error invoking remote method: [navigation_cursor_expired] Navigation cursor expired");
-      if (request.anchor) return { ...queryPage({ instanceId: "a", threadId: "anchor" }), generation: "replacement" };
+      if (request.anchor) return { ...queryPage({ instanceId: "a", threadId: "anchor" }), generation: "replacement", rangeStart: 10 };
       return queryPage({ instanceId: "a", threadId: "anchor", nextCursor: "expired" });
     });
     const desktopApi: DesktopApi = { getNavigationQueryPage: read };
@@ -102,7 +103,30 @@ describe("useStarMapThreads", () => {
       expect(continuation[1]).toMatchObject({ cursor: undefined, deadlineAt: continuation[0]!.deadlineAt,
         anchor: { kind: "thread", ref: { backend: "codex", threadId: "anchor", ownerInstanceId: "a" } } });
       expect(hook.result.current.threadsByInstance.get("a")?.map((thread) => thread.id)).toEqual(["anchor"]);
+      await act(async () => { await hook.result.current.refreshInstance("a"); });
+      expect(read.mock.calls.map(([request]) => request).filter((request) => request.query.kind === "lens").at(-1)?.completeBaselineRevision)
+        .toBeUndefined();
     } finally { hook.unmount(); }
+  });
+
+  it("bounds retained rows across peer clouds and preserves the prior page when admission fails", async () => {
+    const desktopApi: DesktopApi = { getNavigationQueryPage: vi.fn(async (request) => request.query.kind !== "lens"
+      ? queryPage({ instanceId: "a" })
+      : queryPage({ instanceId: "a", threadId: request.cursor ? "next" : "first", nextCursor: request.cursor ? undefined : "next" })) };
+    const hook = renderHook(() => useStarMapThreads({ enabled: true, peers: [peer("a", "connected")], desktopApi }));
+    try {
+      await waitFor(() => expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("first"));
+      const other = navigationAttentionRowsBudget.begin("another-cloud");
+      other.reserve(NAVIGATION_METADATA_MAX_RETAINED_BYTES - navigationAttentionRowsBudget.usage().retainedBytes);
+      other.commit();
+      await act(async () => { await expect(hook.result.current.loadMoreInstance("a")).rejects.toThrow("retained byte budget"); });
+      expect(hook.result.current.threadsByInstance.get("a")?.map((thread) => thread.id)).toEqual(["first"]);
+      expect(navigationAttentionRowsBudget.usage().transientBytes).toBe(0);
+      navigationAttentionRowsBudget.release("another-cloud");
+      await act(async () => { await hook.result.current.loadMoreInstance("a"); });
+      expect(hook.result.current.threadsByInstance.get("a")?.map((thread) => thread.id)).toEqual(["first", "next"]);
+    } finally { navigationAttentionRowsBudget.release("another-cloud"); hook.unmount(); }
+    expect(navigationAttentionRowsBudget.usage()).toEqual({ retainedBytes: 0, transientBytes: 0 });
   });
 
   it("does not publish authoritative counts from checking owner coverage", async () => {

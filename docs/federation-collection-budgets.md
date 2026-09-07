@@ -203,6 +203,13 @@ The owner publishes one directory invalidation after acceptance.
 
 ### Attention view lifetimes
 
+Remote Star Map row retention shares an 8 MiB serialized backing budget across
+all peer clouds in a renderer. Each explicit continuation reserves its cumulative
+page backing before publication; rejection preserves the prior rows. Rebaseline
+replaces the old range, and owner removal or view teardown releases its charge.
+This counts serialized page backing conservatively, including page metadata;
+it is not a measurement of JavaScript heap or garbage-collection latency.
+
 The owner initializes unread watermarks once per profile after complete provider
 discovery. This startup baseline admits at most 8 MiB of serialized metadata and
 uses one SQLite commit. Subsequent queries and restarts make no baseline writes,

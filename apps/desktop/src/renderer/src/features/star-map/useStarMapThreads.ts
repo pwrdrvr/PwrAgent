@@ -13,7 +13,7 @@ import {
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { navigationGeometryBudget, navigationExactRowsBudget } from "../../lib/navigation-metadata-budget";
+import { navigationGeometryBudget, navigationExactRowsBudget, navigationAttentionRowsBudget } from "../../lib/navigation-metadata-budget";
 import { navigationQueryEventRequiresRefresh } from "../../lib/navigation-query-events";
 import { isNavigationCursorExpired } from "../../lib/navigation-query-state";
 import { readNavigationQueryRange } from "../../lib/read-navigation-query-range";
@@ -22,6 +22,7 @@ const STAR_MAP_FIRST_PAGE_ROWS = 10;
 const EVENT_REFRESH_DELAY_MS = 250;
 
 type RetainedPeerQuery = {
+  attentionBytes: number;
   rangeStart: number;
   attentionThreads: NavigationThreadSummary[];
   completeRevision?: string;
@@ -169,6 +170,15 @@ export function useStarMapThreads(params: {
   }, [desktopApi, viewId]);
   const attentionOwnersRef = useRef(new Set<string>());
   const metadataKeys = useRef(new Set<string>());
+  const retainAttentionRows = useCallback((instanceId: string, bytes: number): void => {
+    const key = `${viewId}:${instanceId}:attention`;
+    const lease = navigationAttentionRowsBudget.begin(key);
+    try {
+      lease.reserve(bytes);
+      lease.commit();
+      metadataKeys.current.add(key);
+    } finally { lease.dispose(); }
+  }, [viewId]);
   const attentionView = useMemo(() => ({ id: viewId, promoteOnTurnEnd: params.attentionPromoteOnTurnEnd ?? true }),
     [viewId, params.attentionPromoteOnTurnEnd]);
   const filters = params.filters;
@@ -225,10 +235,13 @@ export function useStarMapThreads(params: {
         if (page.unchanged && (!previous?.completeRevision || previous.completeRevision !== page.countsRevision)) {
           throw new Error("Navigation unchanged response has no matching complete owner baseline.");
         }
+        const attentionBytes = page.unchanged ? previous?.attentionBytes ?? 0 : new TextEncoder().encode(JSON.stringify(page)).byteLength;
+        retainAttentionRows(instanceId, attentionBytes);
         setState((current) => {
           const queriesByInstance = new Map(current.queriesByInstance);
           const retained = queriesByInstance.get(instanceId);
           queriesByInstance.set(instanceId, {
+            attentionBytes,
             rangeStart: page.rangeStart ?? 0,
             attentionThreads: page.unchanged ? retained?.attentionThreads ?? [] : mergeEntries([], page.entries),
             completeRevision: page.complete ? page.countsRevision : undefined,
@@ -295,7 +308,7 @@ export function useStarMapThreads(params: {
       const results = await Promise.allSettled([rows, geometry]);
       for (const result of results) if (result.status === "rejected") throw result.reason;
     },
-    [desktopApi, filters, attentionView, viewId, withQueryConsumer],
+    [desktopApi, filters, attentionView, viewId, withQueryConsumer, retainAttentionRows],
   );
 
   const fetchFirstPageForGeneration = useCallback((instanceId: string, generation: number, deadlineAt = Date.now() + 10_000): Promise<void> => {
@@ -358,6 +371,10 @@ export function useStarMapThreads(params: {
         }, consumerId));
       }
       if (generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration) return;
+      const currentQuery = stateRef.current.queriesByInstance.get(instanceId);
+      if (!currentQuery || currentQuery.generation !== retained.generation || currentQuery.nextCursor !== retained.nextCursor) return;
+      const attentionBytes = (rebaseline ? 0 : currentQuery.attentionBytes) + new TextEncoder().encode(JSON.stringify(page)).byteLength;
+      retainAttentionRows(instanceId, attentionBytes);
       setState((current) => {
         const existing = current.queriesByInstance.get(instanceId);
         if (!existing || existing.generation !== retained.generation
@@ -365,6 +382,7 @@ export function useStarMapThreads(params: {
         const queriesByInstance = new Map(current.queriesByInstance);
         queriesByInstance.set(instanceId, {
           ...existing,
+          attentionBytes,
           rangeStart: rebaseline ? page.rangeStart ?? 0 : existing.rangeStart,
           completeRevision: page.complete && (rebaseline ? page.rangeStart ?? 0 : existing.rangeStart) === 0 ? page.countsRevision : undefined,
           counts: page.counts,
@@ -378,7 +396,7 @@ export function useStarMapThreads(params: {
         return { ...current, queriesByInstance };
       });
     },
-    [desktopApi, filters, attentionView, withQueryConsumer],
+    [desktopApi, filters, attentionView, withQueryConsumer, retainAttentionRows],
   );
 
   const loadMoreInstance = useCallback((instanceId: string): Promise<void> => {
@@ -396,6 +414,9 @@ export function useStarMapThreads(params: {
     const retainedOwners = new Set([...stateRef.current.queriesByInstance.keys(), ...stateRef.current.geometryByInstance.keys(), ...stateRef.current.exactThreadsByInstance.keys()]);
     for (const instanceId of retainedOwners) {
       if (known.has(instanceId)) continue;
+      const attentionKey = `${viewId}:${instanceId}:attention`;
+      navigationAttentionRowsBudget.release(attentionKey);
+      metadataKeys.current.delete(attentionKey);
       const geometryKey = `${viewId}:${instanceId}:geometry`;
       const exactKey = `${viewId}:${instanceId}:exact`;
       navigationGeometryBudget.release(geometryKey);
@@ -588,6 +609,7 @@ export function useStarMapThreads(params: {
       for (const key of keys) {
         navigationGeometryBudget.release(key);
         navigationExactRowsBudget.release(key);
+        navigationAttentionRowsBudget.release(key);
       }
       keys.clear();
     };
