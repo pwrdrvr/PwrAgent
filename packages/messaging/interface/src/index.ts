@@ -16,6 +16,9 @@ import type {
   ThreadIdentifier,
   ThreadExecutionMode,
   NavigationDirectorySummary,
+  NavigationDirectoryRow,
+  NavigationRow,
+  FederationTarget,
   NavigationSnapshot,
   NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -1002,7 +1005,7 @@ export type MessagingThreadPickerIntent = MessagingBaseSurfaceIntent & {
   kind: "thread_picker";
   browseSessionId?: string;
   navigation: Pick<NavigationSnapshot, "backend" | "fetchedAt" | "unchanged">;
-  page: MessagingPickerPage<NavigationThreadSummary | AppServerThreadSummary>;
+  page: MessagingPickerPage<NavigationThreadSummary | AppServerThreadSummary | NavigationRow>;
   prompt: string;
 };
 
@@ -1010,7 +1013,7 @@ export type MessagingProjectPickerIntent = MessagingBaseSurfaceIntent & {
   kind: "project_picker";
   browseSessionId?: string;
   navigation: Pick<NavigationSnapshot, "backend" | "fetchedAt" | "unchanged">;
-  page: MessagingPickerPage<NavigationDirectorySummary>;
+  page: MessagingPickerPage<NavigationDirectorySummary | NavigationDirectoryRow>;
   prompt: string;
 };
 
@@ -1858,6 +1861,7 @@ export type MessagingBrowseLaunchAction =
 
 export type MessagingBrowseSelectedProject = {
   directoryKey?: string;
+  federationTarget?: FederationTarget;
   label: string;
   path?: string;
 };
@@ -1868,6 +1872,7 @@ export type MessagingBrowseReturnTarget = {
   pageIndex: number;
   preferences?: MessagingBindingPreferences;
   query?: string;
+  directorySelector?: string;
   selectedProject?: MessagingBrowseSelectedProject;
 };
 
@@ -1888,6 +1893,8 @@ export type MessagingBrowseSessionRecord = {
   pageSize: number;
   preferences?: MessagingBindingPreferences;
   query?: string;
+  /** Exact key or path requested before its owner is resolved. */
+  directorySelector?: string;
   returnTo?: MessagingBrowseReturnTarget;
   workMode?: LaunchpadWorkMode;
   branchName?: string;

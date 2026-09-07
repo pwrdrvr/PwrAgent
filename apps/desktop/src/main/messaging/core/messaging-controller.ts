@@ -1,3 +1,6 @@
+import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
+import type { NavigationQuery } from "@pwragent/shared";
+import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
 import { rememberBoundedMap } from "../../bounded-map";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -65,6 +68,8 @@ import type {
   PwrAgentMessagingResponse,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
+  NavigationLaunchpadConfiguration,
+  NavigationSelectedDetailRequest,
   NavigationSnapshot,
   NavigationThreadSummary,
   RbacResolution,
@@ -142,6 +147,8 @@ import {
   normalizeMonitorIntervalMs,
   normalizeMonitorThreadLimit,
   selectMonitorThreads,
+  type MessagingMonitorNavigation,
+  type MessagingMonitorRows,
 } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import {
@@ -199,8 +206,8 @@ import {
 } from "../../../shared/review-command.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
-  buildResumeIntent,
-  directoryForProjectSelection,
+  buildBoundedResumeIntent,
+  directoryForProjectSelection as legacyDirectoryForProjectSelection,
   isNewAgentThreadLaunchAction,
   isNewThreadLaunchAction,
   parseResumeCommandArgs,
@@ -256,6 +263,9 @@ import {
 } from "./messaging-skills-browser.js";
 import {
   resolveMessagingThreadState,
+  isMessagingThreadContext,
+  type MessagingNavigationContext,
+  type MessagingThreadContext,
   type MessagingResolvedThreadState,
 } from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
@@ -510,7 +520,6 @@ type AttachTargetResolution =
   | {
       ok: true;
       federatedThread?: FederatedThreadRef;
-      navigation: NavigationSnapshot;
       thread: NavigationThreadSummary;
     }
   | Extract<PwrAgentMessagingResponse, { ok: false }>;
@@ -556,7 +565,7 @@ function resolveExecutionModeForThread(
 
 function resolveExecutionModeForBinding(
   binding: MessagingBindingRecord,
-  navigation?: NavigationSnapshot,
+  navigation?: MessagingNavigationContext,
 ): ExecutionModeResolution {
   return resolveExecutionModeForThread(
     binding,
@@ -566,14 +575,14 @@ function resolveExecutionModeForBinding(
 
 function executionModeForBinding(
   binding: MessagingBindingRecord,
-  navigation?: NavigationSnapshot,
+  navigation?: MessagingNavigationContext,
 ): ThreadExecutionMode | undefined {
   return resolveExecutionModeForBinding(binding, navigation).mode;
 }
 
 function turnSettingsForBinding(
   binding: MessagingBindingRecord,
-  navigation?: NavigationSnapshot,
+  navigation?: MessagingNavigationContext,
 ): {
   executionMode?: ThreadExecutionMode;
   fastMode?: boolean;
@@ -610,10 +619,11 @@ function turnSettingsForThread(
 }
 
 function findThreadForBinding(
-  navigation: NavigationSnapshot | undefined,
+  navigation: MessagingNavigationContext | undefined,
   binding: MessagingBindingRecord,
 ): NavigationThreadSummary | undefined {
-  return navigation?.threads.find(
+  const threads = navigation && isMessagingThreadContext(navigation) ? (navigation.thread ? [navigation.thread] : []) : navigation?.threads;
+  return threads?.find(
     (thread) =>
       thread.source === binding.backend &&
       thread.id === binding.threadId &&
@@ -621,22 +631,11 @@ function findThreadForBinding(
   );
 }
 
-function navigationSnapshotForAdmissionState(
-  binding: MessagingBindingRecord,
+function threadContextForAdmissionState(
+  _binding: MessagingBindingRecord,
   state: MessagingThreadAdmissionState,
-): NavigationSnapshot {
-  return {
-    backend: binding.backend,
-    directories: [],
-    fetchedAt: Date.now(),
-    inboxThreadKeys: [],
-    launchpadDefaults: {
-      backend: binding.backend,
-      executionMode: "default",
-    },
-    threads: state.thread ? [state.thread] : [],
-    unchanged: false,
-  };
+): MessagingThreadContext {
+  return { kind: "thread", thread: state.thread };
 }
 
 function federationRefsMatch(
@@ -859,6 +858,7 @@ export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
   backend?: AppServerBackendKind;
   bindingId?: string;
+  federationTarget?: FederationTarget;
   channel: MessagingChannelKind;
   conversation?: MessagingChannelRef["conversation"];
   intentId: string;
@@ -1113,6 +1113,13 @@ export class MessagingController {
   // handle open, which blocks the test harness from deleting the temp profile
   // dir. Gate re-scheduling on this flag so a disposed controller stays quiet.
   private disposed = false;
+  private readonly browseRenderGenerations = new Map<string, symbol>();
+  private readonly browseQueryPool = new MessagingBrowseQueryPool((request) => {
+    const read = this.options.backend.getNavigationQueryPage;
+    if (!read) throw new Error("Upgrade this instance to support bounded messaging navigation.");
+    return read.call(this.options.backend, request);
+  }, () => this.now());
+  private readonly progressiveBrowseByConversation = new Map<string, symbol>();
   private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
@@ -1249,6 +1256,9 @@ export class MessagingController {
     // a burst of rejected events push the entries this map exists to hold out
     // of it.
     this.markAdmissionStage(event, "handled");
+    // An actor's next action owns the surface. Late browse arrivals must not
+    // overwrite a selection, cancellation, query edit, or a newer browser.
+    this.progressiveBrowseByConversation.delete(buildMessagingConversationKey(event.channel));
 
     // Breadcrumb self-healing and managed-topic observation are optional UX
     // bookkeeping for turn input. Start them from this lifecycle boundary, but
@@ -2110,7 +2120,7 @@ export class MessagingController {
         await this.renderAutomaticBindingStatus(
           binding,
           undefined,
-          await this.navigationSnapshotWithThreadNameFromEvent(event),
+          await this.threadContextWithNameFromEvent(binding, event),
         );
         continue;
       }
@@ -2200,13 +2210,13 @@ export class MessagingController {
     if (renderableBindings.length === 0) {
       return;
     }
-    const navigationByThreadKey = new Map<string, NavigationSnapshot>();
+    const navigationByThreadKey = new Map<string, MessagingNavigationContext>();
     for (const binding of renderableBindings) {
       try {
         const threadKey = threadKeyForBinding(binding);
         let navigation = navigationByThreadKey.get(threadKey);
         if (!navigation) {
-          navigation = navigationSnapshotForAdmissionState(
+          navigation = threadContextForAdmissionState(
             binding,
             await this.options.backend.getThreadAdmissionState({
               backend: binding.backend,
@@ -2857,10 +2867,7 @@ export class MessagingController {
     // findPreferredReviewWorkspaceCwd and buildReviewBranchOptions below read
     // thread.gitWorkingState to choose a workspace and infer a base branch, so
     // this picker cannot race the background refresh.
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: binding.backend,
-      probeWorkingStates: true,
-    });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const thread = findThreadForBinding(navigation, binding);
     const workspaces = (thread?.linkedDirectories ?? [])
       .map((directory) => ({
@@ -2883,7 +2890,7 @@ export class MessagingController {
     const defaultRepositoryPath =
       selectedWorkspace?.repositoryPath
       ?? workspaces[0]?.repositoryPath;
-    const directory = navigation.directories.find((candidate) =>
+    const directory = (navigation.workspaceDirectories ?? []).find((candidate) =>
       reviewWorkspaceMatches(candidate.path, defaultRepositoryPath),
     );
     const workspaceThread = reviewThreadForWorkspace(
@@ -2919,7 +2926,7 @@ export class MessagingController {
 
   private buildReviewIntent(params: {
     binding: MessagingBindingRecord;
-    navigation: NavigationSnapshot;
+    navigation: MessagingNavigationContext;
     phase: MessagingReviewIntent["review"]["phase"];
     cwd?: string;
     repositoryPath?: string;
@@ -2942,7 +2949,7 @@ export class MessagingController {
           }]
         : [];
     });
-    const directory = params.navigation.directories.find((candidate) =>
+    const directory = (isMessagingThreadContext(params.navigation) ? params.navigation.workspaceDirectories ?? [] : params.navigation.directories).find((candidate) =>
       reviewWorkspaceMatches(
         candidate.path,
         params.repositoryPath
@@ -4734,7 +4741,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
-    navigation?: NavigationSnapshot;
+    navigation?: MessagingNavigationContext;
     pdfAttachments?: PendingPdfAttachment[];
     privateResponseRequested?: boolean;
     preview: string;
@@ -4758,7 +4765,7 @@ export class MessagingController {
         });
       this.markAdmissionStage(params.event, "admissionStateResolved");
       const navigation = params.navigation
-        ?? navigationSnapshotForAdmissionState(params.binding, admissionState);
+        ?? threadContextForAdmissionState(params.binding, admissionState);
       startingOrigin = await this.buildAgentMessagingOrigin({
         binding: params.binding,
         event: params.event,
@@ -5078,7 +5085,7 @@ export class MessagingController {
   private async adoptStartedTurn(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
-    navigation: NavigationSnapshot;
+    navigation: MessagingNavigationContext;
     turnId: string;
   }): Promise<void> {
     const currentTurn = this.getActiveTurn(params.binding);
@@ -5423,14 +5430,7 @@ export class MessagingController {
 
     const bindingTarget = readBindingTarget(event);
     if (bindingTarget) {
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
-      const targetThread = navigation.threads.find(
-        (thread) =>
-          thread.source === bindingTarget.backend &&
-          thread.id === bindingTarget.threadId,
-      );
+      const federationTarget = bindingTarget.federatedThread?.target;
       // RBAC scope: binding to a thread that lives on a federated peer is
       // remote control, whatever the thread's execution mode. Gate before the
       // bind so an actor without the scope can never create a remote binding
@@ -5438,10 +5438,20 @@ export class MessagingController {
       if (
         !(await this.requireRemoteScope(
           event,
-          targetThread ? federationTargetForThread(targetThread) : undefined,
+          federationTarget,
           "resume:remote-instance",
         ))
       ) {
+        return;
+      }
+      const targetThread = await this.readExactNavigationThread({
+        ref: { backend: bindingTarget.backend, threadId: bindingTarget.threadId,
+          ...(federationTarget?.scope === "remote" ? { ownerInstanceId: federationTarget.instanceId } : {}) },
+        federationTarget,
+      });
+      if (!targetThread || targetThread.archivedAt) {
+        await this.deliver(buildErrorIntent({ id: this.newIntentId("bind-unavailable"), createdAt: this.now(),
+          title: "Thread unavailable", body: "The owning instance could not resolve an active thread. Refresh the thread picker.", recoverable: true }), undefined, event);
         return;
       }
       if (targetThread?.executionMode === "full-access") {
@@ -5930,10 +5940,7 @@ export class MessagingController {
     // buildReviewBranchOptions below infers the base branch from
     // thread.gitWorkingState, so this callback awaits working state for the
     // same reason presentReviewPicker does.
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: binding.backend,
-      probeWorkingStates: true,
-    });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const targetSurface = pendingIntent.surface ?? (
       event.kind === "callback" ? event.interaction : undefined
     );
@@ -5955,7 +5962,7 @@ export class MessagingController {
     ) {
       const thread = findThreadForBinding(navigation, binding);
       const workspaceThread = reviewThreadForWorkspace(thread, cwd);
-      const directory = navigation.directories.find((candidate) =>
+      const directory = (navigation.workspaceDirectories ?? []).find((candidate) =>
         reviewWorkspaceMatches(
           candidate.path,
           repositoryPath ?? cwd,
@@ -6080,9 +6087,7 @@ export class MessagingController {
     }
 
     try {
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: params.binding.backend,
-      });
+      const navigation = await this.readBoundThreadConfiguration(params.binding);
       const settings = turnSettingsForBinding(params.binding, navigation);
       const result = await submitReview({
         backend: params.binding.backend,
@@ -6480,7 +6485,7 @@ export class MessagingController {
       ...(federationTarget ? { federationTarget } : {}),
       threadId,
     });
-    const navigation = navigationSnapshotForAdmissionState(
+    const navigation = threadContextForAdmissionState(
       renderableBindings[0]!,
       admissionState,
     );
@@ -7756,6 +7761,9 @@ export class MessagingController {
 
   dispose(): void {
     this.disposed = true;
+    this.progressiveBrowseByConversation.clear();
+    this.browseQueryPool.clear();
+    this.browseRenderGenerations.clear();
     this.unregisterAutomationSourceMessageDeliveryHandler();
     this.unregisterAutomationTargetMessageDeliveryHandler();
     this.turnAdmission.dispose();
@@ -7869,67 +7877,67 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
+    await this.presentProgressiveBrowse(event, {
       backend: "all",
       filter: parsed.query,
-    });
-    const selectedBackend =
-      isNewThreadLaunchAction(parsed.launchAction)
-        ? await this.resolveNewThreadBackendForSession(
-            {
-              launchpadBackend: navigation.launchpadDefaults.backend,
-            },
-            event,
-          )
+    }, async (navigation, current) => {
+      const selectedBackend =
+        isNewThreadLaunchAction(parsed.launchAction)
+          ? await this.resolveNewThreadBackendForSession(
+              {
+                launchpadBackend: navigation.launchpadDefaults.backend,
+              },
+              event,
+            )
+          : undefined;
+      if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
+        return;
+      }
+      const selectedDirectory = navigation.directory;
+      const preferences = parsed.preferences
+        ? {
+            ...parsed.preferences,
+            updatedAt: this.now(),
+          }
         : undefined;
-    if (isNewThreadLaunchAction(parsed.launchAction) && !selectedBackend) {
-      return;
-    }
-    const selectedDirectory = parsed.cwd
-      ? navigation.directories.find(
-          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
-        )
-      : undefined;
-    const preferences = parsed.preferences
-      ? {
-          ...parsed.preferences,
-          updatedAt: this.now(),
-        }
-      : undefined;
-    const session: MessagingBrowseSessionRecord = {
-      id: this.newIntentId("browse"),
-      allowedActorIds: [event.actor.platformUserId],
-      backend: selectedBackend?.kind,
-      cancelDestination: options?.cancelDestination,
-      channel: event.channel,
-      createdAt: this.now(),
-      updatedAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
-      launchAction: parsed.launchAction,
-      mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
-      pageIndex: 0,
-      pageSize: resumeBrowserPageSize(this.capabilityProfile),
-      preferences,
-      query: parsed.query,
-      returnTo: parsed.launchAction === "start_new_thread"
-        ? {
-            launchAction: "resume_thread",
-            mode: "recents",
-            pageIndex: 0,
-            preferences,
-            query: parsed.query,
-          }
-        : undefined,
-      selectedProject: selectedDirectory
-        ? {
-            directoryKey: selectedDirectory.key,
-            label: selectedDirectory.label,
-            path: selectedDirectory.path,
-          }
-        : undefined,
-      surface: options?.targetSurface,
-    };
-    await this.renderResumeBrowser(session, navigation, event);
+      const session: MessagingBrowseSessionRecord = {
+        id: this.newIntentId("browse"),
+        allowedActorIds: [event.actor.platformUserId],
+        backend: selectedBackend?.kind,
+        cancelDestination: options?.cancelDestination,
+        channel: event.channel,
+        createdAt: this.now(),
+        updatedAt: this.now(),
+        expiresAt: this.now() + this.pendingIntentTtlMs,
+        launchAction: parsed.launchAction,
+        mode: parsed.cwd && parsed.mode === "recents" ? "project_threads" : parsed.mode,
+        pageIndex: 0,
+        pageSize: resumeBrowserPageSize(this.capabilityProfile),
+        preferences,
+        query: parsed.query,
+        directorySelector: parsed.cwd,
+        returnTo: parsed.launchAction === "start_new_thread"
+          ? {
+              launchAction: "resume_thread",
+              mode: "recents",
+              pageIndex: 0,
+              preferences,
+              query: parsed.query,
+        directorySelector: parsed.cwd,
+            }
+          : undefined,
+        selectedProject: selectedDirectory
+          ? {
+              directoryKey: selectedDirectory.key,
+              label: selectedDirectory.label,
+              path: selectedDirectory.path,
+            }
+          : undefined,
+        surface: options?.targetSurface,
+      };
+      await this.renderResumeBrowser(session, navigation, event, current);
+      return session;
+    }, parsed.cwd);
   }
 
   private async presentAgentBrowser(
@@ -7955,59 +7963,76 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
+    await this.presentProgressiveBrowse(event, {
       backend: "all",
       filter: parsed.query,
-    });
-    const selectedBackend =
-      parsed.launchAction === "start_new_thread"
-        ? await this.resolveNewThreadBackendForSession(
-            {
-              launchpadBackend: navigation.launchpadDefaults.backend,
-            },
-            event,
-          )
-        : undefined;
-    if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
-      return;
+    }, async (navigation, current) => {
+      const selectedBackend =
+        parsed.launchAction === "start_new_thread"
+          ? await this.resolveNewThreadBackendForSession(
+              {
+                launchpadBackend: navigation.launchpadDefaults.backend,
+              },
+              event,
+            )
+          : undefined;
+      if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
+        return;
+      }
+      const selectedDirectory = navigation.directory;
+      const session: MessagingBrowseSessionRecord = {
+        id: this.newIntentId("browse"),
+        allowedActorIds: [event.actor.platformUserId],
+        backend: selectedBackend?.kind,
+        cancelDestination: options?.cancelDestination,
+        channel: event.channel,
+        createdAt: this.now(),
+        updatedAt: this.now(),
+        expiresAt: this.now() + this.pendingIntentTtlMs,
+        launchAction: parsed.launchAction === "start_new_thread"
+          ? "start_new_agent_thread"
+          : "resume_thread",
+        mode: parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
+        pageIndex: 0,
+        pageSize: resumeBrowserPageSize(this.capabilityProfile),
+        preferences: parsed.preferences
+          ? {
+              ...parsed.preferences,
+              updatedAt: this.now(),
+            }
+          : undefined,
+        query: parsed.query,
+        directorySelector: parsed.cwd,
+        selectedProject: selectedDirectory
+          ? {
+              directoryKey: selectedDirectory.key,
+              label: selectedDirectory.label,
+              path: selectedDirectory.path,
+            }
+          : undefined,
+        surface: options?.targetSurface,
+      };
+      await this.renderResumeBrowser(session, navigation, event, current);
+      return session;
+    }, parsed.cwd);
+  }
+
+  private async presentProgressiveBrowse(
+    event: MessagingInboundEvent,
+    _request: { backend?: "all"; filter?: string },
+    initial: (navigation: MessagingLaunchpadContext, current: () => boolean) => Promise<MessagingBrowseSessionRecord | undefined>,
+    _requestedDirectory?: string,
+  ): Promise<void> {
+    const key = buildMessagingConversationKey(event.channel);
+    const generation = Symbol("browse");
+    this.progressiveBrowseByConversation.set(key, generation);
+    const current = (): boolean => !this.disposed && this.progressiveBrowseByConversation.get(key) === generation;
+    try {
+      const configuration = await readMessagingLaunchpadContext({ backend: this.options.backend });
+      if (current()) await initial(configuration, current);
+    } finally {
+      if (current()) this.progressiveBrowseByConversation.delete(key);
     }
-    const selectedDirectory = parsed.cwd
-      ? navigation.directories.find(
-          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
-        )
-      : undefined;
-    const session: MessagingBrowseSessionRecord = {
-      id: this.newIntentId("browse"),
-      allowedActorIds: [event.actor.platformUserId],
-      backend: selectedBackend?.kind,
-      cancelDestination: options?.cancelDestination,
-      channel: event.channel,
-      createdAt: this.now(),
-      updatedAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
-      launchAction: parsed.launchAction === "start_new_thread"
-        ? "start_new_agent_thread"
-        : "resume_thread",
-      mode: parsed.launchAction === "start_new_thread" ? "new_project" : "agents",
-      pageIndex: 0,
-      pageSize: resumeBrowserPageSize(this.capabilityProfile),
-      preferences: parsed.preferences
-        ? {
-            ...parsed.preferences,
-            updatedAt: this.now(),
-          }
-        : undefined,
-      query: parsed.query,
-      selectedProject: selectedDirectory
-        ? {
-            directoryKey: selectedDirectory.key,
-            label: selectedDirectory.label,
-            path: selectedDirectory.path,
-          }
-        : undefined,
-      surface: options?.targetSurface,
-    };
-    await this.renderResumeBrowser(session, navigation, event);
   }
 
   private async handleDefaultAgentCommand(
@@ -8053,9 +8078,7 @@ export class MessagingController {
       );
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend });
     const session: MessagingBrowseSessionRecord = {
       id: this.newIntentId("default-agent-browse"),
       allowedActorIds: [event.actor.platformUserId],
@@ -8111,14 +8134,9 @@ export class MessagingController {
     let targetLabel: string | undefined;
     if (effective) {
       try {
-        const navigation = await this.options.backend.getNavigationSnapshot({
-          backend: "all",
-        });
-        targetLabel = navigation.threads.find(
-          (thread) =>
-            thread.source === effective.target.backend
-            && thread.id === effective.target.threadId,
-        )?.title;
+        targetLabel = (await this.readExactNavigationThread({
+          ref: { backend: effective.target.backend, threadId: effective.target.threadId },
+        }))?.title;
       } catch {
         targetLabel = undefined;
       }
@@ -8199,10 +8217,8 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      filter: session.query,
-    });
+    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend,
+      ...(actionId.startsWith("browse:new:") ? { project: session.selectedProject } : {}) });
     const nextSession = {
       ...session,
       updatedAt: this.now(),
@@ -8235,6 +8251,7 @@ export class MessagingController {
             ? session.returnTo ?? resumeReturnTargetForSession(session)
             : undefined,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8252,6 +8269,7 @@ export class MessagingController {
             ? session.returnTo ?? resumeReturnTargetForSession(session)
             : undefined,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8266,6 +8284,7 @@ export class MessagingController {
           mode: "agents",
           pageIndex: 0,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8294,6 +8313,7 @@ export class MessagingController {
           pageIndex: 0,
           returnTo: session.returnTo ?? resumeReturnTargetForSession(nextSession),
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8319,6 +8339,7 @@ export class MessagingController {
           mode: "new_project",
           pageIndex: 0,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8344,6 +8365,7 @@ export class MessagingController {
           mode: "new_project",
           pageIndex: 0,
           selectedProject: undefined,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8362,6 +8384,7 @@ export class MessagingController {
           query: target?.query,
           returnTo: undefined,
           selectedProject: target?.selectedProject,
+          directorySelector: target?.directorySelector,
           workMode: undefined,
           branchName: undefined,
         },
@@ -8414,6 +8437,7 @@ export class MessagingController {
           mode: "project_threads",
           pageIndex: 0,
           selectedProject: project,
+          directorySelector: undefined,
         },
         navigation,
         event,
@@ -8865,12 +8889,15 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
-      const targetThread = navigation.threads.find(
-        (thread) =>
-          thread.source === target.backend &&
-          thread.id === target.threadId &&
-          federationRefsMatch(thread.federation?.ref, target.federatedThread),
-      );
+      if (session.launchAction === "assign_default_agent" && target.federatedThread?.target.scope === "remote") {
+        await this.deliverDefaultAgentCommandError(event,
+          "Select an Agent owned by this instance for this default route.");
+        return;
+      }
+      if (!await this.requireRemoteScope(event, target.federatedThread?.target, "resume:select:remote-instance")) return;
+      const targetThread = await this.readExactNavigationThread({ ref: { backend: target.backend, threadId: target.threadId,
+        ...(target.federatedThread?.target.scope === "remote" ? { ownerInstanceId: target.federatedThread.target.instanceId } : {}) },
+        federationTarget: target.federatedThread?.target });
       if (session.mode === "agents" && !targetThread?.agent) {
         await this.deliverInvalidBrowseSelection(event);
         return;
@@ -8993,7 +9020,7 @@ export class MessagingController {
         undefined,
         event,
       );
-      await this.renderBindingStatus(updatedBinding, event, navigation);
+      await this.renderBindingStatus(updatedBinding, event);
       await this.repostLastAssistantMessageForResume(updatedBinding);
       return;
     }
@@ -9024,6 +9051,7 @@ export class MessagingController {
   private async retireBrowseSession(
     session: MessagingBrowseSessionRecord,
   ): Promise<void> {
+    this.browseQueryPool.release(session.id);
     this.clearPendingNewThreadPrompt(session.id);
     this.pendingFullAccessNewThreadPrompts.delete(session.id);
     await this.options.store.deleteBrowseSession(session.id);
@@ -9052,6 +9080,9 @@ export class MessagingController {
     patch: UpdateDirectoryLaunchpadRequest["patch"],
     stickySettingsChanged = true,
   ): Promise<void> {
+    // Remote launch choices remain in this viewer's browse session; the final
+    // materialization carries them to the explicit owner.
+    if (session.selectedProject?.federationTarget?.scope === "remote") return;
     const directoryKey = session.selectedProject?.directoryKey;
     if (!directoryKey || !this.options.backend.updateDirectoryLaunchpad) {
       return;
@@ -9072,7 +9103,7 @@ export class MessagingController {
 
   private async resolveNewThreadToolUpdateMode(
     session: MessagingBrowseSessionRecord,
-    directory?: NavigationDirectorySummary,
+    directory?: MessagingLaunchpadDirectory,
   ): Promise<MessagingToolUpdateMode> {
     if (session.preferences?.toolUpdateMode) {
       return session.preferences.toolUpdateMode;
@@ -9167,66 +9198,12 @@ export class MessagingController {
 
   private async ensureNewThreadProjectLaunchpad(
     session: MessagingBrowseSessionRecord,
-    navigation: NavigationSnapshot,
+    _navigation: MessagingNewThreadNavigation,
     preferredBackend?: AppServerBackendKind,
-  ): Promise<{
-    directory?: NavigationDirectorySummary;
-    navigation: NavigationSnapshot;
-  }> {
-    if (!session.selectedProject || !this.options.backend.ensureDirectoryLaunchpad) {
-      return {
-        directory: session.selectedProject
-          ? directoryForProjectSelection(navigation, session.selectedProject)
-          : undefined,
-        navigation,
-      };
-    }
-
-    const directory = directoryForProjectSelection(navigation, session.selectedProject);
-    const directoryKey =
-      session.selectedProject.directoryKey ??
-      directory?.key ??
-      session.selectedProject.path ??
-      session.selectedProject.label;
-    try {
-      const response = await this.options.backend.ensureDirectoryLaunchpad({
-        directoryKey,
-        directoryKind: directory?.kind ?? "directory",
-        directoryLabel: directory?.label ?? session.selectedProject.label,
-        ...((directory?.path ?? session.selectedProject.path)
-          ? { directoryPath: directory?.path ?? session.selectedProject.path }
-          : {}),
-        ...(directory?.gitStatus?.currentBranch
-          ? { currentBranch: directory.gitStatus.currentBranch }
-          : {}),
-        ...(preferredBackend ? { preferredBackend } : {}),
-      });
-      const nextDirectories = navigation.directories.map((candidate) =>
-        candidate.key === directoryKey
-          ? {
-              ...candidate,
-              launchpad: response.launchpad,
-            }
-          : candidate,
-      );
-      const nextNavigation = {
-        ...navigation,
-        directories: nextDirectories,
-      };
-      return {
-        directory: nextDirectories.find((candidate) => candidate.key === directoryKey),
-        navigation: nextNavigation,
-      };
-    } catch (error) {
-      this.logger.debug?.("messaging new-thread launchpad ensure failed", {
-        directoryKey,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
-        directory,
-        navigation,
-      };
-    }
+  ): Promise<{ directory?: MessagingLaunchpadDirectory; navigation: MessagingLaunchpadContext }> {
+    const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend,
+      project: session.selectedProject, ensureBackend: preferredBackend ?? session.backend });
+    return { directory: navigation.directory, navigation };
   }
 
   private async resolveCallbackHandleForEvent(
@@ -9242,48 +9219,79 @@ export class MessagingController {
 
   private async renderResumeBrowser(
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    _navigation: MessagingNewThreadNavigation,
     event: MessagingInboundEvent,
+    stillCurrent: () => boolean = () => true,
   ): Promise<void> {
-    await this.options.store.upsertBrowseSession(session);
-    const browseNavigation = this.filterRemoteThreadsForActor(
-      event,
-      await this.navigationForResumeBrowser(session, navigation),
-    );
-    const intent = buildResumeIntent({
-      id: this.newIntentId("resume"),
-      createdAt: this.now(),
-      navigation: browseNavigation,
-      session,
-    });
-    await this.storePendingIntent(intent, undefined, event);
-    const result = await this.deliver(intent, undefined, event);
-    if (!result.surface) {
-      return;
+    if (!stillCurrent()) return;
+    const parentCurrent = stillCurrent;
+    const token = Symbol("browse-render");
+    this.browseRenderGenerations.set(session.id, token);
+    stillCurrent = () => parentCurrent() && this.browseRenderGenerations.get(session.id) === token;
+    const inventory = await this.options.backend.listNavigationOwners?.() ?? { owners: [{ label: "This instance" }], omitted: 0 };
+    const canReadRemote = this.actorHasPermission(event, "federation.remote_control");
+    let owners = inventory.owners.filter((owner) => !owner.target || (canReadRemote && session.launchAction !== "assign_default_agent"));
+    if (!session.directorySelector && session.selectedProject && session.mode !== "projects" && session.mode !== "new_project") {
+      const target = session.selectedProject.federationTarget;
+      owners = target?.scope === "remote"
+        ? (canReadRemote ? [{ target, label: inventory.owners.find((owner) => owner.target?.instanceId === target.instanceId)?.label ?? target.instanceId }] : [])
+        : owners.filter((owner) => !owner.target);
     }
+    const backendSummaries = session.launchAction === "assign_default_agent" ? await this.loadDefaultAgentBackendSummaries() : undefined;
+    const eligibility = {
+      filter: session.query,
+      agentOnly: session.mode === "agents" || session.launchAction === "assign_default_agent",
+      ...(session.launchAction === "assign_default_agent" ? { allowedBackends: ["codex" as const,
+        ...(backendSummaries ?? []).filter((backend) => backend.kind !== "codex" && defaultAgentBackendSupport(backend.kind, backendSummaries) === "supported")
+          .map((backend) => backend.kind)] } : {}),
+      excludeFullAccess: session.launchAction === "resume_thread" && !await this.canResumeFullAccessThreads(),
+    };
+    const query: NavigationQuery = session.mode === "projects" || session.mode === "new_project"
+      ? { kind: "messaging-projects", ...eligibility, scratchpadFirst: isNewThreadLaunchAction(session.launchAction) }
+      : { kind: "messaging-threads", ...eligibility, directoryKey: session.directorySelector ?? session.selectedProject?.directoryKey };
+    const publish = async (page: Awaited<ReturnType<MessagingBrowseQueryPool["read"]>>): Promise<void> => {
+      if (!stillCurrent()) return;
+      session = { ...session, pageIndex: page.pageIndex, ...(page.selectedProject ? { selectedProject: page.selectedProject } : {}) };
+      await this.options.store.upsertBrowseSession(session);
+      const intent = buildBoundedResumeIntent({ id: this.newIntentId("resume"), createdAt: this.now(), page, session });
+      if (!stillCurrent()) return;
+      await this.storePendingIntent(intent, undefined, event);
+      if (!stillCurrent()) return;
+      const result = await this.deliver(intent, undefined, event);
+      if (!stillCurrent() || !result.surface) {
+        return;
+      }
 
-    await this.options.store.upsertBrowseSession({
-      ...session,
-      surface: result.surface,
-      updatedAt: this.now(),
-    });
-    await this.options.store.upsertPendingIntent({
-      id: intent.id,
-      channel: event.channel,
-      intent,
-      allowedActorIds: [event.actor.platformUserId],
-      createdAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
-      surface: result.surface,
-    });
+      session = { ...session, surface: result.surface, updatedAt: this.now() };
+      await this.options.store.upsertBrowseSession(session);
+      await this.options.store.upsertPendingIntent({
+        id: intent.id,
+        channel: event.channel,
+        intent,
+        allowedActorIds: [event.actor.platformUserId],
+        createdAt: this.now(),
+        expiresAt: this.now() + this.pendingIntentTtlMs,
+        surface: result.surface,
+      });
+    };
+    try {
+      const page = await this.browseQueryPool.read({ sessionId: session.id, query, owners,
+        omittedOwners: canReadRemote ? inventory.omitted : 0, pageSize: session.pageSize, pageIndex: session.pageIndex, onProgress: publish });
+      await publish(page);
+    } catch (error) {
+      if (stillCurrent()) throw error;
+    } finally {
+      if (this.browseRenderGenerations.get(session.id) === token) this.browseRenderGenerations.delete(session.id);
+    }
   }
 
   private async startNewThreadFromProject(
     event: MessagingInboundCallbackEvent,
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: MessagingNewThreadNavigation,
     project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
   ): Promise<void> {
+    if (!await this.requireRemoteScope(event, project.federationTarget, "messaging-project-create")) return;
     if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
       await this.deliver(
         buildErrorIntent({
@@ -9299,6 +9307,8 @@ export class MessagingController {
       return;
     }
 
+    navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project });
+    project = { ...project, directoryKey: navigation.directory?.key ?? project.directoryKey };
     const directory = directoryForProjectSelection(navigation, project);
     const selectedBackend = await this.resolveNewThreadBackendForSession(
       {
@@ -9327,7 +9337,7 @@ export class MessagingController {
           pageIndex: 0,
           workMode,
           branchName: workMode === "worktree" ? session.branchName : undefined,
-          selectedProject: project,
+          selectedProject: { ...project, directoryKey: directory?.key ?? project.directoryKey },
           updatedAt: this.now(),
           expiresAt: this.now() + this.pendingIntentTtlMs,
         }),
@@ -9364,10 +9374,10 @@ export class MessagingController {
   private async presentNewThreadPromptGate(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation?: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    _navigation?: MessagingNewThreadNavigation,
   ): Promise<void> {
-    let snapshot = navigation ?? await this.options.backend.getNavigationSnapshot({
-      backend: "all",
+    let snapshot: MessagingNewThreadNavigation = await readMessagingLaunchpadContext({
+      backend: this.options.backend, project: session.selectedProject,
     });
     const backendChoices = await this.loadNewThreadBackendChoices(event);
     if (!backendChoices) {
@@ -9615,7 +9625,7 @@ export class MessagingController {
   private async presentNewThreadBackendPicker(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const choices = await this.loadNewThreadBackendChoices(event);
     if (!choices) {
@@ -9687,7 +9697,7 @@ export class MessagingController {
 
   private async presentNewThreadBranchPicker(
     session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    navigation: MessagingNewThreadNavigation,
     event: MessagingInboundEvent,
     pageIndex = 0,
   ): Promise<void> {
@@ -9829,7 +9839,7 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
     backend: AppServerBackendKind,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const summary = await this.getBackendSummary(backend);
     if (!summary) {
@@ -9925,7 +9935,7 @@ export class MessagingController {
   private async presentNewThreadPermissionsPicker(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const directory = session.selectedProject
       ? directoryForProjectSelection(navigation, session.selectedProject)
@@ -9997,7 +10007,7 @@ export class MessagingController {
   private async setNewThreadPermissions(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundCallbackEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const executionMode = readThreadExecutionModeValue(event.value);
     if (!executionMode) {
@@ -10045,7 +10055,7 @@ export class MessagingController {
   private async presentNewThreadEnvironmentPicker(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const ensured = await this.ensureNewThreadProjectLaunchpad(
       session,
@@ -10087,7 +10097,7 @@ export class MessagingController {
   private async setNewThreadEnvironment(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundCallbackEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const ensured = await this.ensureNewThreadProjectLaunchpad(
       session,
@@ -10139,7 +10149,7 @@ export class MessagingController {
   private async setNewThreadAcpRuntimeMode(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundCallbackEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
   ): Promise<void> {
     const source = readAcpRuntimeOptionSource(event.value);
     const optionId = readStringValue(event.value, "optionId");
@@ -10208,7 +10218,7 @@ export class MessagingController {
   private async applyNewThreadAcpRuntimeMode(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNewThreadNavigation,
     selection: AcpRuntimeRiskWarningContext & { kind: "new-thread" },
   ): Promise<void> {
     const backend = session.backend ?? navigation.launchpadDefaults.backend;
@@ -10377,6 +10387,7 @@ export class MessagingController {
       return;
     }
 
+    if (!await this.requireRemoteScope(event, bundle.session.selectedProject?.federationTarget, "messaging-project-create")) return;
     const prepared = await this.prepareTurnInput(bundle.events, undefined, event);
     if (!prepared) {
       return;
@@ -10397,8 +10408,8 @@ export class MessagingController {
       return;
     }
 
-    let navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
+    let navigation: MessagingNewThreadNavigation = await readMessagingLaunchpadContext({
+      backend: this.options.backend, project: bundle.session.selectedProject,
     });
     let selectedBackend: BackendSummary | undefined;
     if (bundle.session.backend) {
@@ -10488,7 +10499,7 @@ export class MessagingController {
     let boundThread:
       | {
           binding: MessagingBindingRecord;
-          navigation: NavigationSnapshot;
+          navigation: MessagingThreadContext;
         }
       | undefined;
     let browseSessionRetired = false;
@@ -10504,7 +10515,7 @@ export class MessagingController {
       started: StartedLaunchpadThread,
     ): Promise<{
       binding: MessagingBindingRecord;
-      navigation: NavigationSnapshot;
+      navigation: MessagingThreadContext;
     }> => {
       if (boundThread) {
         return boundThread;
@@ -10512,6 +10523,8 @@ export class MessagingController {
       const binding = await this.bindChannelToThread(event, {
         backend: started.backend,
         threadId: started.threadId,
+        ...(project.federationTarget?.scope === "remote" ? { federatedThread: buildFederatedThreadRef({
+          backend: started.backend, threadId: started.threadId, instanceId: project.federationTarget.instanceId }) } : {}),
         targetKind: isNewAgentThreadLaunchAction(session.launchAction)
           ? "agent_thread"
           : undefined,
@@ -10527,7 +10540,7 @@ export class MessagingController {
           updatedAt: this.now(),
         });
       }
-      const optimisticNavigation = navigationWithStartedThread({
+      const optimisticNavigation = buildMessagingStartedThreadContext({
         backend: started.backend,
         directory,
         executionMode: started.executionMode,
@@ -10579,6 +10592,7 @@ export class MessagingController {
         ? await this.options.backend.materializeDirectoryLaunchpad(
             {
               directoryKey: messagingLaunchpadMaterializationKey(session),
+              ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
               agent: agentForNewThreadSession(session),
               launchpad,
               ...(startFirstTurnAfterEnvironmentSetup
@@ -10606,6 +10620,7 @@ export class MessagingController {
       await environmentSetupReporter?.stop();
     }
     const started = materialized ?? (await this.options.backend.startThread!({
+      ...(project.federationTarget ? { federationTarget: project.federationTarget } : {}),
       backend: selectedBackend.kind,
       cwd: directory?.path ?? project.path,
       directoryKey: directory?.key,
@@ -10806,32 +10821,6 @@ export class MessagingController {
       params.binding,
       params.event,
     );
-  }
-
-  private async navigationForResumeBrowser(
-    session: MessagingBrowseSessionRecord,
-    navigation: NavigationSnapshot,
-  ): Promise<NavigationSnapshot> {
-    if (session.launchAction === "assign_default_agent") {
-      const backendSummaries = await this.loadDefaultAgentBackendSummaries();
-      const threads = navigation.threads.filter(
-        (thread) =>
-          Boolean(thread.agent)
-          && defaultAgentBackendSupport(thread.source, backendSummaries)
-            === "supported",
-      );
-      return filterNavigationToThreads(navigation, threads);
-    }
-    if (session.launchAction !== "resume_thread") {
-      return navigation;
-    }
-    if (await this.canResumeFullAccessThreads()) {
-      return navigation;
-    }
-    const threads = navigation.threads.filter(
-      (thread) => thread.executionMode !== "full-access",
-    );
-    return filterNavigationToThreads(navigation, threads);
   }
 
   private async loadDefaultAgentBackendSummaries(): Promise<
@@ -11347,12 +11336,19 @@ export class MessagingController {
       return;
     }
 
-    const snapshot = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const snapshot = await this.readMonitorRows();
     const selected = selectMonitorThreads({ navigation: snapshot }).threads.slice(0, 3);
     const created: string[] = [];
     const reused: string[] = [];
     const failed: string[] = [];
-    for (const thread of selected) {
+    for (const row of selected) {
+      const target = federationTargetForThread(row);
+      const thread = await this.readExactNavigationThread({ ref: { backend: row.source, threadId: row.id,
+        ...(target?.scope === "remote" ? { ownerInstanceId: target.instanceId } : {}) }, federationTarget: target });
+      if (!thread || thread.archivedAt) {
+        failed.push(row.title);
+        continue;
+      }
       const existing = await this.options.store.findThreadTopicLink({
         backend: thread.source,
         channel: event.channel.channel,
@@ -12029,10 +12025,7 @@ export class MessagingController {
           binding.backend,
           federationTargetForBinding(binding),
         );
-        const navigation = await this.options.backend.getNavigationSnapshot({
-          backend: "all",
-          federationTarget: federationTargetForBinding(binding),
-        });
+        const navigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
         const thread = findThreadForBinding(navigation, binding);
         const runtimeMode = buildMessagingAcpRuntimeModeSummary({
           backend: summary,
@@ -12110,9 +12103,7 @@ export class MessagingController {
     }
 
     try {
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const navigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
       const threadState = resolveMessagingThreadState({ binding, navigation });
       const cwds = skillSearchCwdsForThreadState(threadState);
       const response = await this.options.backend.listSkills({
@@ -12366,7 +12357,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const context = handoffContextForBinding(binding, navigation);
     if (!context) {
       await this.deliverHandoffUnavailable(binding, event, "This thread does not have enough Git workspace metadata for handoff.");
@@ -12399,7 +12390,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const context = handoffContextForBinding(binding, navigation);
     if (!context || context.workspaceKind !== "local") {
       await this.deliverHandoffUnavailable(binding, event, "This thread is not currently in a Local workspace that can move to a worktree.");
@@ -12436,7 +12427,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const context = handoffContextForBinding(binding, navigation);
     const request = handoffRequestFromValue(event.value);
     if (!context || !request) {
@@ -12504,7 +12495,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.readBoundWorkspaceContext(currentBinding);
     const context = handoffContextForBinding(currentBinding, navigation);
     if (!context) {
       await this.deliverHandoffUnavailable(currentBinding, event, "This thread no longer has enough Git workspace metadata for handoff.");
@@ -12540,9 +12531,7 @@ export class MessagingController {
         federationTarget: federationTargetForBinding(currentBinding),
       });
       await this.clearActiveHandoffIntent(event);
-      const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const refreshedNavigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(currentBinding) };
       const updatedBinding = await this.updateBindingAfterHandoff(
         currentBinding,
         result,
@@ -12743,10 +12732,7 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
     if (models.length === 0) {
@@ -12767,7 +12753,7 @@ export class MessagingController {
     const currentModelId =
       thread?.model ??
       binding.preferences?.model ??
-      navigation.launchpadDefaults.model ??
+      navigation.defaults.model ??
       models.find((model) => model.current)?.id;
 
     await this.deliver(
@@ -12792,16 +12778,13 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption =
       models.find((model) => model.id === thread?.model) ??
       models.find((model) => model.id === binding.preferences?.model) ??
-      models.find((model) => model.id === navigation.launchpadDefaults.model) ??
+      models.find((model) => model.id === navigation.defaults.model) ??
       defaultBackendModel(models);
     const efforts = reasoningEffortsForModel(summary, modelOption);
     if (summary && efforts.length === 0) {
@@ -12813,7 +12796,7 @@ export class MessagingController {
       resolveReasoningEffortForModel(summary, modelOption, [
         thread?.reasoningEffort,
         binding.preferences?.reasoningEffort,
-        navigation.launchpadDefaults.reasoningEffort,
+        navigation.defaults.reasoningEffort,
       ]);
 
     await this.deliver(
@@ -12838,9 +12821,7 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const runtimeMode = buildMessagingAcpRuntimeModeSummary({
       backend: summary,
@@ -12879,9 +12860,7 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const currentMode =
       thread?.queuedExecutionMode ??
@@ -12952,10 +12931,7 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption = models.find((candidate) => candidate.id === model);
     if (summary && !modelOption) {
@@ -12980,19 +12956,9 @@ export class MessagingController {
         reasoningEffort,
       });
     }
-    const optimisticNavigation: NavigationSnapshot = {
+    const optimisticNavigation: MessagingThreadContext = {
       ...navigation,
-      threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend &&
-        candidate.id === binding.threadId &&
-        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
-          ? {
-              ...candidate,
-              model,
-              ...(settingsResponse ? { reasoningEffort } : {}),
-            }
-          : candidate,
-      ),
+      thread: { ...navigation.thread, model, ...(settingsResponse ? { reasoningEffort } : {}) },
     };
     await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
     await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
@@ -13011,16 +12977,13 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption =
       models.find((model) => model.id === thread?.model) ??
       models.find((model) => model.id === binding.preferences?.model) ??
-      models.find((model) => model.id === navigation.launchpadDefaults.model) ??
+      models.find((model) => model.id === navigation.defaults.model) ??
       defaultBackendModel(models);
     const efforts = reasoningEffortsForModel(summary, modelOption);
     if (summary && !efforts.includes(reasoningEffort)) {
@@ -13040,15 +13003,9 @@ export class MessagingController {
       reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
     });
-    const optimisticNavigation: NavigationSnapshot = {
+    const optimisticNavigation: MessagingThreadContext = {
       ...navigation,
-      threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend &&
-        candidate.id === binding.threadId &&
-        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
-          ? { ...candidate, reasoningEffort }
-          : candidate,
-      ),
+      thread: { ...navigation.thread, reasoningEffort },
     };
     await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
     await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
@@ -13074,10 +13031,7 @@ export class MessagingController {
       binding.backend,
       federationTargetForBinding(binding),
     );
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      federationTarget: federationTargetForBinding(binding),
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
     const runtimeMode = buildMessagingAcpRuntimeModeSummary({
@@ -13129,9 +13083,7 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
     const acpRuntime: BackendAcpSessionRuntimeState = {
@@ -13159,15 +13111,9 @@ export class MessagingController {
       optionId: selection.optionId,
       value: selection.value,
     });
-    const optimisticNavigation: NavigationSnapshot = {
+    const optimisticNavigation: MessagingThreadContext = {
       ...navigation,
-      threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend &&
-        candidate.id === binding.threadId &&
-        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
-          ? { ...candidate, acpRuntime }
-          : candidate,
-      ),
+      thread: { ...navigation.thread, acpRuntime },
     };
     await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
     await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
@@ -13212,9 +13158,7 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     // When a queued change is already pending we toggle from the
     // *queued* target (so a second click reverses the queue), not from
@@ -13272,9 +13216,7 @@ export class MessagingController {
       await this.deliverInvalidStatusSelection(event);
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation = await this.readBoundThreadConfiguration(binding);
     const thread = findThreadForBinding(navigation, binding);
     const currentMode =
       thread?.queuedExecutionMode ??
@@ -13620,10 +13562,7 @@ export class MessagingController {
         if (context.kind === "new-thread") {
           this.pendingFullAccessNewThreadPrompts.delete(session.id);
         }
-        const navigation = await this.options.backend.getNavigationSnapshot({
-          backend: "all",
-          filter: session.query,
-        });
+        const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
         if (context.kind === "new-thread") {
           await this.presentNewThreadPromptGate(
             this.withNewThreadPromptCaptureExpiry(session),
@@ -13805,9 +13744,7 @@ export class MessagingController {
           await this.deliverStaleFullAccessWarning(event);
           return;
         }
-        const navigation = await this.options.backend.getNavigationSnapshot({
-          backend: "all",
-        });
+        const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
         await this.presentNewThreadPromptGate(session, event, navigation);
         return;
       }
@@ -13842,9 +13779,7 @@ export class MessagingController {
         await this.deliverStaleFullAccessWarning(event);
         return;
       }
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const navigation = await readMessagingLaunchpadContext({ backend: this.options.backend, project: session.selectedProject });
       await this.applyNewThreadAcpRuntimeMode(session, event, navigation, context);
       return;
     }
@@ -14282,9 +14217,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
     const threadState = resolveMessagingThreadState({
       activeTurn: this.getActiveTurn(binding),
       binding,
@@ -14354,7 +14287,7 @@ export class MessagingController {
       updatedBinding,
       event,
     );
-    await this.renderBindingStatus(updatedBinding, event, navigation);
+    await this.renderBindingStatus(updatedBinding, event);
   }
 
   private async cycleToolUpdateMode(
@@ -14668,7 +14601,7 @@ export class MessagingController {
     await this.retireBindingStatus(
       binding,
       event,
-      await this.options.backend.getNavigationSnapshot({ backend: "all" }),
+      { kind: "thread", thread: await this.readBoundNavigationThread(binding) },
     );
 
     await this.options.store.revokeBinding({
@@ -14715,9 +14648,7 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<MessagingBindingRecord> {
     await this.clearActiveBindingSubmodeIntent(event, binding);
-    const snapshot = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const snapshot: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
     const retiredBinding = await this.retireBindingStatus(binding, event, snapshot);
     return await this.renderBindingStatus(retiredBinding, event, snapshot);
   }
@@ -14763,7 +14694,7 @@ export class MessagingController {
   private async retireBindingStatus(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent | undefined,
-    navigation: NavigationSnapshot,
+    navigation: MessagingNavigationContext,
   ): Promise<MessagingBindingRecord> {
     const statusSurface = binding.statusSurface ?? binding.pinnedStatusSurface;
     if (!statusSurface) {
@@ -14848,7 +14779,7 @@ export class MessagingController {
   private async renderBindingStatus(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
-    navigation?: NavigationSnapshot,
+    navigation?: MessagingNavigationContext,
   ): Promise<MessagingBindingRecord> {
     return await this.statusRenderLock.run(binding.id, async () => {
       const latestBinding = await this.options.store.getBinding(binding.id);
@@ -14866,7 +14797,7 @@ export class MessagingController {
   private async renderBindingStatusUnlocked(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
-    navigation?: NavigationSnapshot,
+    navigation?: MessagingNavigationContext,
   ): Promise<MessagingBindingRecord> {
     if (isDefaultAgentRouteBinding(binding)) {
       return binding;
@@ -14879,12 +14810,7 @@ export class MessagingController {
       return await this.options.store.getBinding(binding.id) ?? binding;
     }
     const federationTarget = federationTargetForBinding(binding);
-    const snapshot =
-      navigation ??
-      (await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-        ...(federationTarget ? { federationTarget } : {}),
-      }));
+    const snapshot = navigation ?? { kind: "thread" as const, thread: await this.readBoundNavigationThread(binding) };
     const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
       binding,
       "status_refresh",
@@ -14943,7 +14869,7 @@ export class MessagingController {
   private async renderAutomaticBindingStatus(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
-    navigation?: NavigationSnapshot,
+    navigation?: MessagingNavigationContext,
   ): Promise<MessagingBindingRecord> {
     if (
       binding.statusPresentation === "on_demand"
@@ -14953,7 +14879,7 @@ export class MessagingController {
       return binding;
     }
     const targetedNavigation = navigation
-      ?? navigationSnapshotForAdmissionState(
+      ?? threadContextForAdmissionState(
         binding,
         await this.options.backend.getThreadAdmissionState({
           backend: binding.backend,
@@ -14964,57 +14890,43 @@ export class MessagingController {
     return await this.renderBindingStatus(binding, event, targetedNavigation);
   }
 
-  private async navigationSnapshotWithThreadNameFromEvent(
+  private async threadContextWithNameFromEvent(
+    binding: MessagingBindingRecord,
     event: AgentEvent,
-  ): Promise<NavigationSnapshot> {
-    const snapshot = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
-    const params = event.notification.params as {
-      threadId?: unknown;
-      threadName?: unknown;
-      titleSource?: unknown;
-    };
-    if (
-      typeof params.threadId !== "string" ||
-      typeof params.threadName !== "string" ||
-      !params.threadName.trim()
-    ) {
-      return snapshot;
+  ): Promise<MessagingThreadContext> {
+    const thread = await this.readBoundNavigationThread(binding);
+    const params = event.notification.params as { threadId?: unknown; threadName?: unknown; titleSource?: unknown };
+    if (!thread || params.threadId !== thread.id || typeof params.threadName !== "string" || !params.threadName.trim()) {
+      return { kind: "thread", thread };
     }
-    const threadId = params.threadId;
-    const threadName = params.threadName.trim();
-    // The new name's own provenance. Carrying the row's previous source over
-    // to a new title is the orphaned pair the thread information store
-    // refuses to hold: the status and monitor cards read `derived` to decide
-    // whether to shorten a title, so a stale source formats the same rename
-    // two different ways depending on what the row said before.
-    const titleSource = normalizeRenamedTitleSource(params.titleSource);
+    return { kind: "thread", thread: { ...thread, title: params.threadName.trim(),
+      titleSource: normalizeRenamedTitleSource(params.titleSource) } };
+  }
 
-    return {
-      ...snapshot,
-      threads: snapshot.threads.map((thread) =>
-        thread.source === event.backend && thread.id === threadId
-          ? {
-              ...thread,
-              title: threadName,
-              titleSource,
-            }
-          : thread,
-      ),
-    };
+  private async readMonitorRows(monitor?: MessagingMonitorState, federationTarget?: FederationTarget): Promise<MessagingMonitorRows> {
+    const read = this.options.backend.getNavigationQueryPage?.bind(this.options.backend);
+    if (!read) throw new Error("Upgrade the owning instance to navigation query protocol 2 before opening a monitor.");
+    const sections = [
+      { pinned: "include" as const, size: normalizeMonitorThreadLimit(monitor?.pinnedThreadLimit, MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT) },
+      { pinned: "exclude" as const, size: normalizeMonitorThreadLimit(monitor?.recentThreadLimit, MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT) },
+    ];
+    const pages = await Promise.all(sections.filter((section) => section.size > 0).map(async (section) => {
+      const page = await read({ protocol: 2, consumer: "agent-tool", federationTarget,
+        query: { kind: "star-map", filters: { pinned: section.pinned } }, pageSize: section.size });
+      if (page.protocol !== 2 || page.unchanged) throw new Error("The owning instance did not provide a monitor row page.");
+      return page.entries.map((entry) => entry.row);
+    }));
+    return { kind: "bounded-monitor", threads: pages.flat() };
   }
 
   private async renderMonitorStatus(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
-    navigation?: NavigationSnapshot,
+    navigation?: MessagingMonitorNavigation,
   ): Promise<MessagingBindingRecord> {
     const snapshot =
       navigation ??
-      (await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      }));
+      (await this.readMonitorRows(binding.monitor, federationTargetForBinding(binding)));
     const now = this.now();
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
@@ -15062,13 +14974,11 @@ export class MessagingController {
   private async renderChannelMonitorStatus(
     subscription: MessagingMonitorSubscriptionRecord,
     event?: MessagingInboundEvent,
-    navigation?: NavigationSnapshot,
+    navigation?: MessagingMonitorNavigation,
   ): Promise<MessagingMonitorSubscriptionRecord> {
     const snapshot =
       navigation ??
-      (await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      }));
+      (await this.readMonitorRows(subscription.monitor));
     const now = this.now();
     const activeTurns = await this.resolveMonitorActiveTurns(
       snapshot,
@@ -15255,7 +15165,7 @@ export class MessagingController {
   }
 
   private async resolveMonitorActiveTurns(
-    navigation: NavigationSnapshot,
+    navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
     const activeTurns = new Map(this.activeTurnsByThreadKey);
@@ -15304,7 +15214,7 @@ export class MessagingController {
   }
 
   private async resolveMonitorSnippets(
-    navigation: NavigationSnapshot,
+    navigation: MessagingMonitorNavigation,
     monitor?: MessagingMonitorState,
   ): Promise<ReadonlyMap<string, string>> {
     const snippets = new Map<string, string>();
@@ -15671,7 +15581,7 @@ export class MessagingController {
   private rememberAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
-    navigation: NavigationSnapshot;
+    navigation: MessagingNavigationContext;
     origin?: ActiveAgentMessagingOrigin;
     turnId: string;
   }): void {
@@ -15715,7 +15625,7 @@ export class MessagingController {
   private async buildAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
-    navigation: NavigationSnapshot;
+    navigation: MessagingNavigationContext;
     privateResponseRequested?: boolean;
   }): Promise<ActiveAgentMessagingOrigin | undefined> {
     if (
@@ -15845,7 +15755,7 @@ export class MessagingController {
   private rememberQueuedAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
-    navigation: NavigationSnapshot;
+    navigation: MessagingNavigationContext;
     origin?: ActiveAgentMessagingOrigin;
     queueEntryId: string;
   }): void {
@@ -16591,6 +16501,7 @@ export class MessagingController {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
             at: this.now(),
             backend: binding?.backend,
+            federationTarget: binding?.federatedThread?.target,
             bindingId: binding?.id ?? intent.bindingId,
             channel: budgetChannel,
             conversation: binding?.channel.conversation,
@@ -16637,6 +16548,7 @@ export class MessagingController {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
             at: this.now(),
             backend: binding?.backend,
+            federationTarget: binding?.federatedThread?.target,
             bindingId: binding?.id ?? intent.bindingId,
             channel: budgetChannel,
             conversation: binding?.channel.conversation,
@@ -17367,7 +17279,7 @@ export class MessagingController {
     }
 
     const location = await this.summarizeAgentMessagingLocation(origin.origin, {
-      navigation: target.navigation,
+      navigation: { kind: "thread", thread: target.thread },
     });
     const resolvedPlacement = this.resolveAttachPlacement({
       location,
@@ -18143,14 +18055,7 @@ export class MessagingController {
       ...(configured?.allowedRoots ?? []),
     ];
     try {
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: context.backend,
-      });
-      const thread = navigation.threads.find(
-        (candidate) =>
-          candidate.source === context.backend
-          && candidate.id === context.threadId,
-      );
+      const thread = await this.readExactNavigationThread({ ref: { backend: context.backend, threadId: context.threadId } });
       if (thread?.projectKey) {
         allowedRoots.push(thread.projectKey);
       }
@@ -18322,7 +18227,7 @@ export class MessagingController {
     instanceId?: string;
     includeRemote: boolean;
   }): Promise<AttachTargetResolution> {
-    let navigation: NavigationSnapshot;
+    let target: NavigationThreadSummary | undefined;
     try {
       if (this.options.backend.resolveThreadTarget) {
         const resolved = await this.options.backend.resolveThreadTarget(request);
@@ -18333,9 +18238,7 @@ export class MessagingController {
       if (request.instanceId || request.includeRemote === false) {
         return attachTargetNotFound(request.backend, request.threadId);
       }
-      navigation = await this.options.backend.getNavigationSnapshot({
-        backend: request.backend,
-      });
+      target = await this.readExactNavigationThread({ ref: { backend: request.backend, threadId: request.threadId } });
     } catch (error) {
       return {
         ok: false,
@@ -18352,16 +18255,11 @@ export class MessagingController {
       };
     }
 
-    const target = navigation.threads.find(
-      (thread) =>
-        thread.source === request.backend
-        && thread.id === request.threadId,
-    );
     if (!target) {
       return attachTargetNotFound(request.backend, request.threadId);
     }
 
-    return { ok: true, navigation, thread: target };
+    return { ok: true, thread: target };
   }
 
   private resolveAttachPlacement(params: {
@@ -18450,11 +18348,11 @@ export class MessagingController {
       return { ok: true, origin };
     }
 
-    let navigation: NavigationSnapshot | undefined;
+    let navigation: MessagingThreadContext | undefined;
     try {
-      navigation = await this.options.backend.getNavigationSnapshot({
-        backend: context.backend,
-      });
+      navigation = { kind: "thread", thread: await this.readExactNavigationThread({
+        ref: { backend: context.backend, threadId: context.threadId },
+      }) };
     } catch {
       navigation = undefined;
     }
@@ -18499,7 +18397,7 @@ export class MessagingController {
 
   private async summarizeAgentMessagingLocation(
     origin: ActiveAgentMessagingOrigin,
-    options: { navigation?: NavigationSnapshot } = {},
+    options: { navigation?: MessagingNavigationContext } = {},
   ): Promise<PwrAgentMessagingLocationSummary> {
     return {
       actor: summarizeMessagingActor(origin.event.actor),
@@ -18551,9 +18449,70 @@ export class MessagingController {
     };
   }
 
+  private async readExactNavigationContext(request: Omit<NavigationSelectedDetailRequest, "protocol">) {
+    if (!this.options.backend.getNavigationSelectedDetail) {
+      throw new Error("Upgrade the owning instance to navigation query protocol 2 before using thread configuration.");
+    }
+    const detail = await this.options.backend.getNavigationSelectedDetail({ protocol: 2, ...request });
+    if (detail.protocol !== 2 || detail.unchanged || detail.readiness !== "ready"
+      || detail.ref.backend !== request.ref.backend || detail.ref.threadId !== request.ref.threadId
+      || detail.ref.ownerInstanceId !== request.ref.ownerInstanceId) {
+      throw new Error("The owning instance did not provide matching ready thread configuration.");
+    }
+    if (detail.identity !== "present") return { kind: "thread" as const };
+    if (!detail.thread || detail.thread.id !== request.ref.threadId || detail.thread.source !== request.ref.backend) {
+      throw new Error("Selected thread configuration belongs to a different identity.");
+    }
+    const federation = detail.thread.federation;
+    if (federation && (federation.ref.backend !== request.ref.backend || federation.ref.threadId !== request.ref.threadId
+      || (federation.ref.target.scope === "remote" ? federation.ref.target.instanceId : undefined) !== request.ref.ownerInstanceId)) {
+      throw new Error("Selected thread configuration belongs to a different owner.");
+    }
+    if (!federation && request.ref.ownerInstanceId) {
+      const target = { scope: "remote" as const, instanceId: request.ref.ownerInstanceId };
+      detail.thread = { ...detail.thread, federation: { ref: { backend: request.ref.backend, threadId: request.ref.threadId, target }, instanceLabel: target.instanceId } };
+    }
+    return { kind: "thread" as const, thread: detail.thread, workspaceDirectories: detail.workspaceDirectories };
+  }
+  private async readExactNavigationThread(request: Omit<NavigationSelectedDetailRequest, "protocol">): Promise<NavigationThreadSummary | undefined> {
+    return (await this.readExactNavigationContext(request)).thread;
+  }
+
+  private async readBoundWorkspaceContext(binding: MessagingBindingRecord): Promise<MessagingThreadContext> {
+    const target = federationTargetForBinding(binding);
+    const context = await this.readExactNavigationContext({ ref: { backend: binding.backend, threadId: binding.threadId,
+      ...(target?.scope === "remote" ? { ownerInstanceId: target.instanceId } : {}) },
+      federationTarget: target, includeWorkspaceConfiguration: true, probeWorkingStates: true });
+    const linked = context.thread?.linkedDirectories.find((directory) => directory.kind === "local")
+      ?? context.thread?.linkedDirectories[0];
+    return { ...context, directory: context.workspaceDirectories?.find((directory) => directory.path === linked?.path) };
+  }
+
+
+  private async readBoundThreadConfiguration(binding: MessagingBindingRecord) {
+    if (!this.options.backend.getNavigationLaunchpadConfig) {
+      throw new Error("Upgrade the owning instance to navigation query protocol 2 before using thread configuration.");
+    }
+    const [thread, configuration] = await Promise.all([
+      this.readBoundNavigationThread(binding),
+      this.options.backend.getNavigationLaunchpadConfig({ protocol: 2, federationTarget: federationTargetForBinding(binding) }),
+    ]);
+    if (!thread || configuration.protocol !== 2 || configuration.unchanged || !configuration.defaults) {
+      throw new Error("The owning instance did not provide ready thread configuration and defaults.");
+    }
+    return { kind: "thread" as const, thread, defaults: configuration.defaults };
+  }
+
+  private async readBoundNavigationThread(binding: MessagingBindingRecord, probeWorkingStates = false): Promise<NavigationThreadSummary | undefined> {
+    const target = federationTargetForBinding(binding);
+    return this.readExactNavigationThread({ ref: { backend: binding.backend, threadId: binding.threadId,
+      ...(target?.scope === "remote" ? { ownerInstanceId: target.instanceId } : {}) },
+      federationTarget: target, ...(probeWorkingStates ? { probeWorkingStates: true } : {}) });
+  }
+
   private async resolveBoundThreadSummary(
     binding: MessagingBindingRecord,
-    navigation?: NavigationSnapshot,
+    navigation?: MessagingNavigationContext,
   ): Promise<PwrAgentMessagingBoundThreadSummary | undefined> {
     const existingThread = navigation
       ? findThreadForBinding(navigation, binding)
@@ -18562,10 +18521,7 @@ export class MessagingController {
       return summarizeNavigationThreadForMessaging(existingThread);
     }
     try {
-      const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
-        backend: binding.backend,
-      });
-      const thread = findThreadForBinding(refreshedNavigation, binding);
+      const thread = await this.readBoundNavigationThread(binding);
       if (!thread) {
         return undefined;
       }
@@ -18835,29 +18791,6 @@ export class MessagingController {
    * they can't touch it. Filtering here keeps the menu honest — every row it
    * shows is a row the actor may actually bind.
    */
-  private filterRemoteThreadsForActor<T extends NavigationSnapshot>(
-    event: MessagingInboundEvent,
-    navigation: T,
-  ): T {
-    if (this.actorHasPermission(event, "federation.remote_control")) {
-      return navigation;
-    }
-    const localThreads = navigation.threads.filter(
-      (thread) => federationTargetForThread(thread) === undefined,
-    );
-    if (localThreads.length === navigation.threads.length) {
-      return navigation;
-    }
-    const localKeys = new Set(localThreads.map(threadKeyForNavigationThread));
-    return {
-      ...navigation,
-      threads: localThreads,
-      inboxThreadKeys: navigation.inboxThreadKeys.filter((key) =>
-        localKeys.has(key),
-      ),
-    };
-  }
-
   /** `requireRemoteScope` for an already-resolved binding. */
   private async requireRemoteScopeForBinding(
     event: MessagingInboundEvent,
@@ -19743,7 +19676,7 @@ function readQueuedTurnAction(
 
 function handoffContextForBinding(
   binding: MessagingBindingRecord,
-  navigation: NavigationSnapshot,
+  navigation: MessagingNavigationContext,
 ): MessagingWorkspaceHandoffContext | undefined {
   const thread = findThreadForBinding(navigation, binding);
   if (!thread) {
@@ -19779,7 +19712,7 @@ function handoffContextForBinding(
   if (!localDirectory?.path) {
     return undefined;
   }
-  const directorySummary = findNavigationDirectory(navigation, localDirectory);
+  const directorySummary = isMessagingThreadContext(navigation) ? navigation.directory : findNavigationDirectory(navigation, localDirectory);
   const branch =
     thread.observedGitBranch ??
     thread.gitBranch ??
@@ -19818,6 +19751,16 @@ function branchPageIndexFromValue(value: MessagingJsonValue | undefined): number
   return typeof pageIndex === "number" && Number.isFinite(pageIndex)
     ? Math.max(0, Math.trunc(pageIndex))
     : 0;
+}
+
+function directoryForProjectSelection(
+  navigation: MessagingNewThreadNavigation,
+  selectedProject: Parameters<typeof legacyDirectoryForProjectSelection>[1],
+): MessagingLaunchpadDirectory | undefined {
+  if (!isMessagingLaunchpadContext(navigation)) return legacyDirectoryForProjectSelection(navigation, selectedProject);
+  const directory = navigation.directory;
+  return directory && (selectedProject.directoryKey ? directory.key === selectedProject.directoryKey : directory.path === selectedProject.path)
+    ? directory : undefined;
 }
 
 function findNavigationDirectory(
@@ -19904,7 +19847,7 @@ function paginateReviewWorkspaces(params: {
 }
 
 function messagingReviewBranchOptions(params: {
-  directory: NavigationDirectorySummary | undefined;
+  directory: Pick<NavigationDirectorySummary, "gitStatus"> | undefined;
   thread: NavigationThreadSummary | undefined;
 }): string[] {
   const options = buildReviewBranchOptions(params);
@@ -20065,27 +20008,6 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
     .join("\n");
 }
 
-function filterNavigationToThreads(
-  navigation: NavigationSnapshot,
-  threads: NavigationThreadSummary[],
-): NavigationSnapshot {
-  const allowedThreadKeys = new Set(
-    threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
-  );
-  return {
-    ...navigation,
-    threads,
-    directories: navigation.directories.map((directory) => ({
-      ...directory,
-      threadKeys: directory.threadKeys.filter((threadKey) =>
-        allowedThreadKeys.has(threadKey)
-      ),
-    })),
-    inboxThreadKeys: navigation.inboxThreadKeys.filter((threadKey) =>
-      allowedThreadKeys.has(threadKey)
-    ),
-  };
-}
 
 function normalizeNewThreadSessionForBackend(
   session: MessagingBrowseSessionRecord,
@@ -20270,8 +20192,8 @@ type NewThreadOptionsSummary = {
 
 function newThreadOptionsForSession(
   session: MessagingBrowseSessionRecord,
-  navigation: NavigationSnapshot,
-  directory: NavigationDirectorySummary | undefined,
+  navigation: MessagingNewThreadNavigation,
+  directory: MessagingLaunchpadDirectory | undefined,
   streamingResponsesDefault: boolean,
   backend: BackendSummary,
 ): NewThreadOptionsSummary {
@@ -20379,7 +20301,7 @@ function newThreadOptionsForSession(
 }
 
 function canCreateNewThreadWorktree(
-  directory: NavigationDirectorySummary | undefined,
+  directory: MessagingLaunchpadDirectory | undefined,
 ): boolean {
   if (!directory?.path || directory.kind !== "directory") {
     return false;
@@ -20396,7 +20318,7 @@ function canCreateNewThreadWorktree(
 
 function resolveNewThreadWorkMode(params: {
   requestedWorkMode: LaunchpadWorkMode;
-  directory: NavigationDirectorySummary | undefined;
+  directory: MessagingLaunchpadDirectory | undefined;
 }): LaunchpadWorkMode {
   return params.requestedWorkMode === "worktree" &&
     canCreateNewThreadWorktree(params.directory)
@@ -20452,7 +20374,7 @@ function newThreadPromptGateBody(
 
 function resolveNewThreadCodexEnvironmentId(
   session: MessagingBrowseSessionRecord,
-  launchpad: NavigationLaunchpadDraft | undefined,
+  launchpad: Pick<NavigationLaunchpadConfiguration, "codexEnvironmentId"> | undefined,
 ): string | null | undefined {
   if (session.preferences?.codexEnvironmentId === null) {
     return null;
@@ -20539,8 +20461,8 @@ function formatDurationMs(durationMs: number | undefined): string | undefined {
 
 function resolveNewThreadBaseBranch(
   session: MessagingBrowseSessionRecord,
-  navigation: NavigationSnapshot,
-  directory?: NavigationDirectorySummary,
+  navigation: MessagingNewThreadNavigation,
+  directory?: MessagingLaunchpadDirectory,
 ): string {
   const selectedDirectory =
     directory ??
@@ -20559,8 +20481,8 @@ function resolveNewThreadBaseBranch(
 
 function newThreadBranchChoices(
   session: MessagingBrowseSessionRecord,
-  navigation: NavigationSnapshot,
-  directory: NavigationDirectorySummary | undefined,
+  navigation: MessagingNewThreadNavigation,
+  directory: MessagingLaunchpadDirectory | undefined,
 ): string[] {
   const defaultBranch = resolveNewThreadBaseBranch(session, navigation, directory);
   const branches = [
@@ -21210,7 +21132,7 @@ function summarizeMessagingBinding(
 
 function isMessagingToolOriginBinding(
   binding: MessagingBindingRecord,
-  navigation: NavigationSnapshot | undefined,
+  navigation: MessagingNavigationContext | undefined,
 ): boolean {
   if (binding.targetKind === "agent_thread") {
     return true;
@@ -21218,17 +21140,12 @@ function isMessagingToolOriginBinding(
   if (binding.targetKind !== "thread" || !navigation) {
     return false;
   }
-  return navigation.threads.some(
-    (thread) =>
-      thread.source === binding.backend &&
-      thread.id === binding.threadId &&
-      Boolean(thread.handoffOrigin),
-  );
+  return Boolean(findThreadForBinding(navigation, binding)?.handoffOrigin);
 }
 
 function isLiveMessagingToolOriginBinding(
   binding: MessagingBindingRecord,
-  navigation: NavigationSnapshot | undefined,
+  navigation: MessagingNavigationContext | undefined,
 ): boolean {
   return (
     binding.backend === "codex"
@@ -22360,17 +22277,17 @@ type TurnLifecycleParams = {
   };
 };
 
-function navigationWithStartedThread(params: {
+function buildMessagingStartedThreadContext(params: {
   acpRuntime?: BackendAcpSessionRuntimeState;
   agent?: ReturnType<typeof agentForNewThreadSession>;
   backend: AppServerBackendKind;
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
-  directory?: NavigationDirectorySummary;
+  directory?: MessagingLaunchpadDirectory;
   executionMode?: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
   fastMode?: boolean;
   model?: string;
-  navigation: NavigationSnapshot;
+  navigation: MessagingNewThreadNavigation;
   now: number;
   preferences?: MessagingBrowseSessionRecord["preferences"];
   project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
@@ -22379,16 +22296,7 @@ function navigationWithStartedThread(params: {
   threadId: ThreadIdentifier;
   worktreePath?: string;
   workMode: LaunchpadWorkMode;
-}): NavigationSnapshot {
-  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-  if (
-    params.navigation.threads.some(
-      (thread) => thread.source === params.backend && thread.id === params.threadId,
-    )
-  ) {
-    return params.navigation;
-  }
-
+}): MessagingThreadContext {
   const directoryPath = params.directory?.path ?? params.project.path;
   const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
     ? params.linkedDirectory ?? {
@@ -22401,56 +22309,43 @@ function navigationWithStartedThread(params: {
     : undefined;
 
   return {
-    ...params.navigation,
-    unchanged: false,
-    threads: [
-      {
-        id: params.threadId,
-        source: params.backend,
-        title: params.threadId,
-        titleSource: "fallback",
-        projectKey: directoryPath,
-        createdAt: params.now,
-        updatedAt: params.now,
-        executionMode: params.executionMode,
-        acpRuntime: params.acpRuntime,
-        codexEnvironmentRuntime: params.codexEnvironmentRuntime,
-        agent: params.agent
-          ? {
-              ...params.agent,
-              instructionLineCount: params.agent.instructions
-                ? params.agent.instructions.split(/\r?\n/).length
-                : 0,
-              instructionsTooLong: false,
-              updatedAt: params.now,
-            }
-          : undefined,
-        model: params.model,
-        reasoningEffort: params.reasoningEffort,
-        serviceTier: params.serviceTier,
-        fastMode: params.fastMode,
-        linkedDirectories: linkedDirectory ? [linkedDirectory] : [],
-        inbox: {
-          inInbox: true,
-          reason: "new-thread",
-        },
-      },
-      ...params.navigation.threads,
-    ],
-    directories: params.navigation.directories.map((directory) =>
-      directory.key === params.directory?.key
+    kind: "thread",
+    defaults: params.navigation.launchpadDefaults,
+    directory: params.directory,
+    thread: {
+      id: params.threadId,
+      source: params.backend,
+      ...(params.project.federationTarget?.scope === "remote" ? { federation: {
+        instanceLabel: params.project.federationTarget.instanceId,
+        ref: buildFederatedThreadRef({ backend: params.backend, threadId: params.threadId, instanceId: params.project.federationTarget.instanceId }) } } : {}),
+      title: params.threadId,
+      titleSource: "fallback",
+      projectKey: directoryPath,
+      createdAt: params.now,
+      updatedAt: params.now,
+      executionMode: params.executionMode,
+      acpRuntime: params.acpRuntime,
+      codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+      agent: params.agent
         ? {
-            ...directory,
-            threadKeys: directory.threadKeys.includes(threadKey)
-              ? directory.threadKeys
-              : [threadKey, ...directory.threadKeys],
-            latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, params.now),
+            ...params.agent,
+            instructionLineCount: params.agent.instructions
+              ? params.agent.instructions.split(/\r?\n/).length
+              : 0,
+            instructionsTooLong: false,
+            updatedAt: params.now,
           }
-        : directory,
-    ),
-    inboxThreadKeys: params.navigation.inboxThreadKeys.includes(threadKey)
-      ? params.navigation.inboxThreadKeys
-      : [threadKey, ...params.navigation.inboxThreadKeys],
+        : undefined,
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+      serviceTier: params.serviceTier,
+      fastMode: params.fastMode,
+      linkedDirectories: linkedDirectory ? [linkedDirectory] : [],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread",
+      },
+    },
   };
 }
 
@@ -22458,8 +22353,8 @@ function launchpadForMessagingProject(params: {
   acpRuntime?: BackendAcpSessionRuntimeState;
   backend: AppServerBackendKind;
   branchName: string;
-  directory?: NavigationDirectorySummary;
-  navigation: NavigationSnapshot;
+  directory?: MessagingLaunchpadDirectory;
+  navigation: MessagingNewThreadNavigation;
   now: number;
   options: NewThreadOptionsSummary;
   preferences?: MessagingBrowseSessionRecord["preferences"];
@@ -22468,7 +22363,7 @@ function launchpadForMessagingProject(params: {
 }): NavigationLaunchpadDraft {
   const defaults = params.navigation.launchpadDefaults;
   const directoryPath = params.directory?.path ?? params.project.path;
-  const base: NavigationLaunchpadDraft = params.directory?.launchpad ?? {
+  const base: NavigationLaunchpadConfiguration = params.directory?.launchpad ?? {
     directoryKey:
       params.directory?.key ??
       params.project.directoryKey ??
@@ -22483,7 +22378,6 @@ function launchpadForMessagingProject(params: {
     reasoningEffort: defaults.reasoningEffort,
     serviceTier: defaults.serviceTier,
     fastMode: defaults.fastMode,
-    prompt: "",
     workMode: params.workMode,
     branchName: params.branchName,
     createdAt: params.now,

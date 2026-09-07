@@ -1,7 +1,8 @@
+import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { StrictMode, useState, type ComponentProps } from "react";
+import { StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -34,9 +35,19 @@ import { normalizeImageFile } from "../../../lib/image-normalization";
 import { FEDERATED_THREAD_SEARCH_DEBOUNCE_MS } from "../../../lib/useFederatedThreadSearch";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
-import { Composer } from "../Composer";
+import { Composer as ProductionComposer } from "../Composer";
+import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
+
+function Composer(props: ComponentProps<typeof ProductionComposer>) {
+  const desktopApi = useMemo<DesktopApi>(() => ({
+    ...props.desktopApi,
+    getNavigationQueryPage: props.desktopApi?.getNavigationQueryPage
+      ?? (async (request) => navigationQueryFixture(request, props)),
+  }), [props.desktopApi, props.directories, props.threads]);
+  return <ProductionComposer {...props} desktopApi={desktopApi} />;
+}
 import type {
   ComposerDraftSnapshot,
   ComposerDraftStore,
@@ -183,6 +194,9 @@ function createComposerDraftStore(): ComposerDraftStore {
   const pendingSteers = new Map<string, ComposerPendingSteerSnapshot>();
   const queuedTurns = new Map<string, ComposerQueuedTurnSnapshot[]>();
   return {
+    hydrationStatus: "memory-only",
+    getDraftScopeKeys: () => [...new Set([...drafts.keys(), ...draftStacks.keys()])],
+    getQueuedScopeKeys: () => [...queuedTurns.keys()],
     delete: (scopeKey) => {
       drafts.delete(scopeKey);
     },
@@ -645,8 +659,8 @@ describe("Composer", () => {
       await normalization.promise;
     });
     expect(await screen.findByAltText("follow-up.png")).toBeInTheDocument();
-    expect(store.get("thread:codex:materialized")?.imageAttachments).toHaveLength(1);
-    expect(store.get("thread:codex:materialized")?.draft).toBe("Follow-up image");
+    expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.imageAttachments).toHaveLength(1);
+    expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.draft).toBe("Follow-up image");
     expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
   });
 
@@ -1548,6 +1562,9 @@ describe("Composer", () => {
     const deleteDraft = vi.fn();
     const recordHistory = vi.fn();
     const draftStore: ComposerDraftStore = {
+      hydrationStatus: "memory-only",
+      getDraftScopeKeys: () => [],
+      getQueuedScopeKeys: () => [],
       delete: deleteDraft,
       recordHistory,
       get: () => undefined,
@@ -1960,8 +1977,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Remote repo",
             path: "/remote/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
           },
         ]}
         disabled={false}
@@ -2027,8 +2042,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Owner project",
           path: "/owner/project",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
         }]}
         disabled={false}
         onPickDirectoryForReference={onPickDirectoryForReference}
@@ -2051,7 +2064,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Check @" },
     });
-    const autocomplete = screen.getByRole("listbox", { name: "Directories" });
+    const autocomplete = await screen.findByRole("listbox", { name: "Directories" });
     for (const name of ["+ Add directory…", "+ Add file…"]) {
       const action = screen.getByRole("button", { name });
       expect(within(autocomplete).queryByRole("button", { name }))
@@ -2655,8 +2668,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo/PwrAgent",
@@ -3381,8 +3392,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Repo",
             path: "/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
           }}
           draftStore={createComposerDraftStore()}
           launchpad={launchpad}
@@ -3631,8 +3640,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Repo",
             path: "/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
           }}
           draftStore={createComposerDraftStore()}
           launchpad={launchpad}
@@ -3681,8 +3688,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={createComposerDraftStore()}
         launchpad={launchpad}
@@ -4800,8 +4805,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Repo",
             path: "/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
             gitStatus: {
               currentBranch: "feature/provider-memory",
               branches: ["feature/provider-memory", "main"],
@@ -6031,8 +6034,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo/PwrAgent",
@@ -6392,7 +6393,7 @@ describe("Composer", () => {
       linkedDirectories: [],
       inbox: { inInbox: false },
     };
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     draftStore.setQueuedTurns(scopeKey, [
       {
         id: "queued-1",
@@ -6454,7 +6455,7 @@ describe("Composer", () => {
 
   it("releases the queued-turn lock when a queued review start fails", async () => {
     const draftStore = createComposerDraftStore();
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     draftStore.setQueuedTurns(scopeKey, [
       {
         id: "queued-review",
@@ -7140,7 +7141,7 @@ describe("Composer", () => {
   it("refreshes an existing queued preview only when the owner replaces input", async () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const draftStore = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     draftStore.setQueuedTurns(scopeKey, [{
       id: "backend-queued:owner-entry", queueEntryId: "owner-entry", text: "Original complete findings",
       imageAttachments: [], fileAttachments: [], manualReleaseRequired: true, holdReason: "Operator hold",
@@ -7181,7 +7182,7 @@ describe("Composer", () => {
       { type: "image" as const, name: "diagram.png", url: "data:image/png;base64,AQID" },
       { type: "file" as const, name: "notes.txt", mimeType: "text/plain", data: "aGVsbG8=" },
     ];
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{ id: "mirror", queueEntryId: "owner-entry", text: "tiny preview…", imageAttachments: [], fileAttachments: [] }]);
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{ id: "mirror", queueEntryId: "owner-entry", text: "tiny preview…", imageAttachments: [], fileAttachments: [] }]);
     const readQueuedTurn = vi.fn().mockRejectedValueOnce(new Error("Owner unavailable"))
       .mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "content-hash", input });
     const cancelQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
@@ -7192,7 +7193,7 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await screen.findByText("Owner unavailable");
     expect(cancelQueuedTurn).not.toHaveBeenCalled();
-    expect(draftStore.getQueuedTurns("thread:codex:thread-1")).toHaveLength(1);
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"))).toHaveLength(1);
     const inspect = screen.getByRole("button", { name: "View full message" });
     expect(inspect).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(inspect);
@@ -7212,7 +7213,7 @@ describe("Composer", () => {
     await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveValue(prompt));
     expect(cancelQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({ queueEntryId: "owner-entry", expectedContentHash: "content-hash" }));
     expect(readQueuedTurn).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "thread-1" }));
-    expect(draftStore.getQueuedTurns("thread:codex:thread-1")).toHaveLength(0);
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"))).toHaveLength(0);
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
     await waitFor(() => expect(startTurn).toHaveBeenCalled());
     expect(startTurn.mock.calls[0]?.[0].input).toEqual(input);
@@ -7226,7 +7227,7 @@ describe("Composer", () => {
       { type: "localFile" as const, name: "Authoritative report", path: "/tmp/report.pdf", mimeType: "application/pdf", sizeBytes: 42 },
       { type: "localFile" as const, name: "Authoritative notes", path: "/tmp/notes.txt", mimeType: "text/plain", sizeBytes: 12 },
     ];
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{ id: "mirror", queueEntryId: "owner-entry", text: "preview…", imageAttachments: [], fileAttachments: [] }]);
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{ id: "mirror", queueEntryId: "owner-entry", text: "preview…", imageAttachments: [], fileAttachments: [] }]);
     const readQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "hash", input });
     const cancelQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
     const startTurn = vi.fn().mockResolvedValue({ backend: "codex", threadId: "thread-1", turnId: "new-queue", queueStatus: "queued", queueEntryId: "new-queue" });
@@ -7502,7 +7503,7 @@ describe("Composer", () => {
       "Preserve until admitted",
     );
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1", federationTarget)),
     ).toMatchObject({
       queueEntryId: "queue-entry-1",
       text: "Preserve until admitted",
@@ -7872,7 +7873,7 @@ describe("Composer", () => {
     const request = startTurn.mock.calls[0]?.[0];
     expect(request).toBeDefined();
     if (!request) throw new Error("Expected a queued turn request.");
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const queued = draftStore.getQueuedTurn(scopeKey);
     expect(request.queueEntryId).toBe(queued?.id);
 
@@ -8047,9 +8048,9 @@ describe("Composer", () => {
     });
 
     expect(screen.queryByText("Stay with thread A")).not.toBeInTheDocument();
-    expect(draftStore.getQueuedTurns("thread:codex:thread-2")).toEqual([]);
+    expect(draftStore.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-2"))).toEqual([]);
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toMatchObject({
       queueEntryId: "queue-entry-1",
       text: "Stay with thread A",
@@ -8189,14 +8190,14 @@ describe("Composer", () => {
 
     expect(screen.getByLabelText("Reply")).toHaveValue("Keep thread B draft");
     expect(screen.queryByText("thread A start failed")).not.toBeInTheDocument();
-    expect(draftStore.get("thread:codex:thread-1")).toMatchObject({
+    expect(draftStore.get(buildThreadComposerScopeKey("codex", "thread-1"))).toMatchObject({
       draft: "Recover for thread A",
     });
   });
 
   it("preserves a cancelled queued item when its steer target changes", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setQueuedTurn("thread:codex:thread-1", {
+    draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
       id: "queued-steer-1",
       scheduledActionId: "scheduled-action-1",
       text: "Steer the original turn",
@@ -8290,13 +8291,13 @@ describe("Composer", () => {
     expect(steerTurn).not.toHaveBeenCalled();
     expect(screen.getByText("Steer the original turn")).toBeInTheDocument();
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toMatchObject({
       id: "queued-steer-1",
       text: "Steer the original turn",
     });
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1")?.scheduledActionId,
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"))?.scheduledActionId,
     ).toBeUndefined();
   });
 
@@ -8970,7 +8971,7 @@ describe("Composer", () => {
 
   it("keeps a pending steer local-file reference when a terminal event queues it", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setPendingSteer("thread:codex:thread-1", {
+    draftStore.setPendingSteer(buildThreadComposerScopeKey("codex", "thread-1"), {
       id: "pending-jeep",
       expectedTurnId: "turn-1",
       input: [
@@ -9087,7 +9088,7 @@ describe("Composer", () => {
       "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
-      draftStore.setQueuedTurn("thread:codex:thread-1", {
+      draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
         id: "queued-jeep",
         input: [{ type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" }],
         text: "Compare [@Jeep](~/Downloads/Jeep)",
@@ -9209,14 +9210,14 @@ describe("Composer", () => {
       "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
-      draftStore.setQueuedTurn("thread:codex:thread-1", {
+      draftStore.setQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"), {
         id: "queued-jeep",
         input: [{ type: "text", text: "Compare [@QueuedJeep](~/Downloads/Jeep)" }],
         text: "Compare [@QueuedJeep](~/Downloads/Jeep)",
         imageAttachments: [],
         fileAttachments: [],
       });
-      draftStore.setPendingSteer("thread:codex:thread-1", {
+      draftStore.setPendingSteer(buildThreadComposerScopeKey("codex", "thread-1"), {
         id: "steer-jeep",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Compare [@SteerJeep](~/Downloads/Jeep)" }],
@@ -9513,7 +9514,7 @@ describe("Composer", () => {
 
   it("projects the backend-owned fallback when a steer target is no longer active", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{
       id: "backend-queued:older",
       queueEntryId: "older",
       text: "Earlier queued message",
@@ -9777,7 +9778,7 @@ describe("Composer", () => {
 
   it("releases a held backend queue entry only when the operator retries it", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{
       id: "backend-queued:held-1",
       queueEntryId: "held-1",
       manualReleaseRequired: true,
@@ -9832,7 +9833,7 @@ describe("Composer", () => {
 
   it("keeps a scheduled action visible when retry remains held", async () => {
     const draftStore = createComposerDraftStore();
-    draftStore.setQueuedTurns("thread:codex:thread-1", [{
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [{
       id: "scheduled-projection:held-1",
       scheduledActionId: "held-1",
       queueEntryId: "scheduled-turn:held-1",
@@ -10040,7 +10041,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
     expect(screen.getByText("Queued next")).toBeInTheDocument();
 
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const queued = draftStore.getQueuedTurn(scopeKey);
     expect(queued?.text).toBe("Queued elsewhere");
     draftStore.removeQueuedTurnById(scopeKey, queued!.id);
@@ -10062,7 +10063,7 @@ describe("Composer", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
     const draftStore = createComposerDraftStore();
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     draftStore.setQueuedTurns(scopeKey, [
       {
         id: "queued-later",
@@ -10184,7 +10185,7 @@ describe("Composer", () => {
       expect(screen.queryByText("Queued preflight block")).not.toBeInTheDocument();
     });
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1"),
+      draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toBeUndefined();
     expect(onBeforeStartTurn).not.toHaveBeenCalled();
   });
@@ -11695,8 +11696,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -11755,8 +11754,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -11811,8 +11808,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -11872,8 +11867,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -11941,8 +11934,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/review-base-default-submit",
             defaultBranch: "fix/review-base-default-submit",
@@ -12003,8 +11994,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/pr-chip-tooltip-dismiss",
             defaultBranch: "fix/pr-chip-tooltip-dismiss",
@@ -12048,8 +12037,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "catalog-service",
           path: "/Users/example/Projects/catalog-service",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "search-gha-deploy-cutover",
             defaultBranch: "search-gha-deploy-cutover",
@@ -12168,8 +12155,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "catalog-service",
           path: "/Users/example/Projects/catalog-service",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "channelsv2-get-tagged-channels-by-asset-id",
             defaultBranch: "develop",
@@ -12239,8 +12224,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "catalog-service",
           path: "/Users/example/Projects/catalog-service",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "develop",
             defaultBranch: "develop",
@@ -12483,8 +12466,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -12567,8 +12548,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/review",
             defaultBranch: "main",
@@ -12682,8 +12661,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/review-base-default-submit",
             defaultBranch: "fix/review-base-default-submit",
@@ -12756,8 +12733,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/review-base-default-submit",
             defaultBranch: "fix/review-base-default-submit",
@@ -13437,8 +13412,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feat/thread-workspace-handoff-plan",
             defaultBranch: "main",
@@ -13568,8 +13541,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             defaultBranch: "main",
@@ -13931,8 +13902,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/handoff",
             defaultBranch: "main",
@@ -14000,8 +13969,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "feature/handoff",
             defaultBranch: "main",
@@ -14124,8 +14091,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             branches: ["main", "release"],
@@ -14179,8 +14144,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "subthread:codex:thread-parent:new-worktree",
@@ -14234,8 +14197,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpad}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -14258,8 +14219,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{ ...launchpad, prompt: "/review", updatedAt: 2 }}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -14280,8 +14239,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/.codex/worktrees/mpsmzvdh/PwrAgnt",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "subthread:codex:thread-parent:same-worktree",
@@ -14321,8 +14278,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Projects",
           path: "/Users/fixture-user/.pwragent/projects",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/Users/fixture-user/.pwragent/projects",
@@ -14364,8 +14319,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "UnbornRepo",
           path: "/Users/fixture-user/pwrdrvr/UnbornRepo",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             defaultBranch: "seed",
             branches: ["seed"],
@@ -14419,8 +14372,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "develop",
             branches: [
@@ -14491,8 +14442,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             branches: ["main", "releases/1.0"],
@@ -14556,8 +14505,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             branches: ["main", "releases/1.0"],
@@ -14601,8 +14548,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "catalog-service",
           path: "/missing/catalog-service",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             syncState: "status-unavailable",
             statusUnavailableReason: "fatal: unable to enumerate refs",
@@ -14649,8 +14594,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "app",
           path: "/repo/app",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             syncState: "status-unavailable",
             statusUnavailableReason: "fatal: unable to enumerate refs",
@@ -14699,8 +14642,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             defaultBranch: "main",
@@ -14776,8 +14717,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "ExampleApp",
           path: "/Users/fixture-user/.codex/profiles/work/worktrees/mqs3ew3f/ExampleApp",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "fix/upload-mp4-compression",
             defaultBranch: "main",
@@ -14861,8 +14800,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/pwrdrvr/PwrAgent",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "develop",
             defaultBranch: "main",
@@ -14924,8 +14861,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/Users/fixture-user/.codex/worktrees/mq8mwn78/PwrAgnt",
-          threadKeys: [],
-          needsAttentionCount: 0,
           gitStatus: {
             defaultBranch: "main",
             branches: ["fix/layout-chord-single-owner", "main", "release"],
@@ -14992,8 +14927,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
           gitStatus: {
             currentBranch: "main",
             branches: ["main", "feature/handoff"],
@@ -15080,8 +15013,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "PwrAgent",
           path: "/repo",
-          threadKeys: ["codex:thread-1"],
-          needsAttentionCount: 0,
         }}
         onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         skills={[]}
@@ -15173,8 +15104,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo A",
           path: "/repo-a",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15226,8 +15155,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo B",
           path: "/repo-b",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-b")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15244,8 +15171,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo A",
           path: "/repo-a",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15440,8 +15365,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo A",
           path: "/repo-a",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15473,8 +15396,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo B",
           path: "/repo-b",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-b")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15505,8 +15426,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo A",
           path: "/repo-a",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpads.get("directory:/repo-a")!}
         onUpdateLaunchpad={onUpdateLaunchpad}
@@ -15542,8 +15461,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={launchpad}
         onUpdateLaunchpad={async () => undefined}
@@ -15565,8 +15482,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           ...launchpad,
@@ -15676,8 +15591,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -15755,7 +15668,7 @@ describe("Composer", () => {
         target: { value: "Read MARKET-4803 in @catalog" },
       });
 
-      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Directories" });
       expect(listbox.parentElement).toHaveClass("composer__autocomplete--directories");
       fireEvent.click(
         within(listbox).getByRole("option", { name: /catalog-portal/ })
@@ -15875,7 +15788,7 @@ describe("Composer", () => {
         target: { value: beforeMention },
       });
 
-      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Directories" });
       fireEvent.click(
         within(listbox).getByRole("option", { name: /grok-build/ }),
       );
@@ -15943,8 +15856,6 @@ describe("Composer", () => {
             kind: "directory",
             label: "Repo",
             path: "/repo",
-            threadKeys: [],
-            needsAttentionCount: 0,
           }}
           directories={[]}
           draftStore={createComposerDraftStore()}
@@ -16103,7 +16014,7 @@ describe("Composer", () => {
         target: { value: "Check @" },
       });
 
-      const listbox = screen.getByRole("listbox", { name: "Directories" });
+      const listbox = await screen.findByRole("listbox", { name: "Directories" });
       expect(within(listbox).getAllByRole("option")).toHaveLength(1);
       expect(within(listbox).queryByRole("button")).not.toBeInTheDocument();
       // Only the file action renders — this composer has no
@@ -16204,7 +16115,7 @@ describe("Composer", () => {
         target: { value: "Look in @" },
       });
 
-      screen.getByRole("listbox", { name: "Directories" });
+      await screen.findByRole("listbox", { name: "Directories" });
       await clickButton("+ Add directory…");
 
       expect(onPickDirectoryForReference).toHaveBeenCalledOnce();
@@ -16605,8 +16516,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -16640,8 +16549,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -16681,8 +16588,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -16716,8 +16621,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         draftStore={draftStore}
         launchpad={launchpad}
@@ -16750,8 +16653,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -16837,8 +16738,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -16898,8 +16797,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -16947,8 +16844,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -16996,8 +16891,6 @@ describe("Composer", () => {
           kind: "directory",
           label: "Repo",
           path: "/repo",
-          threadKeys: [],
-          needsAttentionCount: 0,
         }}
         launchpad={{
           directoryKey: "directory:/repo",
@@ -17290,7 +17183,7 @@ describe("Composer", () => {
     };
     const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [
       {
-        scopeKey: "thread:codex:thread-1",
+        scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
         scopeKind: "thread",
         backend: "codex",
         threadId: "thread-1",
@@ -17304,7 +17197,7 @@ describe("Composer", () => {
         charCount: "Recovered unsent draft".length,
       },
       {
-        scopeKey: "thread:codex:thread-1",
+        scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
         scopeKind: "thread",
         backend: "codex",
         threadId: "thread-1",
@@ -17350,7 +17243,7 @@ describe("Composer", () => {
     expect(draftStore.listRecoveryCandidates).toHaveBeenCalledWith(
       expect.objectContaining({
         includeSent: true,
-        scopeKey: "thread:codex:thread-1",
+        scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
       }),
     );
 
@@ -17418,7 +17311,7 @@ describe("Composer", () => {
     await act(async () => {
       resolveRecoveryCandidates?.([
         {
-          scopeKey: "thread:codex:thread-1",
+          scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
           scopeKind: "thread",
           backend: "codex",
           threadId: "thread-1",
@@ -17442,7 +17335,7 @@ describe("Composer", () => {
   it("falls back to global recovery candidates from a blank composer", async () => {
     const draftStore = createComposerDraftStore();
     const globalCandidate: ComposerDraftRecoveryCandidate = {
-      scopeKey: "thread:codex:other-thread",
+      scopeKey: buildThreadComposerScopeKey("codex", "other-thread"),
       scopeKind: "thread",
       backend: "codex",
       threadId: "other-thread",
@@ -17490,7 +17383,7 @@ describe("Composer", () => {
       1,
       expect.objectContaining({
         includeSent: true,
-        scopeKey: "thread:codex:thread-1",
+        scopeKey: buildThreadComposerScopeKey("codex", "thread-1"),
       }),
     );
     expect(draftStore.listRecoveryCandidates).toHaveBeenNthCalledWith(
@@ -17560,7 +17453,7 @@ describe("Composer", () => {
     });
 
     expect(draftStore.recordHistory).toHaveBeenCalledWith(
-      "thread:codex:thread-1",
+      buildThreadComposerScopeKey("codex", "thread-1"),
       expect.objectContaining({ draft: deletedDraft }),
       "abandoned",
     );
@@ -17661,7 +17554,7 @@ describe("Composer", () => {
     const input = screen.getByLabelText("Reply");
     expect(input).toHaveValue("");
 
-    draftStore.set("thread:codex:thread-1", {
+    draftStore.set(buildThreadComposerScopeKey("codex", "thread-1"), {
       draft: "Hydrated durable draft after startup",
       editorDocument: undefined,
       imageAttachments: [],
@@ -17729,7 +17622,7 @@ describe("Composer", () => {
       ],
     };
     const draftStore = createComposerDraftStore();
-    draftStore.set("thread:codex:thread-1", {
+    draftStore.set(buildThreadComposerScopeKey("codex", "thread-1"), {
       draft,
       editorDocument,
       imageAttachments: [],
@@ -18115,7 +18008,7 @@ describe("Composer", () => {
       inbox: { inInbox: false },
     };
     const draftStore = createComposerDraftStore();
-    draftStore.set("thread:codex:thread-1", {
+    draftStore.set(buildThreadComposerScopeKey("codex", "thread-1"), {
       draft: "## Heading\n\n- List item\n\n**keep bold** replace me",
       editorDocument: {
         type: "doc",
@@ -19965,7 +19858,7 @@ describe("Composer", () => {
       "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
-      draftStore.set("thread:codex:thread-1", {
+      draftStore.set(buildThreadComposerScopeKey("codex", "thread-1"), {
         draft: "Compare [@Jeep](~/Downloads/Jeep)",
         editorDocument: undefined,
         imageAttachments: [],
@@ -20352,7 +20245,7 @@ describe("Composer", () => {
     expect(textarea).toHaveValue("$ce:pl");
   });
 
-  it("dismisses directory autocomplete with Escape after focus leaves the composer", () => {
+  it("dismisses directory autocomplete with Escape after focus leaves the composer", async () => {
     const directory: NavigationDirectorySummary = {
       key: "directory:/repo/search",
       kind: "directory",
@@ -20392,7 +20285,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Check @sea" } });
     expect(
-      screen.getByRole("listbox", { name: "Directories" })
+      await screen.findByRole("listbox", { name: "Directories" })
     ).toBeInTheDocument();
 
     const transcript = screen.getByRole("button", {
@@ -20836,7 +20729,7 @@ describe("Composer", () => {
 
   it("releases the queued-turn lock when Stop repairs stale active state", async () => {
     const draftStore = createComposerDraftStore();
-    const scopeKey = "thread:codex:thread-stale-queue";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-stale-queue");
     draftStore.setQueuedTurns(scopeKey, [
       {
         id: "queued-1",

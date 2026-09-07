@@ -1,10 +1,18 @@
 import type { AppServerBackendKind, ThreadIdentifier } from "./normalized-app-server";
+import type { FederationTarget } from "./federation";
 import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
 } from "./navigation";
 
 export type ComposerDraftScopeKind = "thread" | "launchpad" | "empty";
+
+/** Local scope metadata. An old backend/thread scope alone does not name an owner. */
+export type ComposerThreadOwner = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  target: FederationTarget;
+};
 
 export type ComposerDraftLifecycle = "unsent" | "sent" | "abandoned" | "cleared";
 
@@ -46,6 +54,7 @@ export type ComposerDraftSkillToken = {
 };
 
 export type ComposerDraftSnapshotRecord = {
+  threadOwner?: ComposerThreadOwner;
   scopeKey: string;
   scopeKind: ComposerDraftScopeKind;
   backend?: AppServerBackendKind;
@@ -105,6 +114,13 @@ export type ListComposerDraftRecoveryCandidatesRequest = {
 
 export type ListComposerDraftRecoveryCandidatesResponse = {
   candidates: ComposerDraftRecoveryCandidate[];
+};
+
+export type ListComposerDraftLatestRequest = {
+  /** Explicit startup migration; never infer owners for legacy records. */
+  migrateKnownOwners?: boolean;
+  /** Import only this viewer's legacy launchpad input during explicit startup hydration. */
+  migrateLegacyLaunchpads?: boolean;
 };
 
 export type ListComposerDraftLatestResponse = {

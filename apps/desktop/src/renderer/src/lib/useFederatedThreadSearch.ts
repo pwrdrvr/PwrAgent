@@ -16,6 +16,7 @@ export function useFederatedThreadSearch(params: {
   available: boolean;
   completedPeerCount: number;
   loading: boolean;
+  notes: string[];
   results: NavigationThreadSummary[];
   /**
    * The (trimmed) query `results` actually answer.
@@ -32,6 +33,7 @@ export function useFederatedThreadSearch(params: {
 } {
   const [results, setResults] = useState<NavigationThreadSummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const [notes, setNotes] = useState<string[]>([]);
   const [settledQuery, setSettledQuery] = useState("");
   const [completedPeerCount, setCompletedPeerCount] = useState(0);
   const [totalPeerCount, setTotalPeerCount] = useState(0);
@@ -54,6 +56,7 @@ export function useFederatedThreadSearch(params: {
     if (!query || !available || !search) {
       setResults([]);
       setLoading(false);
+      setNotes([]);
       setCompletedPeerCount(0);
       setTotalPeerCount(0);
       // Nothing to ask, so this query is answered the moment it arrives.
@@ -62,6 +65,7 @@ export function useFederatedThreadSearch(params: {
     }
 
     setLoading(true);
+    setNotes([]);
     setCompletedPeerCount(0);
     setTotalPeerCount(0);
     const timer = setTimeout(() => {
@@ -78,6 +82,7 @@ export function useFederatedThreadSearch(params: {
               return;
             }
             setResults(progress.results);
+            setNotes(progress.notes ?? []);
             setCompletedPeerCount(progress.completedPeerCount);
             setTotalPeerCount(progress.totalPeerCount);
             if (progress.complete) {
@@ -91,14 +96,16 @@ export function useFederatedThreadSearch(params: {
               return;
             }
             setResults(response.results);
+            setNotes(response.notes ?? []);
             setLoading(false);
             setSettledQuery(query);
           })
-          .catch(() => {
+          .catch((error: unknown) => {
             if (generationRef.current !== generation) {
               return;
             }
             setResults([]);
+            setNotes([error instanceof Error ? error.message : "Search is unavailable."]);
             setLoading(false);
             setSettledQuery(query);
           });
@@ -120,6 +127,7 @@ export function useFederatedThreadSearch(params: {
     available,
     completedPeerCount,
     loading,
+    notes,
     results,
     settledQuery,
     totalPeerCount,

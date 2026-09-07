@@ -13,6 +13,7 @@ import type {
 } from "./federation";
 import type {
   PrSummary,
+  NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
@@ -855,6 +856,8 @@ export type ArchiveThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   federationTarget?: FederationTarget;
+  /** Group archive admission revalidates the exact persisted parent before mutation. */
+  expectedParent?: { threadId: ThreadIdentifier; backend: AppServerBackendKind; instanceId?: FederationInstanceId } | null;
 };
 
 export type ArchiveThreadResponse = {
@@ -1007,6 +1010,10 @@ export type RenameThreadResponse = {
 };
 
 export type AppServerReadThreadRequest = {
+  /** Bounded diagnostic attribution; never transcript content. */
+  readReason?: "thread-view" | "star-map-card";
+  /** Opt into conditional page revalidation. Empty string requests a first revision. */
+  knownRevision?: string;
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
@@ -1028,6 +1035,10 @@ export type AppServerReadThreadRequest = {
 };
 
 export type AppServerReadThreadResponse = {
+  /** Opaque hash of the complete owner response, excluding observation timings. */
+  replayRevision?: string;
+  /** Only in response to knownRevision. Reuse that exact cached response, not this empty replay. */
+  unchanged?: boolean;
   backend: AppServerBackendKind;
   fetchedAt: number;
   /**
@@ -1485,6 +1496,7 @@ export type AppServerMcpElicitationRequestNotification = {
 };
 
 export type AppServerNotification =
+  | NavigationThreadGitWorkingStateUpdatedNotification
   | {
       method: "error";
       params: {
@@ -2187,6 +2199,18 @@ export type AppServerNotification =
    * mutations propagate within one bus tick.
    * See plan: 2026-05-09-002-feat-directory-pinning-plan.md Unit F.
    */
+  | {
+      method: "navigation/thread/seen";
+      params: { threadId: string; seenUpdatedAt?: number };
+    }
+  | {
+      method: "navigation/directory/seen";
+      params: { directoryKey: string; changedCount: number };
+    }
+  | {
+      method: "navigation/directory/removed";
+      params: { directoryKey: string };
+    }
   | {
       method: "directory/pin/added";
       params: {

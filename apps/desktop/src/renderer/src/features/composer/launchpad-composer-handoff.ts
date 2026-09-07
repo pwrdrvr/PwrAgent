@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary, ScheduledThreadAction } from "@pwragent/shared";
+import type { FederationTarget, NavigationThreadSummary, ScheduledThreadAction } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
@@ -47,10 +47,10 @@ function scheduledFirstActionState(store: ComposerDraftStore): ScheduledFirstAct
 }
 
 /** Retain positive admission evidence even if it arrives before materialization returns. */
-export function observeLaunchpadScheduledAction(store: ComposerDraftStore, action: ScheduledThreadAction): void {
+export function observeLaunchpadScheduledAction(store: ComposerDraftStore, action: ScheduledThreadAction, target: FederationTarget = { scope: "local" }): void {
   if (!["started", "failed", "cancelled", "held"].includes(action.status)) return;
   const state = scheduledFirstActionState(store);
-  const key = `${buildThreadComposerScopeKey(action.backend, action.threadId)}:${action.id}`;
+  const key = `${buildThreadComposerScopeKey(action.backend, action.threadId, target)}:${action.id}`;
   const previous = state.observed.get(key);
   if (previous && previous.updatedAt > action.updatedAt) return;
   state.observed.set(key, {
@@ -96,7 +96,7 @@ export function handoffLaunchpadComposer(
   desktopApi?: DesktopApi,
 ): void {
   const source = `launchpad:${directoryKey}`;
-  const target = buildThreadComposerScopeKey(thread.source, thread.id);
+  const target = buildThreadComposerScopeKey(thread.source, thread.id, thread.federation?.ref.target ?? readRendererFederationTarget() ?? { scope: "local" });
   getLaunchpadComposerDestination(store, source).scopeKey = target;
   const draft = store.get(source);
   if (draft) {

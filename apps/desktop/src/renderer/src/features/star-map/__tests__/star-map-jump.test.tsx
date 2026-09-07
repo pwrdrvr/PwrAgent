@@ -6,7 +6,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import {
+  NAVIGATION_QUERY_PROTOCOL_VERSION,
+  type NavigationQueryRequest,
+  type NavigationThreadSummary,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { STAR_MAP_ESTIMATED_CARD_HEIGHT } from "../star-map-layout";
 import { StarMapScreen } from "../StarMapScreen";
@@ -290,6 +294,16 @@ describe("Star Map ⌘K", () => {
     // while the pick knows only the thread. Resolving the card key from the
     // local instance instead would miss the card that is already on the map
     // — and then summon a duplicate of it under the local cloud.
+    const remoteThread = thread("r1", "Remote work", {
+      federation: {
+        instanceLabel: "Remote",
+        ref: {
+          backend: "codex",
+          threadId: "r1",
+          target: { scope: "remote", instanceId: "pwr_remote" },
+        },
+      },
+    });
     const desktopApi = {
       readFederationHealth: vi.fn(async () => ({
         health: {
@@ -307,17 +321,40 @@ describe("Star Map ⌘K", () => {
               role: "client",
               status: "connected",
               capabilities: ["thread_navigation"],
+              navigationQueryProtocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
             },
           ],
         },
       })),
-      getNavigationSnapshot: vi.fn(async () => ({
-        backend: "all",
-        fetchedAt: 1_000,
-        threads: [thread("r1", "Remote work")],
-        inboxThreadKeys: [],
+      getNavigationQueryPage: vi.fn(async (request: NavigationQueryRequest) => ({
+        protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
+        queryKey: request.query.kind,
+        generation: `pwr_remote-${request.query.kind}`,
+        ownerEpoch: "pwr_remote-epoch",
+        countsRevision: "pwr_remote-revision",
+        coverage: { state: "complete" as const },
+        counts: { total: 1, active: 0, unread: 1, review: 1 },
+        entries: request.query.kind === "star-map-geometry"
+          ? []
+          : [{
+              row: {
+                ...remoteThread,
+                ref: {
+                  backend: "codex" as const,
+                  threadId: "r1",
+                  ownerInstanceId: "pwr_remote",
+                },
+                rowRevision: "remote-r1",
+                ordinaryChildCount: 0,
+                nativeSubAgentGroupPresent: false,
+                queueCount: 0,
+                queueState: "unknown" as const,
+              },
+              orderKey: "0000000000",
+              placement: { kind: "root" as const },
+            }],
         directories: [],
-        launchpadDefaults: { backend: "codex", executionMode: "default" },
+        complete: true,
       })),
       onAgentEvent: vi.fn(() => () => undefined),
     } as unknown as DesktopApi;

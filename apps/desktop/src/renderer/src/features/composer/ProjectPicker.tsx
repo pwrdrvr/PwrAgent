@@ -1,5 +1,6 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
-import type { NavigationDirectorySummary } from "@pwragent/shared";
+import type { } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";

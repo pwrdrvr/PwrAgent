@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   beginLaunchpadComposition,
   getLaunchpadComposerDestination,
@@ -44,7 +45,6 @@ import type {
   FederationTarget,
   HandoffThreadWorkspaceRequest,
   ModelSettingsRecent,
-  NavigationDirectorySummary,
   NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
   NavigationLaunchpadFileAttachment,
@@ -117,6 +117,7 @@ import {
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
   hashReferenceAnchorKey,
+  hashReferenceThreadIdentity,
   HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
@@ -219,6 +220,8 @@ import {
   type ComposerPendingSteerSnapshot,
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
+import { useComposerMentionSources } from "./useComposerMentionSources";
+import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -2860,11 +2863,19 @@ export function Composer(props: ComposerProps) {
   const composerScopeKey = props.launchpad
     ? `launchpad:${props.launchpad.directoryKey}`
     : props.thread
-      ? buildThreadComposerScopeKey(props.thread.source, props.thread.id)
+      ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
       : "empty";
   const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
   const localDraftStore = useComposerDraftStore();
-  const draftStore = props.draftStore ?? localDraftStore;
+  const draftStore = useOwnedComposerDraftStore(
+    props.draftStore ?? localDraftStore,
+    composerScopeKey,
+    props.thread ? {
+      backend: props.thread.source,
+      threadId: props.thread.id,
+      target: props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" },
+    } : undefined,
+  );
   const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
   const savedInitialDraft = draftStore.get(composerScopeKey);
   const savedInitialQueuedTurns = props.thread || props.launchpad
@@ -4529,6 +4540,19 @@ export function Composer(props: ComposerProps) {
     !federatedHashSearchAvailable
     || (!federatedHashSearchLoading
       && federatedHashSearchSettledQuery === (rawHashReferenceQuery ?? "").trim());
+  const mentionNavigation = useComposerMentionSources({ desktopApi: props.desktopApi });
+  const mentionNavigationQuery = directoryRefTrigger?.query ?? rawHashReferenceQuery;
+  const ensureMentionNavigation = mentionNavigation.ensureLoaded;
+  const releaseMentionNavigation = mentionNavigation.release;
+  useEffect(() => {
+    if (mentionNavigationQuery === undefined) {
+      releaseMentionNavigation();
+    } else {
+      ensureMentionNavigation(mentionNavigationQuery);
+    }
+  }, [ensureMentionNavigation, mentionNavigationQuery, releaseMentionNavigation]);
+  const localHashSearchSettled = !mentionNavigation.loading
+    && mentionNavigation.settledQuery === (rawHashReferenceQuery ?? "").trim().toLowerCase();
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -4574,28 +4598,31 @@ export function Composer(props: ComposerProps) {
     }
 
     return filterDirectoryReferenceCandidates(
-      props.directories ?? [],
+      [...mentionNavigation.directories],
       directoryRefTrigger.query,
     );
-  }, [props.directories, directoryRefTrigger]);
+  }, [mentionNavigation.directories, directoryRefTrigger]);
   const filteredHashReferenceOptions = useMemo(() => {
     if (!hashReferenceTrigger) {
       return [];
     }
     return buildHashReferenceOptions({
       currentThreadKey: props.thread
-        ? buildThreadIdentityKey(props.thread.source, props.thread.id)
+        ? hashReferenceThreadIdentity(props.thread)
         : undefined,
-      localThreads: props.threads ?? [],
+      localThreads: mentionNavigation.threads,
+      localOwnerMatched: mentionNavigation.settledQuery === hashReferenceTrigger.query.trim().toLowerCase(),
       query: hashReferenceTrigger.query,
       remoteThreads: federatedHashSearchResults,
+      remoteOwnerMatched: federatedHashSearchSettledQuery === hashReferenceTrigger.query.trim(),
     });
   }, [
     federatedHashSearchResults,
+    federatedHashSearchSettledQuery,
     hashReferenceTrigger,
-    props.thread?.id,
-    props.thread?.source,
-    props.threads,
+    props.thread,
+    mentionNavigation.threads,
+    mentionNavigation.settledQuery,
   ]);
   const hashReferenceCount = filteredHashReferenceOptions.length;
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
@@ -4707,8 +4734,6 @@ export function Composer(props: ComposerProps) {
           kind: "directory",
           label: token.name,
           path: token.path,
-          threadKeys: [],
-          needsAttentionCount: 0,
         },
       );
     }
@@ -5031,6 +5056,7 @@ export function Composer(props: ComposerProps) {
       // once the federated search has answered for this exact query,
       // otherwise the anchor dies a beat before the remote rows land.
       || !federatedHashSearchSettled
+      || !localHashSearchSettled
       || filteredHashReferenceOptions.length > 0
     ) {
       return;
@@ -5042,6 +5068,7 @@ export function Composer(props: ComposerProps) {
     );
   }, [
     federatedHashSearchSettled,
+    localHashSearchSettled,
     filteredHashReferenceOptions.length,
     rawHashReferenceQuery,
   ]);
@@ -5287,6 +5314,7 @@ export function Composer(props: ComposerProps) {
         const mirrorScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
+          event.federationTarget ?? { scope: "local" },
         );
         const mirrorCurrent = draftStore.getQueuedTurns(mirrorScopeKey);
         const matchingIndex = mirrorCurrent.findIndex(
@@ -5344,7 +5372,7 @@ export function Composer(props: ComposerProps) {
         typeof turnQueueRecord?.queueEntryId === "string" &&
         (
           draftStore.getQueuedTurns(
-            buildThreadComposerScopeKey(event.backend, notificationThreadId),
+            buildThreadComposerScopeKey(event.backend, notificationThreadId, event.federationTarget ?? { scope: "local" }),
           ).some(
             (queued) => queued.queueEntryId === turnQueueRecord.queueEntryId,
           )
@@ -5360,6 +5388,7 @@ export function Composer(props: ComposerProps) {
         const queueScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
+          event.federationTarget ?? { scope: "local" },
         );
         const queueEventIsCurrentThread =
           agentEventMatchesThread(event, thread, notificationThreadId);

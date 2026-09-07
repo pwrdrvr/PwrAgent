@@ -1,9 +1,10 @@
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
-  type NavigationThreadSummary,
+  type ThreadJumpCandidate,
   type PrSummary,
 } from "@pwragent/shared";
 
@@ -15,7 +16,7 @@ export type HashReferenceTrigger = {
 
 export type HashReferenceCandidates = {
   pullRequests: PrSummary[];
-  threads: NavigationThreadSummary[];
+  threads: ThreadJumpCandidate[];
 };
 
 const THREAD_CANDIDATE_LIMIT = 8;
@@ -93,7 +94,7 @@ function truncateAtWordBoundary(value: string, limit: number): string {
  * that skips that path is undone by the next restore.
  */
 export function formatHashReferenceThreadLabel(
-  thread: Pick<NavigationThreadSummary, "id" | "title">,
+  thread: Pick<ThreadJumpCandidate, "id" | "title">,
 ): string {
   const collapsed = collapseHashReferenceWhitespace(thread.title);
   if (!collapsed) {
@@ -109,7 +110,7 @@ export function formatHashReferenceThreadLabel(
  * wall of text.
  */
 export function formatHashReferenceThreadTooltip(
-  thread: Pick<NavigationThreadSummary, "id" | "title">,
+  thread: Pick<ThreadJumpCandidate, "id" | "title">,
 ): string {
   const collapsed = collapseHashReferenceWhitespace(thread.title);
   if (!collapsed) {
@@ -154,13 +155,14 @@ export function findHashReferenceTrigger(
  * numeric. A PR attached to several threads appears once.
  */
 export function filterHashReferenceCandidates(
-  threads: readonly NavigationThreadSummary[],
+  threads: readonly ThreadJumpCandidate[],
   query: string,
+  ownerMatched = false,
 ): HashReferenceCandidates {
   const trimmed = query.trim();
   const normalized = trimmed.toLowerCase();
   const threadCandidates = threads
-    .filter((thread) => !trimmed || threadMatchesQuery(thread, trimmed))
+    .filter((thread) => ownerMatched || !trimmed || threadMatchesQuery(thread, trimmed))
     .sort((left, right) => {
       const exactPrDifference =
         Number(threadHasExactPrNumberMatch(right, trimmed))
@@ -227,7 +229,7 @@ export function filterHashReferenceCandidates(
  * when it matched one), the branch, the first linked directory.
  */
 export function describeHashReferenceThread(
-  thread: NavigationThreadSummary,
+  thread: ThreadJumpCandidate,
   query: string,
 ): string {
   const parts: string[] = [];
@@ -263,7 +265,7 @@ export type HashReferenceOption =
   | {
       kind: "thread";
       remote: boolean;
-      thread: NavigationThreadSummary;
+      thread: ThreadJumpCandidate;
     }
   | {
       kind: "pull-request";
@@ -284,23 +286,31 @@ export type HashReferenceOption =
  *     otherwise appear twice once a peer answers;
  *   - remote pull requests already offered by a local thread.
  */
+export function hashReferenceThreadIdentity(thread: ThreadJumpCandidate): string {
+  return thread.federation?.ref ? federatedThreadIdentityKey(thread.federation.ref)
+    : buildThreadIdentityKey(thread.source, thread.id);
+}
+
 export function buildHashReferenceOptions(params: {
   currentThreadKey?: string;
-  localThreads: readonly NavigationThreadSummary[];
+  localThreads: readonly ThreadJumpCandidate[];
+  localOwnerMatched?: boolean;
+  remoteOwnerMatched?: boolean;
   query: string;
-  remoteThreads?: readonly NavigationThreadSummary[];
+  remoteThreads?: readonly ThreadJumpCandidate[];
 }): HashReferenceOption[] {
   const { currentThreadKey, localThreads, query } = params;
-  const isCurrentThread = (thread: NavigationThreadSummary): boolean =>
+  const isCurrentThread = (thread: ThreadJumpCandidate): boolean =>
     currentThreadKey !== undefined
-    && buildThreadIdentityKey(thread.source, thread.id) === currentThreadKey;
+    && hashReferenceThreadIdentity(thread) === currentThreadKey;
   const localCandidates = filterHashReferenceCandidates(
     localThreads.filter((thread) => !isCurrentThread(thread)),
     query,
+    params.localOwnerMatched,
   );
   const localThreadKeys = new Set(
     localThreads.map((thread) =>
-      buildThreadIdentityKey(thread.source, thread.id),
+      hashReferenceThreadIdentity(thread),
     ),
   );
   const remoteCandidates = filterHashReferenceCandidates(
@@ -309,10 +319,11 @@ export function buildHashReferenceOptions(params: {
         thread.federation?.ref.target.scope === "remote"
         && !isCurrentThread(thread)
         && !localThreadKeys.has(
-          buildThreadIdentityKey(thread.source, thread.id),
+          hashReferenceThreadIdentity(thread),
         ),
     ),
     query,
+    params.remoteOwnerMatched,
   );
   const localPullRequestKeys = new Set(
     localCandidates.pullRequests.map(buildPullRequestStatusKey),

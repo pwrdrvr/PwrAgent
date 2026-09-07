@@ -1,9 +1,7 @@
 import { useCallback, useEffect } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { getDesktopApi, useDesktopApi } from "../../lib/desktop-api";
-import { useThreadNavigation } from "../../lib/useThreadNavigation";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
-import { useThreadDraftIndicators } from "../../lib/useThreadDraftIndicators";
 import { useComposerDraftStore } from "../composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "../composer/useDurableComposerDraftStore";
 import { useDesktopSettings } from "../settings/useDesktopSettings";
@@ -19,17 +17,14 @@ import { StarMapScreen } from "./StarMapScreen";
  *
  * The map used to live as a full-window layer inside the main shell and
  * received its data as props from `App`. As a standalone window it sources
- * the same inputs itself: the local navigation snapshot (live-patched over
- * `agent:event`, which the main process subscribes this window to),
- * event-derived session keys, and this window's own composer-draft
- * indicators. Cross-window navigation ("Open in full view", the local
+ * event-derived session keys and this window's composer drafts. The screen
+ * requests bounded local and remote rows through the main-process query pool. Cross-window navigation ("Open in full view", the local
  * instance card) goes back through main-process IPC that focuses the main
  * window.
  */
 export function StarMapWindow() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
-  const navigation = useThreadNavigation(desktopApi, { enabled: true });
   // No selected thread in this window — the hook only contributes its
   // event-derived approval/input/thinking key maps to the map's cards.
   const session = useThreadSessionState({ desktopApi });
@@ -38,15 +33,16 @@ export function StarMapWindow() {
     baseComposerDraftStore,
     desktopApi,
   );
-  const draftThreadKeys = useThreadDraftIndicators({
-    composerDraftStore,
-    threads: navigation.threads,
-  });
-  const markThreadsSeen = navigation.markThreadsSeen;
   const reportUserRepliedToThread = useCallback(
-    (thread: NavigationThreadSummary): Promise<void> =>
-      markThreadsSeen([thread]),
-    [markThreadsSeen],
+    async (thread: NavigationThreadSummary): Promise<void> => {
+      await desktopApi?.markThreadSeen?.({
+        backend: thread.source,
+        threadId: thread.id,
+        federationTarget: thread.federation?.ref.target,
+        seenUpdatedAt: thread.updatedAt,
+      });
+    },
+    [desktopApi],
   );
 
   // The renderer-side document title is what macOS shows in the Window
@@ -97,9 +93,6 @@ export function StarMapWindow() {
       <StarMapScreen
         composerDraftStore={composerDraftStore}
         desktopApi={desktopApi}
-        localThreads={navigation.threads}
-        localNavigationSnapshotFetchedAt={navigation.snapshot?.fetchedAt}
-        draftThreadKeys={draftThreadKeys}
         sessionKeys={{
           approvalRequestThreadKeys: session.approvalRequestThreadKeys,
           inputRequestThreadKeys: session.inputRequestThreadKeys,
@@ -130,7 +123,6 @@ export function StarMapWindow() {
         onFocusLocalInstance={() => {
           void desktopApi?.focusMainWindowFromStarMap?.();
         }}
-        onRefreshLocalThreads={navigation.refresh}
       />
     </div>
   );

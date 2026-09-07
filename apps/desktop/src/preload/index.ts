@@ -1,3 +1,6 @@
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DEFAULT_NAVIGATION_BROWSE_MODE,
@@ -123,6 +126,14 @@ import type {
   CompactThreadResponse,
   CodexEnvironmentSetupProgressEvent,
   CreateAutomationRequest,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationQueueProjection,
+  NavigationQueueProjectionRequest,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
   GetNavigationSnapshotRequest,
   GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
@@ -305,6 +316,7 @@ import type {
   CompleteOnboardingCodexBootstrapResponse,
   ClearComposerDraftRequest,
   ClearComposerDraftResponse,
+  ListComposerDraftLatestRequest,
   ListComposerDraftLatestResponse,
   ListComposerDraftRecoveryCandidatesRequest,
   ListComposerDraftRecoveryCandidatesResponse,
@@ -710,6 +722,14 @@ import {
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
+  NAVIGATION_QUERY_PAGE_CHANNEL,
+  NAVIGATION_QUERY_RELEASE_CHANNEL,
+  NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
+  NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+  NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
+  NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
+  NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
+  NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1807,6 +1827,31 @@ const desktopApi = Object.freeze({
       NAVIGATION_SNAPSHOT_CHANNEL,
       request,
     ),
+  getNavigationQueryPage: async (
+    request: NavigationQueryRequest,
+    consumerId?: string,
+  ): Promise<NavigationQueryPage> =>
+    await ipcRenderer.invoke(NAVIGATION_QUERY_PAGE_CHANNEL, request, consumerId),
+  releaseNavigationQuery: async (consumerId: string): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_QUERY_RELEASE_CHANNEL, consumerId),
+  releaseNavigationAttentionView: async (request: NavigationAttentionViewReleaseRequest): Promise<void> =>
+    await ipcRenderer.invoke(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL, request),
+  markNavigationDirectorySeen: async (request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, request),
+  removeNavigationDirectory: async (request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, request),
+  getNavigationLaunchpadConfig: async (
+    request: NavigationLaunchpadConfigRequest,
+  ): Promise<NavigationLaunchpadConfigResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL, request),
+  getNavigationSelectedDetail: async (
+    request: NavigationSelectedDetailRequest,
+  ): Promise<NavigationSelectedDetailResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SELECTED_DETAIL_CHANNEL, request),
+  getNavigationQueueProjection: async (
+    request: NavigationQueueProjectionRequest,
+  ): Promise<NavigationQueueProjection> =>
+    await ipcRenderer.invoke(NAVIGATION_QUEUE_PROJECTION_CHANNEL, request),
   getNavigationSnapshotTransport: async (
     request: GetNavigationSnapshotTransportRequest,
   ): Promise<NavigationSnapshotTransportResponse> =>
@@ -2051,8 +2096,8 @@ const desktopApi = Object.freeze({
     request: ListComposerDraftRecoveryCandidatesRequest,
   ): Promise<ListComposerDraftRecoveryCandidatesResponse> =>
     await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL, request),
-  listComposerDraftLatest: async (): Promise<ListComposerDraftLatestResponse> =>
-    await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_LATEST_CHANNEL),
+  listComposerDraftLatest: async (request?: ListComposerDraftLatestRequest): Promise<ListComposerDraftLatestResponse> =>
+    await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_LATEST_CHANNEL, request),
   pickDirectoryFromDisk: async (): Promise<PickDirectoryFromDiskResponse> =>
     await ipcRenderer.invoke(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL),
   pickFileFromDisk: async (): Promise<PickFileFromDiskResponse> =>

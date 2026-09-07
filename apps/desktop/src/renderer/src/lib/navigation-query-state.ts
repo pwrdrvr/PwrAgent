@@ -1,0 +1,188 @@
+import { parseThreadIdentityKey, buildThreadIdentityKey, federatedThreadIdentityKey } from "@pwragent/shared";
+import type {
+  FederationTarget,
+  NavigationIdentity,
+  NavigationQueryEntry,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationSelectedDetailResponse,
+} from "@pwragent/shared";
+
+/** One resource's loaded range; it never represents the owner's population. */
+export type NavigationPageState = {
+  request: NavigationQueryRequest;
+  page?: NavigationQueryPage;
+  pendingSequence: number;
+  stale: boolean;
+  error?: string;
+  rebaselineRequired?: boolean;
+};
+
+/** Exact identity authority is independent of all collection pages. */
+export type NavigationSelectionState = {
+  ref: NavigationIdentity;
+  pendingSequence: number;
+  readiness: "loading" | "ready" | "failed";
+  detail?: NavigationSelectedDetailResponse;
+  /** A canonical event invalidated this detail revision. */
+  stale?: boolean;
+  error?: string;
+};
+
+export function navigationIdentityKey(ref: NavigationIdentity): string {
+  return JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]);
+}
+
+/** UI selection keys are distinct from the collision-free JSON keys used by query resources. */
+export function navigationThreadSelectionKey(ref: NavigationIdentity): string {
+  return ref.ownerInstanceId
+    ? federatedThreadIdentityKey({ backend: ref.backend, threadId: ref.threadId, target: { scope: "remote", instanceId: ref.ownerInstanceId } })
+    : buildThreadIdentityKey(ref.backend, ref.threadId);
+}
+
+/** Resolve a durable selection without consulting whichever rows happen to be loaded. */
+export function navigationIdentityFromThreadKey(key: string, target?: FederationTarget): NavigationIdentity | undefined {
+  let threadKey = key;
+  let ownerInstanceId = target?.scope === "remote" ? target.instanceId : undefined;
+  if (key.startsWith("remote:")) {
+    const ownerEnd = key.indexOf(":", "remote:".length);
+    if (ownerEnd <= "remote:".length) return undefined;
+    ownerInstanceId = key.slice("remote:".length, ownerEnd);
+    threadKey = key.slice(ownerEnd + 1);
+  } else if (key.startsWith("local:")) {
+    ownerInstanceId = undefined;
+    threadKey = key.slice("local:".length);
+  }
+  const identity = parseThreadIdentityKey(threadKey);
+  return identity && identity.threadId ? { ...identity, ...(ownerInstanceId ? { ownerInstanceId } : {}) } : undefined;
+}
+
+export function createNavigationPageState(request: NavigationQueryRequest): NavigationPageState {
+  return { request, pendingSequence: 0, stale: false };
+}
+
+export function beginNavigationPageRead(state: NavigationPageState): NavigationPageState {
+  return { ...state, pendingSequence: state.pendingSequence + 1, error: undefined };
+}
+
+function mergeEntries(
+  previous: readonly NavigationQueryEntry[],
+  incoming: readonly NavigationQueryEntry[],
+): NavigationQueryEntry[] {
+  const byIdentity = new Map(previous.map((entry) => [navigationIdentityKey(entry.row.ref), entry]));
+  for (const entry of incoming) byIdentity.set(navigationIdentityKey(entry.row.ref), entry);
+  return [...byIdentity.values()];
+}
+
+/** A continuation can extend only the precise generation that requested it. */
+export function applyNavigationPage(params: {
+  state: NavigationPageState;
+  sequence: number;
+  page: NavigationQueryPage;
+  cursor?: string;
+}): NavigationPageState {
+  const { state, page, sequence, cursor } = params;
+  if (sequence !== state.pendingSequence) return state;
+  if (page.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade the owning instance.");
+  if (page.complete === Boolean(page.nextCursor)) {
+    throw new Error("Navigation page has inconsistent continuation readiness.");
+  }
+  const previous = state.page;
+  if (page.unchanged) {
+    if (!previous?.complete || state.stale || (previous.rangeStart ?? 0) !== 0 || cursor || page.queryKey !== previous.queryKey
+      || page.countsRevision !== previous.countsRevision || page.ownerEpoch !== previous.ownerEpoch) {
+      throw new Error("Navigation unchanged response has no complete matching baseline.");
+    }
+    return { ...state, stale: false, error: undefined };
+  }
+  if (cursor) {
+    if (!previous || previous.nextCursor !== cursor || previous.queryKey !== page.queryKey
+      || previous.generation !== page.generation || previous.ownerEpoch !== page.ownerEpoch
+      || previous.countsRevision !== page.countsRevision) {
+      throw new Error("Navigation continuation does not match its loaded generation.");
+    }
+    if (page.nextCursor === cursor) throw new Error("Navigation continuation did not advance.");
+    const directories = new Map((previous.directories ?? []).map((directory) => [directory.key, directory]));
+    for (const directory of page.directories ?? []) directories.set(directory.key, directory);
+    const modelGroups = new Map((previous.modelGroups ?? []).map((group) => [JSON.stringify([group.backend, group.model, group.modelMigrationRevision]), group]));
+    for (const group of page.modelGroups ?? []) modelGroups.set(JSON.stringify([group.backend, group.model, group.modelMigrationRevision]), group);
+    return {
+      ...state,
+      stale: false,
+      error: undefined,
+      page: {
+        ...page,
+        rangeStart: previous.rangeStart ?? 0,
+        entries: mergeEntries(previous.entries, page.entries),
+        ...(previous.modelGroups || page.modelGroups ? { modelGroups: [...modelGroups.values()] } : {}),
+        ...(previous.directories || page.directories ? { directories: [...directories.values()] } : {}),
+      },
+    };
+  }
+  return { ...state, page, stale: false, error: undefined, rebaselineRequired: false };
+}
+
+export function failNavigationPageRead(
+  state: NavigationPageState,
+  sequence: number,
+  error: unknown,
+): NavigationPageState {
+  if (sequence !== state.pendingSequence) return state;
+  const message = error instanceof Error ? error.message : String(error);
+  const expired = message.includes("navigation_cursor_expired") || message.includes("Navigation cursor expired");
+  return { ...state, stale: Boolean(state.page), error: message, rebaselineRequired: state.rebaselineRequired || expired };
+}
+
+export function selectNavigationIdentity(
+  current: NavigationSelectionState | undefined,
+  ref: NavigationIdentity,
+): NavigationSelectionState {
+  return {
+    ref,
+    pendingSequence: (current?.pendingSequence ?? 0) + 1,
+    readiness: "loading",
+    ...(current && navigationIdentityKey(current.ref) === navigationIdentityKey(ref)
+      ? { detail: current.detail, stale: current.stale }
+      : {}),
+  };
+}
+
+export function applyNavigationSelectedDetail(params: {
+  state: NavigationSelectionState;
+  sequence: number;
+  detail: NavigationSelectedDetailResponse;
+}): NavigationSelectionState {
+  const { state, sequence, detail } = params;
+  if (sequence !== state.pendingSequence) return state;
+  if (detail.protocol !== 2 || navigationIdentityKey(detail.ref) !== navigationIdentityKey(state.ref)) {
+    throw new Error("Selected detail does not match the requested owner and thread.");
+  }
+  if (detail.unchanged) {
+    if (state.stale || !state.detail || state.detail.revision !== detail.revision) {
+      throw new Error("Selected detail unchanged response has no matching baseline.");
+    }
+    return { ...state, readiness: state.detail.readiness, error: undefined };
+  }
+  if (detail.thread && (detail.thread.source !== state.ref.backend || detail.thread.id !== state.ref.threadId)) {
+    throw new Error("Selected configuration belongs to another thread.");
+  }
+  if (detail.readiness === "ready" && detail.identity === "present" && !detail.thread) {
+    throw new Error("Selected thread configuration is not ready.");
+  }
+  if (detail.thread) {
+    const owner = detail.thread.federation?.ref.target.scope === "remote" ? detail.thread.federation.ref.target.instanceId : undefined;
+    if (detail.thread.federation && (owner !== state.ref.ownerInstanceId
+      || detail.thread.federation.ref.backend !== state.ref.backend || detail.thread.federation.ref.threadId !== state.ref.threadId)) {
+      throw new Error("Selected configuration belongs to another owner or thread.");
+    }
+    if (state.ref.ownerInstanceId && !detail.thread.federation) {
+      // The response identity is authoritative even if the native owner omitted
+      // viewer presentation metadata. Every downstream action must retain it.
+      const target = { scope: "remote" as const, instanceId: state.ref.ownerInstanceId };
+      const scopedDetail = { ...detail, thread: { ...detail.thread, federation: { instanceLabel: target.instanceId,
+        ref: { backend: state.ref.backend, threadId: state.ref.threadId, target } } } };
+      return { ...state, detail: scopedDetail, stale: false, readiness: detail.readiness, error: undefined };
+    }
+  }
+  return { ...state, detail, stale: false, readiness: detail.readiness, error: undefined };
+}

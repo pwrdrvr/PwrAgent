@@ -1,3 +1,6 @@
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
+import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
+import { navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { useState, type MouseEvent } from "react";
 import type {
   MessagingThreadBindingSummary,
@@ -27,6 +30,9 @@ import {
 import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
+  pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
+  resourceIds?: string[];
+  loadedThreads?: NavigationThreadSummary[];
   approvalRequestThreadKeys?: Record<string, boolean>;
   /** Thread keys with a live integrated terminal in the main process. */
   terminalThreadKeys?: Record<string, boolean>;
@@ -100,36 +106,43 @@ export function RecentsList(props: RecentsListProps) {
     undefined,
   );
   const threadByKey = new Map(
-    props.threads.map((thread) => [
+    (props.loadedThreads ?? props.threads).map((thread) => [
       threadSummaryIdentityKey(thread),
       thread,
     ]),
   );
-  const topLevelThreads = props.threads.filter((thread) => {
-    if (!thread.parentThreadId) return true;
-    const parentKey = resolveThreadParentKey(thread, threadByKey);
-    return !parentKey || !threadByKey.has(parentKey);
-  });
+  const entries = props.pagedNavigation ? (props.resourceIds ?? ["lens"]).flatMap((id) => props.pagedNavigation?.resources.get(id)?.state.page?.entries ?? []) : undefined;
+  const visibleKeys = new Set(props.threads.map(threadSummaryIdentityKey));
+  const topLevelThreads: NavigationThreadSummary[] = entries
+    ? entries.filter((entry) => entry.placement.kind === "root" && visibleKeys.has(navigationThreadSelectionKey(entry.row.ref)))
+      .map((entry) => threadByKey.get(navigationThreadSelectionKey(entry.row.ref))).filter((thread): thread is NavigationThreadSummary => Boolean(thread))
+    : props.threads.filter((thread) => !thread.parentThreadId);
   const childrenByParentKey = new Map<string, NavigationThreadSummary[]>();
-  for (const thread of props.threads) {
-    if (!thread.parentThreadId) continue;
-    const parentKey = resolveThreadParentKey(thread, threadByKey);
-    if (!parentKey || !threadByKey.has(parentKey)) continue;
+  const childEntries = [...entries ?? [], ...[...props.pagedNavigation?.resources.values() ?? []]
+    .filter((resource) => resource.state.request.query.kind === "children").flatMap((resource) => resource.state.page?.entries ?? [])];
+  for (const entry of childEntries) {
+    if (entry.placement.kind !== "child") continue;
+    const parentKey = navigationThreadSelectionKey(entry.placement.parent);
     const children = childrenByParentKey.get(parentKey) ?? [];
-    children.push(thread);
+    const key = navigationThreadSelectionKey(entry.row.ref);
+    const row = threadByKey.get(key);
+    if (row && !children.some((child) => threadSummaryIdentityKey(child) === key)) children.push(row);
     childrenByParentKey.set(parentKey, children);
   }
-  const renderSubthreads = (parent: NavigationThreadSummary) => {
+  const renderSubthreads = (parent: NavigationPresentedThread) => {
     const parentKey = threadSummaryIdentityKey(parent);
     const children = sortSubthreadSummaries(parent, childrenByParentKey.get(parentKey) ?? []);
-    const nativeSubAgentCount = parent.codexNativeSubAgents?.length ?? 0;
+    const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
+    const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
+      ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
+    const childResource = props.pagedNavigation?.resources.get(childResourceId);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
     const canManageSubthreads = threadSupportsFederationCapability(
       parent,
       "thread_grouping",
     );
     if (
-      (children.length === 0 && nativeSubAgentCount === 0)
+      ((parent.ordinaryChildCount ?? children.length) === 0 && nativeSubAgentCount === 0)
       || subthreadsCollapsed
     ) {
       return null;
@@ -260,6 +273,13 @@ export function RecentsList(props: RecentsListProps) {
             ) : null,
           ];
         })}
+        {childResource?.state.error ? <p role="alert">{childResource.state.error}</p> : null}
+        {childResource?.loading ? <p>Loading sub-threads…</p> : null}
+        {childResource?.state.rebaselineRequired ? (
+          <button type="button" onClick={() => void props.pagedNavigation?.restart(childResourceId)}>Reload sub-threads</button>
+        ) : childResource?.state.page?.nextCursor ? (
+          <button type="button" disabled={childResource.loading} onClick={() => void props.pagedNavigation?.loadMore(childResourceId)}>Load more sub-threads</button>
+        ) : null}
       </div>
     );
   };

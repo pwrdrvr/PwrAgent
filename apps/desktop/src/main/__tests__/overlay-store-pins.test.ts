@@ -167,6 +167,26 @@ describe("SqliteOverlayStore — thread pins", () => {
     ).resolves.toMatchObject({ pinnedRank: "2048" });
   });
 
+  it("rejects an unlink when the authoritative parent changed", async () => {
+    await store.setThreadParent({ backend: "codex", threadId: "child", parentThreadId: "new-parent" });
+    await expect(store.setThreadParent({ backend: "codex", threadId: "child",
+      expectedParent: { backend: "codex", threadId: "old-parent" } })).rejects.toThrow("Thread parent changed");
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "child" }))?.parentThreadId).toBe("new-parent");
+    await expect(store.setThreadParent({ backend: "codex", threadId: "child",
+      expectedParent: { backend: "codex", threadId: "new-parent" } })).resolves.toMatchObject({ parentThreadId: undefined });
+  });
+
+  it("compares the parent owner and backend without conflating matching thread IDs", async () => {
+    await store.setThreadParent({ backend: "codex", threadId: "child", parentThreadId: "parent",
+      parentThreadBackend: "acp:gemini", parentThreadInstanceId: "owner-a" });
+    for (const expectedParent of [null, { backend: "codex" as const, threadId: "parent", instanceId: "owner-a" },
+      { backend: "acp:gemini" as const, threadId: "parent", instanceId: "owner-b" }]) {
+      await expect(store.setThreadParent({ backend: "codex", threadId: "child", expectedParent })).rejects.toThrow("Thread parent changed");
+    }
+    await expect(store.setThreadParent({ backend: "codex", threadId: "child",
+      expectedParent: { backend: "acp:gemini", threadId: "parent", instanceId: "owner-a" } })).resolves.toMatchObject({ parentThreadId: undefined });
+  });
+
   it("persists sub-thread parent, order, and collapsed state", async () => {
     const { dbPath, tempDir } = createTempStateDb("pwragent-pins-test-");
     stateDb.close();
@@ -281,4 +301,19 @@ describe("SqliteOverlayStore — thread pins", () => {
       }),
     ).resolves.toBeUndefined();
   });
+});
+
+it("appends pin intent after unloaded owner pins and preserves concurrent order", async () => {
+  for (let index = 1; index <= 100; index += 1) {
+    await store.setThreadPin({ backend: "codex", threadId: `unloaded-${index}`, pinnedRank: String(index * 1024) });
+  }
+  const [first, second] = await Promise.all([
+    store.setThreadPin({ backend: "codex", threadId: "first", pinned: true }),
+    store.setThreadPin({ backend: "codex", threadId: "second", pinned: true }),
+  ]);
+  expect(first.pinnedRank).toBe("103424");
+  expect(second.pinnedRank).toBe("104448");
+  expect((await store.setThreadPin({ backend: "codex", threadId: "first", pinned: true })).pinnedRank).toBe(first.pinnedRank);
+  expect((await store.setThreadPin({ backend: "codex", threadId: "first", pinned: false })).pinnedRank).toBeUndefined();
+  await expect(store.setThreadPin({ backend: "codex", threadId: "first", pinned: true, pinnedRank: "1" })).rejects.toThrow("either pin intent");
 });

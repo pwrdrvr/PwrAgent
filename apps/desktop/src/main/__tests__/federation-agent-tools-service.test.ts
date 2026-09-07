@@ -8,8 +8,12 @@ import type {
   ListInstanceProjectsResult,
   MaterializeDirectoryLaunchpadRequest,
   NavigationSnapshot,
+  NavigationQueryRequest,
+  NavigationQueryPage,
   SearchFederationThreadsResult,
 } from "@pwragent/shared";
+import { projectNavigationQuery } from "../app-server/navigation-query-projection";
+import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { createFederationAgentToolsHandler } from "../federation/federation-agent-tools-service";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 
@@ -76,7 +80,39 @@ function buildSnapshot(
 
 function buildRuntime(overrides: Partial<DesktopFederationRuntime>): () =>
   DesktopFederationRuntime {
-  return () => overrides as DesktopFederationRuntime;
+  const wrap = (backend: FederationBackendOperations & { readPopulation?: () => Promise<NavigationSnapshot> }): FederationBackendOperations => ({
+    ...backend,
+    getNavigationSnapshot: async () => { throw new Error("Legacy navigation is forbidden"); },
+    getNavigationQueryPage: async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+      const population = await backend.readPopulation!();
+      const projected = projectNavigationQuery({ index: population, request });
+      const offset = Number(request.cursor ?? 0);
+      const limit = request.pageSize ?? 100;
+      const directoryQuery = request.query.kind === "directory-index";
+      const total = directoryQuery ? projected.directories.length : projected.entries.length;
+      return { ...projected, protocol: 2, ownerEpoch: "owner", generation: "fixture", countsRevision: "revision",
+        entries: directoryQuery ? [] : projected.entries.slice(offset, offset + limit),
+        directories: directoryQuery ? projected.directories.slice(offset, offset + limit) : [],
+        complete: offset + limit >= total, ...(offset + limit < total ? { nextCursor: String(offset + limit) } : {}) };
+    },
+    getNavigationLaunchpadConfig: async (request) => {
+      const population = await backend.readPopulation!();
+      return { protocol: 2, revision: "config", directoryKey: request.directoryKey, defaults: population.launchpadDefaults,
+        launchpad: population.directories.find((directory) => directory.key === request.directoryKey)?.launchpad };
+    },
+    getNavigationSelectedDetail: async (request) => {
+      const population = await backend.readPopulation!();
+      const thread = population.threads.find((thread) => thread.source === request.ref.backend && thread.id === request.ref.threadId);
+      return { protocol: 2, revision: "detail", ref: request.ref, readiness: "ready", identity: thread ? "present" : "unresolved", thread };
+    },
+  });
+  return () => ({ ...overrides,
+    ...(overrides.localBackend ? { localBackend: () => wrap(overrides.localBackend!()) } : {}),
+    ...(overrides.remoteBackend ? { remoteBackend: (target) => wrap(overrides.remoteBackend!(target)),
+      remoteNavigationQueryPage: (target, request) => wrap(overrides.remoteBackend!(target)).getNavigationQueryPage!(request),
+      remoteNavigationLaunchpadConfig: (target, request) => wrap(overrides.remoteBackend!(target)).getNavigationLaunchpadConfig!(request),
+    } : {}),
+  }) as DesktopFederationRuntime;
 }
 
 describe("federation agent tools service", () => {
@@ -431,7 +467,7 @@ describe("federation agent tools service", () => {
   });
 
   it("routes list_instance_projects to the remote backend and filters unlinked", async () => {
-    const getNavigationSnapshot = vi.fn(async () =>
+    const readPopulation = vi.fn(async () =>
       buildSnapshot({
         directories: [
           {
@@ -488,7 +524,7 @@ describe("federation agent tools service", () => {
               },
             ],
           }),
-        remoteBackend: (() => ({ getNavigationSnapshot })) as never,
+        remoteBackend: (() => ({ readPopulation })) as never,
       }),
     });
 
@@ -498,7 +534,7 @@ describe("federation agent tools service", () => {
       args: { instanceId: "pwr_studio" },
     });
 
-    expect(getNavigationSnapshot).toHaveBeenCalled();
+    expect(readPopulation).toHaveBeenCalled();
     const data = (response as { ok: true; data: ListInstanceProjectsResult })
       .data;
     expect(data).toMatchObject({
@@ -513,9 +549,6 @@ describe("federation agent tools service", () => {
         path: "/Users/op/pwrsnap",
         hasLaunchpad: true,
         backend: "codex",
-        workMode: "worktree",
-        model: "gpt-5.5-codex",
-        executionMode: "default",
       },
       {
         key: "dir:/Users/op/pwrgit",
@@ -523,7 +556,6 @@ describe("federation agent tools service", () => {
         kind: "directory",
         path: "/Users/op/pwrgit",
         hasLaunchpad: false,
-        backend: "codex",
       },
     ]);
   });
@@ -592,7 +624,7 @@ describe("federation agent tools service", () => {
         turnId: "turn-9",
       }),
     );
-    const getNavigationSnapshot = vi.fn(async () =>
+    const readPopulation = vi.fn(async () =>
       buildSnapshot({
         directories: [
           {
@@ -617,7 +649,7 @@ describe("federation agent tools service", () => {
       runtime: buildRuntime({
         health: async () => buildHealth(),
         localBackend: (() => ({
-          getNavigationSnapshot,
+          readPopulation,
           materializeDirectoryLaunchpad,
         })) as never,
       }),
@@ -736,7 +768,7 @@ describe("federation agent tools service", () => {
         runtime: buildRuntime({
           health: async () => buildHealth(),
           localBackend: (() => ({
-            getNavigationSnapshot: async () => variant.snapshot,
+            readPopulation: async () => variant.snapshot,
             materializeDirectoryLaunchpad,
           })) as never,
         }),
@@ -781,7 +813,7 @@ describe("federation agent tools service", () => {
       runtime: buildRuntime({
         health: async () => buildHealth(),
         localBackend: (() => ({
-          getNavigationSnapshot: async () => buildSnapshot({
+          readPopulation: async () => buildSnapshot({
             directories: [{
               key: "dir:/repo",
               kind: "directory",
@@ -832,7 +864,7 @@ describe("federation agent tools service", () => {
       workMode: "local" as const,
       turnId: "remote-turn-9",
     }));
-    const getNavigationSnapshot = vi.fn(async () =>
+    const readPopulation = vi.fn(async () =>
       buildSnapshot({
         directories: [{
           key: "dir:/repo",
@@ -867,7 +899,7 @@ describe("federation agent tools service", () => {
             }],
           }),
         remoteBackend: (() => ({
-          getNavigationSnapshot,
+          readPopulation,
           materializeDirectoryLaunchpad,
         })) as never,
       }),
@@ -956,7 +988,7 @@ describe("federation agent tools service", () => {
             ],
           }),
         localBackend: (() => ({
-          getNavigationSnapshot: async () =>
+          readPopulation: async () =>
             buildSnapshot({
               threads: [{
                 source: "codex",
@@ -975,7 +1007,7 @@ describe("federation agent tools service", () => {
           target.instanceId === "pwr_root"
             ? { mountRemoteChild }
             : {
-                getNavigationSnapshot: async () =>
+                readPopulation: async () =>
                   buildSnapshot({
                     directories: [{
                       key: "dir:/repo",
@@ -1085,7 +1117,7 @@ describe("federation agent tools service", () => {
             }],
           }),
         localBackend: (() => ({
-          getNavigationSnapshot: async () => localSnapshot,
+          readPopulation: async () => localSnapshot,
           materializeDirectoryLaunchpad,
         })) as never,
         remoteBackend: (() => ({ mountRemoteChild })) as never,
@@ -1362,4 +1394,23 @@ describe("federation agent tools service", () => {
       { instanceId: "pwr_studio", instanceLabel: "Studio Mac", resultCount: 0 },
     ]);
   });
+});
+
+it("returns one bounded project page and requires an explicit continuation", async () => {
+  const readPopulation = vi.fn(async () => buildSnapshot({ directories: Array.from({ length: 1000 }, (_, i) => ({
+    key: `directory:${i}`, kind: "directory", label: `Project ${i}`, threadKeys: [], needsAttentionCount: 0,
+  })) }));
+  const handler = createFederationAgentToolsHandler({ collectHostInfo: async () => localHostInfo,
+    runtime: buildRuntime({ health: async () => buildHealth(), localBackend: (() => ({ readPopulation })) as never }) });
+  const first = await handler({ operation: "list_instance_projects", context, args: { instanceId: "pwr_local", limit: 10 } });
+  expect(first.ok).toBe(true);
+  const page = (first as { ok: true; data: ListInstanceProjectsResult }).data;
+  expect(page.projects).toHaveLength(10);
+  expect(page.complete).toBe(false);
+  expect(page.nextCursor).toBe("10");
+  expect(readPopulation).toHaveBeenCalledTimes(1);
+  const next = await handler({ operation: "list_instance_projects", context,
+    args: { instanceId: "pwr_local", limit: 10, cursor: page.nextCursor } });
+  expect((next as { ok: true; data: ListInstanceProjectsResult }).data.projects[0]?.key).toBe("directory:10");
+  expect(readPopulation).toHaveBeenCalledTimes(2);
 });

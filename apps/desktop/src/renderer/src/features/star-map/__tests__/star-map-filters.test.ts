@@ -283,3 +283,12 @@ describe("selectFilteredThreads summons", () => {
     ).toEqual([]);
   });
 });
+
+
+it("preserves owner matches and order when compact rows omit the matching detail", () => {
+  const first = thread("first", { updatedAt: 1 });
+  const second = thread("second", { updatedAt: 999 });
+  expect(selectFilteredThreads({
+    threads: [first, second], selection: { pr: "include" }, ownerMatched: true,
+  }).map((row) => row.id)).toEqual(["first", "second"]);
+});

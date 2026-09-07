@@ -1,3 +1,4 @@
+import { buildThreadComposerScopeKey } from "../../composer/useComposerDraftStore";
 import {
   act,
   fireEvent,
@@ -14,6 +15,8 @@ import type {
   CelestialIconId,
   DesktopSettingsSnapshot,
   NavigationThreadSummary,
+  NavigationQueryRequest,
+  NavigationQueryPage,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
@@ -108,8 +111,17 @@ function localThread(
   } as unknown as NavigationThreadSummary;
 }
 
+const fixtureThreads = new WeakMap<DesktopApi, Map<string, NavigationThreadSummary>>();
+
 function buildApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
-  return {
+  const api = {
+    getNavigationSelectedDetail: vi.fn(async (request: Parameters<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>[0]) => ({
+      protocol: 2, ref: request.ref, revision: "detail", identity: "present", readiness: "ready",
+      thread: fixtureThreads.get(api)?.get(JSON.stringify([request.ref.backend, request.ref.threadId])) ?? remoteThread({ id: request.ref.threadId, source: request.ref.backend }),
+    })),
+    getNavigationQueueProjection: vi.fn(async (request: Parameters<NonNullable<DesktopApi["getNavigationQueueProjection"]>>[0]) => ({
+      protocol: 2, ref: request.ref, revision: "fifo", readiness: "ready", complete: true, entries: [],
+    })),
     readThread: vi.fn(async () => ({
       backend: "codex",
       threadId: "t",
@@ -123,6 +135,7 @@ function buildApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
     onAgentEvent: vi.fn(() => () => undefined),
     ...overrides,
   } as unknown as DesktopApi;
+  return api;
 }
 
 function reviewCapabilities(startReview: boolean): BackendCapabilities {
@@ -182,6 +195,11 @@ type CardParams = {
 };
 
 function card(params: CardParams) {
+  if (params.desktopApi) {
+    const rows = fixtureThreads.get(params.desktopApi) ?? new Map<string, NavigationThreadSummary>();
+    rows.set(JSON.stringify([params.thread.source, params.thread.id]), params.thread);
+    fixtureThreads.set(params.desktopApi, rows);
+  }
   return (
     <StarMapChatCard
       cardKey="card-1"
@@ -219,8 +237,15 @@ function renderCard(params: CardParams) {
  * setter on its contenteditable node exactly so a controlled-input idiom
  * still drives it, which is what `fireEvent.change` reaches here.
  */
+async function findReadyTextbox(options: { name: string | RegExp }) {
+  const element = await screen.findByRole("textbox", options);
+  await waitFor(() => expect(element.getAttribute("contenteditable")).toBe("true"));
+  return element;
+}
+
 async function typeAndSend(title: string, text: string) {
-  const input = screen.getByRole("textbox", { name: `Message ${title}` });
+  const input = await findReadyTextbox( { name: `Message ${title}` });
+  await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
   fireEvent.change(input, { target: { value: text } });
   fireEvent.keyDown(input, { key: "Enter" });
   return input as HTMLElement & { value: string };
@@ -482,7 +507,7 @@ describe("StarMapChatCard federation routing", () => {
   it("pastes a PNG into the outgoing turn", async () => {
     const desktopApi = buildApi();
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["star-map"], "star-map.png", {
       type: "image/png",
     });
@@ -524,7 +549,7 @@ describe("StarMapChatCard federation routing", () => {
   it("keeps image paste enabled for a remote thread with no negative capability", async () => {
     const desktopApi = buildApi();
     renderCard({ desktopApi, thread: remoteThread() });
-    const input = screen.getByRole("textbox", { name: "Message Remote work" });
+    const input = await findReadyTextbox( { name: "Message Remote work" });
     const image = new File(["remote"], "remote.png", {
       type: "image/png",
     });
@@ -580,7 +605,7 @@ describe("StarMapChatCard federation routing", () => {
       thread: localThread({ model: "gpt-5.3-codex-spark" }),
     });
     await waitFor(() => expect(desktopApi.listBackends).toHaveBeenCalled());
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["spark"], "spark.png", { type: "image/png" });
 
     transferImage(input, image, "paste");
@@ -626,7 +651,7 @@ describe("StarMapChatCard federation routing", () => {
       thread: localThread({ source: "acp:grok", model: "grok-4" }),
     });
     await waitFor(() => expect(desktopApi.listBackends).toHaveBeenCalled());
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["grok"], "grok.png", { type: "image/png" });
 
     transferImage(input, image, "drop");
@@ -646,7 +671,7 @@ describe("StarMapChatCard federation routing", () => {
       pastedImageMaxPatches: 321,
       thread: localThread(),
     });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["star-map"], "star-map.png", {
       type: "image/png",
     });
@@ -676,7 +701,7 @@ describe("StarMapChatCard federation routing", () => {
   it("preserves an animated GIF instead of normalizing it", async () => {
     const desktopApi = buildApi();
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["GIF89a"], "animated.gif", {
       type: "image/gif",
     });
@@ -718,7 +743,7 @@ describe("StarMapChatCard federation routing", () => {
       getPathForFile: vi.fn(() => "/tmp/brief.pdf"),
     });
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const pdf = new File(["%PDF-1.7"], "brief.pdf", {
       type: "application/pdf",
     });
@@ -763,7 +788,7 @@ describe("StarMapChatCard federation routing", () => {
     const getPathForFile = vi.fn(() => "/tmp/brief.pdf");
     const desktopApi = buildApi({ getPathForFile });
     renderCard({ desktopApi, thread: remoteThread() });
-    const input = screen.getByRole("textbox", { name: "Message Remote work" });
+    const input = await findReadyTextbox( { name: "Message Remote work" });
     const pdf = new File(["%PDF-1.7"], "brief.pdf", {
       type: "application/pdf",
     });
@@ -868,7 +893,7 @@ describe("StarMapChatCard slash commands", () => {
     await waitFor(() => {
       expect(desktopApi.listBackends).toHaveBeenCalled();
     });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "/" } });
     expect(screen.queryByRole("option", { name: /\/review/i })).toBeNull();
 
@@ -891,7 +916,7 @@ describe("StarMapChatCard slash commands", () => {
     const startReview = vi.fn();
     const desktopApi = buildApi({ startReview });
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["star-map"], "review.png", {
       type: "image/png",
     });
@@ -938,7 +963,7 @@ describe("StarMapChatCard slash commands", () => {
         desktopApi,
         thread: localThread({ source: backend }),
       });
-      const input = screen.getByRole("textbox", {
+      const input = await findReadyTextbox( {
         name: "Message Local work",
       });
       if (backend.startsWith("acp:")) {
@@ -969,7 +994,7 @@ describe("StarMapChatCard slash commands", () => {
         desktopApi,
         thread: localThread({ source: backend }),
       });
-      const input = screen.getByRole("textbox", {
+      const input = await findReadyTextbox( {
         name: "Message Local work",
       });
       fireEvent.change(input, { target: { value: "/" } });
@@ -1007,7 +1032,7 @@ describe("StarMapChatCard slash commands", () => {
         onUserRepliedToThread,
         thread: localThread({ source: backend }),
       });
-      const input = screen.getByRole("textbox", {
+      const input = await findReadyTextbox( {
         name: "Message Local work",
       });
       if (backend.startsWith("acp:")) {
@@ -1068,10 +1093,10 @@ describe("StarMapChatCard slash commands", () => {
         />
       </>,
     );
-    const firstInput = screen.getByRole("textbox", {
+    const firstInput = await findReadyTextbox( {
       name: "Message Local work",
     });
-    const secondInput = screen.getByRole("textbox", {
+    const secondInput = await findReadyTextbox( {
       name: "Message Other work",
     });
     fireEvent.change(firstInput, { target: { value: "/review" } });
@@ -1095,7 +1120,7 @@ describe("StarMapChatCard slash commands", () => {
   it("cancels the review setup and re-enables its composer", async () => {
     const desktopApi = buildApi({ startReview: vi.fn() });
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "/review" } });
     fireEvent.keyDown(input, { key: "Enter" });
     const dialog = await screen.findByRole("dialog", {
@@ -1124,7 +1149,7 @@ describe("StarMapChatCard slash commands", () => {
   it("cancels review setup on Escape even if the disabled editor kept focus", async () => {
     const desktopApi = buildApi({ startReview: vi.fn() });
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "/review" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await screen.findByRole("dialog", { name: "Start review for Local work" });
@@ -1153,7 +1178,7 @@ describe("StarMapChatCard slash commands", () => {
     }));
     const desktopApi = buildApi({ startReview });
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "/review" } });
     fireEvent.keyDown(input, { key: "Enter" });
     await screen.findByRole("dialog", { name: "Start review for Local work" });
@@ -1182,7 +1207,7 @@ describe("StarMapChatCard slash commands", () => {
     }));
     const desktopApi = buildApi({ startReview });
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "/review" } });
     fireEvent.keyDown(input, { key: "Enter" });
     const dialog = await screen.findByRole("dialog", {
@@ -1216,7 +1241,7 @@ describe("StarMapChatCard slash commands", () => {
     );
     const desktopApi = buildApi({ startReview });
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "/review" } });
     fireEvent.keyDown(input, { key: "Enter" });
     const dialog = await screen.findByRole("dialog", {
@@ -1256,7 +1281,7 @@ describe("StarMapChatCard slash commands", () => {
         zIndex={40}
       />,
     );
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "/review" } });
     fireEvent.keyDown(input, { key: "Enter" });
     const dialog = await screen.findByRole("dialog", {
@@ -1317,7 +1342,7 @@ describe("StarMapChatCard slash commands", () => {
         onUserRepliedToThread,
         thread: localThread(),
       });
-      const input = screen.getByRole("textbox", {
+      const input = await findReadyTextbox( {
         name: "Message Local work",
       });
       fireEvent.change(input, { target: { value: "/compact" } });
@@ -1362,7 +1387,7 @@ describe("StarMapChatCard slash commands", () => {
       })),
     });
     renderCard({ desktopApi, thread: localThread() });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const pdf = new File(["%PDF-1.7"], "brief.pdf", {
       type: "application/pdf",
     });
@@ -1428,7 +1453,7 @@ describe("StarMapChatCard slash commands", () => {
       desktopApi,
       thread: localThread({ source: "acp:grok" }),
     });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["star-map"], "context.png", {
       type: "image/png",
     });
@@ -1479,7 +1504,7 @@ describe("StarMapChatCard slash commands", () => {
       desktopApi,
       thread: localThread({ source: "acp:grok" }),
     });
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "/session-info" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -1526,7 +1551,7 @@ describe("StarMapChatCard start-turn queue handling", () => {
       }),
     );
     expect(
-      result.current.getQueuedTurns("thread:codex:t-local"),
+      result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "t-local")),
     ).toEqual([
       expect.objectContaining({
         backendQueuePending: false,
@@ -1616,7 +1641,7 @@ describe("StarMapChatCard send failures", () => {
       desktopApi,
       thread: localThread(),
     });
-    const input = screen.getByRole("textbox", {
+    const input = await findReadyTextbox( {
       name: "Message Local work",
     }) as HTMLElement & { value: string };
     fireEvent.change(input, { target: { value: "first message" } });
@@ -1678,7 +1703,7 @@ describe("StarMapChatCard send failures", () => {
       expect(input.value).toBe("newer edit");
     });
     expect(
-      composerDraftStore.popDraft("thread:codex:t-local"),
+      composerDraftStore.popDraft(buildThreadComposerScopeKey("codex", "t-local")),
     ).toEqual(expect.objectContaining({ draft: "failed submission" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(
       /admission failed/,
@@ -1984,7 +2009,7 @@ describe("StarMapChatCard steering a live turn", () => {
     const steer = (await screen.findByRole("button", {
       name: "Steer",
     })) as HTMLButtonElement;
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "let me through" } });
 
     await waitFor(() => {
@@ -2036,7 +2061,7 @@ describe("StarMapChatCard steering a live turn", () => {
     const steer = (await screen.findByRole("button", {
       name: "Steer",
     })) as HTMLButtonElement;
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     fireEvent.change(input, { target: { value: "no route for this" } });
 
     await waitFor(() => {
@@ -2068,9 +2093,56 @@ describe("StarMapChatCard mentions", () => {
     ],
   };
 
+  function mentionPage(request: NavigationQueryRequest, population = SNAPSHOT): NavigationQueryPage {
+    return {
+      protocol: 2,
+      queryKey: JSON.stringify(request.query),
+      generation: "fixture",
+      ownerEpoch: "fixture",
+      countsRevision: "fixture",
+      coverage: { state: "complete" },
+      counts: { total: population.threads.length, active: 0, unread: 0, review: 0 },
+      complete: true,
+      directories: request.query.kind === "directory-index"
+        ? population.directories.map((directory) => ({
+            key: directory.key,
+            kind: "directory",
+            label: directory.label,
+            path: directory.path,
+            latestUpdatedAt: directory.latestUpdatedAt,
+            counts: { total: 0, active: 0, unread: 0, review: 0 },
+            pinnedRootCount: 0,
+            unpinnedRootCount: 0,
+            launchpadPresent: false,
+          }))
+        : [],
+      entries: request.query.kind === "directory-index" ? [] : population.threads.map((thread) => ({
+        row: {
+          ref: { backend: thread.source, threadId: thread.id },
+          rowRevision: "fixture",
+          id: thread.id,
+          source: thread.source,
+          title: thread.title,
+          titleSource: thread.titleSource,
+          linkedDirectories: thread.linkedDirectories,
+          inbox: thread.inbox,
+          prs: thread.prs,
+          gitBranch: thread.gitBranch,
+          ordinaryChildCount: 0,
+          nativeSubAgentGroupPresent: false,
+          queueCount: 0,
+          queueState: "unknown",
+        },
+        orderKey: thread.id,
+        placement: { kind: "root" },
+      })),
+    };
+  }
+
   function mentionApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
     return buildApi({
-      getNavigationSnapshot: vi.fn(async () => SNAPSHOT),
+      getNavigationSnapshot: vi.fn(() => { throw new Error("Deprecated collection read"); }),
+      getNavigationQueryPage: vi.fn(async (request) => mentionPage(request)),
       listSkills: vi.fn(async () => ({
         backend: "codex",
         fetchedAt: 1,
@@ -2128,7 +2200,7 @@ describe("StarMapChatCard mentions", () => {
     });
   });
 
-  it("settles a whole picker session on one snapshot fetch", async () => {
+  it("requests bounded owner matches for each picker query", async () => {
     // Load-bearing, and not only for caching: the sources memo changes
     // identity when the fetch lands, which re-runs the effect that asked
     // for it. Without the cache's staleness guard that is a fetch loop,
@@ -2141,14 +2213,15 @@ describe("StarMapChatCard mentions", () => {
       fireEvent.change(composer(), { target: { value } });
       await screen.findByRole("option");
     }
-    expect(desktopApi.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(desktopApi.getNavigationSnapshot).not.toHaveBeenCalled();
+    await waitFor(() => expect(desktopApi.getNavigationQueryPage).toHaveBeenCalledTimes(6));
   });
 
   it("refreshes a fresh mention cache after project registration", async () => {
     let notifyNavigationChanged: (() => void) | undefined;
-    const getNavigationSnapshot = vi.fn()
-      .mockResolvedValueOnce(SNAPSHOT)
-      .mockResolvedValueOnce({
+    let registered = false;
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) =>
+      mentionPage(request, !registered ? SNAPSHOT : {
         ...SNAPSHOT,
         directories: [
           ...SNAPSHOT.directories,
@@ -2160,7 +2233,7 @@ describe("StarMapChatCard mentions", () => {
             path: "/Users/dev/new-project",
           },
         ],
-      });
+      }));
     const onNavigationMentionSourcesChanged = vi.fn(
       (callback: () => void) => {
         notifyNavigationChanged = callback;
@@ -2168,7 +2241,7 @@ describe("StarMapChatCard mentions", () => {
       },
     );
     const desktopApi = mentionApi({
-      getNavigationSnapshot,
+      getNavigationQueryPage,
       onNavigationMentionSourcesChanged,
     });
     renderCard({ desktopApi, thread: localThread() });
@@ -2179,10 +2252,9 @@ describe("StarMapChatCard mentions", () => {
     expect((await screen.findByRole("option")).textContent).toContain("app");
     fireEvent.change(composer(), { target: { value: "check " } });
 
+    registered = true;
     act(() => notifyNavigationChanged?.());
-    await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-    });
+    expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
     fireEvent.change(composer(), { target: { value: "check @new" } });
 
     await waitFor(() => {
@@ -2326,7 +2398,7 @@ describe("StarMapChatCard settings menu", () => {
       await screen.findByRole("menuitemradio", { name: "gpt-5-spark" }),
     );
     await screen.findByText("gpt-5-spark");
-    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["spark"], "spark.png", { type: "image/png" });
 
     transferImage(input, image, "paste");
@@ -2805,5 +2877,40 @@ describe("StarMapChatCard title bar tooltips", () => {
         }),
       ),
     ).toBe("Open in a window connected to Studio Mac");
+  });
+});
+
+describe("Star Map exact detail and FIFO authority", () => {
+  it("keeps a visible row read-only until exact configuration and every FIFO page arrive", async () => {
+    const detail = deferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>>();
+    const queue = deferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationQueueProjection"]>>>>();
+    const ref = { backend: "codex" as const, threadId: "t-remote", ownerInstanceId: "pwr_peer" };
+    const desktopApi = buildApi({
+      getNavigationSelectedDetail: vi.fn(() => detail.promise),
+      getNavigationQueueProjection: vi.fn()
+        .mockResolvedValueOnce({ protocol: 2, ref, revision: "fifo", readiness: "ready", complete: false, entries: [], nextCursor: "next" })
+        .mockReturnValueOnce(queue.promise),
+    });
+    renderCard({ desktopApi, thread: remoteThread({ model: "stale-row-model" }) });
+    const editor = screen.getByRole("textbox", { name: "Message Remote work" });
+    expect(editor.getAttribute("contenteditable")).toBe("false");
+    await act(async () => detail.resolve({ protocol: 2, ref, revision: "detail", readiness: "ready", identity: "present",
+      thread: remoteThread({ model: "owner-model" }),
+    }));
+    expect(editor.getAttribute("contenteditable")).toBe("false");
+    expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    await act(async () => queue.resolve({ protocol: 2, ref, revision: "fifo", readiness: "ready", complete: true, entries: [] }));
+    await waitFor(() => expect(editor.getAttribute("contenteditable")).toBe("true"));
+    expect(screen.getByRole("button", { name: /^Thread settings/ }).textContent).toContain("owner-model");
+    await typeAndSend("Remote work", "ready now");
+    await waitFor(() => expect(desktopApi.startTurn).toHaveBeenCalledTimes(1));
+  });
+
+  it("requires an upgrade when a bridge only has row and transcript reads", async () => {
+    const desktopApi = buildApi({ getNavigationSelectedDetail: undefined, getNavigationQueueProjection: undefined });
+    renderCard({ desktopApi, thread: remoteThread() });
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Upgrade this instance"));
+    expect(screen.getByRole("textbox", { name: "Message Remote work" }).getAttribute("contenteditable")).toBe("false");
+    expect(desktopApi.startTurn).not.toHaveBeenCalled();
   });
 });

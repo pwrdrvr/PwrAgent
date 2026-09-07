@@ -12441,6 +12441,16 @@ export class DesktopBackendRegistry {
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
+    if (request.expectedParent !== undefined) {
+      const overlay = await this.overlayStore?.getThreadOverlayState({ backend, threadId: request.threadId });
+      const expected = request.expectedParent;
+      if (expected === null ? Boolean(overlay?.parentThreadId)
+        : overlay?.parentThreadId !== expected.threadId
+          || (overlay.parentThreadBackend ?? backend) !== expected.backend
+          || overlay.parentThreadInstanceId !== expected.instanceId) {
+        throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
+      }
+    }
     if (isAcpBackendId(backend)) {
       return await this.archiveAcpThread({
         backend,
@@ -13083,6 +13093,10 @@ export class DesktopBackendRegistry {
       },
     });
     return { threadId };
+  }
+
+  async readSelectedWorkspaceGitStatus(path: string): Promise<NavigationDirectoryGitStatus | undefined> {
+    return this.gitDirectoryService.readDirectoryStatus({ path });
   }
 
   async readDirectoryStatuses(directories: NavigationDirectorySummary[]): Promise<
@@ -18698,6 +18712,23 @@ export class DesktopBackendRegistry {
    * viewers — can render and rehydrate queued messages instead of only
    * the window that submitted them.
    */
+  getQueuedTurnsForThread(ref: { backend: AppServerBackendKind; threadId: string }): ThreadQueuedTurnSummary[] {
+    return this.threadTurnQueue.getQueuedEntries(ref).map((entry, position) => ({
+      queueEntryId: entry.id,
+      origin: entry.origin,
+      displayText: queuedTurnDisplayText(entry.input),
+      createdAt: entry.createdAt,
+      position,
+      ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
+      ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+    }));
+  }
+
+  getQueuedExecutionModeForThread(ref: { backend: AppServerBackendKind; threadId: string }) {
+    const entry = this.queuedExecutionModes.get(buildThreadIdentityKey(ref.backend, ref.threadId));
+    return entry ? { mode: entry.mode, queuedAt: entry.queuedAt } : undefined;
+  }
+
   getQueuedTurnsSnapshot(): Record<string, ThreadQueuedTurnSummary[]> {
     const snapshot: Record<string, ThreadQueuedTurnSummary[]> = {};
     for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {
@@ -20352,6 +20383,15 @@ export class DesktopBackendRegistry {
       turnId: params.turnId,
       requestId: params.requestId,
     };
+  }
+
+  /** Compact navigation signal only; never expose pending prompts or response options. */
+  getNavigationInputRequestThreadKeys(): ReadonlySet<string> {
+    const keys = new Set<string>();
+    for (const pending of this.pendingServerRequests.values()) {
+      keys.add(buildThreadIdentityKey(pending.backend, pending.notification.params.threadId));
+    }
+    return keys;
   }
 
   private pendingServerRequestForThread(params: {

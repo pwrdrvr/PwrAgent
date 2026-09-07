@@ -7,7 +7,12 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import {
+  NAVIGATION_QUERY_PROTOCOL_VERSION,
+  type NavigationQueryPage,
+  type NavigationQueryRequest,
+  type NavigationThreadSummary,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 
@@ -66,6 +71,52 @@ function buildDesktopApi(): DesktopApi {
   };
 }
 
+function queryPage(
+  request: NavigationQueryRequest,
+  threads: readonly NavigationThreadSummary[],
+): NavigationQueryPage {
+  const entries = request.query.kind === "star-map-geometry"
+    ? []
+    : threads.map((thread, index) => ({
+        row: {
+          ...thread,
+          ref: {
+            backend: thread.source,
+            threadId: thread.id,
+            ...(thread.federation?.ref.target.scope === "remote"
+              ? { ownerInstanceId: thread.federation.ref.target.instanceId }
+              : {}),
+          },
+          rowRevision: `row-${thread.source}-${thread.id}`,
+          ordinaryChildCount: 0,
+          nativeSubAgentGroupPresent: false,
+          queueCount: 0,
+          queueState: "unknown" as const,
+        },
+        orderKey: index.toString().padStart(10, "0"),
+        placement: { kind: "root" as const },
+      }));
+  return {
+    protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
+    queryKey: request.query.kind,
+    generation: `generation-${request.query.kind}`,
+    ownerEpoch: "owner-epoch",
+    countsRevision: `revision-${request.query.kind}`,
+    coverage: { state: "complete" },
+    counts: {
+      total: threads.length,
+      active: threads.filter((thread) => thread.threadStatus === "active").length,
+      unread: threads.filter((thread) => thread.inbox.inInbox).length,
+      review: threads.filter(
+        (thread) => thread.inbox.inInbox && thread.threadStatus !== "active",
+      ).length,
+    },
+    entries,
+    directories: [],
+    complete: true,
+  };
+}
+
 function unreadThread(id: string): NavigationThreadSummary {
   return {
     id,
@@ -104,6 +155,57 @@ function createDeferred<T>(): {
 }
 
 describe("StarMapScreen", () => {
+  it("owns exact detail subscriptions for restored chats and releases them on close", async () => {
+    const thread: NavigationThreadSummary = {
+      ...unreadThread("chat-A"),
+      federation: {
+        instanceLabel: "Remote", ref: {
+          backend: "codex", threadId: "chat-A", target: { scope: "remote", instanceId: "pwr_remote" },
+        },
+      },
+    };
+    const setFederationEventSubscriptions = vi.fn(async (request) => ({ subscriptions: request.subscriptions }));
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      setFederationEventSubscriptions,
+      readFederationHealth: vi.fn<NonNullable<DesktopApi["readFederationHealth"]>>(async () => ({ health: {
+        enabled: true, role: "gateway", status: "listening", instanceId: "pwr_local",
+        peers: [{ id: "pwr_remote", label: "Remote", role: "client", status: "connected",
+          capabilities: ["thread_navigation", "thread_detail", "event_subscriptions", "pending_request_control"],
+          navigationQueryProtocol: 2,
+        }],
+      } })),
+      readStarMapWorkspace: vi.fn<NonNullable<DesktopApi["readStarMapWorkspace"]>>(async () => ({ workspace: {
+        version: 1, revision: 1, updatedAt: 100, views: {},
+        cards: [{ key: "pwr_remote::codex:chat-A", ownerInstanceId: "pwr_remote", thread,
+          geometry: { anchor: { kind: "canvas" }, dx: 0, dy: 0,
+            fallbackRect: { left: 300, top: 240, width: 420, height: 520 },
+          }, contextOpen: false, terminalOpen: false,
+        }],
+      } })),
+    };
+    render(<StarMapScreen desktopApi={desktopApi} localThreads={[]} sessionKeys={{}}
+      localInstanceLabel="Local" onOpenLocalThread={() => undefined} onFocusLocalInstance={() => undefined} />);
+    const close = await screen.findByRole("button", { name: "Close chat: Thread chat-A" });
+    await waitFor(() => expect(setFederationEventSubscriptions).toHaveBeenLastCalledWith({
+      consumer: "star_map", subscriptions: [{
+        sourceInstanceId: "pwr_remote", threadSelection: { kind: "all" },
+        eventClasses: ["navigation", "star_map", "transcript", "pending_requests"],
+        eventClassSelections: {
+          navigation: { kind: "all" }, star_map: { kind: "all" },
+          transcript: { kind: "threads", threads: [{ backend: "codex", threadId: "chat-A" }] },
+          pending_requests: { kind: "threads", threads: [{ backend: "codex", threadId: "chat-A" }] },
+        },
+      }],
+    }));
+    fireEvent.click(close);
+    await waitFor(() => expect(setFederationEventSubscriptions).toHaveBeenLastCalledWith({
+      consumer: "star_map", subscriptions: [{ sourceInstanceId: "pwr_remote",
+        threadSelection: { kind: "all" }, eventClasses: ["navigation", "star_map"],
+      }],
+    }));
+  });
+
   it("marks a card whose thread holds an unsent draft", async () => {
     // Drafts ride a prop of their own rather than `sessionKeys`, which the
     // screen only trusts for local cards — a draft is this window's own
@@ -704,23 +806,15 @@ describe("StarMapScreen", () => {
     } as NavigationThreadSummary;
     const markSeen = createDeferred<void>();
     const onUserRepliedToThread = vi.fn(() => markSeen.promise);
-    const getNavigationSnapshot = vi.fn(async () => ({
-      backend: "all" as const,
-      fetchedAt: 1_000,
-      threads:
-        getNavigationSnapshot.mock.calls.length === 1
-          ? [remoteUnreadThread]
-          : [remoteSeenThread],
-      inboxThreadKeys:
-        getNavigationSnapshot.mock.calls.length === 1
-          ? ["codex:remote"]
-          : [],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
-      },
-    }));
+    let attentionReads = 0;
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => {
+      if (request.query.kind !== "star-map") return queryPage(request, []);
+      attentionReads += 1;
+      return queryPage(
+        request,
+        attentionReads === 1 ? [remoteUnreadThread] : [remoteSeenThread],
+      );
+    });
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "remote",
@@ -740,10 +834,19 @@ describe("StarMapScreen", () => {
             role: "client" as const,
             status: "connected" as const,
             capabilities: ["thread_navigation" as const],
+            navigationQueryProtocol: 2 as const,
           }],
         },
       })),
-      getNavigationSnapshot,
+      getNavigationSelectedDetail: vi.fn(async () => ({
+        protocol: 2, ref: { backend: "codex", threadId: "remote", ownerInstanceId: "pwr_peer" },
+        revision: "detail", identity: "present", readiness: "ready", thread: remoteUnreadThread,
+      })),
+      getNavigationQueueProjection: vi.fn(async () => ({
+        protocol: 2, ref: { backend: "codex", threadId: "remote", ownerInstanceId: "pwr_peer" },
+        revision: "fifo", readiness: "ready", complete: true, entries: [],
+      })),
+      getNavigationQueryPage,
       onAgentEvent: vi.fn(() => () => undefined),
       readThread: vi.fn(async () => ({
         backend: "codex" as const,
@@ -788,9 +891,11 @@ describe("StarMapScreen", () => {
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalled();
-      expect(onUserRepliedToThread).toHaveBeenCalledWith(remoteUnreadThread);
+      expect(onUserRepliedToThread).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "remote", source: "codex" }),
+      );
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(attentionReads).toBe(1);
 
     await act(async () => {
       markSeen.resolve();
@@ -798,11 +903,11 @@ describe("StarMapScreen", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(attentionReads).toBe(2);
     });
-    expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-      federationTarget: remoteTarget,
-    });
+    expect(getNavigationQueryPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ federationTarget: remoteTarget }),
+    );
     await waitFor(() => {
       expect(
         starMapCard(
@@ -1032,19 +1137,25 @@ describe("StarMapScreen", () => {
     ).toBe("codex:t-remote");
   });
 
-  it("waits for the owning thread layout before restoring a chat anchor", async () => {
+  it.each([false, true])("waits only for the owning thread layout before restoring an anchor (unrelated slow peer: %s)", async (slowPeer) => {
     type HealthResponse = Awaited<
       ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
     >;
-    type SnapshotResponse = Awaited<
-      ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>
+    type QueryResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["getNavigationQueryPage"]>>
     >;
     const health = createDeferred<HealthResponse>();
-    const remoteSnapshot = createDeferred<SnapshotResponse>();
+    const remoteSnapshot = createDeferred<QueryResponse>();
+    const slowSnapshot = createDeferred<QueryResponse>();
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
       readFederationHealth: vi.fn(() => health.promise),
-      getNavigationSnapshot: vi.fn(() => remoteSnapshot.promise),
+      getNavigationQueryPage: vi.fn((request) =>
+        request?.federationTarget?.scope === "remote"
+          && request.federationTarget.instanceId === "pwr_slow"
+          ? slowSnapshot.promise
+          : remoteSnapshot.promise,
+      ),
       readStarMapWorkspace: vi.fn(async () => ({
         workspace: {
           version: 1 as const,
@@ -1124,7 +1235,13 @@ describe("StarMapScreen", () => {
               role: "client",
               status: "connected",
               capabilities: ["thread_navigation"],
+              navigationQueryProtocol: 2,
             },
+            ...(slowPeer ? [{
+              id: "pwr_slow", label: "Slow Mac", role: "client" as const,
+              status: "connected" as const, capabilities: ["thread_navigation" as const],
+              navigationQueryProtocol: 2 as const,
+            }] : []),
           ],
         },
       });
@@ -1134,10 +1251,13 @@ describe("StarMapScreen", () => {
     expect(chat.style.top).toBe("240px");
 
     await act(async () => {
-      remoteSnapshot.resolve({
-        fetchedAt: 200,
-        threads: [
-          {
+      remoteSnapshot.resolve(queryPage({
+        protocol: 2,
+        consumer: "star-map",
+        federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+        query: { kind: "lens", lens: "attention" },
+      }, [
+        {
             ...unreadThread("t-remote"),
             title: "Anchored remote chat",
             federation: {
@@ -1152,13 +1272,12 @@ describe("StarMapScreen", () => {
               instanceLabel: "Remote Mac",
               peerStatus: "connected" as const,
             },
-          },
-        ],
-      } as unknown as SnapshotResponse);
+        },
+      ]));
       await remoteSnapshot.promise;
     });
 
-    await waitFor(() => {
+    const expectRelativeAnchor = () => {
       const shell = document.querySelector<HTMLElement>(
         '[data-card-key="pwr_remote::codex:t-remote"]',
       );
@@ -1174,7 +1293,25 @@ describe("StarMapScreen", () => {
         + Number.parseFloat(shell?.style.top ?? "");
       expect(Number.parseFloat(chat.style.left)).toBeCloseTo(threadLeft + 24);
       expect(Number.parseFloat(chat.style.top)).toBeCloseTo(threadTop + 36);
-    });
+    };
+    await waitFor(expectRelativeAnchor);
+    if (slowPeer) {
+      const before = chat.style.left;
+      await act(async () => {
+        slowSnapshot.resolve(queryPage({
+          protocol: 2,
+          consumer: "star-map",
+          federationTarget: { scope: "remote", instanceId: "pwr_slow" },
+          query: { kind: "lens", lens: "attention" },
+        }, Array.from(
+          { length: 20 },
+          (_, index) => unreadThread(`slow-${index}`),
+        )));
+        await slowSnapshot.promise;
+      });
+      await waitFor(expectRelativeAnchor);
+      expect(chat.style.left).not.toBe(before);
+    }
   });
 
   it("waits for the initial federation layout before restoring the camera", async () => {
@@ -1182,16 +1319,16 @@ describe("StarMapScreen", () => {
     type HealthResponse = Awaited<
       ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
     >;
-    type SnapshotResponse = Awaited<
-      ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>
+    type QueryResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["getNavigationQueryPage"]>>
     >;
     const health = createDeferred<HealthResponse>();
-    const remoteSnapshot = createDeferred<SnapshotResponse>();
-    const getNavigationSnapshot = vi.fn(() => remoteSnapshot.promise);
+    const remoteSnapshot = createDeferred<QueryResponse>();
+    const getNavigationQueryPage = vi.fn(() => remoteSnapshot.promise);
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
       readFederationHealth: vi.fn(() => health.promise),
-      getNavigationSnapshot,
+      getNavigationQueryPage,
       readStarMapWorkspace: vi.fn(async () => ({
         workspace: {
           version: 1 as const,
@@ -1233,20 +1370,24 @@ describe("StarMapScreen", () => {
               role: "client",
               status: "connected",
               capabilities: ["thread_navigation"],
+              navigationQueryProtocol: 2,
             },
           ],
         },
       });
       await health.promise;
     });
-    await waitFor(() => expect(getNavigationSnapshot).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalledTimes(2));
     expect(canvas()?.style.transform).not.toBe(savedTransform);
     const transformBeforeRemoteSnapshot = canvas()?.style.transform;
 
     await act(async () => {
-      remoteSnapshot.resolve({
-        fetchedAt: 200,
-        threads: Array.from({ length: 30 }, (_, index) => ({
+      remoteSnapshot.resolve(queryPage({
+        protocol: 2,
+        consumer: "star-map",
+        federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+        query: { kind: "lens", lens: "attention" },
+      }, Array.from({ length: 30 }, (_, index) => ({
           ...unreadThread(`remote-${index}`),
           federation: {
             ref: {
@@ -1260,8 +1401,7 @@ describe("StarMapScreen", () => {
             instanceLabel: "Remote Mac",
             peerStatus: "connected" as const,
           },
-        })),
-      } as unknown as SnapshotResponse);
+      }))));
       await remoteSnapshot.promise;
     });
 
@@ -1553,20 +1693,11 @@ describe("StarMapScreen", () => {
               "thread_navigation",
               "scheduled_actions",
             ],
+            navigationQueryProtocol: 2 as const,
           }],
         },
       })) as unknown as DesktopApi["readFederationHealth"],
-      getNavigationSnapshot: vi.fn(async () => ({
-        backend: "all",
-        fetchedAt: 1_000,
-        threads: [],
-        inboxThreadKeys: [],
-        directories: [],
-        launchpadDefaults: {
-          backend: "codex",
-          executionMode: "default",
-        },
-      })) as unknown as DesktopApi["getNavigationSnapshot"],
+      getNavigationQueryPage: vi.fn(async (request) => queryPage(request, [])),
       onAgentEvent: vi.fn(() => () => undefined),
       setFederationEventSubscriptions,
     };

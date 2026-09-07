@@ -132,6 +132,7 @@ export class RemoteThreadSummaryCache {
     string,
     {
       fetchedAt: number;
+      descendants?: boolean;
       selection: FederationThreadSelection;
       threads: NavigationThreadSummary[];
     }
@@ -140,13 +141,14 @@ export class RemoteThreadSummaryCache {
     string,
     {
       generation: string;
+      descendants?: boolean;
       promise: Promise<NavigationThreadSummary[]>;
       selection: FederationThreadSelection;
     }
   >();
   private readonly archivedCache = new Map<
     string,
-    { fetchedAt: number; threadKeys: Set<string> }
+    { fetchedAt: number; threadKeys: Set<string>; queriedKeys: ReadonlySet<string> }
   >();
   /**
    * Display names for threads owned by peers, held in the same information
@@ -188,6 +190,11 @@ export class RemoteThreadSummaryCache {
         selection: FederationThreadSelection,
         rpcOptions?: FederationRpcRequestOptions,
       ) => Promise<NavigationSnapshot>;
+      fetchPinnedSnapshot?: (
+        target: FederationRemoteTarget,
+        threadKeys: string[],
+        rpcOptions?: FederationRpcRequestOptions,
+      ) => Promise<NavigationSnapshot>;
       /**
        * Bounded owner-side Cmd+K search. Older peers reject the new method;
        * those alone fall back to the full-snapshot compatibility path.
@@ -201,6 +208,8 @@ export class RemoteThreadSummaryCache {
       fetchArchivedThreads: (
         target: FederationRemoteTarget,
         backend: RemoteThreadPin["ref"]["backend"],
+        threadIds: string[],
+        rpcOptions: FederationRpcRequestOptions,
       ) => Promise<Array<Pick<NavigationThreadSummary, "source" | "id">>>;
       /**
        * Current visible status, composed label, and the VIEWER-actionable
@@ -522,14 +531,10 @@ export class RemoteThreadSummaryCache {
         const now = this.options.now?.() ?? Date.now();
         const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
         const cached = this.cache.get(instanceId);
-        // A pinned parent can mount descendants owned by another instance.
-        // Their identities are only discoverable from the owner's full
-        // navigation projection, so a direct-pin selection would silently
-        // drop them on a cold cache. Keep this collection broad until the
-        // Federation protocol can request a server-computed descendant
-        // closure.
-        const requestedSelection = { kind: "all" } as const;
+        const requestedSelection = this.options.fetchPinnedSnapshot
+          ? threadSelection(group.map((pin) => pin.ref)) : { kind: "all" } as const;
         const cacheSatisfies = cached
+          && (cached.selection.kind === "all" || cached.descendants)
           && selectionIncludes(cached.selection, requestedSelection);
         if (
           !cacheSatisfies
@@ -682,7 +687,8 @@ export class RemoteThreadSummaryCache {
     const failedBefore = this.refreshFailures.has(instanceId);
     this.threadsForPeer(
       target,
-      { kind: "all" },
+      this.options.fetchPinnedSnapshot
+        ? threadSelection(pins.map((pin) => pin.ref)) : { kind: "all" },
       "pins",
     ).then(
       async (threads) => {
@@ -750,6 +756,7 @@ export class RemoteThreadSummaryCache {
             backend,
             candidateKeys,
             timeoutMs,
+            missing.filter((pin) => pin.ref.backend === backend).map((pin) => pin.ref.threadId),
           );
           for (const key of candidateKeys) {
             if (!keys.has(key)) {
@@ -868,15 +875,20 @@ export class RemoteThreadSummaryCache {
   ): Promise<NavigationThreadSummary[]> {
     const now = this.options.now?.() ?? Date.now();
     const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
+    const descendants = interestKey === "pins" && Boolean(this.options.fetchPinnedSnapshot);
+    // Keep new-child discovery notifications broad. Sparse payload selection
+    // must not hide a child whose identity has not arrived yet.
+    const interestSelection = descendants ? { kind: "all" } as const : selection;
     this.touchPeerInterest(
       target.instanceId,
       interestKey,
-      selection,
+      interestSelection,
       ttlMs,
     );
     const cached = this.cache.get(target.instanceId);
     if (
       cached
+      && (!descendants || cached.selection.kind === "all" || cached.descendants)
       && selectionIncludes(cached.selection, selection)
       && now - cached.fetchedAt < ttlMs
     ) {
@@ -886,6 +898,7 @@ export class RemoteThreadSummaryCache {
     const pending = this.inFlight.get(target.instanceId);
     if (
       pending?.generation === generation
+      && (!descendants || pending.selection.kind === "all" || pending.descendants)
       && selectionIncludes(pending.selection, selection)
     ) {
       return await this.awaitPeerSnapshot(
@@ -912,9 +925,13 @@ export class RemoteThreadSummaryCache {
     // recorded.
     const nameObservationSequence = this.reserveThreadNameObservation();
     const promise = (async () => {
-      const rpcOptions = deadlineAt !== undefined ? { deadlineAt } : undefined;
+      const rpcOptions = deadlineAt !== undefined ? { deadlineAt }
+        : descendants ? { deadlineAt: Date.now() + REMOTE_SNAPSHOT_PEER_TIMEOUT_MS } : undefined;
       const snapshot = await this.awaitPeerSnapshot(
-        rpcOptions
+        descendants && selection.kind === "threads"
+          ? this.options.fetchPinnedSnapshot!(target, selection.threads.map((thread) =>
+              buildThreadIdentityKey(thread.backend, thread.threadId)), rpcOptions)
+          : rpcOptions
           ? this.options.fetchSnapshot(target, selection, rpcOptions)
           : this.options.fetchSnapshot(target, selection),
         deadlineAt,
@@ -929,6 +946,7 @@ export class RemoteThreadSummaryCache {
       }
       const threads = snapshot.threads;
       this.cache.set(target.instanceId, {
+        descendants,
         fetchedAt: this.options.now?.() ?? Date.now(),
         selection,
         threads,
@@ -941,7 +959,7 @@ export class RemoteThreadSummaryCache {
       this.touchPeerInterest(
         target.instanceId,
         interestKey,
-        selection,
+        interestSelection,
         ttlMs,
       );
       // ANY successful fetch is proof of life, including one the jump
@@ -950,7 +968,7 @@ export class RemoteThreadSummaryCache {
       this.refreshFailures.delete(target.instanceId);
       return threads;
     })();
-    const entry = { generation, promise, selection };
+    const entry = { generation, promise, selection, descendants };
     this.inFlight.set(target.instanceId, entry);
     try {
       return await promise;
@@ -983,6 +1001,7 @@ export class RemoteThreadSummaryCache {
     backend: RemoteThreadPin["ref"]["backend"],
     candidateKeys: ReadonlySet<string>,
     timeoutMs: number,
+    threadIds: string[],
   ): Promise<Set<string>> {
     const cacheKey = `${target.instanceId}:${backend}`;
     const now = this.options.now?.() ?? Date.now();
@@ -992,7 +1011,7 @@ export class RemoteThreadSummaryCache {
     if (
       cached
       && now - cached.fetchedAt < ttlMs
-      && [...candidateKeys].every((key) => !cached.threadKeys.has(key))
+      && [...candidateKeys].every((key) => cached.queriedKeys.has(key) && !cached.threadKeys.has(key))
     ) {
       // A cached negative can only delay cleanup. A cached positive could
       // delete a thread restored and re-pinned since the probe, so positive
@@ -1000,7 +1019,9 @@ export class RemoteThreadSummaryCache {
       return cached.threadKeys;
     }
     const archivedThreads = await withTimeout(
-      this.options.fetchArchivedThreads(target, backend),
+      this.options.fetchArchivedThreads(target, backend, threadIds, {
+        deadlineAt: Date.now() + timeoutMs,
+      }),
       timeoutMs,
       `Remote archived threads timed out after ${Math.round(timeoutMs / 1000)}s.`,
     );
@@ -1015,6 +1036,7 @@ export class RemoteThreadSummaryCache {
     this.archivedCache.set(cacheKey, {
       fetchedAt: this.options.now?.() ?? Date.now(),
       threadKeys,
+      queriedKeys: new Set(candidateKeys),
     });
     return threadKeys;
   }

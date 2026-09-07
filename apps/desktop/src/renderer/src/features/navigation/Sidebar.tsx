@@ -1,3 +1,6 @@
+import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
+import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -10,7 +13,7 @@ import type {
   BackendSummary,
   DesktopPwrAgentProfileSummary,
   MessagingThreadBindingSummary,
-  NavigationDirectorySummary,
+  NavigationRelativePinMove,
   NavigationThreadSummary,
   PrSummary,
   ThreadExecutionMode,
@@ -58,7 +61,6 @@ import {
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useNativeDragInteractionGuard } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
-import { selectThreadsWithDrafts } from "../../lib/useThreadDraftIndicators";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
 import {
   DetachPullRequestWarning,
@@ -69,15 +71,11 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
-import { useAttentionOrderedThreads } from "./attention-order";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
 import {
   formatReviewThreadCount,
-  isThreadActive,
-  isThreadNeedingAttention,
-  isThreadRemoteWorkHere,
 } from "./ThreadRowStatus";
 import {
   AttentionReviewReadout,
@@ -133,16 +131,10 @@ function hydrateHoverStableSidebarSnapshot(
       ...frozen.directories.map((directory) => {
         const latestDirectory = latestDirectoriesByKey.get(directory.key);
         if (!latestDirectory) return directory;
-        const frozenDirectoryThreadKeys = new Set(directory.threadKeys);
         return {
           ...latestDirectory,
           pinnedRank: directory.pinnedRank,
-          threadKeys: [
-            ...directory.threadKeys,
-            ...latestDirectory.threadKeys.filter(
-              (threadKey) => !frozenDirectoryThreadKeys.has(threadKey),
-            ),
-          ],
+
         };
       }),
       ...latest.directories
@@ -201,12 +193,17 @@ function releaseBeforeListChange<Args extends unknown[], Result>(
   };
 }
 
+import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
+
 type SidebarProps = {
+  directoryDisclosure?: NavigationDirectoryDisclosure;
   backends: BackendSummary[];
   browseMode: BrowseMode;
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
+  pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
+  selectedThreadDirectoryKeys?: readonly string[];
   recentThreads?: NavigationThreadSummary[];
   /**
    * Give a thread one last move to the top of the Attention lens when its turn
@@ -245,6 +242,7 @@ type SidebarProps = {
    * leaves the machine it was typed on (see useThreadDraftIndicators).
    */
   draftThreadKeys?: Record<string, boolean>;
+  unassignedThreadDraftCount?: number;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
   /** Incremented when the thread title asks the active lens to reveal its row. */
@@ -295,6 +293,7 @@ type SidebarProps = {
   onOpenProfile?: (profile: string) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
+  onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
   onMarkThreadUnread?: (thread: NavigationThreadSummary) => Promise<void>;
   onArchiveThread?: (
     thread: NavigationThreadSummary,
@@ -310,7 +309,7 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     pinned: boolean,
   ) => Promise<void>;
-  onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
+  onReorderThreadPins?: (orderedThreadKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onSetThreadParent?: (
     thread: NavigationThreadSummary,
     parentThreadId?: string,
@@ -337,7 +336,7 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     pinned: boolean,
   ) => Promise<void>;
-  onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+  onReorderDirectoryPins?: (directoryKeys: string[], move?: NavigationRelativePinMove) => Promise<void>;
   onSetDirectoryThreadsCollapsed?: (
     directory: NavigationDirectorySummary,
     collapsed: boolean,
@@ -560,44 +559,11 @@ export function Sidebar(props: SidebarProps) {
       profile: activeProfile,
     })
     : undefined;
-  const updatedOrderThreads = props.inboxThreads ?? props.threads;
-  /**
-   * The Attention lens: everything with a live turn or waiting to be
-   * reviewed. Membership comes off the most-recently-updated order, but the
-   * rows are then ranked per turn rather than per update — see
-   * `attention-order.ts` for why a work queue must not re-sort itself while a
-   * turn streams.
-   */
-  const attentionMembers = useMemo(
-    () =>
-      updatedOrderThreads.filter((thread) =>
-        isThreadNeedingAttention(thread, props.thinkingThreadKeys),
-      ),
-    [props.thinkingThreadKeys, updatedOrderThreads],
-  );
-  const attentionThreads = useAttentionOrderedThreads({
-    promoteOnTurnEnd: props.attentionPromoteOnTurnEnd ?? true,
-    threads: attentionMembers,
-    thinkingThreadKeys: props.thinkingThreadKeys,
-  });
-  /**
-   * The Drafts lens: everything holding unsent composer text, in the same
-   * most-recently-updated order Attention uses. Filtered from the very map the
-   * rows render their "Draft" chip from, so the lens and the chips agree by
-   * construction.
-   */
-  const draftThreads = useMemo(
-    () => selectThreadsWithDrafts(updatedOrderThreads, props.draftThreadKeys),
-    [props.draftThreadKeys, updatedOrderThreads],
-  );
-  const visibleThreads =
-    props.browseMode === "attention"
-      ? attentionThreads
-      : props.browseMode === "drafts"
-        ? draftThreads
-        : props.browseMode === "recents"
-          ? props.recentThreads ?? props.threads
-          : updatedOrderThreads;
+  const lensResources = [...props.pagedNavigation?.resources.values() ?? []]
+    .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
+  const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
+  const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
+    .map((entry) => [navigationThreadSelectionKey(entry.row.ref), rowsByKey.get(navigationThreadSelectionKey(entry.row.ref))])).values()].filter((thread): thread is NavigationThreadSummary => Boolean(thread));
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
       hydrateHoverStableSidebarSnapshot(frozen, latest, {
@@ -681,41 +647,11 @@ export function Sidebar(props: SidebarProps) {
       releaseHoverStableSnapshot,
     ],
   );
-  /**
-   * The numbers on the Attention tab. Counted over the very rows the lens
-   * renders, not over `props.threads`, so the tab and the list cannot report
-   * different populations — the counts sum to the queue's length by
-   * construction. A live turn wins over "to review" so one thread is never
-   * counted twice; membership already guarantees a row that is not active is
-   * awaiting review, which is the same split the directory headers use.
-   *
-   * Live turns split again by where they run, but only in a window that can
-   * see both kinds. Only this instance's turns hold shutdown open, so "can I
-   * quit now?" is answerable from the tab alone — which it is not while one
-   * number mixes work on two machines. A window fronting a peer never splits:
-   * every row in it is that peer's work, so the viewer counts the peer's turns
-   * the way an unfederated instance counts its own.
-   *
-   * `isThreadRemoteWorkHere` IS that rule, and calling it here rather than
-   * re-spelling it is what makes "the tab counts it under elsewhere exactly
-   * when its row sweeps neutral" true by construction instead of by two
-   * expressions happening to agree.
-   */
-  const attentionCounts = useMemo(() => {
-    let activeLocal = 0;
-    let activeRemote = 0;
-    let review = 0;
-    for (const thread of attentionThreads) {
-      if (!isThreadActive(thread, props.thinkingThreadKeys)) {
-        review += 1;
-      } else if (isThreadRemoteWorkHere(thread)) {
-        activeRemote += 1;
-      } else {
-        activeLocal += 1;
-      }
-    }
-    return { activeLocal, activeRemote, review };
-  }, [attentionThreads, props.thinkingThreadKeys]);
+  // Counts cover the owner's full population, independently of the visible lens range.
+  const ownerCountPage = props.pagedNavigation?.resources.get("directory-index")?.state.page;
+  const ownerCounts = ownerCountPage?.coverage.state === "complete" ? ownerCountPage.counts : undefined;
+  const activeRemote = federationTarget ? 0 : ownerCounts?.activeRemote ?? 0;
+  const attentionCounts = { activeLocal: (ownerCounts?.active ?? 0) - activeRemote, activeRemote, review: ownerCounts?.review ?? 0 };
   const remoteSignalVisible = useLingeringRemoteActiveSignal(
     attentionCounts.activeRemote,
   );
@@ -755,48 +691,8 @@ export function Sidebar(props: SidebarProps) {
     );
   }, [selectedItemKey]);
 
-  // Archive/refresh reconciliation can remove selected rows while the sidebar
-  // stays mounted. Keep the selection and its range anchor pointed only at
-  // threads still present in the navigation snapshot.
-  useEffect(() => {
-    const availableThreadKeys = new Set(
-      navigationThreads.map((thread) =>
-        threadSummaryIdentityKey(thread),
-      ),
-    );
-    if (!availableThreadKeys.has(selectionAnchorKeyRef.current ?? "")) {
-      selectionAnchorKeyRef.current = undefined;
-    }
-    setSelectedThreadKeys((current) => {
-      const next = new Set(
-        [...current].filter((threadKey) => availableThreadKeys.has(threadKey)),
-      );
-      return next.size === current.size ? current : next;
-    });
-  }, [navigationThreads]);
+  // Selection survives page eviction. Exact resolution and owner actions decide existence.
 
-  // Directory refreshes can remove summary rows while the Directories lens
-  // remains mounted. Keep the separate directory selection scoped to rows that
-  // still exist, rather than letting a later context-menu action reach a stale
-  // project key.
-  useEffect(() => {
-    const availableDirectoryKeys = new Set(
-      props.directories.map((directory) => directory.key),
-    );
-    if (
-      !availableDirectoryKeys.has(directorySelectionAnchorKeyRef.current ?? "")
-    ) {
-      directorySelectionAnchorKeyRef.current = undefined;
-    }
-    setSelectedDirectoryKeys((current) => {
-      const next = new Set(
-        [...current].filter((directoryKey) =>
-          availableDirectoryKeys.has(directoryKey),
-        ),
-      );
-      return next.size === current.size ? current : next;
-    });
-  }, [props.directories]);
 
   // Directory selection is a local batch operation, not navigation state. Do
   // not carry its highlighted rows into a different lens where they are no
@@ -1403,20 +1299,14 @@ export function Sidebar(props: SidebarProps) {
       return;
     }
 
-    const directoryThreadKeys = new Set(
-      directoryContextMenu.directories.flatMap(
-        (directory) => directory.threadKeys,
-      ),
-    );
-    const unreadThreads = props.threads.filter(
-      (thread) =>
-        directoryThreadKeys.has(
-          threadSummaryIdentityKey(thread),
-        ) && thread.inbox.inInbox,
-    );
-    setDirectoryContextMenu(undefined);
-    hoverStableSnapshot.release();
-    void props.onMarkThreadsSeen?.(unreadThreads);
+    if (props.onMarkDirectoriesSeen) {
+      const keys = directoryContextMenu.directories.map((directory) => directory.key);
+      setDirectoryContextMenu(undefined);
+      hoverStableSnapshot.release();
+      void props.onMarkDirectoriesSeen(keys);
+      return;
+    }
+
   };
 
   /**
@@ -1448,6 +1338,12 @@ export function Sidebar(props: SidebarProps) {
     [props.directories],
   );
 
+  const indexState = props.pagedNavigation?.resources.get("directory-index")?.state;
+  const completeDirectoryIndex = Boolean(indexState?.page?.complete && !indexState.stale
+    && (indexState.page.rangeStart ?? 0) === 0 && indexState.page.coverage.state === "complete");
+  const completeThreadPinOrder = completeDirectoryIndex && indexState?.page?.counts.pinned !== undefined
+    && pinnedThreadKeysInOrder.length === indexState.page.counts.pinned;
+
   const moveThreadFromContextMenu = (
     thread: NavigationThreadSummary,
     direction: "up" | "down",
@@ -1458,14 +1354,13 @@ export function Sidebar(props: SidebarProps) {
     if (currentIndex === -1) return;
     const targetIndex =
       direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= ordered.length) return;
-    const targetKey = ordered[targetIndex]!;
-    const nextKeys = moveThreadKey(
+    const targetKey = ordered[targetIndex];
+    const nextKeys = targetKey ? moveThreadKey(
       ordered,
       threadKey,
       targetKey,
       direction === "up" ? "before" : "after",
-    );
+    ) : [];
     // Intentionally do NOT dismiss the menu after a Move — the
     // user often wants several reorder taps in a row, and
     // re-right-clicking between every one is a UX downgrade vs
@@ -1474,7 +1369,7 @@ export function Sidebar(props: SidebarProps) {
     // tick, so subsequent Move clicks see updated adjacency.
     // Pin / Unpin / Rename / Archive are terminal actions and
     // still dismiss the menu.
-    void hoverReleasedListHandlers.reorderThreadPins?.(nextKeys);
+    void hoverReleasedListHandlers.reorderThreadPins?.(nextKeys, { key: threadKey, direction });
   };
 
   const moveDirectoryFromContextMenu = (
@@ -1486,17 +1381,16 @@ export function Sidebar(props: SidebarProps) {
     if (currentIndex === -1) return;
     const targetIndex =
       direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= ordered.length) return;
-    const targetKey = ordered[targetIndex]!;
-    const nextKeys = moveDirectoryKey(
+    const targetKey = ordered[targetIndex];
+    const nextKeys = targetKey ? moveDirectoryKey(
       ordered,
       directory.key,
       targetKey,
       direction === "up" ? "before" : "after",
-    );
+    ) : [];
     // See `moveThreadFromContextMenu` for why we don't dismiss
     // the menu here.
-    void hoverReleasedListHandlers.reorderDirectoryPins?.(nextKeys);
+    void hoverReleasedListHandlers.reorderDirectoryPins?.(nextKeys, { key: directory.key, direction });
   };
 
   const archiveThreadsFromContextMenu = (
@@ -1530,21 +1424,11 @@ export function Sidebar(props: SidebarProps) {
     if (props.browseMode === "directories") {
       hoverStableSnapshot.release();
     }
-    const threadKeys = threads.map((thread) =>
-      threadSummaryIdentityKey(thread),
-    );
-    if (props.onReorderThreadPins) {
-      const nextKeys = [
-        ...pinnedThreadKeysInOrder,
-        ...threadKeys.filter((threadKey) => !pinnedThreadKeysInOrder.includes(threadKey)),
-      ];
-      void props.onReorderThreadPins(nextKeys);
-      return;
-    }
-
-    void Promise.all(
-      threads.map((thread) => props.onSetThreadPin?.(thread, true)),
-    );
+    void (async () => {
+      for (const thread of threads) {
+        await props.onSetThreadPin?.(thread, true);
+      }
+    })();
   };
 
   const unpinThreadsFromContextMenu = (
@@ -1729,11 +1613,11 @@ export function Sidebar(props: SidebarProps) {
     : -1;
   const contextMenuPinnedThreadCount = pinnedThreadKeysInOrder.length;
   const contextMenuCanMoveUp =
-    contextMenuShowMoveItems && contextMenuPinnedThreadIndex > 0;
+    contextMenuShowMoveItems && (contextMenuPinnedThreadIndex > 0 || !completeThreadPinOrder);
   const contextMenuCanMoveDown =
     contextMenuShowMoveItems &&
     contextMenuPinnedThreadIndex >= 0 &&
-    contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1;
+    (contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1 || !completeThreadPinOrder);
   const contextMenuHasPinAction = contextMenuCanPin;
   const contextMenuHasCreationActions =
     contextMenuCanCreateSubthread || contextMenuCanFork;
@@ -1804,20 +1688,7 @@ export function Sidebar(props: SidebarProps) {
     directoryContextMenu?.directories ?? [];
   const directoryContextMenuIsBulk =
     directoryContextMenuDirectories.length > 1;
-  const directoryMenuThreadKeys = new Set(
-    directoryContextMenuDirectories.flatMap(
-      (directory) => directory.threadKeys,
-    ),
-  );
-  const directoryMenuUnreadThreads = props.threads.filter(
-    (thread) =>
-      directoryMenuThreadKeys.has(
-        threadSummaryIdentityKey(thread),
-      ) && thread.inbox.inInbox,
-  );
-  const directoryMenuCanMarkRead = Boolean(
-    props.onMarkThreadsSeen && directoryMenuUnreadThreads.length > 0,
-  );
+  const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen);
   const directoryMenuCanPin = Boolean(
     !directoryContextMenuIsBulk
       && directoryContextMenu
@@ -1827,7 +1698,7 @@ export function Sidebar(props: SidebarProps) {
     !directoryContextMenuIsBulk
       && props.onRemoveDirectory
       && directoryContextMenu?.directory.kind === "directory"
-      && directoryContextMenu.directory.threadKeys.length === 0,
+      && directoryContextMenu.directory.counts?.total === 0,
   );
 
   // Same shape as the thread context menu's "Move" items, applied
@@ -1842,11 +1713,11 @@ export function Sidebar(props: SidebarProps) {
     ? pinnedDirectoryKeysInOrder.indexOf(directoryContextMenu.directory.key)
     : -1;
   const directoryMenuCanMoveUp =
-    directoryMenuShowMoveItems && directoryMenuPinnedIndex > 0;
+    directoryMenuShowMoveItems && (directoryMenuPinnedIndex > 0 || !completeDirectoryIndex);
   const directoryMenuCanMoveDown =
     directoryMenuShowMoveItems &&
     directoryMenuPinnedIndex >= 0 &&
-    directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1;
+    (directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1 || !completeDirectoryIndex);
   const directoryMenuHasPinActions =
     directoryMenuCanPin || directoryMenuShowMoveItems;
 
@@ -2028,6 +1899,7 @@ export function Sidebar(props: SidebarProps) {
               <AttentionLensTab
                 key={mode}
                 active={props.browseMode === mode}
+                countsReady={Boolean(ownerCounts)}
                 activeThreadCount={attentionCounts.activeLocal}
                 remoteActiveThreadCount={
                   remoteSignalVisible ? attentionCounts.activeRemote : undefined
@@ -2044,10 +1916,10 @@ export function Sidebar(props: SidebarProps) {
                 // the rows can't disagree. Only Drafts counts: Updated and
                 // Created hold every thread, and Directories is a different
                 // unit — numbers there would say nothing you'd act on.
-                count={mode === "drafts" ? draftThreads.length : undefined}
+                count={mode === "drafts" ? Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length : undefined}
                 countLabel={
                   mode === "drafts"
-                    ? formatDraftThreadCount(draftThreads.length)
+                    ? formatDraftThreadCount(Object.values(props.draftThreadKeys ?? {}).filter(Boolean).length)
                     : undefined
                 }
                 tooltipText={browseModeTooltips[mode]}
@@ -2078,6 +1950,9 @@ export function Sidebar(props: SidebarProps) {
               <span>Starting</span>
             </button>
           ))}
+          {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
+            <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
+          ) : null}
           {props.loading ? (
             <p className="sidebar-empty">Loading threads…</p>
           ) : props.providerRefresh?.state === "checking"
@@ -2087,6 +1962,9 @@ export function Sidebar(props: SidebarProps) {
             <p className="sidebar-error">{props.error}</p>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
+              pagedNavigation={props.pagedNavigation}
+              selectedThreadDirectoryKeys={props.selectedThreadDirectoryKeys}
+              directoryDisclosure={props.directoryDisclosure}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
               terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
@@ -2133,7 +2011,7 @@ export function Sidebar(props: SidebarProps) {
                 hoverReleasedListHandlers.setDirectoryThreadsCollapsed
               }
               onOpenDirectoryContextMenu={
-                props.onSetDirectoryPin || props.onMarkThreadsSeen
+                props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen
                   ? openDirectoryContextMenu
                   : undefined
               }
@@ -2154,11 +2032,16 @@ export function Sidebar(props: SidebarProps) {
                     // text is equally unsent but belongs to a directory rather
                     // than a thread, so this lens cannot show it and must not
                     // claim there is nothing to find.
-                    ? "No unsent replies."
+                    ? props.unassignedThreadDraftCount
+                      ? "Older drafts are available. Use Recover Draft in a composer to choose one."
+                      : "No unsent replies."
                     : "No threads yet."}
               </p>
             ) : (
               <RecentsList
+                pagedNavigation={props.pagedNavigation}
+                resourceIds={lensResources.map((resource) => resource.id)}
+                loadedThreads={props.threads}
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                 terminalThreadKeys={props.terminalThreadKeys}
                 inputRequestThreadKeys={props.inputRequestThreadKeys}
@@ -2191,6 +2074,20 @@ export function Sidebar(props: SidebarProps) {
               />
             )
           )}
+          {props.pagedNavigation?.admissionError ? <p className="sidebar-error">{props.pagedNavigation.admissionError}</p> : null}
+          {props.browseMode !== "directories" ? lensResources.map((resource) => (
+            <div key={resource.id}>
+              {resource.state.error ? <p className="sidebar-error">{resource.state.error}</p> : null}
+              {resource.state.rebaselineRequired ? (
+                <button type="button" onClick={() => void props.pagedNavigation?.restart(resource.id)}>Reload this lens</button>
+              ) : resource.state.page?.nextCursor ? (
+                <button type="button" disabled={resource.loading} onClick={() => void props.pagedNavigation?.loadMore(resource.id)}>Load more threads</button>
+              ) : null}
+            </div>
+          )) : null}
+          {props.browseMode === "directories" && props.pagedNavigation?.resources.get("directory-index")?.state.page?.nextCursor ? (
+            <button type="button" onClick={() => void props.pagedNavigation?.loadMore("directory-index")}>Load more directories</button>
+          ) : null}
         </div>
       </section>
 
@@ -3111,6 +3008,7 @@ function useLingeringRemoteActiveSignal(count: number): boolean {
  */
 function AttentionLensTab(props: {
   active: boolean;
+  countsReady?: boolean;
   activeThreadCount: number;
   /**
    * Peer turns this window can see. `undefined` means the readout is not on —
@@ -3141,7 +3039,7 @@ function AttentionLensTab(props: {
     <>
       <button
         role="tab"
-        aria-label={accessibleName}
+        aria-label={props.countsReady === false ? "Attention, loading counts" : accessibleName}
         // The card's consequence lines ("Quitting interrupts these") exist
         // nowhere else — without this they are sighted-only, since the portal
         // sits outside this button's subtree. Gated on `visible`: naming an
@@ -3161,11 +3059,13 @@ function AttentionLensTab(props: {
         onMouseEnter={(event) => tooltip.show(event.currentTarget, card)}
         onMouseLeave={tooltip.hide}
       >
+        {props.countsReady === false ? <span aria-label="Loading counts">…</span> : <>
         <AttentionTurnReadouts
           activeLocal={props.activeThreadCount}
           activeRemote={props.remoteActiveThreadCount}
         />
         <AttentionReviewReadout count={props.reviewThreadCount} />
+        </>}
       </button>
       {tooltip.tooltipNode}
     </>

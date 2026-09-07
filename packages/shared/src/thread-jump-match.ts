@@ -1,16 +1,27 @@
 import type { NavigationThreadSummary } from "./contracts/navigation";
 
+/** Metadata needed to match or reference a row; never action/config authority. */
+export type ThreadJumpCandidate = Pick<NavigationThreadSummary,
+  "id" | "source" | "title" | "titleSource" | "createdAt" | "updatedAt"
+  | "gitBranch" | "linkedDirectories" | "prs"
+> & {
+  agent?: { name: string; instructions?: string };
+  federation?: Pick<NonNullable<NavigationThreadSummary["federation"]>,
+    "ref" | "instanceLabel" | "celestialIcon"
+  >;
+};
+
 const MIN_LONG_THREAD_ID_QUERY_LENGTH = 10;
 const MIN_UUID_FRAGMENT_HEX_CHARS = 8;
 
 /** PR numbers linked to a thread via its persisted overlay PR chips. */
-export function threadPrNumbers(thread: NavigationThreadSummary): number[] {
+export function threadPrNumbers(thread: ThreadJumpCandidate): number[] {
   return (thread.prs ?? []).map((pr) => pr.number);
 }
 
 /** True when a bare numeric query exactly identifies any attached PR. */
 export function threadHasExactPrNumberMatch(
-  thread: NavigationThreadSummary,
+  thread: ThreadJumpCandidate,
   query: string,
 ): boolean {
   const match = query.trim().match(/^#?(\d{1,7})$/);
@@ -41,7 +52,7 @@ function threadIdMatchesQuery(threadId: string, query: string): boolean {
 }
 
 export function agentMetadataMatchesQuery(
-  thread: NavigationThreadSummary,
+  thread: ThreadJumpCandidate,
   query: string,
 ): boolean {
   if (!thread.agent) {
@@ -70,7 +81,7 @@ export function agentMetadataMatchesQuery(
 /**
  * Relevance test for the thread-list quick jump (⌘K): matches title, Agent
  * metadata, thread id, linked PR number, git branch, and linked-directory
- * label. PR numbers match with or without the leading "#"; thread ids only
+ * label/path. PR numbers match with or without the leading "#"; thread ids only
  * match sufficiently deliberate UUID-like fragments or longer pasted ids.
  *
  * Shared between the renderer (instant local filtering) and the main process
@@ -78,7 +89,7 @@ export function agentMetadataMatchesQuery(
  * remote matching semantics can never drift.
  */
 export function threadMatchesQuery(
-  thread: NavigationThreadSummary,
+  thread: ThreadJumpCandidate,
   query: string,
 ): boolean {
   const needle = query.trim().toLowerCase();
@@ -105,7 +116,8 @@ export function threadMatchesQuery(
     return true;
   }
   return (thread.linkedDirectories ?? []).some((directory) =>
-    (directory.label ?? "").toLowerCase().includes(needle),
+    [directory.label, directory.path, directory.worktreePath]
+      .some((value) => value?.toLowerCase().includes(needle)),
   );
 }
 
@@ -114,18 +126,18 @@ export function threadMatchesQuery(
  * Owners use this before returning bounded Federation search results, while
  * viewers use it to merge results from multiple peers without semantic drift.
  */
-export function rankThreadJumpMatches(
-  threads: readonly NavigationThreadSummary[],
+export function rankThreadJumpMatches<T extends ThreadJumpCandidate>(
+  threads: readonly T[],
   query: string,
-): NavigationThreadSummary[] {
+): T[] {
   return sortThreadJumpMatches(threads.filter((thread) => threadMatchesQuery(thread, query)), query);
 }
 
 /** Merge owner-matched results without re-filtering their compact display data. */
-export function sortThreadJumpMatches(
-  threads: readonly NavigationThreadSummary[],
+export function sortThreadJumpMatches<T extends ThreadJumpCandidate>(
+  threads: readonly T[],
   query: string,
-): NavigationThreadSummary[] {
+): T[] {
   return [...threads].sort((left, right) => {
     const exactPrPriority =
       Number(threadHasExactPrNumberMatch(right, query))

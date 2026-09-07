@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildFederatedThreadRef,
+  buildThreadIdentityKey,
   type FederationRemoteTarget,
   type FederationThreadSelection,
   type NavigationSnapshot,
@@ -971,7 +972,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.refreshed[0].summary.title).toBe("Fresh title");
   });
 
-  it("carries a transitive remote child with its mounted parent", async () => {
+  it.each([false, true])("carries a transitive remote child with its mounted parent (owner selection: %s)", async (ownerSelection) => {
     const parent = stampedThread({
       instanceId: "peer-a",
       threadId: "parent",
@@ -985,11 +986,14 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     child.parentThreadId = "parent";
     child.parentThreadBackend = "codex";
     child.parentThreadInstanceId = "peer-a";
+    const fetchSnapshot = vi.fn(async (_target: FederationRemoteTarget, selection: FederationThreadSelection) => snapshotOf(
+      selection.kind === "all" ? [parent, child] : [parent],
+    ));
+    const fetchPinnedSnapshot = vi.fn(async () => snapshotOf([parent, child]));
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
-      fetchSnapshot: async (_target, selection) => snapshotOf(
-        selection.kind === "all" ? [parent, child] : [parent],
-      ),
+      fetchSnapshot,
+      ...(ownerSelection ? { fetchPinnedSnapshot } : {}),
       fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected" }),
     });
@@ -1010,6 +1014,14 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(
       resolved.threads[1].federation?.derivedFromMountedParent,
     ).toBe(true);
+    if (ownerSelection) {
+      expect(fetchSnapshot).not.toHaveBeenCalled();
+      expect(fetchPinnedSnapshot).toHaveBeenCalledWith(
+        { scope: "remote", instanceId: "peer-a" },
+        [buildThreadIdentityKey("codex", "parent")],
+        { deadlineAt: expect.any(Number) },
+      );
+    }
   });
 
   it("does not carry ordinary same-instance siblings with a mounted parent", async () => {
@@ -1397,12 +1409,44 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(fetchArchivedThreads).toHaveBeenCalledWith(
       remoteTarget("peer-a"),
       "codex",
+      [archivedPin.ref.threadId],
+      { deadlineAt: expect.any(Number) },
     );
 
     const resolved = await cache.resolvePinnedThreads([archivedPin]);
     expect(resolved.threads).toEqual([]);
     expect(resolved.refreshed).toEqual([]);
     expect(resolved.archived).toEqual([archivedPin.ref]);
+  });
+
+  it("does not treat an unqueried pin as covered by a cached negative archive lookup", async () => {
+    let now = 0;
+    const second = stampedThread({
+      instanceId: "peer-a", threadId: "second", title: "Archived second pin",
+    });
+    const fetchArchivedThreads = vi.fn()
+      .mockImplementationOnce(async () => {
+        now = 50;
+        return [];
+      })
+      .mockResolvedValueOnce([second]);
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      now: () => now,
+      ttlMs: 100,
+    });
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "first" })]);
+    await settle();
+    // Navigation expired, but the slower first archive probe is still fresh.
+    now = 110;
+    const secondPin = pin({ instanceId: "peer-a", threadId: "second" });
+    await cache.resolvePinnedThreads([secondPin]);
+    await settle();
+    expect(fetchArchivedThreads).toHaveBeenCalledTimes(2);
+    expect((await cache.resolvePinnedThreads([secondPin])).archived).toEqual([secondPin.ref]);
   });
 
   it("revalidates cached archive evidence before pruning a re-added pin", async () => {

@@ -1,3 +1,8 @@
+import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -88,6 +93,14 @@ import {
   type NavigationDirectorySummary,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
+  type NavigationQueryPage,
+  type NavigationQueryRequest,
+  type NavigationQueueProjection,
+  type NavigationQueueProjectionRequest,
+  type NavigationLaunchpadConfigRequest,
+  type NavigationLaunchpadConfigResponse,
+  type NavigationSelectedDetailRequest,
+  type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
   type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
@@ -287,6 +300,14 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_QUERY_PAGE_CHANNEL,
+  NAVIGATION_QUERY_RELEASE_CHANNEL,
+  NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
+  NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+  NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
+  NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
+  NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
+  NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -295,6 +316,12 @@ import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
+import { searchNavigationOwners } from "../app-server/navigation-jump-search";
+import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
+import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   isFederationPeerUnavailableError,
 } from "../federation/federation-peer-unavailable-error";
@@ -1809,6 +1836,8 @@ class DesktopAppServerService {
           includeTurns: request.includeTurns,
           limit: request.limit,
           viewOnly: request.viewOnly,
+          knownRevision: request.knownRevision,
+          readReason: request.readReason,
         });
     }
     const backend = request.backend ?? "codex";
@@ -2100,6 +2129,110 @@ class DesktopAppServerService {
     this.pendingNavigationSnapshots.set(requestKey, promise);
 
     return await promise;
+  }
+
+  async getNavigationQueryPage(
+    request: NavigationQueryRequest,
+    consumerId?: string,
+  ): Promise<NavigationQueryPage> {
+    if (consumerId) {
+      return navigationQueryPool.read({
+        consumerId,
+        request,
+        load: async ({ signal, deadlineAt }) => {
+          signal.throwIfAborted();
+          return this.readNavigationQueryPage(request, { signal, deadlineAt });
+        },
+      });
+    }
+    return this.readNavigationQueryPage(request);
+  }
+
+  private async readNavigationQueryPage(
+    request: NavigationQueryRequest,
+    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
+  ): Promise<NavigationQueryPage> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationQueryPage(
+        request.federationTarget,
+        request,
+        rpcOptions,
+      );
+    }
+    return await getDesktopNavigationQueryStore().readPage({
+      loadIndex: async () => {
+        rpcOptions?.signal.throwIfAborted();
+        const index = await loadLocalNavigationQueryIndex({
+          backend: request.backend,
+          callerReason: "renderer-navigation-query",
+        });
+        rpcOptions?.signal.throwIfAborted();
+        if (request.inventory === "viewer") {
+          const pins = await getDesktopOverlayStore().readRemoteThreadPinNavigationRows();
+          rpcOptions?.signal.throwIfAborted();
+          return pins.length ? appendViewerNavigationPins(index, getDesktopFederationRuntime().stampViewerNavigationPins(pins)) : index;
+        }
+        return index;
+      },
+      request,
+      scopeKey: request.inventory === "viewer" ? "renderer-viewer" : "renderer-local",
+    });
+  }
+
+  async releaseNavigationAttentionView(request: NavigationAttentionViewReleaseRequest): Promise<void> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteReleaseNavigationAttentionView(request.federationTarget, request);
+    }
+    getDesktopNavigationQueryStore().releaseAttentionView("renderer-local", request.viewId);
+    getDesktopNavigationQueryStore().releaseAttentionView("renderer-viewer", request.viewId);
+  }
+
+  async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteMarkNavigationDirectorySeen(request.federationTarget, request);
+    }
+    return markLocalNavigationDirectorySeen(request);
+  }
+
+  async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteRemoveNavigationDirectory(request.federationTarget, request);
+    }
+    return removeLocalNavigationDirectory(request);
+  }
+
+  async getNavigationLaunchpadConfig(
+    request: NavigationLaunchpadConfigRequest,
+  ): Promise<NavigationLaunchpadConfigResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request);
+    }
+    return await getDesktopNavigationDetailService().readLaunchpadConfig(request);
+  }
+
+  async getNavigationSelectedDetail(
+    request: NavigationSelectedDetailRequest,
+  ): Promise<NavigationSelectedDetailResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationSelectedDetail(
+        request.federationTarget,
+        request,
+      );
+    }
+    return await getDesktopNavigationDetailService().readSelectedDetail(request);
+  }
+
+  async getNavigationQueueProjection(
+    request: NavigationQueueProjectionRequest,
+  ): Promise<NavigationQueueProjection> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationQueueProjection(
+        request.federationTarget,
+        request,
+        { deadlineAt: Math.min(request.deadlineAt ?? Date.now() + 10_000, Date.now() + 10_000) },
+      );
+    }
+    return getDesktopNavigationDetailService().readQueueProjection(request);
   }
 
   async setNavigationBrowseMode(
@@ -3515,6 +3648,9 @@ class DesktopAppServerService {
       seenUpdatedAt: request.seenUpdatedAt ?? null,
     });
 
+    await getDesktopBackendRegistry().publishLocalEvent({ backend, notification: {
+      method: "navigation/thread/seen", params: { threadId: request.threadId, seenUpdatedAt: request.seenUpdatedAt },
+    } });
     return response;
   }
 
@@ -6057,6 +6193,9 @@ class DesktopAppServerService {
       // it locally would only create a phantom pin on the viewer machine
       // that the next remote snapshot overwrites.
       const { federationTarget, ...remoteRequest } = request;
+      if (request.pinned !== undefined) {
+        getDesktopFederationRuntime().assertRemoteNavigationQueryProtocol(federationTarget);
+      }
       return await getDesktopFederationRuntime()
         .remoteBackend(federationTarget)
         .setThreadPin(remoteRequest);
@@ -6066,6 +6205,7 @@ class DesktopAppServerService {
     const overlay = await this.getOverlayStore().setThreadPin({
       backend,
       threadId: request.threadId,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
 
@@ -6179,9 +6319,24 @@ class DesktopAppServerService {
       && isRemoteFederationTarget(request.federationTarget)
     ) {
       const { federationTarget, ...remoteRequest } = request;
-      return await getDesktopFederationRuntime()
+      if (request.move) {
+        getDesktopFederationRuntime().assertRemoteNavigationQueryProtocol(federationTarget);
+      }
+      const ownerPrefix = `remote:${federationTarget.instanceId}:`;
+      const ownerKey = (key: string): string => key.startsWith(ownerPrefix) ? key.slice(ownerPrefix.length) : key;
+      const result = await getDesktopFederationRuntime()
         .remoteBackend(federationTarget)
-        .reorderThreadPins(remoteRequest);
+        .reorderThreadPins({
+          ...remoteRequest,
+          threadKeys: remoteRequest.threadKeys?.map(ownerKey),
+          move: remoteRequest.move ? (remoteRequest.move.direction
+            ? { key: ownerKey(remoteRequest.move.key), direction: remoteRequest.move.direction }
+            : { key: ownerKey(remoteRequest.move.key), anchorKey: ownerKey(remoteRequest.move.anchorKey), placement: remoteRequest.move.placement })
+            : undefined,
+        });
+      return { pinnedRanks: Object.fromEntries(Object.entries(result.pinnedRanks).map(([key, rank]) => [
+        key.startsWith("remote:") ? key : `${ownerPrefix}${key}`, rank,
+      ])) };
     }
     // The pinned section interleaves local pins and viewer-owned remote
     // pins. The store assigns ranks from the FULL requested order in one
@@ -6190,7 +6345,7 @@ class DesktopAppServerService {
     // and a mixed reorder is atomic.
     const overlayStore = this.getOverlayStore();
     const remotePins =
-      typeof overlayStore.listRemoteThreadPins === "function"
+      !request.move && typeof overlayStore.listRemoteThreadPins === "function"
         ? await overlayStore.listRemoteThreadPins()
         : [];
     const remoteRefsByKey = Object.fromEntries(
@@ -6201,11 +6356,12 @@ class DesktopAppServerService {
     );
     const pinnedRanks = await overlayStore.reorderThreadPins({
       threadKeys: request.threadKeys,
+      ...(request.move ? { move: request.move } : {}),
       remoteRefsByKey,
     });
 
     logDebug("reorderThreadPins", {
-      pinCount: request.threadKeys.length,
+      pinCount: request.threadKeys?.length ?? 1,
       remotePinCount: Object.keys(remoteRefsByKey).length,
     });
 
@@ -6495,6 +6651,7 @@ class DesktopAppServerService {
     const instanceId = validateRemoteThreadPinRef(request.ref);
     const result = await this.getOverlayStore().setRemoteThreadLocalPin({
       ref: request.ref,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
     await getDesktopBackendRegistry().publishLocalEvent({
@@ -6515,9 +6672,14 @@ class DesktopAppServerService {
     request: FederationJumpSearchRequest,
     onProgress?: (progress: FederationJumpSearchProgress) => void,
   ): Promise<FederationJumpSearchResponse> {
-    return await getDesktopFederationRuntime()
-      .remoteThreadSummaries()
-      .searchForJump(request, onProgress);
+    return await searchNavigationOwners({ request, onProgress,
+      owners: getDesktopFederationRuntime().connectedPeerTargets().filter((peer) => peer.capabilities.includes("thread_navigation")),
+      readPage: async (query) => {
+        const consumer = `jump-search:${randomUUID()}`;
+        try { return await this.getNavigationQueryPage(query, consumer); }
+        finally { navigationQueryPool.release(consumer); }
+      },
+    });
   }
 
   async setThreadParent(
@@ -6529,6 +6691,9 @@ class DesktopAppServerService {
     ) {
       const { federationTarget, ...ownerRequest } = request;
       const federationRuntime = getDesktopFederationRuntime();
+      if (request.expectedParent !== undefined) {
+        federationRuntime.assertRemoteNavigationQueryProtocol(federationTarget);
+      }
       const response = await federationRuntime
         .remoteBackend(federationTarget)
         .setThreadParent(ownerRequest);
@@ -6579,6 +6744,7 @@ class DesktopAppServerService {
       parentThreadId: request.parentThreadId,
       parentThreadBackend: request.parentThreadBackend,
       parentThreadInstanceId: request.parentThreadInstanceId,
+      expectedParent: request.expectedParent,
     });
 
     logDebug("setThreadParent", {
@@ -6634,7 +6800,7 @@ class DesktopAppServerService {
     const threadIds = await this.getOverlayStore().updateSubthreadOrder({
       backend,
       parentThreadId: request.parentThreadId,
-      threadIds: request.threadIds,
+      ...(request.insertAfter ? { insertAfter: request.insertAfter } : { threadIds: request.threadIds }),
     });
 
     logDebug("updateSubthreadOrder", {
@@ -6723,6 +6889,7 @@ class DesktopAppServerService {
 
     const overlay = await this.getOverlayStore().setDirectoryPin({
       directoryKey: request.directoryKey,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
 
@@ -6758,16 +6925,17 @@ class DesktopAppServerService {
   async reorderDirectoryPins(
     request: ReorderDirectoryPinsRequest,
   ): Promise<ReorderDirectoryPinsResponse> {
-    for (const directoryKey of request.directoryKeys) {
+    for (const directoryKey of request.directoryKeys ?? [request.move?.key, request.move?.anchorKey].filter((key): key is string => Boolean(key))) {
       rejectNonUserDirectoryKey(directoryKey);
     }
 
     const pinnedRanks = await this.getOverlayStore().reorderDirectoryPins({
       directoryKeys: request.directoryKeys,
+      ...(request.move ? { move: request.move } : {}),
     });
 
     logDebug("reorderDirectoryPins", {
-      pinCount: request.directoryKeys.length,
+      pinCount: request.directoryKeys?.length ?? 1,
     });
 
     await getDesktopBackendRegistry().publishLocalEvent({
@@ -7589,7 +7757,11 @@ function commandLooksLikeGitMutation(command: string): boolean {
 const GIT_MUTATION_COMMAND =
   /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
 
+const navigationQueryPool = getDesktopNavigationQueryPool();
+const navigationQueryConsumersBySender = new Map<number, Set<string>>();
+let nextTransientNavigationConsumer = 0;
 const appServerService = new DesktopAppServerService();
+const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
 const navigationSnapshotTransport = new NavigationSnapshotTransport();
 
 /** Sender ids that already have a destroyed-listener reaping their PR focus. */
@@ -7897,6 +8069,85 @@ export function registerAppServerIpcHandlers(): void {
         },
       });
     },
+  );
+  ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_QUERY_PAGE_CHANNEL,
+    async (
+      event,
+      request: NavigationQueryRequest,
+      consumerId?: string,
+    ): Promise<NavigationQueryPage> => {
+      if (consumerId !== undefined
+        && (typeof consumerId !== "string" || consumerId.length < 1 || consumerId.length > 128)) {
+        throw new Error("Navigation consumer identity must contain 1 to 128 characters.");
+      }
+      const senderId = event.sender.id;
+      let consumers = navigationQueryConsumersBySender.get(senderId);
+      if (!consumers) {
+        consumers = new Set();
+        navigationQueryConsumersBySender.set(senderId, consumers);
+        event.sender.once("destroyed", () => {
+          for (const token of navigationQueryConsumersBySender.get(senderId) ?? []) {
+            navigationQueryPool.release(token);
+          }
+          navigationQueryConsumersBySender.delete(senderId);
+          void navigationAttentionViewLeases.releaseSender(senderId);
+        });
+      }
+      const token = JSON.stringify([senderId, consumerId ?? ++nextTransientNavigationConsumer]);
+      consumers.add(token);
+      try {
+        return await appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(senderId, request), token);
+      } finally {
+        if (consumerId === undefined) {
+          consumers.delete(token);
+          navigationQueryPool.release(token);
+        }
+      }
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
+  ipcMain.handle(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL, async (event, request: NavigationAttentionViewReleaseRequest) =>
+    navigationAttentionViewLeases.release(event.sender.id, request));
+  ipcMain.removeHandler(NAVIGATION_QUERY_RELEASE_CHANNEL);
+  ipcMain.handle(NAVIGATION_QUERY_RELEASE_CHANNEL, async (event, consumerId: string) => {
+    const token = JSON.stringify([event.sender.id, consumerId]);
+    navigationQueryConsumersBySender.get(event.sender.id)?.delete(token);
+    navigationQueryPool.release(token);
+  });
+  ipcMain.removeHandler(NAVIGATION_REMOVE_DIRECTORY_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
+  ipcMain.handle(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, async (_event, request: MarkNavigationDirectorySeenRequest) =>
+    appServerService.markNavigationDirectorySeen(request));
+  ipcMain.handle(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, async (_event, request: RemoveNavigationDirectoryRequest) =>
+    appServerService.removeNavigationDirectory(request));
+  ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
+    async (
+      _event,
+      request: NavigationLaunchpadConfigRequest,
+    ): Promise<NavigationLaunchpadConfigResponse> =>
+      await appServerService.getNavigationLaunchpadConfig(request),
+  );
+  ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SELECTED_DETAIL_CHANNEL,
+    async (
+      _event,
+      request: NavigationSelectedDetailRequest,
+    ): Promise<NavigationSelectedDetailResponse> =>
+      await appServerService.getNavigationSelectedDetail(request),
+  );
+  ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+    async (
+      _event,
+      request: NavigationQueueProjectionRequest,
+    ): Promise<NavigationQueueProjection> =>
+      await appServerService.getNavigationQueueProjection(request),
   );
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.handle(
@@ -8574,6 +8825,14 @@ export function registerAppServerIpcHandlers(): void {
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
+  await navigationAttentionViewLeases.dispose();
+  ipcMain.removeHandler(NAVIGATION_QUERY_RELEASE_CHANNEL);
+  for (const consumers of navigationQueryConsumersBySender.values()) {
+    for (const token of consumers) navigationQueryPool.release(token);
+  }
+  navigationQueryConsumersBySender.clear();
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
@@ -8594,6 +8853,11 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_REMOVE_DIRECTORY_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);

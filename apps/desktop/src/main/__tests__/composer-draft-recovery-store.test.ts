@@ -1,7 +1,10 @@
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { buildOwnedComposerScopeKey } from "@pwragent/shared";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerDraftSnapshotRecord } from "@pwragent/shared";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
@@ -17,11 +20,84 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("ComposerDraftRecoveryStore", () => {
+  it("imports viewer-local legacy launchpad drafts once without overwriting recovery history", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    stateDb.close();
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    store = new ComposerDraftRecoveryStore(stateDb);
+    for (const name of ["recover", "newer", "cleared"]) {
+      const key = `directory:/${name}`;
+      const payload = { directoryKey: key, directoryKind: "directory", directoryLabel: name, directoryPath: `/${name}`,
+        backend: "codex", executionMode: "default", prompt: `Legacy ${name}`, createdAt: 1, updatedAt: 2 };
+      stateDb.raw.prepare("INSERT INTO directory_launchpads(directory_path, payload, created_at, updated_at) VALUES (?, ?, ?, ?)")
+        .run(key, JSON.stringify(payload), 1, 2);
+    }
+    store.save({ draft: buildDraft({ scopeKey: "launchpad:directory:/newer", scopeKind: "launchpad", text: "Newer composer input" }) });
+    store.recordHistory(buildDraft({ scopeKey: "launchpad:directory:/cleared", scopeKind: "launchpad", status: "cleared", text: "Cleared input" }));
+    const migration = await measureSqliteWrites(() => store.migrateLegacyLaunchpadDrafts());
+    expect(migration.result).toBe(1);
+    expectSqliteWriteBudget({ scenario: "composer-legacy-launchpad-migration", writes: migration.writes,
+      note: "One explicit startup transaction imports viewer-local legacy input and its recovery marker; less than 0.1 MB once, 0 additional MB/day" });
+    expect(store.listLatest().map((draft) => draft.text).sort()).toEqual(["Legacy recover", "Newer composer input"]);
+    store.clear("launchpad:directory:/recover");
+    const repeat = await measureSqliteWrites(() => store.migrateLegacyLaunchpadDrafts());
+    expect(repeat.result).toBe(0);
+    expectSqliteWriteBudget({ scenario: "composer-legacy-launchpad-migration-repeat", writes: repeat.writes,
+      note: "A recovery marker prevents cleared legacy input from resurrecting; repeated startup performs zero commits, 0 MB/day" });
+    expect(store.listLatest().map((draft) => draft.text)).toEqual(["Newer composer input"]);
+    expect(stateDb.raw.prepare("SELECT count(*) AS count FROM directory_launchpads").get()).toEqual({ count: 3 });
+  });
+
+  it("budgets known-owner migration as one transaction and zero writes on repeat", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    stateDb.close();
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    store = new ComposerDraftRecoveryStore(stateDb);
+    for (let index = 0; index < 3; index += 1) {
+      store.save({ draft: buildDraft({ scopeKey: `thread:codex:thread-${index}`, threadId: `thread-${index}`, text: `Draft ${index}`,
+        threadOwner: { backend: "codex", threadId: `thread-${index}`, target: { scope: "remote", instanceId: `peer-${index}` } },
+      }), recordHistory: true });
+    }
+    const { result, writes } = await measureSqliteWrites(() => store.migrateKnownOwnerScopes());
+    expect(result).toBe(3);
+    expectSqliteWriteBudget({ scenario: "composer-owner-scope-migration", writes,
+      note: "One startup transaction migrates three latest drafts and three proven-owner journal records; less than 0.1 MB once, zero additional MB/day after migration" });
+    const repeat = await measureSqliteWrites(() => store.migrateKnownOwnerScopes());
+    expect(repeat.result).toBe(0);
+    expectSqliteWriteBudget({ scenario: "composer-owner-scope-migration-repeat", writes: repeat.writes,
+      note: "Repeated startup migration performs no commits after known scopes are qualified; 0 MB/day" });
+  });
+
+  it("migrates only proven owners and leaves unassigned and foreign history intact", () => {
+    const owner = { backend: "codex" as const, threadId: "same", target: { scope: "remote" as const, instanceId: "peer" } };
+    const legacy = "thread:codex:same";
+    store.recordHistory(buildDraft({ scopeKey: legacy, text: "Unassigned older history", threadId: "same", contentHash: "unassigned" }));
+    store.recordHistory(buildDraft({ scopeKey: legacy, text: "Other owner's history", threadId: "same", contentHash: "foreign",
+      threadOwner: { ...owner, target: { scope: "local" } } }));
+    store.save({ draft: buildDraft({ scopeKey: legacy, text: "Known owner's latest", threadId: "same", contentHash: "known", threadOwner: owner }), recordHistory: true });
+    store.save({ draft: buildDraft({ scopeKey: "thread:codex:unknown", text: "Never infer local ownership", threadId: "unknown" }) });
+    expect(store.migrateKnownOwnerScopes()).toBe(1);
+    const owned = buildOwnedComposerScopeKey(owner);
+    expect(store.listLatest().map((draft) => draft.scopeKey).sort()).toEqual([owned, "thread:codex:unknown"].sort());
+    expect(store.listCandidates({ scopeKey: owned, includeSent: true }).map((draft) => draft.text)).toEqual(["Known owner's latest"]);
+    expect(store.listCandidates({ scopeKey: legacy, includeSent: true }).map((draft) => draft.text).sort())
+      .toEqual(["Unassigned older history", "Other owner's history"].sort());
+    expect(store.migrateKnownOwnerScopes()).toBe(0);
+  });
+
+  it("does not resurrect a legacy draft over a cleared owner scope", () => {
+    const owner = { backend: "codex" as const, threadId: "same", target: { scope: "local" as const } };
+    store.save({ draft: buildDraft({ scopeKey: "thread:codex:same", threadOwner: owner, text: "Older draft" }) });
+    store.recordHistory(buildDraft({ scopeKey: buildOwnedComposerScopeKey(owner), threadOwner: owner, text: "Already sent", status: "sent" }));
+    expect(store.migrateKnownOwnerScopes()).toBe(0);
+    expect(store.listLatest()[0]?.scopeKey).toBe("thread:codex:same");
+  });
   it("creates the durable draft schema at the current state DB version", () => {
     expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
       CURRENT_STATE_DB_USER_VERSION,

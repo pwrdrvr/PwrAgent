@@ -75,6 +75,53 @@ vi.mock("../app-server/codex-environment-config", () => ({
 }));
 
 describe("DesktopMessagingBackendBridge", () => {
+  it("publishes local and fast-peer navigation before a slow peer and shares one deadline", async () => {
+    const registry = {
+      listThreads: vi.fn(async () => []),
+      canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
+      refreshThreadGitWorkingStates: vi.fn(async () => undefined),
+      rememberCompleteNavigationSnapshot: vi.fn(),
+      readDirectoryStatuses: vi.fn(async () => ({})),
+    } as unknown as DesktopBackendRegistry;
+    const remoteSnapshot: NavigationSnapshot = {
+      backend: "all", fetchedAt: 1, unchanged: false, threads: [],
+      directories: [], inboxThreadKeys: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    let finishSlow!: (snapshot: NavigationSnapshot) => void;
+    const slow = new Promise<NavigationSnapshot>((resolve) => { finishSlow = resolve; });
+    let finishMiddle!: (snapshot: NavigationSnapshot) => void;
+    const middle = new Promise<NavigationSnapshot>((resolve) => { finishMiddle = resolve; });
+    const remoteNavigationSnapshot = vi.fn(async (target: { instanceId: string }) =>
+      target.instanceId === "slow" ? await slow
+        : target.instanceId === "middle" ? await middle : remoteSnapshot);
+    const bridge = new DesktopMessagingBackendBridge(registry, {
+      connectedPeerTargets: () => ["fast", "middle", "slow"].map((instanceId) => ({
+        target: { scope: "remote", instanceId }, label: instanceId, capabilities: ["messaging_route"],
+      })),
+      remoteNavigationSnapshot,
+    } as unknown as DesktopMessagingFederationBridge);
+    const progress: NavigationSnapshot[] = [];
+    let settled = false;
+    const pending = bridge.getNavigationSnapshot({}, { onProgress: async (snapshot) => { progress.push(snapshot); } })
+      .then((snapshot) => { settled = true; return snapshot; });
+    await vi.waitFor(() => expect(progress.at(-1)?.federationRefresh?.pendingPeers).toBe(2));
+    expect(progress[0]?.federationRefresh?.pendingPeers).toBe(3);
+    expect(settled).toBe(false);
+    const calls = remoteNavigationSnapshot.mock.calls as unknown as Array<[unknown, unknown, unknown, { deadlineAt: number }]>;
+    expect(calls[0]![3].deadlineAt).toBe(calls[1]![3].deadlineAt);
+    finishMiddle(remoteSnapshot);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(progress).toHaveLength(2);
+    finishSlow(remoteSnapshot);
+    await pending;
+    expect(progress).toHaveLength(3);
+    expect(progress.at(-1)?.federationRefresh).toEqual({ pendingPeers: 0, failedPeers: 0 });
+  });
+
   it("resolves admission state from one thread cache and overlay only", async () => {
     getThreadOverlayState.mockResolvedValueOnce({
       backend: "codex",
@@ -118,11 +165,8 @@ describe("DesktopMessagingBackendBridge", () => {
       })),
       getCachedThreadSummary,
       isThreadTurnOccupied: vi.fn(() => true),
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({
-        "codex:thread-1": { mode: "full-access", queuedAt: 2_000 },
-      })),
-      getQueuedTurnsSnapshot: vi.fn(() => ({
-        "codex:thread-1": [
+      getQueuedExecutionModeForThread: vi.fn(() => ({ mode: "full-access", queuedAt: 2_000 })),
+      getQueuedTurnsForThread: vi.fn(() => [
           {
             queueEntryId: "queue-1",
             origin: "messaging",
@@ -130,8 +174,7 @@ describe("DesktopMessagingBackendBridge", () => {
             createdAt: 2_100,
             position: 0,
           },
-        ],
-      })),
+      ]),
       listThreads,
       readDirectoryStatuses,
     } as unknown as DesktopBackendRegistry;
@@ -181,8 +224,8 @@ describe("DesktopMessagingBackendBridge", () => {
     const registry = {
       getActiveTurnForThread: vi.fn(() => undefined),
       getCachedThreadSummary: vi.fn(() => undefined),
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      getQueuedExecutionModeForThread: vi.fn(() => undefined),
+      getQueuedTurnsForThread: vi.fn(() => []),
       isThreadTurnOccupied: vi.fn(() => false),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);
@@ -261,7 +304,7 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(readDirectoryStatuses).not.toHaveBeenCalled();
   });
 
-  it("caches a read-only owner projection for bounded navigation search", async () => {
+  it("shares bounded owner queries for navigation search without queue or binding hydration", async () => {
     const listedThreads: AppServerThreadSummary[] = [
       {
         id: "thread-alpha",
@@ -288,9 +331,12 @@ describe("DesktopMessagingBackendBridge", () => {
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
       listThreads: vi.fn(async () => listedThreads),
+      hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
+      getNavigationInputRequestThreadKeys: vi.fn(() => new Set()),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);
-    const reconcileCallsBefore = reconcileNavigationSnapshot.mock.calls.length;
+    const queryRead = vi.spyOn(bridge, "getNavigationQueryPage");
+    const snapshotRead = vi.spyOn(bridge, "getNavigationSnapshot");
 
     await expect(bridge.searchNavigationThreads({ query: "alpha" }))
       .resolves.toMatchObject({ results: [{ id: "thread-alpha" }] });
@@ -300,15 +346,12 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(Buffer.byteLength(JSON.stringify(wireResponse))).toBeLessThan(8 * 1024);
     expect(wireResponse.results[0]).not.toHaveProperty("summary");
 
-    expect(registry.listThreads).toHaveBeenCalledTimes(1);
-    expect(reconcileNavigationSnapshot).toHaveBeenCalledTimes(
-      reconcileCallsBefore + 1,
-    );
-    expect(reconcileNavigationSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
-      backend: "all",
-      partial: true,
-      threads: listedThreads,
-    });
+    expect(queryRead).toHaveBeenCalledWith(expect.objectContaining({ protocol: 2,
+      consumer: "search", query: { kind: "search", text: "alpha" }, pageSize: 8 }));
+    expect(wireResponse.results[0]).toMatchObject({ ref: { backend: "codex", threadId: "thread-alpha" } });
+    expect(registry.getQueuedTurnsSnapshot).not.toHaveBeenCalled();
+    expect(registry.getQueuedExecutionModesSnapshot).not.toHaveBeenCalled();
+    expect(snapshotRead).not.toHaveBeenCalled();
   });
 
   it("filters and bounds generic search on the owner without reconciliation", async () => {
@@ -1194,6 +1237,9 @@ describe("DesktopMessagingBackendBridge", () => {
       onRemoteBackendEvent: () => () => undefined,
       remoteBackend: () => ({ resolveThread } as unknown as FederationBackendOperations),
       remoteNavigationSnapshot: vi.fn(async () => remoteNavigation),
+      remoteNavigationSelectedDetail: vi.fn<NonNullable<DesktopMessagingFederationBridge["remoteNavigationSelectedDetail"]>>(async (_target, request) => ({
+        protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: "present", thread: remoteThread,
+      })),
     } satisfies DesktopMessagingFederationBridge;
     const registry = {
       listThreads: vi.fn(async () => []),
@@ -1387,7 +1433,7 @@ describe("DesktopMessagingBackendBridge", () => {
     });
   });
 
-  it("falls back to remote navigation when an older peer lacks targeted admission", async () => {
+  it("requires an upgrade when an older peer lacks targeted admission", async () => {
     const methodNotFound = Object.assign(
       new Error("Unknown federation method: resolve_thread_admission_state"),
       { code: "method_not_found" },
@@ -1444,24 +1490,8 @@ describe("DesktopMessagingBackendBridge", () => {
         federationTarget: target,
         threadId: "thread-1",
       }),
-    ).resolves.toMatchObject({
-      thread: {
-        id: "thread-1",
-        federation: { instanceLabel: "Legacy Peer" },
-      },
-      threadStatus: "active",
-    });
-    expect(remoteNavigationSnapshot).toHaveBeenCalledWith(
-      target,
-      {
-        backend: "codex",
-        federationTarget: target,
-      },
-      {
-        kind: "threads",
-        threads: [{ backend: "codex", threadId: "thread-1" }],
-      },
-    );
+    ).rejects.toThrow("Upgrade the owning instance");
+    expect(remoteNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("subscribes messaging controllers to local and remote backend events", async () => {
@@ -1599,3 +1629,20 @@ function createBridge(replay: AppServerThreadReplay): DesktopMessagingBackendBri
   } as unknown as DesktopBackendRegistry;
   return new DesktopMessagingBackendBridge(registry);
 }
+
+it("routes exact messaging configuration through V2 without a legacy snapshot fallback", async () => {
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const ref = { backend: "codex" as const, threadId: "chosen", ownerInstanceId: "peer" };
+  const remoteNavigationSnapshot = vi.fn(async () => { throw new Error("Legacy snapshot is forbidden"); });
+  const remoteNavigationSelectedDetail = vi.fn(async () => ({ protocol: 2 as const, ref, revision: "r",
+    identity: "present" as const, readiness: "ready" as const,
+    thread: { source: "codex" as const, id: "chosen", title: "Chosen", titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } } }));
+  const federation = { remoteNavigationSelectedDetail, remoteNavigationSnapshot } as unknown as DesktopMessagingFederationBridge;
+  const bridge = new DesktopMessagingBackendBridge({} as DesktopBackendRegistry, federation);
+  await expect(bridge.getNavigationSelectedDetail({ protocol: 2, ref, probeWorkingStates: true })).resolves.toMatchObject({ identity: "present" });
+  expect(remoteNavigationSelectedDetail).toHaveBeenCalledWith(target, { protocol: 2, ref, probeWorkingStates: true });
+  const oldPeer = new DesktopMessagingBackendBridge({} as DesktopBackendRegistry,
+    { remoteNavigationSnapshot } as unknown as DesktopMessagingFederationBridge);
+  await expect(oldPeer.getNavigationSelectedDetail({ protocol: 2, ref })).rejects.toThrow("Upgrade");
+  expect(remoteNavigationSnapshot).not.toHaveBeenCalled();
+});

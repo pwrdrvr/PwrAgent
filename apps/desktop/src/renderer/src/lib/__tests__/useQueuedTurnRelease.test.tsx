@@ -1,14 +1,47 @@
+import { useMemo, useRef } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
   AgentEvent,
   BackendSummary,
+  ComposerThreadOwner,
   StartReviewRequest,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "../desktop-api";
-import { useQueuedTurnRelease } from "../useQueuedTurnRelease";
+import { useQueuedTurnRelease as useOwnerQueuedTurnRelease } from "../useQueuedTurnRelease";
+
+const fixtureOwners = new WeakMap<ComposerDraftStore, Map<string, ComposerThreadOwner>>();
+
+/** Test owner endpoints are seeded independently of the production hook's demands. */
+function useQueuedTurnRelease(params: Parameters<typeof useOwnerQueuedTurnRelease>[0] & { threads: NavigationThreadSummary[] }) {
+  const current = useRef(params);
+  current.current = params;
+  const owners = fixtureOwners.get(params.composerDraftStore) ?? new Map<string, ComposerThreadOwner>();
+  for (const row of params.threads) owners.set(`thread:${row.source}:${row.id}`, {
+    backend: row.source, threadId: row.id, target: row.federation?.ref.target ?? { scope: "local" },
+  });
+  fixtureOwners.set(params.composerDraftStore, owners);
+  for (const [scope, owner] of owners) {
+    const entries = params.composerDraftStore.getQueuedTurns(scope);
+    if (entries.some((entry) => !entry.threadOwner)) params.composerDraftStore.setQueuedTurns(scope,
+      entries.map((entry) => ({ ...entry, threadOwner: entry.threadOwner ?? owner })),
+    );
+  }
+  const desktopApi = useMemo<DesktopApi>(() => ({
+    getNavigationSelectedDetail: async (request) => {
+      const row = current.current.threads.find((candidate) => candidate.source === request.ref.backend && candidate.id === request.ref.threadId);
+      return { protocol: 2, ref: request.ref, revision: "detail", readiness: "ready", identity: row ? "present" : "deleted", thread: row };
+    },
+    getNavigationQueueProjection: async (request) => ({
+      protocol: 2, ref: request.ref, revision: "fifo", readiness: "ready", complete: true, entries: [],
+    }),
+    listBackends: async () => ({ fetchedAt: 1, backends: current.current.backends }),
+    ...params.desktopApi,
+  }), [params.desktopApi]);
+  useOwnerQueuedTurnRelease({ ...params, desktopApi });
+}
 
 type BranchDriftResult = Awaited<
   ReturnType<NonNullable<DesktopApi["checkThreadBranchDrift"]>>
@@ -19,7 +52,11 @@ function createComposerDraftStore(): ComposerDraftStore {
     string,
     ReturnType<ComposerDraftStore["getQueuedTurns"]>
   >();
-  return {
+  const store: ComposerDraftStore = {
+    getScopeOwner: (scope) => fixtureOwners.get(store)?.get(scope),
+    hydrationStatus: "memory-only",
+    getDraftScopeKeys: () => [],
+    getQueuedScopeKeys: () => [...queuedTurns.keys()],
     delete: vi.fn(),
     get: vi.fn(),
     popDraft: vi.fn(),
@@ -81,6 +118,7 @@ function createComposerDraftStore(): ComposerDraftStore {
     },
     set: vi.fn(),
   };
+  return store;
 }
 
 function backendSummary(): BackendSummary {
@@ -2024,4 +2062,125 @@ describe("useQueuedTurnRelease", () => {
       composerDraftStore.getQueuedTurn("thread:codex:thread-a")
     ).toBeUndefined();
   });
+});
+
+describe("queue release without navigation rows", () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const owner: ComposerThreadOwner = { backend: "codex", threadId: "same", target: { scope: "remote", instanceId: "owner" } };
+  const scope = "thread:codex:same";
+  function seededStore(owned = true) {
+    const store = createComposerDraftStore();
+    store.setQueuedTurns(scope, [{ id: "local-queued", text: "off-page reply", imageAttachments: [], fileAttachments: [],
+      ...(owned ? { threadOwner: owner } : {}),
+    }]);
+    return store;
+  }
+  function ownerApi(patch: Partial<DesktopApi> = {}): DesktopApi {
+    return {
+      getNavigationSelectedDetail: vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+        protocol: 2, ref: request.ref, revision: "detail", readiness: "ready", identity: "present", thread: thread("same"),
+      })),
+      getNavigationQueueProjection: vi.fn<NonNullable<DesktopApi["getNavigationQueueProjection"]>>(async (request) => ({
+        protocol: 2, ref: request.ref, revision: "fifo", readiness: "ready", complete: true, entries: [],
+      })),
+      listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [backendSummary()] })),
+      readThread: vi.fn<NonNullable<DesktopApi["readThread"]>>(async () => ({ backend: "codex", threadId: "same", fetchedAt: 1, threadStatus: "idle", replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } } })),
+      startTurn: vi.fn<NonNullable<DesktopApi["startTurn"]>>(async () => ({ backend: "codex", threadId: "same", turnId: "accepted" })),
+      ...patch,
+    };
+  }
+
+  it("releases an off-page owner queue while another owner's same-ID thread is selected", async () => {
+    vi.useFakeTimers();
+    const store = seededStore();
+    const api = ownerApi();
+    const onUserRepliedToThread = vi.fn();
+    renderHook(() => useOwnerQueuedTurnRelease({
+      backends: [backendSummary()], composerDraftStore: store, desktopApi: api,
+      selectedThread: thread("same"), onUserRepliedToThread,
+    }));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(api.startTurn).toHaveBeenCalledWith(expect.objectContaining({ federationTarget: owner.target, threadId: "same" }));
+    expect(api.listBackends).toHaveBeenCalledWith({ includeUnavailable: true, federationTarget: owner.target });
+    expect(onUserRepliedToThread).toHaveBeenCalledTimes(1);
+    expect(store.getQueuedTurns(scope)).toHaveLength(0);
+  });
+
+  it("does not infer an unowned legacy entry's owner from a mounted scope registration", async () => {
+    vi.useFakeTimers();
+    const store = seededStore(false);
+    fixtureOwners.set(store, new Map([[scope, owner]]));
+    const api = ownerApi();
+    renderHook(() => useOwnerQueuedTurnRelease({ backends: [backendSummary()], composerDraftStore: store, desktopApi: api }));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(api.getNavigationSelectedDetail).not.toHaveBeenCalled();
+    expect(api.startTurn).not.toHaveBeenCalled();
+    expect(store.getQueuedTurns(scope)).toHaveLength(1);
+  });
+
+  it("does not leapfrog an owner FIFO that has not reached the renderer mirror yet", async () => {
+    vi.useFakeTimers();
+    const store = seededStore();
+    const api = ownerApi({ getNavigationQueueProjection: vi.fn<NonNullable<DesktopApi["getNavigationQueueProjection"]>>(async (request) => ({
+      protocol: 2, ref: request.ref, revision: "fifo", readiness: "ready", complete: true,
+      entries: [{ queueEntryId: "owner-head", createdAt: 1, displayText: "accepted earlier", origin: "manual", position: 0 }],
+    })) });
+    renderHook(() => useOwnerQueuedTurnRelease({ backends: [backendSummary()], composerDraftStore: store, desktopApi: api }));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(api.startTurn).not.toHaveBeenCalled();
+    expect(store.getQueuedTurns(scope)).toHaveLength(1);
+  });
+
+  it("does not dispatch after the consumer closes during its exact configuration read", async () => {
+    vi.useFakeTimers();
+    let resolve!: (value: Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>) => void;
+    const pending = new Promise<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>>((done) => { resolve = done; });
+    const api = ownerApi({ getNavigationSelectedDetail: vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(() => pending) });
+    const store = seededStore();
+    const hook = renderHook(() => useOwnerQueuedTurnRelease({ backends: [backendSummary()], composerDraftStore: store, desktopApi: api }));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    hook.unmount();
+    await act(async () => resolve({ protocol: 2, ref: { backend: "codex", threadId: "same", ownerInstanceId: "owner" },
+      revision: "detail", readiness: "ready", identity: "present", thread: thread("same"),
+    }));
+    expect(api.getNavigationQueueProjection).not.toHaveBeenCalled();
+    expect(api.startTurn).not.toHaveBeenCalled();
+    expect(store.getQueuedTurns(scope)).toHaveLength(1);
+  });
+  it("admits at most eight physical release probes across a background sweep", async () => {
+    vi.useFakeTimers();
+    const store = createComposerDraftStore();
+    const pending: Array<() => void> = [];
+    for (let index = 0; index < 20; index += 1) {
+      const owned = { ...owner, threadId: `thread-${index}` };
+      store.setQueuedTurns(`thread:codex:${owned.threadId}`, [{
+        id: `queued-${index}`, text: "reply", imageAttachments: [], fileAttachments: [], threadOwner: owned,
+      }]);
+    }
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>((request) => new Promise((resolve) => {
+      pending.push(() => resolve({ protocol: 2, ref: request.ref, revision: "detail", readiness: "ready", identity: "present", thread: thread(request.ref.threadId) }));
+    }));
+    const api = ownerApi({ getNavigationSelectedDetail: read });
+    const hook = renderHook(() => useOwnerQueuedTurnRelease({ backends: [backendSummary()], composerDraftStore: store, desktopApi: api }));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(read).toHaveBeenCalledTimes(8);
+    hook.unmount();
+    await act(async () => { for (const resolve of pending) resolve(); });
+    expect(read).toHaveBeenCalledTimes(8);
+    expect(api.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("only removes an accepted FIFO mirror for a terminal event from its owner", async () => {
+    const store = seededStore();
+    store.setQueuedTurns(scope, store.getQueuedTurns(scope).map((entry) => ({ ...entry, queueEntryId: "same-queue-id" })));
+    let emit!: (event: AgentEvent) => void;
+    const api = ownerApi({ onAgentEvent: (listener) => { emit = listener; return () => {}; } });
+    renderHook(() => useOwnerQueuedTurnRelease({ backends: [backendSummary()], composerDraftStore: store, desktopApi: api }));
+    const notification = { method: "thread/turnQueue/updated", params: { threadId: "same", queueEntryId: "same-queue-id", status: "started" } } as AgentEvent["notification"];
+    act(() => emit({ backend: "codex", federationTarget: { scope: "remote", instanceId: "foreign" }, notification }));
+    expect(store.getQueuedTurns(scope)).toHaveLength(1);
+    act(() => emit({ backend: "codex", federationTarget: owner.target, notification }));
+    expect(store.getQueuedTurns(scope)).toHaveLength(0);
+  });
+
 });

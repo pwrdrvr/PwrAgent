@@ -23,6 +23,7 @@ export * from "./contracts/messaging";
 export * from "./contracts/messaging-tools";
 export * from "./contracts/mcp-connections";
 export * from "./contracts/navigation";
+export * from "./navigation-star-map-filters";
 export * from "./contracts/rbac";
 export * from "./contracts/settings";
 export * from "./contracts/scheduled-thread-actions";
@@ -53,3 +54,5 @@ export * from "./tool-activity-burst";
 export * from "./token-usage-pricing";
 export * from "./thread-pricing-projection";
 export * from "./worktree-paths";
+
+export * from "./composer-scope";

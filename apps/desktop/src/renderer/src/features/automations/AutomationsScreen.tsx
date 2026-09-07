@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   useEffect,
   useId,
@@ -11,7 +12,6 @@ import type {
   AutomationReplayCandidate,
   ListAutomationReplayCandidatesResponse,
   MessagingChannelKind,
-  NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";

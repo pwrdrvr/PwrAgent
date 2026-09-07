@@ -166,6 +166,13 @@ export const MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL =
 export const MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrsnap-download";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
+export const NAVIGATION_QUERY_PAGE_CHANNEL = "navigation:get-query-page";
+export const NAVIGATION_QUERY_RELEASE_CHANNEL = "navigation:release-query";
+export const NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL = "navigation:get-launchpad-config";
+export const NAVIGATION_SELECTED_DETAIL_CHANNEL =
+  "navigation:get-selected-detail";
+export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
+  "navigation:get-queue-projection";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
@@ -630,3 +637,9 @@ export const APP_MENU_POPUP_CHANNEL = "app-menu:popup";
 // renderer would silently degrade to browser clipboard fallbacks.
 export const CLIPBOARD_WRITE_TEXT_CHANNEL = "clipboard:write-text";
 export const CLIPBOARD_WRITE_RICH_TEXT_CHANNEL = "clipboard:write-rich-text";
+
+export const NAVIGATION_REMOVE_DIRECTORY_CHANNEL = "navigation:remove-directory";
+
+export const NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL = "navigation:mark-directory-seen";
+
+export const NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL = "navigation:release-attention-view";

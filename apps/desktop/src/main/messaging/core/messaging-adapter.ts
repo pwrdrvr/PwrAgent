@@ -27,6 +27,12 @@ import type {
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
+  NavigationQueryRequest,
+  NavigationQueryPage,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
   NavigationSnapshot,
   NavigationThreadSummary,
   SetAcpSessionRuntimeOptionRequest,
@@ -157,8 +163,13 @@ export type MessagingAdapter = {
 };
 
 export type MessagingBackendBridge = {
+  listNavigationOwners?(): Promise<{ owners: Array<{ target?: Extract<FederationTarget, { scope: "remote" }>; label: string }>; omitted: number }>;
+  getNavigationQueryPage?(request: NavigationQueryRequest): Promise<NavigationQueryPage>;
+  getNavigationSelectedDetail?(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse>;
+  getNavigationLaunchpadConfig?(request: NavigationLaunchpadConfigRequest): Promise<NavigationLaunchpadConfigResponse>;
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
+    options?: { onProgress?: (snapshot: NavigationSnapshot) => Promise<void> },
   ): Promise<NavigationSnapshot>;
   getThreadAdmissionState(request: {
     backend: AppServerBackendKind;
@@ -178,7 +189,6 @@ export type MessagingBackendBridge = {
     instanceId?: FederationInstanceId;
     includeRemote?: boolean;
   }): Promise<{
-    navigation: NavigationSnapshot;
     thread: NavigationThreadSummary;
     federatedThread?: FederatedThreadRef;
   } | undefined>;

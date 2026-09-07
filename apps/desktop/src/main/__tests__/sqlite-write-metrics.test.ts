@@ -32,6 +32,7 @@ import {
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { StateDb } from "../state/state-db";
+import { partitionFederationCollection } from "../federation/federation-collection-reads";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
@@ -63,6 +64,53 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("budgets paged Star Map bootstrap and identical reconnects", async () => {
+    const entries = Array.from({ length: 1001 }, (_, index) => ({
+      instanceId: "owner_one",
+      threadKey: `codex:thread-${index}`,
+      dx: index % 2 ? null : index,
+      dy: index % 2 ? null : index,
+      updatedAt: 1000,
+      by: "owner_one",
+    }));
+    const pages = partitionFederationCollection(entries);
+    const { writes } = await measureSqliteWrites(async () => {
+      for (const page of pages) await store.mergeStarMapArrangement(page);
+    });
+    expectSqliteWriteBudget({
+      scenario: "federation-star-map-paged-bootstrap",
+      note: "1001 new arrangement entries/tombstones in 11 bounded merge notifications",
+      writes,
+    });
+    const reading = await measureSqliteWrites(async () => {
+      const readEntries = [];
+      let afterKey: string | undefined;
+      do {
+        const page = await store.readStarMapArrangementPage(afterKey);
+        expect(page.entries.length).toBeLessThanOrEqual(100);
+        readEntries.push(...page.entries);
+        afterKey = page.nextKey;
+      } while (afterKey !== undefined);
+      expect(readEntries).toHaveLength(entries.length);
+      expect(readEntries.filter((entry) => entry.dx === null)).toHaveLength(500);
+    });
+    expectSqliteWriteBudget({
+      scenario: "federation-star-map-bootstrap-page-reads",
+      note: "1001 arrangement entries including tombstones read in SQL pages; no writes",
+      writes: reading.writes,
+    });
+    const reconnect = await measureSqliteWrites(async () => {
+      for (const page of pages) {
+        expect((await store.mergeStarMapArrangement(page)).accepted).toEqual([]);
+      }
+    });
+    expectSqliteWriteBudget({
+      scenario: "federation-star-map-unchanged-reconnect",
+      note: "11 identical arrangement pages on reconnect; no changed rows or WAL",
+      writes: reconnect.writes,
+    });
+  });
+
   it("keeps partial navigation search reconciliation read-only", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-search",
@@ -577,8 +625,8 @@ describe("sqlite write metrics", () => {
             kind: "directory",
             label: "PwrSuiteLab",
             path: "/repos/PwrSuiteLab",
-            threadKeys: [],
-            needsAttentionCount: 0,
+            counts: { total: 0, active: 0, unread: 0, review: 0 },
+            pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false,
           },
         );
       });
@@ -2294,6 +2342,11 @@ function buildUnpricedGrokUsageLine(index: number): ThreadUsageLineRecord {
           draft: {
             scopeKey: "thread:codex:typing",
             scopeKind: "thread",
+            threadOwner: {
+              backend: "codex",
+              threadId: "typing",
+              target: { scope: "remote", instanceId: "draft-owner" },
+            },
             backend: "codex",
             threadId: "typing",
             text,
