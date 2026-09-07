@@ -98,10 +98,11 @@ describe("independent complete FIFO projection", () => {
     expect(read.mock.calls[0]![0].deadlineAt).toBe(read.mock.calls[1]![0].deadlineAt);
   });
 
-  it("restarts once without publishing partial queue data", async () => {
+  it.each([false, true])("restarts once without publishing partial queue data (IPC=%s)", async (ipc) => {
     const read = vi.fn()
       .mockResolvedValueOnce(projection({ complete: false, nextCursor: "expired" }))
-      .mockRejectedValueOnce(Object.assign(new Error("expired"), { code: "navigation_cursor_expired" }))
+      .mockRejectedValueOnce(ipc ? new Error("Error invoking remote method: [navigation_cursor_expired] Queue changed while paging")
+        : Object.assign(new Error("expired"), { code: "navigation_cursor_expired" }))
       .mockResolvedValueOnce(projection({ revision: "new" }));
     expect((await readCompleteNavigationQueue({ owner, read, isCancelled: () => false })).revision).toBe("new");
     expect(read.mock.calls[2]![0].cursor).toBeUndefined();

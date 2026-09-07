@@ -8,18 +8,21 @@ import {
   type NavigationDirectoryRow,
   type NavigationIdentity,
   type NavigationQueryEntry,
+  type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { navigationGeometryBudget, navigationExactRowsBudget } from "../../lib/navigation-metadata-budget";
 import { navigationQueryEventRequiresRefresh } from "../../lib/navigation-query-events";
+import { isNavigationCursorExpired } from "../../lib/navigation-query-state";
 import { readNavigationQueryRange } from "../../lib/read-navigation-query-range";
 
 const STAR_MAP_FIRST_PAGE_ROWS = 10;
 const EVENT_REFRESH_DELAY_MS = 250;
 
 type RetainedPeerQuery = {
+  rangeStart: number;
   attentionThreads: NavigationThreadSummary[];
   completeRevision?: string;
   counts: NavigationCounts;
@@ -195,6 +198,7 @@ export function useStarMapThreads(params: {
   const generationRef = useRef(0);
   const nextOwnerGeneration = useRef(0);
   const ownerGenerations = useRef(new Map<string, number>());
+  const loadMoreReads = useRef(new Map<string, Promise<void>>());
   const firstPageReads = useRef(new Map<string, { generation: number; ownerGeneration: number; promise: Promise<void> }>());
   const exactDemands = useRef(new Map<string, { key: string; cancelled: boolean; consumerId?: string }>());
   const connectedIdsRef = useRef(connectedIds);
@@ -225,6 +229,7 @@ export function useStarMapThreads(params: {
           const queriesByInstance = new Map(current.queriesByInstance);
           const retained = queriesByInstance.get(instanceId);
           queriesByInstance.set(instanceId, {
+            rangeStart: page.rangeStart ?? 0,
             attentionThreads: page.unchanged ? retained?.attentionThreads ?? [] : mergeEntries([], page.entries),
             completeRevision: page.complete ? page.countsRevision : undefined,
             counts: page.counts,
@@ -326,35 +331,65 @@ export function useStarMapThreads(params: {
     [fetchFirstPageForGeneration],
   );
 
-  const loadMoreInstance = useCallback(
+  const readMoreInstance = useCallback(
     async (instanceId: string): Promise<void> => {
       const retained = stateRef.current.queriesByInstance.get(instanceId);
       if (!desktopApi?.getNavigationQueryPage || !retained?.nextCursor) return;
       const generation = generationRef.current;
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       if (ownerGeneration === undefined) return;
-      const page = await withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!(
-        attentionRequest({ cursor: retained.nextCursor, instanceId, filters, attentionView }),
-        consumerId,
-      ));
+      const deadlineAt = Date.now() + 10_000;
+      let page: NavigationQueryPage;
+      let rebaseline = false;
+      try {
+        page = await withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!({
+          ...attentionRequest({ cursor: retained.nextCursor, instanceId, filters, attentionView }), deadlineAt,
+        }, consumerId));
+      } catch (error) {
+        if (!isNavigationCursorExpired(error)) throw error;
+        if (generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration) return;
+        const anchor = retained.attentionThreads.at(-1);
+        rebaseline = true;
+        page = await withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!({
+          ...attentionRequest({ instanceId, filters, attentionView }), deadlineAt,
+          ...(anchor ? { anchor: { kind: "thread" as const, ref: {
+            backend: anchor.source, threadId: anchor.id, ownerInstanceId: instanceId,
+          } } } : {}),
+        }, consumerId));
+      }
       if (generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration) return;
       setState((current) => {
         const existing = current.queriesByInstance.get(instanceId);
-        if (!existing || existing.generation !== page.generation) return current;
+        if (!existing || existing.generation !== retained.generation
+          || (!rebaseline && existing.generation !== page.generation)) return current;
         const queriesByInstance = new Map(current.queriesByInstance);
         queriesByInstance.set(instanceId, {
           ...existing,
-          completeRevision: page.complete ? page.countsRevision : undefined,
+          rangeStart: rebaseline ? page.rangeStart ?? 0 : existing.rangeStart,
+          completeRevision: page.complete && (rebaseline ? page.rangeStart ?? 0 : existing.rangeStart) === 0 ? page.countsRevision : undefined,
           counts: page.counts,
           countsReady: page.coverage.state === "complete",
           nextCursor: page.nextCursor,
-          attentionThreads: mergeEntries(existing.attentionThreads, page.entries),
+          generation: page.generation,
+          queryKey: page.queryKey,
+          facets: page.facets,
+          attentionThreads: mergeEntries(rebaseline ? [] : existing.attentionThreads, page.entries),
         });
         return { ...current, queriesByInstance };
       });
     },
     [desktopApi, filters, attentionView, withQueryConsumer],
   );
+
+  const loadMoreInstance = useCallback((instanceId: string): Promise<void> => {
+    const pending = loadMoreReads.current.get(instanceId);
+    if (pending) return pending;
+    const read = readMoreInstance(instanceId).finally(() => {
+      if (loadMoreReads.current.get(instanceId) === read) loadMoreReads.current.delete(instanceId);
+    });
+    loadMoreReads.current.set(instanceId, read);
+    return read;
+  }, [readMoreInstance]);
 
   useEffect(() => {
     const known = new Set(knownIds.length > 0 ? knownIds.split("\n") : []);

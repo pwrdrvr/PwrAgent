@@ -1,6 +1,6 @@
 import type { NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
-import { applyNavigationPage, beginNavigationPageRead, createNavigationPageState } from "./navigation-query-state";
+import { applyNavigationPage, beginNavigationPageRead, createNavigationPageState, isNavigationCursorExpired } from "./navigation-query-state";
 
 /** Complete compact metadata/exact demand, never an eager full thread-lens reader. */
 export async function readNavigationQueryRange(params: {
@@ -28,7 +28,7 @@ export async function readNavigationQueryRange(params: {
     try {
       page = await params.read({ ...params.request, cursor, deadlineAt, completeBaselineRevision: undefined });
     } catch (error) {
-      if (!restarted && cursor && (error as { code?: string }).code === "navigation_cursor_expired") {
+      if (!restarted && cursor && isNavigationCursorExpired(error)) {
         restarted = true;
         state = createNavigationPageState(params.request);
         params.releaseBytes?.(retainedBytes);

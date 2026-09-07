@@ -1481,8 +1481,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const toggleClusterExpanded = useCallback(
     (instanceId: string, clusterKey: string) => {
       if (!expandedClusters.has(`${instanceId}::${clusterKey}`)) {
-        if (instanceId === localInstanceId) void loadMoreLocal();
-        else void loadMoreRemoteInstance(instanceId);
+        const read = instanceId === localInstanceId ? loadMoreLocal() : loadMoreRemoteInstance(instanceId);
+        void read.catch((error: unknown) => setCardError(error instanceof Error ? error.message : String(error)));
       }
       toggleClusterExpandedIn(cloudMemory, instanceId, clusterKey);
     },

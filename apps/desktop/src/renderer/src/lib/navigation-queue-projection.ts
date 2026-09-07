@@ -5,6 +5,7 @@ import type {
   NavigationQueueProjectionRequest,
 } from "@pwragent/shared";
 import type { ComposerQueuedTurnSnapshot } from "../features/composer/useComposerDraftStore";
+import { isNavigationCursorExpired } from "./navigation-query-state";
 
 export const NAVIGATION_QUEUE_MAX_BASELINE_BYTES = 8 * 1024 * 1024;
 export const NAVIGATION_QUEUE_MAX_PAGES = 128;
@@ -86,8 +87,7 @@ export async function readCompleteNavigationQueue(params: {
         cursors.add(cursor);
       } while (cursor);
     } catch (error) {
-      if (restart === 0 && typeof error === "object" && error !== null
-        && "code" in error && error.code === "navigation_cursor_expired") continue;
+      if (restart === 0 && isNavigationCursorExpired(error)) continue;
       throw error;
     }
   }

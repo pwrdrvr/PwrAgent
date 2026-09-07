@@ -122,6 +122,12 @@ export function applyNavigationPage(params: {
   return { ...state, page, stale: false, error: undefined, rebaselineRequired: false };
 }
 
+export function isNavigationCursorExpired(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "navigation_cursor_expired") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("navigation_cursor_expired") || message.includes("Navigation cursor expired");
+}
+
 export function failNavigationPageRead(
   state: NavigationPageState,
   sequence: number,
@@ -129,7 +135,7 @@ export function failNavigationPageRead(
 ): NavigationPageState {
   if (sequence !== state.pendingSequence) return state;
   const message = error instanceof Error ? error.message : String(error);
-  const expired = message.includes("navigation_cursor_expired") || message.includes("Navigation cursor expired");
+  const expired = isNavigationCursorExpired(error);
   return { ...state, stale: Boolean(state.page), error: message, rebaselineRequired: state.rebaselineRequired || expired };
 }
 

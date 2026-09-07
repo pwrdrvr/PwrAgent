@@ -28,9 +28,10 @@ it("rejects oversized wire responses and responses arriving after the transactio
   } finally { now.mockRestore(); }
 });
 
-it("restarts one expired metadata range under its original deadline", async () => {
+it.each([false, true])("restarts one expired metadata range under its original deadline (IPC=%s)", async (ipc) => {
   const read = vi.fn().mockResolvedValueOnce(page({ complete: false, nextCursor: "expired" }))
-    .mockRejectedValueOnce(Object.assign(new Error("expired"), { code: "navigation_cursor_expired" }))
+    .mockRejectedValueOnce(ipc ? new Error("Error invoking remote method: [navigation_cursor_expired] Navigation cursor expired")
+      : Object.assign(new Error("expired"), { code: "navigation_cursor_expired" }))
     .mockResolvedValueOnce(page({ generation: "new" }));
   const result = await readNavigationQueryRange({ request, read, isCancelled: () => false, maxBytes: 8192 });
   expect(result.generation).toBe("new");

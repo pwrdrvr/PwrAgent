@@ -83,6 +83,28 @@ function buildDesktopApi(): DesktopApi {
 }
 
 describe("useStarMapThreads", () => {
+  it("coalesces load-more and rebaselines an expired IPC cursor around the visible anchor", async () => {
+    const read = vi.fn(async (request: NavigationQueryRequest) => {
+      if (request.query.kind !== "lens") return queryPage({ instanceId: "a" });
+      if (request.cursor) throw new Error("Error invoking remote method: [navigation_cursor_expired] Navigation cursor expired");
+      if (request.anchor) return { ...queryPage({ instanceId: "a", threadId: "anchor" }), generation: "replacement" };
+      return queryPage({ instanceId: "a", threadId: "anchor", nextCursor: "expired" });
+    });
+    const desktopApi: DesktopApi = { getNavigationQueryPage: read };
+    const hook = renderHook(() => useStarMapThreads({ enabled: true, peers: [peer("a", "connected")], desktopApi }));
+    try {
+      await waitFor(() => expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("anchor"));
+      await act(async () => {
+        await Promise.all([hook.result.current.loadMoreInstance("a"), hook.result.current.loadMoreInstance("a")]);
+      });
+      const continuation = read.mock.calls.map(([request]) => request).filter((request) => request.cursor || request.anchor);
+      expect(continuation).toHaveLength(2);
+      expect(continuation[1]).toMatchObject({ cursor: undefined, deadlineAt: continuation[0]!.deadlineAt,
+        anchor: { kind: "thread", ref: { backend: "codex", threadId: "anchor", ownerInstanceId: "a" } } });
+      expect(hook.result.current.threadsByInstance.get("a")?.map((thread) => thread.id)).toEqual(["anchor"]);
+    } finally { hook.unmount(); }
+  });
+
   it("does not publish authoritative counts from checking owner coverage", async () => {
     let checking = true;
     const desktopApi: DesktopApi = { getNavigationQueryPage: vi.fn(async (request) => ({

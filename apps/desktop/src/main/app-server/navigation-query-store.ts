@@ -40,7 +40,8 @@ export class NavigationQueryError extends Error {
   readonly code: NavigationQueryErrorCode;
 
   constructor(code: NavigationQueryErrorCode, message: string) {
-    super(message);
+    // Electron serializes Error.message but drops custom fields such as code.
+    super(`[${code}] ${message}`);
     this.name = "NavigationQueryError";
     this.code = code;
   }
