@@ -28,7 +28,7 @@ describe("owner-revalidated archive group planning", () => {
   it("discovers a cross-owner child through viewer metadata but uses its owner's current parent", async () => {
     const root = thread("root");
     const remote = { ...thread("child", "root"), parentThreadInstanceId: "local-id",
-      federation: { instanceLabel: "Peer", ref: { backend: "codex" as const, threadId: "child",
+      federation: { instanceLabel: "Peer", capabilities: ["turn_control" as const], ref: { backend: "codex" as const, threadId: "child",
         target: { scope: "remote" as const, instanceId: "peer" } } } };
     const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => navigationQueryFixture(request, {
       threads: request.inventory === "viewer" ? [root, remote]
@@ -49,5 +49,29 @@ describe("owner-revalidated archive group planning", () => {
     await expect(readNavigationArchiveGroup({ api: { getNavigationQueryPage, releaseNavigationQuery }, thread: root }))
       .rejects.toThrow("membership is incomplete");
     expect(releaseNavigationQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a viewer-owned child local when archiving from a remote native window", async () => {
+    const root = { ...thread("root"), federation: { instanceLabel: "Peer", capabilities: ["turn_control" as const],
+      ref: { backend: "codex" as const, threadId: "root", target: { scope: "remote" as const, instanceId: "peer" } } } };
+    const child = { ...thread("child", "root"), parentThreadInstanceId: "peer" };
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => navigationQueryFixture(request, {
+      threads: request.inventory === "viewer" ? [root, child] : request.federationTarget?.scope === "remote" ? [root] : [child],
+    }));
+    const members = await readNavigationArchiveGroup({ thread: root, windowTarget: { scope: "remote", instanceId: "peer" },
+      api: { getNavigationQueryPage, readFederationHealth: async () => ({ health: {
+        instanceId: "local-id", enabled: true, role: "gateway", status: "connected", peers: [],
+      } }) } });
+    expect(members.map(({ id, federationTarget }) => [id, federationTarget])).toEqual([
+      ["child", { scope: "local" }], ["root", { scope: "remote", instanceId: "peer" }],
+    ]);
+  });
+
+  it("requires each owner's current control grant before producing a plan", async () => {
+    const root = { ...thread("root"), federation: { instanceLabel: "Peer",
+      ref: { backend: "codex" as const, threadId: "root", target: { scope: "remote" as const, instanceId: "peer" } } } };
+    await expect(readNavigationArchiveGroup({ thread: root, api: {
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request, { threads: [root] }),
+    } })).rejects.toThrow("has not granted thread control");
   });
 });

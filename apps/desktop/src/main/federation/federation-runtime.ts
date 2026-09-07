@@ -2080,7 +2080,10 @@ export class DesktopFederationRuntime {
     const instanceLabel = this.connectedPeerTargets().find(
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
-    return stampRemoteNavigationQueryPage({ instanceLabel, page, target });
+    const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    return stampRemoteNavigationQueryPage({ instanceLabel, page, target,
+      capabilities: this.viewerCapabilitiesFor(target.instanceId, peer), peerStatus: peer?.status ?? "connected",
+      celestialIcon: peer?.celestialIcon });
   }
 
   async remoteReleaseNavigationAttentionView(target: FederationRemoteTarget, request: NavigationAttentionViewReleaseRequest): Promise<void> {

@@ -3,6 +3,7 @@ import type { ArchiveThreadRequest, FederationTarget, NavigationIdentity, Naviga
 import type { DesktopApi } from "./desktop-api";
 
 export type NavigationArchiveMember = Pick<NavigationThreadSummary, "id" | "source" | "federation"> & {
+  federationTarget?: FederationTarget;
   expectedParent?: ArchiveThreadRequest["expectedParent"];
 };
 type Member = { ref: NavigationIdentity; parent?: NavigationIdentity; expectedParent: ArchiveThreadRequest["expectedParent"] };
@@ -16,7 +17,7 @@ export async function readNavigationArchiveGroup(params: {
 }): Promise<NavigationArchiveMember[]> {
   if (!params.api.getNavigationQueryPage) throw new Error("Upgrade this instance to read the complete thread group before archiving.");
   const deadlineAt = Date.now() + 10_000;
-  const localInstanceId = !params.windowTarget && params.api.readFederationHealth
+  const localInstanceId = params.api.readFederationHealth
     ? (await params.api.readFederationHealth()).health.instanceId : undefined;
   const normalize = (ref: NavigationIdentity): NavigationIdentity => ref.ownerInstanceId === localInstanceId
     ? { backend: ref.backend, threadId: ref.threadId } : ref;
@@ -58,6 +59,9 @@ export async function readNavigationArchiveGroup(params: {
         if (ref.backend !== entry.row.source || ref.threadId !== entry.row.id || (!viewer && ref.ownerInstanceId !== owner)) {
           throw new Error("Thread group response belongs to a different owner.");
         }
+        if (!viewer && owner && !entry.row.federation?.capabilities?.includes("turn_control")) {
+          throw new Error(`The owner ${owner} has not granted thread control. No threads were archived.`);
+        }
         if (!viewer) authoritative.set(key(ref), member(entry, ref));
         admit(ref);
       }
@@ -83,7 +87,7 @@ export async function readNavigationArchiveGroup(params: {
         return ref;
       });
       await read(roots, owner, false);
-      if (!params.windowTarget) {
+      {
         const viewerRoots = [...roots, ...roots.filter((ref) => !ref.ownerInstanceId && localInstanceId)
           .map((ref) => ({ ...ref, ownerInstanceId: localInstanceId }))];
         await read(viewerRoots, undefined, true);
@@ -106,6 +110,7 @@ export async function readNavigationArchiveGroup(params: {
       for (const child of children.get(id) ?? []) visit(child, depth + 1);
       visiting.delete(id);
       result.push({ source: value.ref.backend, id: value.ref.threadId, expectedParent: value.expectedParent,
+        federationTarget: value.ref.ownerInstanceId ? { scope: "remote", instanceId: value.ref.ownerInstanceId } : { scope: "local" },
         ...(value.ref.ownerInstanceId ? { federation: { instanceLabel: value.ref.ownerInstanceId,
           ref: buildFederatedThreadRef({ backend: value.ref.backend, threadId: value.ref.threadId, instanceId: value.ref.ownerInstanceId }) } } : {}) });
     };

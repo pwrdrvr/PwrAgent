@@ -3,6 +3,8 @@ import type {
   NavigationQueryPage,
   NavigationQueryRequest,
   NavigationIdentity,
+  FederationCapability,
+  FederationPeerSummary,
 } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
 
@@ -11,6 +13,9 @@ export function stampRemoteNavigationQueryPage(params: {
   instanceLabel: string;
   page: NavigationQueryPage;
   target: FederationRemoteTarget;
+  capabilities?: FederationCapability[];
+  peerStatus?: FederationPeerSummary["status"];
+  celestialIcon?: FederationPeerSummary["celestialIcon"];
 }): NavigationQueryPage {
   return {
     ...params.page,
@@ -21,7 +26,7 @@ export function stampRemoteNavigationQueryPage(params: {
           ...entry.placement.parent, ownerInstanceId: params.target.instanceId,
         } }
         : entry.placement;
-      if (entry.row.ref.ownerInstanceId || entry.row.federation) {
+      if (entry.row.ref.ownerInstanceId && entry.row.ref.ownerInstanceId !== params.target.instanceId) {
         return placement === entry.placement ? entry : { ...entry, placement };
       }
       const ref = buildFederatedThreadRef({
@@ -39,8 +44,12 @@ export function stampRemoteNavigationQueryPage(params: {
             ownerInstanceId: params.target.instanceId,
           },
           federation: {
+            ...entry.row.federation,
             instanceLabel: params.instanceLabel,
             ref,
+            ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+            ...(params.peerStatus ? { peerStatus: params.peerStatus } : {}),
+            ...(params.celestialIcon ? { celestialIcon: params.celestialIcon } : {}),
           },
         },
       };
