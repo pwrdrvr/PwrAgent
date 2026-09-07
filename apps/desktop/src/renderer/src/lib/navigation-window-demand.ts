@@ -80,3 +80,28 @@ export function buildNavigationWindowDemand(params: {
   }
   return demand;
 }
+
+/** Child pages are useful only while their disclosed parent is reachable from a visible collection. */
+export function visibleDisclosedNavigationParents(params: {
+  collectionIds: Iterable<string>;
+  pages: ReadonlyMap<string, import("@pwragent/shared").NavigationQueryPage>;
+  disclosedParents: readonly NavigationIdentity[];
+}): NavigationIdentity[] {
+  const candidates = new Map(params.disclosedParents.map((ref) => [navigationIdentityKey(ref), ref]));
+  const visible = new Map<string, NavigationIdentity>();
+  const pending = [...params.collectionIds].filter((id) => id === "lens" || id.startsWith("directory:") || id.startsWith("drafts:"));
+  const visited = new Set<string>();
+  while (pending.length) {
+    const id = pending.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    for (const entry of params.pages.get(id)?.entries ?? []) {
+      const key = navigationIdentityKey(entry.row.ref);
+      const parent = candidates.get(key);
+      if (!parent || visible.has(key)) continue;
+      visible.set(key, parent);
+      pending.push(`children:${key}`);
+    }
+  }
+  return [...visible.values()];
+}
