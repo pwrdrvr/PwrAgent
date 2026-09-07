@@ -7155,9 +7155,11 @@ export function useThreadNavigation(
       } catch (error) {
         setRenameThreadError(error instanceof Error ? error.message : String(error));
         await refresh(threadKey);
+      } finally {
+        if (selectedItemKeyRef.current === threadKey) await selectedDetail.refresh();
       }
     },
-    [refresh, renameThreadRequest]
+    [refresh, renameThreadRequest, selectedDetail.refresh]
   );
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
