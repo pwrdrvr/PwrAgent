@@ -13,6 +13,7 @@
     "dev:dev": "pnpm --filter @pwragent/desktop dev:dev",
     "dev:no-messaging": "PWRAGENT_DISABLE_MESSAGING=1 pnpm --filter @pwragent/desktop dev -- --disable-messaging",
     "dev:op": "node ./scripts/op-run.mjs dev",
+    "dev:sky-computer-use": "node ./scripts/configure-sky-computer-use-workaround.mjs",
     "op:dev": "node ./scripts/op-run.mjs dev",
     "op:run": "node ./scripts/op-run.mjs run",
     "licenses:allowlist": "node ./scripts/check-third-party-license-allowlist.mjs",
