@@ -7339,10 +7339,9 @@ describe("app server ipc", () => {
     ]);
   });
 
-  it("refreshes cached directory git status when explicitly requested", async () => {
+  it("refreshes exact directory git status without warming the legacy snapshot", async () => {
     const {
       NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
-      NAVIGATION_SNAPSHOT_CHANNEL,
     } = await import("../../shared/ipc");
 
     readDirectoryGitStatusCache.mockResolvedValueOnce({
@@ -7360,7 +7359,6 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
     expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
 
     await expect(
@@ -7381,6 +7379,16 @@ describe("app server ipc", () => {
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
       expect.objectContaining({ key: "directory:/repo/app" }),
     ]);
+  });
+
+  it("does not probe removed directories and bounds explicit directory refresh admission", async () => {
+    const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const refresh = handlers.get(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL)!;
+    await expect(refresh({}, { directoryKeys: ["directory:/removed"] })).resolves.toEqual({ scheduledCount: 0 });
+    await expect(refresh({}, { directoryKeys: Array.from({ length: 101 }, (_, index) => `directory:/repo-${index}`) }))
+      .rejects.toThrow("Refresh at most 100 directories");
+    expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
   });
 
   it("routes remote directory git status refreshes to the owning federation peer", async () => {

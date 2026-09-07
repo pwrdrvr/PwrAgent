@@ -13130,8 +13130,8 @@ export class DesktopBackendRegistry {
     return await this.gitDirectoryService.readDirectoryStatuses(directories);
   }
 
-  readDirectoryStatusEntries(
-    directories: NavigationDirectorySummary[],
+  readDirectoryStatusEntries<T extends Pick<NavigationDirectorySummary, "key" | "path">>(
+    directories: T[],
   ): AsyncIterable<DirectoryGitStatusEntry> {
     return this.gitDirectoryService.readDirectoryStatusEntries(directories);
   }

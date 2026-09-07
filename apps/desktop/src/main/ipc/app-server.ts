@@ -406,6 +406,8 @@ const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT =
 const PR_DISCOVERY_TICK_INTERVAL_MS = 60_000;
 const PR_DISCOVERY_CADENCE_MS = 5 * 60_000;
 const PR_DISCOVERY_MAX_PER_TICK = 3;
+type DirectoryGitRefreshTarget = Pick<NavigationDirectoryRow, "key" | "path" | "latestUpdatedAt">;
+
 type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
     SqliteOverlayStore,
@@ -3198,11 +3200,32 @@ class DesktopAppServerService {
     const directoryKeys = [
       ...new Set(request.directoryKeys.map((key) => key.trim()).filter(Boolean)),
     ];
-    const directories = directoryKeys
-      .map((key) => this.lastDirectoriesByKey.get(key))
-      .filter((directory): directory is NavigationSnapshot["directories"][number] =>
-        Boolean(directory?.path?.trim()),
-      );
+    if (directoryKeys.length > 100) throw new Error("Refresh at most 100 directories at a time.");
+    if (!directoryKeys.length) return { scheduledCount: 0 };
+    const token = `directory-git-refresh:${randomUUID()}`;
+    const deadlineAt = Date.now() + 10_000;
+    const directories: DirectoryGitRefreshTarget[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    let bytes = 0;
+    try {
+      for (let count = 0; count < 16; count += 1) {
+        const page = await this.getNavigationQueryPage({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
+          query: { kind: "directory-index", keys: directoryKeys }, pageSize: 100, cursor, deadlineAt,
+        }, token);
+        if (page.coverage.state !== "complete" || page.unchanged) throw new Error("Directory metadata is incomplete. Retry after the owner finishes refreshing.");
+        bytes += Buffer.byteLength(JSON.stringify(page), "utf8");
+        if (bytes > 512 * 1024) throw new Error("Directory refresh metadata exceeds its bounded budget.");
+        for (const directory of page.directories ?? []) {
+          if (!directoryKeys.includes(directory.key) || seen.has(directory.key)) throw new Error("Directory refresh returned inconsistent owner membership.");
+          seen.add(directory.key);
+          if (directory.path?.trim()) directories.push({ key: directory.key, path: directory.path, latestUpdatedAt: directory.latestUpdatedAt });
+        }
+        if (page.complete) break;
+        if (!page.nextCursor || count === 15) throw new Error("Directory refresh did not reach a complete owner page range.");
+        cursor = page.nextCursor;
+      }
+    } finally { navigationQueryPool.release(token); }
     const scheduledCount = this.startDirectoryGitStatusRefresh({
       automatic: false,
       directories,
@@ -3227,7 +3250,7 @@ class DesktopAppServerService {
 
   private startDirectoryGitStatusRefresh(params: {
     automatic: boolean;
-    directories: NavigationSnapshot["directories"];
+    directories: DirectoryGitRefreshTarget[];
     force?: boolean;
     requestKey: string;
   }): number {
@@ -3284,9 +3307,9 @@ class DesktopAppServerService {
 
   private selectDirectoryGitStatusRefreshCandidates(params: {
     automatic: boolean;
-    directories: NavigationSnapshot["directories"];
+    directories: DirectoryGitRefreshTarget[];
     force?: boolean;
-  }): NavigationSnapshot["directories"] {
+  }): DirectoryGitRefreshTarget[] {
     const candidates = params.directories.filter((directory) => {
       if (!directory.path?.trim()) {
         return false;
@@ -3440,7 +3463,7 @@ class DesktopAppServerService {
   }
 
   private async refreshDirectoryGitStatuses(
-    directories: NavigationSnapshot["directories"],
+    directories: DirectoryGitRefreshTarget[],
     force = false,
   ): Promise<void> {
     const refreshableDirectories = directories.filter((directory) => directory.path?.trim());
@@ -3470,7 +3493,7 @@ class DesktopAppServerService {
   }
 
   async writeDirectoryGitStatusEntry(params: {
-    directory?: NavigationSnapshot["directories"][number];
+    directory?: DirectoryGitRefreshTarget;
     directoryKey: string;
     fetchedAt: number;
     gitStatus?: NavigationDirectoryGitStatus;

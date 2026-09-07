@@ -817,8 +817,8 @@ export class GitDirectoryService {
     return statuses;
   }
 
-  readDirectoryStatusEntries(
-    directories: NavigationDirectorySummary[],
+  readDirectoryStatusEntries<T extends Pick<NavigationDirectorySummary, "key" | "path">>(
+    directories: T[],
   ): AsyncIterable<DirectoryGitStatusEntry> {
     return new IterableMapper(
       directories,
