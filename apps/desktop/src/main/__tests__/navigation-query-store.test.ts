@@ -237,7 +237,7 @@ describe("NavigationQueryStore", () => {
       { ...thread("1"), inbox: { inInbox: true } },
       { ...thread("2"), inbox: { inInbox: true } },
     ]);
-    const read = (promoteOnTurnEnd: boolean, id = "view") => store.readPage({
+    const read = (promoteOnTurnEnd: boolean, id = promoteOnTurnEnd ? "promoting-view" : "stable-view") => store.readPage({
       loadIndex: async () => owner,
       request: request({
         query: { kind: "lens", lens: "attention" },
@@ -251,9 +251,24 @@ describe("NavigationQueryStore", () => {
     owner.threads[0]!.updatedAt = 100;
     expect((await read(true)).entries[0]?.row.id).toBe("1");
     expect((await read(false)).entries[0]?.row.id).toBe("2");
-    store.releaseAttentionView("requester", "view");
+    store.releaseAttentionView("requester", "stable-view");
     await expect(read(false)).rejects.toThrow("has closed");
     expect((await read(false, "replacement-view")).entries[0]?.row.id).toBe("1");
+  });
+
+  it("changing one view's promotion preference does not mint new membership ranks", async () => {
+    const store = new NavigationQueryStore();
+    const owner = snapshot([{ ...thread("1"), inbox: { inInbox: true }, threadStatus: "active" },
+      { ...thread("2"), inbox: { inInbox: true }, threadStatus: "active" }]);
+    const read = (promoteOnTurnEnd: boolean) => store.readPage({ scopeKey: "requester", loadIndex: async () => owner,
+      request: request({ query: { kind: "lens", lens: "attention" }, attentionView: { id: "same-window", promoteOnTurnEnd } }) });
+    const initial = await read(true);
+    // Streamed timestamps cannot reorder already-ranked active turns, including
+    // when the operator changes the end-of-turn promotion preference.
+    owner.threads[0]!.updatedAt = 100;
+    const changed = await read(false);
+    expect(changed.entries.map((entry) => [entry.row.id, entry.orderKey]))
+      .toEqual(initial.entries.map((entry) => [entry.row.id, entry.orderKey]));
   });
 
   it("cursor_preserves_generation_during_owner_activity", async () => {

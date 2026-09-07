@@ -322,9 +322,7 @@ export class NavigationQueryStore {
     for (const [key, generationId] of this.currentGenerationByScopeAndQuery) {
       if (!this.generations.has(generationId)) this.currentGenerationByScopeAndQuery.delete(key);
     }
-    for (const promoteOnTurnEnd of [false, true]) {
-      this.attentionViews.delete(JSON.stringify([scopeKey, viewId, promoteOnTurnEnd]));
-    }
+    this.attentionViews.delete(JSON.stringify([scopeKey, viewId]));
   }
 
   private reconcileAttentionView(
@@ -334,7 +332,7 @@ export class NavigationQueryStore {
   ): NavigationAttentionOrder | undefined {
     if (!request.attentionView) return undefined;
     const { id, promoteOnTurnEnd } = request.attentionView;
-    const key = JSON.stringify([scopeKey, id, promoteOnTurnEnd]);
+    const key = JSON.stringify([scopeKey, id]);
     const previous = this.attentionViews.get(key);
     if (!previous && this.attentionViews.size >= NAVIGATION_ATTENTION_MAX_VIEWS) {
       throw new NavigationQueryError("navigation_busy", "Attention view budget is occupied.");
@@ -342,6 +340,7 @@ export class NavigationQueryStore {
     const order = reconcileNavigationAttentionOrder({
       previous: previous?.order,
       threads: index.threads,
+      complete: !index.coverage || index.coverage.state === "complete",
       promoteOnTurnEnd,
     });
     const bytes = navigationAttentionOrderBytes(order);
