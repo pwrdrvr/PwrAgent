@@ -6,6 +6,8 @@ type Member = {
   updatedAt: number;
   /** Canonical turn identity prevents replayed boundaries from moving a rank. */
   eventTurnId?: string;
+  /** Membership-scoped replay protection, charged to the owner's Attention budget. */
+  observedTurnIds?: readonly string[];
   eventTracked?: boolean;
   awaitingBaseline?: boolean;
 };
@@ -23,6 +25,8 @@ export function observeNavigationAttentionTurn(params: {
   promoteOnTurnEnd: boolean;
 }): NavigationAttentionOrder {
   const previous = params.previous.members.get(params.key);
+  const observedTurnIds = previous?.observedTurnIds ?? (previous?.eventTurnId ? [previous.eventTurnId] : []);
+  if (params.turnId && params.turnId !== previous?.eventTurnId && observedTurnIds.includes(params.turnId)) return params.previous;
   if (previous?.active === params.active && (!params.turnId || previous.eventTurnId === params.turnId)) return params.previous;
   // An old completion cannot finish a newer live turn.
   if (!params.active && previous?.active && previous.eventTurnId && params.turnId
@@ -33,6 +37,7 @@ export function observeNavigationAttentionTurn(params: {
   const rank = move ? params.previous.nextRank : previous.rank;
   const members = new Map(params.previous.members);
   members.set(params.key, { active: params.active, rank, updatedAt: previous?.updatedAt ?? 0,
+    observedTurnIds: params.turnId && !observedTurnIds.includes(params.turnId) ? [...observedTurnIds, params.turnId] : observedTurnIds,
     eventTurnId: params.active ? params.turnId : params.turnId ?? previous?.eventTurnId, eventTracked: true, awaitingBaseline: true });
   return { members, nextRank: params.previous.nextRank + Number(move) };
 }
@@ -86,6 +91,7 @@ export function reconcileNavigationAttentionOrder(params: {
       : previous.rank;
     members.set(key, { active, rank, updatedAt,
       ...(previous?.eventTurnId ? { eventTurnId: previous.eventTurnId } : {}),
+      ...(previous?.observedTurnIds ? { observedTurnIds: previous.observedTurnIds } : {}),
       ...(previous?.eventTracked ? { eventTracked: true } : {}),
       ...(previous?.awaitingBaseline && observedActive !== active ? { awaitingBaseline: true } : {}),
     });

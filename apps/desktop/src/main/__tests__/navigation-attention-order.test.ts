@@ -5,6 +5,26 @@ import { navigationAttentionIdentity, observeNavigationAttentionTurn, reconcileN
 const thread = (id: string, updatedAt: number): NavigationThreadSummary => ({ id, source: "codex", title: id, titleSource: "fallback",
   linkedDirectories: [], updatedAt, threadStatus: "active", inbox: { inInbox: true } });
 
+it("does not promote an old completed turn after a newer completed turn or a status-only start", () => {
+  const row = { ...thread("same", 1), threadStatus: "idle" as const };
+  const key = navigationAttentionIdentity(row);
+  let order = reconcileNavigationAttentionOrder({ threads: [row], promoteOnTurnEnd: true });
+  for (const turnId of ["first", "second"]) {
+    order = observeNavigationAttentionTurn({ previous: order, key, active: true, turnId, promoteOnTurnEnd: true });
+    order = observeNavigationAttentionTurn({ previous: order, key, active: false, turnId, promoteOnTurnEnd: true });
+  }
+  order = reconcileNavigationAttentionOrder({ previous: order, threads: [row], promoteOnTurnEnd: true });
+  const replay = (previous: typeof order, active: boolean) => observeNavigationAttentionTurn({ previous, key,
+    active, turnId: "first", promoteOnTurnEnd: true });
+  expect(replay(order, false)).toBe(order);
+  expect(replay(order, true)).toBe(order);
+  const status = observeNavigationAttentionTurn({ previous: order, key, active: true, promoteOnTurnEnd: true });
+  expect(replay(status, false)).toBe(status);
+  expect(replay(status, true)).toBe(status);
+  const seen = reconcileNavigationAttentionOrder({ previous: order, threads: [{ ...row, inbox: { inInbox: false } }], promoteOnTurnEnd: true });
+  expect(seen.members.has(key)).toBe(false);
+});
+
 it.each([true, false])("owns both turn boundaries between reads with promotion=%s and never promotes the later baseline again", (promoteOnTurnEnd) => {
   const idle = { ...thread("first", 1), threadStatus: "idle" as const };
   const key = navigationAttentionIdentity(idle);

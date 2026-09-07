@@ -227,6 +227,11 @@ late reads from recreating released ranks. These operations add no SQLite writes
 Hidden views retain their Attention lifetime without polling. Releasing a query
 page or changing a lens does not release the view.
 
+Observed turn identities remain with their Attention member to reject replayed
+boundaries after a later turn finishes. They count toward the existing aggregate
+owner Attention byte ceiling and disappear when membership ends or the view
+closes; they do not create a persistent turn history or SQLite writes.
+
 ### Independent FIFO read assembly
 
 Each renderer FIFO read admits at most 128 pages and 8 MiB of cumulative
