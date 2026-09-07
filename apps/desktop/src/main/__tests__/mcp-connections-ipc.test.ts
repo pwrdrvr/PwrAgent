@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  McpConnectionStatus,
   PwrSnapConnectionStatus,
   ReadPwrSnapConnectionStatusRequest,
 } from "@pwragent/shared";
@@ -59,7 +60,28 @@ describe("MCP connection IPC", () => {
     availability: "not_installed",
     configured: false,
   };
+  const managedConnection: McpConnectionStatus = {
+    id: "datadog",
+    displayName: "Datadog",
+    serverUrl: "https://mcp.datadoghq.com/mcp",
+    authMode: "oauth",
+    kind: "remote",
+    enabled: true,
+    createdAt: 1,
+    updatedAt: 1,
+    configured: false,
+    state: "disconnected",
+  };
   const service = {
+    listConnections: vi.fn(async () => [managedConnection]),
+    createConnection: vi.fn(async () => managedConnection),
+    authorizeConnection: vi.fn(async () => ({
+      ...managedConnection,
+      configured: true,
+      state: "ready" as const,
+    })),
+    disconnectConnection: vi.fn(async () => managedConnection),
+    removeConnection: vi.fn(async () => true),
     readStatus: vi.fn(async () => localStatus),
     connect: vi.fn(),
     openApplication: vi.fn(),
@@ -74,6 +96,11 @@ describe("MCP connection IPC", () => {
     service.connect.mockClear();
     service.openApplication.mockClear();
     service.openDownload.mockClear();
+    service.listConnections.mockClear();
+    service.createConnection.mockClear();
+    service.authorizeConnection.mockClear();
+    service.disconnectConnection.mockClear();
+    service.removeConnection.mockClear();
   });
 
   it("reads status from the remote owner without consulting local PwrSnap", async () => {
@@ -150,5 +177,57 @@ describe("MCP connection IPC", () => {
     expect(service.connect).not.toHaveBeenCalled();
     expect(service.openApplication).not.toHaveBeenCalled();
     expect(service.openDownload).not.toHaveBeenCalled();
+  });
+
+  it("routes managed connection lifecycle actions only on the local owner", async () => {
+    const { registerMcpConnectionIpcHandlers } = await import(
+      "../ipc/mcp-connections"
+    );
+    const {
+      MCP_CONNECTION_AUTHORIZE_CHANNEL,
+      MCP_CONNECTION_CREATE_CHANNEL,
+      MCP_CONNECTION_DISCONNECT_CHANNEL,
+      MCP_CONNECTION_LIST_CHANNEL,
+      MCP_CONNECTION_REMOVE_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerMcpConnectionIpcHandlers(service as never);
+    const localEvent = { sender: { id: 18 } };
+
+    await expect(
+      mocks.handlers.get(MCP_CONNECTION_LIST_CHANNEL)?.(localEvent),
+    ).resolves.toEqual({ connections: [managedConnection] });
+    await mocks.handlers.get(MCP_CONNECTION_CREATE_CHANNEL)?.(localEvent, {
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    await mocks.handlers.get(MCP_CONNECTION_AUTHORIZE_CHANNEL)?.(localEvent, {
+      connectionId: "datadog",
+    });
+    await mocks.handlers.get(MCP_CONNECTION_DISCONNECT_CHANNEL)?.(localEvent, {
+      connectionId: "datadog",
+    });
+    await mocks.handlers.get(MCP_CONNECTION_REMOVE_CHANNEL)?.(localEvent, {
+      connectionId: "datadog",
+    });
+
+    expect(service.createConnection).toHaveBeenCalledOnce();
+    expect(service.authorizeConnection).toHaveBeenCalledWith("datadog");
+    expect(service.disconnectConnection).toHaveBeenCalledWith("datadog");
+    expect(service.removeConnection).toHaveBeenCalledWith("datadog");
+
+    for (const channel of [
+      MCP_CONNECTION_LIST_CHANNEL,
+      MCP_CONNECTION_CREATE_CHANNEL,
+      MCP_CONNECTION_AUTHORIZE_CHANNEL,
+      MCP_CONNECTION_DISCONNECT_CHANNEL,
+      MCP_CONNECTION_REMOVE_CHANNEL,
+    ]) {
+      await expect(
+        mocks.handlers.get(channel)?.(
+          { sender: remoteSender },
+          { connectionId: "datadog" },
+        ),
+      ).rejects.toThrow(/machine that owns this window/i);
+    }
   });
 });

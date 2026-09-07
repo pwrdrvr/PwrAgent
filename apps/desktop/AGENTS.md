@@ -822,7 +822,7 @@ replaces `globalThis.fetch` and fails any test that makes a real outbound
 request. It hooks the global rather than taking an injected `fetch` per caller
 for the same reason the spawn guard hooks a prototype: it is the one chokepoint
 every request funnels through, so it also covers `acp-registry-service`,
-`pwrsnap-connection-service`, and `auto-updater` — none of which were given a
+`mcp-connection-gateway-service`, and `auto-updater` — none of which were given a
 seam — plus any network path added later. Injection is how you *fix* a failure
 (`fetchLatestCompatibleRelease` honors `options.fetch`, and
 `grok-managed-runtime.test.ts` passes one); it cannot be what enforces the

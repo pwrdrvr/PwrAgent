@@ -110,6 +110,7 @@ import {
   PwrSnapConnectionPrompt,
   pwrSnapConnectionIds,
 } from "./PwrSnapConnectionPrompt";
+import { McpAccessPanel, ThreadMcpAccessPanel } from "./McpAccessPanel";
 import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
@@ -940,6 +941,12 @@ export type ThreadViewProps = {
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging settings. */
   onOpenMessagingSettings?: () => void;
+  /**
+   * Opens Settings -> Plugins. The MCP access panel needs this: a connection
+   * that needs authorization, or that an operator turned off for every
+   * thread, cannot be repaired from the panel itself.
+   */
+  onOpenPluginSettings?: () => void;
   onRevealSelectedThreadInList?: () => void;
   /**
    * Window-level layout state (owned by App). The context rail pin +
@@ -1078,6 +1085,7 @@ export type ThreadViewProps = {
         | "directoryPath"
         | "imageAttachments"
         | "mcpConnectionIds"
+        | "mcpProviderServersEnabled"
         | "agent"
       >
     >,
@@ -1656,6 +1664,27 @@ export function ThreadView(props: ThreadViewProps) {
   useEffect(() => {
     setMcpInventoryRequest(undefined);
   }, [selectedThreadKey]);
+  // MCP access is a per-thread execution setting, so it opens from the
+  // composer's thread options the same way sandbox and approval do, and it
+  // closes when the operator moves to another thread.
+  const [launchpadMcpAccessOpen, setLaunchpadMcpAccessOpen] = useState(false);
+  const [threadMcpAccessOpen, setThreadMcpAccessOpen] = useState(false);
+  useEffect(() => {
+    setLaunchpadMcpAccessOpen(false);
+    setThreadMcpAccessOpen(false);
+  }, [selectedThreadKey]);
+  const onOpenPluginSettings = props.onOpenPluginSettings;
+  const openMcpConnectionSettings = useMemo(
+    () =>
+      onOpenPluginSettings
+        ? () => {
+            setLaunchpadMcpAccessOpen(false);
+            setThreadMcpAccessOpen(false);
+            onOpenPluginSettings();
+          }
+        : undefined,
+    [onOpenPluginSettings],
+  );
   const showMcpInventory = useCallback(
     (detail: McpInventoryPanelRequest["detail"]): void => {
       mcpInventoryRequestSequence.current += 1;
@@ -3346,7 +3375,13 @@ export function ThreadView(props: ThreadViewProps) {
           }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         >
           <div className="thread-view__primary">
-            {!launchpadMaterializing ? (
+            {/* Local MCP selection lives in the composer's MCP access
+                panel, beside the other per-thread execution settings, so it
+                is reachable from an existing thread too. Only the remote
+                case keeps a card: it is a rare, thread-specific offer from
+                the machine that owns the thread, and the local panel
+                refuses to edit a remote thread's selection. */}
+            {!launchpadMaterializing && props.activeFederationTarget ? (
               <PwrSnapConnectionPrompt
                 backend={selectedLaunchpad.backend}
                 desktopApi={props.desktopApi}
@@ -3356,14 +3391,40 @@ export function ThreadView(props: ThreadViewProps) {
                   ) === true
                 }
                 remoteOwnerLabel={
-                  props.activeFederationTarget
-                    ? props.activeFederationOwnerLabel ?? "the remote machine"
-                    : undefined
+                  props.activeFederationOwnerLabel ?? "the remote machine"
                 }
                 onEnabledChange={async (enabled) => {
                   await props.onUpdateLaunchpad?.(
                     selectedLaunchpad.directoryKey,
-                    { mcpConnectionIds: pwrSnapConnectionIds(enabled) },
+                    {
+                      mcpConnectionIds: pwrSnapConnectionIds(
+                        enabled,
+                        selectedLaunchpad.mcpConnectionIds,
+                      ),
+                    },
+                  );
+                }}
+              />
+            ) : null}
+            {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
+              <McpAccessPanel
+                backend={selectedLaunchpad.backend}
+                desktopApi={props.desktopApi}
+                selection={{
+                  connectionIds: selectedLaunchpad.mcpConnectionIds ?? [],
+                  providerServersEnabled:
+                    selectedLaunchpad.mcpProviderServersEnabled !== false,
+                }}
+                onDismiss={() => setLaunchpadMcpAccessOpen(false)}
+                onOpenSettings={openMcpConnectionSettings}
+                onSelectionChange={async (selection) => {
+                  await props.onUpdateLaunchpad?.(
+                    selectedLaunchpad.directoryKey,
+                    {
+                      mcpConnectionIds: selection.connectionIds,
+                      mcpProviderServersEnabled:
+                        selection.providerServersEnabled,
+                    },
                   );
                 }}
               />
@@ -3431,6 +3492,11 @@ export function ThreadView(props: ThreadViewProps) {
                 backends={props.backends}
                 applications={props.applications}
                 codexFastAllowed={props.codexFastAllowed}
+                onShowMcpAccess={
+                  props.activeFederationTarget
+                    ? undefined
+                    : () => setLaunchpadMcpAccessOpen(true)
+                }
                 providerModelDefaults={props.providerModelDefaults}
                 desktopApi={props.desktopApi}
                 onShowNotice={props.onShowNotice}
@@ -3751,6 +3817,21 @@ export function ThreadView(props: ThreadViewProps) {
             />
           ) : null}
 
+          {/* Managed connections are local to the profile that runs the
+              thread, so a remote thread's selection belongs to its owner
+              and is not editable from here. */}
+          {threadMcpAccessOpen
+            && selectedThread
+            && !props.activeFederationTarget ? (
+            <ThreadMcpAccessPanel
+              backend={selectedThread.source}
+              desktopApi={props.desktopApi}
+              threadId={selectedThread.id}
+              onDismiss={() => setThreadMcpAccessOpen(false)}
+              onOpenSettings={openMcpConnectionSettings}
+            />
+          ) : null}
+
           <Composer
             activeTurnId={props.activeTurnId}
             addOptimisticReviewEntry={props.addOptimisticReviewEntry}
@@ -3761,6 +3842,11 @@ export function ThreadView(props: ThreadViewProps) {
             desktopApi={props.desktopApi}
             onShowNotice={props.onShowNotice}
             onShowMcpInventory={showMcpInventory}
+            onShowMcpAccess={
+              props.activeFederationTarget
+                ? undefined
+                : () => setThreadMcpAccessOpen(true)
+            }
             composerImplementation={props.composerImplementation}
             draftStore={props.composerDraftStore}
             directory={props.selectedDirectory}

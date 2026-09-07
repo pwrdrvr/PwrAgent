@@ -41,6 +41,8 @@ import type {
 } from "../../../shared/quit-blockers";
 import type {
   AgentEvent,
+  AuthorizeMcpConnectionRequest,
+  AuthorizeMcpConnectionResponse,
   AutomationIdRequest,
   AutomationMutationResponse,
   ArchiveWorktreeRequest,
@@ -54,6 +56,8 @@ import type {
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
+  CreateMcpConnectionRequest,
+  CreateMcpConnectionResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   CheckThreadBranchDriftRequest,
@@ -116,6 +120,7 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListMcpConnectionsResponse,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
   ListThreadMcpServersRequest,
@@ -256,6 +261,13 @@ import type {
   OpenPwrSnapResponse,
   PwrSnapConnectionStatus,
   ReadPwrSnapConnectionStatusRequest,
+  DisconnectMcpConnectionRequest,
+  MutateMcpConnectionResponse,
+  RemoveMcpConnectionRequest,
+  SetMcpConnectionEnabledRequest,
+  ReadThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsResponse,
   InspectPdfReferencePathsRequest,
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
@@ -468,6 +480,28 @@ export type DesktopApi = {
   replayFixtureActive?: boolean;
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
+  listMcpConnections?: () => Promise<ListMcpConnectionsResponse>;
+  createMcpConnection?: (
+    request: CreateMcpConnectionRequest,
+  ) => Promise<CreateMcpConnectionResponse>;
+  authorizeMcpConnection?: (
+    request: AuthorizeMcpConnectionRequest,
+  ) => Promise<AuthorizeMcpConnectionResponse>;
+  disconnectMcpConnection?: (
+    request: DisconnectMcpConnectionRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  removeMcpConnection?: (
+    request: RemoveMcpConnectionRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  setMcpConnectionEnabled?: (
+    request: SetMcpConnectionEnabledRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  setThreadMcpConnections?: (
+    request: SetThreadMcpConnectionsRequest,
+  ) => Promise<SetThreadMcpConnectionsResponse>;
+  readThreadMcpConnections?: (
+    request: ReadThreadMcpConnectionsRequest,
+  ) => Promise<SetThreadMcpConnectionsResponse>;
   readPwrSnapConnectionStatus?: (
     request?: ReadPwrSnapConnectionStatusRequest,
   ) => Promise<PwrSnapConnectionStatus>;

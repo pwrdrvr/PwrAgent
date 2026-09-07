@@ -18,11 +18,16 @@ import { DesktopAutomationService } from "../automations/desktop-automation-serv
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
+import { McpCredentialVault } from "../mcp-connections/mcp-credential-vault";
+import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-broker-discovery";
+import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
+import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import {
   AppRuntimeInstanceStore,
   RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
 } from "../state/app-runtime-instance-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";
 import {
   measureSqliteWrites,
   readSqliteWriteMetrics,
@@ -1912,7 +1917,7 @@ describe("sqlite write metrics", () => {
     }
   });
 
-  it("holds messaging and federation for an idle hour without sqlite writes", async () => {
+  it("holds profile runtimes for an idle hour without sqlite writes", async () => {
     const instances = new AppRuntimeInstanceStore(stateDb);
     const leases = new RuntimeLeaseManager({
       cwd: "/tmp/PwrAgnt",
@@ -1925,19 +1930,122 @@ describe("sqlite write metrics", () => {
     });
     leases.acquire("messaging");
     leases.acquire("federation");
+    leases.acquire("mcp_connections");
 
     const { writes } = await measureSqliteWrites(() => {
       for (let tick = 0; tick < 360; tick += 1) {
         leases.snapshot("messaging");
         leases.snapshot("federation");
+        leases.snapshot("mcp_connections");
       }
     });
 
     expectSqliteWriteBudget({
-      note: "one idle hour: PID-owned messaging and federation leases",
+      note: "one idle hour: PID-owned messaging, federation, and MCP connection leases",
       scenario: "idle-hour-runtime-leases",
       writes,
     });
+  });
+
+  it("persists one rotated MCP credential in one sqlite commit", async () => {
+    const secretStore = new DbBackedSafeStorageSecretStore({
+      decryptString: (value) => value.toString("utf8"),
+      encryptString: (value) => Buffer.from(value, "utf8"),
+      getSelectedStorageBackend: () => "keychain",
+      isEncryptionAvailable: () => true,
+    }, stateDb);
+    const vault = new McpCredentialVault({
+      settings: {
+        clearMcpConnectionCredentials: async () =>
+          await secretStore.deleteSecret("mcpConnectionCredentials"),
+        resolveMcpConnectionCredentials: async () =>
+          await secretStore.getSecret("mcpConnectionCredentials"),
+        resolvePwrSnapMcpCredential: async () => undefined,
+        saveMcpConnectionCredentials: async (value) =>
+          await secretStore.setSecret("mcpConnectionCredentials", value),
+      },
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await vault.write("datadog", {
+        resourceUrl: "https://mcp.example.com/mcp",
+        tokens: {
+          access_token: "rotated-access",
+          refresh_token: "rotated-refresh",
+          token_type: "bearer",
+        },
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "persist one encrypted rotated MCP credential generation",
+      scenario: "mcp-token-rotation",
+      writes,
+    });
+  });
+
+  it("serves one non-owner MCP broker request without sqlite writes", async () => {
+    const instances = new AppRuntimeInstanceStore(stateDb);
+    const discovery = new McpConnectionBrokerDiscovery({
+      filePath: path.join(tempDir, "mcp-broker.json"),
+    });
+    const registry = new McpConnectionRegistry({
+      configPath: path.join(tempDir, "config.toml"),
+    });
+    const settings = {
+      clearMcpConnectionCredentials: vi.fn(async () => undefined),
+      clearPwrSnapMcpCredential: vi.fn(async () => undefined),
+      resolveMcpConnectionCredentials: vi.fn(async () => undefined),
+      resolvePwrSnapMcpCredential: vi.fn(async () => undefined),
+      saveMcpConnectionCredentials: vi.fn(async () => undefined),
+      savePwrSnapMcpCredential: vi.fn(async () => undefined),
+    };
+    const ownerLeases = new RuntimeLeaseManager({
+      instanceId: "mcp-owner",
+      processId: 1001,
+      processIsAlive: () => true,
+      profileName: "default",
+      store: instances,
+    });
+    const viewerLeases = new RuntimeLeaseManager({
+      instanceId: "mcp-viewer",
+      processId: 1002,
+      processIsAlive: () => true,
+      profileName: "default",
+      store: instances,
+    });
+    const owner = new McpConnectionGatewayService({
+      brokerDiscovery: discovery,
+      leaseManager: ownerLeases,
+      registry,
+      settings,
+    });
+    const viewer = new McpConnectionGatewayService({
+      brokerDiscovery: discovery,
+      leaseManager: viewerLeases,
+      registry,
+      settings,
+    });
+    try {
+      await owner.start();
+      viewerLeases.recordMessagingState({
+        desiredMessagingEnabled: false,
+        effectiveMessagingEnabled: false,
+      });
+      await viewer.start();
+      const { result, writes } = await measureSqliteWrites(async () =>
+        await viewer.listConnections(),
+      );
+      expect(result.map((connection) => connection.id)).toContain("pwrsnap");
+      expectSqliteWriteBudget({
+        note: "serve one non-owner MCP broker list request",
+        scenario: "mcp-broker-request",
+        writes,
+      });
+    } finally {
+      await viewer.close();
+      await owner.close();
+    }
   });
 
   it("holds a federated child mount to its write budget", async () => {
@@ -2041,13 +2149,15 @@ describe("sqlite write metrics", () => {
     const { writes } = await measureSqliteWrites(() => {
       leases.acquire("messaging");
       leases.acquire("federation");
+      leases.acquire("mcp_connections");
+      leases.release("mcp_connections");
       leases.release("federation");
       leases.release("messaging");
       leases.markExited();
     });
 
     expectSqliteWriteBudget({
-      note: "register once, acquire and release both runtime leases, mark exited",
+      note: "register once, acquire and release all profile runtime leases, mark exited",
       scenario: "runtime-lease-lifecycle",
       writes,
     });
@@ -2067,6 +2177,7 @@ describe("sqlite write metrics", () => {
     });
     owner.acquire("messaging");
     owner.acquire("federation");
+    owner.acquire("mcp_connections");
     const challenger = new RuntimeLeaseManager({
       cwd: "/tmp/PwrAgnt-b",
       instanceId: "instance-b",
@@ -2080,13 +2191,15 @@ describe("sqlite write metrics", () => {
     const { writes } = await measureSqliteWrites(() => {
       challenger.acquire("messaging");
       challenger.acquire("federation");
+      challenger.acquire("mcp_connections");
       now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
       challenger.acquire("messaging");
       challenger.acquire("federation");
+      challenger.acquire("mcp_connections");
     });
 
     expectSqliteWriteBudget({
-      note: "observe one dead owner, wait one minute, replace both runtime leases",
+      note: "observe one dead owner, wait one minute, replace all profile runtime leases",
       scenario: "runtime-lease-dead-owner-takeover",
       writes,
     });

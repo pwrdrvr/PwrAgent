@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   CodexMcpServerSummary,
   DesktopSettingsSnapshot,
+  McpConnectionStatus,
+  PwrSnapConnectionStatus,
 } from "@pwragent/shared";
 import { describeMcpAuthStatus } from "@pwragent/shared";
 import { McpInventoryLine } from "../../components/McpInventoryLine";
@@ -11,6 +21,7 @@ import {
 } from "../chrome/ChipContextMenu";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  SettingsField,
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
@@ -20,6 +31,8 @@ import {
   describeMcpServerTools,
   readMcpServerHealth,
 } from "./mcp-server-health";
+import { SettingsSwitch } from "./SettingsSwitch";
+import { sourceBadge } from "./settings-fields";
 
 type ActionNotice = {
   kind: "error" | "info" | "success" | "working";
@@ -29,6 +42,11 @@ type ActionNotice = {
 type PendingAction = {
   kind: "login" | "reload" | "remove";
   name: string;
+};
+
+type ConnectionPendingAction = {
+  kind: "authorize" | "availability" | "create" | "disconnect" | "remove";
+  connectionId?: string;
 };
 
 type StartupResult = {
@@ -82,9 +100,20 @@ function matchesMcpFilter(
 
 export function PluginsSettings(props: {
   desktopApi?: DesktopApi;
+  saving?: boolean;
   snapshot: DesktopSettingsSnapshot;
+  onMcpGatewayEnabledChange: (enabled: boolean) => Promise<void>;
 }) {
   const [servers, setServers] = useState<CodexMcpServerSummary[]>([]);
+  const [connections, setConnections] = useState<McpConnectionStatus[]>([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(true);
+  const [connectionPending, setConnectionPending] =
+    useState<ConnectionPendingAction>();
+  const [connectionNotice, setConnectionNotice] = useState<ActionNotice>();
+  const [connectionName, setConnectionName] = useState("");
+  const [connectionUrl, setConnectionUrl] = useState("");
+  const [connectionRemoveCandidate, setConnectionRemoveCandidate] =
+    useState<McpConnectionStatus>();
   const [activeCodexHome, setActiveCodexHome] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
@@ -233,9 +262,41 @@ export function PluginsSettings(props: {
     }
   }, [props.desktopApi]);
 
+  const gatewaySetting = props.snapshot.general.mcpGatewayEnabled;
+  const gatewayEnabled = gatewaySetting.value;
+  const availableToThreads = connections.filter(
+    (connection) => connection.enabled,
+  ).length;
+
+  const loadConnections = useCallback(async () => {
+    if (!props.desktopApi?.listMcpConnections) {
+      setConnectionNotice({
+        kind: "error",
+        text: "PwrAgent-managed MCP connections are unavailable in this build.",
+      });
+      setConnectionsLoading(false);
+      return false;
+    }
+    setConnectionsLoading(true);
+    try {
+      const response = await props.desktopApi.listMcpConnections();
+      setConnections(response.connections);
+      return true;
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      setConnectionsLoading(false);
+    }
+  }, [props.desktopApi]);
+
   useEffect(() => {
     void loadServers();
-  }, [loadServers]);
+    void loadConnections();
+  }, [loadConnections, loadServers]);
 
   useEffect(() => () => {
     clearOAuthWaitTimer();
@@ -506,6 +567,159 @@ export function PluginsSettings(props: {
     });
   };
 
+  const authorizeConnection = async (
+    connection: McpConnectionStatus,
+    continueCreate = false,
+  ) => {
+    if (connectionPending && !continueCreate) return;
+    setConnectionPending({
+      kind: "authorize",
+      connectionId: connection.id,
+    });
+    setConnectionNotice({
+      kind: "working",
+      text: `Waiting for ${connection.displayName} authorization to complete...`,
+    });
+    try {
+      if (connection.kind === "pwrsnap" && props.desktopApi?.connectPwrSnap) {
+        const response = await props.desktopApi.connectPwrSnap();
+        if (response.outcome !== "connected") {
+          throw new Error(
+            response.status.detail
+            ?? "Open PwrSnap and enable Local Agent Access, then try again.",
+          );
+        }
+      } else {
+        if (!props.desktopApi?.authorizeMcpConnection) {
+          throw new Error("MCP authorization is unavailable in this build.");
+        }
+        await props.desktopApi.authorizeMcpConnection({
+          connectionId: connection.id,
+        });
+      }
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: `${connection.displayName} is connected through PwrAgent.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
+  const createConnection = async () => {
+    if (connectionPending || !props.desktopApi?.createMcpConnection) return;
+    setConnectionPending({ kind: "create" });
+    setConnectionNotice({
+      kind: "working",
+      text: `Adding ${connectionName.trim() || "MCP connection"}...`,
+    });
+    try {
+      const response = await props.desktopApi.createMcpConnection({
+        displayName: connectionName,
+        serverUrl: connectionUrl,
+      });
+      setConnectionName("");
+      setConnectionUrl("");
+      await loadConnections();
+      setConnectionPending(undefined);
+      await authorizeConnection(response.connection, true);
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+      setConnectionPending(undefined);
+    }
+  };
+
+  const disconnectConnection = async (connection: McpConnectionStatus) => {
+    if (connectionPending || !props.desktopApi?.disconnectMcpConnection) return;
+    setConnectionPending({
+      kind: "disconnect",
+      connectionId: connection.id,
+    });
+    try {
+      await props.desktopApi.disconnectMcpConnection({
+        connectionId: connection.id,
+      });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: `${connection.displayName} credentials were removed.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
+  const setConnectionAvailability = async (
+    connection: McpConnectionStatus,
+    enabled: boolean,
+  ) => {
+    if (connectionPending || !props.desktopApi?.setMcpConnectionEnabled) return;
+    setConnectionPending({ kind: "availability", connectionId: connection.id });
+    try {
+      await props.desktopApi.setMcpConnectionEnabled({
+        connectionId: connection.id,
+        enabled,
+      });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: enabled
+          ? `${connection.displayName} is available to threads again.`
+          // Turning a connection off closes its live bridges, so say that
+          // rather than letting a running thread look unaffected.
+          : `${connection.displayName} was turned off. Threads already using it lose it on their next turn.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
+  const removeConnection = async () => {
+    const connection = connectionRemoveCandidate;
+    if (
+      !connection
+      || connectionPending
+      || !props.desktopApi?.removeMcpConnection
+    ) return;
+    setConnectionPending({ kind: "remove", connectionId: connection.id });
+    try {
+      await props.desktopApi.removeMcpConnection({
+        connectionId: connection.id,
+      });
+      setConnectionRemoveCandidate(undefined);
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: `${connection.displayName} was removed from this PwrAgent profile.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
   const actionsDisabled = Boolean(pendingAction)
     || profileChanged
     || !activeCodexHome;
@@ -521,12 +735,12 @@ export function PluginsSettings(props: {
         : undefined;
 
   return (
-    <SettingsSectionStack paneId="plugins" aria-label="Plugin settings">
-      <SettingsPanelHead
-        eyebrow="Plugins"
-        title="Codex MCP servers"
-        help="MCP servers give Codex threads extra tools. They are configured per Codex profile — PwrAgent inspects and repairs the profile it is running."
-        action={
+      <SettingsSectionStack paneId="plugins" aria-label="Plugin settings">
+        <SettingsPanelHead
+          eyebrow="Plugins"
+          title="Codex MCP servers"
+          help="MCP servers give Codex threads extra tools. They are configured per Codex profile — PwrAgent inspects and repairs the profile it is running."
+          action={
           <button
             className="button button--secondary"
             disabled={loading || actionsDisabled}
@@ -543,8 +757,120 @@ export function PluginsSettings(props: {
       />
 
       <SettingsSection
+        eyebrow="PwrAgent gateway"
+        title="Managed MCP connections"
+        sectionId="managed-mcp-connections"
+        description="PwrAgent keeps OAuth credentials encrypted in this profile, refreshes them centrally, and gives selected threads a local proxy instead of copying tokens into each agent process."
+        chip={`${availableToThreads} of ${connections.length} on`}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Managed MCP gateway"
+            sub="Off means no thread can reach a managed connection, whatever each thread has selected. Credentials stay stored, so turning the gateway back on restores every selection."
+            source={sourceBadge(gatewaySetting)}
+            control={
+              <SettingsSwitch
+                checked={gatewayEnabled}
+                disabled={props.saving}
+                label="Managed MCP gateway"
+                onChange={(next) => {
+                  void props.onMcpGatewayEnabledChange(next);
+                }}
+              />
+            }
+          />
+        </div>
+        {connectionNotice ? (
+          <div
+            className={`settings-plugin-notice settings-plugin-notice--${connectionNotice.kind}`}
+            role={connectionNotice.kind === "error" ? "alert" : "status"}
+          >
+            <span>{connectionNotice.text}</span>
+          </div>
+        ) : null}
+        <form
+          className="settings-mcp-create"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void createConnection();
+          }}
+        >
+          <label>
+            <span>Name</span>
+            <input
+              className="settings-input"
+              disabled={Boolean(connectionPending)}
+              placeholder="Datadog"
+              value={connectionName}
+              onChange={(event) => setConnectionName(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Remote MCP URL</span>
+            <input
+              className="settings-input"
+              disabled={Boolean(connectionPending)}
+              inputMode="url"
+              placeholder="https://mcp.example.com/mcp"
+              value={connectionUrl}
+              onChange={(event) => setConnectionUrl(event.target.value)}
+            />
+          </label>
+          <button
+            className="button button--secondary"
+            disabled={
+              Boolean(connectionPending)
+              || !connectionName.trim()
+              || !connectionUrl.trim()
+            }
+            type="submit"
+          >
+            {connectionPending?.kind === "create" ? "Adding..." : "Add and authorize"}
+          </button>
+        </form>
+        {connectionsLoading ? (
+          <p className="settings-empty">Loading managed connections...</p>
+        ) : connections.length ? (
+          <div className="settings-mcp-list">
+            {connections.map((connection) => (
+              <ManagedMcpConnectionRow
+                key={connection.id}
+                busy={connectionPending?.connectionId === connection.id}
+                connection={connection}
+                disabled={Boolean(connectionPending)}
+                gatewayEnabled={gatewayEnabled}
+                pwrSnap={
+                  connection.kind === "pwrsnap" ? (
+                    <PwrSnapConnectionActions
+                      busy={connectionPending?.connectionId === connection.id}
+                      desktopApi={props.desktopApi}
+                      disabled={Boolean(connectionPending)}
+                      onAuthorize={() => void authorizeConnection(connection)}
+                      onChanged={() => void loadConnections()}
+                      onNotice={setConnectionNotice}
+                    />
+                  ) : undefined
+                }
+                onAuthorize={() => void authorizeConnection(connection)}
+                onAvailabilityChange={
+                  props.desktopApi?.setMcpConnectionEnabled
+                    ? (enabled) =>
+                        void setConnectionAvailability(connection, enabled)
+                    : undefined
+                }
+                onDisconnect={() => void disconnectConnection(connection)}
+                onRemove={() => setConnectionRemoveCandidate(connection)}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="settings-empty">No managed MCP connections are available.</p>
+        )}
+      </SettingsSection>
+
+      <SettingsSection
         eyebrow="Plugins"
-        title="MCP servers"
+        title="Codex-managed MCP servers"
         sectionId="mcp-servers"
         description="Sign-in replaces expired OAuth credentials. Remove deletes only this server's configuration from the selected Codex profile."
         chip={
@@ -715,7 +1041,311 @@ export function PluginsSettings(props: {
           </div>
         </div>
       ) : null}
+
+      {connectionRemoveCandidate ? (
+        <div className="settings-confirm-modal" role="presentation">
+          <div
+            aria-labelledby="remove-managed-mcp-heading"
+            aria-modal="true"
+            className="settings-confirm-dialog settings-confirm-dialog--danger"
+            role="dialog"
+          >
+            <h2 id="remove-managed-mcp-heading">Remove managed connection?</h2>
+            <p>
+              Remove <strong>{connectionRemoveCandidate.displayName}</strong> and
+              its encrypted OAuth credentials from this PwrAgent profile.
+              Threads selecting it will no longer receive the connection.
+            </p>
+            <div className="settings-confirm-dialog__actions">
+              <button
+                className="button button--secondary"
+                disabled={Boolean(connectionPending)}
+                type="button"
+                onClick={() => setConnectionRemoveCandidate(undefined)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--ghost settings-profile-row__button--danger"
+                disabled={Boolean(connectionPending)}
+                type="button"
+                onClick={() => void removeConnection()}
+              >
+                Remove connection
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </SettingsSectionStack>
+  );
+}
+
+function ManagedMcpConnectionRow(props: {
+  busy: boolean;
+  connection: McpConnectionStatus;
+  disabled: boolean;
+  gatewayEnabled: boolean;
+  /** Replaces the generic Authorize action for the PwrSnap row. */
+  pwrSnap?: ReactNode;
+  onAuthorize: () => void;
+  onAvailabilityChange?: (enabled: boolean) => void;
+  onDisconnect: () => void;
+  onRemove: () => void;
+}) {
+  const connection = props.connection;
+  const needsAuthorization = !connection.configured
+    || connection.state === "reauthorization_required";
+  return (
+    <article
+      className={`settings-mcp-row${
+        props.onAvailabilityChange ? " settings-mcp-row--managed" : ""
+      }`}
+    >
+      <div className="settings-mcp-row__body">
+        <strong>{connection.displayName}</strong>
+        <span title={connection.serverUrl}>{connection.serverUrl}</span>
+        {connection.detail ? (
+          <p className="settings-mcp-row__error">{connection.detail}</p>
+        ) : null}
+      </div>
+      <div className="settings-mcp-row__chips">
+        <span className="settings-pathrow__chip">OAuth</span>
+        <span
+          className={`settings-pathrow__chip${
+            connection.state === "ready"
+              ? " settings-pathrow__chip--ok"
+              : connection.state === "reauthorization_required"
+                || connection.state === "temporarily_unavailable"
+                ? " settings-pathrow__chip--err"
+                : ""
+          }`}
+        >
+          {formatConnectionState(connection)}
+        </span>
+      </div>
+      {props.onAvailabilityChange ? (
+        <div className="settings-mcp-row__availability">
+          <SettingsSwitch
+            checked={connection.enabled}
+            // The gateway switch above already states the reason every
+            // connection is off, so this one reads as a consequence rather
+            // than as an unexplained dead control.
+            disabled={props.disabled || !props.gatewayEnabled}
+            label={`Offer ${connection.displayName} to threads`}
+            onChange={props.onAvailabilityChange}
+          />
+          <span className="settings-mcp-row__availability-label">
+            Offer to threads
+          </span>
+        </div>
+      ) : null}
+      <div className="settings-mcp-row__actions">
+        {/*
+          * PwrSnap is a local application, not a remote OAuth endpoint, so
+          * the OAuth handshake only works once it is installed and running
+          * with Local Agent Access. Offering a bare Authorize button before
+          * that would fail with a connection error and name no cause.
+          */}
+        {props.pwrSnap ? <>{props.pwrSnap}</> : (
+          <button
+            className="button button--secondary"
+            disabled={props.disabled}
+            type="button"
+            onClick={props.onAuthorize}
+          >
+            {props.busy
+              ? "Working..."
+              : needsAuthorization
+                ? "Authorize"
+                : "Reauthorize"}
+          </button>
+        )}
+        {connection.configured ? (
+          <button
+            className="button button--ghost"
+            disabled={props.disabled}
+            type="button"
+            onClick={props.onDisconnect}
+          >
+            Disconnect
+          </button>
+        ) : null}
+        {connection.kind !== "pwrsnap" ? (
+          <button
+            className="button button--ghost settings-mcp-row__remove"
+            disabled={props.disabled}
+            type="button"
+            onClick={props.onRemove}
+          >
+            Remove
+          </button>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+/**
+ * PwrSnap's setup ladder, in Settings so the operator can finish it from the
+ * one screen the MCP access panel routes them to. Each rung offers exactly
+ * the action that advances it.
+ */
+function PwrSnapConnectionActions(props: {
+  busy: boolean;
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+  onAuthorize: () => void;
+  onChanged: () => void;
+  onNotice: (notice: ActionNotice) => void;
+}) {
+  const [status, setStatus] = useState<PwrSnapConnectionStatus>();
+  const [pending, setPending] = useState(false);
+  const desktopApi = props.desktopApi;
+
+  const refresh = useCallback(async (): Promise<void> => {
+    if (!desktopApi?.readPwrSnapConnectionStatus) return;
+    try {
+      setStatus(await desktopApi.readPwrSnapConnectionStatus());
+    } catch {
+      // The row still renders its state chip from the connection record, so
+      // a failed probe degrades to the generic Authorize action.
+      setStatus(undefined);
+    }
+  }, [desktopApi]);
+
+  useEffect(() => {
+    void refresh();
+    // Installing PwrSnap or enabling Local Agent Access happens outside this
+    // window, so re-probe when the operator comes back to it.
+    const onFocus = (): void => {
+      void refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
+
+  // Every action here is invoked as `void run(...)`, so a rejection would
+  // escape as an unhandled rejection and the button would simply revert —
+  // indistinguishable from a click that did nothing. On a federated window
+  // the pairing IPC always rejects, so that state would be permanent.
+  const run = async (
+    action: () => Promise<ActionNotice | undefined>,
+  ): Promise<void> => {
+    setPending(true);
+    try {
+      const notice = await action();
+      await refresh();
+      props.onChanged();
+      if (notice) props.onNotice(notice);
+    } catch (cause) {
+      props.onNotice({
+        kind: "error",
+        text: cause instanceof Error ? cause.message : String(cause),
+      });
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const busy = props.busy || pending;
+  const running = status?.availability === "running";
+  const installed = status?.availability === "installed" || running;
+
+  if (!status) {
+    return (
+      <button
+        className="button button--secondary"
+        disabled={props.disabled}
+        type="button"
+        onClick={props.onAuthorize}
+      >
+        {busy ? "Working..." : "Authorize"}
+      </button>
+    );
+  }
+
+  if (!installed) {
+    return (
+      <button
+        className="button button--secondary"
+        disabled={busy}
+        type="button"
+        onClick={() => void run(async () => {
+          const response = await desktopApi?.openPwrSnapDownload?.();
+          if (response && !response.opened) {
+            return {
+              kind: "error",
+              text:
+                response.error
+                ?? "PwrAgent could not open the PwrSnap download page.",
+            };
+          }
+          return undefined;
+        })}
+      >
+        Get PwrSnap
+      </button>
+    );
+  }
+
+  if (!running) {
+    return (
+      <button
+        className="button button--secondary"
+        disabled={busy}
+        type="button"
+        onClick={() => void run(async () => {
+          const response = await desktopApi?.openPwrSnap?.();
+          if (response && !response.opened) {
+            return {
+              kind: "error",
+              text: response.error ?? "PwrAgent could not open PwrSnap.",
+            };
+          }
+          return undefined;
+        })}
+      >
+        Open PwrSnap
+      </button>
+    );
+  }
+
+  if (!status.configured) {
+    return (
+      <button
+        className="button button--secondary"
+        disabled={busy}
+        type="button"
+        onClick={() => void run(async () => {
+          const response = await desktopApi?.connectPwrSnap?.();
+          // A `needs_local_agent_access` result is not a failure and not a
+          // success: PwrSnap is running but has not been told to accept
+          // PwrAgent. Reporting it as connected would send the operator
+          // looking for a bug instead of a setting.
+          if (response?.outcome === "needs_local_agent_access") {
+            return {
+              kind: "info",
+              text: "Turn on Local Agent Access in PwrSnap, then try Connect again.",
+            };
+          }
+          return undefined;
+        })}
+      >
+        {busy ? "Connecting..." : "Connect"}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      className="button button--secondary"
+      disabled={props.disabled}
+      type="button"
+      onClick={props.onAuthorize}
+    >
+      {busy ? "Working..." : "Reauthorize"}
+    </button>
   );
 }
 
@@ -840,4 +1470,19 @@ function McpServerRow(props: {
       ) : null}
     </article>
   );
+}
+
+function formatConnectionState(connection: McpConnectionStatus): string {
+  if (!connection.configured || connection.state === "disconnected") {
+    return "Not connected";
+  }
+  if (connection.state === "reauthorization_required") {
+    return "Login required";
+  }
+  if (connection.state === "temporarily_unavailable") {
+    return "Unavailable";
+  }
+  if (connection.state === "connecting") return "Connecting";
+  if (connection.state === "refreshing") return "Refreshing";
+  return "Ready";
 }

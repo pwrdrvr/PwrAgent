@@ -1949,6 +1949,14 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/mcpConnections/updated";
+      params: {
+        threadId: string;
+        connectionIds: string[];
+        providerServersEnabled: boolean;
+      };
+    }
+  | {
       method: "thread/prAutoDispatch/updated";
       params: {
         threadId: string;

@@ -63,7 +63,7 @@ afterEach(() => {
 });
 
 describe("RuntimeLeaseManager", () => {
-  it("uses one process registration for messaging and federation", () => {
+  it("uses one process registration for every profile runtime", () => {
     const manager = createManager({
       instanceId: "instance-a",
       processId: 123,
@@ -71,6 +71,7 @@ describe("RuntimeLeaseManager", () => {
 
     expect(manager.acquire("messaging")).toEqual({ acquired: true });
     expect(manager.acquire("federation")).toEqual({ acquired: true });
+    expect(manager.acquire("mcp_connections")).toEqual({ acquired: true });
 
     expect(store.getInstance("instance-a")).toMatchObject({
       instanceId: "instance-a",
@@ -84,9 +85,13 @@ describe("RuntimeLeaseManager", () => {
       ownerInstanceId: "instance-a",
       status: "active",
     });
+    expect(store.getMcpConnectionsLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "active",
+    });
   });
 
-  it("denies both leases while their registered owner identity is alive", () => {
+  it("denies all leases while their registered owner identity is alive", () => {
     const owner = createManager({ instanceId: "instance-a", processId: 123 });
     const challenger = createManager({
       instanceId: "instance-b",
@@ -94,12 +99,17 @@ describe("RuntimeLeaseManager", () => {
     });
     owner.acquire("messaging");
     owner.acquire("federation");
+    owner.acquire("mcp_connections");
 
     expect(challenger.acquire("messaging")).toMatchObject({
       acquired: false,
       holder: { instanceId: "instance-a", processId: 123 },
     });
     expect(challenger.acquire("federation")).toMatchObject({
+      acquired: false,
+      holder: { instanceId: "instance-a", processId: 123 },
+    });
+    expect(challenger.acquire("mcp_connections")).toMatchObject({
       acquired: false,
       holder: { instanceId: "instance-a", processId: 123 },
     });

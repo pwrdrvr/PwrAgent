@@ -19,7 +19,10 @@ import type {
   DesktopSettingsSnapshot,
   InspectDiscordThreadPermissionsResponse,
   ListMessagingRoutesResponse,
+  McpConnectionStatus,
   MessagingPairingEntry,
+  MutateMcpConnectionResponse,
+  SetMcpConnectionEnabledRequest,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -92,6 +95,10 @@ function createSnapshot(
         source: "default",
       },
       attentionPromoteOnTurnEnd: {
+        value: true,
+        source: "default",
+      },
+      mcpGatewayEnabled: {
         value: true,
         source: "default",
       },
@@ -6413,6 +6420,78 @@ describe("SettingsScreen", () => {
     ).toBeEnabled();
   });
 
+  it("creates and authorizes a PwrAgent-managed MCP connection", async () => {
+    const managedConnection = {
+      id: "datadog",
+      displayName: "Datadog",
+      serverUrl: "https://mcp.example.com/mcp",
+      authMode: "oauth" as const,
+      kind: "remote" as const,
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+      configured: false,
+      state: "disconnected" as const,
+    };
+    let connections: McpConnectionStatus[] = [];
+    const listMcpConnections = vi.fn(async () => ({ connections }));
+    const createMcpConnection = vi.fn(async () => {
+      connections = [managedConnection];
+      return { connection: managedConnection };
+    });
+    const authorizeMcpConnection = vi.fn(async () => {
+      const connection = {
+        ...managedConnection,
+        configured: true,
+        state: "ready" as const,
+      };
+      connections = [connection];
+      return { connection };
+    });
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          authorizeMcpConnection,
+          createMcpConnection,
+          listMcpConnections,
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Datadog" },
+    });
+    fireEvent.change(screen.getByLabelText("Remote MCP URL"), {
+      target: { value: "https://mcp.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add and authorize" }));
+
+    await waitFor(() => {
+      expect(createMcpConnection).toHaveBeenCalledWith({
+        displayName: "Datadog",
+        serverUrl: "https://mcp.example.com/mcp",
+      });
+      expect(authorizeMcpConnection).toHaveBeenCalledWith({
+        connectionId: "datadog",
+      });
+      expect(screen.getByText("Datadog is connected through PwrAgent."))
+        .toBeInTheDocument();
+    });
+    const row = screen.getByText("Datadog")
+      .closest<HTMLElement>(".settings-mcp-row");
+    expect(row).not.toBeNull();
+    expect(within(row!).getByText("Ready")).toBeInTheDocument();
+  });
+
   it("disables MCP mutations when the selected Codex profile changed after startup", async () => {
     const base = createSnapshot();
     const workCodexHome = "/home/example/.codex/profiles/work";
@@ -7058,4 +7137,74 @@ describe("SettingsScreen", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("/tmp/pwragent/config.toml");
     expect(screen.queryByRole("radio", { name: "TipTap with chips" })).not.toBeInTheDocument();
   });
+
+  it("makes the MCP gateway and each connection switchable", async () => {
+    const setMcpConnectionEnabled = vi.fn(async (
+      request: SetMcpConnectionEnabledRequest,
+    ): Promise<MutateMcpConnectionResponse> => ({
+      connectionId: request.connectionId,
+      connection: {
+        id: "datadog",
+        displayName: "Datadog",
+        serverUrl: "https://mcp.datadoghq.com/mcp",
+        authMode: "oauth" as const,
+        kind: "remote" as const,
+        enabled: request.enabled,
+        createdAt: 0,
+        updatedAt: 0,
+        configured: true,
+        state: "ready" as const,
+      },
+    }));
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        cachedBackends={[]}
+        desktopApi={{
+          listMcpConnections: async () => ({
+            connections: [
+              {
+                id: "datadog",
+                displayName: "Datadog",
+                serverUrl: "https://mcp.datadoghq.com/mcp",
+                authMode: "oauth",
+                kind: "remote",
+                enabled: true,
+                createdAt: 0,
+                updatedAt: 0,
+                configured: true,
+                state: "ready",
+              },
+            ],
+          }),
+          setMcpConnectionEnabled,
+        }}
+        initialSection="plugins"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("switch", { name: "Offer Datadog to threads" }),
+    );
+    await waitFor(() => {
+      expect(setMcpConnectionEnabled).toHaveBeenCalledWith({
+        connectionId: "datadog",
+        enabled: false,
+      });
+    });
+
+    // The profile-wide switch is the one control that can withhold every
+    // connection at once, so it writes the setting rather than the registry.
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Managed MCP gateway" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { mcpGatewayEnabled: false },
+      });
+    });
+  });
+
 });

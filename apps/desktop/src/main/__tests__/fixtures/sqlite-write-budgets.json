@@ -120,7 +120,7 @@
   },
   "idle-hour-runtime-leases": {
     "commits": 0,
-    "note": "one idle hour: PID-owned messaging and federation leases",
+    "note": "one idle hour: PID-owned messaging, federation, and MCP connection leases",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
@@ -138,6 +138,20 @@
     "observedWalBytes": 547960,
     "rowsChanged": 30,
     "statements": 30
+  },
+  "mcp-broker-request": {
+    "commits": 0,
+    "note": "serve one non-owner MCP broker list request",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "mcp-token-rotation": {
+    "commits": 1,
+    "note": "persist one encrypted rotated MCP credential generation",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
   },
   "messaging-agent-conversation-rename": {
     "commits": 5,
@@ -189,18 +203,18 @@
     "statements": 1
   },
   "runtime-lease-dead-owner-takeover": {
-    "commits": 5,
-    "note": "observe one dead owner, wait one minute, replace both runtime leases",
-    "observedWalBytes": 74160,
-    "rowsChanged": 8,
-    "statements": 8
+    "commits": 7,
+    "note": "observe one dead owner, wait one minute, replace all profile runtime leases",
+    "observedWalBytes": 90640,
+    "rowsChanged": 10,
+    "statements": 10
   },
   "runtime-lease-lifecycle": {
-    "commits": 6,
-    "note": "register once, acquire and release both runtime leases, mark exited",
-    "observedWalBytes": 94760,
-    "rowsChanged": 8,
-    "statements": 8
+    "commits": 8,
+    "note": "register once, acquire and release all profile runtime leases, mark exited",
+    "observedWalBytes": 115360,
+    "rowsChanged": 10,
+    "statements": 10
   },
   "star-map-intake-launchpad-initialization": {
     "commits": 2,

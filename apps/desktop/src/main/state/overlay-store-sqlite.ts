@@ -5888,6 +5888,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     connectionIds: string[];
+    providerServersEnabled?: boolean;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
@@ -5899,11 +5900,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const connectionIds = [
       ...new Set(params.connectionIds.map((id) => id.trim()).filter(Boolean)),
     ];
+    // `true` is the default, so it is stored as absence. Only an explicit
+    // opt-out needs a row, which keeps the overlay JSON free of a field on
+    // every thread that never touched the setting.
+    const providerServersEnabled = params.providerServersEnabled === false
+      ? false
+      : undefined;
     const nextState: ThreadOverlayState = {
       ...current,
       ...(connectionIds.length > 0
         ? { mcpConnectionIds: connectionIds }
         : { mcpConnectionIds: undefined }),
+      ...(params.providerServersEnabled === undefined
+        ? {}
+        : { mcpProviderServersEnabled: providerServersEnabled }),
     };
     this.putThread(threadKey, nextState);
     return nextState;
