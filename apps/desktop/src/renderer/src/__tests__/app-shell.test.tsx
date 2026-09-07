@@ -2196,6 +2196,7 @@ describe("App", () => {
           fetchedAt: Date.now(),
           unchanged: false,
           inboxThreadKeys: ["codex:thread-1"],
+          directories: [],
           threads: [
             {
               id: "thread-1",
