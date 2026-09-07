@@ -116,3 +116,22 @@ describe("durable selection identity", () => {
     expect(navigationIdentityFromThreadKey("codex:")).toBeUndefined();
   });
 });
+
+it("retains only the acknowledged partial range and adopts its renewed generation", () => {
+  const directory = { key: "directory", label: "Directory", counts: { total: 30, active: 0, unread: 0, review: 0 } };
+  let state = beginNavigationPageRead(createNavigationPageState(request));
+  state = applyNavigationPage({ state, sequence: state.pendingSequence,
+    page: page({ directories: [directory] as NavigationQueryPage["directories"] }) });
+  state = beginNavigationPageRead(state);
+  const acknowledgment = page({ generation: "renewed", nextCursor: "renewed-next",
+    rangeUnchanged: { start: 0, count: 1 }, directories: [] });
+  const applied = applyNavigationPage({ state, sequence: state.pendingSequence, page: acknowledgment });
+  expect(applied.page?.directories).toBe(state.page?.directories);
+  expect(applied.page?.generation).toBe("renewed");
+  expect(applied.page?.nextCursor).toBe("renewed-next");
+  expect(applied.page?.complete).toBe(false);
+  for (const patch of [{ countsRevision: "changed" }, { ownerEpoch: "restarted" }, { rangeUnchanged: { start: 0, count: 2 } }]) {
+    expect(() => applyNavigationPage({ state, sequence: state.pendingSequence,
+      page: { ...acknowledgment, ...patch } })).toThrow("matching retained range");
+  }
+});

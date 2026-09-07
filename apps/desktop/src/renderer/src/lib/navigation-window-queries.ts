@@ -3,7 +3,7 @@ import type { NavigationQueryAnchor, NavigationQueryRequest } from "@pwragent/sh
 import type { DesktopApi } from "./desktop-api";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
-  failNavigationPageRead, type NavigationPageState,
+  failNavigationPageRead, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
 const MAX_RESOURCES = 8;
@@ -160,6 +160,7 @@ export class NavigationWindowQueries {
       if (anchor) resource.refreshAfterPending = true;
       return resource.pending;
     }
+    const explicitAnchor = anchor;
     anchor = continuation ? undefined : anchor ?? resource.anchor;
     if (resource.value.state.rebaselineRequired && !anchor) return Promise.resolve();
     const cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
@@ -173,6 +174,9 @@ export class NavigationWindowQueries {
         if (!this.api.getNavigationQueryPage) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
         const page = await this.api.getNavigationQueryPage({ ...started.request, cursor, anchor,
           completeBaselineRevision: !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
+          retainedRange: !explicitAnchor && !cursor
+            && (anchor || !started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
+            ? navigationRetainedRange(started) : undefined,
         }, resource.token);
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         if (new TextEncoder().encode(JSON.stringify(page)).byteLength > NAVIGATION_QUERY_MAX_RESULT_BYTES) {

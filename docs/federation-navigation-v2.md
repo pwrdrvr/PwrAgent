@@ -90,6 +90,15 @@ selection independently resolves its local viewer mount and remote configuration
 | Operation deadline | One 10-second deadline per fetch transaction/page batch across queueing, relay and at most one cursor restart. Not a deadline for an entire human scrolling session |
 | Idle reconciliation | At most once per 60 seconds for an active query, coalesced; unchanged result at most 1 KiB. Preserve slower existing cadences (including five minutes); this ceiling does not require more polling. Hidden/closed UI consumers do not poll |
 
+A partial viewer can send `retainedRange` with its owner epoch, query revision,
+start and retained count. `rangeUnchanged` acknowledges only that exact range;
+it never sets the complete-baseline `unchanged` flag. The owner issues a fresh
+continuation after cursor expiry when the same generation content still exists.
+Changed content or an owner restart returns a normal bounded rebaseline. The
+renderer keeps its existing range only after validating the acknowledgment.
+This keeps idle reconciliation below 1 KiB without transferring unchanged rows
+or requiring the viewer to load the whole collection first.
+
 `NavigationQueryRequest.anchor` identifies a thread or directory for an explicit
 rebaseline after cursor expiry. It cannot be combined with a cursor or an
 unchanged-baseline revision. Owners seek within the new immutable generation;

@@ -74,6 +74,14 @@ function mergeEntries(
   return [...byIdentity.values()];
 }
 
+export function navigationRetainedRange(state: NavigationPageState): NavigationQueryRequest["retainedRange"] {
+  const page = state.page;
+  if (!page || state.stale) return undefined;
+  const count = (page.modelGroups ?? page.directories ?? page.entries).length;
+  return count ? { revision: page.countsRevision, ownerEpoch: page.ownerEpoch,
+    start: page.rangeStart ?? 0, count } : undefined;
+}
+
 /** A continuation can extend only the precise generation that requested it. */
 export function applyNavigationPage(params: {
   state: NavigationPageState;
@@ -88,6 +96,19 @@ export function applyNavigationPage(params: {
     throw new Error("Navigation page has inconsistent continuation readiness.");
   }
   const previous = state.page;
+  if (page.rangeUnchanged) {
+    const range = navigationRetainedRange(state);
+    if (!previous || !range || cursor || page.unchanged
+      || page.queryKey !== previous.queryKey || page.countsRevision !== range.revision
+      || page.ownerEpoch !== range.ownerEpoch || page.rangeUnchanged.start !== range.start
+      || page.rangeUnchanged.count !== range.count || (page.rangeStart ?? 0) !== range.start
+      || page.entries.length || page.directories?.length || page.modelGroups?.length) {
+      throw new Error("Navigation range acknowledgment has no matching retained range.");
+    }
+    return { ...state, stale: false, error: undefined, rebaselineRequired: false,
+      page: { ...page, entries: previous.entries, directories: previous.directories,
+        modelGroups: previous.modelGroups, rangeUnchanged: undefined } };
+  }
   if (page.unchanged) {
     if (!previous?.complete || state.stale || (previous.rangeStart ?? 0) !== 0 || cursor || page.queryKey !== previous.queryKey
       || page.countsRevision !== previous.countsRevision || page.ownerEpoch !== previous.ownerEpoch) {

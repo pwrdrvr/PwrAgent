@@ -1723,6 +1723,8 @@ export type NavigationQueryRequest = {
   deadlineAt?: number;
   /** Unchanged is legal only for a complete baseline of this exact query. */
   completeBaselineRevision?: string;
+  /** Conditional acknowledgment of exactly the retained range, never a complete baseline. */
+  retainedRange?: { revision: string; ownerEpoch: string; start: number; count: number };
 };
 
 export type NavigationQueryPlacement =
@@ -1758,6 +1760,8 @@ export type NavigationQueryPage = {
   nextCursor?: string;
   complete: boolean;
   unchanged?: boolean;
+  /** Empty payload confirms these already retained rows; continuation remains explicit. */
+  rangeUnchanged?: { start: number; count: number };
 };
 
 /** Selected launchpad configuration excludes unsent text, attachments and environment output. */

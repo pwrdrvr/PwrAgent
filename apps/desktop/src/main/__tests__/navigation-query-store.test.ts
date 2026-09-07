@@ -668,3 +668,28 @@ it("does not spend cursor slots on complete exact reads or one-page lists", asyn
   expect(rest.entries).toHaveLength(10);
   expect(rest.complete).toBe(true);
 });
+
+it("acknowledges a retained partial range below 1 KiB and renews its continuation after expiry", async () => {
+  let now = 1;
+  const store = new NavigationQueryStore({ now: () => now });
+  const threads = Array.from({ length: 30 }, (_, index) => thread(`t${index}`));
+  const read = (patch: Partial<NavigationQueryRequest> = {}) => store.readPage({
+    scopeKey: "viewer", request: request({ pageSize: 10, ...patch }), loadIndex: async () => snapshot(threads),
+  });
+  const first = await read();
+  now += 61_000;
+  const retainedRange = { revision: first.countsRevision, ownerEpoch: first.ownerEpoch, start: 0, count: 10 };
+  const ack = await read({ retainedRange });
+  expect(ack.rangeUnchanged).toEqual({ start: 0, count: 10 });
+  expect(ack.unchanged).toBeUndefined();
+  expect(ack.complete).toBe(false);
+  expect(ack.entries).toEqual([]);
+  expect(Buffer.byteLength(JSON.stringify(ack))).toBeLessThan(1024);
+  const next = await read({ cursor: ack.nextCursor });
+  expect(next.entries).toHaveLength(10);
+  expect(next.entries.some((entry) => first.entries.some((old) => old.row.ref.threadId === entry.row.ref.threadId))).toBe(false);
+  threads[0]!.title = "Changed owner metadata";
+  expect((await read({ retainedRange })).rangeUnchanged).toBeUndefined();
+  expect((await read({ retainedRange: { ...retainedRange, ownerEpoch: "previous-process" } })).rangeUnchanged).toBeUndefined();
+  await expect(read({ retainedRange: { ...retainedRange, count: -1 } })).rejects.toThrow("Invalid retained navigation range");
+});

@@ -133,6 +133,15 @@ function validateRequest(request: NavigationQueryRequest): void {
       "Navigation page size must be between 1 and 100.",
     );
   }
+  const range = request.retainedRange;
+  if (range && (request.cursor || request.completeBaselineRevision
+    || typeof range.revision !== "string" || range.revision.length > 128
+    || typeof range.ownerEpoch !== "string" || range.ownerEpoch.length > 128
+    || !Number.isSafeInteger(range.start) || range.start < 0
+    || !Number.isSafeInteger(range.count) || range.count < 1
+    || !Number.isSafeInteger(range.start + range.count))) {
+    throw new NavigationQueryError("navigation_invalid_request", "Invalid retained navigation range.");
+  }
   if (request.anchor && (request.cursor || request.completeBaselineRevision
     || !["thread", "directory"].includes(request.anchor.kind)
     || (request.anchor.kind === "thread" && (!request.anchor.ref?.backend || !request.anchor.ref.threadId))
@@ -333,6 +342,26 @@ export class NavigationQueryStore {
         generation.lastAccessedAt = now;
         return unchanged;
       }
+    }
+
+    const range = params.request.retainedRange;
+    if (range && range.revision === generation.completeRevision && range.ownerEpoch === this.ownerEpoch) {
+      const size = generation.materialization.modelGroups?.length
+        ?? (generation.materialization.directories.length || generation.materialization.entries.length);
+      if (range.start + range.count > size) {
+        throw new NavigationQueryError("navigation_invalid_request", "Retained range exceeds its matching generation.");
+      }
+      const page = this.buildPage({ generation, offset: range.start + range.count,
+        ownerEpoch: this.ownerEpoch, pageSize: 0 });
+      page.rangeStart = range.start;
+      page.rangeUnchanged = { start: range.start, count: range.count };
+      this.assertPageBudget(page);
+      generation.lastAccessedAt = now;
+      if (newCurrentKey && page.nextCursor) {
+        this.retainGeneration(generation);
+        this.currentGenerationByScopeAndQuery.set(newCurrentKey, generation.generation);
+      }
+      return page;
     }
 
     if (params.request.anchor) {

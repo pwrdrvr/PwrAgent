@@ -6,6 +6,7 @@ import {
   beginNavigationPageRead,
   createNavigationPageState,
   failNavigationPageRead,
+  navigationRetainedRange,
   type NavigationPageState,
 } from "./navigation-query-state";
 
@@ -57,6 +58,8 @@ export function useNavigationQueryResource(params: {
           cursor,
           completeBaselineRevision: !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0
             ? started.page.countsRevision : undefined,
+          retainedRange: !cursor && (!started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
+            ? navigationRetainedRange(started) : undefined,
         }, consumerId);
         if (lifetimeRef.current !== lifetime) return;
         publish(applyNavigationPage({

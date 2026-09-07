@@ -61,7 +61,7 @@ export class NavigationQueryPool {
       ownerKey: ownerKey(params.request.federationTarget),
       key: JSON.stringify(["query", params.scopeKey ?? "renderer", params.request.federationTarget ?? { scope: "local" }, navigationQueryKey(params.request)]),
       operationKey: JSON.stringify([params.request.cursor ?? null, params.request.anchor ?? null,
-        params.request.completeBaselineRevision ?? null, params.request.pageSize ?? 100]),
+        params.request.completeBaselineRevision ?? null, params.request.retainedRange ?? null, params.request.pageSize ?? 100]),
       deadlineAt: params.request.deadlineAt,
     });
   }
