@@ -650,3 +650,21 @@ it("bounds closed Attention lifetime metadata and expires it after the late-read
   now = 60_001;
   await expect(read("next")).resolves.toMatchObject({ protocol: 2 });
 });
+
+
+it("does not spend cursor slots on complete exact reads or one-page lists", async () => {
+  const store = new NavigationQueryStore();
+  const owner = snapshot(Array.from({ length: 20 }, (_, index) => thread(String(index))));
+  const first = await store.readPage({ scopeKey: "window", request: request({ pageSize: 10 }), loadIndex: async () => owner });
+  for (let index = 0; index < 20; index += 1) {
+    const exact = await store.readPage({ scopeKey: "window", request: request({ query: { kind: "exact", identities: [{ backend: "codex", threadId: String(index) }] } }), loadIndex: async () => owner });
+    expect(exact.complete).toBe(true);
+    expect(exact.nextCursor).toBeUndefined();
+    const page = await store.readPage({ scopeKey: `window-${index}`, request: request(), loadIndex: async () => snapshot([thread(String(index))]) });
+    expect(page.complete).toBe(true);
+  }
+  const rest = await store.readPage({ scopeKey: "window", request: request({ pageSize: 10, cursor: first.nextCursor }), loadIndex: async () => { throw new Error("Cursor must use retained authority"); } });
+  expect(rest.generation).toBe(first.generation);
+  expect(rest.entries).toHaveLength(10);
+  expect(rest.complete).toBe(true);
+});

@@ -538,6 +538,9 @@ export async function startInProcessFederationGateway(params: {
     ): Promise<MaterializeDirectoryLaunchpadResponse> {
       calls.push({ method: "materializeDirectoryLaunchpad", params: request });
       const threadId = `remote-created-${threads.length + 1}`;
+      const directory = directories.find((entry) => entry.key === request.directoryKey
+        || entry.path === request.launchpad?.directoryPath);
+      directory?.threadIds?.push(threadId);
       const prompt =
         request.input?.find((item) => item.type === "text")?.text.trim()
         ?? request.launchpad?.prompt.trim()

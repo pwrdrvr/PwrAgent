@@ -251,6 +251,7 @@ export class NavigationQueryStore {
     if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view has closed. Open a new view lifetime.");
     const queryKey = navigationQueryKey(params.request);
     let generation: NavigationQueryGeneration;
+    let newCurrentKey: string | undefined;
     let offset = 0;
 
     if (params.request.cursor) {
@@ -301,7 +302,7 @@ export class NavigationQueryStore {
       if (current?.completeRevision === revision) {
         generation = current;
       } else {
-        generation = this.retainGeneration({
+        generation = {
           completeRevision: revision,
           createdAt: now,
           generation: randomUUID(),
@@ -310,8 +311,11 @@ export class NavigationQueryStore {
           retainedBytes: serializedBytes(materialization),
           scopeKey: params.scopeKey,
           attentionViewId: params.request.attentionView?.id,
-        });
-        this.currentGenerationByScopeAndQuery.set(currentKey, generation.generation);
+        };
+        if (generation.retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
+          throw new NavigationQueryError("navigation_busy", "Navigation query exceeds the process retained-memory budget.");
+        }
+        newCurrentKey = currentKey;
       }
       if (
         params.request.completeBaselineRevision
@@ -341,12 +345,19 @@ export class NavigationQueryStore {
       }
     }
     generation.lastAccessedAt = now;
-    return this.buildPage({
+    const page = this.buildPage({
       generation,
       offset,
       ownerEpoch: this.ownerEpoch,
       pageSize: params.request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS,
     });
+    // Only an issued cursor needs retained authority. Complete exact reads and
+    // one-page lists must not consume the active pagination generation budget.
+    if (newCurrentKey && page.nextCursor) {
+      this.retainGeneration(generation);
+      this.currentGenerationByScopeAndQuery.set(newCurrentKey, generation.generation);
+    }
+    return page;
   }
 
   /** Window teardown releases order lifetime; page expiry deliberately does not. */
