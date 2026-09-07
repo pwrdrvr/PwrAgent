@@ -42,9 +42,9 @@ export type ThreadLinkSource = {
 
 export type ThreadLinkContextValue = {
   /**
-   * Returns the thread a link points at, or undefined when it names a thread
-   * this profile does not have. Callers render unresolved links as plain text
-   * rather than a chip that goes nowhere.
+   * Resolves loaded or mounted-link metadata. Explicit backend identities stay
+   * actionable off-page; selection resolves their existence through the owner.
+   * Bare ids without known metadata remain unresolved.
    */
   resolve: (ref: ThreadLinkRef) => ResolvedThreadLink | undefined;
   openRemoteViewer: (link: ResolvedThreadLink) => void;
@@ -232,11 +232,13 @@ function threadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
 class ThreadLinkMetadataStore {
   private links = new Map<string, ResolvedThreadLink>();
   private listeners = new Map<string, Set<() => void>>();
+  private admittedKeys = new Set<string>();
 
   constructor(threads: NavigationThreadSummary[]) {
     for (const thread of threads) {
       const link = threadSummaryLink(thread);
       this.links.set(threadLinkKey(link), link);
+      this.admittedKeys.add(threadLinkKey(link));
     }
   }
 
@@ -244,16 +246,34 @@ class ThreadLinkMetadataStore {
     return this.links.get(threadLinkKey(fallback)) ?? fallback;
   }
 
+  getMountedLink(ref: ThreadLinkRef): ResolvedThreadLink | undefined {
+    for (const key of this.listeners.keys()) {
+      const link = this.links.get(key);
+      if (link?.threadId === ref.threadId
+        && link.instanceId === ref.instanceId
+        && (!ref.backend || link.backend === ref.backend)) {
+        return link;
+      }
+    }
+    return undefined;
+  }
+
   subscribe(link: ResolvedThreadLink, listener: () => void): () => void {
     const key = threadLinkKey(link);
     const listeners = this.listeners.get(key) ?? new Set();
     listeners.add(listener);
     this.listeners.set(key, listeners);
+    if (!this.links.has(key)) {
+      this.links.set(key, link);
+    }
 
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) {
         this.listeners.delete(key);
+        if (!this.admittedKeys.has(key)) {
+          this.links.delete(key);
+        }
       }
     };
   }
@@ -273,9 +293,16 @@ class ThreadLinkMetadataStore {
       }
     }
 
-    for (const key of this.links.keys()) {
+    this.admittedKeys = new Set(nextLinks.keys());
+    for (const [key, link] of this.links) {
       if (!nextLinks.has(key)) {
-        changedKeys.add(key);
+        // Page omission is not deletion. Retain only metadata with a mounted
+        // subscriber; the last unsubscribe releases off-page metadata.
+        if (this.listeners.has(key)) {
+          nextLinks.set(key, link);
+        } else {
+          changedKeys.add(key);
+        }
       }
     }
 
@@ -581,18 +608,6 @@ export function ThreadLinkProvider(props: {
             instanceId: ref.instanceId,
             threadId: ref.threadId,
           }));
-          if (!resolved) {
-            // Remote links stay actionable without a navigation row, but the
-            // synthetic fallback must not hydrate through metadata that may
-            // still be awaiting removal from the store's layout effect.
-            return {
-              backend: ref.backend,
-              instanceId: ref.instanceId,
-              ...(ref.messageId ? { messageId: ref.messageId } : {}),
-              threadId: ref.threadId,
-              title: "",
-            };
-          }
         } else if (ref.backend) {
           resolved = byIdentity.get(
             buildThreadIdentityKey(ref.backend, ref.threadId),
@@ -604,6 +619,16 @@ export function ThreadLinkProvider(props: {
         // The maps above are rebuilt only when membership changes, so their
         // metadata may predate a live rename. Resolve through the mutable store
         // before returning a value to one-shot consumers such as the composer.
+        resolved ??= metadataStore.getMountedLink(ref);
+        if (!resolved && ref.backend) {
+          return {
+            backend: ref.backend,
+            ...(ref.instanceId ? { instanceId: ref.instanceId } : {}),
+            ...(ref.messageId ? { messageId: ref.messageId } : {}),
+            threadId: ref.threadId,
+            title: "",
+          };
+        }
         if (!resolved) {
           return undefined;
         }
