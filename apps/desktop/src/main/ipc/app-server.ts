@@ -5978,11 +5978,19 @@ class DesktopAppServerService {
   async setEligibleThreadsPrAutoDispatch(
     request: SetEligibleThreadsPrAutoDispatchRequest,
   ): Promise<SetEligibleThreadsPrAutoDispatchResponse> {
-    const snapshot = await this.getNavigationSnapshot({
+    const index = await loadLocalNavigationQueryIndex({
       backend: "all",
-      refreshMode: "full",
+      callerReason: "settings-bulk-pr-auto-dispatch",
     });
-    const eligibleThreads = snapshot.threads.filter((thread) => {
+    if (index.coverage && index.coverage.state !== "complete") {
+      throw new Error("Thread discovery is incomplete. Wait for providers to finish loading before changing Auto-fix for all eligible threads.");
+    }
+    await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
+    this.seedPrStatusRegistryFromThreads(index.threads);
+    const canonical = this.applyCanonicalPrStatuses(index.threads);
+    await this.rememberThreadPrAttachments(canonical.threads, { replace: true });
+    const eligibleThreads = canonical.threads.filter((thread) => {
       const attachment = this.attachedPrsByThreadKey.get(
         buildThreadIdentityKey(thread.source, thread.id),
       );

@@ -1096,6 +1096,8 @@ vi.mock("../app-server/backend-registry", () => {
     invalidateDirectoryStatus,
     readWorktreeWorkingStateEntries,
     hydrateThreadGitWorkingStates,
+    canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+    getNavigationInputRequestThreadKeys: () => new Set<string>(),
     refreshThreadGitWorkingStates,
     scheduleWorktreeGitWorkingStateRefresh,
     getThreadGitWorkingStateCache,
@@ -1696,6 +1698,20 @@ describe("app server ipc", () => {
         enabled: true,
       },
     ]);
+    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ partial: true }));
+    const read = reconcileNavigationSnapshot.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(read).not.toHaveProperty("messagingBindingsByThreadKey");
+    expect(read).not.toHaveProperty("queuedTurnsByThreadKey");
+    expect(read).not.toHaveProperty("automationsByThreadKey");
+  });
+
+  it.each(["checking", "degraded"])("does not apply bulk Auto-fix changes to a %s owner inventory", async (state) => {
+    const { NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL } = await import("../../shared/ipc");
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state });
+    registerAppServerIpcHandlers();
+    await expect(handlers.get(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL)?.({}, { enabled: true }))
+      .rejects.toThrow("Thread discovery is incomplete");
+    expect(setThreadPrAutoDispatchBatch).not.toHaveBeenCalled();
   });
 
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {
