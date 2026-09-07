@@ -82,6 +82,7 @@ export function registerComposerDraftIpcHandlers(): void {
     async (_event, request?: ListComposerDraftLatestRequest): Promise<ListComposerDraftLatestResponse> => {
       const store = getStore();
       if (request?.migrateKnownOwners === true) store.migrateKnownOwnerScopes();
+      if (request?.migrateLegacyLaunchpads === true) store.migrateLegacyLaunchpadDrafts();
       return { drafts: store.listLatest() };
     },
   );

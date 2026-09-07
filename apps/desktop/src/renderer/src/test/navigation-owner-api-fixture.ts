@@ -80,6 +80,11 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi): De
           parentThreadInstanceId: draft.parentThreadInstanceId, parentThreadTitle: draft.parentThreadTitle,
           sourceThreadId: draft.sourceThreadId, federationTarget: draft.federationTarget,
           registeredAt: draft.registeredAt, settingsTouchedAt: draft.settingsTouchedAt,
+          acpRuntime: draft.acpRuntime, providerSettings: draft.providerSettings, agent: draft.agent,
+          mcpConnectionIds: draft.mcpConnectionIds, messagingToolUpdateMode: draft.messagingToolUpdateMode,
+          prAutoDispatchEnabled: draft.prAutoDispatchEnabled, tokenMiserEnabled: draft.tokenMiserEnabled,
+          codexEnvironmentId: draft.codexEnvironmentId, codexEnvironmentExecutionTarget: draft.codexEnvironmentExecutionTarget,
+          codexEnvironmentActionId: draft.codexEnvironmentActionId,
           createdAt: draft.createdAt, updatedAt: draft.updatedAt } : undefined };
     }),
     ...(api.markThreadSeen ? { markThreadSeen: async (request) => {

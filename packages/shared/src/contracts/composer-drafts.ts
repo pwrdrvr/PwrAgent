@@ -119,6 +119,8 @@ export type ListComposerDraftRecoveryCandidatesResponse = {
 export type ListComposerDraftLatestRequest = {
   /** Explicit startup migration; never infer owners for legacy records. */
   migrateKnownOwners?: boolean;
+  /** Import only this viewer's legacy launchpad input during explicit startup hydration. */
+  migrateLegacyLaunchpads?: boolean;
 };
 
 export type ListComposerDraftLatestResponse = {

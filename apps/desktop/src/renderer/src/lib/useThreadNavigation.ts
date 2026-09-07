@@ -2394,7 +2394,7 @@ function getFallbackSelectionKey(
     return threadSummaryIdentityKey(loadedThreadRows(response)[0]);
   }
 
-  const firstLaunchpadDirectory = loadedDirectoryRows(response).find((directory) => directory.launchpad);
+  const firstLaunchpadDirectory = loadedDirectoryRows(response).find((directory) => directory.launchpadPresent || directory.launchpad);
   return firstLaunchpadDirectory
     ? buildLaunchpadSelectionKey(firstLaunchpadDirectory.key)
     : undefined;
@@ -3134,11 +3134,13 @@ export function useThreadNavigation(
   });
   const acceptedPagesRef = useRef(new Map<string, unknown>());
   const acceptedDefaultsRef = useRef<unknown>(undefined);
+  const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     const pages = new Map([...boundedNavigation.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : []));
     const changed = pages.size !== acceptedPagesRef.current.size
       || [...pages].some(([id, page]) => acceptedPagesRef.current.get(id) !== page)
-      || acceptedDefaultsRef.current !== launchpadConfiguration.value;
+      || acceptedDefaultsRef.current !== launchpadConfiguration.value
+      || acceptedDraftHydrationRef.current !== draftStore?.hydrationVersion;
     const resources = [...boundedNavigation.resources.values()];
     const error = boundedNavigation.admissionError ?? resources.find((resource) => resource.state.error)?.state.error;
     const refreshing = resources.some((resource) => resource.loading);
@@ -3150,9 +3152,13 @@ export function useThreadNavigation(
       const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
       acceptedPagesRef.current = pages;
       acceptedDefaultsRef.current = launchpadConfiguration.value;
+      acceptedDraftHydrationRef.current = draftStore?.hydrationVersion;
       const directoryRows = indexLoadedDirectoryRows(boundedNavigation.directories.map((directory) => ({ ...directory,
         ...(launchpadConfiguration.value?.directoryKey === directory.key && launchpadConfiguration.value.launchpad
-          ? { launchpad: { ...launchpadConfiguration.value.launchpad, prompt: "" } } : {}),
+          ? { launchpad: { ...launchpadConfiguration.value.launchpad,
+              prompt: draftStore?.get(`launchpad:${directory.key}`)?.draft ?? "",
+              imageAttachments: draftStore?.get(`launchpad:${directory.key}`)?.imageAttachments,
+              fileAttachments: draftStore?.get(`launchpad:${directory.key}`)?.fileAttachments } } : {}),
       })));
       setState((current) => {
         // Unchanged resource pages must not roll back canonical row events or
@@ -3171,7 +3177,7 @@ export function useThreadNavigation(
     } else {
       setState((current) => ({ ...current, loading, refreshing, error }));
     }
-  }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode]);
+  }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore]);
 
   const performRefresh = useCallback(async (
     preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,

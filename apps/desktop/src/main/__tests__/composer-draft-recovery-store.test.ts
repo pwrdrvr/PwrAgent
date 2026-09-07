@@ -26,6 +26,34 @@ afterEach(() => {
 });
 
 describe("ComposerDraftRecoveryStore", () => {
+  it("imports viewer-local legacy launchpad drafts once without overwriting recovery history", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    stateDb.close();
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    store = new ComposerDraftRecoveryStore(stateDb);
+    for (const name of ["recover", "newer", "cleared"]) {
+      const key = `directory:/${name}`;
+      const payload = { directoryKey: key, directoryKind: "directory", directoryLabel: name, directoryPath: `/${name}`,
+        backend: "codex", executionMode: "default", prompt: `Legacy ${name}`, createdAt: 1, updatedAt: 2 };
+      stateDb.raw.prepare("INSERT INTO directory_launchpads(directory_path, payload, created_at, updated_at) VALUES (?, ?, ?, ?)")
+        .run(key, JSON.stringify(payload), 1, 2);
+    }
+    store.save({ draft: buildDraft({ scopeKey: "launchpad:directory:/newer", scopeKind: "launchpad", text: "Newer composer input" }) });
+    store.recordHistory(buildDraft({ scopeKey: "launchpad:directory:/cleared", scopeKind: "launchpad", status: "cleared", text: "Cleared input" }));
+    const migration = await measureSqliteWrites(() => store.migrateLegacyLaunchpadDrafts());
+    expect(migration.result).toBe(1);
+    expectSqliteWriteBudget({ scenario: "composer-legacy-launchpad-migration", writes: migration.writes,
+      note: "One explicit startup transaction imports viewer-local legacy input and its recovery marker; less than 0.1 MB once, 0 additional MB/day" });
+    expect(store.listLatest().map((draft) => draft.text).sort()).toEqual(["Legacy recover", "Newer composer input"]);
+    store.clear("launchpad:directory:/recover");
+    const repeat = await measureSqliteWrites(() => store.migrateLegacyLaunchpadDrafts());
+    expect(repeat.result).toBe(0);
+    expectSqliteWriteBudget({ scenario: "composer-legacy-launchpad-migration-repeat", writes: repeat.writes,
+      note: "A recovery marker prevents cleared legacy input from resurrecting; repeated startup performs zero commits, 0 MB/day" });
+    expect(store.listLatest().map((draft) => draft.text)).toEqual(["Newer composer input"]);
+    expect(stateDb.raw.prepare("SELECT count(*) AS count FROM directory_launchpads").get()).toEqual({ count: 3 });
+  });
+
   it("budgets known-owner migration as one transaction and zero writes on repeat", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     stateDb.close();
