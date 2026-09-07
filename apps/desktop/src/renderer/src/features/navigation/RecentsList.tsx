@@ -1,3 +1,4 @@
+import { readNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
@@ -30,6 +31,7 @@ import {
 import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
+  presentationOrder?: NavigationPresentationOrder;
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
   resourceIds?: string[];
   loadedThreads?: NavigationThreadSummary[];
@@ -111,20 +113,21 @@ export function RecentsList(props: RecentsListProps) {
       thread,
     ]),
   );
-  const entries = props.pagedNavigation ? (props.resourceIds ?? ["lens"]).flatMap((id) => props.pagedNavigation?.resources.get(id)?.state.page?.entries ?? []) : undefined;
+  const presentation = props.presentationOrder ?? readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map());
+  const entries = props.pagedNavigation ? (props.resourceIds ?? ["lens"]).flatMap((id) => presentation.get(id) ?? []) : undefined;
   const visibleKeys = new Set(props.threads.map(threadSummaryIdentityKey));
   const topLevelThreads: NavigationThreadSummary[] = entries
-    ? entries.filter((entry) => entry.placement.kind === "root" && visibleKeys.has(navigationThreadSelectionKey(entry.row.ref)))
-      .map((entry) => threadByKey.get(navigationThreadSelectionKey(entry.row.ref))).filter((thread): thread is NavigationThreadSummary => Boolean(thread))
+    ? entries.filter((entry) => entry.placement.kind === "root" && visibleKeys.has(entry.key))
+      .map((entry) => threadByKey.get(entry.key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread))
     : props.threads.filter((thread) => !thread.parentThreadId);
   const childrenByParentKey = new Map<string, NavigationThreadSummary[]>();
   const childEntries = [...entries ?? [], ...[...props.pagedNavigation?.resources.values() ?? []]
-    .filter((resource) => resource.state.request.query.kind === "children").flatMap((resource) => resource.state.page?.entries ?? [])];
+    .filter((resource) => resource.state.request.query.kind === "children").flatMap((resource) => presentation.get(resource.id) ?? [])];
   for (const entry of childEntries) {
     if (entry.placement.kind !== "child") continue;
     const parentKey = navigationThreadSelectionKey(entry.placement.parent);
     const children = childrenByParentKey.get(parentKey) ?? [];
-    const key = navigationThreadSelectionKey(entry.row.ref);
+    const key = entry.key;
     const row = threadByKey.get(key);
     if (row && !children.some((child) => threadSummaryIdentityKey(child) === key)) children.push(row);
     childrenByParentKey.set(parentKey, children);

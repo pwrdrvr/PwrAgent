@@ -32,6 +32,7 @@ export function navigationQueryFixture(
     directories?: readonly FixtureDirectory[];
     threads?: readonly NavigationThreadSummary[];
   },
+  options?: { ownerLensOrder?: boolean },
 ): NavigationQueryPage {
   const query = request.query;
   const target = request.federationTarget;
@@ -70,7 +71,7 @@ export function navigationQueryFixture(
   if (query.kind === "search") threads = rankThreadJumpMatches(all, query.text);
   if (query.kind === "lens") {
     if (query.lens === "attention") threads = all.filter((thread) => thread.threadStatus === "active" || thread.inbox.inInbox);
-    else threads = [...all].sort((left, right) => query.lens === "recents"
+    else if (!options?.ownerLensOrder) threads = [...all].sort((left, right) => query.lens === "recents"
       ? (right.createdAt ?? 0) - (left.createdAt ?? 0) : (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   }
   if (query.kind === "directory") {

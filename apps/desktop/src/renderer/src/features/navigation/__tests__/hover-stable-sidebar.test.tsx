@@ -723,7 +723,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     });
     fireEvent.pointerOver(launchpadButton, { pointerType: "mouse" });
     fireEvent.click(launchpadButton);
-    expect(onOpenLaunchpad).toHaveBeenCalledWith(collapsedDirectory, undefined);
+    expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: collapsedDirectory.key, directoryThreadsCollapsed: true }), undefined);
 
     const expandedDirectory = {
       ...collapsedDirectory,

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type ComponentProps } from "react";
-import { classifyDirectory, type NavigationDirectorySummary, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
+import { classifyDirectory, resolveThreadParentKey, type NavigationDirectorySummary, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
 import { Sidebar } from "../features/navigation/Sidebar";
 import { DirectoriesList } from "../features/navigation/DirectoriesList";
 import { createAttentionOrderState, reconcileAttentionOrder } from "../features/navigation/attention-order";
@@ -12,6 +12,7 @@ type FixtureProps = {
   browseMode?: "attention" | "drafts" | "inbox" | "recents" | "directories";
   directories: ComponentProps<typeof Sidebar>["directories"];
   threads: NavigationThreadSummary[];
+  recentThreads?: NavigationThreadSummary[];
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   attentionPromoteOnTurnEnd?: boolean;
@@ -25,8 +26,7 @@ function usePresentationOwner(props: FixtureProps) {
   const ownerThreads = props.threads.map((thread) => props.thinkingThreadKeys?.[threadSummaryIdentityKey(thread)]
     ? { ...thread, threadStatus: "active" as const } : thread);
   const attention = reconcileAttentionOrder({ previous: order.current,
-    threads: ownerThreads.filter((thread) => thread.threadStatus === "active" || thread.inbox.inInbox)
-      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)),
+    threads: ownerThreads.filter((thread) => thread.threadStatus === "active" || thread.inbox.inInbox),
     promoteOnTurnEnd: props.attentionPromoteOnTurnEnd ?? true });
   order.current = attention.state;
   const selectedThreadDirectoryKeys = props.directories.filter((directory) => {
@@ -39,12 +39,16 @@ function usePresentationOwner(props: FixtureProps) {
   const add = (id: string, query: NavigationQueryRequest["query"], threads = ownerThreads) => {
     const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query,
       pageSize: limits[id] ?? (query.kind === "directory-index" ? 100 : 10) };
+    let page = navigationQueryFixture(request, { directories: props.directories, threads }, { ownerLensOrder: true });
     if (query.kind === "directory" && selectedThread && !selectedThread.parentThreadId
-      && selectedThreadDirectoryKeys.includes(query.directoryKey)) {
+      && selectedThreadDirectoryKeys.includes(query.directoryKey)
+      && (query.roots !== "pinned" || selectedThread.pinnedRank)
+      && !page.entries.some((entry) => entry.row.id === selectedThread.id && entry.row.source === selectedThread.source
+        && entry.row.ref.ownerInstanceId === (selectedThread.federation?.ref.target.scope === "remote" ? selectedThread.federation.ref.target.instanceId : undefined))) {
       request.anchor = { kind: "thread", ref: { backend: selectedThread.source, threadId: selectedThread.id,
         ownerInstanceId: selectedThread.federation?.ref.target.scope === "remote" ? selectedThread.federation.ref.target.instanceId : undefined } };
+      page = navigationQueryFixture(request, { directories: props.directories, threads });
     }
-    const page = navigationQueryFixture(request, { directories: props.directories, threads });
     resources.set(id, { id, loading: false, state: { ...createNavigationPageState(request), page, stale: false } });
     return page;
   };
@@ -53,10 +57,14 @@ function usePresentationOwner(props: FixtureProps) {
   if (mode === "drafts") add('drafts:"":0', { kind: "exact", identities: ownerThreads
     .filter((thread) => props.draftThreadKeys?.[threadSummaryIdentityKey(thread)])
     .map((thread) => ({ backend: thread.source, threadId: thread.id })), includeAncestry: true });
-  else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, mode === "attention" ? attention.threads : ownerThreads);
+  else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, mode === "attention" ? attention.threads
+    : mode === "recents" ? props.recentThreads ?? ownerThreads : ownerThreads);
   for (const directory of props.directories) add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key,
     roots: directory.directoryThreadsCollapsed ? "pinned" : "all" });
+  const byKey = new Map(ownerThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
+  const parents = new Set(ownerThreads.map((thread) => resolveThreadParentKey(thread, byKey)).filter(Boolean));
   for (const thread of ownerThreads) {
+    if (thread.subthreadsCollapsed || !parents.has(threadSummaryIdentityKey(thread))) continue;
     const parent = { backend: thread.source, threadId: thread.id,
       ownerInstanceId: thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined };
     add(`children:${navigationIdentityKey(parent)}`, { kind: "children", parent });

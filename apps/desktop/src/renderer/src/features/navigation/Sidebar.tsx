@@ -1,3 +1,4 @@
+import { readNavigationPresentationOrder, retainNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
@@ -91,6 +92,8 @@ type ThreadContextMenuPosition = {
 };
 
 type HoverStableSidebarSnapshot = {
+  order: NavigationPresentationOrder;
+  visibleKeys: string[];
   directories: NavigationDirectorySummary[];
   threads: NavigationThreadSummary[];
 };
@@ -127,6 +130,9 @@ function hydrateHoverStableSidebarSnapshot(
   );
 
   return {
+    order: retainNavigationPresentationOrder(frozen.order, latest.order),
+    visibleKeys: [...frozen.visibleKeys.filter((key) => !options?.removeMissingThreads || latest.visibleKeys.includes(key)),
+      ...latest.visibleKeys.filter((key) => !frozen.visibleKeys.includes(key))],
     directories: [
       ...frozen.directories.map((directory) => {
         const latestDirectory = latestDirectoriesByKey.get(directory.key);
@@ -574,12 +580,16 @@ export function Sidebar(props: SidebarProps) {
     scope: props.browseMode,
     value: {
       directories: props.directories,
-      threads:
-        props.browseMode === "directories" ? props.threads : visibleThreads,
+      threads: props.threads,
+      visibleKeys: visibleThreads.map(threadSummaryIdentityKey),
+      order: readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map()),
     },
   });
   const renderedDirectories = hoverStableSnapshot.value.directories;
-  const renderedThreads = hoverStableSnapshot.value.threads;
+  const presentedThreads = hoverStableSnapshot.value.threads;
+  const presentedByKey = new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
+  const renderedThreads = props.browseMode === "directories" ? presentedThreads
+    : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
   /**
    * Hover stability protects a target from background list churn. A command
    * the operator chose must instead reveal its resulting snapshot immediately.
@@ -1965,6 +1975,7 @@ export function Sidebar(props: SidebarProps) {
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               pagedNavigation={props.pagedNavigation}
+              presentationOrder={hoverStableSnapshot.value.order}
               selectedThreadDirectoryKeys={props.selectedThreadDirectoryKeys}
               directoryDisclosure={props.directoryDisclosure}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -2043,7 +2054,8 @@ export function Sidebar(props: SidebarProps) {
               <RecentsList
                 pagedNavigation={props.pagedNavigation}
                 resourceIds={lensResources.map((resource) => resource.id)}
-                loadedThreads={props.threads}
+                presentationOrder={hoverStableSnapshot.value.order}
+                loadedThreads={presentedThreads}
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                 terminalThreadKeys={props.terminalThreadKeys}
                 inputRequestThreadKeys={props.inputRequestThreadKeys}

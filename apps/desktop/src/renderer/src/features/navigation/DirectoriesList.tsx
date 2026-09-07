@@ -1,4 +1,5 @@
-import { navigationIdentityKey } from "../../lib/navigation-query-state";
+import type { NavigationPresentationOrder } from "./navigation-presentation-order";
+import { navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -78,6 +79,7 @@ import {
 } from "../../lib/useNavigationDirectoryDisclosure";
 
 type DirectoriesListProps = {
+  presentationOrder?: NavigationPresentationOrder;
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
   selectedThreadDirectoryKeys?: readonly string[];
   directoryDisclosure?: NavigationDirectoryDisclosure;
@@ -879,12 +881,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
     if (move) void props.onReorderThreadPins?.(nextThreadKeys, move);
   };
 
-  // The directory's pinned thread keys (any backend), in global rank order.
+  const isAdmittedDirectoryRoot = (directory: NavigationDirectorySummary, threadKey: string): boolean => {
+    const entries = props.pagedNavigation?.resources.get(`directory:${directory.key}`)?.state.page?.entries;
+    return entries
+      ? entries.some((entry) => entry.placement.kind === "root" && navigationThreadSelectionKey(entry.row.ref) === threadKey)
+      : false;
+  };
+
+  // Membership comes from the owner's directory query; compact row metadata
+  // need not enumerate every linked directory. The owner revalidates the move.
   const buildDirectoryPinnedKeys = (
     directory: NavigationDirectorySummary,
   ): string[] =>
     pinnedThreadKeys.filter((threadKey) =>
-      threadsByKey.get(threadKey)?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key),
+      isAdmittedDirectoryRoot(directory, threadKey),
     );
 
   const moveDirectoryPin = (
@@ -893,7 +903,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     targetKey: string,
     position: "before" | "after",
   ): void => {
-    if (!threadsByKey.get(draggedKey)?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)) return;
+    if (!isAdmittedDirectoryRoot(directory, draggedKey) || !isAdmittedDirectoryRoot(directory, targetKey)) return;
 
     const draggedThread = threadsByKey.get(draggedKey);
     const targetThread = threadsByKey.get(targetKey);
@@ -1110,7 +1120,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       .filter((label): label is string => Boolean(label))
       .join(", ");
     const expandedThreadModel =
-      expanded ? buildPagedDirectoryPresentation({ directory, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
+      expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
     const { childThreadsByParentKey } = expandedThreadModel;
     const renderStaticSubthreads = (parent: NavigationPresentedThread): ReactElement | null => {
       const parentKey = threadSummaryIdentityKey(parent);

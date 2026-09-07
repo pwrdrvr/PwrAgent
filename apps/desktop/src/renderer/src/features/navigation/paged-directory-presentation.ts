@@ -1,3 +1,4 @@
+import { readNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isPinnedThread } from "@pwragent/shared";
@@ -16,20 +17,21 @@ export type PagedDirectoryPresentation = {
 /** Presentation of admitted entries only. Placement and counts remain owner authority. */
 export function buildPagedDirectoryPresentation(params: {
   directory: NavigationDirectoryView;
+  presentationOrder?: NavigationPresentationOrder;
   resources: NavigationWindowQueriesState["resources"];
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
 }): PagedDirectoryPresentation {
-  const rootPage = params.resources.get(`directory:${params.directory.key}`)?.state.page;
-  const roots = (rootPage?.entries ?? []).filter((entry) => entry.placement.kind === "root")
-    .map((entry) => params.threadsByKey.get(navigationThreadSelectionKey(entry.row.ref))).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  const presentation = params.presentationOrder ?? readNavigationPresentationOrder(params.resources);
+  const roots = (presentation.get(`directory:${params.directory.key}`) ?? []).filter((entry) => entry.placement.kind === "root")
+    .map((entry) => params.threadsByKey.get(entry.key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
   const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
   for (const resource of params.resources.values()) {
     if (resource.state.request.query.kind !== "children") continue;
-    for (const entry of resource.state.page?.entries ?? []) {
+    for (const entry of presentation.get(resource.id) ?? []) {
       if (entry.placement.kind !== "child") continue;
       const parentKey = navigationThreadSelectionKey(entry.placement.parent);
       const children = childThreadsByParentKey.get(parentKey) ?? [];
-      const row = params.threadsByKey.get(navigationThreadSelectionKey(entry.row.ref));
+      const row = params.threadsByKey.get(entry.key);
       if (!row) continue;
       children.push(row);
       childThreadsByParentKey.set(parentKey, children);
