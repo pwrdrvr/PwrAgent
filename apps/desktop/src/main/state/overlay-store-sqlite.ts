@@ -645,6 +645,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   constructor(private readonly stateDb: StateDb) {}
 
+  /** Read-only stamp prevents a post-mutation query joining pre-mutation work. */
+  readNavigationSourceVersion(): string {
+    const external = this.stateDb.raw.pragma("data_version", { simple: true });
+    const local = this.stateDb.raw.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    return `${external}:${local.changes}`;
+  }
+
   /**
    * Finalize sub-agents whose creating PwrAgent runtime no longer exists.
    *

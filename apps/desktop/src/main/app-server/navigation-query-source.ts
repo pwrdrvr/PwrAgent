@@ -6,6 +6,16 @@ import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backen
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
+import { NavigationIndexReadPool } from "./navigation-index-read-pool";
+
+const indexReads = new NavigationIndexReadPool();
+const sourceIds = new WeakMap<object, number>();
+let nextSourceId = 0;
+function sourceId(value: object): number {
+  let id = sourceIds.get(value);
+  if (id === undefined) { id = ++nextSourceId; sourceIds.set(value, id); }
+  return id;
+}
 
 /**
  * Build the complete compact membership index used by bounded navigation
@@ -20,6 +30,26 @@ export async function loadLocalNavigationQueryIndex(params: {
 }): Promise<NavigationQueryIndex> {
   params.signal?.throwIfAborted();
   const registry = params.registry ?? getDesktopBackendRegistry();
+  const overlayStore = getDesktopOverlayStore();
+  const backend = params.backend ?? "all";
+  const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
+    overlayStore.readNavigationSourceVersion?.()]);
+  return indexReads.read(key, async (signal) => {
+    // Provider events invalidate joinability, not another consumer's read.
+    // A later query must not inherit work begun before a canonical event.
+    const unsubscribe = registry.onEvent?.(() => indexReads.invalidate(key));
+    try { return await buildLocalNavigationQueryIndex({ ...params, registry, signal }); }
+    finally { unsubscribe?.(); }
+  }, params.signal);
+}
+
+async function buildLocalNavigationQueryIndex(params: {
+  backend?: AppServerBackendScope;
+  callerReason: string;
+  registry: DesktopBackendRegistry;
+  signal: AbortSignal;
+}): Promise<NavigationQueryIndex> {
+  const registry = params.registry;
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
   const listedThreads = await registry.listThreads({

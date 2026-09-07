@@ -1720,7 +1720,6 @@ describe("StarMapScreen", () => {
           eventClasses: [
             "navigation",
             "star_map",
-            "scheduled_actions",
           ],
           threadSelection: { kind: "all" },
         }],
