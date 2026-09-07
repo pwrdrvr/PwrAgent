@@ -425,6 +425,7 @@ function normalizeQuery(query: NavigationQuery): NavigationQuery {
 
 export function navigationQueryKey(request: NavigationQueryRequest): string {
   return hashValue({
+    inventory: request.inventory ?? "owner",
     backend: request.backend ?? "all",
     attentionView: request.attentionView,
     query: normalizeQuery(request.query),

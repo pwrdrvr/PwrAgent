@@ -172,3 +172,18 @@ it("does not coalesce different visible anchors into the same page transaction",
   expect(loadSecond).toHaveBeenCalledTimes(1);
   pool.release("a"); pool.release("b");
 });
+
+it("does not coalesce viewer mounts with the otherwise identical owner inventory", async () => {
+  const pool = new NavigationQueryPool();
+  let resolveOwner!: (value: NavigationQueryPage) => void;
+  const owner = pool.read({ consumerId: "owner", request,
+    load: () => new Promise((resolve) => { resolveOwner = resolve; }) });
+  const viewerLoad = vi.fn(async () => ({ ...page, counts: { ...page.counts, total: 1 } }));
+  const viewer = await pool.read({ consumerId: "viewer", request: { ...request, inventory: "viewer" }, load: viewerLoad });
+  expect(viewerLoad).toHaveBeenCalledTimes(1);
+  expect(viewer.counts.total).toBe(1);
+  resolveOwner(page);
+  expect((await owner).counts.total).toBe(0);
+  pool.release("owner");
+  pool.release("viewer");
+});

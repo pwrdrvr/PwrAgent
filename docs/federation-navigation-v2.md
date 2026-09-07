@@ -35,6 +35,14 @@ moving all overlay logs into one new unbounded detail response is not completion
 
 ## Query and revision semantics
 
+`NavigationQueryRequest.inventory` defaults to `owner`. The local main viewer
+uses `viewer` to include its own mounted remote-thread membership and pin ranks.
+Inventory is part of the canonical query identity. Federation rejects viewer
+inventory; an exact remote row or selected-detail read always uses its owner's
+inventory. Visible mounts acquire bounded owner-row queries, while an off-page
+selection independently resolves its local viewer mount and remote configuration.
+
+
 - An explicit read version identifies this contract. Keep it separate from
   Noise framing, invitation versions, and authorization capabilities. Wire
   support negotiation must not require changing existing permission grants.

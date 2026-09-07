@@ -2166,7 +2166,7 @@ class DesktopAppServerService {
           callerReason: "renderer-navigation-query",
         });
         rpcOptions?.signal.throwIfAborted();
-        if (request.consumer === "main-sidebar") {
+        if (request.inventory === "viewer") {
           const pins = await getDesktopOverlayStore().readRemoteThreadPinNavigationRows();
           rpcOptions?.signal.throwIfAborted();
           return pins.length ? appendViewerNavigationPins(index, getDesktopFederationRuntime().stampViewerNavigationPins(pins)) : index;
@@ -2174,7 +2174,7 @@ class DesktopAppServerService {
         return index;
       },
       request,
-      scopeKey: request.consumer === "main-sidebar" ? "renderer-viewer" : "renderer-local",
+      scopeKey: request.inventory === "viewer" ? "renderer-viewer" : "renderer-local",
     });
   }
 

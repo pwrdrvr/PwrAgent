@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { NavigationDirectoryRow, NavigationIdentity, NavigationQueryPage } from "@pwragent/shared";
-import { buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "../navigation-window-demand";
+import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "../navigation-window-demand";
 
 const directories: NavigationDirectoryRow[] = Array.from({ length: 100 }, (_, index) => ({
   key: `directory:${index}`, kind: "directory", label: `Project ${index}`,
@@ -78,4 +78,25 @@ it("does not demand children of off-page selections, collapsed ancestors, or ina
   expect(visibleDisclosedNavigationParents({ collectionIds: ["lens"], pages,
     disclosedParents: disclosedParents.filter((item) => item.threadId !== "child") })).toEqual([ref("visible")]);
   expect(visibleDisclosedNavigationParents({ collectionIds: ["directory:other", "selected-context"], pages, disclosedParents })).toEqual([]);
+});
+
+
+it("resolves only visible mounted rows from each explicit owner and keeps selected detail separate", () => {
+  const remote = { backend: "codex" as const, threadId: "visible", ownerInstanceId: "peer" };
+  const demand = buildNavigationWindowDemand({ ...base, browseMode: "inbox" });
+  const page: NavigationQueryPage = { protocol: 2, queryKey: "q", generation: "g", ownerEpoch: "o", countsRevision: "c",
+    coverage: { state: "complete" }, counts: { total: 1, active: 0, unread: 0, review: 0 }, complete: true,
+    entries: [{ row: { ref: remote, rowRevision: "r", id: remote.threadId, source: "codex", title: "Remote", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+      queueCount: 0, queueState: "unknown" }, placement: { kind: "root" }, orderKey: "r" }] };
+  const pages = new Map([["lens", page], ["directory:hidden", page]]);
+  addVisibleMountedOwnerDemand({ demand, pages });
+  expect(demand.get('visible-owner:"peer":0')).toMatchObject({ inventory: "owner", federationTarget: { scope: "remote", instanceId: "peer" },
+    query: { kind: "exact", identities: [remote] } });
+  expect(demand.get("lens")?.inventory).toBe("viewer");
+  const selected = buildNavigationWindowDemand({ ...base, browseMode: "inbox", selectedRef: remote });
+  addVisibleMountedOwnerDemand({ demand: selected, pages, selectedRef: remote });
+  expect(selected.has('visible-owner:"peer":0')).toBe(false);
+  expect(selected.get("selected-context")?.inventory).toBe("owner");
+  expect(selected.get("selected-viewer-mount")?.inventory).toBe("viewer");
 });

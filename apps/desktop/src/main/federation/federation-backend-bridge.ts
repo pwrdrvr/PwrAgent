@@ -900,13 +900,14 @@ export function registerFederationBackendHandlers(params: {
   if (params.backend.getNavigationQueryPage) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
-      async (envelope) => await params.backend.getNavigationQueryPage!(
-        envelope.params as NavigationQueryRequest,
-        {
+      async (envelope) => {
+        const request = envelope.params as NavigationQueryRequest;
+        if (request.inventory === "viewer") throw new Error("Viewer navigation inventory is available only on its local machine.");
+        return await params.backend.getNavigationQueryPage!(request, {
           deadlineAt: envelope.deadlineAt,
           requesterInstanceId: envelope.sourceInstanceId,
-        },
-      ),
+        });
+      },
     );
   }
   if (params.backend.releaseNavigationAttentionView) {
