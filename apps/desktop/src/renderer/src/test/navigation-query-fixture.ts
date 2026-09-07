@@ -134,6 +134,7 @@ export function navigationQueryFixture(
         parentThreadBackend: thread.parentThreadBackend, parentThreadInstanceId: thread.parentThreadInstanceId,
         subthreadsCollapsed: thread.subthreadsCollapsed, reactions: thread.reactions, model: thread.model,
         executionMode: thread.executionMode, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort,
+        primaryGitRepository: thread.primaryGitRepository, prAutoDispatchEnabled: thread.prAutoDispatchEnabled,
         fastMode: thread.fastMode, ordinaryChildCount: all.filter((child) => resolveParentKey(child) === key(thread)).length,
         nativeSubAgentGroupPresent: Boolean(thread.codexNativeSubAgents?.length), nativeSubAgentCount: thread.codexNativeSubAgents?.length,
         queueCount: 0, queueState: "unknown",
