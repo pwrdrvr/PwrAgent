@@ -6925,7 +6925,7 @@ export function useThreadNavigation(
           (snapshot, target) =>
             removeThreadFromLoadedRows(snapshot, {
               backend: target.source,
-              federationTarget: target.federation?.ref.target
+              federationTarget: target.federationTarget ?? target.federation?.ref.target
                 ?? readRendererFederationTarget(),
               threadId: target.id,
             }),
@@ -6961,7 +6961,7 @@ export function useThreadNavigation(
       const archivedKeys = new Set<string>();
       try {
         for (const target of targetThreads) {
-          const federationTarget = target.federation?.ref.target
+          const federationTarget = target.federationTarget ?? target.federation?.ref.target
             ?? readRendererFederationTarget();
           const response = await archiveThreadRequest({
             backend: target.source,

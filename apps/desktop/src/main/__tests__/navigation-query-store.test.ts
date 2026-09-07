@@ -452,6 +452,15 @@ describe("NavigationQueryStore", () => {
   });
 });
 
+it("stamps current viewer grants and removes a revoked grant on an already stamped row", async () => {
+  const page = await new NavigationQueryStore().readPage({ scopeKey: "grants", loadIndex: async () => snapshot([thread("one")]), request: request() });
+  const target = { scope: "remote" as const, instanceId: "owner" };
+  const granted = stampRemoteNavigationQueryPage({ page, target, instanceLabel: "Owner", capabilities: ["thread_navigation", "turn_control"], peerStatus: "connected" });
+  expect(granted.entries[0]?.row.federation).toMatchObject({ capabilities: ["thread_navigation", "turn_control"], peerStatus: "connected" });
+  const revoked = stampRemoteNavigationQueryPage({ page: granted, target, instanceLabel: "Owner", capabilities: ["thread_navigation"], peerStatus: "disconnected" });
+  expect(revoked.entries[0]?.row.federation).toMatchObject({ capabilities: ["thread_navigation"], peerStatus: "disconnected" });
+});
+
 it.each([undefined, "owner", "other-owner"])("stamps off-page parent ownership independently of child ownership %s", async (childOwner) => {
   const store = new NavigationQueryStore();
   const page = await store.readPage({ scopeKey: "remote-placement", loadIndex: async () => snapshot([thread("child")]), request: request() });
