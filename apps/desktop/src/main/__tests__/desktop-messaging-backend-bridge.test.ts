@@ -165,11 +165,8 @@ describe("DesktopMessagingBackendBridge", () => {
       })),
       getCachedThreadSummary,
       isThreadTurnOccupied: vi.fn(() => true),
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({
-        "codex:thread-1": { mode: "full-access", queuedAt: 2_000 },
-      })),
-      getQueuedTurnsSnapshot: vi.fn(() => ({
-        "codex:thread-1": [
+      getQueuedExecutionModeForThread: vi.fn(() => ({ mode: "full-access", queuedAt: 2_000 })),
+      getQueuedTurnsForThread: vi.fn(() => [
           {
             queueEntryId: "queue-1",
             origin: "messaging",
@@ -177,8 +174,7 @@ describe("DesktopMessagingBackendBridge", () => {
             createdAt: 2_100,
             position: 0,
           },
-        ],
-      })),
+      ]),
       listThreads,
       readDirectoryStatuses,
     } as unknown as DesktopBackendRegistry;
@@ -228,8 +224,8 @@ describe("DesktopMessagingBackendBridge", () => {
     const registry = {
       getActiveTurnForThread: vi.fn(() => undefined),
       getCachedThreadSummary: vi.fn(() => undefined),
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      getQueuedExecutionModeForThread: vi.fn(() => undefined),
+      getQueuedTurnsForThread: vi.fn(() => []),
       isThreadTurnOccupied: vi.fn(() => false),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);
@@ -1437,7 +1433,7 @@ describe("DesktopMessagingBackendBridge", () => {
     });
   });
 
-  it("falls back to remote navigation when an older peer lacks targeted admission", async () => {
+  it("requires an upgrade when an older peer lacks targeted admission", async () => {
     const methodNotFound = Object.assign(
       new Error("Unknown federation method: resolve_thread_admission_state"),
       { code: "method_not_found" },
@@ -1494,24 +1490,8 @@ describe("DesktopMessagingBackendBridge", () => {
         federationTarget: target,
         threadId: "thread-1",
       }),
-    ).resolves.toMatchObject({
-      thread: {
-        id: "thread-1",
-        federation: { instanceLabel: "Legacy Peer" },
-      },
-      threadStatus: "active",
-    });
-    expect(remoteNavigationSnapshot).toHaveBeenCalledWith(
-      target,
-      {
-        backend: "codex",
-        federationTarget: target,
-      },
-      {
-        kind: "threads",
-        threads: [{ backend: "codex", threadId: "thread-1" }],
-      },
-    );
+    ).rejects.toThrow("Upgrade the owning instance");
+    expect(remoteNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("subscribes messaging controllers to local and remote backend events", async () => {
