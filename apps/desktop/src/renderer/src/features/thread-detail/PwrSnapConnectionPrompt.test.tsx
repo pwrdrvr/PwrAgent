@@ -119,4 +119,31 @@ describe("PwrSnapConnectionPrompt", () => {
     });
     fireEvent.click(toggle);
     await waitFor(() => expect(onEnabledChange).toHaveBeenCalledWith(true));
-  });});
+  });
+
+  it("offers to reconnect and explains why after PwrSnap revoked the session", async () => {
+    const detail =
+      "PwrSnap revoked this connection. Choose Connect to PwrSnap on the New thread card to connect again.";
+    render(
+      <PwrSnapConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrSnapConnectionStatus: async () => ({
+            connectionId: "pwrsnap",
+            displayName: "PwrSnap",
+            availability: "running",
+            configured: false,
+            detail,
+          }),
+        }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Connect to PwrSnap" }))
+      .toBeTruthy();
+    expect(screen.getByText(detail)).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
+});

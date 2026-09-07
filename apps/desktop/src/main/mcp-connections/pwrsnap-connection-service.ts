@@ -9,10 +9,14 @@ import { shell } from "electron";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   auth,
+  UnauthorizedError,
   type OAuthClientProvider,
   type OAuthDiscoveryState,
 } from "@modelcontextprotocol/sdk/client/auth.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type {
   OAuthClientInformationMixed,
   OAuthClientMetadata,
@@ -44,6 +48,8 @@ const PWRSNAP_SCOPES = [
   "sizzle.full.read",
 ].join(" ");
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
+export const PWRSNAP_SESSION_REVOKED_DETAIL =
+  "PwrSnap revoked this connection. Choose Connect to PwrSnap on the New thread card to connect again.";
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 const MAX_RPC_CONNECTIONS = 32;
 
@@ -93,6 +99,29 @@ type FetchLike = (
   input: string | URL,
   init?: RequestInit,
 ) => Promise<Response>;
+
+/**
+ * PwrSnap rejected the stored access token. PwrSnap issues no refresh token,
+ * so the only recovery is a fresh OAuth approval from the New thread card.
+ */
+export class PwrSnapSessionRevokedError extends Error {
+  constructor() {
+    super(PWRSNAP_SESSION_REVOKED_DETAIL);
+    this.name = "PwrSnapSessionRevokedError";
+  }
+}
+
+/**
+ * True for the SDK failures that only occur after PwrSnap answered 401 with
+ * the stored token. The redirect handler raises PwrSnapSessionRevokedError
+ * itself after revoking, so that error is deliberately not matched here.
+ */
+function isRejectedTokenError(error: unknown): boolean {
+  return (
+    error instanceof UnauthorizedError
+    || (error instanceof StreamableHTTPError && error.code === 401)
+  );
+}
 
 export type PwrSnapConnectionServiceOptions = {
   bridgeEntryPath?: string;
@@ -399,6 +428,7 @@ export class PwrSnapConnectionService {
   private upstreamClient?: Client;
   private upstreamTransport?: StreamableHTTPClientTransport;
   private connectPromise?: Promise<ConnectPwrSnapResponse>;
+  private revokedDetail?: string;
 
   constructor(options: PwrSnapConnectionServiceOptions = {}) {
     this.bridgeEntryPath =
@@ -419,6 +449,13 @@ export class PwrSnapConnectionService {
       this.isEndpointAvailable(),
     ]);
     const installed = endpointAvailable || Boolean(this.findInstalledPath());
+    const configured = Boolean(credential.tokens?.access_token);
+    const detail = [
+      !configured ? this.revokedDetail : undefined,
+      !endpointAvailable && installed
+        ? "Open PwrSnap and enable Local Agent Access to connect agents."
+        : undefined,
+    ].filter(Boolean).join(" ");
     return {
       connectionId: PWRSNAP_MCP_CONNECTION_ID,
       displayName: "PwrSnap",
@@ -427,13 +464,8 @@ export class PwrSnapConnectionService {
         : installed
           ? "installed"
           : "not_installed",
-      configured: Boolean(credential.tokens?.access_token),
-      ...(!endpointAvailable && installed
-        ? {
-            detail:
-              "Open PwrSnap and enable Local Agent Access to connect agents.",
-          }
-        : {}),
+      configured,
+      ...(detail ? { detail } : {}),
     };
   }
 
@@ -476,7 +508,7 @@ export class PwrSnapConnectionService {
     }
     const credential = await this.readCredential();
     if (!credential.tokens?.access_token) {
-      throw new Error("PwrSnap is not connected to PwrAgent.");
+      throw new Error(this.revokedDetail ?? "PwrSnap is not connected to PwrAgent.");
     }
     const registrationKey = threadId
       ? `${connectionId}:${threadId}`
@@ -770,21 +802,40 @@ export class PwrSnapConnectionService {
       await this.settings.clearPwrSnapMcpCredential();
       return;
     }
+    this.revokedDetail = undefined;
     await this.settings.savePwrSnapMcpCredential(JSON.stringify(credential));
+  }
+
+  /**
+   * PwrSnap rejected the stored token, so drop it: readStatus() then reports
+   * configured: false and the New thread card offers Connect to PwrSnap again.
+   */
+  private async revokeStoredSession(): Promise<void> {
+    this.revokedDetail = PWRSNAP_SESSION_REVOKED_DETAIL;
+    connectionLog.warn("PwrSnap rejected the stored session; clearing credential");
+    await this.settings.clearPwrSnapMcpCredential();
+  }
+
+  private async revokeIfTokenRejected(error: unknown): Promise<void> {
+    if (isRejectedTokenError(error)) await this.revokeStoredSession();
   }
 
   private async ensureUpstreamClient(): Promise<Client> {
     if (this.upstreamClient) return this.upstreamClient;
     const credential = await this.readCredential();
     if (!credential.tokens?.access_token) {
-      throw new Error("PwrSnap is not connected to PwrAgent.");
+      throw new Error(this.revokedDetail ?? "PwrSnap is not connected to PwrAgent.");
     }
     const provider = new StoredOAuthProvider(
       new URL("http://127.0.0.1/oauth/callback"),
       credential,
       randomBytes(24).toString("base64url"),
       async () => {
-        throw new Error("PwrSnap needs to be reconnected from New Thread.");
+        // The SDK only starts a new authorization after PwrSnap answered 401
+        // and no refresh token could rescue the session. The proxy cannot
+        // open a consent window, so treat this as a revoked session.
+        await this.revokeStoredSession();
+        throw new PwrSnapSessionRevokedError();
       },
       async (next) => await this.persistCredential(next),
     );
@@ -800,6 +851,7 @@ export class PwrSnapConnectionService {
       await client.connect(transport);
     } catch (error) {
       await transport.close().catch(() => undefined);
+      await this.revokeIfTokenRejected(error);
       throw error;
     }
     this.upstreamClient = client;
@@ -891,6 +943,7 @@ export class PwrSnapConnectionService {
       this.respond(socket, { ok: true, result });
     } catch (error) {
       await this.closeUpstream();
+      await this.revokeIfTokenRejected(error);
       const message = error instanceof Error ? error.message : String(error);
       connectionLog.warn("proxied MCP operation failed", {
         message,
