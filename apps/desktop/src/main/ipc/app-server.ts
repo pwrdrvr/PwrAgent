@@ -59,7 +59,6 @@ import {
   type FocusedDiffAnalysisRequest,
   type FocusedDiffAnalysisResponse,
   type GetNavigationSnapshotRequest,
-  type GetNavigationSnapshotTransportRequest,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type GetGhStatusRequest,
@@ -106,7 +105,6 @@ import {
   type NavigationSelectedDetailRequest,
   type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
-  type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
   type AutomationThreadSummary,
   type PrSummary,
@@ -187,7 +185,6 @@ import {
   type PwrAgentThreadInspectionResponse,
   type PwrAgentThreadInspectionContext,
 } from "@pwragent/shared";
-import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -8008,13 +8005,13 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
     }
   }
 }
-const appServerService = new DesktopAppServerService();
+/** Internal owner service; legacy materialization is retained only for unit regression coverage. */
+export const appServerService = new DesktopAppServerService();
 
 export async function startAppServerOwnerNavigation(): Promise<void> {
   await appServerService.startOwnerNavigation();
 }
 const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
-const navigationSnapshotTransport = new NavigationSnapshotTransport();
 
 /** Sender ids that already have a destroyed-listener reaping their PR focus. */
 const prPollingFocusCleanupSenderIds = new Set<number>();
@@ -8302,39 +8299,9 @@ export function registerAppServerIpcHandlers(): void {
     }
   );
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
-  ipcMain.handle(
-    NAVIGATION_SNAPSHOT_CHANNEL,
-    async (
-      _event,
-      request?:
-        | GetNavigationSnapshotRequest
-        | GetNavigationSnapshotTransportRequest,
-    ): Promise<NavigationSnapshot | NavigationSnapshotTransportResponse> => {
-      const transportRequest =
-        request && "transport" in request ? request : undefined;
-      return await timeStartupProfileOperation({
-        type: "ipc-main:getNavigationSnapshot",
-        detail: {
-          forceRefresh: Boolean(request?.forceRefresh),
-          transport: transportRequest?.transport.protocol ?? null,
-        },
-        operation: async () => {
-          if (!transportRequest) {
-            return await appServerService.getNavigationSnapshot(request);
-          }
-          const { transport, ...snapshotRequest } = transportRequest;
-          const snapshot = await appServerService.getNavigationSnapshot(
-            snapshotRequest,
-          );
-          return navigationSnapshotTransport.encode({
-            baseRevision: transport.baseRevision,
-            request: snapshotRequest,
-            snapshot,
-          });
-        },
-      });
-    },
-  );
+  ipcMain.handle(NAVIGATION_SNAPSHOT_CHANNEL, async () => {
+    throw new Error("Full navigation snapshots are retired. Upgrade this window and its owning instance to navigation query protocol 2.");
+  });
   ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
   ipcMain.handle(
     NAVIGATION_QUERY_PAGE_CHANNEL,
@@ -9132,7 +9099,6 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeWorkingStateEvents = undefined;
   unsubscribeNavigationRemoteEvents?.();
   unsubscribeNavigationRemoteEvents = undefined;
-  navigationSnapshotTransport.clear();
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);

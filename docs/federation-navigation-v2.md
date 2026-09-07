@@ -1,8 +1,15 @@
 # Federation navigation read protocol: replacement contract
 
-Status: implementation contract for the remaining work in #2001. The new
-navigation API and renderer migration are **not implemented yet**. Existing
-bounded project and descendant RPCs do not constitute this complete protocol.
+Status: the V2 query and independent detail APIs and renderer migration are
+implemented in #2001. Completion budgets, remaining lifecycle regressions, and
+operator acceptance are still in progress; this document defines their contract.
+
+Local snapshot IPC rejects both raw and V1 transport requests. Incoming Federation
+snapshot methods reject, and the outgoing runtime no longer fetches full snapshots
+or retains their revision caches. New instances do not advertise snapshot-delta
+support. Navigation requires protocol 2 on the owner and each serving route;
+unsupported peers receive an upgrade error. V2 event selection is negotiated
+independently of the retired snapshot capability.
 
 The measured 115 MB/hour incident used pre-#2001 code. Thresholded logs attribute
 81,950,662 uncompressed bytes to 41 locally sourced navigation responses; they
