@@ -27299,6 +27299,66 @@ command = "pnpm dev"
     },
   );
 
+  it.each(["explicit", "turnless"])(
+    "keeps current usage advancing after an equal-total %s older-turn replay",
+    async (attribution) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/read"] },
+      });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex", threadId: "thread-1", executionMode: "default",
+            extraLinkedDirectories: [], model: "gpt-6-astra", serviceTier: "standard",
+          },
+        },
+      });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const emitUsage = async (turnId: string | undefined, total: number, last: number) => {
+        const tokens = (inputTokens: number) => ({
+          inputTokens, cachedInputTokens: 0, outputTokens: 0,
+          reasoningOutputTokens: 0, totalTokens: inputTokens,
+        });
+        await codexClient.emit({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1", ...(turnId ? { turnId } : {}),
+            tokenUsage: { total: tokens(total), last: tokens(last) },
+          },
+        });
+      };
+      await emitUsage("turn-1", 1_000, 1_000);
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      });
+      // Turn 2 has an identity before it consumes any additional tokens.
+      await emitUsage("turn-2", 1_000, 1_000);
+      const replayTurnId = attribution === "explicit" ? "turn-1" : undefined;
+      await emitUsage(replayTurnId, 1_000, 1_000);
+      await emitUsage(replayTurnId, 1_000, 1_000);
+      await emitUsage("turn-2", 2_000, 1_000);
+      await emitUsage("turn-2", 3_000, 1_000);
+      // Ownership must also remain correct when the next turn starts.
+      await emitUsage("turn-3", 4_000, 1_000);
+      await emitUsage("turn-2", 3_000, 1_000);
+      await emitUsage("turn-3", 5_000, 1_000);
+      const pricing = await overlayStore.readThreadPricing({
+        backend: "codex", threadId: "thread-1",
+      });
+      expect(pricing.lines).toHaveLength(3);
+      for (const [turnId, inputTokens] of [
+        ["turn-1", 1_000], ["turn-2", 2_000], ["turn-3", 2_000],
+      ] as const) {
+        expect(pricing.lines.find((line) => line.turnId === turnId)?.inputTokens).toBe(inputTokens);
+      }
+      await registry.close();
+    },
+  );
+
   it("does not regress Codex cumulative usage on a late older-turn snapshot", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },

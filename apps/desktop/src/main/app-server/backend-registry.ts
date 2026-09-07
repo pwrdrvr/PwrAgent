@@ -25327,6 +25327,9 @@ export class DesktopBackendRegistry {
       params.backend === "codex"
       && params.turnId
       && observationSequence !== undefined
+      // A superseded turn may refresh its own bounded usage, but it can never
+      // own the thread cursor again, even when cumulative totals are equal.
+      && !this.liveCodexThreadUsageCeilings.has(key)
       && (
         !priorCumulative
         || (
