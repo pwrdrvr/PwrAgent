@@ -4551,7 +4551,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("isolates observed names for same-id threads owned by different peers", async () => {
+  it.each(["native", "mounted"])("isolates observed names for same-id threads owned by different peers in %s navigation", async (surface) => {
     const firstTarget = {
       scope: "remote" as const,
       instanceId: "first-owner",
@@ -4560,7 +4560,7 @@ describe("useThreadNavigation", () => {
       scope: "remote" as const,
       instanceId: "second-owner",
     };
-    (window as unknown as {
+    if (surface === "native") (window as unknown as {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget = firstTarget;
     let agentEventHandler:
@@ -4659,6 +4659,14 @@ describe("useThreadNavigation", () => {
       "first-owner": "Renamed first owner",
       "second-owner": "Second owner title",
     });
+
+    // Once the owner acknowledges the observation, a later authoritative
+    // baseline may carry another name without being pinned to the old event.
+    navigationSnapshot.threads[0] = { ...navigationSnapshot.threads[0]!, title: "Renamed first owner" };
+    await act(() => result.current.refresh());
+    navigationSnapshot.threads[0] = { ...navigationSnapshot.threads[0]!, title: "Later owner name" };
+    await act(() => result.current.refresh());
+    expect(titlesByOwner()).toEqual({ "first-owner": "Later owner name", "second-owner": "Second owner title" });
   });
 
   it("keeps an eager generated name that arrives while a scheduled thread materializes", async () => {

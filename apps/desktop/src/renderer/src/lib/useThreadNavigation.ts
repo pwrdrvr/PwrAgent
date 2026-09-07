@@ -3158,10 +3158,18 @@ export function useThreadNavigation(
           const key = threadSummaryIdentityKey(row);
           const ownerPage = boundedNavigation.resources.get(id)?.state.request.federationTarget?.scope === "remote";
           const previous = threadRows.get(key);
-          const presentedRow = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
+          let presentedRow = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
             ? ownerPage ? { ...row, pinnedRank: previous?.pinnedRank }
               : previous && remoteContextKeys.has(key) ? { ...previous, pinnedRank: row.pinnedRank } : row
             : row;
+          const observedName = threadNameObservationsRef.current.get(key);
+          if (observedName) {
+            if (row.title === observedName.threadName && row.titleSource === observedName.titleSource) {
+              threadNameObservationsRef.current.delete(key);
+            } else {
+              presentedRow = { ...presentedRow, title: observedName.threadName, titleSource: observedName.titleSource };
+            }
+          }
           if (!suppressedArchivedThreadKeysRef.current.has(key)) threadRows.set(key, presentedRow);
         }
         for (const key of suppressedArchivedThreadKeysRef.current) threadRows.delete(key);
@@ -3534,6 +3542,7 @@ export function useThreadNavigation(
         !windowTarget
         && Boolean(event.federationTarget)
         && (method === "pullRequest/status/updated"
+          || method === "thread/name/updated"
           || method === "thread/pullRequests/updated"
           || method === "thread/reactions/updated"
           || method === "thread/prAutoDispatch/pendingUpdated"
