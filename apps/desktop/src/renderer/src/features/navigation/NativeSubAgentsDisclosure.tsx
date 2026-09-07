@@ -1,5 +1,6 @@
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
+import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
 import { useState } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
 import { SubAgentsIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useDesktopApi } from "../../lib/desktop-api";
@@ -13,7 +14,7 @@ type NativeSubAgentsDisclosureProps = {
    * that owns it.
    */
   nested?: boolean;
-  thread: NavigationThreadSummary;
+  thread: NavigationPresentedThread;
 };
 
 /**
@@ -26,24 +27,30 @@ type NativeSubAgentsDisclosureProps = {
  * the reason the tray exists.
  */
 export function getSubthreadDisclosureCount(
-  thread: NavigationThreadSummary,
+  thread: NavigationPresentedThread,
   ordinaryChildCount: number,
 ): number {
-  return ordinaryChildCount + (thread.codexNativeSubAgents?.length ? 1 : 0);
+  return (thread.ordinaryChildCount ?? ordinaryChildCount) + (thread.nativeSubAgentGroupPresent ?? Boolean(thread.codexNativeSubAgents?.length) ? 1 : 0);
 }
 
 /** The ordinary child-section preference remains authoritative. */
-export function isSubthreadSectionCollapsed(thread: NavigationThreadSummary): boolean {
+export function isSubthreadSectionCollapsed(thread: NavigationPresentedThread): boolean {
   return thread.subthreadsCollapsed === true;
 }
 
 export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps) {
-  const nativeSubAgents = props.thread.codexNativeSubAgents ?? [];
   const [expanded, setExpanded] = useState(false);
   const desktopApi = useDesktopApi();
   const openSubAgentTranscriptWindow = desktopApi?.openSubAgentTranscriptWindow;
+  const target = props.thread.federation?.ref.target ?? readRendererFederationTarget();
+  const detail = useNavigationSelectedDetail({ desktopApi, federationTarget: target,
+    ref: expanded ? { backend: props.thread.source, threadId: props.thread.id,
+      ownerInstanceId: target?.scope === "remote" ? target.instanceId : undefined } : undefined });
+  const nativeSubAgents = detail.state?.detail?.thread?.codexNativeSubAgents ?? props.thread.codexNativeSubAgents ?? [];
+  const count = props.thread.nativeSubAgentCount ?? nativeSubAgents.length;
 
-  if (nativeSubAgents.length === 0) {
+
+  if (count === 0 && !props.thread.nativeSubAgentGroupPresent) {
     return null;
   }
 
@@ -69,7 +76,7 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
         /* A tray can hold several of these groups — the parent's and one per
            child that spawned workers — so the owning thread has to be in the
            name for the buttons to be tellable apart. */
-        aria-label={`${expanded ? "Collapse" : "Expand"} ${nativeSubAgents.length} native Codex sub-agents for ${props.thread.title}`}
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${count} native Codex sub-agents for ${props.thread.title}`}
         className={`native-subagents__toggle${expanded ? " is-open" : ""}`}
         /* Expanding changes the tray's height, so let the frozen snapshot go,
            the way the sibling sub-thread toggle does. */
@@ -82,7 +89,7 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
         <span aria-hidden="true" className="native-subagents__chevron" />
         <SubAgentsIcon aria-hidden="true" size={14} />
         <span className="native-subagents__label">Sub-agents</span>
-        <span className="native-subagents__count">{nativeSubAgents.length}</span>
+        <span className="native-subagents__count">{count}</span>
         {activeCount > 0 ? (
           <span className="native-subagents__activity">
             {activeCount} working
@@ -95,6 +102,8 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
           role="list"
           aria-label={`Native Codex sub-agents for ${props.thread.title}`}
         >
+          {detail.state?.error ? <p role="alert">{detail.state.error}</p> : null}
+          {detail.state?.readiness !== "ready" ? <p>Loading sub-agents…</p> : null}
           {nativeSubAgents.map((subAgent) => {
             const label = subAgent.agentNickname ?? subAgent.title;
             return (

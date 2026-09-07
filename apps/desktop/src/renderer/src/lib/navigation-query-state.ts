@@ -1,4 +1,4 @@
-import { parseThreadIdentityKey } from "@pwragent/shared";
+import { parseThreadIdentityKey, buildThreadIdentityKey, federatedThreadIdentityKey } from "@pwragent/shared";
 import type {
   FederationTarget,
   NavigationIdentity,
@@ -29,6 +29,13 @@ export type NavigationSelectionState = {
 
 export function navigationIdentityKey(ref: NavigationIdentity): string {
   return JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]);
+}
+
+/** UI selection keys are distinct from the collision-free JSON keys used by query resources. */
+export function navigationThreadSelectionKey(ref: NavigationIdentity): string {
+  return ref.ownerInstanceId
+    ? federatedThreadIdentityKey({ backend: ref.backend, threadId: ref.threadId, target: { scope: "remote", instanceId: ref.ownerInstanceId } })
+    : buildThreadIdentityKey(ref.backend, ref.threadId);
 }
 
 /** Resolve a durable selection without consulting whichever rows happen to be loaded. */

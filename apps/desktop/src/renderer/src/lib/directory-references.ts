@@ -1,4 +1,5 @@
-import type { NavigationDirectorySummary } from "@pwragent/shared";
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
+import type { } from "@pwragent/shared";
 import { getHomeDir, tildifyPath } from "./tildify-path";
 
 /**

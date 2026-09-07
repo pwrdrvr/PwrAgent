@@ -1,6 +1,6 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type {
   AppServerSkillSummary,
-  NavigationDirectorySummary,
   ThreadJumpCandidate,
   PrSummary,
 } from "@pwragent/shared";

@@ -17,7 +17,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { DirectoriesList } from "../DirectoriesList";
+import { FixtureDirectoriesList as DirectoriesList } from "../../../test/navigation-presentation-fixture";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";
 
 afterEach(() => {
@@ -106,11 +106,10 @@ describe("Directories lens thread list ARIA", () => {
     const nonRows = children.filter(
       (child) => !child.classList.contains("thread-row-shell"),
     );
-    // Two pinned + the ten-row cap (12 unpinned, one re-parented as a
-    // sub-thread, so 11 against a cap of 10).
-    expect(rows).toHaveLength(12);
-    // The sub-thread list, the pin-drop boundary, the disclosure, "Show more".
-    expect(nonRows).toHaveLength(4);
+    // The owner admits ten roots total, including the two pinned roots.
+    expect(rows).toHaveLength(10);
+    // The sub-thread list, the pin-drop boundary, and the disclosure.
+    expect(nonRows).toHaveLength(3);
 
     // A bare <button> child has no explicit role but IS a button to axe, so
     // the role check above cannot see it. Assert both controls sit in a
@@ -118,7 +117,6 @@ describe("Directories lens thread list ARIA", () => {
     // minus the one re-parented as a sub-thread, so 11 against a cap of 10.
     for (const name of [
       "Hide directory threads for Project 1",
-      "Show 1 more",
     ]) {
       const control = within(threads).getByRole("button", { name });
       expect(control.parentElement).toHaveAttribute("role", "listitem");

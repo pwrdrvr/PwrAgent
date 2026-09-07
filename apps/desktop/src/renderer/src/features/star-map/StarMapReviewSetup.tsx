@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   useEffect,
   useId,
@@ -10,7 +11,6 @@ import {
   buildReviewBranchOptions,
   findPreferredReviewWorkspaceCwd,
   type AppServerReviewTarget,
-  type NavigationDirectorySummary,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 

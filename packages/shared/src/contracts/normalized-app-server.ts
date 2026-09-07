@@ -2192,6 +2192,10 @@ export type AppServerNotification =
    * See plan: 2026-05-09-002-feat-directory-pinning-plan.md Unit F.
    */
   | {
+      method: "navigation/thread/seen";
+      params: { threadId: string; seenUpdatedAt?: number };
+    }
+  | {
       method: "navigation/directory/seen";
       params: { directoryKey: string; changedCount: number };
     }

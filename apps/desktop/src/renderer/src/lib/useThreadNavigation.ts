@@ -1,6 +1,12 @@
+import { readNavigationQueryRange } from "./read-navigation-query-range";
+import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
+import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
+import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
+import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
+import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
 import { readNavigationActionThread } from "./navigation-action-authority";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
@@ -18,11 +24,9 @@ import type {
   NavigationBrowseMode,
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
-  NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationRelativePinMove,
-  NavigationSnapshot,
   FederationPeerSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   NavigationThreadSummary,
@@ -34,10 +38,11 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
-  buildNavigationSnapshotTransportScopeKey,
   buildPinnedRanks,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  classifyDirectory,
+  parseOwnedComposerScopeKey,
   comparePinnedThreads,
   compareThreadsByCreatedAtDesc,
   DEFAULT_NAVIGATION_BROWSE_MODE,
@@ -61,11 +66,7 @@ import {
   readRendererFederationLabel,
   readRendererFederationTarget,
 } from "./federation-window";
-import {
-  applyNavigationSnapshotTransportResponse,
-  type NavigationSnapshotTransportState,
-} from "./navigation-snapshot-transport";
-import { waitForNativeDragInteractionEnd } from "./native-drag-interaction";
+
 import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import {
   agentEventMatchesThread,
@@ -116,7 +117,6 @@ const FEDERATED_LAUNCHPAD_SELECTION_PREFIX = "federated-launchpad:";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 const NAVIGATION_BACKGROUND_REFRESH_IDLE_AFTER_MS = 30 * 60_000;
 const NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS = 60_000;
-const NAVIGATION_REMOTE_RECOVERY_MAX_DELAY_MS = 30_000;
 const NAVIGATION_ACTIVITY_EVENTS = [
   "input",
   "keydown",
@@ -153,7 +153,7 @@ type NavigationState = {
   loading: boolean;
   refreshing: boolean;
   error?: string;
-  response?: NavigationSnapshot;
+  rows?: NavigationLoadedRows;
   startupSelectionSettled?: boolean;
 };
 
@@ -169,16 +169,6 @@ type FederatedLaunchpadSession = {
   target: FederationRemoteTarget;
 };
 
-type ThreadStatusObservation = {
-  sequence: number;
-  threadStatus: AppServerThreadStatus;
-};
-
-type FederationPeerStatusObservation = {
-  sequence: number;
-  status: FederationPeerSummary["status"];
-};
-
 type ThreadNameObservation = {
   threadName: string;
   // Normalized, not raw: the retire check compares this against a snapshot
@@ -192,7 +182,7 @@ type PrChipLocation = {
 };
 
 type PrChipLocationIndex = {
-  snapshot: NavigationSnapshot;
+  snapshot: NavigationLoadedRows;
   byPrKey: Map<string, PrChipLocation[]>;
 };
 
@@ -281,8 +271,8 @@ function compareNavigationDirectoriesByLabel(
 }
 
 function sortNavigationDirectories(
-  directories: NavigationSnapshot["directories"]
-): NavigationSnapshot["directories"] {
+  directories: NavigationDirectorySummary[]
+): NavigationDirectorySummary[] {
   return [...directories].sort(compareNavigationDirectoriesByLabel);
 }
 
@@ -325,10 +315,10 @@ function displayLaunchpadDirectoryLabel(
 }
 
 function findLaunchpadSourceDirectory(
-  directories: NavigationSnapshot["directories"],
+  directories: NavigationDirectorySummary[],
   launchpad: NavigationLaunchpadDraft,
   sourcePath?: string,
-): NavigationSnapshot["directories"][number] | undefined {
+): NavigationDirectorySummary[][number] | undefined {
   const normalizedSourcePath = sourcePath?.trim();
   if (normalizedSourcePath) {
     const sourceDirectory = directories.find(
@@ -354,14 +344,14 @@ function findLaunchpadSourceDirectory(
 }
 
 function upsertLaunchpadDirectory(
-  directories: NavigationSnapshot["directories"],
+  directories: NavigationDirectorySummary[],
   launchpad: NavigationLaunchpadDraft,
   options?: {
     gitStatus?: NavigationDirectoryGitStatus | null;
     gitStatusSourcePath?: string;
     preserveExistingDirectoryAuthority?: boolean;
   },
-): NavigationSnapshot["directories"] {
+): NavigationDirectorySummary[] {
   let foundDirectory = false;
   const exactDirectory = directories.find(
     (directory) => directory.key === launchpad.directoryKey,
@@ -384,13 +374,15 @@ function upsertLaunchpadDirectory(
     && existingDirectory
     ? existingDirectory.label
     : displayLaunchpadDirectoryLabel(launchpad, existingDirectory);
+  const detailedGitStatus = existingDirectory?.gitStatus && "branches" in existingDirectory.gitStatus
+    ? existingDirectory.gitStatus : undefined;
   const authoritativeBranchNames = new Set([
-    ...(existingDirectory?.gitStatus?.branches ?? []),
-    ...(existingDirectory?.gitStatus?.branchDetails ?? []).map(
+    ...(detailedGitStatus?.branches ?? []),
+    ...(detailedGitStatus?.branchDetails ?? []).map(
       (branch) => branch.name,
     ),
-    ...(existingDirectory?.gitStatus?.baseBranches ?? []),
-    ...(existingDirectory?.gitStatus?.baseBranchDetails ?? []).map(
+    ...(detailedGitStatus?.baseBranches ?? []),
+    ...(detailedGitStatus?.baseBranchDetails ?? []).map(
       (branch) => branch.name,
     ),
   ]);
@@ -447,7 +439,7 @@ function upsertLaunchpadDirectory(
     }
 
     foundDirectory = true;
-    const next: NavigationSnapshot["directories"][number] = {
+    const next: NavigationDirectorySummary[][number] = {
       ...directory,
       kind: normalizedLaunchpad.directoryKind,
       label: displayLabel,
@@ -455,16 +447,6 @@ function upsertLaunchpadDirectory(
       launchpad: normalizedLaunchpad,
     };
     if (fallbackWorkspaceDirectory) {
-      next.threadKeys = [
-        ...new Set([
-          ...directory.threadKeys,
-          ...fallbackWorkspaceDirectory.threadKeys,
-        ]),
-      ];
-      next.needsAttentionCount = Math.max(
-        directory.needsAttentionCount,
-        fallbackWorkspaceDirectory.needsAttentionCount,
-      );
       next.latestUpdatedAt = Math.max(
         directory.latestUpdatedAt ?? 0,
         fallbackWorkspaceDirectory.latestUpdatedAt ?? 0,
@@ -493,9 +475,6 @@ function upsertLaunchpadDirectory(
             kind: normalizedLaunchpad.directoryKind,
             label: displayLabel,
             path: normalizedLaunchpad.directoryPath,
-            threadKeys: fallbackWorkspaceDirectory?.threadKeys ?? [],
-            needsAttentionCount:
-              fallbackWorkspaceDirectory?.needsAttentionCount ?? 0,
             ...(inheritedGitStatus
               ? { gitStatus: inheritedGitStatus }
               : {}),
@@ -505,23 +484,14 @@ function upsertLaunchpadDirectory(
   );
 }
 
-function directoryKeysForThread(
-  directories: NavigationSnapshot["directories"],
-  threadKey?: string,
-): string[] {
-  if (!threadKey) {
-    return [];
-  }
-
-  return directories
-    .filter((directory) => directory.path && directory.threadKeys.includes(threadKey))
-    .map((directory) => directory.key);
+function directoryKeysForThread(thread?: NavigationThreadSummary): string[] {
+  return thread?.linkedDirectories.map((directory) => classifyDirectory(directory).key) ?? [];
 }
 
 function resolveCreateThreadTargetDirectory(args: {
-  directories: NavigationSnapshot["directories"];
+  directories: NavigationDirectorySummary[];
   selectedDirectory?: NavigationDirectorySummary;
-  selectedThreadKey?: string;
+  selectedThread?: NavigationThreadSummary;
   /**
    * When true, ignore the selected directory / thread context and resolve
    * straight to the directory-less workspace target. Drives the "New chat
@@ -535,7 +505,7 @@ function resolveCreateThreadTargetDirectory(args: {
   directoryPath?: string;
   gitStatus?: NavigationDirectoryGitStatus;
 } {
-  const { directories, selectedDirectory, selectedThreadKey, forceWorkspace } = args;
+  const { directories, selectedDirectory, selectedThread, forceWorkspace } = args;
 
   if (!forceWorkspace && selectedDirectory?.kind === "directory") {
     return {
@@ -547,10 +517,10 @@ function resolveCreateThreadTargetDirectory(args: {
     };
   }
 
-  if (!forceWorkspace && selectedThreadKey) {
+  if (!forceWorkspace && selectedThread) {
     const threadDirectories = directories.filter(
       (directory) =>
-        directory.kind === "directory" && directory.threadKeys.includes(selectedThreadKey)
+        directory.kind === "directory" && directoryKeysForThread(selectedThread).includes(directory.key)
     );
     if (threadDirectories.length === 1) {
       const [threadDirectory] = threadDirectories;
@@ -845,10 +815,14 @@ function questionnaireActivityLogsEqual(
 }
 
 function threadSummariesEqual(
-  left: NavigationThreadSummary,
-  right: NavigationThreadSummary
+  left: NavigationPresentedThread,
+  right: NavigationPresentedThread
 ): boolean {
   return (
+    left.rowRevision === right.rowRevision &&
+    left.ordinaryChildCount === right.ordinaryChildCount &&
+    left.nativeSubAgentGroupPresent === right.nativeSubAgentGroupPresent &&
+    left.nativeSubAgentCount === right.nativeSubAgentCount &&
     left.id === right.id &&
     left.source === right.source &&
     left.title === right.title &&
@@ -938,24 +912,24 @@ function hasPlaceholderThreadTitle(thread: NavigationThreadSummary): boolean {
   );
 }
 
-function reconcileNavigationSnapshot(
-  previous: NavigationSnapshot | undefined,
-  next: NavigationSnapshot
-): NavigationSnapshot {
+function reconcileLoadedNavigationRows(
+  previous: NavigationLoadedRows | undefined,
+  next: NavigationLoadedRows
+): NavigationLoadedRows {
   if (!previous) {
     return next;
   }
 
   const previousByThreadKey = new Map(
-    previous.threads.map((thread) => [
+    loadedThreadRows(previous).map((thread) => [
       threadSummaryIdentityKey(thread),
       thread,
     ])
   );
   const previousByDirectoryKey = new Map(
-    previous.directories.map((directory) => [directory.key, directory])
+    loadedDirectoryRows(previous).map((directory) => [directory.key, directory])
   );
-  const reconciledDirectories = next.directories.map((directory) => {
+  const reconciledDirectories = loadedDirectoryRows(next).map((directory) => {
     const previousDirectory = previousByDirectoryKey.get(directory.key);
     return {
       ...directory,
@@ -968,105 +942,28 @@ function reconcileNavigationSnapshot(
 
   return {
     ...next,
-    directories: sortNavigationDirectories(reconciledDirectories),
-    threads: next.threads.map((thread) => {
+    directoryRows: indexLoadedDirectoryRows(sortNavigationDirectories(reconciledDirectories)),
+    threadRows: indexLoadedThreadRows(loadedThreadRows(next).map((thread) => {
       const previousThread = previousByThreadKey.get(
         threadSummaryIdentityKey(thread)
       );
       return previousThread && threadSummariesEqual(previousThread, thread)
         ? previousThread
         : thread;
-    }),
+    })),
   };
-}
-
-function preserveNavigationPinState(
-  current: NavigationSnapshot | undefined,
-  next: NavigationSnapshot,
-): NavigationSnapshot {
-  if (!current) {
-    return next;
-  }
-
-  const currentThreads = new Map(
-    current.threads.map((thread) => [
-      threadSummaryIdentityKey(thread),
-      thread,
-    ]),
-  );
-  const currentDirectories = new Map(
-    current.directories.map((directory) => [directory.key, directory]),
-  );
-  return {
-    ...next,
-    threads: next.threads.map((thread) => {
-      const currentThread = currentThreads.get(
-        threadSummaryIdentityKey(thread),
-      );
-      if (!currentThread || currentThread.pinnedRank === thread.pinnedRank) {
-        return thread;
-      }
-      const preserved = { ...thread };
-      if (currentThread.pinnedRank === undefined) {
-        delete preserved.pinnedRank;
-      } else {
-        preserved.pinnedRank = currentThread.pinnedRank;
-      }
-      return preserved;
-    }),
-    directories: next.directories.map((directory) => {
-      const currentDirectory = currentDirectories.get(directory.key);
-      if (
-        !currentDirectory
-        || currentDirectory.pinnedRank === directory.pinnedRank
-      ) {
-        return directory;
-      }
-      const preserved = { ...directory };
-      if (currentDirectory.pinnedRank === undefined) {
-        delete preserved.pinnedRank;
-      } else {
-        preserved.pinnedRank = currentDirectory.pinnedRank;
-      }
-      return preserved;
-    }),
-  };
-}
-
-function applyConcurrentThreadStatusObservations(
-  snapshot: NavigationSnapshot,
-  observations: ReadonlyMap<string, ThreadStatusObservation>,
-  sequenceAtRefreshStart: number,
-): NavigationSnapshot {
-  let changed = false;
-  const threads = snapshot.threads.map((thread) => {
-    const observation = observations.get(threadSummaryIdentityKey(thread));
-    if (
-      !observation
-      || observation.sequence <= sequenceAtRefreshStart
-      || observation.threadStatus === thread.threadStatus
-    ) {
-      return thread;
-    }
-    changed = true;
-    return {
-      ...thread,
-      threadStatus: observation.threadStatus,
-    };
-  });
-  return changed ? { ...snapshot, threads } : snapshot;
 }
 
 function applyFederationPeerStatusUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   instanceId: string,
   status: FederationPeerSummary["status"],
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (
       !thread.federation
       || !isRemoteFederationTarget(thread.federation.ref.target)
@@ -1084,69 +981,19 @@ function applyFederationPeerStatusUpdate(
       },
     };
   });
-  return changed ? { ...snapshot, threads } : snapshot;
-}
-
-function applyConcurrentFederationPeerStatusObservations(
-  snapshot: NavigationSnapshot,
-  observations: ReadonlyMap<string, FederationPeerStatusObservation>,
-  sequenceAtRefreshStart: number,
-): NavigationSnapshot {
-  let next = snapshot;
-  for (const [instanceId, observation] of observations) {
-    if (observation.sequence <= sequenceAtRefreshStart) {
-      continue;
-    }
-    next = applyFederationPeerStatusUpdate(
-      next,
-      instanceId,
-      observation.status,
-    ) ?? next;
-  }
-  return next;
-}
-
-function applyObservedThreadNames(
-  snapshot: NavigationSnapshot,
-  observations: Map<string, ThreadNameObservation>,
-): NavigationSnapshot {
-  if (observations.size === 0) {
-    return snapshot;
-  }
-  let changed = false;
-  const threads = snapshot.threads.map((thread) => {
-    const threadKey = threadSummaryIdentityKey(thread);
-    const observation = observations.get(threadKey);
-    if (!observation) {
-      return thread;
-    }
-    if (
-      thread.title === observation.threadName
-      && thread.titleSource === observation.titleSource
-    ) {
-      observations.delete(threadKey);
-      return thread;
-    }
-    changed = true;
-    return {
-      ...thread,
-      title: observation.threadName,
-      titleSource: observation.titleSource,
-    };
-  });
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
 function applyDirectoryGitStatusUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: NavigationDirectoryGitStatusUpdatedNotification["params"],
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const directories = snapshot.directories.map((directory) => {
+  const directories = loadedDirectoryRows(snapshot).map((directory) => {
     if (directory.key !== params.directoryKey) {
       return directory;
     }
@@ -1164,19 +1011,19 @@ function applyDirectoryGitStatusUpdate(
     return next;
   });
 
-  return changed ? { ...snapshot, directories } : snapshot;
+  return changed ? { ...snapshot, directoryRows: indexLoadedDirectoryRows(directories) } : snapshot;
 }
 
 function applyThreadGitWorkingStateUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: NavigationThreadGitWorkingStateUpdatedNotification["params"],
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (resolveThreadWorkingStatePath(thread) !== params.worktreePath) {
       return thread;
     }
@@ -1200,25 +1047,25 @@ function applyThreadGitWorkingStateUpdate(
     return { ...rest, gitWorkingStateFetchedAt: params.fetchedAt };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
-function updateThreadReactionsInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateThreadReactionsInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     reactions: string[];
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (buildThreadIdentityKey(thread.source, thread.id) !== threadKey) {
       return thread;
     }
@@ -1245,24 +1092,24 @@ function updateThreadReactionsInSnapshot(
     return snapshot;
   }
 
-  return { ...snapshot, threads };
+  return { ...snapshot, threadRows: indexLoadedThreadRows(threads) };
 }
 
-function updateThreadSubAgentsInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateThreadSubAgentsInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     subAgents: ThreadSubAgentSummary[];
     threadId: string;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
   const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (
       buildThreadIdentityKey(thread.source, thread.id) !== threadKey
       || !federationTargetsEqual(
@@ -1275,18 +1122,18 @@ function updateThreadSubAgentsInSnapshot(
     changed = true;
     return { ...thread, subAgents: params.subAgents };
   });
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
-function updateThreadPinInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateThreadPinInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     pinnedRank?: string;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
@@ -1300,7 +1147,7 @@ function updateThreadPinInSnapshot(
       })
     : buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
@@ -1311,23 +1158,23 @@ function updateThreadPinInSnapshot(
     return { ...thread, pinnedRank: params.pinnedRank };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
-function updateThreadAgentInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateThreadAgentInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     threadId: string;
     agent?: ThreadAgentMetadata;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -1338,22 +1185,22 @@ function updateThreadAgentInSnapshot(
     return { ...thread, agent: params.agent };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
-function updateThreadPinsInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateThreadPinsInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     /** Thread identity key -> pin rank. Pin order is global across backends. */
     pinnedRanksByThreadKey: Record<string, string>;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     const pinnedRank =
       params.pinnedRanksByThreadKey[
         threadSummaryIdentityKey(thread)
@@ -1365,11 +1212,11 @@ function updateThreadPinsInSnapshot(
     return { ...thread, pinnedRank };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
-function updateThreadParentInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateThreadParentInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
@@ -1378,13 +1225,13 @@ function updateThreadParentInSnapshot(
     parentThreadBackend?: AppServerBackendKind;
     parentThreadInstanceId?: string;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -1417,28 +1264,28 @@ function updateThreadParentInSnapshot(
     };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
-function ungroupChildThreadsInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function ungroupChildThreadsInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     parent: NavigationThreadSummary;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
   const threadByKey = new Map(
-    snapshot.threads.map((thread) => [
+    loadedThreadRows(snapshot).map((thread) => [
       threadSummaryIdentityKey(thread),
       thread,
     ]),
   );
   const parentKey = threadSummaryIdentityKey(params.parent);
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (resolveThreadParentKey(thread, threadByKey) !== parentKey) {
       return thread;
     }
@@ -1451,7 +1298,7 @@ function ungroupChildThreadsInSnapshot(
     };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
 function collectDescendantThreads(
@@ -1491,21 +1338,21 @@ function collectDescendantThreads(
   return descendants;
 }
 
-function updateSubthreadOrderInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateSubthreadOrderInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     parentThreadId: string;
     threadIds: string[];
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.parentThreadId) {
       return thread;
     }
@@ -1524,24 +1371,24 @@ function updateSubthreadOrderInSnapshot(
     return { ...thread, subthreadOrder: params.threadIds };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
-function updateSubthreadsCollapsedInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateSubthreadsCollapsedInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     parentThreadId: string;
     collapsed: boolean;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.parentThreadId) {
       return thread;
     }
@@ -1560,7 +1407,7 @@ function updateSubthreadsCollapsedInSnapshot(
     return { ...thread, subthreadsCollapsed: params.collapsed };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
 /**
@@ -1571,19 +1418,19 @@ function updateSubthreadsCollapsedInSnapshot(
  * same patcher so the optimistic update and the authoritative
  * response collapse into a no-op when they agree.
  */
-function updateDirectoryPinInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateDirectoryPinInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     directoryKey: string;
     pinnedRank?: string;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const directories = snapshot.directories.map((directory) => {
+  const directories = loadedDirectoryRows(snapshot).map((directory) => {
     if (directory.key !== params.directoryKey) {
       return directory;
     }
@@ -1594,21 +1441,21 @@ function updateDirectoryPinInSnapshot(
     return { ...directory, pinnedRank: params.pinnedRank };
   });
 
-  return changed ? { ...snapshot, directories } : snapshot;
+  return changed ? { ...snapshot, directoryRows: indexLoadedDirectoryRows(directories) } : snapshot;
 }
 
-function updateDirectoryPinsInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateDirectoryPinsInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     pinnedRanks: Record<string, string>;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const directories = snapshot.directories.map((directory) => {
+  const directories = loadedDirectoryRows(snapshot).map((directory) => {
     const pinnedRank = params.pinnedRanks[directory.key];
     if (!pinnedRank || directory.pinnedRank === pinnedRank) {
       return directory;
@@ -1617,22 +1464,22 @@ function updateDirectoryPinsInSnapshot(
     return { ...directory, pinnedRank };
   });
 
-  return changed ? { ...snapshot, directories } : snapshot;
+  return changed ? { ...snapshot, directoryRows: indexLoadedDirectoryRows(directories) } : snapshot;
 }
 
-function updateDirectoryThreadsCollapsedInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function updateDirectoryThreadsCollapsedInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     directoryKey: string;
     collapsed: boolean;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const directories = snapshot.directories.map((directory) => {
+  const directories = loadedDirectoryRows(snapshot).map((directory) => {
     if (directory.key !== params.directoryKey) {
       return directory;
     }
@@ -1646,40 +1493,18 @@ function updateDirectoryThreadsCollapsedInSnapshot(
     };
   });
 
-  return changed ? { ...snapshot, directories } : snapshot;
+  return changed ? { ...snapshot, directoryRows: indexLoadedDirectoryRows(directories) } : snapshot;
 }
 
-function applyDirectoryThreadsCollapsedOverrides(
-  snapshot: NavigationSnapshot,
-  overrides: ReadonlyMap<string, boolean>,
-): NavigationSnapshot {
-  let changed = false;
-  const directories = snapshot.directories.map((directory) => {
-    const collapsed = overrides.get(directory.key);
-    if (
-      collapsed === undefined
-      || directory.directoryThreadsCollapsed === collapsed
-    ) {
-      return directory;
-    }
-    changed = true;
-    return {
-      ...directory,
-      directoryThreadsCollapsed: collapsed,
-    };
-  });
-  return changed ? { ...snapshot, directories, unchanged: false } : snapshot;
-}
-
-function markThreadsSeenInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function markThreadsSeenInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: Array<{
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     seenUpdatedAt?: number;
   }>,
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot || params.length === 0) {
     return snapshot;
   }
@@ -1696,9 +1521,8 @@ function markThreadsSeenInSnapshot(
       entry.seenUpdatedAt,
     ]),
   );
-  const markedThreadKeys = new Set<string>();
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     const threadKey = threadSummaryIdentityKey(thread);
     if (!seenUpdatedAtByThreadKey.has(threadKey)) {
       return thread;
@@ -1718,7 +1542,6 @@ function markThreadsSeenInSnapshot(
     }
 
     changed = true;
-    markedThreadKeys.add(threadKey);
     return {
       ...thread,
       inbox: {
@@ -1735,51 +1558,34 @@ function markThreadsSeenInSnapshot(
     return snapshot;
   }
 
-  const directories = snapshot.directories ?? [];
-  const threadInboxByKey = new Map(
-    threads.map((thread) => [
-      threadSummaryIdentityKey(thread),
-      thread.inbox.inInbox,
-    ])
-  );
 
   return {
     ...snapshot,
-    directories: directories.map((directory) => ({
-      ...directory,
-      needsAttentionCount: directory.threadKeys.reduce(
-        (count, threadKey) => count + (threadInboxByKey.get(threadKey) ? 1 : 0),
-        0
-      ),
-    })),
-    inboxThreadKeys: snapshot.inboxThreadKeys.filter(
-      (candidate) => !markedThreadKeys.has(candidate),
-    ),
-    threads,
+    threadRows: indexLoadedThreadRows(threads),
   };
 }
 
-function markThreadSeenInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function markThreadSeenInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     seenUpdatedAt?: number;
   },
-): NavigationSnapshot | undefined {
-  return markThreadsSeenInSnapshot(snapshot, [params]);
+): NavigationLoadedRows | undefined {
+  return markThreadsSeenInLoadedRows(snapshot, [params]);
 }
 
-function markThreadUnreadInSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function markThreadUnreadInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     seenUpdatedAt: number;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
@@ -1793,7 +1599,7 @@ function markThreadUnreadInSnapshot(
       })
     : buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
@@ -1814,38 +1620,21 @@ function markThreadUnreadInSnapshot(
     return snapshot;
   }
 
-  const threadInboxByKey = new Map(
-    threads.map((thread) => [
-      threadSummaryIdentityKey(thread),
-      thread.inbox.inInbox,
-    ]),
-  );
 
   return {
     ...snapshot,
-    directories: snapshot.directories.map((directory) => ({
-      ...directory,
-      needsAttentionCount: directory.threadKeys.reduce(
-        (count, candidateKey) =>
-          count + (threadInboxByKey.get(candidateKey) ? 1 : 0),
-        0,
-      ),
-    })),
-    inboxThreadKeys: snapshot.inboxThreadKeys.includes(threadKey)
-      ? snapshot.inboxThreadKeys
-      : [threadKey, ...snapshot.inboxThreadKeys],
-    threads,
+    threadRows: indexLoadedThreadRows(threads),
   };
 }
 
-function removeThreadFromSnapshot(
-  snapshot: NavigationSnapshot | undefined,
+function removeThreadFromLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
@@ -1858,84 +1647,22 @@ function removeThreadFromSnapshot(
         threadId: params.threadId,
       })
     : buildThreadIdentityKey(params.backend, params.threadId);
-  const threads = snapshot.threads.filter(
+  const threads = loadedThreadRows(snapshot).filter(
     (thread) => threadSummaryIdentityKey(thread) !== threadKey
   );
-  if (threads.length === snapshot.threads.length) {
+  if (threads.length === loadedThreadRows(snapshot).length) {
     return snapshot;
   }
 
-  const threadInboxByKey = new Map(
-    threads.map((thread) => [
-      threadSummaryIdentityKey(thread),
-      thread.inbox.inInbox,
-    ])
-  );
 
   return {
     ...snapshot,
-    directories: snapshot.directories.map((directory) => {
-      const threadKeys = directory.threadKeys.filter((candidate) => candidate !== threadKey);
-      return {
-        ...directory,
-        threadKeys,
-        needsAttentionCount: threadKeys.reduce(
-          (count, candidate) => count + (threadInboxByKey.get(candidate) ? 1 : 0),
-          0
-        ),
-      };
-    }),
-    inboxThreadKeys: snapshot.inboxThreadKeys.filter((candidate) => candidate !== threadKey),
-    threads,
-  };
-}
-
-function removeThreadKeysFromSnapshot(
-  snapshot: NavigationSnapshot,
-  threadKeysToRemove: ReadonlySet<string>
-): NavigationSnapshot {
-  if (threadKeysToRemove.size === 0) {
-    return snapshot;
-  }
-
-  const threads = snapshot.threads.filter(
-    (thread) => !threadKeysToRemove.has(threadSummaryIdentityKey(thread))
-  );
-  if (threads.length === snapshot.threads.length) {
-    return snapshot;
-  }
-
-  const threadInboxByKey = new Map(
-    threads.map((thread) => [
-      threadSummaryIdentityKey(thread),
-      thread.inbox.inInbox,
-    ])
-  );
-
-  return {
-    ...snapshot,
-    directories: snapshot.directories.map((directory) => {
-      const threadKeys = directory.threadKeys.filter(
-        (candidate) => !threadKeysToRemove.has(candidate)
-      );
-      return {
-        ...directory,
-        threadKeys,
-        needsAttentionCount: threadKeys.reduce(
-          (count, candidate) => count + (threadInboxByKey.get(candidate) ? 1 : 0),
-          0
-        ),
-      };
-    }),
-    inboxThreadKeys: snapshot.inboxThreadKeys.filter(
-      (candidate) => !threadKeysToRemove.has(candidate)
-    ),
-    threads,
+    threadRows: indexLoadedThreadRows(threads),
   };
 }
 
 function getFallbackSelectionAfterRemoval(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
@@ -1943,14 +1670,14 @@ function getFallbackSelectionAfterRemoval(
     optimisticThreadKey?: string;
   }
 ): string | undefined {
-  const nextSnapshot = removeThreadFromSnapshot(snapshot, params);
+  const nextSnapshot = removeThreadFromLoadedRows(snapshot, params);
   return nextSnapshot
     ? getFallbackSelectionKey(nextSnapshot, params.optimisticThreadKey)
     : undefined;
 }
 
 function applyThreadNameUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
@@ -1958,7 +1685,7 @@ function applyThreadNameUpdate(
     threadName?: string;
     titleSource: AppServerRenamedTitleSource;
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   const threadName = params.threadName?.trim();
   if (!snapshot || !threadName) {
     return snapshot;
@@ -1972,7 +1699,7 @@ function applyThreadNameUpdate(
       })
     : buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
@@ -1992,26 +1719,26 @@ function applyThreadNameUpdate(
   return changed
     ? {
         ...snapshot,
-        threads,
+        threadRows: indexLoadedThreadRows(threads),
       }
     : snapshot;
 }
 
 function applyThreadRewindUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     updatedAt: number;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (
       thread.source !== params.backend
       || thread.id !== params.threadId
@@ -2034,24 +1761,24 @@ function applyThreadRewindUpdate(
     };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
 function applyThreadStatusUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     threadStatus: AppServerThreadStatus;
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -2074,24 +1801,24 @@ function applyThreadStatusUpdate(
     };
   });
 
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
 function applyThreadPullRequestsUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     threadId: string;
     prs: PrSummary[];
     federationTarget?: FederationTarget;
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -2124,15 +1851,15 @@ function applyThreadPullRequestsUpdate(
   return changed
     ? {
         ...snapshot,
-        threads,
+        threadRows: indexLoadedThreadRows(threads),
       }
     : snapshot;
 }
 
 function applyPullRequestStatusUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: { prKey: string; pr: PrSummary; index?: PrChipLocationIndex }
-): { snapshot: NavigationSnapshot | undefined; index: PrChipLocationIndex | undefined } {
+): { snapshot: NavigationLoadedRows | undefined; index: PrChipLocationIndex | undefined } {
   if (!snapshot) {
     return { snapshot, index: undefined };
   }
@@ -2146,10 +1873,10 @@ function applyPullRequestStatusUpdate(
     return { snapshot, index };
   }
 
-  let threads: NavigationSnapshot["threads"] | undefined;
+  let threads: NavigationThreadSummary[] | undefined;
   const updatedThreadIndexes = new Set<number>();
   for (const location of locations) {
-    const sourceThreads = threads ?? snapshot.threads;
+    const sourceThreads = threads ?? loadedThreadRows(snapshot);
     const thread = sourceThreads[location.threadIndex];
     const currentPr = thread?.prs?.[location.prIndex];
     if (!thread || !currentPr) {
@@ -2163,7 +1890,7 @@ function applyPullRequestStatusUpdate(
     }
 
     if (!threads) {
-      threads = [...snapshot.threads];
+      threads = [...loadedThreadRows(snapshot)];
     }
     if (!updatedThreadIndexes.has(location.threadIndex)) {
       threads[location.threadIndex] = {
@@ -2193,10 +1920,10 @@ function applyPullRequestStatusUpdate(
 }
 
 function buildPrChipLocationIndex(
-  snapshot: NavigationSnapshot,
+  snapshot: NavigationLoadedRows,
 ): PrChipLocationIndex {
   const byPrKey = new Map<string, PrChipLocation[]>();
-  snapshot.threads.forEach((thread, threadIndex) => {
+  loadedThreadRows(snapshot).forEach((thread, threadIndex) => {
     thread.prs?.forEach((pr, prIndex) => {
       const prKey = buildPullRequestStatusKey(pr);
       const locations = byPrKey.get(prKey) ?? [];
@@ -2212,7 +1939,7 @@ function buildPrChipLocationIndex(
 }
 
 function applyThreadModelSettingsUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -2221,13 +1948,13 @@ function applyThreadModelSettingsUpdate(
     serviceTier?: string;
     fastMode?: boolean;
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -2247,25 +1974,25 @@ function applyThreadModelSettingsUpdate(
   return changed
     ? {
         ...snapshot,
-        threads,
+        threadRows: indexLoadedThreadRows(threads),
       }
     : snapshot;
 }
 
 function applyThreadPrAutoDispatchUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     enabled: boolean;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (
       thread.source !== params.backend
       || thread.id !== params.threadId
@@ -2279,21 +2006,21 @@ function applyThreadPrAutoDispatchUpdate(
     changed = true;
     return { ...thread, prAutoDispatchEnabled: params.enabled };
   });
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
 function applyThreadPrAutoDispatchPendingUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     threadId: string;
     pending: NavigationThreadSummary["prAutoDispatchPending"];
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) return snapshot;
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (
       thread.source !== params.backend
       || thread.id !== params.threadId
@@ -2307,23 +2034,23 @@ function applyThreadPrAutoDispatchPendingUpdate(
     changed = true;
     return { ...thread, prAutoDispatchPending: params.pending };
   });
-  return changed ? { ...snapshot, threads } : snapshot;
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
 function applyThreadAcpRuntimeUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     threadId: string;
     acpRuntime?: NavigationThreadSummary["acpRuntime"];
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -2345,25 +2072,25 @@ function applyThreadAcpRuntimeUpdate(
   return changed
     ? {
         ...snapshot,
-        threads,
+        threadRows: indexLoadedThreadRows(threads),
       }
     : snapshot;
 }
 
 function applyThreadCodexEnvironmentUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     threadId: string;
     codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -2378,25 +2105,25 @@ function applyThreadCodexEnvironmentUpdate(
   return changed
     ? {
         ...snapshot,
-        threads,
+        threadRows: indexLoadedThreadRows(threads),
       }
     : snapshot;
 }
 
 function applyThreadExecutionModeUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     threadId: string;
     executionMode: "default" | "full-access";
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -2415,26 +2142,26 @@ function applyThreadExecutionModeUpdate(
   return changed
     ? {
         ...snapshot,
-        threads,
+        threadRows: indexLoadedThreadRows(threads),
       }
     : snapshot;
 }
 
 function applyThreadExecutionModeQueued(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     threadId: string;
     queuedExecutionMode: "default" | "full-access";
     queuedAt: number;
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -2455,24 +2182,24 @@ function applyThreadExecutionModeQueued(
   return changed
     ? {
         ...snapshot,
-        threads,
+        threadRows: indexLoadedThreadRows(threads),
       }
     : snapshot;
 }
 
 function applyThreadExecutionModeQueueCleared(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   params: {
     backend: AppServerBackendKind;
     threadId: string;
   }
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   let changed = false;
-  const threads = snapshot.threads.map((thread) => {
+  const threads = loadedThreadRows(snapshot).map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
@@ -2493,53 +2220,50 @@ function applyThreadExecutionModeQueueCleared(
   return changed
     ? {
         ...snapshot,
-        threads,
+        threadRows: indexLoadedThreadRows(threads),
       }
     : snapshot;
 }
 
 function applyLaunchpadUpdate(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   launchpad: NavigationLaunchpadDraft,
-  defaults: NavigationSnapshot["launchpadDefaults"],
+  defaults: NavigationLaunchpadDefaults | undefined,
   options?: {
     gitStatus?: NavigationDirectoryGitStatus | null;
     gitStatusSourcePath?: string;
     preserveExistingDirectoryAuthority?: boolean;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return {
-      backend: "all",
-      fetchedAt: Date.now(),
-      unchanged: false,
-      threads: [],
-      inboxThreadKeys: [],
-      directories: upsertLaunchpadDirectory([], launchpad, options),
+      threadRows: indexLoadedThreadRows([]),
+      
+      directoryRows: indexLoadedDirectoryRows(upsertLaunchpadDirectory([], launchpad, options)),
       launchpadDefaults: defaults,
     };
   }
 
   return {
     ...snapshot,
-    directories: upsertLaunchpadDirectory(snapshot.directories, launchpad, options),
+    directoryRows: indexLoadedDirectoryRows(upsertLaunchpadDirectory(loadedDirectoryRows(snapshot), launchpad, options)),
     launchpadDefaults: defaults,
   };
 }
 
 function applyLaunchpadUpdateIfMissing(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   launchpad: NavigationLaunchpadDraft,
-  defaults: NavigationSnapshot["launchpadDefaults"],
+  defaults: NavigationLaunchpadDefaults,
   options?: {
     preserveExistingDirectoryAuthority?: boolean;
   },
-): NavigationSnapshot | undefined {
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return applyLaunchpadUpdate(snapshot, launchpad, defaults, options);
   }
 
-  if (snapshot.directories.some(
+  if (loadedDirectoryRows(snapshot).some(
     (directory) =>
       directory.key === launchpad.directoryKey && Boolean(directory.launchpad)
   )) {
@@ -2620,143 +2344,60 @@ function mergeLaunchpadUpdateResponse(
 }
 
 function applyLaunchpadReset(
-  snapshot: NavigationSnapshot | undefined,
+  snapshot: NavigationLoadedRows | undefined,
   directoryKey: string,
-  defaults: NavigationSnapshot["launchpadDefaults"]
-): NavigationSnapshot | undefined {
+  defaults: NavigationLaunchpadDefaults | undefined
+): NavigationLoadedRows | undefined {
   if (!snapshot) {
     return snapshot;
   }
 
   return {
     ...snapshot,
-    directories: snapshot.directories.map((directory) =>
+    directoryRows: indexLoadedDirectoryRows(loadedDirectoryRows(snapshot).map((directory) =>
       directory.key === directoryKey ? { ...directory, launchpad: undefined } : directory
-    ),
+    )),
     launchpadDefaults: defaults,
   };
 }
 
 function projectOptimisticThreadIntoDirectories(
-  directories: NavigationSnapshot["directories"],
-  optimisticThread?: NavigationThreadSummary
-): NavigationSnapshot["directories"] {
-  if (!optimisticThread) {
-    return directories;
-  }
-
-  const threadKey = threadSummaryIdentityKey(optimisticThread);
-  let changed = false;
+  directories: NavigationDirectorySummary[],
+  optimisticThread?: NavigationThreadSummary,
+): NavigationDirectorySummary[] {
+  if (!optimisticThread) return directories;
   const nextDirectories = [...directories];
-
   for (const linkedDirectory of optimisticThread.linkedDirectories) {
-    const directoryKey = linkedDirectory.id.startsWith("launchpad:")
-      ? linkedDirectory.id.slice("launchpad:".length)
-      : linkedDirectory.path
-        ? `directory:${linkedDirectory.path}`
-        : undefined;
-    if (!directoryKey) {
-      continue;
-    }
-
-    const existingIndex = nextDirectories.findIndex(
-      (directory) => directory.key === directoryKey
-    );
-    if (existingIndex >= 0) {
-      const existing = nextDirectories[existingIndex]!;
-      if (existing.threadKeys.includes(threadKey)) {
-        continue;
-      }
-
-      nextDirectories[existingIndex] = {
-        ...existing,
-        threadKeys: [threadKey, ...existing.threadKeys],
-        needsAttentionCount:
-          existing.needsAttentionCount + (optimisticThread.inbox.inInbox ? 1 : 0),
-        latestUpdatedAt: Math.max(
-          existing.latestUpdatedAt ?? 0,
-          optimisticThread.updatedAt ?? 0
-        ),
-      };
-      changed = true;
-      continue;
-    }
-
+    const descriptor = classifyDirectory(linkedDirectory);
+    if (nextDirectories.some((directory) => directory.key === descriptor.key)) continue;
+    // A newly accepted thread can reveal a project before its descriptor arrives.
+    // Its population remains unknown until the owner query returns.
     nextDirectories.push({
-      key: directoryKey,
-      kind: directoryKey.startsWith("workspace:") ? "workspace" : "directory",
-      label: linkedDirectory.label,
-      path: linkedDirectory.path,
-      threadKeys: [threadKey],
-      needsAttentionCount: optimisticThread.inbox.inInbox ? 1 : 0,
-      latestUpdatedAt: optimisticThread.updatedAt,
+      key: descriptor.key,
+      kind: descriptor.kind,
+      label: descriptor.label,
+      path: descriptor.path,
     });
-    changed = true;
   }
-
-  return changed ? sortNavigationDirectories(nextDirectories) : directories;
-}
-
-function hasSelectionKey(
-  response: NavigationSnapshot,
-  selectionKey: string,
-  optimisticThreadKey?: string
-): boolean {
-  const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectionKey);
-  if (launchpadDirectoryKey) {
-    return response.directories.some(
-      (directory) =>
-        directory.key === launchpadDirectoryKey && Boolean(directory.launchpad)
-    );
-  }
-
-  return (
-    response.threads.some(
-      (thread) => threadSummaryIdentityKey(thread) === selectionKey
-    ) || selectionKey === optimisticThreadKey
-  );
+  return nextDirectories.length === directories.length ? directories : sortNavigationDirectories(nextDirectories);
 }
 
 function getFallbackSelectionKey(
-  response: NavigationSnapshot,
+  response: NavigationLoadedRows,
   optimisticThreadKey?: string
 ): string | undefined {
   if (optimisticThreadKey) {
     return optimisticThreadKey;
   }
 
-  if (response.threads[0]) {
-    return threadSummaryIdentityKey(response.threads[0]);
+  if (loadedThreadRows(response)[0]) {
+    return threadSummaryIdentityKey(loadedThreadRows(response)[0]);
   }
 
-  const firstLaunchpadDirectory = response.directories.find((directory) => directory.launchpad);
+  const firstLaunchpadDirectory = loadedDirectoryRows(response).find((directory) => directory.launchpad);
   return firstLaunchpadDirectory
     ? buildLaunchpadSelectionKey(firstLaunchpadDirectory.key)
     : undefined;
-}
-
-function resolveRefreshSelectionKey(
-  response: NavigationSnapshot,
-  currentSelectionKey: string | undefined,
-  preferredSelectionKey: string | undefined,
-  optimisticThreadKey?: string,
-  forcePreferredSelection = false
-): string | undefined {
-  if (
-    preferredSelectionKey &&
-    (forcePreferredSelection ||
-      currentSelectionKey === preferredSelectionKey ||
-      !currentSelectionKey) &&
-    hasSelectionKey(response, preferredSelectionKey, optimisticThreadKey)
-  ) {
-    return preferredSelectionKey;
-  }
-
-  if (currentSelectionKey) {
-    return currentSelectionKey;
-  }
-
-  return getFallbackSelectionKey(response, optimisticThreadKey);
 }
 
 function buildOptimisticThreadFromLaunchpad(params: {
@@ -2955,6 +2596,8 @@ export type PendingLaunchpadCreation = {
 
 type UseThreadNavigationOptions = {
   enabled?: boolean;
+  composerDraftStore?: ComposerDraftStore;
+  attentionPromoteOnTurnEnd?: boolean;
   lightweightNavigationRefresh?: boolean;
   progressiveInitialRefresh?: boolean;
   threadViewVisible?: boolean;
@@ -3011,7 +2654,7 @@ export function useThreadNavigation(
   worktreeArchiveError?: string;
   loading: boolean;
   loaded: boolean;
-  providerRefresh?: NavigationSnapshot["providerRefresh"];
+  providerRefresh?: { state: "checking" | "degraded" | "ready"; failedProviders?: number };
   refreshing: boolean;
   refresh: () => Promise<void>;
   materializeDirectoryLaunchpad: (
@@ -3210,7 +2853,9 @@ export function useThreadNavigation(
     directory: NavigationDirectorySummary,
     collapsed: boolean,
   ) => Promise<void>;
-  snapshot?: NavigationSnapshot;
+  loadedRows?: NavigationLoadedRows;
+  pagedNavigation: ReturnType<typeof useBoundedNavigationWindow>;
+  selectedLaunchpadConfigurationReady: boolean;
   threads: NavigationThreadSummary[];
 } {
   const directoryDisclosure = useNavigationDirectoryDisclosure();
@@ -3234,10 +2879,9 @@ export function useThreadNavigation(
     desktopApi?.sendThreadPrAutoDispatchNow;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
-  const rendererFederationTarget = readRendererFederationTarget();
+  const rendererFederationTarget = useMemo(readRendererFederationTarget, []);
   const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
-  const progressiveInitialRefresh = options.progressiveInitialRefresh ?? false;
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
@@ -3353,7 +2997,6 @@ export function useThreadNavigation(
   const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
-  const startupAutomaticSelectionKeyRef = useRef<string | undefined>(undefined);
   const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const selectedItemKeyRef = useRef<string | undefined>(undefined);
   const manuallySelectedThreadKeysRef = useRef(new Set<string>());
@@ -3381,7 +3024,6 @@ export function useThreadNavigation(
   const focusRefreshInFlightRef = useRef(false);
   const focusRefreshQueuedRef = useRef(false);
   const lastFocusRefreshCompletedAtRef = useRef(0);
-  const remoteRecoveryAttemptRef = useRef(0);
   const remotePeerDisconnectedRef = useRef(false);
   const remoteDirectoryThreadsCollapsedOverridesRef = useRef(
     new Map<string, boolean>(),
@@ -3393,14 +3035,6 @@ export function useThreadNavigation(
   const pendingDirectoryGitStatusRef = useRef(
     new Map<string, NavigationDirectoryGitStatus | null>(),
   );
-  const threadStatusObservationSequenceRef = useRef(0);
-  const threadStatusObservationsRef = useRef(
-    new Map<string, ThreadStatusObservation>(),
-  );
-  const federationPeerStatusObservationSequenceRef = useRef(0);
-  const federationPeerStatusObservationsRef = useRef(
-    new Map<string, FederationPeerStatusObservation>(),
-  );
   // A newly-created thread can be named by the helper before the materialize
   // IPC response gives the renderer an optimistic row to update. Retain the
   // authoritative event so that response and a stale first refresh cannot
@@ -3410,9 +3044,7 @@ export function useThreadNavigation(
   );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
-  const navigationSnapshotTransportByScopeRef = useRef(
-    new Map<string, NavigationSnapshotTransportState>(),
-  );
+
 
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
@@ -3453,7 +3085,7 @@ export function useThreadNavigation(
 
     setState((current) => ({
       ...current,
-      response: markThreadSeenInSnapshot(current.response, {
+      rows: markThreadSeenInLoadedRows(current.rows, {
         backend: retainedThread.source,
         federationTarget: retainedThread.federation?.ref.target,
         threadId: retainedThread.id,
@@ -3463,297 +3095,92 @@ export function useThreadNavigation(
     setRetainedUnreadThread(undefined);
   }, []);
 
-  const performRefresh = useCallback(
-    async (
-      preferredSelectionKey?: string,
-      preferredOptimisticThread?: NavigationThreadSummary,
-      forcePreferredSelection = false,
-      options?: NavigationRefreshOptions
-    ): Promise<void> => {
-      if (!enabled) {
-        prChipLocationIndexRef.current = undefined;
-        navigationSnapshotTransportByScopeRef.current.clear();
-        setState({
-          loading: false,
-          refreshing: false,
-          error: undefined,
-          response: undefined,
-        });
-        return;
-      }
-
-      const getNavigationSnapshot = desktopApi?.getNavigationSnapshot;
-      const getNavigationSnapshotTransport =
-        desktopApi?.getNavigationSnapshotTransport;
-      if (!getNavigationSnapshot && !getNavigationSnapshotTransport) {
-        prChipLocationIndexRef.current = undefined;
-        setState({
-          loading: false,
-          refreshing: false,
-          error: "Desktop bridge is missing navigation snapshot support.",
-          response: undefined,
-        });
-        return;
-      }
-
-      const federationTarget = readRendererFederationTarget();
-      if (federationTarget && remotePeerDisconnectedRef.current) {
-        // Peer-status events are the live connectivity source. While the
-        // route is known down, preserve the current response and let the
-        // connected transition below schedule the one authoritative refresh.
-        return;
-      }
-
-      let deferredForNativeDrag = await waitForNativeDragInteractionEnd();
-
-      setState((current) => ({
-        ...current,
-        loading: !current.response,
-        refreshing: Boolean(current.response),
-        error: undefined,
-      }));
-
-      try {
-        desktopApi.recordStartupProfileEvent?.("navigation-refresh:start", {
-          forceRefresh: Boolean(options?.forceRefresh),
-          hasCurrentResponse: Boolean(stateRef.current.response),
-          preferredSelectionKey: preferredSelectionKey ?? null,
-          refreshMode: options?.refreshMode ?? "full",
-        });
-        const snapshotRequest =
-          options?.forceRefresh || options?.refreshMode || federationTarget
-            ? {
-                ...(options?.forceRefresh ? { forceRefresh: true } : {}),
-                ...(options?.refreshMode ? { refreshMode: options.refreshMode } : {}),
-                ...(federationTarget ? { federationTarget } : {}),
-              }
-            : undefined;
-        const threadStatusSequenceAtRefreshStart =
-          threadStatusObservationSequenceRef.current;
-        const federationPeerStatusSequenceAtRefreshStart =
-          federationPeerStatusObservationSequenceRef.current;
-        let snapshot: NavigationSnapshot;
-        let transportKind:
-          | "changes"
-          | "delta"
-          | "full"
-          | "legacy"
-          | "unchanged" =
-          "legacy";
-        if (getNavigationSnapshotTransport) {
-          const transportScopeKey = buildNavigationSnapshotTransportScopeKey(
-            snapshotRequest ?? {},
-          );
-          const previousTransportState =
-            navigationSnapshotTransportByScopeRef.current.get(
-              transportScopeKey,
-            );
-          let transportResponse = await getNavigationSnapshotTransport({
-            ...snapshotRequest,
-            transport: {
-              protocol: 1,
-              ...(previousTransportState
-                ? { baseRevision: previousTransportState.revision }
-                : {}),
-            },
-          });
-          transportKind = transportResponse.kind;
-          let nextTransportState = applyNavigationSnapshotTransportResponse(
-            previousTransportState,
-            transportResponse,
-          );
-          if (!nextTransportState) {
-            desktopApi.recordStartupProfileEvent?.(
-              "navigation-refresh:transport-recovery",
-              { responseKind: transportResponse.kind },
-            );
-            transportResponse = await getNavigationSnapshotTransport({
-              ...snapshotRequest,
-              transport: { protocol: 1 },
-            });
-            transportKind = transportResponse.kind;
-            nextTransportState = applyNavigationSnapshotTransportResponse(
-              undefined,
-              transportResponse,
-            );
-          }
-          if (!nextTransportState) {
-            throw new Error(
-              "Navigation snapshot transport did not provide a recoverable baseline.",
-            );
-          }
-          navigationSnapshotTransportByScopeRef.current.set(
-            transportScopeKey,
-            nextTransportState,
-          );
-          snapshot = nextTransportState.snapshot;
-        } else if (getNavigationSnapshot) {
-          snapshot = snapshotRequest
-            ? await getNavigationSnapshot(snapshotRequest)
-            : await getNavigationSnapshot();
-        } else {
-          throw new Error("Desktop bridge is missing navigation snapshot support.");
-        }
-        deferredForNativeDrag =
-          (await waitForNativeDragInteractionEnd())
-          || deferredForNativeDrag;
-        remoteRecoveryAttemptRef.current = 0;
-        desktopApi.recordStartupProfileEvent?.("navigation-refresh:snapshot", {
-          directoryCount: snapshot.directories.length,
-          forceRefresh: Boolean(options?.forceRefresh),
-          refreshMode: options?.refreshMode ?? "full",
-          threadCount: snapshot.threads.length,
-          transportKind,
-          unchanged: Boolean(snapshot.unchanged),
-        });
-        const filteredResponse = removeThreadKeysFromSnapshot(
-          snapshot,
-          suppressedArchivedThreadKeysRef.current
-        );
-        if (federationTarget && isRemoteFederationTarget(federationTarget)) {
-          // A remote window adopts its first snapshot as a baseline, then
-          // owns the disclosure for the rest of the window lifetime. This
-          // also seeds preferences restored by the viewer-side SQLite
-          // overlay before owner events can race them.
-          for (const directory of filteredResponse.directories) {
-            if (
-              !remoteDirectoryThreadsCollapsedOverridesRef.current.has(
-                directory.key,
-              )
-            ) {
-              remoteDirectoryThreadsCollapsedOverridesRef.current.set(
-                directory.key,
-                directory.directoryThreadsCollapsed === true,
-              );
-            }
-          }
-        }
-        const response = federationTarget
-          && isRemoteFederationTarget(federationTarget)
-          ? applyDirectoryThreadsCollapsedOverrides(
-              filteredResponse,
-              remoteDirectoryThreadsCollapsedOverridesRef.current,
-            )
-          : filteredResponse;
-        const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
-        const optimisticThreadKey = optimisticSelection
-          ? threadSummaryIdentityKey(optimisticSelection)
-          : undefined;
-        const responseWithObservedThreadNames = applyObservedThreadNames(
-          response,
-          threadNameObservationsRef.current,
-        );
-
-        setState((current) => {
-          if (current.response && response.unchanged && !preferredSelectionKey) {
-            return {
-              ...current,
-              loading: false,
-              refreshing: false,
-              error: undefined,
-              startupSelectionSettled:
-                current.startupSelectionSettled
-                || options?.refreshMode !== "active-recent",
-            };
-          }
-
-          const responseWithConcurrentThreadStatuses =
-            applyConcurrentThreadStatusObservations(
-              applyConcurrentFederationPeerStatusObservations(
-                deferredForNativeDrag
-                  ? preserveNavigationPinState(
-                      current.response,
-                      responseWithObservedThreadNames,
-                    )
-                  : responseWithObservedThreadNames,
-                federationPeerStatusObservationsRef.current,
-                federationPeerStatusSequenceAtRefreshStart,
-              ),
-              threadStatusObservationsRef.current,
-              threadStatusSequenceAtRefreshStart,
-            );
-          const nextResponse = reconcileNavigationSnapshot(
-            current.response,
-            responseWithConcurrentThreadStatuses,
-          );
-          prChipLocationIndexRef.current = buildPrChipLocationIndex(nextResponse);
-          return {
-            loading: false,
-            refreshing: false,
-            error: undefined,
-            response: nextResponse,
-            startupSelectionSettled:
-              current.startupSelectionSettled
-              || options?.refreshMode !== "active-recent",
-          };
-        });
-
-        if (
-          optimisticThreadKey &&
-          response.threads.some(
-            (thread) => threadSummaryIdentityKey(thread) === optimisticThreadKey
-          )
-        ) {
-          const hydratedOptimisticThread = response.threads.find(
-            (thread) => threadSummaryIdentityKey(thread) === optimisticThreadKey
-          );
-
-          setOptimisticThread((current) => {
-            if (current?.optimisticUserMessage) {
-              return current;
-            }
-
-            if (
-              current?.titleSource === "derived" &&
-              hydratedOptimisticThread &&
-              hasPlaceholderThreadTitle(hydratedOptimisticThread)
-            ) {
-              return current;
-            }
-
-            return undefined;
-          });
-        }
-
-        setSelectedItemKey((current) => {
-          const repairingAutomaticStartupSelection = Boolean(
-            options?.refreshMode === "full"
-            && current
-            && current === startupAutomaticSelectionKeyRef.current
-            && !hasSelectionKey(response, current, optimisticThreadKey)
-          );
-          const next = resolveRefreshSelectionKey(
-            response,
-            repairingAutomaticStartupSelection ? undefined : current,
-            preferredSelectionKey,
-            optimisticThreadKey,
-            forcePreferredSelection
-          );
-          if (
-            options?.refreshMode === "active-recent"
-            && !current
-            && !preferredSelectionKey
-          ) {
-            startupAutomaticSelectionKeyRef.current = next;
-          } else if (options?.refreshMode === "full") {
-            startupAutomaticSelectionKeyRef.current = undefined;
-          }
-          return next;
-        });
-      } catch (error) {
-        desktopApi.recordStartupProfileEvent?.("navigation-refresh:error", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        setState((current) => ({
-          loading: false,
-          refreshing: false,
-          response: current.response,
-          error: error instanceof Error ? error.message : String(error),
-        }));
-      }
-    },
-    [desktopApi, enabled]
+  const attentionViewId = useId();
+  const selectedIdentity = selectedItemKey
+    ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
+    : undefined;
+  const selectedDetail = useNavigationSelectedDetail({
+    desktopApi,
+    ref: selectedIdentity,
+    federationTarget: selectedIdentity?.ownerInstanceId
+      ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
+      : undefined,
+  });
+  const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled,
+    directoryKey: getDirectoryKeyFromLaunchpadSelection(selectedItemKey), federationTarget: rendererFederationTarget,
+  });
+  const draftStore = options.composerDraftStore;
+  const draftVersion = useSyncExternalStore(
+    useCallback((listener: () => void) => draftStore?.subscribeDraftPresence(listener) ?? (() => undefined), [draftStore]),
+    useCallback(() => draftStore?.getDraftPresenceVersion() ?? 0, [draftStore]),
   );
+  const draftRefs = useMemo(() => (draftStore?.getDraftScopeKeys() ?? []).flatMap((scope) => {
+    const owner = parseOwnedComposerScopeKey(scope);
+    if (!owner || (rendererFederationTarget && !federationTargetsEqual(owner.target, rendererFederationTarget))) return [];
+    return [{ backend: owner.backend, threadId: owner.threadId,
+      ...(owner.target.scope === "remote" ? { ownerInstanceId: owner.target.instanceId } : {}) }];
+  }), [draftStore, draftVersion, rendererFederationTarget]);
+  const selectedConfiguration = selectedDetail.state?.detail?.thread;
+  const selectedDirectoryKeys = selectedConfiguration?.linkedDirectories.map((directory) => classifyDirectory(directory).key)
+    ?? (getDirectoryKeyFromLaunchpadSelection(selectedItemKey) ? [getDirectoryKeyFromLaunchpadSelection(selectedItemKey)!] : []);
+  const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewForeground, observeEvents: false,
+    browseMode, target: rendererFederationTarget, attentionView: { id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true },
+    expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
+    selectedRef: selectedIdentity, selectedDirectoryKeys,
+    disclosedParents: loadedThreadRows(state.rows).filter((thread) => !thread.subthreadsCollapsed && Boolean(thread.ordinaryChildCount))
+      .map((thread) => ({ backend: thread.source, threadId: thread.id,
+        ...(thread.federation?.ref.target.scope === "remote" ? { ownerInstanceId: thread.federation.ref.target.instanceId } : {}) })),
+    draftRefs,
+  });
+  const acceptedPagesRef = useRef(new Map<string, unknown>());
+  const acceptedDefaultsRef = useRef<unknown>(undefined);
+  useEffect(() => {
+    const pages = new Map([...boundedNavigation.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : []));
+    const changed = pages.size !== acceptedPagesRef.current.size
+      || [...pages].some(([id, page]) => acceptedPagesRef.current.get(id) !== page)
+      || acceptedDefaultsRef.current !== launchpadConfiguration.value;
+    const resources = [...boundedNavigation.resources.values()];
+    const error = boundedNavigation.admissionError ?? resources.find((resource) => resource.state.error)?.state.error;
+    const refreshing = resources.some((resource) => resource.loading);
+    const primary = resources.filter((resource) => browseMode === "directories" ? resource.id === "directory-index"
+      : browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
+    const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
+    if (changed && pages.size) {
+      const changedPages = [...pages].filter(([id, page]) => acceptedPagesRef.current.get(id) !== page).map(([, page]) => page);
+      const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
+      acceptedPagesRef.current = pages;
+      acceptedDefaultsRef.current = launchpadConfiguration.value;
+      const directoryRows = indexLoadedDirectoryRows(boundedNavigation.directories.map((directory) => ({ ...directory,
+        ...(launchpadConfiguration.value?.directoryKey === directory.key && launchpadConfiguration.value.launchpad
+          ? { launchpad: { ...launchpadConfiguration.value.launchpad, prompt: "" } } : {}),
+      })));
+      setState((current) => {
+        // Unchanged resource pages must not roll back canonical row events or
+        // resurrect tombstones when another resource finishes loading.
+        const threadRows = new Map([...current.rows?.threadRows ?? []].filter(([key]) => retainedKeys.has(key)));
+        for (const page of changedPages) for (const { row } of page.entries) {
+          const key = threadSummaryIdentityKey(row);
+          if (!suppressedArchivedThreadKeysRef.current.has(key)) threadRows.set(key, row);
+        }
+        for (const key of suppressedArchivedThreadKeysRef.current) threadRows.delete(key);
+        const next: NavigationLoadedRows = { threadRows, directoryRows,
+          launchpadDefaults: launchpadConfiguration.value?.defaults, federationTarget: rendererFederationTarget };
+        return { loading, refreshing, error, rows: reconcileLoadedNavigationRows(current.rows, next),
+          startupSelectionSettled: pages.get("directory-index")?.coverage.state === "complete" };
+      });
+    } else {
+      setState((current) => ({ ...current, loading, refreshing, error }));
+    }
+  }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode]);
+
+  const performRefresh = useCallback(async (
+    preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,
+    _options?: NavigationRefreshOptions,
+  ): Promise<void> => {
+    if (preferredOptimisticThread) setOptimisticThread(preferredOptimisticThread);
+    if (preferredSelectionKey) setSelectedItemKey((current) => forcePreferredSelection || !current ? preferredSelectionKey : current);
+    await boundedNavigation.refresh();
+  }, [boundedNavigation.refresh]);
 
   const refresh = useCallback(
     async (
@@ -3915,8 +3342,8 @@ export function useThreadNavigation(
 
       if (
         !enabled ||
-        !desktopApi?.getNavigationSnapshot ||
-        (lightweightNavigationRefresh && !isRendererViewForeground())
+        !desktopApi?.getNavigationQueryPage ||
+        !isRendererViewForeground()
       ) {
         return;
       }
@@ -3927,7 +3354,7 @@ export function useThreadNavigation(
       });
     },
     [
-      desktopApi?.getNavigationSnapshot,
+      desktopApi?.getNavigationQueryPage,
       enabled,
       lightweightNavigationRefresh,
       scheduleRefresh,
@@ -3989,76 +3416,10 @@ export function useThreadNavigation(
   }, [markNavigationActivity]);
 
   useEffect(() => {
-    if (!enabled) {
-      prChipLocationIndexRef.current = undefined;
-      setState({
-        loading: false,
-        refreshing: false,
-        error: undefined,
-        response: undefined,
-      });
-      return;
-    }
-
-    if (
-      progressiveInitialRefresh
-      && desktopApi?.getNavigationSnapshotTransport
-      && !readRendererFederationTarget()
-    ) {
-      void refresh(undefined, undefined, false, {
-        refreshMode: "active-recent",
-      });
-      void refresh(undefined, undefined, false, {
-        refreshMode: "full",
-      });
-      return;
-    }
-
-    void refresh();
-  }, [
-    desktopApi?.getNavigationSnapshotTransport,
-    enabled,
-    progressiveInitialRefresh,
-    refresh,
-  ]);
-
-  useEffect(() => {
-    if (
-      !enabled
-      || !desktopApi?.getNavigationSnapshot
-      || !state.error
-      || !readRendererFederationTarget()
-    ) {
-      return;
-    }
-
-    const delayMs = Math.min(
-      1_000 * 2 ** remoteRecoveryAttemptRef.current,
-      NAVIGATION_REMOTE_RECOVERY_MAX_DELAY_MS,
-    );
-    remoteRecoveryAttemptRef.current += 1;
-    const timer = setTimeout(() => {
-      scheduleRefresh(undefined, undefined, false, {
-        forceRefresh: true,
-        refreshMode: "full",
-      });
-    }, delayMs);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [
-    desktopApi?.getNavigationSnapshot,
-    enabled,
-    scheduleRefresh,
-    state.error,
-  ]);
-
-  useEffect(() => {
     if (
       !enabled ||
-      !desktopApi?.getNavigationSnapshot ||
-      (lightweightNavigationRefresh && !viewForeground)
+      !desktopApi?.getNavigationQueryPage ||
+      !viewForeground
     ) {
       return;
     }
@@ -4080,7 +3441,7 @@ export function useThreadNavigation(
       clearInterval(timer);
     };
   }, [
-    desktopApi?.getNavigationSnapshot,
+    desktopApi?.getNavigationQueryPage,
     enabled,
     lightweightNavigationRefresh,
     scheduleRefresh,
@@ -4117,6 +3478,17 @@ export function useThreadNavigation(
     return desktopApi.onAgentEvent((event) => {
       const windowTarget = readRendererFederationTarget();
       const method = event.notification.method as string;
+      if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method)) {
+        boundedNavigation.invalidate();
+        scheduleRefresh();
+      }
+      if (method === "navigation/thread/seen" && federationTargetsEqual(event.federationTarget, windowTarget)) {
+        const params = event.notification.params as { threadId: string; seenUpdatedAt?: number };
+        setState((current) => ({ ...current, rows: markThreadSeenInLoadedRows(current.rows, {
+          backend: event.backend, federationTarget: event.federationTarget, ...params,
+        }) }));
+        return;
+      }
       if (method === "navigation/directory/seen") {
         scheduleRefresh();
         return;
@@ -4168,18 +3540,11 @@ export function useThreadNavigation(
           status: string;
         };
         const status = params.status as FederationPeerSummary["status"];
-        const observationSequence =
-          federationPeerStatusObservationSequenceRef.current + 1;
-        federationPeerStatusObservationSequenceRef.current = observationSequence;
-        federationPeerStatusObservationsRef.current.set(params.instanceId, {
-          sequence: observationSequence,
-          status,
-        });
         markNavigationActivity({ refreshOnIdleResume: false });
         setState((current) => ({
           ...current,
-          response: applyFederationPeerStatusUpdate(
-            current.response,
+          rows: applyFederationPeerStatusUpdate(
+            current.rows,
             params.instanceId,
             status,
           ),
@@ -4216,19 +3581,12 @@ export function useThreadNavigation(
           unavailableReason?: string;
         };
         const status = params.status as FederationPeerSummary["status"];
-        const observationSequence =
-          federationPeerStatusObservationSequenceRef.current + 1;
-        federationPeerStatusObservationSequenceRef.current = observationSequence;
-        federationPeerStatusObservationsRef.current.set(params.instanceId, {
-          sequence: observationSequence,
-          status,
-        });
         if (params.status === "connected") {
           remotePeerDisconnectedRef.current = false;
           setState((current) => ({
             ...current,
-            response: applyFederationPeerStatusUpdate(
-              current.response,
+            rows: applyFederationPeerStatusUpdate(
+              current.rows,
               params.instanceId,
               status,
             ),
@@ -4245,8 +3603,8 @@ export function useThreadNavigation(
           // Patch the live peer status onto the affected rows so surfaces
           // keyed off it (the remote terminal toggle) disable immediately
           // instead of waiting for the next snapshot refresh.
-          response: applyFederationPeerStatusUpdate(
-            current.response,
+          rows: applyFederationPeerStatusUpdate(
+            current.rows,
             params.instanceId,
             status,
           ),
@@ -4260,7 +3618,7 @@ export function useThreadNavigation(
       if (method === "navigation/directoryGitStatus/updated") {
         const params = event.notification
           .params as NavigationDirectoryGitStatusUpdatedNotification["params"];
-        const hasDirectoryNow = stateRef.current.response?.directories.some(
+        const hasDirectoryNow = loadedDirectoryRows(stateRef.current.rows).some(
           (directory) => directory.key === params.directoryKey,
         ) ?? false;
         if (!hasDirectoryNow) {
@@ -4270,7 +3628,7 @@ export function useThreadNavigation(
           );
         }
         setState((current) => {
-          const hasDirectory = current.response?.directories.some(
+          const hasDirectory = loadedDirectoryRows(current.rows).some(
             (directory) => directory.key === params.directoryKey,
           ) ?? false;
           if (!hasDirectory) {
@@ -4279,7 +3637,7 @@ export function useThreadNavigation(
           pendingDirectoryGitStatusRef.current.delete(params.directoryKey);
           return {
             ...current,
-            response: applyDirectoryGitStatusUpdate(current.response, params),
+            rows: applyDirectoryGitStatusUpdate(current.rows, params),
           };
         });
         return;
@@ -4290,7 +3648,7 @@ export function useThreadNavigation(
           .params as NavigationThreadGitWorkingStateUpdatedNotification["params"];
         setState((current) => ({
           ...current,
-          response: applyThreadGitWorkingStateUpdate(current.response, params),
+          rows: applyThreadGitWorkingStateUpdate(current.rows, params),
         }));
         return;
       }
@@ -4306,7 +3664,7 @@ export function useThreadNavigation(
           prs: PrSummary[];
         };
         setState((current) => {
-          const nextResponse = applyThreadPullRequestsUpdate(current.response, {
+          const nextResponse = applyThreadPullRequestsUpdate(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4315,12 +3673,12 @@ export function useThreadNavigation(
           prChipLocationIndexRef.current = nextResponse
             ? buildPrChipLocationIndex(nextResponse)
             : undefined;
-          if (nextResponse === current.response) {
+          if (nextResponse === current.rows) {
             return current;
           }
           return {
             ...current,
-            response: nextResponse,
+            rows: nextResponse,
           };
         });
         scheduleRefresh();
@@ -4334,7 +3692,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateThreadReactionsInSnapshot(current.response, {
+          rows: updateThreadReactionsInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4350,18 +3708,18 @@ export function useThreadNavigation(
           pr: PrSummary;
         };
         setState((current) => {
-          const result = applyPullRequestStatusUpdate(current.response, {
+          const result = applyPullRequestStatusUpdate(current.rows, {
             prKey,
             pr,
             index: prChipLocationIndexRef.current,
           });
           prChipLocationIndexRef.current = result.index;
-          if (result.snapshot === current.response) {
+          if (result.snapshot === current.rows) {
             return current;
           }
           return {
             ...current,
-            response: result.snapshot,
+            rows: result.snapshot,
           };
         });
         scheduleRefresh();
@@ -4383,20 +3741,10 @@ export function useThreadNavigation(
           return;
         }
 
-        const observationSequence =
-          threadStatusObservationSequenceRef.current + 1;
-        threadStatusObservationSequenceRef.current = observationSequence;
-        threadStatusObservationsRef.current.set(
-          agentEventThreadIdentityKey(event, threadId),
-          {
-            sequence: observationSequence,
-            threadStatus,
-          },
-        );
 
         setState((current) => ({
           ...current,
-          response: applyThreadStatusUpdate(current.response, {
+          rows: applyThreadStatusUpdate(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4440,7 +3788,7 @@ export function useThreadNavigation(
         );
         setState((current) => ({
           ...current,
-          response: applyThreadNameUpdate(current.response, {
+          rows: applyThreadNameUpdate(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4469,7 +3817,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: applyThreadRewindUpdate(current.response, {
+          rows: applyThreadRewindUpdate(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4498,7 +3846,7 @@ export function useThreadNavigation(
 
         setState((current) => ({
           ...current,
-          response: removeThreadFromSnapshot(current.response, {
+          rows: removeThreadFromLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4506,7 +3854,7 @@ export function useThreadNavigation(
         }));
         setSelectedItemKey((current) =>
           current === threadKey
-            ? getFallbackSelectionAfterRemoval(state.response, {
+            ? getFallbackSelectionAfterRemoval(state.rows, {
                 backend: event.backend,
                 federationTarget: event.federationTarget,
                 threadId,
@@ -4536,7 +3884,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: applyThreadExecutionModeUpdate(current.response, {
+          rows: applyThreadExecutionModeUpdate(current.rows, {
             backend: event.backend,
             threadId,
             executionMode,
@@ -4563,7 +3911,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: applyThreadExecutionModeQueued(current.response, {
+          rows: applyThreadExecutionModeQueued(current.rows, {
             backend: event.backend,
             threadId,
             queuedExecutionMode,
@@ -4592,7 +3940,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: applyThreadExecutionModeQueueCleared(current.response, {
+          rows: applyThreadExecutionModeQueueCleared(current.rows, {
             backend: event.backend,
             threadId,
           }),
@@ -4620,7 +3968,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: applyThreadCodexEnvironmentUpdate(current.response, {
+          rows: applyThreadCodexEnvironmentUpdate(current.rows, {
             backend: event.backend,
             threadId,
             codexEnvironmentRuntime,
@@ -4654,7 +4002,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: applyThreadModelSettingsUpdate(current.response, {
+          rows: applyThreadModelSettingsUpdate(current.rows, {
             backend: event.backend,
             threadId: params.threadId,
             ...modelSettingsPatch,
@@ -4675,7 +4023,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: applyThreadPrAutoDispatchUpdate(current.response, {
+          rows: applyThreadPrAutoDispatchUpdate(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             ...params,
@@ -4697,7 +4045,7 @@ export function useThreadNavigation(
         const pending = params.pending ?? undefined;
         setState((current) => ({
           ...current,
-          response: applyThreadPrAutoDispatchPendingUpdate(current.response, {
+          rows: applyThreadPrAutoDispatchPendingUpdate(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId: params.threadId,
@@ -4719,7 +4067,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: applyThreadAcpRuntimeUpdate(current.response, {
+          rows: applyThreadAcpRuntimeUpdate(current.rows, {
             backend: event.backend,
             threadId,
             acpRuntime,
@@ -4780,7 +4128,7 @@ export function useThreadNavigation(
         }
         setState((current) => ({
           ...current,
-          response: updateThreadSubAgentsInSnapshot(current.response, {
+          rows: updateThreadSubAgentsInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             subAgents: params.subAgents ?? [],
@@ -4812,7 +4160,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateThreadPinInSnapshot(current.response, {
+          rows: updateThreadPinInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4828,7 +4176,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateThreadPinInSnapshot(current.response, {
+          rows: updateThreadPinInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4844,7 +4192,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateThreadPinsInSnapshot(current.response, {
+          rows: updateThreadPinsInLoadedRows(current.rows, {
             pinnedRanksByThreadKey: pinnedRanks,
           }),
         }));
@@ -4865,7 +4213,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateThreadParentInSnapshot(current.response, {
+          rows: updateThreadParentInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4884,7 +4232,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateThreadParentInSnapshot(current.response, {
+          rows: updateThreadParentInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
@@ -4903,7 +4251,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateSubthreadOrderInSnapshot(current.response, {
+          rows: updateSubthreadOrderInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             parentThreadId,
@@ -4920,7 +4268,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateSubthreadsCollapsedInSnapshot(current.response, {
+          rows: updateSubthreadsCollapsedInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             parentThreadId,
@@ -4941,7 +4289,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateDirectoryPinInSnapshot(current.response, {
+          rows: updateDirectoryPinInLoadedRows(current.rows, {
             directoryKey,
             pinnedRank,
           }),
@@ -4955,7 +4303,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateDirectoryPinInSnapshot(current.response, {
+          rows: updateDirectoryPinInLoadedRows(current.rows, {
             directoryKey,
             pinnedRank: undefined,
           }),
@@ -4969,7 +4317,7 @@ export function useThreadNavigation(
         };
         setState((current) => ({
           ...current,
-          response: updateDirectoryPinsInSnapshot(current.response, {
+          rows: updateDirectoryPinsInLoadedRows(current.rows, {
             pinnedRanks,
           }),
         }));
@@ -4987,8 +4335,8 @@ export function useThreadNavigation(
           : undefined;
         setState((current) => ({
           ...current,
-          response: updateDirectoryThreadsCollapsedInSnapshot(
-            current.response,
+          rows: updateDirectoryThreadsCollapsedInLoadedRows(
+            current.rows,
             {
               directoryKey,
               collapsed: viewerCollapsed ?? collapsed,
@@ -5022,7 +4370,7 @@ export function useThreadNavigation(
         scheduleRefresh();
       }
     });
-  }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh, state.response]);
+  }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh, state.rows]);
 
   // Bindings live in the navigation snapshot but are mutated outside
   // the agent-event bus (a Telegram callback creates a binding, a
@@ -5040,7 +4388,9 @@ export function useThreadNavigation(
   }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh]);
 
   const threads = useMemo(() => {
-    const currentThreads = state.response?.threads ?? [];
+    const retainedKey = browseMode !== "attention" && retainedUnreadThread ? threadSummaryIdentityKey(retainedUnreadThread) : undefined;
+    const currentThreads = loadedThreadRows(state.rows).map((thread) => threadSummaryIdentityKey(thread) === retainedKey
+      ? { ...thread, inbox: { ...thread.inbox, inInbox: true } } : thread);
     if (!optimisticThread) {
       return currentThreads;
     }
@@ -5068,7 +4418,7 @@ export function useThreadNavigation(
     }
 
     return [optimisticThread, ...currentThreads];
-  }, [optimisticThread, state.response?.threads]);
+  }, [optimisticThread, state.rows, browseMode, retainedUnreadThread]);
 
   const directories = useMemo(
     () => {
@@ -5078,7 +4428,7 @@ export function useThreadNavigation(
           upsertLaunchpadDirectory(nextDirectories, launchpad, {
             preserveExistingDirectoryAuthority: Boolean(rendererFederationTarget),
           }),
-        state.response?.directories ?? [],
+        loadedDirectoryRows(state.rows) ?? [],
       );
 
       if (!optimisticThread) {
@@ -5086,7 +4436,7 @@ export function useThreadNavigation(
       }
 
       const optimisticThreadKey = threadSummaryIdentityKey(optimisticThread);
-      const hasHydratedThread = state.response?.threads.some(
+      const hasHydratedThread = loadedThreadRows(state.rows).some(
         (thread) => threadSummaryIdentityKey(thread) === optimisticThreadKey
       );
 
@@ -5098,8 +4448,7 @@ export function useThreadNavigation(
     [
       localLaunchpads,
       optimisticThread,
-      state.response?.directories,
-      state.response?.threads,
+      state.rows,
       rendererFederationTarget,
     ]
   );
@@ -5108,7 +4457,7 @@ export function useThreadNavigation(
     // Move the renderer-local fallback draft and its selection onto the
     // authoritative workspace key. Keeping the alias in localLaunchpads would
     // reintroduce it after every snapshot refresh.
-    const canonicalWorkspace = state.response?.directories.find(
+    const canonicalWorkspace = loadedDirectoryRows(state.rows).find(
       (directory) =>
         directory.kind === "workspace"
         && directory.key !== ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
@@ -5145,7 +4494,7 @@ export function useThreadNavigation(
         ? buildLaunchpadSelectionKey(canonicalWorkspace.key)
         : current
     );
-  }, [state.response?.directories]);
+  }, [state.rows]);
 
   const inboxThreads = threads;
   const recentThreads = useMemo(
@@ -5157,22 +4506,22 @@ export function useThreadNavigation(
     if (
       selectedItemKey
       || initialSelectionEstablishedRef.current
-      || !state.response
+      || !state.rows
     ) {
       return undefined;
     }
 
     return getFallbackSelectionKey(
       {
-        ...state.response,
-        directories,
-        threads,
+        ...state.rows,
+        directoryRows: indexLoadedDirectoryRows(directories),
+        threadRows: indexLoadedThreadRows(threads),
       },
       optimisticThread
         ? threadSummaryIdentityKey(optimisticThread)
         : undefined,
     );
-  }, [directories, optimisticThread, selectedItemKey, state.response, threads]);
+  }, [directories, optimisticThread, selectedItemKey, state.rows, threads]);
   const displaySelectionKey = selectedItemKey ?? initialFallbackSelectionKey;
   useEffect(() => {
     if (selectedItemKey) {
@@ -5181,9 +4530,9 @@ export function useThreadNavigation(
     }
     if (!initialFallbackSelectionKey) {
       if (
-        state.response
+        state.rows
         && state.startupSelectionSettled
-        && state.response.providerRefresh?.state !== "checking"
+        && boundedNavigation.resources.get(browseMode === "directories" ? "directory-index" : "lens")?.state.page?.coverage.state === "complete"
       ) {
         // An empty settled full startup is still a completed selection
         // decision. A progressive active-recent page is explicitly unsettled:
@@ -5208,7 +4557,7 @@ export function useThreadNavigation(
   }, [
     initialFallbackSelectionKey,
     selectedItemKey,
-    state.response,
+    state.rows,
     state.startupSelectionSettled,
   ]);
 
@@ -5243,16 +4592,6 @@ export function useThreadNavigation(
     [selectedThreadKey, threads]
   );
 
-  const selectedIdentity = selectedThreadKey
-    ? navigationIdentityFromThreadKey(selectedThreadKey, rendererFederationTarget)
-    : undefined;
-  const selectedDetail = useNavigationSelectedDetail({
-    desktopApi,
-    ref: selectedIdentity,
-    federationTarget: selectedIdentity?.ownerInstanceId
-      ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
-      : undefined,
-  });
   const selectedThreadConfigurationReady = selectedDetail.state?.readiness === "ready"
     && selectedDetail.state.detail?.identity === "present";
   const selectedThread = selectedDetail.state?.detail?.thread ?? selectedRow;
@@ -5274,13 +4613,14 @@ export function useThreadNavigation(
     }
 
     return directories.find((directory) =>
-      directory.threadKeys.includes(selectedThreadKey)
+      directoryKeysForThread(selectedDetail.state?.detail?.thread).includes(directory.key)
     );
   }, [
     activeFederatedLaunchpad,
     directories,
     displaySelectionKey,
     selectedThreadKey,
+    selectedDetail.state?.detail?.thread,
   ]);
   const selectedLaunchpad = useMemo(() => {
     if (activeFederatedLaunchpad) {
@@ -5307,10 +4647,10 @@ export function useThreadNavigation(
     const target = resolveCreateThreadTargetDirectory({
       directories,
       selectedDirectory: activeFederatedLaunchpad ? undefined : selectedDirectory,
-      selectedThreadKey,
+      selectedThread: selectedDetail.state?.detail?.thread,
     });
     return target.directoryKind === "directory" ? target.directoryLabel : undefined;
-  }, [activeFederatedLaunchpad, directories, selectedDirectory, selectedThreadKey]);
+  }, [activeFederatedLaunchpad, directories, selectedDirectory, selectedThreadKey, selectedDetail.state?.detail?.thread]);
   // The thread card to render as the orange "composing" source while a
   // sub-thread launchpad is open. Plain new-thread launchpads have no source.
   const composerSourceThreadKey = useMemo(() => {
@@ -5366,7 +4706,7 @@ export function useThreadNavigation(
           ) {
             setState((current) => ({
               ...current,
-              response: markThreadSeenInSnapshot(current.response, {
+              rows: markThreadSeenInLoadedRows(current.rows, {
                 backend: threadToMarkSeen.source,
                 federationTarget: threadToMarkSeen.federation?.ref.target,
                 threadId: threadToMarkSeen.id,
@@ -5397,7 +4737,9 @@ export function useThreadNavigation(
         return;
       }
 
-      const directoryKeys = directoryKeysForThread(directories, threadKey);
+      const directoryKeys = directoryKeysForThread(selectedDetail.state?.detail?.thread
+        && threadSummaryIdentityKey(selectedDetail.state.detail.thread) === threadKey
+        ? selectedDetail.state.detail.thread : undefined);
       if (directoryKeys.length === 0) {
         return;
       }
@@ -5409,7 +4751,8 @@ export function useThreadNavigation(
       });
     },
     [
-      desktopApi?.refreshDirectoryGitStatuses,
+      desktopApi,
+      selectedDetail.state?.detail?.thread,
       directories,
       rendererFederationTarget,
     ]
@@ -5555,7 +4898,7 @@ export function useThreadNavigation(
       }));
       setState((current) => ({
         ...current,
-        response: markThreadsSeenInSnapshot(current.response, seenThreads),
+        rows: markThreadsSeenInLoadedRows(current.rows, seenThreads),
       }));
       setRetainedUnreadThread((current) => {
         if (
@@ -5607,7 +4950,7 @@ export function useThreadNavigation(
       );
       setState((current) => ({
         ...current,
-        response: markThreadUnreadInSnapshot(current.response, {
+        rows: markThreadUnreadInLoadedRows(current.rows, {
           backend: thread.source,
           federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
@@ -5632,7 +4975,7 @@ export function useThreadNavigation(
             threadId: params.threadId,
           })
         : buildThreadIdentityKey(params.backend, params.threadId);
-      const thread = state.response?.threads.find(
+      const thread = loadedThreadRows(state.rows).find(
         (candidate) =>
           candidate.source === params.backend
           && candidate.id === params.threadId
@@ -5648,7 +4991,7 @@ export function useThreadNavigation(
       setSelectedItemKey(threadKey);
       await refresh(threadKey, undefined, true);
     },
-    [refresh, selectThread, state.response?.threads],
+    [refresh, selectThread, state.rows],
   );
 
   const selectDirectoryLaunchpad = useCallback((directoryKey: string): void => {
@@ -5685,12 +5028,15 @@ export function useThreadNavigation(
       setSetThreadModelSettingsError(undefined);
 
       try {
+        if (!options?.forceWorkspace && selectedThreadKey && !selectedDetail.state?.detail?.thread) {
+          throw new Error("Wait for the selected thread's owner configuration before creating a thread here.");
+        }
         const targetDirectory = resolveCreateThreadTargetDirectory({
           directories,
           selectedDirectory: activeFederatedLaunchpad
             ? undefined
             : selectedDirectory,
-          selectedThreadKey,
+          selectedThread: selectedDetail.state?.detail?.thread,
           forceWorkspace: options?.forceWorkspace,
         });
         const directoryKey = targetDirectory.directoryKey;
@@ -5730,8 +5076,8 @@ export function useThreadNavigation(
             : pendingGitStatus;
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdate(
-            current.response,
+          rows: applyLaunchpadUpdate(
+            current.rows,
             launchpad,
             defaults,
             {
@@ -5752,8 +5098,8 @@ export function useThreadNavigation(
           pendingPickedLaunchpadRef.current.get(directoryKey) ?? launchpad;
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdateIfMissing(
-            current.response,
+          rows: applyLaunchpadUpdateIfMissing(
+            current.rows,
             pendingLaunchpad,
             defaults,
             {
@@ -5772,7 +5118,7 @@ export function useThreadNavigation(
           selectedDirectory: activeFederatedLaunchpad
             ? undefined
             : selectedDirectory,
-          selectedThreadKey,
+          selectedThread: selectedDetail.state?.detail?.thread,
           forceWorkspace: options?.forceWorkspace,
         });
         pendingPickedLaunchpadRef.current.delete(targetDirectory.directoryKey);
@@ -5786,6 +5132,7 @@ export function useThreadNavigation(
       activeFederatedLaunchpad,
       selectedDirectory,
       selectedThreadKey,
+      selectedDetail.state?.detail?.thread,
       takePendingDirectoryGitStatus,
       rendererFederationTarget,
     ]
@@ -5803,7 +5150,7 @@ export function useThreadNavigation(
       if (!source.parentThreadId) {
         return source;
       }
-      const threads = stateRef.current.response?.threads ?? [];
+      const threads = loadedThreadRows(stateRef.current.rows) ?? [];
       const threadByKey = new Map(
         threads.map((thread) => [
           threadSummaryIdentityKey(thread),
@@ -5832,12 +5179,12 @@ export function useThreadNavigation(
       newThreadId: string,
       federationTarget?: FederationTarget,
     ): Promise<void> => {
-      const snapshot = stateRef.current.response;
+      const snapshot = stateRef.current.rows;
       if (!snapshot) {
         return;
       }
       const threadByKey = new Map(
-        snapshot.threads.map((thread) => [
+        loadedThreadRows(snapshot).map((thread) => [
           threadSummaryIdentityKey(thread),
           thread,
         ]),
@@ -5862,7 +5209,7 @@ export function useThreadNavigation(
       }
       const currentChildIds = sortSubthreadSummaries(
         root ?? { subthreadOrder: undefined },
-        snapshot.threads.filter(
+        loadedThreadRows(snapshot).filter(
           (thread) => resolveThreadParentKey(thread, threadByKey) === rootKey,
         ),
       ).map((child) => child.id);
@@ -5874,7 +5221,7 @@ export function useThreadNavigation(
 
       setState((current) => ({
         ...current,
-        response: updateSubthreadOrderInSnapshot(current.response, {
+        rows: updateSubthreadOrderInLoadedRows(current.rows, {
           backend: parentBackend,
           federationTarget,
           parentThreadId: rootThreadId,
@@ -5895,7 +5242,7 @@ export function useThreadNavigation(
           });
           setState((current) => ({
             ...current,
-            response: updateSubthreadOrderInSnapshot(current.response, {
+            rows: updateSubthreadOrderInLoadedRows(current.rows, {
               backend: result.backend,
               federationTarget,
               parentThreadId: result.parentThreadId,
@@ -5910,7 +5257,7 @@ export function useThreadNavigation(
       if (root?.subthreadsCollapsed) {
         setState((current) => ({
           ...current,
-          response: updateSubthreadsCollapsedInSnapshot(current.response, {
+          rows: updateSubthreadsCollapsedInLoadedRows(current.rows, {
             backend: parentBackend,
             federationTarget,
             parentThreadId: rootThreadId,
@@ -5989,7 +5336,7 @@ export function useThreadNavigation(
           gitStatusSourcePath: directory.gitStatusSourcePath,
           ...(parent.federation
             ? {
-                gitStatus: stateRef.current.response?.directories.find(
+                gitStatus: loadedDirectoryRows(stateRef.current.rows).find(
                   (entry) =>
                     entry.path === directory.gitStatusSourcePath
                     || entry.path === directory.directoryPath,
@@ -6072,7 +5419,7 @@ export function useThreadNavigation(
             : pendingGitStatus;
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdate(current.response, launchpad, defaults, {
+          rows: applyLaunchpadUpdate(current.rows, launchpad, defaults, {
             ...(ensuredGitStatus !== undefined
               ? { gitStatus: ensuredGitStatus }
               : {}),
@@ -6353,34 +5700,38 @@ export function useThreadNavigation(
   const openFederatedWorkspaceLaunchpad = useCallback(
     async (target: FederationRemoteTarget): Promise<void> => {
       const openRevision = ++federatedLaunchpadOpenRevisionRef.current;
-      if (!desktopApi?.getNavigationSnapshot) {
+      if (!desktopApi?.getNavigationQueryPage) {
         if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
-          setLaunchpadError("Desktop bridge is missing navigation snapshot support.");
+          setLaunchpadError("Desktop bridge requires bounded navigation support. Upgrade this instance.");
         }
         return;
       }
 
       setLaunchpadError(undefined);
       try {
-        const snapshot = await desktopApi.getNavigationSnapshot({
-          federationTarget: target,
-        });
+        const consumerId = `workspace-launchpad:${attentionViewId}:${openRevision}`;
+        const page = await readNavigationQueryRange({
+          request: { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" }, pageSize: 100, federationTarget: target },
+          read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
+          isCancelled: () => !mountedRef.current || federatedLaunchpadOpenRevisionRef.current !== openRevision,
+          maxBytes: 8 * 1024 * 1024,
+        }).finally(() => desktopApi.releaseNavigationQuery?.(consumerId));
+        if (page.coverage.state !== "complete") throw new Error("The owner is still loading its directories. Retry when it is ready.");
+        const ownerDirectories = page.directories ?? [];
         if (federatedLaunchpadOpenRevisionRef.current !== openRevision) {
           return;
         }
-        const workspaceDirectory = snapshot.directories.find(
+        const workspaceDirectory = ownerDirectories.find(
           (directory) => directory.kind === "workspace",
         ) ?? {
           key: ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
           kind: "workspace" as const,
           label: ROOT_NEW_THREAD_WORKSPACE_LABEL,
-          threadKeys: [],
-          needsAttentionCount: 0,
         };
         await openFederatedDirectoryLaunchpad(
           target,
           workspaceDirectory,
-          snapshot.directories,
+          ownerDirectories,
           openRevision,
         );
       } catch (error) {
@@ -6389,7 +5740,7 @@ export function useThreadNavigation(
         }
       }
     },
-    [desktopApi, openFederatedDirectoryLaunchpad],
+    [desktopApi, openFederatedDirectoryLaunchpad, attentionViewId],
   );
 
   const openDirectoryLaunchpad = useCallback(
@@ -6425,8 +5776,8 @@ export function useThreadNavigation(
         }));
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdate(
-            current.response,
+          rows: applyLaunchpadUpdate(
+            current.rows,
             response.launchpad,
             response.defaults,
             {
@@ -6462,8 +5813,6 @@ export function useThreadNavigation(
           key: ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
           kind: "workspace",
           label: ROOT_NEW_THREAD_WORKSPACE_LABEL,
-          threadKeys: [],
-          needsAttentionCount: 0,
         },
         preferredBackend
       );
@@ -6518,8 +5867,8 @@ export function useThreadNavigation(
         }));
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdate(
-            current.response,
+          rows: applyLaunchpadUpdate(
+            current.rows,
             result.launchpad,
             result.defaults,
           ),
@@ -6532,8 +5881,8 @@ export function useThreadNavigation(
           result.launchpad;
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdateIfMissing(
-            current.response,
+          rows: applyLaunchpadUpdateIfMissing(
+            current.rows,
             pickedLaunchpad,
             result.defaults,
           ),
@@ -6603,8 +5952,8 @@ export function useThreadNavigation(
       }));
       setState((current) => ({
         ...current,
-        response: applyLaunchpadUpdate(
-          current.response,
+        rows: applyLaunchpadUpdate(
+          current.rows,
           result.launchpad,
           result.defaults,
         ),
@@ -6829,8 +6178,8 @@ export function useThreadNavigation(
       }
 
       setState((current) => {
-        const currentResponse = current.response;
-        const currentLaunchpad = currentResponse?.directories.find(
+        const currentResponse = current.rows;
+        const currentLaunchpad = loadedDirectoryRows(currentResponse).find(
           (directory) => directory.key === directoryKey
         )?.launchpad;
         if (!currentResponse || !currentLaunchpad) {
@@ -6839,7 +6188,7 @@ export function useThreadNavigation(
 
         return {
           ...current,
-          response: applyLaunchpadUpdate(
+          rows: applyLaunchpadUpdate(
             currentResponse,
             {
               ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
@@ -6909,10 +6258,10 @@ export function useThreadNavigation(
         );
         setState((current) => ({
           ...current,
-          response: applyLaunchpadUpdate(
-            current.response,
+          rows: applyLaunchpadUpdate(
+            current.rows,
             mergeLaunchpadUpdateResponse(
-              current.response?.directories.find(
+              loadedDirectoryRows(current.rows).find(
                 (directory) => directory.key === directoryKey
               )?.launchpad,
               response.launchpad,
@@ -6987,8 +6336,8 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: applyLaunchpadReset(
-            current.response,
+          rows: applyLaunchpadReset(
+            current.rows,
             response.directoryKey,
             response.defaults
           ),
@@ -6996,15 +6345,12 @@ export function useThreadNavigation(
         setSelectedItemKey((current) =>
           current === buildLaunchpadSelectionKey(directoryKey)
             ? getFallbackSelectionKey(
-                state.response
-                  ? applyLaunchpadReset(state.response, response.directoryKey, response.defaults)!
+                state.rows
+                  ? applyLaunchpadReset(state.rows, response.directoryKey, response.defaults)!
                   : {
-                      backend: "all",
-                      fetchedAt: Date.now(),
-                      unchanged: false,
-                      threads,
-                      inboxThreadKeys: [],
-                      directories,
+                      threadRows: indexLoadedThreadRows(threads),
+                      
+                      directoryRows: indexLoadedDirectoryRows(directories),
                       launchpadDefaults: response.defaults,
                     },
                 optimisticThread
@@ -7022,7 +6368,7 @@ export function useThreadNavigation(
       desktopApi,
       directories,
       optimisticThread,
-      state.response,
+      state.rows,
       threads,
     ]
   );
@@ -7072,17 +6418,17 @@ export function useThreadNavigation(
           return next;
         });
         setState((current) => {
-          if (!current.response) {
+          if (!current.rows) {
             return current;
           }
           return {
             ...current,
-            response: {
-              ...current.response,
-              directories: current.response.directories.filter(
+            rows: {
+              ...current.rows,
+              directoryRows: indexLoadedDirectoryRows(loadedDirectoryRows(current.rows).filter(
                 (directory) =>
                   directory.key !== directoryKey,
-              ),
+              )),
             },
           };
         });
@@ -7159,6 +6505,11 @@ export function useThreadNavigation(
           launchpad.parentThreadInstanceId;
         const federationTarget =
           launchpad.federationTarget ?? readRendererFederationTarget();
+        if (!desktopApi.getNavigationLaunchpadConfig) throw new Error("Upgrade this instance to load launchpad configuration before sending.");
+        const configuration = await desktopApi.getNavigationLaunchpadConfig({ protocol: 2, directoryKey, federationTarget });
+        if (configuration.protocol !== 2 || configuration.unchanged || !configuration.defaults || configuration.directoryKey !== directoryKey) {
+          throw new Error("Launchpad configuration is not ready. The draft has been retained.");
+        }
         let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
         try {
           response = await desktopApi.materializeDirectoryLaunchpad({
@@ -7297,7 +6648,7 @@ export function useThreadNavigation(
         // card. Plain new-thread launchpads have no parent and skip this. Await
         // so the order write commits before the refresh below reads it back.
         if (materializeParentThreadId) {
-          const groupRoot = stateRef.current.response?.threads.find(
+          const groupRoot = loadedThreadRows(stateRef.current.rows).find(
             (thread) =>
               thread.source === materializeParentThreadBackend
               && thread.id === materializeParentThreadId,
@@ -7387,13 +6738,13 @@ export function useThreadNavigation(
         if (!federatedSelection) {
           setState((current) => ({
             ...current,
-            response: current.response
+            rows: current.rows
               ? applyLaunchpadReset(
-                  current.response,
+                  current.rows,
                   directoryKey,
-                  current.response.launchpadDefaults
+                  current.rows.launchpadDefaults
                 )
-              : current.response,
+              : current.rows,
           }));
         }
         try {
@@ -7491,13 +6842,13 @@ export function useThreadNavigation(
     });
     setState((current) => ({
       ...current,
-      response: current.response
+      rows: current.rows
         ? applyLaunchpadReset(
-            current.response,
+            current.rows,
             directoryKey,
-            current.response.launchpadDefaults,
+            current.rows.launchpadDefaults,
           )
-        : current.response,
+        : current.rows,
     }));
 
     setSelectedItemKey(
@@ -7568,24 +6919,24 @@ export function useThreadNavigation(
       setSetThreadModelSettingsError(undefined);
       setState((current) => ({
         ...current,
-        response: targetThreads.reduce(
+        rows: targetThreads.reduce(
           (snapshot, target) =>
-            removeThreadFromSnapshot(snapshot, {
+            removeThreadFromLoadedRows(snapshot, {
               backend: target.source,
               federationTarget: target.federation?.ref.target
                 ?? readRendererFederationTarget(),
               threadId: target.id,
             }),
           options?.includeSubthreads
-            ? current.response
-            : ungroupChildThreadsInSnapshot(current.response, {
+            ? current.rows
+            : ungroupChildThreadsInLoadedRows(current.rows, {
                 parent: thread,
               })
         ),
       }));
       setSelectedItemKey((current) =>
         current && targetThreadKeys.has(current)
-          ? getFallbackSelectionAfterRemoval(state.response, {
+          ? getFallbackSelectionAfterRemoval(state.rows, {
               backend: thread.source,
               federationTarget: thread.federation?.ref.target
                 ?? readRendererFederationTarget(),
@@ -7641,7 +6992,7 @@ export function useThreadNavigation(
       optimisticThread,
       refresh,
       removeRemoteThreadPinRequest,
-      state.response,
+      state.rows,
       threads,
     ]
   );
@@ -7771,7 +7122,7 @@ export function useThreadNavigation(
       setSetThreadModelSettingsError(undefined);
       setState((current) => ({
         ...current,
-        response: applyThreadNameUpdate(current.response, {
+        rows: applyThreadNameUpdate(current.rows, {
           backend: thread.source,
           federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
@@ -7848,7 +7199,7 @@ export function useThreadNavigation(
         : currentReactions.filter((existing) => existing !== emoji);
       setState((current) => ({
         ...current,
-        response: updateThreadReactionsInSnapshot(current.response, {
+        rows: updateThreadReactionsInLoadedRows(current.rows, {
           backend: thread.source,
           federationTarget: thread.federation?.ref.target ??
             readRendererFederationTarget(),
@@ -7869,7 +7220,7 @@ export function useThreadNavigation(
         // Reconcile with the authoritative server response (handles races).
         setState((current) => ({
           ...current,
-          response: updateThreadReactionsInSnapshot(current.response, {
+          rows: updateThreadReactionsInLoadedRows(current.rows, {
             backend: thread.source,
             federationTarget: thread.federation?.ref.target ??
               readRendererFederationTarget(),
@@ -7899,7 +7250,7 @@ export function useThreadNavigation(
 
       setState((current) => ({
         ...current,
-        response: updateThreadPinInSnapshot(current.response, {
+        rows: updateThreadPinInLoadedRows(current.rows, {
           backend: thread.source,
           federationTarget,
           threadId: thread.id,
@@ -7925,7 +7276,7 @@ export function useThreadNavigation(
           });
           setState((current) => ({
             ...current,
-            response: updateThreadPinInSnapshot(current.response, {
+            rows: updateThreadPinInLoadedRows(current.rows, {
               backend: thread.source,
               federationTarget,
               threadId: thread.id,
@@ -7942,7 +7293,7 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: updateThreadPinInSnapshot(current.response, {
+          rows: updateThreadPinInLoadedRows(current.rows, {
             backend: result.backend,
             federationTarget,
             threadId: result.threadId,
@@ -7969,7 +7320,7 @@ export function useThreadNavigation(
       const pinnedRanksByThreadKey = move ? {} : buildPinnedRanks(orderedThreadKeys);
       setState((current) => ({
         ...current,
-        response: updateThreadPinsInSnapshot(current.response, {
+        rows: updateThreadPinsInLoadedRows(current.rows, {
           pinnedRanksByThreadKey,
         }),
       }));
@@ -7982,7 +7333,7 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: updateThreadPinsInSnapshot(current.response, {
+          rows: updateThreadPinsInLoadedRows(current.rows, {
             pinnedRanksByThreadKey: result.pinnedRanks,
           }),
         }));
@@ -8007,7 +7358,7 @@ export function useThreadNavigation(
 
       setState((current) => ({
         ...current,
-        response: updateThreadParentInSnapshot(current.response, {
+        rows: updateThreadParentInLoadedRows(current.rows, {
           backend: thread.source,
           federationTarget,
           threadId: thread.id,
@@ -8026,7 +7377,7 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: updateThreadParentInSnapshot(current.response, {
+          rows: updateThreadParentInLoadedRows(current.rows, {
             backend: result.backend,
             federationTarget,
             threadId: result.threadId,
@@ -8047,12 +7398,12 @@ export function useThreadNavigation(
       if (!setThreadParentRequest || threadsToUnlink.length === 0) {
         return;
       }
-      const snapshot = stateRef.current.response;
+      const snapshot = stateRef.current.rows;
       if (!snapshot) {
         return;
       }
       const threadByKey = new Map(
-        snapshot.threads.map((thread) => [
+        loadedThreadRows(snapshot).map((thread) => [
           threadSummaryIdentityKey(thread),
           thread,
         ]),
@@ -8089,7 +7440,7 @@ export function useThreadNavigation(
           threadSummaryIdentityKey(thread)
         ),
       );
-      const currentPinnedKeys = snapshot.threads
+      const currentPinnedKeys = loadedThreadRows(snapshot)
         .filter((thread) => thread.pinnedRank && !selectedKeys.has(
           threadSummaryIdentityKey(thread),
         ))
@@ -8103,16 +7454,16 @@ export function useThreadNavigation(
 
       setState((current) => ({
         ...current,
-        response: updateThreadPinsInSnapshot(
+        rows: updateThreadPinsInLoadedRows(
           threadsToUnlink.reduce(
-            (response, thread) => updateThreadParentInSnapshot(response, {
+            (response, thread) => updateThreadParentInLoadedRows(response, {
               backend: thread.source,
               federationTarget: thread.federation?.ref.target
                 ?? readRendererFederationTarget(),
               threadId: thread.id,
               parentThreadId: undefined,
             }),
-            current.response,
+            current.rows,
           ),
           { pinnedRanksByThreadKey },
         ),
@@ -8196,7 +7547,7 @@ export function useThreadNavigation(
 
       setState((current) => ({
         ...current,
-        response: updateSubthreadOrderInSnapshot(current.response, {
+        rows: updateSubthreadOrderInLoadedRows(current.rows, {
           backend: parent.source,
           federationTarget,
           parentThreadId: parent.id,
@@ -8213,7 +7564,7 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: updateSubthreadOrderInSnapshot(current.response, {
+          rows: updateSubthreadOrderInLoadedRows(current.rows, {
             backend: result.backend,
             federationTarget,
             parentThreadId: result.parentThreadId,
@@ -8243,7 +7594,7 @@ export function useThreadNavigation(
 
       setState((current) => ({
         ...current,
-        response: updateSubthreadsCollapsedInSnapshot(current.response, {
+        rows: updateSubthreadsCollapsedInLoadedRows(current.rows, {
           backend: parent.source,
           federationTarget,
           parentThreadId: parent.id,
@@ -8260,7 +7611,7 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: updateSubthreadsCollapsedInSnapshot(current.response, {
+          rows: updateSubthreadsCollapsedInLoadedRows(current.rows, {
             backend: result.backend,
             federationTarget,
             parentThreadId: result.parentThreadId,
@@ -8291,7 +7642,7 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: updateThreadAgentInSnapshot(current.response, {
+          rows: updateThreadAgentInLoadedRows(current.rows, {
             backend: result.backend,
             threadId: result.threadId,
             agent: result.agent,
@@ -8325,7 +7676,7 @@ export function useThreadNavigation(
 
       setState((current) => ({
         ...current,
-        response: updateDirectoryPinInSnapshot(current.response, {
+        rows: updateDirectoryPinInLoadedRows(current.rows, {
           directoryKey: directory.key,
           pinnedRank,
         }),
@@ -8338,7 +7689,7 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: updateDirectoryPinInSnapshot(current.response, {
+          rows: updateDirectoryPinInLoadedRows(current.rows, {
             directoryKey: result.directoryKey,
             pinnedRank: result.pinnedRank,
           }),
@@ -8359,7 +7710,7 @@ export function useThreadNavigation(
       const pinnedRanks = move ? {} : buildPinnedRanks(directoryKeys);
       setState((current) => ({
         ...current,
-        response: updateDirectoryPinsInSnapshot(current.response, {
+        rows: updateDirectoryPinsInLoadedRows(current.rows, {
           pinnedRanks,
         }),
       }));
@@ -8368,7 +7719,7 @@ export function useThreadNavigation(
         const result = await reorderDirectoryPinsRequest(move ? { move } : { directoryKeys });
         setState((current) => ({
           ...current,
-          response: updateDirectoryPinsInSnapshot(current.response, {
+          rows: updateDirectoryPinsInLoadedRows(current.rows, {
             pinnedRanks: result.pinnedRanks,
           }),
         }));
@@ -8398,8 +7749,8 @@ export function useThreadNavigation(
 
       setState((current) => ({
         ...current,
-        response: updateDirectoryThreadsCollapsedInSnapshot(
-          current.response,
+        rows: updateDirectoryThreadsCollapsedInLoadedRows(
+          current.rows,
           {
             directoryKey: directory.key,
             collapsed,
@@ -8415,8 +7766,8 @@ export function useThreadNavigation(
         });
         setState((current) => ({
           ...current,
-          response: updateDirectoryThreadsCollapsedInSnapshot(
-            current.response,
+          rows: updateDirectoryThreadsCollapsedInLoadedRows(
+            current.rows,
             {
               directoryKey: result.directoryKey,
               collapsed: result.collapsed,
@@ -8566,7 +7917,7 @@ export function useThreadNavigation(
       );
       setState((current) => ({
         ...current,
-        response: applyThreadModelSettingsUpdate(current.response, {
+        rows: applyThreadModelSettingsUpdate(current.rows, {
           backend: thread.source,
           threadId: thread.id,
           ...nextSettings,
@@ -8612,7 +7963,7 @@ export function useThreadNavigation(
       );
       setState((current) => ({
         ...current,
-        response: applyThreadPrAutoDispatchUpdate(current.response, {
+        rows: applyThreadPrAutoDispatchUpdate(current.rows, {
           backend: thread.source,
           federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
@@ -8723,7 +8074,7 @@ export function useThreadNavigation(
       );
       setState((current) => ({
         ...current,
-        response: applyThreadAcpRuntimeUpdate(current.response, {
+        rows: applyThreadAcpRuntimeUpdate(current.rows, {
           backend: thread.source,
           threadId: thread.id,
           acpRuntime: nextAcpRuntime,
@@ -8764,7 +8115,7 @@ export function useThreadNavigation(
     directories,
     error: state.error,
     federationTarget:
-      activeFederatedLaunchpad?.target ?? state.response?.federationTarget,
+      activeFederatedLaunchpad?.target ?? state.rows?.federationTarget,
     inboxThreads,
     recentThreads,
     launchpadError,
@@ -8773,8 +8124,9 @@ export function useThreadNavigation(
     dismissArchiveThreadNotice,
     worktreeArchiveError,
     loading: state.loading,
-    loaded: Boolean(state.response),
-    providerRefresh: state.response?.providerRefresh,
+    loaded: Boolean(state.rows),
+    providerRefresh: boundedNavigation.resources.get("directory-index")?.state.page?.coverage
+      ? { ...boundedNavigation.resources.get("directory-index")!.state.page!.coverage, state: boundedNavigation.resources.get("directory-index")!.state.page!.coverage.state === "complete" ? "ready" : boundedNavigation.resources.get("directory-index")!.state.page!.coverage.state as "checking" | "degraded" } : undefined,
     refreshing: state.refreshing,
     refresh: refreshNavigation,
     materializeDirectoryLaunchpad,
@@ -8839,7 +8191,9 @@ export function useThreadNavigation(
     setDirectoryPin,
     reorderDirectoryPins,
     setDirectoryThreadsCollapsed,
-    snapshot: state.response,
+    loadedRows: state.rows,
+    pagedNavigation: boundedNavigation,
+    selectedLaunchpadConfigurationReady: Boolean(activeFederatedLaunchpad) || launchpadConfiguration.ready,
     threads,
   };
 }

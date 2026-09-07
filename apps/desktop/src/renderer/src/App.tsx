@@ -1,3 +1,6 @@
+import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
+import { classifyDirectory } from "@pwragent/shared";
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
   Suspense,
   lazy,
@@ -26,7 +29,6 @@ import {
   type FederationInstanceId,
   type FederationTarget,
   type MessagingChannelKind,
-  type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
   type ThreadToolAccounting,
@@ -86,7 +88,6 @@ import { useFederationThreadEventSubscriptions } from "./lib/useFederationThread
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import {
   federationTargetsEqual,
-  threadSummaryIdentityKey,
 } from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
@@ -1035,18 +1036,14 @@ function DesktopAppShell(props: {
           dispatchAppNotice({ type: "dismiss", id: noticeId });
         };
         const examine = (): void => {
-          const threadKey = buildThreadIdentityKey(
-            event.backend,
-            params.threadId,
-          );
           const matchingDirectory =
             backendErrorDirectoriesRef.current.find(
               (directory) =>
                 directory.kind === "directory"
-                && directory.threadKeys.includes(threadKey),
+                && matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key),
             )
             ?? backendErrorDirectoriesRef.current.find((directory) =>
-              directory.threadKeys.includes(threadKey)
+              matchingThread?.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key)
             );
           const projectLabel =
             matchingDirectory?.label
@@ -1320,8 +1317,15 @@ function DesktopAppShell(props: {
   const profiles = usePwrAgentProfiles(desktopApi);
   const refreshProfiles = profiles.refresh;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
+  const baseComposerDraftStore = useComposerDraftStore();
+  const composerDraftStore = useDurableComposerDraftStore(
+    baseComposerDraftStore,
+    desktopApi,
+  );
   const navigation = useThreadNavigation(desktopApi, {
     enabled: normalAppEnabled,
+    composerDraftStore,
+    attentionPromoteOnTurnEnd: settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true,
     lightweightNavigationRefresh:
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     onThreadActionError: handleThreadActionError,
@@ -1694,44 +1698,16 @@ function DesktopAppShell(props: {
         selectDirectoryLaunchpad(location.directoryKey);
         return;
       }
-      const thread = navigation.threads.find(
-        (candidate) => threadSummaryIdentityKey(candidate) === location.threadKey,
-      );
-      if (thread) {
-        navigation.selectThread(thread);
-      }
+      const ref = navigationIdentityFromThreadKey(location.threadKey);
+      if (ref) void navigation.showThread({ backend: ref.backend, threadId: ref.threadId,
+        federationTarget: ref.ownerInstanceId ? { scope: "remote", instanceId: ref.ownerInstanceId } : undefined });
+
     },
     [navigation, selectDirectoryLaunchpad],
   );
-  // Undefined while the snapshot is empty/loading so a transient blank
-  // thread list can't wipe the stacks; otherwise dead threads (archived,
-  // backend disconnected) are pruned from history.
-  const liveThreadKeys = useMemo<ReadonlySet<string> | undefined>(
-    () =>
-      navigation.threads.length > 0
-        ? new Set(
-            navigation.threads.map((thread) =>
-              threadSummaryIdentityKey(thread),
-            ),
-          )
-        : undefined,
-    [navigation.threads],
-  );
-  const liveLaunchpadKeys = useMemo<ReadonlySet<string> | undefined>(
-    () =>
-      navigation.loaded
-        ? new Set(
-            navigation.directories
-              .filter((directory) => directory.launchpad)
-              .map((directory) => directory.key),
-          )
-        : undefined,
-    [navigation.directories, navigation.loaded],
-  );
+  // Loaded navigation pages cannot prove a history entry was deleted.
   const history = useNavigationHistory({
     current: historyLocation,
-    liveLaunchpadKeys,
-    liveThreadKeys,
     restore: restoreHistoryLocation,
   });
   useHistoryNavHotkeys({ onBack: history.goBack, onForward: history.goForward });
@@ -1803,11 +1779,6 @@ function DesktopAppShell(props: {
       onForward: history.goForward,
     }),
     [history],
-  );
-  const baseComposerDraftStore = useComposerDraftStore();
-  const composerDraftStore = useDurableComposerDraftStore(
-    baseComposerDraftStore,
-    desktopApi,
   );
   const selectedQueue = useIndependentQueueProjection({
     composerDraftStore,
@@ -2248,6 +2219,7 @@ function DesktopAppShell(props: {
     providerThreadMigrations:
       settings.snapshot?.models?.providerThreadMigrations,
     clearPendingRequest: session.clearPendingRequest,
+    launchpadConfigurationReady: navigation.selectedLaunchpadConfigurationReady,
     composerDisabled:
       !navigation.selectedThread ||
       !navigation.selectedThreadConfigurationReady ||
@@ -2649,6 +2621,8 @@ function DesktopAppShell(props: {
           backends={backendSummaries.backends}
           browseMode={navigation.browseMode}
           creatingThread={navigation.creatingThread}
+          pagedNavigation={navigation.pagedNavigation}
+          selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
           directories={navigation.directories}
           error={navigation.error}
           inboxThreads={navigation.inboxThreads}

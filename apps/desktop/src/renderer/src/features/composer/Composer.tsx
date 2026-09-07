@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   beginLaunchpadComposition,
   getLaunchpadComposerDestination,
@@ -44,7 +45,6 @@ import type {
   FederationTarget,
   HandoffThreadWorkspaceRequest,
   ModelSettingsRecent,
-  NavigationDirectorySummary,
   NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
   NavigationLaunchpadFileAttachment,
@@ -4732,8 +4732,6 @@ export function Composer(props: ComposerProps) {
           kind: "directory",
           label: token.name,
           path: token.path,
-          threadKeys: [],
-          needsAttentionCount: 0,
         },
       );
     }

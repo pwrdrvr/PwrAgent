@@ -37,3 +37,23 @@ it("changing lens removes directory membership demand while preserving owner Att
   expect([...demand.keys()]).toEqual(["directory-index", "lens"]);
   expect(demand.get("lens")).toMatchObject({ pageSize: 10, attentionView: base.attentionView, query: { kind: "lens", lens: "attention" } });
 });
+
+
+it("waits for selected ancestry before opening its root directory range", () => {
+  const selectedRef = { backend: "codex" as const, threadId: "child" };
+  const pending = { ...base, selectedRef, selectedDirectoryKeys: ["directory:42"], selectedContextReady: false };
+  expect([...buildNavigationWindowDemand(pending).keys()]).toEqual(["directory-index", "selected-context"]);
+  const root = { backend: "codex" as const, threadId: "off-page-root" };
+  const ready = buildNavigationWindowDemand({ ...pending, selectedContextReady: true, selectedRootRef: root });
+  expect(ready.get("directory:directory:42")).toMatchObject({ pageSize: 10, anchor: { kind: "thread", ref: root } });
+});
+
+it("routes disclosed children and viewer drafts to their explicit owners", () => {
+  const remote = { backend: "codex" as const, threadId: "same-id", ownerInstanceId: "peer" };
+  const local = { backend: "codex" as const, threadId: "same-id" };
+  const demand = buildNavigationWindowDemand({ ...base, browseMode: "drafts", disclosedParents: [remote], draftRefs: [remote, local] });
+  expect([...demand.values()].find((value) => value.query.kind === "children")).toMatchObject({ federationTarget: { scope: "remote", instanceId: "peer" } });
+  expect(demand.get('drafts:"peer":0')).toMatchObject({ federationTarget: { scope: "remote", instanceId: "peer" }, query: { identities: [remote] } });
+  expect(demand.get('drafts:"":0')?.federationTarget).toBeUndefined();
+  expect(demand.get('drafts:"":0')?.query).toMatchObject({ identities: [local] });
+});

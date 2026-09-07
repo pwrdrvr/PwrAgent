@@ -77,7 +77,7 @@ export class NavigationWindowQueries {
       const resource: Resource = {
         requestKey: JSON.stringify(request), token: `${this.prefix}:${++this.nextResource}`,
         value: { id, state: createNavigationPageState(request), loading: false },
-        refreshAfterPending: false, released: !this.visible,
+        refreshAfterPending: false, released: !this.visible, anchor: request.anchor,
       };
       this.resources.set(id, resource);
       added.push(resource);

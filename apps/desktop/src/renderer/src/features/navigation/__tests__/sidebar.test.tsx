@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -17,7 +18,7 @@ import type {
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
-import { Sidebar } from "../Sidebar";
+import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 
 /**
  * The whole row card for a thread, given any element inside it (the
@@ -1159,6 +1160,7 @@ describe("Sidebar", () => {
       id: "thread-review",
       title: "Adversarial review",
       parentThreadId: remoteParent.id,
+      federation: { ...remoteParent.federation!, ref: { ...remoteParent.federation!.ref, threadId: "thread-review" } },
     };
     const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
 
@@ -1747,6 +1749,9 @@ describe("Sidebar", () => {
         derivedFromMountedParent: true,
       },
     };
+    const mountedParent: NavigationThreadSummary = { ...derivedChild, id: "thread-remote-root", title: "Mounted root",
+      parentThreadId: undefined, federation: { ...derivedChild.federation!,
+        ref: { ...derivedChild.federation!.ref, threadId: "thread-remote-root" }, derivedFromMountedParent: false } };
     render(
       <Sidebar
         backends={backends}
@@ -1755,7 +1760,7 @@ describe("Sidebar", () => {
         inboxThreads={[derivedChild]}
         loading={false}
         selectedItemKey="codex:thread-derived-child"
-        threads={[derivedChild]}
+        threads={[mountedParent, derivedChild]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
@@ -1808,6 +1813,9 @@ describe("Sidebar", () => {
         ],
       },
     };
+    const parent: NavigationThreadSummary = { ...sharedThread, id: "thread-local-parent", title: "Parent",
+      federation: { ...remoteChild.federation!, ref: { backend: "codex", threadId: "thread-local-parent",
+        target: { scope: "remote", instanceId: "local-instance" } } } };
     render(
       <Sidebar
         backends={remoteBackends}
@@ -1816,7 +1824,7 @@ describe("Sidebar", () => {
         inboxThreads={[remoteChild]}
         loading={false}
         selectedItemKey="codex:thread-remote-child"
-        threads={[remoteChild]}
+        threads={[parent, remoteChild]}
         onArchiveThread={async () => undefined}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -2286,7 +2294,6 @@ describe("Sidebar", () => {
         directories={[
           {
             ...directories[0],
-            threadKeys: ["codex:thread-1", "codex:thread-local"],
           },
         ]}
         inboxThreads={[sharedThread, localThread]}
@@ -2437,7 +2444,7 @@ describe("Sidebar", () => {
       })
     );
 
-    expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
+    expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: directories[0]!.key }), undefined);
   });
 
   it("shows mounted projects that are not configured on this instance", async () => {
@@ -4416,7 +4423,7 @@ describe("Sidebar", () => {
         directories={[
           {
             ...directories[0]!,
-            threadKeys: ["codex:thread-top", "codex:thread-bottom"],
+            ...{ threadKeys: ["codex:thread-top", "codex:thread-bottom"] },
           },
         ]}
         inboxThreads={[]}
@@ -4521,7 +4528,7 @@ describe("Sidebar", () => {
         inboxThreads={[sharedThread]}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey="codex:thread-1"
+        selectedItemKey="codex:thread-updated"
         threads={[sharedThread, pinnedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -4637,7 +4644,7 @@ describe("Sidebar", () => {
     );
   });
 
-  it("caps unpinned directory threads and toggles the overflow behind Show more / Show less", async () => {
+  it("loads the next owner page only after explicit load more", async () => {
     const cappedThreads = Array.from({ length: 12 }, (_, index) => ({
       ...sharedThread,
       id: `thread-cap-${index + 1}`,
@@ -4671,33 +4678,18 @@ describe("Sidebar", () => {
     ).toHaveLength(10);
     expect(screen.queryByText("Capped thread 11")).not.toBeInTheDocument();
 
-    await clickElement(screen.getByRole("button", { name: "Show 2 more" }));
+    await clickElement(screen.getByRole("button", { name: "Load more threads" }));
 
     expect(
       screen.getAllByRole("button", { name: /Capped thread \d+/ }),
     ).toHaveLength(12);
     expect(screen.getByText("Capped thread 12")).toBeInTheDocument();
 
-    // The collapse control stays at the pivot — right where "Show more"
-    // was — so it sits BEFORE the freshly revealed overflow rows and the
-    // user never scrolls to the bottom of the directory to collapse it.
-    const showLess = screen.getByRole("button", { name: "Show less" });
-    const overflowRow = screen.getByRole("button", {
-      name: /Capped thread 12/,
-    });
-    expect(
-      showLess.compareDocumentPosition(overflowRow) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Load more threads" })).not.toBeInTheDocument();
 
-    await clickElement(screen.getByRole("button", { name: "Show less" }));
-
-    expect(
-      screen.getAllByRole("button", { name: /Capped thread \d+/ }),
-    ).toHaveLength(10);
   });
 
-  it("auto-expands a directory's overflow when the selected thread is hidden in it", () => {
+  it("opens a bounded owner range at an off-page selected thread", () => {
     const cappedThreads = Array.from({ length: 12 }, (_, index) => ({
       ...sharedThread,
       id: `thread-cap-${index + 1}`,
@@ -4726,15 +4718,14 @@ describe("Sidebar", () => {
       />,
     );
 
-    // The selected overflow thread renders without any click, and the
-    // toggle reflects the auto-expanded state.
+    // The selected row anchors a tail page; earlier membership stays unloaded.
     expect(
       screen.getAllByRole("button", { name: /Capped thread \d+/ }),
-    ).toHaveLength(12);
+    ).toHaveLength(1);
     expect(screen.getByText("Capped thread 12")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Show less" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Show less" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not render a directory pin divider when no directory threads are pinned", () => {
@@ -4788,7 +4779,7 @@ describe("Sidebar", () => {
         inboxThreads={[sharedThread]}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey="codex:thread-1"
+        selectedItemKey="codex:thread-updated"
         threads={[sharedThread, pinnedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -5118,11 +5109,6 @@ describe("Sidebar", () => {
         directories={[
           {
             ...directories[0]!,
-            threadKeys: [
-              "codex:thread-1",
-              "codex:thread-updated",
-              "codex:thread-unpinned",
-            ],
           },
         ]}
         inboxThreads={[firstPinnedThread, secondPinnedThread, unpinnedThread]}
@@ -6249,14 +6235,15 @@ describe("Sidebar directory pinning", () => {
   function renderSidebar(
     directoriesArg: NavigationDirectorySummary[],
     overrides: {
+      threads?: NavigationThreadSummary[];
       onSetDirectoryPin?: (
-        directory: NavigationDirectorySummary,
+        directory: NavigationDirectoryView,
         pinned: boolean,
       ) => Promise<void>;
       onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
-      onRemoveDirectory?: (directory: NavigationDirectorySummary) => void;
+      onRemoveDirectory?: (directory: NavigationDirectoryView) => void;
       onOpenLaunchpad?: (
-        directory: NavigationDirectorySummary,
+        directory: NavigationDirectoryView,
       ) => Promise<void>;
       onCreateThreadOnFederationTarget?: (
         instanceId: string,
@@ -6273,7 +6260,7 @@ describe("Sidebar directory pinning", () => {
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
-        threads={[]}
+        threads={overrides.threads ?? []}
         newThreadFederationTargets={overrides.newThreadFederationTargets}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -6399,7 +6386,7 @@ describe("Sidebar directory pinning", () => {
     });
     await clickElement(removeItem);
 
-    expect(onRemoveDirectory).toHaveBeenCalledWith(projectBDirectory);
+    expect(onRemoveDirectory).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }));
     expect(
       screen.queryByRole("menuitem", { name: "Remove Directory" }),
     ).not.toBeInTheDocument();
@@ -6414,6 +6401,7 @@ describe("Sidebar directory pinning", () => {
     renderSidebar([populated], {
       onSetDirectoryPin: async () => undefined,
       onRemoveDirectory: vi.fn(),
+      threads: [{ ...sharedThread, linkedDirectories: [] }],
     });
 
     fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
@@ -6490,7 +6478,7 @@ describe("Sidebar directory pinning", () => {
       { dataTransfer: createDirectoryDataTransfer(projectBDirectory.key) },
     );
 
-    expect(onSetDirectoryPin).toHaveBeenCalledWith(projectBDirectory, true);
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
     expect(onReorderDirectoryPins).not.toHaveBeenCalled();
   });
 
@@ -6642,7 +6630,7 @@ describe("Sidebar directory pinning", () => {
     expect(pinItem).toBeInTheDocument();
     await clickElement(pinItem);
 
-    expect(onSetDirectoryPin).toHaveBeenCalledWith(projectADirectory, true);
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectADirectory.key }), true);
     // Menu dismisses on action — the menuitem should no longer be
     // mounted after the click.
     expect(
@@ -6670,7 +6658,7 @@ describe("Sidebar directory pinning", () => {
     });
     await clickElement(unpinItem);
 
-    expect(onSetDirectoryPin).toHaveBeenCalledWith(pinned, false);
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: pinned.key }), false);
   });
 
   it("opens the context menu for workspace rows (workspaces are pinnable)", async () => {
@@ -6689,7 +6677,7 @@ describe("Sidebar directory pinning", () => {
     });
     await clickElement(pinItem);
 
-    expect(onSetDirectoryPin).toHaveBeenCalledWith(workspaceDirectory, true);
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: workspaceDirectory.key }), true);
   });
 
   it("never opens the context menu for the unlinked pseudo-directory bucket", () => {

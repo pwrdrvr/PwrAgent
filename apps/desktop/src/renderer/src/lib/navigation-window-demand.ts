@@ -15,8 +15,10 @@ export function buildNavigationWindowDemand(params: {
   unpinnedExpandedByKey: Readonly<Record<string, boolean>>;
   selectedDirectoryKeys?: readonly string[];
   selectedRef?: NavigationIdentity;
+  selectedRootRef?: NavigationIdentity;
+  selectedContextReady?: boolean;
   disclosedParents?: readonly NavigationIdentity[];
-  /** Explicitly admitted draft identities, already grouped to this owner; no draft text. */
+  /** Viewer-owned draft identities only. Grouped and bounded per owner below; no draft text. */
   draftRefs?: readonly NavigationIdentity[];
 }): Map<string, NavigationQueryRequest> {
   const demand = new Map<string, NavigationQueryRequest>();
@@ -27,7 +29,8 @@ export function buildNavigationWindowDemand(params: {
   // Descriptors provide authoritative counts for collapsed directories and all lenses.
   demand.set("directory-index", request({ kind: "directory-index" }, 100));
   if (params.selectedRef) {
-    demand.set("selected-context", request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100));
+    demand.set("selected-context", { ...request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100),
+      federationTarget: params.selectedRef.ownerInstanceId ? { scope: "remote", instanceId: params.selectedRef.ownerInstanceId } : params.target });
   }
   const loadedDirectoryKeys = params.indexedDirectoryKeys ?? new Set(params.directories.map((directory) => directory.key));
   const missingSelectedDirectories = (params.selectedDirectoryKeys ?? []).filter((key) => !loadedDirectoryKeys.has(key));
@@ -39,17 +42,38 @@ export function buildNavigationWindowDemand(params: {
     for (const directory of orderedDirectories) {
       const expanded = params.expandedByKey[directory.key] ?? params.selectedDirectoryKeys?.includes(directory.key) ?? false;
       if (!expanded) continue;
+      const selectedDirectory = params.selectedDirectoryKeys?.includes(directory.key);
+      if (selectedDirectory && params.selectedRef && params.selectedContextReady === false) continue;
       const showUnpinned = params.unpinnedExpandedByKey[directory.key] ?? !directory.directoryThreadsCollapsed;
-      demand.set(`directory:${directory.key}`, request({ kind: "directory", directoryKey: directory.key,
-        roots: showUnpinned ? "all" : "pinned" }));
+      demand.set(`directory:${directory.key}`, { ...request({ kind: "directory", directoryKey: directory.key,
+        roots: showUnpinned ? "all" : "pinned" }),
+        ...(selectedDirectory && params.selectedRootRef ? { anchor: { kind: "thread" as const, ref: params.selectedRootRef } } : {}),
+      });
     }
-    for (const parent of params.disclosedParents ?? []) {
-      demand.set(`children:${navigationIdentityKey(parent)}`, request({ kind: "children", parent }));
-    }
+
   } else if (params.browseMode === "drafts") {
-    if (params.draftRefs?.length) demand.set("drafts", request({ kind: "exact", identities: [...params.draftRefs], includeAncestry: true }));
+    const owners = new Map<string, NavigationIdentity[]>();
+    for (const ref of params.draftRefs ?? []) {
+      const owner = ref.ownerInstanceId ?? "";
+      const refs = owners.get(owner) ?? [];
+      refs.push(ref);
+      owners.set(owner, refs);
+    }
+    for (const [owner, refs] of owners) {
+      for (let offset = 0; offset < refs.length; offset += 100) {
+        demand.set(`drafts:${JSON.stringify(owner)}:${offset}`, {
+          ...request({ kind: "exact", identities: refs.slice(offset, offset + 100), includeAncestry: true }),
+          federationTarget: owner ? { scope: "remote", instanceId: owner } : undefined,
+        });
+      }
+    }
   } else {
     demand.set("lens", request({ kind: "lens", lens: params.browseMode }));
+  }
+  for (const parent of params.disclosedParents ?? []) {
+    demand.set(`children:${navigationIdentityKey(parent)}`, { ...request({ kind: "children", parent }),
+      federationTarget: parent.ownerInstanceId ? { scope: "remote", instanceId: parent.ownerInstanceId } : params.target,
+    });
   }
   return demand;
 }
