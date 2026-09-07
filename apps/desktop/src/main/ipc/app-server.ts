@@ -2921,6 +2921,10 @@ class DesktopAppServerService {
     await this.syncThreadPrAutoDispatchCandidates(params);
   }
 
+  readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
+    return this.attachedPrsByThreadKey.get(buildThreadIdentityKey(backend, threadId))?.primaryRepoKey;
+  }
+
   private applyPrimaryGitRepositories(
     threads: NavigationSnapshot["threads"],
   ): NavigationSnapshot["threads"] {
@@ -8048,6 +8052,9 @@ export function registerAppServerIpcHandlers(): void {
     async (prs) =>
       await appServerService.canonicalizeStoredPullRequests(prs),
   );
+  getDesktopBackendRegistry().setThreadPrimaryGitRepositoryReader((backend, threadId) =>
+    appServerService.readPrimaryGitRepository(backend, threadId)
+  );
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
   );
@@ -9102,6 +9109,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
+  registry?.setThreadPrimaryGitRepositoryReader(undefined);
   registry?.setLocalPullRequestAuthorityResolver(undefined);
   registry?.setThreadPullRequestWatchToolHandler(undefined);
   registry?.setDirectoryGitStatusWriter(undefined);

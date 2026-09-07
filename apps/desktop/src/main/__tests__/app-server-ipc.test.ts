@@ -1119,6 +1119,7 @@ vi.mock("../app-server/backend-registry", () => {
     publishLocalEvent,
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
+    setThreadPrimaryGitRepositoryReader: vi.fn(),
     setLocalPullRequestAuthorityResolver,
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,

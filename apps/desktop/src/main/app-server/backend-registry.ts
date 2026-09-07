@@ -9825,6 +9825,14 @@ export class DesktopBackendRegistry {
     this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
   }
 
+  private threadPrimaryGitRepositoryReader?: (backend: AppServerBackendKind, threadId: string) => string | undefined;
+
+  setThreadPrimaryGitRepositoryReader(
+    reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
+  ): void {
+    this.threadPrimaryGitRepositoryReader = reader;
+  }
+
   setLocalPullRequestAuthorityResolver(
     resolver: LocalPullRequestAuthorityResolver | null | undefined,
   ): void {
@@ -37066,6 +37074,10 @@ export class DesktopBackendRegistry {
   async canonicalizeNavigationThreadPullRequests(
     threads: NavigationSnapshot["threads"],
   ): Promise<NavigationSnapshot["threads"]> {
+    const primaryRepository = this.threadPrimaryGitRepositoryReader;
+    if (primaryRepository) threads = threads.map((thread) => ({
+      ...thread, primaryGitRepository: primaryRepository(thread.source, thread.id),
+    }));
     const canonicalizer = this.threadPullRequestCanonicalizer;
     if (!canonicalizer) {
       return threads;

@@ -51167,6 +51167,14 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     expect(
       await registry.canonicalizeNavigationThreadPullRequests(threads),
     ).toBe(threads);
+    registry.setThreadPrimaryGitRepositoryReader((_backend, threadId) =>
+      threadId === "thread-2" ? "github.com/pwrdrvr/pwragent" : undefined,
+    );
+    const withPrimary = await registry.canonicalizeNavigationThreadPullRequests(threads);
+    expect(withPrimary[1]?.primaryGitRepository).toBe("github.com/pwrdrvr/pwragent");
+    expect(withPrimary[0]?.primaryGitRepository).toBeUndefined();
+    registry.setThreadPrimaryGitRepositoryReader(undefined);
+
   });
 
   /**
