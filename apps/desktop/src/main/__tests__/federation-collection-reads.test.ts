@@ -132,7 +132,7 @@ describe("bounded Federation collection reads", () => {
       ...snapshot(),
       threads: [{ id: "not-requested", source: "codex" as const, title: "Not requested", titleSource: "derived" as const,
         linkedDirectories: [], inbox: { inInbox: false }, turns: huge }],
-      directories: [{ key: "project", kind: "directory", label: "Project", threadKeys: [huge], needsAttentionCount: 0, launchpad: { prompt: huge }, gitStatus: { error: huge } }],
+      directories: [{ key: "project", kind: "directory", label: "Project", threadKeys: [huge], needsAttentionCount: 0, launchpad: { backend: "codex", executionMode: "default", directoryKey: "project", directoryKind: "directory", directoryLabel: "Project", prompt: huge }, gitStatus: { statusUnavailableReason: huge } }],
     };
     const backend = { getNavigationSnapshot: vi.fn(),
       getProjectPage: vi.fn(async (query: FederationProjectPageRequest) => projectFederationProjectPage(value as NavigationSnapshot, query)),
