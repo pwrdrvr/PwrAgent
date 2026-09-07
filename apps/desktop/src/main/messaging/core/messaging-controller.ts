@@ -1115,9 +1115,9 @@ export class MessagingController {
   private disposed = false;
   private readonly browseRenderGenerations = new Map<string, symbol>();
   private readonly browseQueryPool = new MessagingBrowseQueryPool((request) => {
-    const read = this.options.backend.getNavigationQueryPage;
-    if (!read) throw new Error("Upgrade this instance to support bounded messaging navigation.");
-    return read.call(this.options.backend, request);
+    const backend = this.options.backend;
+    if (!backend.getNavigationQueryPage) throw new Error("Upgrade this instance to support bounded messaging navigation.");
+    return backend.getNavigationQueryPage(request);
   }, () => this.now());
   private readonly progressiveBrowseByConversation = new Map<string, symbol>();
   private readonly deliveryBudget?: MessagingDeliveryBudget;

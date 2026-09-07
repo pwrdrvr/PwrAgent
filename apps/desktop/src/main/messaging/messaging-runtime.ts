@@ -2324,10 +2324,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return undefined;
     }
     try {
-      const read = this.options.backendBridge.getNavigationSelectedDetail;
-      if (!read) return undefined;
+      const backendBridge = this.options.backendBridge;
+      if (!backendBridge.getNavigationSelectedDetail) return undefined;
       const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
-      const detail = await read.call(this.options.backendBridge, {
+      const detail = await backendBridge.getNavigationSelectedDetail({
         protocol: 2, federationTarget: event.federationTarget,
         ref: { backend: event.backend, threadId: event.threadId, ...(ownerInstanceId ? { ownerInstanceId } : {}) },
       });
