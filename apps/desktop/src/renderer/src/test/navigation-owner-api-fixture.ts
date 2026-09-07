@@ -75,8 +75,9 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
     }),
     getNavigationLaunchpadConfig: api.getNavigationLaunchpadConfig ?? (async (request) => {
       const value = await read();
-      const draft = value.directories.find((directory) => directory.key === request.directoryKey)?.launchpad;
-      return { protocol: 2, revision: "fixture-config", directoryKey: request.directoryKey, defaults: value.launchpadDefaults,
+      const directory = value.directories.find((directory) => directory.key === request.directoryKey);
+      const draft = directory?.launchpad;
+      return { protocol: 2, revision: "fixture-config", directoryKey: request.directoryKey, defaults: value.launchpadDefaults, directoryGitStatus: directory?.gitStatus,
         launchpad: draft ? { backend: draft.backend, executionMode: draft.executionMode, workMode: draft.workMode,
           directoryKey: draft.directoryKey, directoryKind: draft.directoryKind, directoryLabel: draft.directoryLabel,
           directoryPath: draft.directoryPath, model: draft.model, reasoningEffort: draft.reasoningEffort,
@@ -88,6 +89,7 @@ export function navigationOwnerApiFixture(source: NavigationOwnerFixtureApi, onL
           acpRuntime: draft.acpRuntime, providerSettings: draft.providerSettings, agent: draft.agent,
           mcpConnectionIds: draft.mcpConnectionIds, messagingToolUpdateMode: draft.messagingToolUpdateMode,
           prAutoDispatchEnabled: draft.prAutoDispatchEnabled, tokenMiserEnabled: draft.tokenMiserEnabled,
+          codexEnvironmentOptions: draft.codexEnvironmentOptions,
           codexEnvironmentId: draft.codexEnvironmentId, codexEnvironmentExecutionTarget: draft.codexEnvironmentExecutionTarget,
           codexEnvironmentActionId: draft.codexEnvironmentActionId,
           createdAt: draft.createdAt, updatedAt: draft.updatedAt } : undefined };

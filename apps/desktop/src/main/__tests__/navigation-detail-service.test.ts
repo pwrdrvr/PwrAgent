@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   reconcileNavigationSnapshot: vi.fn(),
   getLaunchpadDefaults: vi.fn(),
   getDirectoryLaunchpad: vi.fn(),
+  listCodexEnvironmentOptions: vi.fn(),
 }));
 
 vi.mock("../app-server/desktop-overlay-store", () => ({
@@ -19,6 +20,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getDirectoryLaunchpad: mocks.getDirectoryLaunchpad,
   }),
 }));
+
+vi.mock("../app-server/codex-environment-config", () => ({ listCodexEnvironmentOptions: mocks.listCodexEnvironmentOptions }));
 
 vi.mock("../messaging/messaging-bindings-snapshot", () => ({
   buildMessagingBindingsByThreadKey: vi.fn(async () => new Map()),
@@ -42,6 +45,7 @@ describe("NavigationDetailService", () => {
     mocks.reconcileNavigationSnapshot.mockReset();
     mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
     mocks.getDirectoryLaunchpad.mockReset().mockResolvedValue(undefined);
+    mocks.listCodexEnvironmentOptions.mockReset().mockResolvedValue([]);
   });
 
   it("reads defaults and only the selected launchpad without enumerating navigation", async () => {
@@ -60,6 +64,22 @@ describe("NavigationDetailService", () => {
     expect(unchanged.defaults).toBeUndefined();
     expect(unchanged.launchpad).toBeUndefined();
     expect(Buffer.byteLength(JSON.stringify(unchanged))).toBeLessThan(1024);
+  });
+
+  it("loads environment and branch choices only for the selected owner directory", async () => {
+    const readSelectedWorkspaceGitStatus = vi.fn(async () => ({ currentBranch: "feature", branches: ["main", "feature"] }));
+    const service = new NavigationDetailService({ readSelectedWorkspaceGitStatus } as unknown as DesktopBackendRegistry);
+    mocks.getDirectoryLaunchpad.mockResolvedValue({ directoryKey: "chosen", directoryPath: "/owner/repo", prompt: "private draft" });
+    mocks.listCodexEnvironmentOptions.mockResolvedValue([{ id: "env", name: "Owner environment", actions: [] }]);
+    const response = await service.readLaunchpadConfig({ protocol: 2, directoryKey: "chosen" });
+    expect(response.launchpad?.codexEnvironmentOptions).toEqual([{ id: "env", name: "Owner environment", actions: [] }]);
+    expect(response.directoryGitStatus?.branches).toEqual(["main", "feature"]);
+    expect(mocks.listCodexEnvironmentOptions).toHaveBeenCalledExactlyOnceWith("/owner/repo");
+    expect(JSON.stringify(response)).not.toContain("private draft");
+    mocks.getDirectoryLaunchpad.mockResolvedValue({ directoryKey: "viewer", directoryPath: "/same/path", federationTarget: { scope: "remote", instanceId: "peer" } });
+    await service.readLaunchpadConfig({ protocol: 2, directoryKey: "viewer" });
+    expect(mocks.listCodexEnvironmentOptions).toHaveBeenCalledTimes(1);
+    expect(readSelectedWorkspaceGitStatus).toHaveBeenCalledTimes(1);
   });
 
   it("rejects oversized configuration without truncating action metadata", async () => {
