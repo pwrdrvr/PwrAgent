@@ -1,3 +1,4 @@
+import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13551,9 +13552,9 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
-    });
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 2, pageSize: 5, query: { kind: "star-map", filters: { pinned: "exclude" } },
+      }));
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Monitor: Recent threads"),
@@ -13603,14 +13604,30 @@ describe("MessagingController", () => {
     });
   });
 
+  it("bounds monitor work to the requested pin and recent sections for a large owner", async () => {
+    const navigation = buildNavigationSnapshot();
+    const base = navigation.threads[0]!;
+    navigation.threads = Array.from({ length: 1000 }, (_, index) => ({ ...base, id: `thread-${index}`,
+      updatedAt: index, ...(index < 500 ? { pinnedRank: `pin-${String(index).padStart(4, "0")}` } : {}) }));
+    const harness = await createHarness({ navigation });
+    harness.getNavigationSnapshot.mockImplementation(() => { throw new Error("Legacy navigation is forbidden"); });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledTimes(2);
+    expect(harness.getNavigationQueryPage.mock.calls.every(([request]) => request.pageSize === 5)).toBe(true);
+    expect(harness.readThreadStatus).toHaveBeenCalledTimes(10);
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "status" });
+    harness.controller.dispose();
+  });
+
   it("starts Monitor in an unbound conversation", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
 
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
-    });
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 2, pageSize: 5, query: { kind: "star-map", filters: { pinned: "exclude" } },
+      }));
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Monitor: Recent threads"),
@@ -13741,13 +13758,13 @@ describe("MessagingController", () => {
     const binding = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/monitor").channel,
     );
-    harness.getNavigationSnapshot.mockClear();
+    harness.getNavigationQueryPage.mockClear();
     harness.readThreadStatus.mockResolvedValue("active");
     harness.delivered.splice(0);
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/MONITOR"));
 
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledTimes(2);
     expect(harness.readThreadStatus).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -14154,12 +14171,12 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     try {
       await bindThread(harness);
-      harness.getNavigationSnapshot.mockClear();
+      harness.getNavigationQueryPage.mockClear();
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
 
-      expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(harness.getNavigationQueryPage).toHaveBeenCalledTimes(4);
       expect(vi.getTimerCount()).toBe(1);
     } finally {
       harness.controller.dispose();
@@ -14178,7 +14195,7 @@ describe("MessagingController", () => {
     const harness = await createHarness({ logger });
     try {
       await bindThread(harness);
-      harness.getNavigationSnapshot.mockRejectedValueOnce(
+      harness.getNavigationQueryPage.mockRejectedValueOnce(
         new Error("navigation unavailable"),
       );
       harness.delivered.splice(0);
@@ -14274,7 +14291,7 @@ describe("MessagingController", () => {
     try {
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
-      harness.getNavigationSnapshot.mockClear();
+      harness.getNavigationQueryPage.mockClear();
       harness.delivered.splice(0);
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor stop"));
@@ -14325,14 +14342,14 @@ describe("MessagingController", () => {
         },
         updatedAt: 1000,
       });
-      harness.getNavigationSnapshot.mockClear();
+      harness.getNavigationQueryPage.mockClear();
 
       await harness.controller.startMonitoringForEnabledBindings();
 
       expect(harness.listBackends).toHaveBeenCalled();
-      expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
-        backend: "all",
-      });
+      expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 2, pageSize: 5, query: { kind: "star-map", filters: { pinned: "exclude" } },
+      }));
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",
         text: expect.stringContaining("Monitor: Recent threads"),
@@ -14360,13 +14377,13 @@ describe("MessagingController", () => {
           updatedAt: 1000,
         },
       });
-      harness.getNavigationSnapshot.mockClear();
+      harness.getNavigationQueryPage.mockClear();
 
       await harness.controller.startMonitoringForEnabledBindings();
 
-      expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
-        backend: "all",
-      });
+      expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 2, pageSize: 5, query: { kind: "star-map", filters: { pinned: "exclude" } },
+      }));
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",
         text: expect.stringContaining("Monitor: Recent threads"),
@@ -24852,6 +24869,7 @@ async function createHarness<
   ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   getNavigationSelectedDetail: ReturnType<typeof vi.fn>;
+  getNavigationQueryPage: ReturnType<typeof vi.fn>;
   getNavigationLaunchpadConfig: ReturnType<typeof vi.fn>;
   getThreadAdmissionState: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
@@ -24958,6 +24976,15 @@ async function createHarness<
       return { protocol: 2, revision: "fixture", defaults: population.launchpadDefaults };
     }),
   );
+  const navigationQueryStore = new NavigationQueryStore();
+  const getNavigationQueryPage = vi.fn<NonNullable<MessagingBackendBridge["getNavigationQueryPage"]>>(async (request) => {
+    const population = options?.getNavigationSnapshot
+      ? await options.getNavigationSnapshot({ backend: request.backend, federationTarget: request.federationTarget })
+      : options?.navigation ?? buildNavigationSnapshot();
+    return navigationQueryStore.readPage({ request, scopeKey: "messaging-test", loadIndex: async () => ({
+      threads: population.threads, directories: population.directories,
+    }) });
+  });
   const getThreadAdmissionState = vi.fn(
     options?.getThreadAdmissionState
       ?? (async (request) => {
@@ -25335,6 +25362,7 @@ async function createHarness<
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     getNavigationSelectedDetail,
+    getNavigationQueryPage,
     getNavigationLaunchpadConfig,
     getThreadAdmissionState,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
@@ -25419,6 +25447,7 @@ async function createHarness<
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     getNavigationSelectedDetail,
+    getNavigationQueryPage,
     getNavigationLaunchpadConfig,
     getThreadAdmissionState,
     handoffThreadWorkspace,
