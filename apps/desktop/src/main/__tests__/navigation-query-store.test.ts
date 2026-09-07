@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { navigationRequestForOwner, stampRemoteNavigationQueryPage } from "../federation/federation-navigation-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   NavigationQueryRequest,
@@ -12,6 +13,7 @@ import {
 import {
   NavigationQueryError,
   NavigationQueryStore,
+  fingerprintNavigationMaterialization,
 } from "../app-server/navigation-query-store";
 
 function thread(id: string, title = `Thread ${id}`): NavigationThreadSummary {
@@ -692,4 +694,36 @@ it("acknowledges a retained partial range below 1 KiB and renews its continuatio
   expect((await read({ retainedRange })).rangeUnchanged).toBeUndefined();
   expect((await read({ retainedRange: { ...retainedRange, ownerEpoch: "previous-process" } })).rangeUnchanged).toBeUndefined();
   await expect(read({ retainedRange: { ...retainedRange, count: -1 } })).rejects.toThrow("Invalid retained navigation range");
+});
+
+it("streams the same UTF-8 revision and backing count as canonical materialization JSON", () => {
+  const value = { queryKey: "query", coverage: { state: "complete" as const },
+    counts: { total: 1, active: 0, unread: 0, review: 0 }, pinnedRootCount: 0, unpinnedRootCount: 1, launchpadPresent: false,
+    entries: [], directories: [{ key: "directory:日本語", kind: "directory" as const,
+      label: "A \"quoted\" project 🚀", counts: { total: 1, active: 0, unread: 0, review: 0 }, pinnedRootCount: 0, unpinnedRootCount: 1, launchpadPresent: false }],
+    collectionSize: undefined };
+  const canonical = JSON.stringify(value);
+  expect(fingerprintNavigationMaterialization(value)).toEqual({
+    revision: createHash("sha256").update(canonical).digest("base64url"),
+    retainedBytes: Buffer.byteLength(canonical, "utf8"),
+  });
+});
+
+it("never serializes a whole retained collection while fingerprinting its generation", () => {
+  const value = { queryKey: "large-query", coverage: { state: "complete" as const },
+    counts: { total: 205, active: 0, unread: 0, review: 0 }, entries: [],
+    directories: Array.from({ length: 205 }, (_, index) => ({ key: `directory:${index}`,
+      kind: "directory" as const, label: "Label ".repeat(100),
+      counts: { total: 1, active: 0, unread: 0, review: 0 }, pinnedRootCount: 0, unpinnedRootCount: 1, launchpadPresent: false })) };
+  const stringify = vi.spyOn(JSON, "stringify");
+  let serializedCollection: boolean;
+  try {
+    fingerprintNavigationMaterialization(value);
+    serializedCollection = stringify.mock.calls.some(([input]) => {
+      if (Array.isArray(input)) return input.length > 100;
+      return input && typeof input === "object"
+        && Object.values(input).some((field) => Array.isArray(field) && field.length > 100);
+    });
+  } finally { stringify.mockRestore(); }
+  expect(serializedCollection).toBe(false);
 });

@@ -196,10 +196,38 @@ function validateRequest(request: NavigationQueryRequest): void {
   }
 }
 
-function completeRevision(materialization: NavigationQueryMaterialization): string {
-  return createHash("sha256")
-    .update(JSON.stringify(materialization))
-    .digest("base64url");
+/** Hash the canonical JSON stream without allocating a whole-collection string. */
+export function fingerprintNavigationMaterialization(materialization: NavigationQueryMaterialization): {
+  revision: string; retainedBytes: number;
+} {
+  const hash = createHash("sha256");
+  let retainedBytes = 0;
+  const append = (value: string) => {
+    retainedBytes += Buffer.byteLength(value, "utf8");
+    if (retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
+      throw new NavigationQueryError("navigation_busy", "Navigation query exceeds the process retained-memory budget.");
+    }
+    hash.update(value);
+  };
+  append("{");
+  let first = true;
+  for (const [key, value] of Object.entries(materialization)) {
+    if (value === undefined) continue;
+    if (!first) append(",");
+    first = false;
+    append(JSON.stringify(key));
+    append(":");
+    if (Array.isArray(value)) {
+      append("[");
+      for (let index = 0; index < value.length; index += 1) {
+        if (index) append(",");
+        append(JSON.stringify(value[index]) ?? "null");
+      }
+      append("]");
+    } else append(JSON.stringify(value));
+  }
+  append("}");
+  return { revision: hash.digest("base64url"), retainedBytes };
 }
 
 function pageBase(params: {
@@ -305,7 +333,7 @@ export class NavigationQueryStore {
         request: params.request,
         attentionOrder,
       });
-      const revision = completeRevision(materialization);
+      const { revision, retainedBytes } = fingerprintNavigationMaterialization(materialization);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);
       const current = currentId ? this.generations.get(currentId) : undefined;
@@ -318,7 +346,7 @@ export class NavigationQueryStore {
           generation: randomUUID(),
           lastAccessedAt: now,
           materialization,
-          retainedBytes: serializedBytes(materialization),
+          retainedBytes,
           scopeKey: params.scopeKey,
           attentionViewId: params.request.attentionView?.id,
         };

@@ -341,3 +341,20 @@ the RPC, and non-cooperative work retains its physical slot until settlement.
 The original ten-second transaction deadline crosses IPC, owner RPC and page
 continuations. The renderer also rejects a hung transport at that deadline.
 No additional SQLite writes are introduced.
+
+### Owner generation allocation measurement
+
+Generation fingerprints stream canonical JSON one record at a time. They retain
+the same SHA-256 revision and serialized-equivalent backing count without a
+whole-collection JSON string. A regression rejects serializing a collection while
+fingerprinting it.
+
+An isolated Node 24 probe on 2026-09-07 traversed 10,000 contrived threads in 100
+pages. The largest response and largest single serialization were 53,199 bytes.
+After GC, the retained heap increase was 7,519,176 bytes; heap sampled around
+serialization peaked 28,423,584 bytes above the seeded baseline. Process peak
+RSS was 105,968 KiB. Before streaming, the same probe made a 5,254,635-byte
+serialization, sampled a 37,321,528-byte heap increase and reached 133,776 KiB RSS.
+These measurements are distinct from enforced serialized-backing admission
+budgets. Sampling does not establish a bound on all V8 allocations or all
+simultaneously mounted application resources.
