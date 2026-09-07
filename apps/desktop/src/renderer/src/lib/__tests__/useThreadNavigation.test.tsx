@@ -185,7 +185,7 @@ describe("useThreadNavigation", () => {
     return { promise, resolve, reject };
   }
 
-  it("defers navigation deltas during a drag and preserves the dropped pin rank", async () => {
+  it("rejects a pre-move navigation page after the owner accepts a dropped pin rank", async () => {
     const buildSnapshot = (title: string): NavigationSnapshot => ({
       backend: "all",
       fetchedAt: 1,
@@ -249,7 +249,7 @@ describe("useThreadNavigation", () => {
 
     beginNativeDragInteraction();
     await act(async () => {
-      await result.current.reorderThreadPins(["codex:thread-1"]);
+      await result.current.reorderThreadPins([], { key: "codex:thread-1", direction: "up" });
     });
     expect(result.current.threads[0]?.pinnedRank).toBe("1024");
 
@@ -274,7 +274,7 @@ describe("useThreadNavigation", () => {
       await refresh;
     });
     expect(result.current.threads[0]).toMatchObject({
-      title: "Updated during drag",
+      title: "Initial",
       pinnedRank: "1024",
     });
     expect(readPopulation).not.toHaveBeenCalled();
