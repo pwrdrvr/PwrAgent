@@ -163,18 +163,20 @@ export class NavigationDetailService {
       partial: true,
       queuedExecutionModesByThreadKey:
         this.registry.getQueuedExecutionModesSnapshot(),
-      queuedTurnsByThreadKey: this.registry.getQueuedTurnsSnapshot(),
       threads: [summary],
       workspaceRoots: resolveScratchProjectsRoots(),
     });
     const projected = snapshot.threads.find(
       (thread) => buildThreadIdentityKey(thread.source, thread.id) === threadKey,
     );
-    const thread = projected
-      ? (await this.registry.canonicalizeNavigationThreadPullRequests([
-          projected,
-        ]))[0]
-      : undefined;
+    const canonical = projected
+      ? await this.registry.canonicalizeNavigationThreadPullRequests([projected]) : [];
+    const hydrated = (await this.registry.hydrateThreadGitWorkingStates(canonical, {
+      probeMissing: request.probeWorkingStates === true,
+    }))[0];
+    // Queue payloads have an independent complete FIFO resource and readiness.
+    // A selected configuration read must not enumerate or duplicate that FIFO.
+    const thread = hydrated ? (({ queuedTurns: _queue, ...configuration }) => configuration)(hydrated) : undefined;
     if (!thread) {
       return {
         protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,

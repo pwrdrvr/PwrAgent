@@ -27,6 +27,12 @@ import type {
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
+  NavigationQueryRequest,
+  NavigationQueryPage,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
   NavigationSnapshot,
   NavigationThreadSummary,
   SetAcpSessionRuntimeOptionRequest,
@@ -157,6 +163,9 @@ export type MessagingAdapter = {
 };
 
 export type MessagingBackendBridge = {
+  getNavigationQueryPage?(request: NavigationQueryRequest): Promise<NavigationQueryPage>;
+  getNavigationSelectedDetail?(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse>;
+  getNavigationLaunchpadConfig?(request: NavigationLaunchpadConfigRequest): Promise<NavigationLaunchpadConfigResponse>;
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
     options?: { onProgress?: (snapshot: NavigationSnapshot) => Promise<void> },

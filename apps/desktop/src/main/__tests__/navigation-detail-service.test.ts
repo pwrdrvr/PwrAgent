@@ -71,6 +71,7 @@ describe("NavigationDetailService", () => {
 
   it("loads authoritative selected detail independently of a row page", async () => {
     const selected = thread("selected");
+    selected.queuedTurns = [{ queueEntryId: "independent", origin: "manual", displayText: "Private FIFO", createdAt: 1, position: 0 }];
     selected.agent = {
       name: "Operator",
       instructions: "exact detail only",
@@ -92,7 +93,8 @@ describe("NavigationDetailService", () => {
       getCachedThreadSummary: vi.fn(() => undefined),
       resolveThread: vi.fn(async () => thread("selected")),
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => { throw new Error("FIFO must remain independent"); }),
+      hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
       canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
@@ -109,6 +111,10 @@ describe("NavigationDetailService", () => {
         agent: { instructions: "exact detail only" },
       },
     });
+    expect(first.thread).not.toHaveProperty("queuedTurns");
+    expect(registry.getQueuedTurnsSnapshot).not.toHaveBeenCalled();
+    await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" }, probeWorkingStates: true });
+    expect(registry.hydrateThreadGitWorkingStates).toHaveBeenLastCalledWith(expect.any(Array), { probeMissing: true });
     const unchanged = await service.readSelectedDetail({
       protocol: 2,
       ref: { backend: "codex", threadId: "selected" },

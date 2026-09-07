@@ -1,4 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { NavigationDetailService } from "../app-server/navigation-detail-service";
+import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
+import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { compactNavigationSearchResult } from "../federation/navigation-search-result";
 import type {
   AgentEvent,
@@ -39,6 +43,12 @@ import type {
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
+  NavigationQueryRequest,
+  NavigationQueryPage,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
   NavigationSnapshot,
   NavigationThreadSummary,
   SetAcpSessionRuntimeOptionRequest,
@@ -110,6 +120,10 @@ export type DesktopMessagingFederationBridge = {
     subscriptions: readonly FederationEventSubscription[],
   ): FederationEventSubscription[];
   remoteBackend(target: FederationRemoteTarget): FederationBackendOperations;
+  remoteNavigationQueryPage?(target: FederationRemoteTarget, request: NavigationQueryRequest,
+    rpcOptions?: { deadlineAt: number; signal: AbortSignal }): Promise<NavigationQueryPage>;
+  remoteNavigationSelectedDetail?(target: FederationRemoteTarget, request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse>;
+  remoteNavigationLaunchpadConfig?(target: FederationRemoteTarget, request: NavigationLaunchpadConfigRequest): Promise<NavigationLaunchpadConfigResponse>;
   remoteNavigationSnapshot(
     target: FederationRemoteTarget,
     request: GetNavigationSnapshotRequest,
@@ -268,6 +282,43 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       ...(thread ? { thread } : {}),
       ...(thread?.threadStatus ? { threadStatus: thread.threadStatus } : {}),
     };
+  }
+
+  async getNavigationQueryPage(request: NavigationQueryRequest): Promise<NavigationQueryPage> {
+    if (request.inventory === "viewer") throw new Error("Messaging navigation requires owner inventory.");
+    const consumerId = `messaging-query:${randomUUID()}`;
+    const pool = getDesktopNavigationQueryPool();
+    try {
+      return await pool.read({ consumerId, request, load: async (options) => {
+        const target = request.federationTarget;
+        if (target?.scope === "remote") {
+          if (!this.federation?.remoteNavigationQueryPage) throw new Error("Upgrade the owning instance to navigation query protocol 2.");
+          return this.federation.remoteNavigationQueryPage(target, request, options);
+        }
+        options.signal.throwIfAborted();
+        return getDesktopNavigationQueryStore().readPage({ request, scopeKey: "renderer-local",
+          loadIndex: () => loadLocalNavigationQueryIndex({ backend: request.backend,
+            callerReason: "messaging-bounded-navigation", registry: this.registry }) });
+      } });
+    } finally { pool.release(consumerId); }
+  }
+
+  async getNavigationSelectedDetail(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> {
+    const target = request.federationTarget ?? (request.ref.ownerInstanceId ? { scope: "remote" as const, instanceId: request.ref.ownerInstanceId } : undefined);
+    if (target?.scope === "remote") {
+      if (!this.federation?.remoteNavigationSelectedDetail) throw new Error("Upgrade the owning instance to navigation query protocol 2.");
+      return this.federation.remoteNavigationSelectedDetail(target, request);
+    }
+    return new NavigationDetailService(this.registry).readSelectedDetail(request);
+  }
+
+  async getNavigationLaunchpadConfig(request: NavigationLaunchpadConfigRequest): Promise<NavigationLaunchpadConfigResponse> {
+    const target = request.federationTarget;
+    if (target?.scope === "remote") {
+      if (!this.federation?.remoteNavigationLaunchpadConfig) throw new Error("Upgrade the owning instance to navigation query protocol 2.");
+      return this.federation.remoteNavigationLaunchpadConfig(target, request);
+    }
+    return new NavigationDetailService(this.registry).readLaunchpadConfig(request);
   }
 
   async getNavigationSnapshot(

@@ -1790,6 +1790,8 @@ export type NavigationLaunchpadConfigResponse = {
 
 export type NavigationSelectedDetailRequest = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
+  /** Explicit review inspection may await this thread's working-state probe. */
+  probeWorkingStates?: boolean;
   ref: NavigationIdentity;
   federationTarget?: FederationTarget;
   knownRevision?: string;

@@ -2,7 +2,7 @@ import type {
   AppServerBackendScope,
   NavigationDirectorySummary,
 } from "@pwragent/shared";
-import { getDesktopBackendRegistry } from "./backend-registry";
+import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
@@ -15,8 +15,9 @@ import { resolveScratchProjectsRoots } from "./scratch-projects";
 export async function loadLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
+  registry?: DesktopBackendRegistry;
 }): Promise<NavigationQueryIndex> {
-  const registry = getDesktopBackendRegistry();
+  const registry = params.registry ?? getDesktopBackendRegistry();
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
   const listedThreads = await registry.listThreads({
