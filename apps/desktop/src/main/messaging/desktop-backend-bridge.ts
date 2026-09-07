@@ -167,27 +167,20 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           "Remote messaging admission requires a federation target.",
         );
       }
-      let state: MessagingThreadAdmissionState;
       if (!remote.resolveThreadAdmissionState) {
-        state = await this.readLegacyRemoteThreadAdmissionState(
-          target,
-          request,
-        );
-      } else {
-        try {
-          state = await remote.resolveThreadAdmissionState({
-            backend: request.backend,
-            threadId: request.threadId,
-          });
-        } catch (error) {
-          if (!isFederationMethodNotFoundError(error)) {
-            throw error;
-          }
-          state = await this.readLegacyRemoteThreadAdmissionState(
-            target,
-            request,
-          );
+        throw new Error("Upgrade the owning instance to support exact messaging admission before sending to this thread.");
+      }
+      let state: MessagingThreadAdmissionState;
+      try {
+        state = await remote.resolveThreadAdmissionState({ backend: request.backend, threadId: request.threadId });
+      } catch (error) {
+        if (isFederationMethodNotFoundError(error)) {
+          throw new Error("Upgrade the owning instance to support exact messaging admission before sending to this thread.");
         }
+        throw error;
+      }
+      if (state.thread && (state.thread.source !== request.backend || state.thread.id !== request.threadId)) {
+        throw new Error("Messaging admission belongs to a different thread.");
       }
       const instanceLabel = this.federation.connectedPeerTargets().find(
         (peer) => peer.target.instanceId === target.instanceId,
@@ -227,10 +220,8 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     const threadStatus = this.registry.isThreadTurnOccupied(request)
       ? "active"
       : "idle";
-    const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
-    const queuedExecutionMode =
-      this.registry.getQueuedExecutionModesSnapshot()[threadKey];
-    const queuedTurns = this.registry.getQueuedTurnsSnapshot()[threadKey];
+    const queuedExecutionMode = this.registry.getQueuedExecutionModeForThread(request);
+    const queuedTurns = this.registry.getQueuedTurnsForThread(request);
     const thread = cached || overlay
       ? buildAdmissionThreadSummary({
           overlay,
@@ -249,38 +240,6 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       ...(activeTurn ? { activeTurn } : {}),
       ...(thread ? { thread } : {}),
       threadStatus,
-    };
-  }
-
-  private async readLegacyRemoteThreadAdmissionState(
-    target: FederationRemoteTarget,
-    request: {
-      backend: AppServerBackendKind;
-      federationTarget?: FederationTarget;
-      threadId: string;
-    },
-  ): Promise<MessagingThreadAdmissionState> {
-    if (!this.federation) {
-      throw new Error("Remote messaging admission requires federation.");
-    }
-    const navigation = await this.federation.remoteNavigationSnapshot(
-      target,
-      {
-        backend: request.backend,
-        federationTarget: target,
-      },
-      {
-        kind: "threads",
-        threads: [{ backend: request.backend, threadId: request.threadId }],
-      },
-    );
-    const thread = navigation.threads.find(
-      (candidate) => candidate.source === request.backend
-        && candidate.id === request.threadId,
-    );
-    return {
-      ...(thread ? { thread } : {}),
-      ...(thread?.threadStatus ? { threadStatus: thread.threadStatus } : {}),
     };
   }
 
