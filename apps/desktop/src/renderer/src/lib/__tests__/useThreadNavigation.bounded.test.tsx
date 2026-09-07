@@ -90,3 +90,81 @@ it("renders admitted owner rows in the real Sidebar and requests more only after
   expect(f.legacy).not.toHaveBeenCalled();
   mounted.unmount();
 });
+
+it("reconciles visible pages every five minutes without a sixty-second poll, and stops while hidden", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(result.current.selectedThreadConfigurationReady).toBe(true);
+  const lensReads = () => f.read.mock.calls.filter(([request]) => request.query.kind === "lens").length;
+  expect(lensReads()).toBe(1);
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(lensReads()).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(240_001); });
+    expect(lensReads()).toBe(2);
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    act(() => { window.dispatchEvent(new Event("blur")); });
+    const hiddenReads = f.read.mock.calls.length;
+    const hiddenDetails = f.detail.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(15 * 60_000); });
+    expect(f.read).toHaveBeenCalledTimes(hiddenReads);
+    expect(f.detail).toHaveBeenCalledTimes(hiddenDetails);
+    expect(result.current.selectedThread?.id).toBe("thread-0");
+    expect(f.release).toHaveBeenCalled();
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});
+
+it("publishes the initial visible rows together with their fallback selection", async () => {
+  const f = fixture();
+  const frames: Array<{ count: number; selected?: string }> = [];
+  const { result, unmount } = renderHook(() => {
+    const navigation = useThreadNavigation(f.api);
+    frames.push({ count: navigation.threads.length, selected: navigation.selectedThread?.id });
+    return navigation;
+  });
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  expect(frames.some((frame) => frame.count > 0)).toBe(true);
+  expect(frames.filter((frame) => frame.count > 0).every((frame) => frame.selected === "thread-0")).toBe(true);
+  expect(f.read.mock.calls.filter(([request]) => request.query.kind === "lens")).toHaveLength(1);
+  unmount();
+});
+
+it("retains an exact selected identity when a refreshed page no longer contains it", async () => {
+  const f = fixture();
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  const originalRead = f.read.getMockImplementation()!;
+  f.read.mockImplementation(async (request) => {
+    const page = await originalRead(request);
+    return request.query.kind === "lens" ? { ...page, entries: [{ row: row("replacement"), placement: { kind: "root" }, orderKey: "replacement" }] } : page;
+  });
+  await act(async () => { await result.current.refresh(); });
+  expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries[0]?.row.id).toBe("replacement");
+  expect(result.current.selectedItemKey).toBe("codex:thread-0");
+  expect(result.current.selectedThread?.id).toBe("thread-0");
+  expect(f.legacy).not.toHaveBeenCalled();
+  unmount();
+});
+
+it("pauses reconciliation after thirty minutes idle and resumes from user activity", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const { unmount } = renderHook(() => useThreadNavigation(f.api));
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(30 * 60_000); });
+    const idleReads = f.read.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(f.read).toHaveBeenCalledTimes(idleReads);
+    act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(f.read.mock.calls.length).toBeGreaterThan(idleReads);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});

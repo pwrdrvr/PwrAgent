@@ -169,5 +169,20 @@ export function applyNavigationSelectedDetail(params: {
   if (detail.readiness === "ready" && detail.identity === "present" && !detail.thread) {
     throw new Error("Selected thread configuration is not ready.");
   }
+  if (detail.thread) {
+    const owner = detail.thread.federation?.ref.target.scope === "remote" ? detail.thread.federation.ref.target.instanceId : undefined;
+    if (detail.thread.federation && (owner !== state.ref.ownerInstanceId
+      || detail.thread.federation.ref.backend !== state.ref.backend || detail.thread.federation.ref.threadId !== state.ref.threadId)) {
+      throw new Error("Selected configuration belongs to another owner or thread.");
+    }
+    if (state.ref.ownerInstanceId && !detail.thread.federation) {
+      // The response identity is authoritative even if the native owner omitted
+      // viewer presentation metadata. Every downstream action must retain it.
+      const target = { scope: "remote" as const, instanceId: state.ref.ownerInstanceId };
+      const scopedDetail = { ...detail, thread: { ...detail.thread, federation: { instanceLabel: target.instanceId,
+        ref: { backend: state.ref.backend, threadId: state.ref.threadId, target } } } };
+      return { ...state, detail: scopedDetail, stale: false, readiness: detail.readiness, error: undefined };
+    }
+  }
   return { ...state, detail, stale: false, readiness: detail.readiness, error: undefined };
 }
