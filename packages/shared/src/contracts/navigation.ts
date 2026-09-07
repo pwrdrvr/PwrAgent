@@ -1637,7 +1637,17 @@ export type NavigationModelInventoryRow = {
   fastThreadCount: number;
 };
 
+export type NavigationMessagingQueryFilters = {
+  filter?: string;
+  agentOnly?: boolean;
+  allowedBackends?: AppServerBackendKind[];
+  excludeFullAccess?: boolean;
+  directoryKey?: string;
+};
+
 export type NavigationQuery =
+  | ({ kind: "messaging-threads" } & NavigationMessagingQueryFilters)
+  | ({ kind: "messaging-projects"; scratchpadFirst?: boolean } & NavigationMessagingQueryFilters)
   | { kind: "model-inventory" }
   | {
       kind: "directory-index";
@@ -1724,6 +1734,8 @@ export type NavigationQueryPage = {
   countsRevision: string;
   coverage: NavigationQueryCoverage;
   counts: NavigationCounts;
+  /** Exact item count for the queried collection, distinct from thread facet counts. */
+  collectionSize?: number;
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
   /** Offset of this page in its immutable owner generation. Omitted means zero. */
