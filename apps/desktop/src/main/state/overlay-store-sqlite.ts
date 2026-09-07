@@ -69,6 +69,7 @@ import {
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   buildPullRequestStatusKey,
   buildFederatedThreadRef,
   federatedThreadIdentityKey,
@@ -3447,8 +3448,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         SELECT instance_id, backend, thread_id, added_at,
           CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS data
         FROM remote_thread_pins WHERE revoked_at IS NULL
-      )
-      SELECT instance_id, backend, thread_id,
+      ), projected AS (
+      SELECT instance_id, backend, thread_id, added_at,
+        COALESCE(json_array_length(data, '$.summary.linkedDirectories'), 0) AS directory_count,
         json_object(
           'title', substr(COALESCE(json_extract(data, '$.summary.title'), thread_id), 1, 2048),
           'titleSource', COALESCE(json_extract(data, '$.summary.titleSource'), 'fallback'),
@@ -3472,12 +3474,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             'id', json_extract(value, '$.id'), 'kind', json_extract(value, '$.kind'),
             'label', json_extract(value, '$.label'), 'path', json_extract(value, '$.path'),
             'worktreePath', json_extract(value, '$.worktreePath')
-          )) FROM json_each(data, '$.summary.linkedDirectories') WHERE key < 16)),
+          )) FROM json_each(data, '$.summary.linkedDirectories') WHERE json_array_length(data, '$.summary.linkedDirectories') <= 100)),
           'instanceLabel', substr(COALESCE(json_extract(data, '$.instanceLabel'), instance_id), 1, 512)
         ) AS compact
-      FROM pins ORDER BY added_at DESC
-    `).all() as Array<{ instance_id: string; backend: string; thread_id: string; compact: string }>;
-    return rows.map((row) => {
+      FROM pins
+      ) SELECT instance_id, backend, thread_id, directory_count,
+        CASE WHEN length(CAST(compact AS BLOB)) <= ${NAVIGATION_QUERY_MAX_RESULT_BYTES} THEN compact END AS compact
+      FROM projected ORDER BY added_at DESC
+    `).iterate() as Iterable<{ instance_id: string; backend: string; thread_id: string; directory_count: number; compact: string | null }>;
+    const result: NavigationThreadSummary[] = [];
+    let retainedBytes = 2;
+    for (const row of rows) {
+      if (row.directory_count > 100 || row.compact === null) {
+        throw new Error("A pinned thread exceeds the navigation index row budget. Reduce its linked directories or cached metadata before refreshing.");
+      }
       const parsed = JSON.parse(row.compact) as NavigationThreadSummary & { instanceLabel: string };
       const { instanceLabel, ...fields } = parsed;
       // SQLite JSON null represents an absent cached optional field. Do not
@@ -3485,9 +3495,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const summary = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null)) as NavigationThreadSummary;
       const ref = buildFederatedThreadRef({ backend: row.backend as FederatedThreadRef["backend"],
         instanceId: row.instance_id, threadId: row.thread_id });
-      return { ...summary, id: row.thread_id, source: ref.backend,
+      const projected: NavigationThreadSummary = { ...summary, id: row.thread_id, source: ref.backend,
         federation: { ref, instanceLabel, peerStatus: "disconnected" } };
-    });
+      const rowBytes = Buffer.byteLength(JSON.stringify(projected), "utf8");
+      if (rowBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+        throw new Error("A pinned thread exceeds the navigation index row budget. Reduce its linked directories or cached metadata before refreshing.");
+      }
+      retainedBytes += rowBytes + (result.length ? 1 : 0);
+      if (retainedBytes > 8 * 1024 * 1024) {
+        throw new Error("Pinned navigation exceeds the 8 MiB viewer index budget. Remove unused pins before refreshing.");
+      }
+      result.push(projected);
+    }
+    return result;
   }
 
   async updateRemoteThreadPinSnapshots(

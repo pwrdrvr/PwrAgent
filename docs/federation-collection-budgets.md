@@ -168,6 +168,16 @@ checks; eight physical reads alone do not bound completed responses awaiting del
 boundaries. `navigation-query-write-budget.test.ts` exercises the real overlay
 read path and records zero SQLite commits for navigation query reads.
 
+### Viewer pin index admission
+
+The compact persisted-pin reader iterates rows and admits at most 8 MiB of
+serialized projected rows. Each row is limited to 252 KiB and 100 linked
+directories. It preserves all admitted directory memberships; exceeding either
+limit rejects the read instead of returning a silently truncated index. These
+reads make zero SQLite commits. The limits cover the returned index, not SQLite's
+internal JSON parsing or JavaScript heap overhead. `remote-thread-pins-store.test.ts`
+and `navigation-query-write-budget.test.ts` enforce these boundaries.
+
 ### Main-window paged state
 
 `NavigationWindowQueries` is a window-demand building block for the atomic main

@@ -604,8 +604,30 @@ describe("compact viewer navigation pins", () => {
     expect(rows[0]).toMatchObject({ id: "visible", source: "codex", title: "Visible", inbox: { inInbox: true },
       federation: { ref: ref("visible"), instanceLabel: "Laptop" } });
     expect(rows[0]?.pinnedRank).toBeUndefined();
-    expect(rows[0]?.linkedDirectories).toHaveLength(16);
+    expect(rows[0]?.linkedDirectories).toHaveLength(100);
     expect(rows[0]).not.toHaveProperty("summary");
-    expect(JSON.stringify(rows).length).toBeLessThan(8_000);
+    expect(JSON.stringify(rows).length).toBeLessThan(16_000);
   });
+});
+
+
+it("rejects oversized viewer pin rows without returning silently truncated membership", async () => {
+  await store.addRemoteThreadPin({ ref: ref("oversized"), instanceLabel: "Laptop", summary: summary({
+    linkedDirectories: Array.from({ length: 101 }, (_, i) => ({ id: String(i), kind: "local", label: String(i), path: `/repo/${i}` })),
+  }) });
+  await expect(store.readRemoteThreadPinNavigationRows()).rejects.toThrow("index row budget");
+  await store.updateRemoteThreadPinSnapshots([{ ref: ref("oversized"), instanceLabel: "Laptop", summary: summary({
+    projectKey: "x".repeat(252 * 1024),
+  }) }]);
+  await expect(store.readRemoteThreadPinNavigationRows()).rejects.toThrow("index row budget");
+});
+
+
+it("rejects a viewer pin index above its aggregate retained byte budget", async () => {
+  for (let index = 0; index < 34; index += 1) {
+    await store.addRemoteThreadPin({ ref: ref(`large-${index}`), instanceLabel: "Laptop",
+      summary: summary({ projectKey: "x".repeat(248 * 1024) }),
+    });
+  }
+  await expect(store.readRemoteThreadPinNavigationRows()).rejects.toThrow("8 MiB viewer index budget");
 });
