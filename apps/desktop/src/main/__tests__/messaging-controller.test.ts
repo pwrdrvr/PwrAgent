@@ -874,7 +874,10 @@ describe("MessagingController", () => {
   });
 
   it("rejects review before opening a picker for unsupported backends", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:gemini";
     const harness = await createHarness({
+      navigation,
       listBackends: async (): Promise<ListBackendsResponse> => ({
         fetchedAt: 1000,
         backends: [
@@ -1112,7 +1115,10 @@ describe("MessagingController", () => {
   });
 
   it("submits reviews for Kimi when managed review is advertised", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:kimi";
     const harness = await createHarness({
+      navigation,
       listBackends: async (): Promise<ListBackendsResponse> => ({
         fetchedAt: 1000,
         backends: [buildKimiRuntimeBackendSummary()],
@@ -16082,7 +16088,9 @@ describe("MessagingController", () => {
   });
 
   it("keeps commentary assistant deltas off messaging providers while delivering the final response", async () => {
-    const harness = await createHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:kimi";
+    const harness = await createHarness({ navigation });
     await bindThreadToBackend(harness, "acp:kimi");
     harness.delivered.length = 0;
 
@@ -17406,7 +17414,10 @@ describe("MessagingController", () => {
 
   it("delivers buffered assistant stream text when ACP terminal output is empty", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:gemini";
     const harness = await createHarness({
+      navigation,
       streamingResponsesDefault: true,
       // Fixed clock: the single delta coalesces (no intermediate edit) and only
       // the final discarded stream update fires before the fallback message.
@@ -17857,7 +17868,10 @@ describe("MessagingController", () => {
 
   it("posts buffered delta text as one message when streaming is disabled and terminal output is empty", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:gemini";
     const harness = await createHarness({
+      navigation,
       deliver: async (intent) => {
         delivered.push(intent);
         return {
@@ -18750,7 +18764,9 @@ describe("MessagingController", () => {
   });
 
   it("delivers completed ACP tool updates as generated system messages", async () => {
-    const harness = await createHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:gemini";
+    const harness = await createHarness({ navigation });
     await bindThreadToBackend(harness, "acp:gemini");
     await harness.controller.handleInboundEvent(buildTextEvent("start work"));
     harness.delivered.length = 0;
@@ -22644,6 +22660,17 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       executionMode: "default",
     });
+  });
+
+  it("rejects an unresolved bind target without falling back to a population read", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockImplementation(() => { throw new Error("Legacy navigation is forbidden"); });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "bind:codex:missing", value: { backend: "codex", threadId: "missing" },
+    }));
+    expect(await harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel)).toBeUndefined();
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", title: "Thread unavailable" });
   });
 
   it("blocks permission changes when exact configuration is unavailable without reading navigation", async () => {

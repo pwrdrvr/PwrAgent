@@ -1115,6 +1115,8 @@ vi.mock("../app-server/backend-registry", () => {
     updateDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     getQueuedTurnsSnapshot: () => ({}),
+    getQueuedTurnsForThread: () => [],
+    getQueuedExecutionModeForThread: () => undefined,
     getStartupProviderRefreshStatus,
     rememberCompleteNavigationSnapshot,
   };
