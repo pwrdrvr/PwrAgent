@@ -163,6 +163,7 @@ export type MessagingAdapter = {
 };
 
 export type MessagingBackendBridge = {
+  listNavigationOwners?(): Promise<{ owners: Array<{ target?: Extract<FederationTarget, { scope: "remote" }>; label: string }>; omitted: number }>;
   getNavigationQueryPage?(request: NavigationQueryRequest): Promise<NavigationQueryPage>;
   getNavigationSelectedDetail?(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse>;
   getNavigationLaunchpadConfig?(request: NavigationLaunchpadConfigRequest): Promise<NavigationLaunchpadConfigResponse>;

@@ -150,10 +150,13 @@ function validateRequest(request: NavigationQueryRequest): void {
       throw new NavigationQueryError("navigation_invalid_request", "Messaging queries accept at most 64 backends and a 256-character filter.");
     }
   }
-  if (request.query.kind === "directory-index" && request.query.keys !== undefined
-    && (!Array.isArray(request.query.keys) || request.query.keys.length > 100
-      || request.query.keys.some((key) => typeof key !== "string" || !key))) {
-    throw new NavigationQueryError("navigation_invalid_request", "Exact directory metadata accepts at most 100 keys.");
+  if (request.query.kind === "directory-index") {
+    const { keys, paths } = request.query;
+    if ((keys !== undefined && !Array.isArray(keys)) || (paths !== undefined && !Array.isArray(paths))
+      || [...(keys ?? []), ...(paths ?? [])].length > 100
+      || [...(keys ?? []), ...(paths ?? [])].some((key) => typeof key !== "string" || !key)) {
+      throw new NavigationQueryError("navigation_invalid_request", "Exact directory metadata accepts at most 100 keys or paths.");
+    }
   }
   if (request.query.kind === "directory" && request.query.roots !== undefined
     && !["all", "pinned", "unpinned"].includes(request.query.roots)) {
@@ -196,6 +199,7 @@ function pageBase(params: {
     coverage: generation.materialization.coverage,
     counts: generation.materialization.counts,
     ...(generation.materialization.collectionSize !== undefined ? { collectionSize: generation.materialization.collectionSize } : {}),
+    ...(generation.materialization.selectionDirectory ? { selectionDirectory: generation.materialization.selectionDirectory } : {}),
     ...(generation.materialization.facets ? { facets: generation.materialization.facets } : {}),
   };
 }

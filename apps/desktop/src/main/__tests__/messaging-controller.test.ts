@@ -136,6 +136,26 @@ afterEach(async () => {
   );
 });
 
+function boundedPeerBrowseFixture(local: NavigationSnapshot, remote: NavigationSnapshot, gate: Promise<void>, failure?: string): {
+  navigation: NavigationSnapshot;
+  listNavigationOwners: NonNullable<MessagingBackendBridge["listNavigationOwners"]>;
+  getNavigationQueryPage: NonNullable<MessagingBackendBridge["getNavigationQueryPage"]>;
+} {
+  const localStore = new NavigationQueryStore();
+  const peerStore = new NavigationQueryStore();
+  return { navigation: local,
+    listNavigationOwners: async () => ({ owners: [{ label: "This instance" }, { label: "Peer", target: { scope: "remote", instanceId: "peer" } }], omitted: 0 }),
+    getNavigationQueryPage: async (request) => {
+      const isRemote = request.federationTarget?.scope === "remote";
+      if (isRemote) { await gate; if (failure) throw new Error(failure); }
+      const population = isRemote ? remote : local;
+      return (isRemote ? peerStore : localStore).readPage({ request, scopeKey: "peer-browse-test", loadIndex: async () => ({
+        threads: population.threads, directories: population.directories,
+      }) });
+    },
+  };
+}
+
 describe("MessagingController", () => {
   it("logs provider-neutral ingress stages through startTurn acceptance", async () => {
     let clock = 2_000;
@@ -1724,6 +1744,8 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
 
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({ query: expect.objectContaining({ kind: "messaging-threads" }), pageSize: 8 }));
     expect(harness.delivered).toHaveLength(1);
     expect(harness.delivered[0]).toMatchObject({
       kind: "thread_picker",
@@ -1741,14 +1763,7 @@ describe("MessagingController", () => {
   it("publishes a usable browse surface before the last peer answers and updates that surface", async () => {
     const peer = createDeferred<void>();
     const navigation = buildNavigationSnapshot();
-    const harness = await createHarness({
-      getNavigationSnapshot: async (_request, options) => {
-        await options?.onProgress?.({ ...navigation, federationRefresh: { pendingPeers: 1, failedPeers: 0 } });
-        await peer.promise;
-        await options?.onProgress?.({ ...navigation, federationRefresh: { pendingPeers: 0, failedPeers: 1 } });
-        return navigation;
-      },
-    });
+    const harness = await createHarness(boundedPeerBrowseFixture(navigation, navigation, peer.promise, "Peer disconnected"));
     const pending = harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
     await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
     expect(harness.delivered[0]).toMatchObject({
@@ -1778,14 +1793,7 @@ describe("MessagingController", () => {
       key: "remote:project", path: "/remote/project", label: "Remote project", threadKeys: [],
     };
     const complete = { ...local, directories: [...local.directories, remoteDirectory] };
-    const harness = await createHarness({
-      getNavigationSnapshot: async (_request, options) => {
-        await options?.onProgress?.({ ...local, federationRefresh: { pendingPeers: 1, failedPeers: 0 } });
-        await peer.promise;
-        await options?.onProgress?.(complete);
-        return complete;
-      },
-    });
+    const harness = await createHarness(boundedPeerBrowseFixture(local, complete, peer.promise));
     const pending = harness.controller.handleInboundEvent(buildCommandEvent(`${command} --cwd ${selector}`));
     await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
     const browseSessionId = (harness.delivered[0] as { browseSessionId: string }).browseSessionId;
@@ -1813,14 +1821,7 @@ describe("MessagingController", () => {
         ...navigation.directories[0]!, key: "remote:project", path: "/remote/project",
       }],
     };
-    const harness = await createHarness({
-      getNavigationSnapshot: async (_request, options) => {
-        await options?.onProgress?.(navigation);
-        await peer.promise;
-        await options?.onProgress?.(complete);
-        return complete;
-      },
-    });
+    const harness = await createHarness(boundedPeerBrowseFixture(navigation, complete, peer.promise));
     const pending = harness.controller.handleInboundEvent(buildCommandEvent(`/resume${args}`));
     await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
     await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
@@ -1841,11 +1842,7 @@ describe("MessagingController", () => {
       const navigation = buildNavigationSnapshot();
       const harness = await createHarness({
         store: new SqliteMessagingStore(db),
-        getNavigationSnapshot: async (_request, options) => {
-          await options?.onProgress?.({ ...navigation, federationRefresh: { pendingPeers: 1, failedPeers: 0 } });
-          await options?.onProgress?.({ ...navigation, federationRefresh: { pendingPeers: 0, failedPeers: 0 } });
-          return navigation;
-        },
+        ...boundedPeerBrowseFixture(navigation, { ...navigation, threads: [], directories: [] }, Promise.resolve()),
       });
       resetSqliteWriteMetrics();
       const { writes } = await measureSqliteWrites(async () => {
@@ -7691,6 +7688,9 @@ describe("MessagingController", () => {
         latestUpdatedAt: 8_000,
       },
     ];
+    navigation.threads.push(...["profile-scratchpad-1", "profile-scratchpad-2", "scratchpad-thread", "example-thread"].map((id) => ({
+      ...navigation.threads[0]!, id,
+    })));
     const harness = await createHarness({ navigation });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
@@ -11271,7 +11271,8 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledTimes(1);
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
     });
@@ -24805,6 +24806,8 @@ async function createHarness<
   responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
   getNavigationSnapshot?: NonNullable<MessagingBackendBridge["getNavigationSnapshot"]>;
+  getNavigationQueryPage?: NonNullable<MessagingBackendBridge["getNavigationQueryPage"]>;
+  listNavigationOwners?: NonNullable<MessagingBackendBridge["listNavigationOwners"]>;
   getNavigationSelectedDetail?: NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]>;
   getNavigationLaunchpadConfig?: NonNullable<MessagingBackendBridge["getNavigationLaunchpadConfig"]>;
   getThreadAdmissionState?: NonNullable<MessagingBackendBridge["getThreadAdmissionState"]>;
@@ -24991,14 +24994,15 @@ async function createHarness<
     }),
   );
   const navigationQueryStore = new NavigationQueryStore();
-  const getNavigationQueryPage = vi.fn<NonNullable<MessagingBackendBridge["getNavigationQueryPage"]>>(async (request) => {
+  const getNavigationQueryPage = vi.fn<NonNullable<MessagingBackendBridge["getNavigationQueryPage"]>>(options?.getNavigationQueryPage ?? (async (request) => {
     const population = options?.getNavigationSnapshot
       ? await options.getNavigationSnapshot({ backend: request.backend, federationTarget: request.federationTarget })
       : options?.navigation ?? buildNavigationSnapshot();
     return navigationQueryStore.readPage({ request, scopeKey: "messaging-test", loadIndex: async () => ({
-      threads: population.threads, directories: population.directories,
+      threads: population.threads.filter((thread) => (thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined)
+        === (request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined)), directories: population.directories,
     }) });
-  });
+  }));
   const getThreadAdmissionState = vi.fn(
     options?.getThreadAdmissionState
       ?? (async (request) => {
@@ -25377,6 +25381,12 @@ async function createHarness<
     getNavigationSnapshot,
     getNavigationSelectedDetail,
     getNavigationQueryPage,
+    listNavigationOwners: options?.listNavigationOwners ?? (async () => {
+      const population = options?.navigation ?? buildNavigationSnapshot();
+      const peers = new Map(population.threads.flatMap((thread) => thread.federation?.ref.target.scope === "remote"
+        ? [[thread.federation.ref.target.instanceId, { target: thread.federation.ref.target, label: thread.federation.instanceLabel }] as const] : []));
+      return { owners: [{ label: "This instance" }, ...peers.values()], omitted: 0 };
+    }),
     getNavigationLaunchpadConfig,
     getThreadAdmissionState,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
