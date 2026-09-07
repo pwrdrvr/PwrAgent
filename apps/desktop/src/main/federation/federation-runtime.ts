@@ -5320,14 +5320,13 @@ function localBackendOperations(): FederationBackendOperations {
       });
       // Project discovery must not reconcile the complete navigation baseline
       // or initialize seen metadata merely because a remote tool lists projects.
-      const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
-        backend: "all",
-        fetchedAt: Date.now(),
-        partial: true,
-        threads,
-        workspaceRoots: resolveScratchProjectsRoots(),
+      const store = getDesktopOverlayStore();
+      const index = store.readNavigationQueryIndex({
+        backend: "all", threads, workspaceRoots: resolveScratchProjectsRoots(),
       });
-      return projectFederationProjectPage(snapshot, request);
+      return projectFederationProjectPage({ backend: "all", fetchedAt: Date.now(),
+        directories: index.directories, launchpadDefaults: await store.getLaunchpadDefaults(),
+      }, request);
     },
     async lookupArchivedThreads(request, rpcOptions) {
       if (validateArchivedThreadLookup(request).size === 0) return { threads: [] };

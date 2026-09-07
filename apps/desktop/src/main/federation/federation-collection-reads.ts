@@ -49,7 +49,7 @@ export type FederationArchivedThreadLookupRequest = {
 };
 
 export function projectFederationProjectPage(
-  snapshot: NavigationSnapshot,
+  snapshot: Pick<NavigationSnapshot, "backend" | "fetchedAt" | "directories" | "launchpadDefaults">,
   request: FederationProjectPageRequest,
 ): FederationProjectPage {
   const page: FederationProjectPage = {
@@ -67,7 +67,12 @@ export function projectFederationProjectPage(
   for (const directory of directories) {
     // A project picker never consumes directory membership. In particular,
     // do not send every thread key merely to display a project label.
-    const candidate = { ...directory, threadKeys: [] };
+    const candidate = {
+      key: directory.key, kind: directory.kind, label: directory.label,
+      path: directory.path, localAvailability: directory.localAvailability,
+      needsAttentionCount: directory.needsAttentionCount, latestUpdatedAt: directory.latestUpdatedAt,
+      pinnedRank: directory.pinnedRank, threadKeys: [],
+    };
     const next = {
       ...page,
       directories: [...page.directories, candidate],
