@@ -411,6 +411,7 @@ type DirectoryGitRefreshTarget = Pick<NavigationDirectoryRow, "key" | "path" | "
 type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
     SqliteOverlayStore,
+    | "readDetachedThreadPullRequests"
     | "initializeNavigationUnreadBaseline"
     | "readDirectoryGitStatusCache"
     | "writeDirectoryGitStatusCacheEntry"
@@ -3048,15 +3049,15 @@ class DesktopAppServerService {
     const detachedPrsByThreadKey = new Map<string, PrSummary[]>();
     await Promise.all(
       [...threadIdsByBackend.entries()].map(async ([backend, threadIds]) => {
-        const overlays = await this.getOverlayStore().getThreadOverlayStates({
+        const detached = this.getOverlayStore().readDetachedThreadPullRequests({
           backend,
           threadIds: [...threadIds],
         });
-        for (const [threadId, overlay] of Object.entries(overlays)) {
-          if (overlay?.detachedPrs?.length) {
+        for (const [threadId, prs] of Object.entries(detached)) {
+          if (prs.length) {
             detachedPrsByThreadKey.set(
               buildThreadIdentityKey(backend, threadId),
-              overlay.detachedPrs,
+              prs,
             );
           }
         }
@@ -3698,7 +3699,9 @@ class DesktopAppServerService {
 
   handleAgentEventForPrAttachments(event: AgentEvent): void {
     if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
-    if (event.notification.method === "navigation/providerThreads/refreshed") {
+    if (["navigation/providerThreads/refreshed", "thread/started", "thread/archived", "thread/unarchived",
+      "navigation/threadDirectories/updated", "navigation/directory/removed", "thread/parent/set", "thread/parent/cleared",
+      "thread/branch/updated"].includes(event.notification.method)) {
       if (this.ownerNavigationActive) void this.refreshOwnerNavigationMetadata().catch((error) => {
         appServerLog.warn("failed to refresh owner navigation metadata", { error: String(error) });
       });
@@ -3759,10 +3762,28 @@ class DesktopAppServerService {
         const complete = !index.coverage || index.coverage.state === "complete";
         await this.rememberThreadPrAttachments(canonical.threads, { replace: complete, isCurrent });
         if (!isCurrent()) continue;
-        this.rememberThreadPrRefreshContexts(canonical.threads);
+        const ownerThreads = this.applyPrimaryGitRepositories(canonical.threads);
+        this.rememberPublishedPrimaryGitRepositories(ownerThreads, { replace: complete });
+        await Promise.all([this.loadDirectoryGitStatusCache(), this.loadThreadGitWorkingStateCache()]);
+        if (!isCurrent()) continue;
+        for (const directory of index.directories) this.lastDirectoriesByKey.set(directory.key, directory);
+        this.startDirectoryGitStatusRefresh({ automatic: true, directories: index.directories, requestKey: "owner-navigation-metadata" });
+        this.rememberThreadWorktreePaths(ownerThreads);
+        this.rememberThreadPrRefreshContexts(ownerThreads);
+        const detachedPrs = await this.readDetachedPrsByThreadKey(ownerThreads);
+        if (!isCurrent()) continue;
+        this.rememberMergedPrCommitShas(ownerThreads, detachedPrs);
+        this.syncPrPollingSchedulerState();
+        void getDesktopBackendRegistry().refreshThreadGitWorkingStates(ownerThreads).catch((error: unknown) => {
+          appServerLog.warn("owner worktree status refresh failed", { error: String(error) });
+        });
         if (complete) {
           const live = new Set(canonical.threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
-          for (const key of this.prRefreshContextByThreadKey.keys()) if (!live.has(key)) this.prRefreshContextByThreadKey.delete(key);
+          for (const map of [this.prRefreshContextByThreadKey, this.worktreePathByThreadKey, this.mergedPrCommitShasByThread]) {
+            for (const key of map.keys()) if (!live.has(key)) map.delete(key);
+          }
+          const liveDirectories = new Set(index.directories.map((directory) => directory.key));
+          for (const key of this.lastDirectoriesByKey.keys()) if (!liveDirectories.has(key)) this.lastDirectoriesByKey.delete(key);
           getDesktopBackendRegistry().rememberNavigationVisibilityIndex(index);
         }
         await this.getPrAutoDispatchCoordinator().resume();

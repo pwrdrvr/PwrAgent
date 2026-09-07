@@ -782,6 +782,7 @@ const registerDirectoryFromDiskService = vi.fn(async (request: { path: string })
 });
 const getThreadOverlayState = vi.fn();
 const getThreadOverlayStates = vi.fn(async () => ({}));
+const readDetachedThreadPullRequests = vi.fn(() => ({}));
 const addLinkedDirectory = vi.fn(async (request: {
   backend: "codex" | "acp:grok";
   threadId: string;
@@ -1027,6 +1028,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     reconcileNavigationSnapshot,
     readNavigationQueryIndex,
     initializeNavigationUnreadBaseline: vi.fn(() => false),
+    readDetachedThreadPullRequests,
     markThreadSeen,
     getThreadOverlayState,
     getThreadOverlayStates,
@@ -1293,6 +1295,8 @@ describe("app server ipc", () => {
     removeLinkedDirectory.mockClear();
     getThreadOverlayState.mockReset();
     getThreadOverlayState.mockResolvedValue(undefined);
+    readDetachedThreadPullRequests.mockReset();
+    readDetachedThreadPullRequests.mockReturnValue({});
     getThreadOverlayStates.mockReset();
     getThreadOverlayStates.mockResolvedValue({});
     setThreadPullRequests.mockClear();
@@ -7960,7 +7964,7 @@ describe("app server ipc", () => {
   });
 
   it("passes detached merged PR commit SHAs into working-state probes", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
     const mergedPrSha = "b".repeat(40);
     const detachedPr = githubPr({
       number: 807,
@@ -7973,16 +7977,8 @@ describe("app server ipc", () => {
       commitShas: [mergedPrSha],
     });
 
-    getThreadOverlayStates.mockResolvedValue({
-      "thread-1": {
-        backend: "codex",
-        threadId: "thread-1",
-        executionMode: "default",
-        extraLinkedDirectories: [],
-        detachedPrKeys: ["github.com/pwrdrvr/pwragent#807"],
-        detachedPrs: [detachedPr],
-      },
-    });
+    readDetachedThreadPullRequests.mockReturnValue({ "thread-1": [detachedPr] });
+    getThreadOverlayStates.mockResolvedValue({ "thread-1": { detachedPrs: [detachedPr] } });
     listThreads.mockResolvedValueOnce([
       {
         id: "thread-1",
@@ -7997,7 +7993,8 @@ describe("app server ipc", () => {
     ] as never);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    await startAppServerOwnerNavigation();
 
     await vi.waitFor(() => {
       expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(

@@ -779,6 +779,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return result;
   }
 
+  /** Owner worktree maintenance reads PR metadata without selected thread payloads. */
+  readDetachedThreadPullRequests(params: { backend: AppServerBackendKind; threadIds: string[] }): Record<string, PrSummary[]> {
+    const result: Record<string, PrSummary[]> = {};
+    let bytes = 0;
+    const keys = params.threadIds.map((id) => buildThreadIdentityKey(params.backend, id));
+    for (const row of this.stateDb.raw.prepare(`
+      SELECT json_extract(payload, '$.threadId') AS threadId,
+        json_extract(payload, '$.detachedPrs') AS prs
+      FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
+        AND json_type(payload, '$.detachedPrs') = 'array'
+    `).iterate(JSON.stringify(keys)) as Iterable<{ threadId: string; prs: string }>) {
+      bytes += Buffer.byteLength(row.prs, "utf8");
+      if (bytes > 8 * 1024 * 1024) throw new Error("Detached pull-request metadata exceeds its 8 MiB budget.");
+      result[row.threadId] = JSON.parse(row.prs) as PrSummary[];
+    }
+    return result;
+  }
+
   /** Owner startup initializes this once; ordinary navigation reads never persist a baseline. */
   initializeNavigationUnreadBaseline(threads: readonly NavigationThreadSummary[]): boolean {
     if (this.readNavigationUnreadBaseline()) return false;

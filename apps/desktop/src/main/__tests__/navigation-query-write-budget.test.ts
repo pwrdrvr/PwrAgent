@@ -84,6 +84,7 @@ it("builds the owner index without materializing private provider, overlay, or l
     fastMode: true, subthreadsCollapsed: false, prAutoDispatchEnabled: true,
     agent: { name: "Agent", instructions: secret, instructionLineCount: 42, instructionsTooLong: true, createdAt: 1, updatedAt: 2 },
     questionnaireActivityLog: [{ text: secret }], queuedTurns: [{ prompt: secret }],
+    detachedPrs: [{ provider: "github.com", org: "owner", repo: "repo", number: 1, lifecycleState: "merged", commitShas: ["abc"] }],
   }));
   db.raw.prepare("INSERT INTO directory_launchpads(directory_path, payload, created_at, updated_at) VALUES (?, ?, 1, 2)").run("directory:/launchpad", JSON.stringify({
     directoryKey: "directory:/launchpad", directoryKind: "directory", directoryLabel: "Launchpad", directoryPath: "/launchpad",
@@ -99,6 +100,8 @@ it("builds the owner index without materializing private provider, overlay, or l
       expect(index.threads[0]).toMatchObject({ fastMode: true, subthreadsCollapsed: false, prAutoDispatchEnabled: true,
         nativeSubAgentCount: 100, agent: { name: "Agent", instructionLineCount: 42, instructionsTooLong: true } });
       expect(index.directories.find((directory) => directory.key === "directory:/launchpad")?.launchpad?.backend).toBe("codex");
+      expect(mocks.store.readDetachedThreadPullRequests({ backend: "codex", threadIds: ["owner"] }))
+        .toEqual({ owner: [expect.objectContaining({ number: 1, commitShas: ["abc"] })] });
     });
     expect(writes.commits).toBe(0);
   } finally { legacy.mockRestore(); db.close(); }
