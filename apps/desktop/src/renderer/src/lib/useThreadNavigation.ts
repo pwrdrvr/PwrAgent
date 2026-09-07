@@ -3168,6 +3168,8 @@ export function useThreadNavigation(
       acceptedDefaultsRef.current = launchpadConfiguration.value;
       acceptedDraftHydrationRef.current = draftStore?.hydrationVersion;
       const directoryRows = indexLoadedDirectoryRows(boundedNavigation.directories.filter((directory) => !removedDirectoryKeysRef.current.has(directory.key)).map((directory) => ({ ...directory,
+        ...(launchpadConfiguration.value?.directoryKey === directory.key && launchpadConfiguration.value.directoryGitStatus
+          ? { gitStatus: launchpadConfiguration.value.directoryGitStatus } : {}),
         ...(launchpadConfiguration.value?.directoryKey === directory.key && launchpadConfiguration.value.launchpad
           ? { launchpad: { ...launchpadConfiguration.value.launchpad,
               prompt: draftStore?.get(`launchpad:${directory.key}`)?.draft ?? "",

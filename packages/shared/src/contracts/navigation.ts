@@ -1764,6 +1764,7 @@ export type NavigationLaunchpadConfiguration = Pick<NavigationLaunchpadDraft,
   | "parentThreadInstanceId"
   | "parentThreadTitle"
   | "sourceThreadId"
+  | "codexEnvironmentOptions"
   | "codexEnvironmentId"
   | "codexEnvironmentExecutionTarget"
   | "codexEnvironmentActionId"
@@ -1785,6 +1786,7 @@ export type NavigationLaunchpadConfigResponse = {
   defaults?: NavigationLaunchpadDefaults;
   directoryKey?: string;
   launchpad?: NavigationLaunchpadConfiguration;
+  directoryGitStatus?: NavigationDirectoryGitStatus;
   unchanged?: boolean;
 };
 

@@ -19,6 +19,7 @@ import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
+import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
 
 function revision(value: unknown): string {
@@ -80,6 +81,11 @@ export class NavigationDetailService {
       store.getLaunchpadDefaults(),
       request.directoryKey ? store.getDirectoryLaunchpad({ directoryKey: request.directoryKey }) : undefined,
     ]);
+    const inspectPath = storedLaunchpad?.federationTarget?.scope === "remote" ? undefined : storedLaunchpad?.directoryPath;
+    const [environmentOptions, directoryGitStatus] = inspectPath ? await Promise.all([
+      listCodexEnvironmentOptions(inspectPath),
+      this.registry.readSelectedWorkspaceGitStatus(inspectPath),
+    ]) : [undefined, undefined];
     const launchpad: NavigationLaunchpadConfiguration | undefined = storedLaunchpad ? {
       backend: storedLaunchpad.backend,
       executionMode: storedLaunchpad.executionMode,
@@ -108,13 +114,14 @@ export class NavigationDetailService {
       parentThreadInstanceId: storedLaunchpad.parentThreadInstanceId,
       parentThreadTitle: storedLaunchpad.parentThreadTitle,
       sourceThreadId: storedLaunchpad.sourceThreadId,
+      codexEnvironmentOptions: environmentOptions,
       codexEnvironmentId: storedLaunchpad.codexEnvironmentId,
       codexEnvironmentExecutionTarget: storedLaunchpad.codexEnvironmentExecutionTarget,
       codexEnvironmentActionId: storedLaunchpad.codexEnvironmentActionId,
       createdAt: storedLaunchpad.createdAt,
       updatedAt: storedLaunchpad.updatedAt,
     } : undefined;
-    const payload = { defaults, directoryKey: request.directoryKey, launchpad };
+    const payload = { defaults, directoryKey: request.directoryKey, launchpad, directoryGitStatus };
     const configRevision = revision(payload);
     const response: NavigationLaunchpadConfigResponse = {
       protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
