@@ -1,5 +1,5 @@
 import type { FederationTarget, NavigationIdentity, NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse,
-  NavigationLaunchpadConfigResponse, NavigationQueueProjection } from "@pwragent/shared";
+  NavigationLaunchpadConfigResponse, NavigationQueueProjection, ListScheduledThreadActionsResponse } from "@pwragent/shared";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import { navigationQueryKey } from "./navigation-query-projection";
 import { NavigationQueryError } from "./navigation-query-store";
@@ -16,6 +16,7 @@ type ExactResources = {
   detail: NavigationSelectedDetailResponse;
   launchpad: NavigationLaunchpadConfigResponse;
   queue: NavigationQueueProjection;
+  scheduled: ListScheduledThreadActionsResponse;
 };
 type Result = NavigationQueryPage | ExactResources[keyof ExactResources];
 type Load<T extends Result> = (options: { signal: AbortSignal; deadlineAt: number }) => Promise<T>;
@@ -236,7 +237,7 @@ export class NavigationQueryPool {
       if (bytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         throw new NavigationQueryError("navigation_item_too_large", "Navigation page exceeds its result budget.");
       }
-      if (page.unchanged) return page;
+      if ("unchanged" in page && page.unchanged) return page;
       // Exact consumers retain their own complete revision. The process pool
       // needs only the latest admitted result, not every conditional revision
       // or FIFO cursor visited during an open window's lifetime.

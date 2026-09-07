@@ -6,9 +6,10 @@ export async function readScheduledActionProjection(params: {
   request: ListScheduledThreadActionsRequest;
   read: (request: ListScheduledThreadActionsRequest) => Promise<ListScheduledThreadActionsResponse>;
   isCancelled: () => boolean;
+  signal?: AbortSignal;
   allocation: { reserve: (bytes: number) => void; unreserve: (bytes: number) => void };
 }): Promise<ListScheduledThreadActionsResponse> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Math.min(params.request.deadlineAt ?? Infinity, Date.now() + 10_000);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let cursor: string | undefined;
     let result: ListScheduledThreadActionsResponse | undefined;
@@ -18,7 +19,21 @@ export async function readScheduledActionProjection(params: {
     try {
       for (let pageIndex = 0; pageIndex < 128; pageIndex += 1) {
         if (params.isCancelled() || Date.now() >= deadline) throw new Error("Scheduled projection cancelled or expired.");
-        const page = await params.read({ ...params.request, projectionProtocol: 2, cursor });
+        params.signal?.throwIfAborted();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let abort: (() => void) | undefined;
+        let page: ListScheduledThreadActionsResponse;
+        try {
+          const expired = new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("Scheduled projection deadline expired.")), Math.max(0, deadline - Date.now()));
+            abort = () => reject(new Error("Scheduled projection cancelled."));
+            params.signal?.addEventListener("abort", abort, { once: true });
+          });
+          page = await Promise.race([params.read({ ...params.request, projectionProtocol: 2, cursor, deadlineAt: deadline }), expired]);
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+          if (abort) params.signal?.removeEventListener("abort", abort);
+        }
         if (params.isCancelled() || Date.now() >= deadline) throw new Error("Scheduled projection cancelled or expired.");
         if (page.projectionProtocol !== 2 || !page.revision || typeof page.complete !== "boolean") {
           throw new Error("Upgrade the owning instance to bounded scheduled projection protocol 2.");

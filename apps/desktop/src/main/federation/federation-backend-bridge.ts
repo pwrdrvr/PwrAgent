@@ -753,6 +753,7 @@ export type FederationBackendOperations = {
   startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
   listScheduledThreadActions(
     request?: ListScheduledThreadActionsRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<ListScheduledThreadActionsResponse>;
   createScheduledThreadAction(
     request: CreateScheduledThreadActionRequest,
@@ -1316,6 +1317,7 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.listScheduledThreadActions(
         (envelope.params ?? {}) as ListScheduledThreadActionsRequest,
+        { deadlineAt: envelope.deadlineAt, requesterInstanceId: envelope.sourceInstanceId },
       ),
   );
   params.router.registerHandler(
@@ -2134,10 +2136,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async listScheduledThreadActions(
     request: ListScheduledThreadActionsRequest = {},
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<ListScheduledThreadActionsResponse> {
     return await this.rpc.request<ListScheduledThreadActionsResponse>({
       method: FEDERATION_BACKEND_METHODS.listScheduledThreadActions,
       params: request,
+      ...rpcOptions,
     });
   }
 

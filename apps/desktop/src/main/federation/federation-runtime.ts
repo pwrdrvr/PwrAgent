@@ -5737,10 +5737,20 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async listScheduledThreadActions(
       request: ListScheduledThreadActionsRequest = {},
+      rpcOptions?: FederationRpcRequestOptions,
     ): Promise<ListScheduledThreadActionsResponse> {
       const { getScheduledThreadActionService } = await import(
         "../scheduled-actions/scheduled-thread-action-service.js"
       );
+      if (request.projectionProtocol === 2) {
+        const { cursor, deadlineAt, ...identity } = request;
+        return withFederationNavigationConsumer(rpcOptions, (consumerId, scopeKey) =>
+          getDesktopNavigationQueryPool().readExact({ kind: "scheduled", consumerId, scopeKey,
+            identity: JSON.stringify(identity), operation: JSON.stringify({ cursor }),
+            deadlineAt: rpcOptions?.deadlineAt ?? deadlineAt,
+            load: async () => getScheduledThreadActionService().list(request),
+          }));
+      }
       return getScheduledThreadActionService().list(request);
     },
     async createScheduledThreadAction(

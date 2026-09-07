@@ -45,3 +45,20 @@ describe("complete scheduled projections", () => {
     expect(budget.usage()).toEqual({ retainedBytes: 0, transientBytes: 0 });
   });
 });
+
+it.each(["deadline", "cancel"])("ends a hung scheduled read on %s without publishing", async (reason) => {
+  vi.useFakeTimers();
+  const budget = new NavigationMetadataBudget();
+  const allocation = budget.begin("hung");
+  const controller = new AbortController();
+  try {
+    const operation = readScheduledActionProjection({ request: {},
+      read: () => new Promise(() => {}), isCancelled: () => false, signal: controller.signal, allocation });
+    const rejected = expect(operation).rejects.toThrow(reason === "deadline" ? "deadline expired" : "cancelled");
+    if (reason === "deadline") await vi.advanceTimersByTimeAsync(10_000);
+    else controller.abort();
+    await rejected;
+    expect(budget.usage().retainedBytes).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { allocation.dispose(); vi.useRealTimers(); }
+});

@@ -112,6 +112,8 @@ export type ScheduledThreadActionIdRequest = {
 export type ListScheduledThreadActionsRequest = {
   /** Complete renderer projections use bounded pages, never the legacy list. */
   projectionProtocol?: 2;
+  /** Original bounded projection transaction deadline, preserved across pages and relays. */
+  deadlineAt?: number;
   cursor?: string;
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;

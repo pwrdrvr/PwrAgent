@@ -161,6 +161,56 @@ describe("scheduled action IPC", () => {
     })).resolves.toBe(fresh);
   });
 
+  it("shares scheduled reads across windows and aborts only after their final release", async () => {
+    const { EventEmitter } = await import("node:events");
+    const { registerScheduledActionIpcHandlers } = await import("../ipc/scheduled-actions-ipc");
+    const { SCHEDULED_ACTIONS_LIST_CHANNEL } = await import("../../shared/ipc");
+    let signal: AbortSignal | undefined;
+    remoteBackendMock.listScheduledThreadActions.mockImplementationOnce((...args: unknown[]) => {
+      signal = (args[1] as { signal: AbortSignal }).signal;
+      return new Promise<{ actions: never[] }>((_resolve, reject) => {
+        signal!.addEventListener("abort", () => reject(new Error("owner read cancelled")), { once: true });
+      });
+    });
+    registerScheduledActionIpcHandlers();
+    const handler = handlers.get(SCHEDULED_ACTIONS_LIST_CHANNEL)!;
+    const first = Object.assign(new EventEmitter(), { id: 101 });
+    const second = Object.assign(new EventEmitter(), { id: 102 });
+    const request = { projectionProtocol: 2, federationTarget: { scope: "remote", instanceId: "shared-schedules" } };
+    const results = Promise.allSettled([
+      handler({ sender: first }, request, "scheduled-scope"),
+      handler({ sender: second }, request, "scheduled-scope"),
+    ]);
+    await vi.waitFor(() => expect(remoteBackendMock.listScheduledThreadActions).toHaveBeenCalledTimes(1));
+    first.emit("destroyed");
+    expect(signal?.aborted).toBe(false);
+    second.emit("destroyed");
+    expect(signal?.aborted).toBe(true);
+    expect((await results).every((result) => result.status === "rejected")).toBe(true);
+    expect(first.listenerCount("destroyed")).toBe(0);
+    expect(second.listenerCount("destroyed")).toBe(0);
+  });
+
+  it("never substitutes a cached final page for a disconnected V2 baseline", async () => {
+    const { FederationPeerUnavailableError } = await import("../federation/federation-peer-unavailable-error");
+    const { registerScheduledActionIpcHandlers } = await import("../ipc/scheduled-actions-ipc");
+    const { SCHEDULED_ACTIONS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "client_projection" };
+    const finalPage = { actions: [], projectionProtocol: 2, complete: true, revision: "old-generation" };
+    remoteBackendMock.listScheduledThreadActions.mockResolvedValueOnce(finalPage)
+      .mockRejectedValueOnce(new FederationPeerUnavailableError("client_projection"));
+    registerScheduledActionIpcHandlers();
+    const handler = handlers.get(SCHEDULED_ACTIONS_LIST_CHANNEL)!;
+    await expect(handler({}, { federationTarget, projectionProtocol: 2, cursor: "last" }, "scheduled-view"))
+      .resolves.toBe(finalPage);
+    await expect(handler({}, { federationTarget, projectionProtocol: 2 }, "scheduled-view"))
+      .rejects.toThrow();
+    expect(remoteBackendMock.listScheduledThreadActions).toHaveBeenCalledWith(
+      expect.objectContaining({ projectionProtocol: 2, cursor: "last" }),
+      expect.objectContaining({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }),
+    );
+  });
+
   it("keeps unexpected remote list failures actionable", async () => {
     const { registerScheduledActionIpcHandlers } = await import(
       "../ipc/scheduled-actions-ipc"

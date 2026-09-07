@@ -198,9 +198,9 @@ describe("scheduled thread action projections", () => {
       await Promise.resolve();
     });
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
-      projectionProtocol: 2, cursor: undefined, federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, deadlineAt: expect.any(Number), federationTarget: undefined,
       includeFailed: true,
-    });
+    }, expect.stringMatching(/^scheduled:/));
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
@@ -212,9 +212,9 @@ describe("scheduled thread action projections", () => {
     });
     expect(listScheduledThreadActions).toHaveBeenCalledTimes(2);
     expect(listScheduledThreadActions).toHaveBeenLastCalledWith({
-      projectionProtocol: 2, cursor: undefined, federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, deadlineAt: expect.any(Number), federationTarget: undefined,
       terminalUpdatedAfter: 1_000,
-    });
+    }, expect.stringMatching(/^scheduled:/));
     expect(
       result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toEqual([
@@ -266,13 +266,13 @@ describe("scheduled thread action projections", () => {
 
     expect(listScheduledThreadActions).toHaveBeenCalledTimes(3);
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
-      projectionProtocol: 2, cursor: undefined,
+      projectionProtocol: 2, cursor: undefined, deadlineAt: expect.any(Number),
       federationTarget: {
         scope: "remote",
         instanceId: "owner-two",
       },
       includeFailed: true,
-    });
+    }, expect.stringMatching(/^scheduled:/));
     expect(
       result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1", { scope: "remote", instanceId: "owner-two" })),
     ).toEqual([
@@ -352,9 +352,9 @@ describe("scheduled thread action projections", () => {
     });
 
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
-      projectionProtocol: 2, cursor: undefined, federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, deadlineAt: expect.any(Number), federationTarget: undefined,
       includeFailed: true,
-    });
+    }, expect.stringMatching(/^scheduled:/));
     expect(
       result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toEqual([

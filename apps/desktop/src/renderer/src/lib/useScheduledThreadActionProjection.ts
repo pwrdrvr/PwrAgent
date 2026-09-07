@@ -104,6 +104,7 @@ function startScheduledThreadActionProjection(params: {
   let dirty = false;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   const budgetKey = `scheduled:${++nextScheduledProjection}`;
+  const controller = new AbortController();
 
   const refresh = async (): Promise<void> => {
     if (running) { dirty = true; refreshSequence += 1; return; }
@@ -117,7 +118,8 @@ function startScheduledThreadActionProjection(params: {
         request: { federationTarget: params.federationTarget,
           ...(terminalUpdatedAfter === undefined ? { includeFailed: true } : { terminalUpdatedAfter }),
         },
-        read: params.listScheduledThreadActions,
+        read: (request) => params.listScheduledThreadActions(request, budgetKey),
+        signal: controller.signal,
         allocation,
         isCancelled: () => cancelled || sequence !== refreshSequence,
       });
@@ -224,6 +226,8 @@ function startScheduledThreadActionProjection(params: {
   });
   return () => {
     cancelled = true;
+    controller.abort();
+    void params.desktopApi.releaseNavigationQuery?.(budgetKey);
     if (refreshTimer !== undefined) clearTimeout(refreshTimer);
     navigationScheduledProjectionBudget.release(budgetKey);
     unsubscribe?.();

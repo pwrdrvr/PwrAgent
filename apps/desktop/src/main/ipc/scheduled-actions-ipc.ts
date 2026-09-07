@@ -1,4 +1,6 @@
 import { ipcMain } from "electron";
+import { randomUUID } from "node:crypto";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import type {
   CreateScheduledThreadActionRequest,
   ListScheduledThreadActionsRequest,
@@ -39,6 +41,7 @@ function stripFederationTarget<T extends {
 
 export function registerScheduledActionIpcHandlers(): void {
   getScheduledThreadActionService();
+  const consumersBySender = new Map<number, { tokens: Set<string>; release: () => void }>();
   const cachedRemoteLists = new Map<
     string,
     ListScheduledThreadActionsResponse
@@ -96,10 +99,50 @@ export function registerScheduledActionIpcHandlers(): void {
   ipcMain.handle(
     SCHEDULED_ACTIONS_LIST_CHANNEL,
     async (
-      _event,
+      event,
       request?: ListScheduledThreadActionsRequest,
+      consumerId?: string,
     ): Promise<ListScheduledThreadActionsResponse> => {
       const routedRequest = request ?? {};
+      if (routedRequest.projectionProtocol === 2) {
+        // A cached final page is not a complete replacement baseline. Outages
+        // must reject V2 reads so the renderer retains its complete mirrors.
+        if (consumerId !== undefined && (typeof consumerId !== "string" || consumerId.length > 256)) {
+          throw new Error("Invalid scheduled projection consumer.");
+        }
+        const pool = getDesktopNavigationQueryPool();
+        const token = JSON.stringify([event.sender?.id ?? 0, consumerId ?? randomUUID()]);
+        const sender = event.sender;
+        let owner = sender ? consumersBySender.get(sender.id) : undefined;
+        if (sender && !owner) {
+          const tokens = new Set<string>();
+          owner = { tokens, release: () => {
+            for (const consumer of tokens) pool.release(consumer);
+            consumersBySender.delete(sender.id);
+          } };
+          consumersBySender.set(sender.id, owner);
+          sender.once("destroyed", owner.release);
+        }
+        owner?.tokens.add(token);
+        const { cursor, deadlineAt, ...identity } = stripFederationTarget(routedRequest);
+        try {
+          return await pool.readExact({ kind: "scheduled", consumerId: token, owner: routedRequest.federationTarget,
+            identity: JSON.stringify(identity), operation: JSON.stringify({ cursor }), deadlineAt,
+            load: async (options) => {
+              const backend = remoteBackendFor(routedRequest);
+              return backend ? backend.listScheduledThreadActions({ ...identity, cursor, deadlineAt: options.deadlineAt }, options)
+                : getScheduledThreadActionService().list({ ...identity, cursor, deadlineAt: options.deadlineAt });
+            },
+          });
+        } finally {
+          pool.release(token);
+          owner?.tokens.delete(token);
+          if (sender && owner && owner.tokens.size === 0) {
+            sender.removeListener("destroyed", owner.release);
+            consumersBySender.delete(sender.id);
+          }
+        }
+      }
       return await listRemoteActions(routedRequest);
     },
   );

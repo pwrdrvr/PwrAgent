@@ -1668,8 +1668,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(AGENT_RELEASE_QUEUED_TURN_CHANNEL, request),
   listScheduledThreadActions: async (
     request?: ListScheduledThreadActionsRequest,
+    consumerId?: string,
   ): Promise<ListScheduledThreadActionsResponse> =>
-    await ipcRenderer.invoke(SCHEDULED_ACTIONS_LIST_CHANNEL, request),
+    await ipcRenderer.invoke(SCHEDULED_ACTIONS_LIST_CHANNEL, request, consumerId),
   createScheduledThreadAction: async (
     request: CreateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> =>

@@ -326,3 +326,18 @@ scheduled input files. The 205-action paging and observation regression records
 zero commits, or 0 MB/day added WAL. These are serialized backing budgets, not
 an assertion about the JavaScript engine's total heap usage. Legacy explicit
 control-plane list callers remain separate from renderer projection reads.
+
+### Scheduled projection transport ownership
+
+V2 scheduled pages bypass the legacy outage cache. A cached final page can never
+be returned as a fresh complete generation after disconnect. Renderer mirrors
+remain authoritative until another complete generation has been read.
+
+Scheduled projections now share the main-process query pool's eight physical
+read slots, 32 exact resources, 256 consumers and 64 MiB result backing budget.
+Consumer identities include the native window. Closing a hook or window releases
+its interest; another window keeps a shared read alive. The final release aborts
+the RPC, and non-cooperative work retains its physical slot until settlement.
+The original ten-second transaction deadline crosses IPC, owner RPC and page
+continuations. The renderer also rejects a hung transport at that deadline.
+No additional SQLite writes are introduced.

@@ -764,6 +764,7 @@ export type DesktopApi = {
   ) => Promise<ReleaseQueuedTurnResponse>;
   listScheduledThreadActions?: (
     request?: ListScheduledThreadActionsRequest,
+    consumerId?: string,
   ) => Promise<ListScheduledThreadActionsResponse>;
   createScheduledThreadAction?: (
     request: CreateScheduledThreadActionRequest,
