@@ -21,6 +21,7 @@ export function useBoundedNavigationWindow(params: Demand & {
   const { desktopApi, enabled, visible } = params;
   const [state, setState] = useState<NavigationWindowQueriesState>(EMPTY);
   const controllerRef = useRef<NavigationWindowQueries | undefined>(undefined);
+  const selectedRangeCheckedRef = useRef(new Map<string, string>());
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const [connection, setConnection] = useState<{ target: string; connected: boolean; error?: string }>();
@@ -60,6 +61,7 @@ export function useBoundedNavigationWindow(params: Demand & {
   useEffect(() => {
     const controller = new NavigationWindowQueries(desktopApi ?? {});
     controllerRef.current = controller;
+    selectedRangeCheckedRef.current.clear();
     const unsubscribe = controller.subscribe(() => setState(controller.getSnapshot()));
     const current = paramsRef.current;
     controller.setVisible(current.enabled && current.visible);
@@ -78,6 +80,33 @@ export function useBoundedNavigationWindow(params: Demand & {
     controller.setVisible(enabled && visible && connected);
     controller.setDemand(demandRef.current);
   }, [desktopApi, demandKey, enabled, visible, connected]);
+
+  useEffect(() => {
+    const controller = controllerRef.current;
+    if (!controller || controller.getSnapshot() !== state || !enabled || !visible || !connected) return;
+    for (const id of selectedRangeCheckedRef.current.keys()) {
+      if (!state.resources.has(id)) selectedRangeCheckedRef.current.delete(id);
+    }
+    if (params.browseMode !== "directories" || !params.selectedRef || !selectedRoot) return;
+    const selection = navigationIdentityKey(params.selectedRef);
+    const rootKey = navigationIdentityKey(selectedRoot.row.ref);
+    for (const directoryKey of selectedDirectoryKeys ?? []) {
+      const id = `directory:${directoryKey}`;
+      const resource = state.resources.get(id);
+      const query = resource?.state.request.query;
+      const page = resource?.state.page;
+      if (!page || resource?.loading || resource?.state.error || page.coverage.state !== "complete"
+        || query?.kind !== "directory" || (query.roots === "pinned" && !selectedRoot.row.pinnedRank)) continue;
+      const checked = JSON.stringify([selection, rootKey, query.roots]);
+      if (selectedRangeCheckedRef.current.get(id) === checked) continue;
+      selectedRangeCheckedRef.current.set(id, checked);
+      // First show the ordinary page, including pins before the selection.
+      // Seek only when an exact restored/selected ancestor is outside it.
+      if (!page.entries.some((entry) => navigationIdentityKey(entry.row.ref) === rootKey)) {
+        void controller.rebaseline(id, { kind: "thread", ref: selectedRoot.row.ref });
+      }
+    }
+  }, [connected, enabled, params.browseMode, params.selectedRef, selectedDirectoryKeys, selectedRoot, state, visible]);
 
   useEffect(() => {
     const viewId = params.attentionView.id;

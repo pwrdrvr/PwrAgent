@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { expect, it, vi } from "vitest";
-import type { AgentEvent, NavigationDirectoryRow, NavigationQueryPage } from "@pwragent/shared";
+import type { AgentEvent, NavigationDirectoryRow, NavigationQueryPage, NavigationRow } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useBoundedNavigationWindow } from "../useBoundedNavigationWindow";
 
@@ -24,6 +24,36 @@ function api() {
       onAgentEvent: (callback: (event: AgentEvent) => void) => { listener = callback; return () => { listener = undefined; }; },
     } satisfies DesktopApi };
 }
+
+it.each([5, 35])("restores selected root %s without discarding the first page when it already contains that root", async (index) => {
+  const fixture = api();
+  const selectedRef = { backend: "codex" as const, threadId: `thread-${index}` };
+  const row = (position: number): NavigationRow => ({
+    id: `thread-${position}`, source: "codex", title: `Thread ${position}`, titleSource: "fallback",
+    ref: { backend: "codex", threadId: `thread-${position}` }, rowRevision: "row", linkedDirectories: [],
+    inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+    queueCount: 0, queueState: "unknown", ...(position === 0 ? { pinnedRank: "1024" } : {}),
+  });
+  fixture.read.mockImplementation(async (request) => {
+    if (request.query.kind === "directory-index") return page({ directories: [directory] });
+    if (request.query.kind === "exact") return page({ entries: [{ row: row(index), placement: { kind: "root" }, orderKey: "selected" }] });
+    const offset = request.anchor?.kind === "thread" ? Number(request.anchor.ref.threadId.slice("thread-".length)) : 0;
+    return page({ complete: false, nextCursor: String(offset + 10), ...(offset ? { rangeStart: offset } : {}),
+      entries: Array.from({ length: 10 }, (_, i) => ({ row: row(offset + i), placement: { kind: "root" as const }, orderKey: String(offset + i) })),
+    });
+  });
+  const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base, desktopApi: fixture.desktopApi,
+    selectedRef, selectedDirectoryKeys: [directory.key],
+  }));
+  const id = `directory:${directory.key}`;
+  await waitFor(() => expect(result.current.resources.get(id)?.state.page?.entries.some((entry) => entry.row.id === selectedRef.threadId)).toBe(true));
+  const reads = fixture.read.mock.calls.map(([request]) => request).filter((request) => request.query.kind === "directory");
+  expect(reads[0]?.anchor).toBeUndefined();
+  expect(reads).toHaveLength(index < 10 ? 1 : 2);
+  expect(result.current.resources.get(id)?.state.page?.entries[0]?.row.id).toBe(index < 10 ? "thread-0" : "thread-35");
+  if (index >= 10) expect(reads[1]?.anchor).toEqual({ kind: "thread", ref: selectedRef });
+  unmount();
+});
 
 it("resolves selected off-page descriptors exactly without repeatedly dropping their demand", async () => {
   const fixture = api();

@@ -45,7 +45,8 @@ it("waits for selected ancestry before opening its root directory range", () => 
   expect([...buildNavigationWindowDemand(pending).keys()]).toEqual(["directory-index", "selected-context"]);
   const root = { backend: "codex" as const, threadId: "off-page-root" };
   const ready = buildNavigationWindowDemand({ ...pending, selectedContextReady: true, selectedRootRef: root });
-  expect(ready.get("directory:directory:42")).toMatchObject({ pageSize: 10, anchor: { kind: "thread", ref: root } });
+  expect(ready.get("directory:directory:42")).toMatchObject({ pageSize: 10 });
+  expect(ready.get("directory:directory:42")?.anchor).toBeUndefined();
 });
 
 it("routes disclosed children and viewer drafts to their explicit owners", () => {

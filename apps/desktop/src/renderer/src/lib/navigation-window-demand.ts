@@ -52,10 +52,8 @@ export function buildNavigationWindowDemand(params: {
       const selectedDirectory = params.selectedDirectoryKeys?.includes(directory.key);
       if (selectedDirectory && params.selectedRef && params.selectedContextReady === false) continue;
       const showUnpinned = params.unpinnedExpandedByKey[directory.key] ?? !directory.directoryThreadsCollapsed;
-      demand.set(`directory:${directory.key}`, { ...request({ kind: "directory", directoryKey: directory.key,
-        roots: showUnpinned ? "all" : "pinned" }),
-        ...(selectedDirectory && params.selectedRootRef ? { anchor: { kind: "thread" as const, ref: params.selectedRootRef } } : {}),
-      });
+      demand.set(`directory:${directory.key}`, request({ kind: "directory", directoryKey: directory.key,
+        roots: showUnpinned ? "all" : "pinned" }));
     }
 
   } else if (params.browseMode === "drafts") {
