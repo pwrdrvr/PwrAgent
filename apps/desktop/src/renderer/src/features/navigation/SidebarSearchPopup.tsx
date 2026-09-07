@@ -99,6 +99,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     available: remoteSearchAvailable,
     completedPeerCount: remoteCompletedPeerCount,
     loading: remoteLoading,
+    notes: remoteNotes,
     results: remoteResults,
     totalPeerCount: remoteTotalPeerCount,
   } = useFederatedThreadSearch({
@@ -401,6 +402,10 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
               {remoteTotalPeerCount > 0
                 ? ` ${remoteCompletedPeerCount}/${remoteTotalPeerCount}`
                 : ""}
+            </span>
+          ) : remoteNotes.length ? (
+            <span className="jump-palette__foot-remote" title={remoteNotes.join("\n")} role="status">
+              Some instances could not be searched
             </span>
           ) : null}
           {trimmed ? (

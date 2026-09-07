@@ -304,7 +304,7 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(readDirectoryStatuses).not.toHaveBeenCalled();
   });
 
-  it("caches a read-only owner projection for bounded navigation search", async () => {
+  it("shares bounded owner queries for navigation search without queue or binding hydration", async () => {
     const listedThreads: AppServerThreadSummary[] = [
       {
         id: "thread-alpha",
@@ -331,9 +331,12 @@ describe("DesktopMessagingBackendBridge", () => {
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
       listThreads: vi.fn(async () => listedThreads),
+      hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
+      getNavigationInputRequestThreadKeys: vi.fn(() => new Set()),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);
-    const reconcileCallsBefore = reconcileNavigationSnapshot.mock.calls.length;
+    const queryRead = vi.spyOn(bridge, "getNavigationQueryPage");
+    const snapshotRead = vi.spyOn(bridge, "getNavigationSnapshot");
 
     await expect(bridge.searchNavigationThreads({ query: "alpha" }))
       .resolves.toMatchObject({ results: [{ id: "thread-alpha" }] });
@@ -343,15 +346,12 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(Buffer.byteLength(JSON.stringify(wireResponse))).toBeLessThan(8 * 1024);
     expect(wireResponse.results[0]).not.toHaveProperty("summary");
 
-    expect(registry.listThreads).toHaveBeenCalledTimes(1);
-    expect(reconcileNavigationSnapshot).toHaveBeenCalledTimes(
-      reconcileCallsBefore + 1,
-    );
-    expect(reconcileNavigationSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
-      backend: "all",
-      partial: true,
-      threads: listedThreads,
-    });
+    expect(queryRead).toHaveBeenCalledWith(expect.objectContaining({ protocol: 2,
+      consumer: "search", query: { kind: "search", text: "alpha" }, pageSize: 8 }));
+    expect(wireResponse.results[0]).toMatchObject({ ref: { backend: "codex", threadId: "thread-alpha" } });
+    expect(registry.getQueuedTurnsSnapshot).not.toHaveBeenCalled();
+    expect(registry.getQueuedExecutionModesSnapshot).not.toHaveBeenCalled();
+    expect(snapshotRead).not.toHaveBeenCalled();
   });
 
   it("filters and bounds generic search on the owner without reconciliation", async () => {
