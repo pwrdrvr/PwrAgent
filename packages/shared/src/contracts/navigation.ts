@@ -1980,6 +1980,9 @@ export type FederationJumpSearchRequest = {
 };
 
 export type FederationJumpSearchResponse = {
+  /** A failed, unready, or unadmitted owner must not certify an empty fleet. */
+  incomplete?: boolean;
+  notes?: string[];
   /** Compact navigation-compatible search placeholders, not hydrated thread
    * state. Owner matching precedes projection. Viewers stamp `federation`;
    * selecting a result fetches authoritative navigation/thread state.

@@ -1349,15 +1349,7 @@ describe("app server ipc", () => {
       FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
     } = await import("../../shared/ipc");
     const searchForJump = federationMock.remoteThreadSummaries.searchForJump;
-    searchForJump.mockImplementation(async (request, onProgress) => {
-      onProgress?.({
-        results: [],
-        completedPeerCount: 1,
-        totalPeerCount: 2,
-        complete: false,
-      });
-      return { results: [] };
-    });
+    searchForJump.mockRejectedValue(new Error("Legacy navigation search must not run."));
     const firstSend = vi.fn();
     const secondSend = vi.fn();
     const firstSender = { isDestroyed: () => false, send: firstSend };
@@ -1386,6 +1378,7 @@ describe("app server ipc", () => {
       FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
       expect.objectContaining({ requestId: 73 }),
     );
+    expect(searchForJump).not.toHaveBeenCalled();
   });
 
   it("invalidates the GraphQL token during an auth recheck", async () => {

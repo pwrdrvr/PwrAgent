@@ -318,6 +318,7 @@ import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
+import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
@@ -6671,9 +6672,14 @@ class DesktopAppServerService {
     request: FederationJumpSearchRequest,
     onProgress?: (progress: FederationJumpSearchProgress) => void,
   ): Promise<FederationJumpSearchResponse> {
-    return await getDesktopFederationRuntime()
-      .remoteThreadSummaries()
-      .searchForJump(request, onProgress);
+    return await searchNavigationOwners({ request, onProgress,
+      owners: getDesktopFederationRuntime().connectedPeerTargets().filter((peer) => peer.capabilities.includes("thread_navigation")),
+      readPage: async (query) => {
+        const consumer = `jump-search:${randomUUID()}`;
+        try { return await this.getNavigationQueryPage(query, consumer); }
+        finally { navigationQueryPool.release(consumer); }
+      },
+    });
   }
 
   async setThreadParent(
