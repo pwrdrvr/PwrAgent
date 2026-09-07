@@ -238,6 +238,16 @@ function buildNativeContextMenuTemplate(
     });
   }
 
+  if (params.mediaType === "image" && params.hasImageContents) {
+    appendSeparator(template);
+    template.push({
+      label: "Copy Image",
+      click: () => {
+        window.webContents.copyImageAt(params.x, params.y);
+      },
+    });
+  }
+
   if (params.linkURL) {
     appendSeparator(template);
     template.push({
