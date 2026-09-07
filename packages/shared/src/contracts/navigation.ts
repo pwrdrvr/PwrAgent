@@ -1792,6 +1792,8 @@ export type NavigationSelectedDetailRequest = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
   /** Explicit review inspection may await this thread's working-state probe. */
   probeWorkingStates?: boolean;
+  /** Explicit review/handoff demand for only this thread's linked workspaces. */
+  includeWorkspaceConfiguration?: boolean;
   ref: NavigationIdentity;
   federationTarget?: FederationTarget;
   knownRevision?: string;
@@ -1805,6 +1807,7 @@ export type NavigationSelectedDetailResponse = {
   identity: "present" | "archived" | "deleted" | "denied" | "unresolved";
   /** Exact-thread compatibility detail; large collections migrate separately. */
   thread?: NavigationThreadSummary;
+  workspaceDirectories?: Array<Pick<NavigationDirectorySummary, "key" | "label" | "path" | "gitStatus">>;
   unchanged?: boolean;
 };
 

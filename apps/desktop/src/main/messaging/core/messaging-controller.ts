@@ -514,7 +514,6 @@ type AttachTargetResolution =
   | {
       ok: true;
       federatedThread?: FederatedThreadRef;
-      navigation: NavigationSnapshot;
       thread: NavigationThreadSummary;
     }
   | Extract<PwrAgentMessagingResponse, { ok: false }>;
@@ -8170,14 +8169,9 @@ export class MessagingController {
     let targetLabel: string | undefined;
     if (effective) {
       try {
-        const navigation = await this.options.backend.getNavigationSnapshot({
-          backend: "all",
-        });
-        targetLabel = navigation.threads.find(
-          (thread) =>
-            thread.source === effective.target.backend
-            && thread.id === effective.target.threadId,
-        )?.title;
+        targetLabel = (await this.readExactNavigationThread({
+          ref: { backend: effective.target.backend, threadId: effective.target.threadId },
+        }))?.title;
       } catch {
         targetLabel = undefined;
       }
@@ -12092,10 +12086,7 @@ export class MessagingController {
           binding.backend,
           federationTargetForBinding(binding),
         );
-        const navigation = await this.options.backend.getNavigationSnapshot({
-          backend: "all",
-          federationTarget: federationTargetForBinding(binding),
-        });
+        const navigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
         const thread = findThreadForBinding(navigation, binding);
         const runtimeMode = buildMessagingAcpRuntimeModeSummary({
           backend: summary,
@@ -12173,9 +12164,7 @@ export class MessagingController {
     }
 
     try {
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const navigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
       const threadState = resolveMessagingThreadState({ binding, navigation });
       const cwds = skillSearchCwdsForThreadState(threadState);
       const response = await this.options.backend.listSkills({
@@ -12429,7 +12418,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const context = handoffContextForBinding(binding, navigation);
     if (!context) {
       await this.deliverHandoffUnavailable(binding, event, "This thread does not have enough Git workspace metadata for handoff.");
@@ -12462,7 +12451,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const context = handoffContextForBinding(binding, navigation);
     if (!context || context.workspaceKind !== "local") {
       await this.deliverHandoffUnavailable(binding, event, "This thread is not currently in a Local workspace that can move to a worktree.");
@@ -12499,7 +12488,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const context = handoffContextForBinding(binding, navigation);
     const request = handoffRequestFromValue(event.value);
     if (!context || !request) {
@@ -12567,7 +12556,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const navigation = await this.readBoundWorkspaceContext(currentBinding);
     const context = handoffContextForBinding(currentBinding, navigation);
     if (!context) {
       await this.deliverHandoffUnavailable(currentBinding, event, "This thread no longer has enough Git workspace metadata for handoff.");
@@ -12603,9 +12592,7 @@ export class MessagingController {
         federationTarget: federationTargetForBinding(currentBinding),
       });
       await this.clearActiveHandoffIntent(event);
-      const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const refreshedNavigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(currentBinding) };
       const updatedBinding = await this.updateBindingAfterHandoff(
         currentBinding,
         result,
@@ -14298,9 +14285,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
+    const navigation: MessagingThreadContext = { kind: "thread", thread: await this.readBoundNavigationThread(binding) };
     const threadState = resolveMessagingThreadState({
       activeTurn: this.getActiveTurn(binding),
       binding,
@@ -17376,7 +17361,7 @@ export class MessagingController {
     }
 
     const location = await this.summarizeAgentMessagingLocation(origin.origin, {
-      navigation: target.navigation,
+      navigation: { kind: "thread", thread: target.thread },
     });
     const resolvedPlacement = this.resolveAttachPlacement({
       location,
@@ -18324,7 +18309,7 @@ export class MessagingController {
     instanceId?: string;
     includeRemote: boolean;
   }): Promise<AttachTargetResolution> {
-    let navigation: NavigationSnapshot;
+    let target: NavigationThreadSummary | undefined;
     try {
       if (this.options.backend.resolveThreadTarget) {
         const resolved = await this.options.backend.resolveThreadTarget(request);
@@ -18335,9 +18320,7 @@ export class MessagingController {
       if (request.instanceId || request.includeRemote === false) {
         return attachTargetNotFound(request.backend, request.threadId);
       }
-      navigation = await this.options.backend.getNavigationSnapshot({
-        backend: request.backend,
-      });
+      target = await this.readExactNavigationThread({ ref: { backend: request.backend, threadId: request.threadId } });
     } catch (error) {
       return {
         ok: false,
@@ -18354,16 +18337,11 @@ export class MessagingController {
       };
     }
 
-    const target = navigation.threads.find(
-      (thread) =>
-        thread.source === request.backend
-        && thread.id === request.threadId,
-    );
     if (!target) {
       return attachTargetNotFound(request.backend, request.threadId);
     }
 
-    return { ok: true, navigation, thread: target };
+    return { ok: true, thread: target };
   }
 
   private resolveAttachPlacement(params: {
@@ -18452,11 +18430,11 @@ export class MessagingController {
       return { ok: true, origin };
     }
 
-    let navigation: NavigationSnapshot | undefined;
+    let navigation: MessagingThreadContext | undefined;
     try {
-      navigation = await this.options.backend.getNavigationSnapshot({
-        backend: context.backend,
-      });
+      navigation = { kind: "thread", thread: await this.readExactNavigationThread({
+        ref: { backend: context.backend, threadId: context.threadId },
+      }) };
     } catch {
       navigation = undefined;
     }
@@ -18501,7 +18479,7 @@ export class MessagingController {
 
   private async summarizeAgentMessagingLocation(
     origin: ActiveAgentMessagingOrigin,
-    options: { navigation?: NavigationSnapshot } = {},
+    options: { navigation?: MessagingNavigationContext } = {},
   ): Promise<PwrAgentMessagingLocationSummary> {
     return {
       actor: summarizeMessagingActor(origin.event.actor),
@@ -18553,7 +18531,7 @@ export class MessagingController {
     };
   }
 
-  private async readExactNavigationThread(request: Omit<NavigationSelectedDetailRequest, "protocol">): Promise<NavigationThreadSummary | undefined> {
+  private async readExactNavigationContext(request: Omit<NavigationSelectedDetailRequest, "protocol">) {
     if (!this.options.backend.getNavigationSelectedDetail) {
       throw new Error("Upgrade the owning instance to navigation query protocol 2 before using thread configuration.");
     }
@@ -18563,7 +18541,7 @@ export class MessagingController {
       || detail.ref.ownerInstanceId !== request.ref.ownerInstanceId) {
       throw new Error("The owning instance did not provide matching ready thread configuration.");
     }
-    if (detail.identity !== "present") return undefined;
+    if (detail.identity !== "present") return { kind: "thread" as const };
     if (!detail.thread || detail.thread.id !== request.ref.threadId || detail.thread.source !== request.ref.backend) {
       throw new Error("Selected thread configuration belongs to a different identity.");
     }
@@ -18574,10 +18552,24 @@ export class MessagingController {
     }
     if (!federation && request.ref.ownerInstanceId) {
       const target = { scope: "remote" as const, instanceId: request.ref.ownerInstanceId };
-      return { ...detail.thread, federation: { ref: { backend: request.ref.backend, threadId: request.ref.threadId, target }, instanceLabel: target.instanceId } };
+      detail.thread = { ...detail.thread, federation: { ref: { backend: request.ref.backend, threadId: request.ref.threadId, target }, instanceLabel: target.instanceId } };
     }
-    return detail.thread;
+    return { kind: "thread" as const, thread: detail.thread, workspaceDirectories: detail.workspaceDirectories };
   }
+  private async readExactNavigationThread(request: Omit<NavigationSelectedDetailRequest, "protocol">): Promise<NavigationThreadSummary | undefined> {
+    return (await this.readExactNavigationContext(request)).thread;
+  }
+
+  private async readBoundWorkspaceContext(binding: MessagingBindingRecord): Promise<MessagingThreadContext> {
+    const target = federationTargetForBinding(binding);
+    const context = await this.readExactNavigationContext({ ref: { backend: binding.backend, threadId: binding.threadId,
+      ...(target?.scope === "remote" ? { ownerInstanceId: target.instanceId } : {}) },
+      federationTarget: target, includeWorkspaceConfiguration: true, probeWorkingStates: true });
+    const linked = context.thread?.linkedDirectories.find((directory) => directory.kind === "local")
+      ?? context.thread?.linkedDirectories[0];
+    return { ...context, directory: context.workspaceDirectories?.find((directory) => directory.path === linked?.path) };
+  }
+
 
   private async readBoundThreadConfiguration(binding: MessagingBindingRecord) {
     if (!this.options.backend.getNavigationLaunchpadConfig) {

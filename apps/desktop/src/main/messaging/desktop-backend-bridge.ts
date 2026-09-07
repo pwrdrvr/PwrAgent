@@ -651,28 +651,16 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     includeRemote?: boolean;
   }) {
     if (!request.instanceId) {
-      const localThreads = await this.registry.listThreads({
-        backend: request.backend,
-        archived: false,
-        callerReason: "messaging-attach-thread-target",
-      });
-      const localThread = localThreads.find(
-        (thread) => thread.id === request.threadId,
-      );
-      if (localThread) {
-        const navigation = await this.getNavigationSnapshot({
-          backend: request.backend,
-        });
-        const thread = navigation.threads.find(
-          (candidate) =>
-            candidate.source === request.backend
-            && candidate.id === request.threadId,
-        );
-        if (thread) {
-          return { navigation, thread };
-        }
+      const detail = await this.getNavigationSelectedDetail({ protocol: 2,
+        ref: { backend: request.backend, threadId: request.threadId } });
+      if (detail.protocol !== 2 || detail.unchanged || detail.readiness !== "ready") {
+        throw new Error("The local instance did not provide ready thread configuration.");
+      }
+      if (detail.identity === "present" && detail.thread && !detail.thread.archivedAt) {
+        return { thread: detail.thread };
       }
     }
+
     if (request.includeRemote === false || !this.federation) {
       return undefined;
     }
@@ -692,24 +680,16 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         );
       }
       const federationTarget = match.peer.target;
-      const navigation = await this.federation.remoteNavigationSnapshot(
-        federationTarget,
-        {
-          backend: request.backend,
-          federationTarget,
-        },
-        { kind: "all" },
-      );
-      const thread = navigation.threads.find(
-        (candidate) =>
-          candidate.source === request.backend
-          && candidate.id === request.threadId,
-      );
-      if (!thread) {
-        return undefined;
+      const detail = await this.getNavigationSelectedDetail({ protocol: 2, federationTarget,
+        ref: { backend: request.backend, threadId: request.threadId, ownerInstanceId: federationTarget.instanceId } });
+      if (detail.protocol !== 2 || detail.unchanged || detail.readiness !== "ready"
+        || detail.ref.backend !== request.backend || detail.ref.threadId !== request.threadId
+        || detail.ref.ownerInstanceId !== federationTarget.instanceId) {
+        throw new Error("The owning instance did not provide matching ready thread configuration.");
       }
+      const thread = detail.identity === "present" ? detail.thread : undefined;
+      if (!thread || thread.archivedAt) return undefined;
       return {
-        navigation,
         thread,
         federatedThread: buildFederatedThreadRef({
           backend: request.backend,

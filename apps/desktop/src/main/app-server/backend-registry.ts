@@ -13084,6 +13084,10 @@ export class DesktopBackendRegistry {
     return { threadId };
   }
 
+  async readSelectedWorkspaceGitStatus(path: string): Promise<NavigationDirectoryGitStatus | undefined> {
+    return this.gitDirectoryService.readDirectoryStatus({ path });
+  }
+
   async readDirectoryStatuses(directories: NavigationDirectorySummary[]): Promise<
     Record<string, NavigationDirectoryGitStatus | undefined>
   > {

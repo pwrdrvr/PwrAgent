@@ -187,7 +187,18 @@ export class NavigationDetailService {
         identity: "unresolved",
       };
     }
-    const detailRevision = revision(thread);
+    let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
+    if (request.includeWorkspaceConfiguration) {
+      if (thread.linkedDirectories.length > 100) {
+        throw new NavigationQueryError("navigation_item_too_large", "Selected workspace configuration exceeds the 100-directory detail budget.");
+      }
+      workspaceDirectories = [];
+      for (const directory of thread.linkedDirectories) {
+        workspaceDirectories.push({ key: directory.id, label: directory.label, path: directory.path,
+          gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined });
+      }
+    }
+    const detailRevision = revision({ thread, workspaceDirectories });
     if (request.knownRevision === detailRevision) {
       return {
         protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
@@ -205,6 +216,7 @@ export class NavigationDetailService {
       readiness: "ready",
       identity: "present",
       thread,
+      ...(workspaceDirectories ? { workspaceDirectories } : {}),
     };
     if (responseBytes(response) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
       throw new NavigationQueryError(
