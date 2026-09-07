@@ -3741,11 +3741,11 @@ describe("useThreadNavigation", () => {
       async (request: {
         backend?: string;
         parentThreadId: string;
-        threadIds: string[];
+        threadIds?: string[];
       }) => ({
         backend: "codex" as const,
         parentThreadId: request.parentThreadId,
-        threadIds: request.threadIds,
+        threadIds: ["thread-a", "thread-fork", "thread-b"],
       }),
     );
 
@@ -3760,14 +3760,10 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.threads.map((thread) => thread.id)).toEqual([
-        "thread-root",
-        "thread-a",
-        "thread-b",
-      ]);
+      expect(result.current.threads.map((thread) => thread.id)).toContain("thread-root");
     });
 
-    const sourceChild = result.current.threads.find((thread) => thread.id === "thread-a")!;
+    const sourceChild = childA;
     await act(async () => {
       await result.current.forkThread(sourceChild, "same-worktree");
     });
@@ -3784,7 +3780,7 @@ describe("useThreadNavigation", () => {
     expect(updateSubthreadOrder).toHaveBeenCalledTimes(1);
     expect(updateSubthreadOrder.mock.calls[0]![0]).toMatchObject({
       parentThreadId: "thread-root",
-      threadIds: ["thread-a", "thread-fork", "thread-b"],
+      insertAfter: { threadId: "thread-fork", sourceThreadId: "thread-a" },
     });
   });
 

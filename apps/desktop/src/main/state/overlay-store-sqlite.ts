@@ -1,4 +1,4 @@
-import { buildAppendPinRank } from "@pwragent/shared";
+import { buildAppendPinRank, insertSubthreadIdAfter } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import type {
@@ -3807,26 +3807,48 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   async updateSubthreadOrder(params: {
     backend: ThreadOverlayState["backend"];
     parentThreadId: string;
-    threadIds: string[];
+    threadIds?: string[];
+    insertAfter?: { threadId: string; sourceThreadId: string };
   }): Promise<string[]> {
-    const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
-    const parent = this.getThread(parentKey) ?? {
-      backend: params.backend,
-      threadId: params.parentThreadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const seen = new Set<string>();
-    const threadIds = params.threadIds.filter((threadId) => {
-      if (seen.has(threadId)) return false;
-      seen.add(threadId);
-      return threadId !== params.parentThreadId;
-    });
-    this.putThread(parentKey, {
-      ...parent,
-      subthreadOrder: threadIds,
-    });
-    return threadIds;
+    return this.stateDb.raw.transaction(() => {
+      const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
+      const parent = this.getThread(parentKey) ?? {
+        backend: params.backend,
+        threadId: params.parentThreadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      let requestedOrder = params.threadIds;
+      if (params.insertAfter) {
+        if (params.threadIds !== undefined || !params.insertAfter.threadId || !params.insertAfter.sourceThreadId) {
+          throw new Error("A relative child move requires exactly one source and child identity.");
+        }
+        const { threadId, sourceThreadId } = params.insertAfter;
+        for (const id of [threadId, sourceThreadId]) {
+          if (id === params.parentThreadId && id === sourceThreadId) continue;
+          const child = this.getThread(buildThreadIdentityKey(params.backend, id));
+          if (!child || child.archiveTombstonedAt !== undefined || child.parentThreadId !== params.parentThreadId
+            || (child.parentThreadBackend ?? child.backend) !== params.backend || child.parentThreadInstanceId) {
+            throw new Error("The owning instance no longer places that child in this group.");
+          }
+        }
+        if (parent.archiveTombstonedAt !== undefined || threadId === params.parentThreadId || threadId === sourceThreadId) {
+          throw new Error("The relative child move targets an invalid group identity.");
+        }
+        requestedOrder = insertSubthreadIdAfter(parent.subthreadOrder ?? [], sourceThreadId, threadId);
+      }
+      if (!requestedOrder) throw new Error("A child order or relative insertion is required.");
+      const seen = new Set<string>();
+      const threadIds = requestedOrder.filter((threadId) => {
+        if (seen.has(threadId)) return false;
+        seen.add(threadId);
+        return threadId !== params.parentThreadId;
+      });
+      if (JSON.stringify(threadIds) !== JSON.stringify(parent.subthreadOrder ?? [])) {
+        this.putThread(parentKey, { ...parent, subthreadOrder: threadIds });
+      }
+      return threadIds;
+    })();
   }
 
   async setSubthreadsCollapsed(params: {

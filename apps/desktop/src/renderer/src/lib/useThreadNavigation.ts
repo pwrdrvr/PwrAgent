@@ -4,7 +4,7 @@ import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadCon
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
-import { readNavigationActionDetail, readNavigationActionThread } from "./navigation-action-authority";
+import { readNavigationActionDetail, readNavigationActionThread, resolveNavigationActionGroupRoot } from "./navigation-action-authority";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
@@ -47,7 +47,6 @@ import {
   compareThreadsByCreatedAtDesc,
   DEFAULT_NAVIGATION_BROWSE_MODE,
   federatedThreadIdentityKey,
-  insertSubthreadIdAfter,
   isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
   normalizeNavigationBrowseMode,
@@ -5194,30 +5193,15 @@ export function useThreadNavigation(
    * since the source has then become effectively top-level.
    */
   const resolveGroupRoot = useCallback(
-    (source: NavigationThreadSummary): NavigationThreadSummary => {
-      if (!source.parentThreadId) {
-        return source;
-      }
-      const threads = loadedThreadRows(stateRef.current.rows) ?? [];
-      const threadByKey = new Map(
-        threads.map((thread) => [
-          threadSummaryIdentityKey(thread),
-          thread,
-        ]),
-      );
-      const parentKey = resolveThreadParentKey(source, threadByKey);
-      const root = parentKey ? threadByKey.get(parentKey) : undefined;
-      return root ?? source;
-    },
-    [],
+    (source: NavigationThreadSummary) => resolveNavigationActionGroupRoot({ api: desktopApi, thread: source,
+      target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal }),
+    [desktopApi],
   );
 
   /**
    * Place a freshly created child directly below the card it was spawned from.
-   * Writes the full current child order into the root's `subthreadOrder` (so the
-   * tray behaves like a pinned tray — every child explicitly ranked, born in
-   * place and staying there) with `newThreadId` inserted after `sourceThreadId`,
-   * then expands the group if it was collapsed so the new child is visible.
+   * The owner inserts into its complete current order, preserving unloaded
+   * siblings, then expands the group so the new child is visible.
    */
   const insertSubthreadBelowSource = useCallback(
     async (
@@ -5227,55 +5211,19 @@ export function useThreadNavigation(
       newThreadId: string,
       federationTarget?: FederationTarget,
     ): Promise<void> => {
-      const snapshot = stateRef.current.rows;
-      if (!snapshot) {
+      let root: NavigationThreadSummary;
+      try {
+        root = await readNavigationActionThread({ api: desktopApi,
+          thread: { source: parentBackend, id: rootThreadId }, target: federationTarget,
+          signal: actionAbortControllerRef.current.signal });
+      } catch (error) {
+        // Creation has already succeeded. Preserve its selection even if the
+        // owner's group configuration is no longer available for insertion.
+        console.warn("Could not load the group order for the created child:", error);
         return;
       }
-      const threadByKey = new Map(
-        loadedThreadRows(snapshot).map((thread) => [
-          threadSummaryIdentityKey(thread),
-          thread,
-        ]),
-      );
-      const rootKey = federationTarget
-        && isRemoteFederationTarget(federationTarget)
-        ? federatedThreadIdentityKey({
-            backend: parentBackend,
-            target: federationTarget,
-            threadId: rootThreadId,
-          })
-        : buildThreadIdentityKey(parentBackend, rootThreadId);
-      const root = threadByKey.get(rootKey);
-      if (
-        federationTarget
-        && (
-          !root
-          || !threadSupportsFederationCapability(root, "thread_grouping")
-        )
-      ) {
-        return;
-      }
-      const currentChildIds = sortSubthreadSummaries(
-        root ?? { subthreadOrder: undefined },
-        loadedThreadRows(snapshot).filter(
-          (thread) => resolveThreadParentKey(thread, threadByKey) === rootKey,
-        ),
-      ).map((child) => child.id);
-      const nextOrder = insertSubthreadIdAfter(
-        currentChildIds,
-        sourceThreadId,
-        newThreadId,
-      );
-
-      setState((current) => ({
-        ...current,
-        rows: updateSubthreadOrderInLoadedRows(current.rows, {
-          backend: parentBackend,
-          federationTarget,
-          parentThreadId: rootThreadId,
-          threadIds: nextOrder,
-        }),
-      }));
+      const rootKey = threadSummaryIdentityKey(root);
+      if (federationTarget && !threadSupportsFederationCapability(root, "thread_grouping")) return;
       // Await the persist so callers can sequence the authoritative refresh
       // after it commits — otherwise a refresh racing ahead of this write can
       // momentarily resurrect the pre-insert order.
@@ -5286,7 +5234,7 @@ export function useThreadNavigation(
             backend: parentBackend,
             federationTarget,
             parentThreadId: rootThreadId,
-            threadIds: nextOrder,
+            insertAfter: { threadId: newThreadId, sourceThreadId },
           });
           setState((current) => ({
             ...current,
@@ -5334,11 +5282,13 @@ export function useThreadNavigation(
       }
 
       let workspaceDirectories: Awaited<ReturnType<typeof readNavigationActionDetail>>["workspaceDirectories"];
+      let groupRoot: NavigationThreadSummary;
       try {
         const detail = await readNavigationActionDetail({ api: desktopApi, thread: parent, target: readRendererFederationTarget(),
           signal: actionAbortControllerRef.current.signal, includeWorkspaceConfiguration: true });
         parent = detail.thread;
         workspaceDirectories = detail.workspaceDirectories;
+        groupRoot = await resolveGroupRoot(parent);
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
         return;
@@ -5353,7 +5303,7 @@ export function useThreadNavigation(
       // composer (two children of one root must not collide), but link the new
       // thread to the group root and remember the source for in-place insertion.
       const directoryKey = buildSubthreadLaunchpadKey(parent, mode);
-      const groupRoot = resolveGroupRoot(parent);
+
       const federationTarget =
         parent.federation?.ref.target ?? rendererFederationTarget;
       const groupRootInstanceId = groupRoot.federation?.ref.target
@@ -5504,15 +5454,17 @@ export function useThreadNavigation(
         return;
       }
 
+      let groupRoot: NavigationThreadSummary;
       try {
         parent = await readNavigationActionThread({ api: desktopApi, thread: parent, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
+        groupRoot = await resolveGroupRoot(parent);
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
         return;
       }
 
       const directory = selectThreadWorkspace(parent, mode);
-      const groupRoot = resolveGroupRoot(parent);
+
       const federationTarget = parent.federation?.ref.target ??
         readRendererFederationTarget();
       const groupRootInstanceId = groupRoot.federation?.ref.target
@@ -6721,19 +6673,9 @@ export function useThreadNavigation(
         // card. Plain new-thread launchpads have no parent and skip this. Await
         // so the order write commits before the refresh below reads it back.
         if (materializeParentThreadId) {
-          const groupRoot = loadedThreadRows(stateRef.current.rows).find(
-            (thread) =>
-              thread.source === materializeParentThreadBackend
-              && thread.id === materializeParentThreadId,
-          );
-          const subthreadOrderTarget = groupRoot
-            ? groupRoot.federation?.ref.target
-            : materializeParentThreadInstanceId
-              ? {
-                  scope: "remote" as const,
-                  instanceId: materializeParentThreadInstanceId,
-                }
-              : federationTarget;
+          const subthreadOrderTarget = materializeParentThreadInstanceId
+            ? { scope: "remote" as const, instanceId: materializeParentThreadInstanceId }
+            : federationTarget;
           await insertSubthreadBelowSource(
             materializeParentThreadBackend,
             materializeParentThreadId,

@@ -2061,8 +2061,10 @@ export type UpdateSubthreadOrderRequest = {
   federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
-  threadIds: ThreadIdentifier[];
-};
+} & (
+  | { threadIds: ThreadIdentifier[]; insertAfter?: never }
+  | { threadIds?: never; insertAfter: { threadId: ThreadIdentifier; sourceThreadId: ThreadIdentifier } }
+);
 
 export type UpdateSubthreadOrderResponse = {
   backend: AppServerBackendKind;
