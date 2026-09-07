@@ -33,6 +33,34 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it.each([false, true])("waits for New Thread owner authority and respects changed selection=%s", async (changeSelection) => {
+  const f = fixture();
+  let resolve!: (detail: NavigationSelectedDetailResponse) => void;
+  const pending = new Promise<NavigationSelectedDetailResponse>((done) => { resolve = done; });
+  f.detail.mockImplementation((request) => request.ref.threadId === "thread-0" ? pending : Promise.resolve({
+    protocol: 2, ref: request.ref, revision: "other", readiness: "ready", identity: "present", thread: row(request.ref.threadId),
+  }));
+  const ensureDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["ensureDirectoryLaunchpad"]>>(async (request) => ({
+    defaults: { backend: "codex", executionMode: "default" },
+    launchpad: { ...request, backend: "codex", executionMode: "default", workMode: "local", prompt: "", createdAt: 1, updatedAt: 1 },
+  }));
+  const api = { ...f.api, ensureDirectoryLaunchpad };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  await waitFor(() => expect(result.current.selectedThreadKey).toBe("codex:thread-0"));
+  let creation!: Promise<void>;
+  act(() => { creation = result.current.createThread(); });
+  expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+  if (changeSelection) act(() => result.current.selectThread(row("thread-1")));
+  await act(async () => {
+    resolve({ protocol: 2, ref: row("thread-0").ref, revision: "owner", readiness: "ready", identity: "present", thread: row("thread-0") });
+    await creation;
+  });
+  expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(changeSelection ? 0 : 1);
+  if (changeSelection) expect(result.current.selectedThreadKey).toBe("codex:thread-1");
+  expect(f.legacy).not.toHaveBeenCalled();
+  unmount();
+});
+
 it("fences a page started before an accepted relative pin move and accepts the next owner baseline", async () => {
   const f = fixture();
   const originalRead = f.read.getMockImplementation()!;

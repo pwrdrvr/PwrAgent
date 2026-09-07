@@ -5046,16 +5046,22 @@ export function useThreadNavigation(
       setArchiveThreadError(undefined);
       setSetThreadModelSettingsError(undefined);
 
+      const selectionAtStart = selectedItemKeyRef.current;
       try {
-        if (!options?.forceWorkspace && selectedThreadKey && !selectedDetail.state?.detail?.thread) {
-          throw new Error("Wait for the selected thread's owner configuration before creating a thread here.");
+        let selectedConfiguration = selectedDetail.state?.detail?.thread;
+        if (!options?.forceWorkspace && selectedIdentity && selectedDetail.state?.readiness !== "ready") {
+          selectedConfiguration = await readNavigationActionThread({ api: desktopApi,
+            thread: { source: selectedIdentity.backend, id: selectedIdentity.threadId },
+            target: selectedIdentity.ownerInstanceId ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId } : rendererFederationTarget,
+            signal: actionAbortControllerRef.current.signal });
+          if (selectedItemKeyRef.current !== selectionAtStart) return;
         }
         const targetDirectory = resolveCreateThreadTargetDirectory({
           directories,
           selectedDirectory: activeFederatedLaunchpad
             ? undefined
             : selectedDirectory,
-          selectedThread: selectedDetail.state?.detail?.thread,
+          selectedThread: selectedConfiguration,
           forceWorkspace: options?.forceWorkspace,
         });
         const directoryKey = targetDirectory.directoryKey;
@@ -5151,7 +5157,9 @@ export function useThreadNavigation(
       activeFederatedLaunchpad,
       selectedDirectory,
       selectedThreadKey,
+      selectedIdentity,
       selectedDetail.state?.detail?.thread,
+      selectedDetail.state?.readiness,
       takePendingDirectoryGitStatus,
       rendererFederationTarget,
     ]
