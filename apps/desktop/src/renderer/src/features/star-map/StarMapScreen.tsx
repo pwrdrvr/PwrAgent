@@ -1118,6 +1118,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   ], [localThreads, remote.threadsByInstance]);
   const localDraftThreadKeys = useThreadDraftIndicators({ composerDraftStore: props.composerDraftStore, threads: draftIndicatorThreads });
   const draftThreadKeys = props.draftThreadKeys ?? localDraftThreadKeys;
+  const remoteGeometryError = remote.geometryErrorsByInstance.entries().next().value;
+  const remoteGeometryErrorText = remoteGeometryError
+    ? `${peers.find((peer) => peer.id === remoteGeometryError[0])?.label ?? remoteGeometryError[0]}: ${remoteGeometryError[1]}`
+    : undefined;
   const federationLayoutReady =
     (!localRowsAreOwnerMatched || (localFeed.geometryReady && Boolean(localFeed.counts)) || Boolean(localFeed.error))
     && (!props.desktopApi?.readFederationHealth
@@ -1130,8 +1134,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
             peer.status !== "connected"
             || !peer.capabilities.includes("thread_navigation")
             || peer.navigationQueryProtocol !== 2
-            || remote.threadsByInstance.has(peer.id)
-            || remote.unreachableInstanceIds.has(peer.id),
+            || ((remote.geometryReadyInstanceIds.has(peer.id) || remote.geometryErrorsByInstance.has(peer.id))
+              && (remote.countsByInstance.has(peer.id) || remote.unreachableInstanceIds.has(peer.id))),
         )
       )
     ));
@@ -5269,13 +5273,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }}
         />
       ) : null}
-      {cardError || localFeed.error ? (
+      {cardError || localFeed.error || remoteGeometryErrorText ? (
         <p className="star-map__card-error" role="alert">
-          {cardError ?? localFeed.error}
+          {cardError ?? localFeed.error ?? remoteGeometryErrorText}
           <button
             type="button"
             aria-label={cardError ? "Dismiss error" : "Retry navigation"}
-            onClick={() => { if (cardError) setCardError(undefined); else void localFeed.refresh(); }}
+            onClick={() => {
+              if (cardError) setCardError(undefined);
+              else if (localFeed.error) void localFeed.refresh();
+              else if (remoteGeometryError) void remote.refreshInstance(remoteGeometryError[0]).catch(() => undefined);
+            }}
           >
             {cardError ? "×" : "Retry"}
           </button>

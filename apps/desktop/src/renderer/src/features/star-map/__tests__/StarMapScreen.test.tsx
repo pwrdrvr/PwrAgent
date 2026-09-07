@@ -907,6 +907,7 @@ describe("StarMapScreen", () => {
     });
     expect(getNavigationQueryPage).toHaveBeenLastCalledWith(
       expect.objectContaining({ federationTarget: remoteTarget }),
+      expect.stringContaining(":remote-query:"),
     );
     await waitFor(() => {
       expect(

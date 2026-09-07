@@ -82,6 +82,59 @@ function buildDesktopApi(): DesktopApi {
 }
 
 describe("useStarMapThreads", () => {
+  it("publishes Attention rows while complete project geometry is still pending", async () => {
+    const desktopApi = buildDesktopApi();
+    const normal = desktopApi.getNavigationQueryPage!;
+    let finish!: (page: NavigationQueryPage) => void;
+    const geometry = new Promise<NavigationQueryPage>((resolve) => { finish = resolve; });
+    desktopApi.getNavigationQueryPage = vi.fn((request) => request.query.kind === "star-map-geometry" ? geometry : normal(request));
+    const hook = renderHook(() => useStarMapThreads({ desktopApi, peers: [peer("a", "connected")], enabled: true }));
+    await waitFor(() => expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("thread-a"));
+    expect(hook.result.current.countsByInstance.get("a")?.total).toBe(12);
+    expect(hook.result.current.geometryReadyInstanceIds.has("a")).toBe(false);
+    await act(async () => finish(queryPage({ instanceId: "a" })));
+    await waitFor(() => expect(hook.result.current.geometryReadyInstanceIds.has("a")).toBe(true));
+    hook.unmount();
+  });
+
+  it("resolves a restored card independently of pending rows and geometry without inventing counts", async () => {
+    let finishRows!: (page: NavigationQueryPage) => void;
+    let finishGeometry!: (page: NavigationQueryPage) => void;
+    const rows = new Promise<NavigationQueryPage>((resolve) => { finishRows = resolve; });
+    const geometry = new Promise<NavigationQueryPage>((resolve) => { finishGeometry = resolve; });
+    const desktopApi: DesktopApi = { getNavigationQueryPage: vi.fn((request) => {
+      if (request.query.kind === "star-map-geometry") return geometry;
+      if (request.query.kind === "exact") return Promise.resolve(queryPage({ instanceId: "a", threadId: "restored" }));
+      return rows;
+    }) };
+    const demand = new Map([["a", [{ backend: "codex" as const, threadId: "restored", ownerInstanceId: "a" }]]]);
+    const hook = renderHook(() => useStarMapThreads({ desktopApi, peers: [peer("a", "connected")], enabled: true, demandedIdentitiesByInstance: demand }));
+    await waitFor(() => expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("restored"));
+    expect(hook.result.current.countsByInstance.has("a")).toBe(false);
+    expect(hook.result.current.geometryReadyInstanceIds.has("a")).toBe(false);
+    await act(async () => { finishRows(queryPage({ instanceId: "a", threadId: "attention" })); finishGeometry(queryPage({ instanceId: "a" })); });
+    await waitFor(() => expect(hook.result.current.threadsByInstance.get("a")).toHaveLength(2));
+    expect(hook.result.current.countsByInstance.get("a")?.total).toBe(12);
+    hook.unmount();
+  });
+
+  it("retains ready rows after a geometry failure and clears the geometry error on retry", async () => {
+    const desktopApi = buildDesktopApi();
+    const normal = desktopApi.getNavigationQueryPage!;
+    let failing = true;
+    desktopApi.getNavigationQueryPage = vi.fn((request) => request.query.kind === "star-map-geometry" && failing
+      ? Promise.reject(new Error("Project geometry exceeds its budget.")) : normal(request));
+    const hook = renderHook(() => useStarMapThreads({ desktopApi, peers: [peer("a", "connected")], enabled: true }));
+    await waitFor(() => expect(hook.result.current.geometryErrorsByInstance.get("a")).toContain("budget"));
+    expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("thread-a");
+    expect(hook.result.current.unreachableInstanceIds.has("a")).toBe(false);
+    failing = false;
+    await act(async () => hook.result.current.refreshInstance("a"));
+    expect(hook.result.current.geometryErrorsByInstance.has("a")).toBe(false);
+    expect(hook.result.current.geometryReadyInstanceIds.has("a")).toBe(true);
+    hook.unmount();
+  });
+
   it("keeps another owner's pending card query through a peer reconnect", async () => {
     const desktopApi = buildDesktopApi();
     const normal = desktopApi.getNavigationQueryPage!;

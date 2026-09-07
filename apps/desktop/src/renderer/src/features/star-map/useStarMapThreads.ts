@@ -24,8 +24,6 @@ type RetainedPeerQuery = {
   completeRevision?: string;
   counts: NavigationCounts;
   facets?: NavigationStarMapFacetCounts;
-  directories: NavigationDirectoryRow[];
-  exactThreads: NavigationThreadSummary[];
   generation: string;
   nextCursor?: string;
   queryKey: string;
@@ -37,6 +35,8 @@ export type StarMapRemoteThreads = {
   facetsByInstance: Map<string, NavigationStarMapFacetCounts>;
   /** Compact project/group geometry descriptors for each owner. */
   directoriesByInstance: Map<string, NavigationDirectoryRow[]>;
+  geometryReadyInstanceIds: Set<string>;
+  geometryErrorsByInstance: Map<string, string>;
   /** Per-instance bounded row pages, retained across peer reconnect churn. */
   threadsByInstance: Map<string, NavigationThreadSummary[]>;
   /** Instances whose last bounded query failed (rendered as unreachable). */
@@ -51,6 +51,8 @@ export type StarMapRemoteThreads = {
 
 type StarMapRemoteThreadState = {
   queriesByInstance: Map<string, RetainedPeerQuery>;
+  geometryByInstance: Map<string, { directories: NavigationDirectoryRow[]; ready: boolean; error?: string }>;
+  exactThreadsByInstance: Map<string, NavigationThreadSummary[]>;
   unreachableInstanceIds: Set<string>;
   staleInstanceIds: Set<string>;
 };
@@ -167,6 +169,8 @@ export function useStarMapThreads(params: {
   const filters = params.filters;
   const [state, setState] = useState<StarMapRemoteThreadState>({
     queriesByInstance: new Map(),
+    geometryByInstance: new Map(),
+    exactThreadsByInstance: new Map(),
     unreachableInstanceIds: new Set(),
     staleInstanceIds: new Set(),
   });
@@ -203,48 +207,24 @@ export function useStarMapThreads(params: {
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       if (ownerGeneration === undefined) throw new Error("This owner is not connected with navigation query protocol 2.");
       const isCurrent = () => generationRef.current === generation && ownerGenerations.current.get(instanceId) === ownerGeneration;
-      let geometryLease: ReturnType<typeof navigationGeometryBudget.begin> | undefined;
-      try {
-        const key = `${viewId}:${instanceId}:geometry`;
-        metadataKeys.current.add(key);
-        const lease = navigationGeometryBudget.begin(key);
-        geometryLease = lease;
-        const previous = stateRef.current.queriesByInstance.get(instanceId);
-        attentionOwnersRef.current.add(instanceId);
-        const baseRequest = attentionRequest({ instanceId, filters, attentionView });
-        const [rowResult, geometryResult] = await Promise.allSettled([
-          withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!({
-            ...baseRequest,
-            completeBaselineRevision: previous?.completeRevision,
-          }, consumerId)),
-          withQueryConsumer(instanceId, (consumerId) => readNavigationQueryRange({
-            request: { ...geometryRequest(instanceId), pageSize: 100 },
-            read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
-            isCancelled: () => !isCurrent(),
-            maxBytes: 8 * 1024 * 1024,
-            reserveBytes: lease.reserve,
-            releaseBytes: lease.unreserve,
-          })),
-        ]);
-        if (rowResult.status === "rejected") throw rowResult.reason;
-        if (geometryResult.status === "rejected") throw geometryResult.reason;
-        const page = rowResult.value;
-        const geometry = geometryResult.value;
+      attentionOwnersRef.current.add(instanceId);
+      const previous = stateRef.current.queriesByInstance.get(instanceId);
+      const rows = withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!({
+        ...attentionRequest({ instanceId, filters, attentionView }),
+        completeBaselineRevision: previous?.completeRevision,
+      }, consumerId)).then((page) => {
         if (!isCurrent()) return;
-        geometryLease.commit();
+        if (page.unchanged && (!previous?.completeRevision || previous.completeRevision !== page.countsRevision)) {
+          throw new Error("Navigation unchanged response has no matching complete owner baseline.");
+        }
         setState((current) => {
           const queriesByInstance = new Map(current.queriesByInstance);
           const retained = queriesByInstance.get(instanceId);
-          const attentionThreads = page.unchanged
-            ? retained?.attentionThreads ?? []
-            : mergeEntries([], page.entries);
           queriesByInstance.set(instanceId, {
-            attentionThreads,
+            attentionThreads: page.unchanged ? retained?.attentionThreads ?? [] : mergeEntries([], page.entries),
             completeRevision: page.complete ? page.countsRevision : undefined,
             counts: page.counts,
             facets: page.facets,
-            directories: geometry.directories ?? [],
-            exactThreads: retained?.exactThreads ?? [],
             generation: page.generation,
             nextCursor: page.nextCursor,
             queryKey: page.queryKey,
@@ -253,22 +233,57 @@ export function useStarMapThreads(params: {
           unreachableInstanceIds.delete(instanceId);
           const staleInstanceIds = new Set(current.staleInstanceIds);
           staleInstanceIds.delete(instanceId);
-          return { queriesByInstance, unreachableInstanceIds, staleInstanceIds };
+          return { ...current, queriesByInstance, unreachableInstanceIds, staleInstanceIds };
         });
-      } catch (error) {
-        if (isCurrent()) {
-          setState((current) => {
-            const unreachableInstanceIds = new Set(current.unreachableInstanceIds);
-            unreachableInstanceIds.add(instanceId);
-            const staleInstanceIds = new Set(current.staleInstanceIds);
-            if (current.queriesByInstance.has(instanceId)) {
-              staleInstanceIds.add(instanceId);
-            }
-            return { ...current, unreachableInstanceIds, staleInstanceIds };
-          });
-        }
+      }).catch((error: unknown) => {
+        if (isCurrent()) setState((current) => {
+          const unreachableInstanceIds = new Set(current.unreachableInstanceIds);
+          unreachableInstanceIds.add(instanceId);
+          const staleInstanceIds = new Set(current.staleInstanceIds);
+          if (current.queriesByInstance.has(instanceId) || current.exactThreadsByInstance.has(instanceId)) staleInstanceIds.add(instanceId);
+          return { ...current, unreachableInstanceIds, staleInstanceIds };
+        });
         throw error;
-      } finally { geometryLease?.dispose(); }
+      });
+      const geometry = (async () => {
+        let lease: ReturnType<typeof navigationGeometryBudget.begin> | undefined;
+        try {
+          const key = `${viewId}:${instanceId}:geometry`;
+          metadataKeys.current.add(key);
+          const reservation = navigationGeometryBudget.begin(key);
+          lease = reservation;
+          setState((current) => {
+            const geometryByInstance = new Map(current.geometryByInstance);
+            geometryByInstance.set(instanceId, { directories: geometryByInstance.get(instanceId)?.directories ?? [], ready: false });
+            return { ...current, geometryByInstance };
+          });
+          const page = await withQueryConsumer(instanceId, (consumerId) => readNavigationQueryRange({
+            request: { ...geometryRequest(instanceId), pageSize: 100 },
+            read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
+            isCancelled: () => !isCurrent(),
+            maxBytes: 8 * 1024 * 1024,
+            reserveBytes: reservation.reserve,
+            releaseBytes: reservation.unreserve,
+          }));
+          if (!isCurrent()) return;
+          reservation.commit();
+          setState((current) => {
+            const geometryByInstance = new Map(current.geometryByInstance);
+            geometryByInstance.set(instanceId, { directories: page.directories ?? [], ready: true });
+            return { ...current, geometryByInstance };
+          });
+        } catch (error) {
+          if (isCurrent()) setState((current) => {
+            const geometryByInstance = new Map(current.geometryByInstance);
+            geometryByInstance.set(instanceId, { directories: geometryByInstance.get(instanceId)?.directories ?? [], ready: false,
+              error: error instanceof Error ? error.message : String(error) });
+            return { ...current, geometryByInstance };
+          });
+          throw error;
+        } finally { lease?.dispose(); }
+      })();
+      const results = await Promise.allSettled([rows, geometry]);
+      for (const result of results) if (result.status === "rejected") throw result.reason;
     },
     [desktopApi, filters, attentionView, viewId, withQueryConsumer],
   );
@@ -323,7 +338,8 @@ export function useStarMapThreads(params: {
 
   useEffect(() => {
     const known = new Set(knownIds.length > 0 ? knownIds.split("\n") : []);
-    for (const instanceId of stateRef.current.queriesByInstance.keys()) {
+    const retainedOwners = new Set([...stateRef.current.queriesByInstance.keys(), ...stateRef.current.geometryByInstance.keys(), ...stateRef.current.exactThreadsByInstance.keys()]);
+    for (const instanceId of retainedOwners) {
       if (known.has(instanceId)) continue;
       const geometryKey = `${viewId}:${instanceId}:geometry`;
       const exactKey = `${viewId}:${instanceId}:exact`;
@@ -339,13 +355,16 @@ export function useStarMapThreads(params: {
       const queriesByInstance = new Map(
         [...current.queriesByInstance].filter(([instanceId]) => known.has(instanceId)),
       );
+      const geometryByInstance = new Map([...current.geometryByInstance].filter(([instanceId]) => known.has(instanceId))
+        .map(([instanceId, geometry]) => [instanceId, { ...geometry, ready: connected.has(instanceId) && geometry.ready }]));
+      const exactThreadsByInstance = new Map([...current.exactThreadsByInstance].filter(([instanceId]) => known.has(instanceId)));
       const unreachableInstanceIds = new Set(
         [...current.unreachableInstanceIds].filter((instanceId) => known.has(instanceId)),
       );
       const staleInstanceIds = new Set(
-        [...queriesByInstance.keys()].filter((instanceId) => !connected.has(instanceId)),
+        [...new Set([...queriesByInstance.keys(), ...exactThreadsByInstance.keys()])].filter((instanceId) => !connected.has(instanceId)),
       );
-      return { queriesByInstance, unreachableInstanceIds, staleInstanceIds };
+      return { queriesByInstance, geometryByInstance, exactThreadsByInstance, unreachableInstanceIds, staleInstanceIds };
     });
   }, [connectedIds, knownIds, viewId]);
 
@@ -407,19 +426,19 @@ export function useStarMapThreads(params: {
       if (demand.consumerId) void desktopApi?.releaseNavigationQuery?.(demand.consumerId).catch(() => undefined);
       exactDemands.current.delete(instanceId);
     }
-    for (const instanceId of stateRef.current.queriesByInstance.keys()) {
+    for (const instanceId of stateRef.current.exactThreadsByInstance.keys()) {
       if (!params.demandedIdentitiesByInstance?.get(instanceId)?.length) navigationExactRowsBudget.release(`${viewId}:${instanceId}:exact`);
     }
     setState((current) => {
-      const queriesByInstance = new Map(current.queriesByInstance);
+      const exactThreadsByInstance = new Map(current.exactThreadsByInstance);
       let changed = false;
-      for (const [instanceId, query] of queriesByInstance) {
-        if (query.exactThreads.length > 0 && !params.demandedIdentitiesByInstance?.get(instanceId)?.length) {
-          queriesByInstance.set(instanceId, { ...query, exactThreads: [] });
+      for (const instanceId of exactThreadsByInstance.keys()) {
+        if (!params.demandedIdentitiesByInstance?.get(instanceId)?.length) {
+          exactThreadsByInstance.delete(instanceId);
           changed = true;
         }
       }
-      return changed ? { ...current, queriesByInstance } : current;
+      return changed ? { ...current, exactThreadsByInstance } : current;
     });
     for (const [instanceId, identities] of params.demandedIdentitiesByInstance ?? []) {
       if (identities.length === 0) continue;
@@ -431,9 +450,6 @@ export function useStarMapThreads(params: {
       const isCancelled = () => demand.cancelled || generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration;
       void withQueryConsumer(instanceId, async (consumerId) => {
         demand.consumerId = consumerId;
-        if (!stateRef.current.queriesByInstance.has(instanceId)) {
-          await refreshInstance(instanceId);
-        }
         if (isCancelled()) return;
         const key = `${viewId}:${instanceId}:exact`;
         metadataKeys.current.add(key);
@@ -458,14 +474,9 @@ export function useStarMapThreads(params: {
           if (isCancelled()) return;
           lease.commit();
           setState((current) => {
-            const existing = current.queriesByInstance.get(instanceId);
-            if (!existing) return current;
-            const queriesByInstance = new Map(current.queriesByInstance);
-            queriesByInstance.set(instanceId, {
-              ...existing,
-              exactThreads,
-            });
-            return { ...current, queriesByInstance };
+            const exactThreadsByInstance = new Map(current.exactThreadsByInstance);
+            exactThreadsByInstance.set(instanceId, exactThreads);
+            return { ...current, exactThreadsByInstance };
           });
         } finally { lease.dispose(); }
       }).catch(() => undefined);
@@ -541,18 +552,22 @@ export function useStarMapThreads(params: {
     const countsByInstance = new Map<string, NavigationCounts>();
     const facetsByInstance = new Map<string, NavigationStarMapFacetCounts>();
     const directoriesByInstance = new Map<string, NavigationDirectoryRow[]>();
+    const geometryReadyInstanceIds = new Set<string>();
+    const geometryErrorsByInstance = new Map<string, string>();
     const threadsByInstance = new Map<string, NavigationThreadSummary[]>();
     for (const [instanceId, query] of state.queriesByInstance) {
       countsByInstance.set(instanceId, query.counts);
       if (query.facets) facetsByInstance.set(instanceId, query.facets);
-      directoriesByInstance.set(instanceId, query.directories);
-      threadsByInstance.set(
-        instanceId,
-        mergeThreads(query.attentionThreads, query.exactThreads),
-      );
+      threadsByInstance.set(instanceId, query.attentionThreads);
     }
-    return { countsByInstance, facetsByInstance, directoriesByInstance, threadsByInstance };
-  }, [state.queriesByInstance]);
+    for (const [instanceId, geometry] of state.geometryByInstance) {
+      directoriesByInstance.set(instanceId, geometry.directories);
+      if (geometry.ready) geometryReadyInstanceIds.add(instanceId);
+      if (geometry.error) geometryErrorsByInstance.set(instanceId, geometry.error);
+    }
+    for (const [instanceId, exact] of state.exactThreadsByInstance) threadsByInstance.set(instanceId, mergeThreads(threadsByInstance.get(instanceId) ?? [], exact));
+    return { countsByInstance, facetsByInstance, directoriesByInstance, geometryReadyInstanceIds, geometryErrorsByInstance, threadsByInstance };
+  }, [state.queriesByInstance, state.geometryByInstance, state.exactThreadsByInstance]);
 
   return {
     ...result,
