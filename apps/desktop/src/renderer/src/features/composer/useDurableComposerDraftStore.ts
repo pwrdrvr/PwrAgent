@@ -160,7 +160,7 @@ export function useDurableComposerDraftStore(
 
     let cancelled = false;
     setHydration({ baseStore, desktopApi, status: "loading" });
-    void desktopApi.listComposerDraftLatest({ migrateKnownOwners: true })
+    void desktopApi.listComposerDraftLatest({ migrateKnownOwners: true, migrateLegacyLaunchpads: true })
       .then((response) => {
         if (cancelled) {
           return;

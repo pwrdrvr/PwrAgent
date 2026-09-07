@@ -4,6 +4,7 @@ import type {
   ComposerDraftRecoveryCandidate,
   ComposerDraftSnapshotRecord,
   ListComposerDraftRecoveryCandidatesRequest,
+  NavigationLaunchpadDraft,
   SaveComposerDraftRequest,
 } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
@@ -76,6 +77,42 @@ export class ComposerDraftRecoveryStore {
           db.prepare("UPDATE composer_draft_journal SET scope_key = ?, payload = ? WHERE id = ?")
             .run(scopeKey, JSON.stringify({ ...record, scopeKey }), entry.id);
         }
+        migrated += 1;
+      }
+      return migrated;
+    })();
+  }
+
+  /** Import viewer-local legacy input once; a destination history always wins. */
+  migrateLegacyLaunchpadDrafts(): number {
+    const db = this.stateDb.raw;
+    const rows = db.prepare("SELECT directory_path, payload FROM directory_launchpads")
+      .all() as Array<{ directory_path: string; payload: string }>;
+    const hasHistory = (scopeKey: string) => Boolean(db.prepare(
+      "SELECT 1 FROM composer_draft_latest WHERE scope_key = ? UNION ALL SELECT 1 FROM composer_draft_journal WHERE scope_key = ? LIMIT 1",
+    ).get(scopeKey, scopeKey));
+    const candidates = rows.flatMap((row) => {
+      try {
+        const launchpad = JSON.parse(row.payload) as NavigationLaunchpadDraft;
+        if (launchpad.directoryKey !== row.directory_path || typeof launchpad.prompt !== "string") return [];
+        const scopeKey = `launchpad:${launchpad.directoryKey}`;
+        if (hasHistory(scopeKey) || (!launchpad.prompt.trim() && !launchpad.imageAttachments?.length && !launchpad.fileAttachments?.length)) return [];
+        const draft = normalizeDraftRecord({ scopeKey, scopeKind: "launchpad", backend: launchpad.backend,
+          directoryKey: launchpad.directoryKey, directoryPath: launchpad.directoryPath, text: launchpad.prompt,
+          imageAttachments: launchpad.imageAttachments ?? [], fileAttachments: launchpad.fileAttachments ?? [], skillTokens: [],
+          status: "unsent", createdAt: launchpad.createdAt, updatedAt: launchpad.updatedAt, contentHash: "", charCount: launchpad.prompt.length });
+        return [draft];
+      } catch { return []; }
+    });
+    if (!candidates.length) return 0;
+    return db.transaction(() => {
+      let migrated = 0;
+      for (const draft of candidates) {
+        if (hasHistory(draft.scopeKey)) continue;
+        db.prepare("INSERT INTO composer_draft_latest(scope_key, scope_kind, status, updated_at, payload) VALUES (?, ?, ?, ?, ?)")
+          .run(draft.scopeKey, draft.scopeKind, draft.status, draft.updatedAt, JSON.stringify(draft));
+        // A journal marker prevents a cleared imported draft from returning on restart.
+        this.insertJournalDraft(draft);
         migrated += 1;
       }
       return migrated;

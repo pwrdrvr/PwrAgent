@@ -48,6 +48,20 @@
     "rowsChanged": 140,
     "statements": 209
   },
+  "composer-legacy-launchpad-migration": {
+    "commits": 1,
+    "note": "One explicit startup transaction imports viewer-local legacy input and its recovery marker; less than 0.1 MB once, 0 additional MB/day",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "composer-legacy-launchpad-migration-repeat": {
+    "commits": 0,
+    "note": "A recovery marker prevents cleared legacy input from resurrecting; repeated startup performs zero commits, 0 MB/day",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "composer-owner-scope-migration": {
     "commits": 1,
     "note": "One startup transaction migrates three latest drafts and three proven-owner journal records; less than 0.1 MB once, zero additional MB/day after migration",
