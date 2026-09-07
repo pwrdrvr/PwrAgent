@@ -180,6 +180,7 @@ export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
 export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
   "navigation:set-thread-tool-incident-notice";
+export const NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL = "navigation:pending-thread-spend-alerts";
 export const NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL =
   "navigation:acknowledge-thread-spend-alert";
 export const NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL =

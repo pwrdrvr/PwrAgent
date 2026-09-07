@@ -44,6 +44,13 @@ import type {
 import type { ThreadHandoffOrigin } from "./thread-orchestration-tools";
 import type { ThreadSpendAlert } from "../token-usage-pricing";
 
+/** Local durable alert inbox. Acknowledgement removes a delivered entry. */
+export type ListPendingThreadSpendAlertsRequest = { limit?: number };
+export type ListPendingThreadSpendAlertsResponse = {
+  alerts: Array<{ backend: AppServerBackendKind; alert: ThreadSpendAlert }>;
+  hasMore: boolean;
+};
+
 export type AcknowledgeThreadSpendAlertRequest = {
   alertId: string;
   backend?: AppServerBackendKind;

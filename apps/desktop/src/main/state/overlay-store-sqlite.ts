@@ -37,6 +37,8 @@ import type {
   ThreadPermissionTransition,
   ThreadPricingSummary,
   ThreadSpendAlert,
+  ListPendingThreadSpendAlertsRequest,
+  ListPendingThreadSpendAlertsResponse,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
@@ -2924,6 +2926,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (!nextNotice) delete nextState.toolIncidentNotice;
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  /** Bounded local inbox read; unrelated overlay payloads never leave SQLite. */
+  async listPendingThreadSpendAlerts(request: ListPendingThreadSpendAlertsRequest): Promise<ListPendingThreadSpendAlertsResponse> {
+    const limit = request.limit ?? 10;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error("Spend alert page size must be between one and ten.");
+    const rows = this.stateDb.raw.prepare(`SELECT
+      COALESCE(json_extract(payload, '$.backend'), 'codex') AS backend,
+      CASE WHEN length(CAST(json_extract(payload, '$.threadSpendAlertPending') AS BLOB)) <= 16384
+        THEN json_extract(payload, '$.threadSpendAlertPending') END AS alert
+      FROM threads WHERE json_type(payload, '$.threadSpendAlertPending') = 'object'
+      ORDER BY thread_id LIMIT ?`).all(limit + 1) as Array<{ backend: AppServerBackendKind; alert: string | null }>;
+    const alerts = rows.slice(0, limit).map((row) => {
+      if (row.alert === null) throw new Error("Pending spend alert exceeds its bounded payload budget.");
+      return { backend: row.backend, alert: JSON.parse(row.alert) as ThreadSpendAlert };
+    });
+    return { alerts, hasMore: rows.length > limit };
   }
 
   /** Retains the threshold-crossing payload until a renderer receives it. */

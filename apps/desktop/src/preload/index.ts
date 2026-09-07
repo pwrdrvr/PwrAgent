@@ -178,6 +178,8 @@ import type {
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
+  ListPendingThreadSpendAlertsRequest,
+  ListPendingThreadSpendAlertsResponse,
   AcknowledgeThreadSpendAlertRequest,
   AcknowledgeThreadSpendAlertResponse,
   GetGhStatusRequest,
@@ -718,6 +720,7 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+  NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
@@ -1882,6 +1885,8 @@ const desktopApi = Object.freeze({
       NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
       request,
     ),
+  listPendingThreadSpendAlerts: async (request: ListPendingThreadSpendAlertsRequest): Promise<ListPendingThreadSpendAlertsResponse> =>
+    ipcRenderer.invoke(NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL, request),
   acknowledgeThreadSpendAlert: async (
     request: AcknowledgeThreadSpendAlertRequest,
   ): Promise<AcknowledgeThreadSpendAlertResponse> =>

@@ -1332,37 +1332,33 @@ function DesktopAppShell(props: {
     progressiveInitialRefresh: true,
     threadViewVisible: mainView === "thread",
   });
+  const pendingSpendAlertCapacity = Math.max(0, 10 - appNotices.durable.filter((notice) =>
+    notice.id.startsWith("spend-alert:thread:")).length);
   useEffect(() => {
-    if (readRendererFederationTarget()) {
-      return;
-    }
-    for (const thread of navigation.threads) {
-      const alert = thread.threadSpendAlertPending;
-      if (!alert || thread.federation) {
-        continue;
-      }
-      dispatchAppNotice({
-        type: "show",
-        notice: buildSpendAlertNotice({
-          alert,
-          backend: thread.source,
-          threadLink: {
-            backend: thread.source,
-            inThreadList: true,
-            threadId: thread.id,
-            title: thread.title,
-            titleSource: thread.titleSource,
-            gitBranch: thread.gitBranch,
-            linkedDirectories: thread.linkedDirectories,
-          },
-        }),
-      });
-      acknowledgeThreadSpendAlert({
-        alert,
-        backend: thread.source,
-      });
-    }
-  }, [acknowledgeThreadSpendAlert, navigation.threads]);
+    if (!normalAppEnabled || readRendererFederationTarget() || !desktopApi?.listPendingThreadSpendAlerts
+      || !pendingSpendAlertCapacity) return;
+    let disposed = false;
+    let pending = false;
+    const read = async () => {
+      if (pending || disposed) return;
+      pending = true;
+      try {
+        const page = await desktopApi.listPendingThreadSpendAlerts!({ limit: pendingSpendAlertCapacity });
+        if (disposed) return;
+        for (const { alert, backend } of page.alerts) {
+          dispatchAppNotice({ type: "show", notice: buildSpendAlertNotice({ alert, backend,
+            threadLink: { backend, threadId: alert.threadId, title: alert.threadId, inThreadList: false, linkedDirectories: [] } }) });
+          acknowledgeThreadSpendAlert({ alert, backend });
+        }
+      } catch {
+        // Undelivered alerts remain durable on the owner. Focus retries the read.
+      } finally { pending = false; }
+    };
+    void read();
+    const unsubscribe = desktopApi.onWindowFocus?.(() => { void read(); });
+    return () => { disposed = true; unsubscribe?.(); };
+  }, [acknowledgeThreadSpendAlert, desktopApi, normalAppEnabled, pendingSpendAlertCapacity]);
+
   useEffect(() => {
     if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
       return;

@@ -146,6 +146,8 @@ import {
   type SetThreadToolIncidentNoticeResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
   type AcknowledgeThreadEnvironmentFailureResponse,
+  type ListPendingThreadSpendAlertsRequest,
+  type ListPendingThreadSpendAlertsResponse,
   type AcknowledgeThreadSpendAlertRequest,
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
@@ -287,6 +289,7 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+  NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
@@ -418,6 +421,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "listRemoteThreadPins"
     | "updateRemoteThreadPinSnapshots"
     | "setThreadToolIncidentNotice"
+    | "listPendingThreadSpendAlerts"
     | "acknowledgeThreadSpendAlert"
     | "acknowledgeThreadEnvironmentFailure"
   >;
@@ -6218,6 +6222,10 @@ class DesktopAppServerService {
     };
   }
 
+  async listPendingThreadSpendAlerts(request: ListPendingThreadSpendAlertsRequest): Promise<ListPendingThreadSpendAlertsResponse> {
+    return this.getOverlayStore().listPendingThreadSpendAlerts(request);
+  }
+
   async acknowledgeThreadSpendAlert(
     request: AcknowledgeThreadSpendAlertRequest,
   ): Promise<AcknowledgeThreadSpendAlertResponse> {
@@ -8360,6 +8368,9 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setThreadToolIncidentNotice(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL);
+  ipcMain.handle(NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL, async (_event, request: ListPendingThreadSpendAlertsRequest) =>
+    appServerService.listPendingThreadSpendAlerts(request));
   ipcMain.removeHandler(NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL);
   ipcMain.handle(
     NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,

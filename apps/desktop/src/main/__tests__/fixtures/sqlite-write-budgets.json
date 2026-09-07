@@ -314,6 +314,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "pending-spend-alert-page": {
+    "commits": 0,
+    "note": "Ten local alert projections out of twelve pending entries, with no overlay summaries: zero commits; 0 MB/day added WAL",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "provider-thread-snapshot-refresh": {
     "commits": 1,
     "note": "one secret-free provider thread projection per successful full provider list, never per thread",
