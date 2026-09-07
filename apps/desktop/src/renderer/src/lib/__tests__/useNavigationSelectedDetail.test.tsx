@@ -99,3 +99,34 @@ it("does not read hidden detail and revalidates when the window becomes visible"
   expect(read.mock.calls[1]?.[0].knownRevision).toBeUndefined();
   unmount();
 });
+
+it("applies working-directory events to exact detail and fences an older read", async () => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const initial = detail("initial");
+  initial.thread!.projectKey = "/repo";
+  initial.thread!.linkedDirectories = [{ id: "directory:/repo", kind: "local", label: "repo", path: "/repo" }];
+  const old = deferred<NavigationSelectedDetailResponse>();
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce(initial).mockReturnValue(old.promise);
+  const api: DesktopApi = { getNavigationSelectedDetail: read, onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.refresh(); });
+  const notify = (worktreePath: string, fetchedAt: number, owner?: string) => listener!({ backend: "codex",
+    ...(owner ? { federationTarget: { scope: "remote" as const, instanceId: owner } } : {}),
+    notification: { method: "navigation/threadGitWorkingState/updated", params: {
+      worktreePath, fetchedAt, gitWorkingState: { dirtyFiles: 3, dirtyAdditions: 12, dirtyDeletions: 4, untrackedFiles: 1, unpushedCommits: 2 },
+    } } });
+  act(() => { notify("/unrelated", 10); notify("/repo", 10, "peer"); });
+  expect(result.current.state?.detail?.thread?.gitWorkingState).toBeUndefined();
+  act(() => notify("/repo", 20));
+  expect(result.current.state?.detail?.thread?.gitWorkingState?.dirtyFiles).toBe(3);
+  expect(result.current.state?.detail?.thread?.gitWorkingStateFetchedAt).toBe(20);
+  act(() => notify("/repo", 10));
+  expect(result.current.state?.detail?.thread?.gitWorkingStateFetchedAt).toBe(20);
+  await act(async () => { old.resolve(initial); await pending; });
+  expect(result.current.state?.detail?.thread?.gitWorkingStateFetchedAt).toBe(20);
+  expect(result.current.state?.readiness).toBe("loading");
+  unmount();
+});

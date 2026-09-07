@@ -3500,7 +3500,12 @@ export function useThreadNavigation(
       const method = event.notification.method as string;
       if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method)) {
         boundedNavigation.invalidate();
-        scheduleRefresh();
+        // These notifications contain the complete replacement for every
+        // affected chip. Keep the patched baseline stale for the next query,
+        // without reading a new page for each working-state probe.
+        if (method !== "navigation/threadGitWorkingState/updated" && method !== "navigation/directoryGitStatus/updated") {
+          scheduleRefresh();
+        }
       }
       if (method === "navigation/thread/seen" && federationTargetsEqual(event.federationTarget, windowTarget)) {
         const params = event.notification.params as { threadId: string; seenUpdatedAt?: number };

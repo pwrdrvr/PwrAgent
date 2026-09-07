@@ -115,8 +115,15 @@ export function useNavigationSelectedDetail(params: {
         timer = peer.status === "connected" ? setTimeout(() => { timer = undefined; void refresh(); }, 250) : undefined;
         return;
       }
-      if (!selected || event.backend !== selected.backend || eventOwner !== selectedOwner
-        || !("threadId" in notification.params) || notification.params.threadId !== selected.threadId) return;
+      if (!selected || eventOwner !== selectedOwner) return;
+      const currentThread = currentRef.current?.detail?.thread;
+      const patchedThread = currentThread ? applyNavigationThreadEvent(currentThread, event) : undefined;
+      const exactThreadEvent = event.backend === selected.backend
+        && (("threadId" in notification.params && notification.params.threadId === selected.threadId)
+          || ("parentThreadId" in notification.params && notification.params.parentThreadId === selected.threadId)
+          || (notification.method === "navigation/threadDirectories/updated"
+            && Array.isArray(notification.params.threadIds) && notification.params.threadIds.includes(selected.threadId)));
+      if (!exactThreadEvent && patchedThread === currentThread) return;
       if (!navigationQueryEventRequiresRefresh(notification.method)
         && notification.method !== "thread/codexEnvironment/updated"
         && notification.method !== "thread/acpRuntime/updated") return;
@@ -127,7 +134,7 @@ export function useNavigationSelectedDetail(params: {
       if (current) {
         const next: NavigationSelectionState = { ...current, pendingSequence: sequence, readiness: "loading", stale: true,
           detail: current.detail?.thread ? { ...current.detail,
-            thread: applyNavigationThreadEvent(current.detail.thread, event) } : current.detail };
+            thread: patchedThread ?? current.detail.thread } : current.detail };
         currentRef.current = next;
         setState(next);
       }

@@ -13,6 +13,7 @@ import type {
 } from "./federation";
 import type {
   PrSummary,
+  NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
@@ -1489,6 +1490,7 @@ export type AppServerMcpElicitationRequestNotification = {
 };
 
 export type AppServerNotification =
+  | NavigationThreadGitWorkingStateUpdatedNotification
   | {
       method: "error";
       params: {
