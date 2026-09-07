@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  PWRSNAP_SESSION_REVOKED_DETAIL,
   PwrSnapConnectionService,
 } from "../mcp-connections/pwrsnap-connection-service";
 
@@ -16,6 +18,40 @@ function createSettings(initial?: string) {
     }),
   };
 }
+
+// A credential as PwrAgent stores it after a completed OAuth approval. The
+// cached discovery state lets the SDK skip metadata fetches, so a 401 on the
+// MCP endpoint goes straight to the token check and then to a new
+// authorization, exactly as it does against a real PwrSnap.
+function createAuthorizedCredential(): string {
+  return JSON.stringify({
+    clientInformation: { client_id: "pwragent-client" },
+    discoveryState: {
+      authorizationServerUrl: "http://127.0.0.1:51729",
+      resourceMetadata: {
+        resource: "http://127.0.0.1:51729/mcp",
+        authorization_servers: ["http://127.0.0.1:51729"],
+      },
+      authorizationServerMetadata: {
+        issuer: "http://127.0.0.1:51729",
+        authorization_endpoint: "http://127.0.0.1:51729/oauth/authorize",
+        token_endpoint: "http://127.0.0.1:51729/oauth/token",
+        response_types_supported: ["code"],
+        code_challenge_methods_supported: ["S256"],
+      },
+    },
+    tokens: { access_token: "revoked-by-pwrsnap", token_type: "bearer" },
+  });
+}
+
+type BridgeInternals = {
+  dispatchBridgeOperation: (
+    operation: unknown,
+    params: unknown,
+  ) => Promise<unknown>;
+  grants: Map<string, { connectionId: "pwrsnap" }>;
+  handleBridgeLine: (socket: unknown, line: string) => Promise<void>;
+};
 
 const services: PwrSnapConnectionService[] = [];
 
@@ -130,5 +166,82 @@ describe("PwrSnapConnectionService", () => {
       undefined,
       { timeout: 720_000 },
     );
+  });
+
+  it("clears the stored credential when PwrSnap rejects the session token", async () => {
+    const settings = createSettings(createAuthorizedCredential());
+    const openExternal = vi.fn(async () => undefined);
+    const service = new PwrSnapConnectionService({
+      fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
+      openExternal,
+      resolveInstallPaths: () => [],
+      settings,
+    });
+    services.push(service);
+
+    await expect(service.readStatus()).resolves.toMatchObject({
+      availability: "running",
+      configured: true,
+    });
+
+    const bridge = service as unknown as BridgeInternals;
+    await expect(bridge.dispatchBridgeOperation("tools/list", {}))
+      .rejects.toThrow(PWRSNAP_SESSION_REVOKED_DETAIL);
+
+    // The proxy must never try to open a consent window of its own.
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
+    await expect(service.readStatus()).resolves.toMatchObject({
+      availability: "running",
+      configured: false,
+      detail: PWRSNAP_SESSION_REVOKED_DETAIL,
+    });
+    await expect(service.registerBridge("pwrsnap", "thread-1"))
+      .rejects.toThrow(PWRSNAP_SESSION_REVOKED_DETAIL);
+
+    // A fresh approval stored by the connect flow hides the revoke notice.
+    await settings.savePwrSnapMcpCredential(createAuthorizedCredential());
+    await expect(service.readStatus()).resolves.toMatchObject({
+      configured: true,
+    });
+    await expect(service.readStatus()).resolves.not.toHaveProperty("detail");
+  });
+
+  it("clears the stored credential when a proxied call gets 401 after connecting", async () => {
+    const settings = createSettings(createAuthorizedCredential());
+    const service = new PwrSnapConnectionService({
+      fetchFn: vi.fn(async () => new Response("ok", { status: 200 })),
+      resolveInstallPaths: () => [],
+      settings,
+    });
+    services.push(service);
+    Object.assign(service, {
+      upstreamClient: {
+        listTools: vi.fn(async () => {
+          throw new StreamableHTTPError(
+            401,
+            "Server returned 401 after successful authentication",
+          );
+        }),
+        close: vi.fn(async () => undefined),
+      },
+    });
+    const bridge = service as unknown as BridgeInternals;
+    bridge.grants.set("grant-token", { connectionId: "pwrsnap" });
+    const socket = { destroyed: false, end: vi.fn() };
+
+    await bridge.handleBridgeLine(
+      socket,
+      JSON.stringify({ token: "grant-token", op: "tools/list" }),
+    );
+
+    expect(socket.end).toHaveBeenCalledWith(
+      expect.stringContaining("Server returned 401 after successful authentication"),
+    );
+    expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
+    await expect(service.readStatus()).resolves.toMatchObject({
+      configured: false,
+      detail: PWRSNAP_SESSION_REVOKED_DETAIL,
+    });
   });
 });
