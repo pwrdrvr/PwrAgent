@@ -234,6 +234,18 @@ describe("PluginsSettings", () => {
     expect(
       screen.getByRole("button", { name: "More actions for datadog" }),
     ).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "More actions for datadog" });
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menu")).toHaveClass("settings-mcp-context-menu");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menuitem", { name: "Remove datadog" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
+    fireEvent.click(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("filters by server name and by tool name", async () => {

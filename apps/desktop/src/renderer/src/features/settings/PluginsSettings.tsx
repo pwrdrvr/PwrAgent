@@ -787,6 +787,7 @@ function McpServerRow(props: {
             </button>
           ) : null}
           <button
+            aria-expanded={Boolean(menuPosition)}
             aria-haspopup="menu"
             aria-label={`More actions for ${server.name}`}
             className="button button--ghost settings-mcp-row__more"
@@ -818,6 +819,7 @@ function McpServerRow(props: {
       ) : null}
       {menuPosition && menuInvokerRef.current ? (
         <ChipContextMenu
+          className="settings-mcp-context-menu"
           items={[
             ...(canSignIn
               ? [{
