@@ -21,13 +21,17 @@ export function navigationAttentionIdentity(thread: NavigationThreadSummary): st
   ]);
 }
 
-/** Reconcile complete eligible owner metadata, never a visible page. */
+/** Reconcile owner metadata, never a visible page; incomplete coverage cannot remove unseen members. */
 export function reconcileNavigationAttentionOrder(params: {
   previous?: NavigationAttentionOrder;
   threads: readonly NavigationThreadSummary[];
   promoteOnTurnEnd: boolean;
+  complete?: boolean;
 }): NavigationAttentionOrder {
-  const members = new Map<string, Member>();
+  const members = params.complete === false ? new Map(params.previous?.members) : new Map<string, Member>();
+  for (const thread of params.threads) {
+    if (thread.codexNativeSubAgent || (thread.threadStatus !== "active" && !thread.inbox.inInbox)) members.delete(navigationAttentionIdentity(thread));
+  }
   let nextRank = params.previous?.nextRank ?? 1;
   const eligible = params.threads
     .filter((thread) => !thread.codexNativeSubAgent
