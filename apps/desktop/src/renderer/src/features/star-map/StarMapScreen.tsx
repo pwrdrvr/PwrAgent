@@ -1135,7 +1135,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             || !peer.capabilities.includes("thread_navigation")
             || peer.navigationQueryProtocol !== 2
             || ((remote.geometryReadyInstanceIds.has(peer.id) || remote.geometryErrorsByInstance.has(peer.id))
-              && (remote.countsByInstance.has(peer.id) || remote.unreachableInstanceIds.has(peer.id))),
+              && (remote.queriedInstanceIds.has(peer.id) || remote.unreachableInstanceIds.has(peer.id))),
         )
       )
     ));
@@ -1640,11 +1640,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   // Chip counts answer "how many cards is this chip about", measured
   // against whatever the other facets already allow.
+  const localFacetCountsKnown = !localRowsAreOwnerMatched || (Boolean(localFeed.facets) && !localFeed.stale && !localFeed.error);
+  const remoteFacetCountsKnown = (!props.desktopApi?.readFederationHealth || health !== undefined)
+    && peers.every((peer) => peer.status === "connected" && peer.navigationQueryProtocol === 2
+      && peer.capabilities.includes("thread_navigation") && remote.facetsByInstance.has(peer.id)
+      && !remote.staleInstanceIds.has(peer.id) && !remote.unreachableInstanceIds.has(peer.id));
+  const facetCountsKnown = localFacetCountsKnown && remoteFacetCountsKnown;
+  const attentionCountsKnown = { local: localFacetCountsKnown, remote: remoteFacetCountsKnown, unread: facetCountsKnown };
   const filterCounts = useMemo(() => {
     let counts = localFeed.facets?.matches ?? countFilterMatches({
       selection: filterSelection,
       sessionKeys: props.sessionKeys,
-      threads: localThreads.filter(
+      threads: (localRowsAreOwnerMatched ? [] : localThreads).filter(
         (thread) =>
           !thread.federation
           || !isRemoteFederationTarget(thread.federation.ref.target),
@@ -1654,7 +1661,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       counts = addFilterMatchCounts(counts, facets.matches);
     }
     return counts;
-  }, [filterSelection, localThreads, localFeed.facets, props.sessionKeys, remote]);
+  }, [filterSelection, localThreads, localRowsAreOwnerMatched, localFeed.facets, props.sessionKeys, remote]);
 
   /**
    * The Attention chip's two indicators.
@@ -1668,7 +1675,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     let counts = localFeed.facets ? { activeLocal: localFeed.facets.active, activeRemote: 0, unread: localFeed.facets.unread } : countAttentionSignals({
       selection: filterSelection,
       sessionKeys: props.sessionKeys,
-      threads: localThreads.filter(
+      threads: (localRowsAreOwnerMatched ? [] : localThreads).filter(
         (thread) =>
           !thread.federation
           || !isRemoteFederationTarget(thread.federation.ref.target),
@@ -1678,7 +1685,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       counts = addAttentionCounts(counts, { activeLocal: 0, activeRemote: facets.active, unread: facets.unread });
     }
     return counts;
-  }, [filterSelection, localThreads, localFeed.facets, props.sessionKeys, remote]);
+  }, [filterSelection, localThreads, localRowsAreOwnerMatched, localFeed.facets, props.sessionKeys, remote]);
 
   /**
    * Whether the Attention chip draws its remote-turn readout.
@@ -1711,6 +1718,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // to undo.
   const droppableFilters = useMemo(() => {
     const droppable = new Set<number>();
+    if (!facetCountsKnown) return droppable;
     STAR_MAP_FILTERS.forEach((definition, index) => {
       if (
         filterCounts[definition.key] === 0
@@ -1720,7 +1728,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }
     });
     return droppable;
-  }, [filterCounts, filterSelection]);
+  }, [filterCounts, filterSelection, facetCountsKnown]);
 
   useLayoutEffect(() => {
     const band = bandRef.current;
@@ -5353,6 +5361,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 definition={definition}
                 selection={filterSelection}
                 count={filterCounts[definition.key]}
+                countsKnown={facetCountsKnown}
+                attentionKnown={attentionCountsKnown}
                 attention={
                   definition.key === "attention" ? attentionCounts : undefined
                 }
@@ -5374,6 +5384,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
           <StarMapFilterMenu
             selection={filterSelection}
             counts={filterCounts}
+            countsKnown={facetCountsKnown}
+            attentionKnown={attentionCountsKnown}
             attention={attentionCounts}
             showRemoteTurns={showRemoteTurns}
             onCycle={cycleFilter}

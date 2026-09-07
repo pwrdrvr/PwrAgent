@@ -31,6 +31,7 @@ export type SignalCountTone = "active" | "remote-active" | "idle";
 
 export function SignalCount(props: {
   count: number;
+  unknown?: boolean;
   /**
    * The mark. Callers pass it rather than deriving it from the tone because
    * "is anything running?" is not always "is the count zero?" — the strips
@@ -74,13 +75,14 @@ export function SignalCount(props: {
       // reach the orange cookie, which paints itself from accent tokens
       // rather than `currentColor`, and an attribute selector is what the
       // cookie rule already keys off.
-      data-zero={props.count === 0 ? "true" : undefined}
+      data-zero={props.unknown || props.count === 0 ? "true" : undefined}
+      data-unknown={props.unknown ? "true" : undefined}
       onMouseEnter={props.onMouseEnter}
       onMouseLeave={props.onMouseLeave}
       {...props.data}
     >
       {props.indicator}
-      <span className="signal-count__value">{props.count}</span>
+      <span className="signal-count__value">{props.unknown ? "—" : props.count}</span>
     </span>
   );
 }

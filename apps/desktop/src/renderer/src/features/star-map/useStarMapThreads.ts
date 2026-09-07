@@ -23,6 +23,7 @@ type RetainedPeerQuery = {
   attentionThreads: NavigationThreadSummary[];
   completeRevision?: string;
   counts: NavigationCounts;
+  countsReady: boolean;
   facets?: NavigationStarMapFacetCounts;
   generation: string;
   nextCursor?: string;
@@ -32,6 +33,7 @@ type RetainedPeerQuery = {
 export type StarMapRemoteThreads = {
   /** Authoritative owner totals, independent of the visible row page. */
   countsByInstance: Map<string, NavigationCounts>;
+  queriedInstanceIds: Set<string>;
   facetsByInstance: Map<string, NavigationStarMapFacetCounts>;
   /** Compact project/group geometry descriptors for each owner. */
   directoriesByInstance: Map<string, NavigationDirectoryRow[]>;
@@ -224,6 +226,7 @@ export function useStarMapThreads(params: {
             attentionThreads: page.unchanged ? retained?.attentionThreads ?? [] : mergeEntries([], page.entries),
             completeRevision: page.complete ? page.countsRevision : undefined,
             counts: page.counts,
+            countsReady: page.coverage.state === "complete",
             facets: page.facets,
             generation: page.generation,
             nextCursor: page.nextCursor,
@@ -327,6 +330,7 @@ export function useStarMapThreads(params: {
           ...existing,
           completeRevision: page.complete ? page.countsRevision : undefined,
           counts: page.counts,
+          countsReady: page.coverage.state === "complete",
           nextCursor: page.nextCursor,
           attentionThreads: mergeEntries(existing.attentionThreads, page.entries),
         });
@@ -550,14 +554,15 @@ export function useStarMapThreads(params: {
 
   const result = useMemo(() => {
     const countsByInstance = new Map<string, NavigationCounts>();
+    const queriedInstanceIds = new Set(state.queriesByInstance.keys());
     const facetsByInstance = new Map<string, NavigationStarMapFacetCounts>();
     const directoriesByInstance = new Map<string, NavigationDirectoryRow[]>();
     const geometryReadyInstanceIds = new Set<string>();
     const geometryErrorsByInstance = new Map<string, string>();
     const threadsByInstance = new Map<string, NavigationThreadSummary[]>();
     for (const [instanceId, query] of state.queriesByInstance) {
-      countsByInstance.set(instanceId, query.counts);
-      if (query.facets) facetsByInstance.set(instanceId, query.facets);
+      if (query.countsReady) countsByInstance.set(instanceId, query.counts);
+      if (query.countsReady && query.facets) facetsByInstance.set(instanceId, query.facets);
       threadsByInstance.set(instanceId, query.attentionThreads);
     }
     for (const [instanceId, geometry] of state.geometryByInstance) {
@@ -566,7 +571,7 @@ export function useStarMapThreads(params: {
       if (geometry.error) geometryErrorsByInstance.set(instanceId, geometry.error);
     }
     for (const [instanceId, exact] of state.exactThreadsByInstance) threadsByInstance.set(instanceId, mergeThreads(threadsByInstance.get(instanceId) ?? [], exact));
-    return { countsByInstance, facetsByInstance, directoriesByInstance, geometryReadyInstanceIds, geometryErrorsByInstance, threadsByInstance };
+    return { countsByInstance, queriedInstanceIds, facetsByInstance, directoriesByInstance, geometryReadyInstanceIds, geometryErrorsByInstance, threadsByInstance };
   }, [state.queriesByInstance, state.geometryByInstance, state.exactThreadsByInstance]);
 
   return {

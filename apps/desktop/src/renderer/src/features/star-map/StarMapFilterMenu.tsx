@@ -25,6 +25,8 @@ import {
 export function StarMapFilterMenu(props: {
   selection: StarMapFilterSelection;
   counts: Record<StarMapFilterKey, number>;
+  countsKnown?: boolean;
+  attentionKnown?: { local: boolean; remote: boolean; unread: boolean };
   /** The Attention chip's readouts; see `StarMapFilterChip`. */
   attention: StarMapAttentionCounts;
   showRemoteTurns: boolean;
@@ -90,6 +92,8 @@ export function StarMapFilterMenu(props: {
               definition={definition}
               selection={props.selection}
               count={props.counts[definition.key]}
+              countsKnown={props.countsKnown}
+              attentionKnown={props.attentionKnown}
               attention={
                 definition.key === "attention" ? props.attention : undefined
               }

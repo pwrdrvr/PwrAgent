@@ -9,6 +9,25 @@ function page(patch: Partial<NavigationQueryPage> = {}): NavigationQueryPage {
     directories: [], complete: true, ...patch };
 }
 
+it("does not certify incomplete coverage or an unchanged response without a complete baseline", async () => {
+  for (const response of [page({ coverage: { state: "checking" } }), page({ coverage: { state: "degraded" } }), page({ unchanged: true })]) {
+    const reserve = vi.fn();
+    await expect(readNavigationQueryRange({ request, read: async () => response, isCancelled: () => false, maxBytes: 1024 * 1024, reserveBytes: reserve }))
+      .rejects.toThrow("no complete owner baseline");
+    expect(reserve).not.toHaveBeenCalled();
+  }
+});
+
+it("rejects oversized wire responses and responses arriving after the transaction deadline", async () => {
+  await expect(readNavigationQueryRange({ request, read: async () => page({ queryKey: "x".repeat(260_000) }),
+    isCancelled: () => false, maxBytes: 1024 * 1024 })).rejects.toThrow("wire-byte budget");
+  const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  try {
+    await expect(readNavigationQueryRange({ request, read: async () => { now.mockReturnValue(11_001); return page(); },
+      isCancelled: () => false, maxBytes: 1024 * 1024 })).rejects.toThrow("deadline expired");
+  } finally { now.mockRestore(); }
+});
+
 it("restarts one expired metadata range under its original deadline", async () => {
   const read = vi.fn().mockResolvedValueOnce(page({ complete: false, nextCursor: "expired" }))
     .mockRejectedValueOnce(Object.assign(new Error("expired"), { code: "navigation_cursor_expired" }))

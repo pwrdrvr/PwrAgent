@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -83,6 +83,38 @@ function chip(): HTMLElement {
 }
 
 describe("star map attention filter", () => {
+  it("shows unknown owner counts without replacing a known local count or describing an empty fleet", async () => {
+    const definition = STAR_MAP_FILTERS.find((item) => item.key === "attention")!;
+    const { container } = render(<StarMapFilterChip definition={definition} selection={{}} count={3}
+      countsKnown={false} attention={{ activeLocal: 3, activeRemote: 0, unread: 0 }}
+      attentionKnown={{ local: true, remote: false, unread: false }} showRemoteTurns onCycle={() => {}} />);
+    const button = chip();
+    expect(button.getAttribute("aria-label")).toContain("3 active threads");
+    expect(button.getAttribute("aria-label")).toContain("Active thread count on other instances unavailable");
+    expect(button.getAttribute("aria-label")).toContain("Unread count unavailable");
+    expect(container.querySelector("[data-attention-active-count]")).toHaveAttribute("data-attention-active-count", "3");
+    expect(container.querySelector("[data-attention-remote-active-count]")).toBeNull();
+    expect(container.querySelectorAll('[data-unknown="true"]')).toHaveLength(2);
+    fireEvent.mouseEnter(button);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Unavailable");
+  });
+
+  it("keeps filter counts unknown until the owner directory is known, then displays real zeroes", async () => {
+    const api = buildDesktopApi();
+    const baseline = await api.readFederationHealth!();
+    let finish!: (value: typeof baseline) => void;
+    const pending = new Promise<typeof baseline>((resolve) => { finish = resolve; });
+    api.readFederationHealth = vi.fn(() => pending);
+    render(<StarMapScreen desktopApi={api} localThreads={[]} sessionKeys={{}} localInstanceLabel="Local"
+      onOpenLocalThread={() => {}} onFocusLocalInstance={() => {}} />);
+    const pinned = screen.getByRole("button", { name: /^Pinned:/ });
+    expect(pinned).toHaveTextContent("—");
+    expect(pinned.getAttribute("aria-label")).toContain("Count unavailable");
+    await act(async () => finish(baseline));
+    await waitFor(() => expect(pinned).toHaveTextContent("0"));
+    expect(pinned.getAttribute("aria-label")).not.toContain("unavailable");
+  });
+
   it("matches a thread that is unread OR working", () => {
     const selection = { attention: "include" } as const;
     expect(threadPassesFilters({ selection, thread: working })).toBe(true);

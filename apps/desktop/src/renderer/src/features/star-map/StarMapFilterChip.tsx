@@ -16,6 +16,8 @@ type StarMapFilterChipProps = {
   definition: StarMapFilterDefinition;
   selection: StarMapFilterSelection;
   count: number;
+  countsKnown?: boolean;
+  attentionKnown?: { local: boolean; remote: boolean; unread: boolean };
   /**
    * Present only on the Attention chip, which draws the sidebar's
    * Attention readouts instead of a label and a number — the stacked
@@ -60,12 +62,12 @@ export function StarMapFilterChip(props: StarMapFilterChipProps) {
       className={chrome.className}
       tabIndex={chrome.tabIndex}
       aria-hidden={chrome.ariaHidden}
-      aria-label={chrome.ariaLabel}
+      aria-label={`${chrome.ariaLabel}${props.countsKnown === false ? ". Count unavailable." : ""}`}
       onClick={props.onCycle}
     >
       <ExcludeMark state={chrome.state} />
       <span>{props.definition.label}</span>
-      <span className="star-map__filter-count">{props.count}</span>
+      <span className="star-map__filter-count">{props.countsKnown === false ? "—" : props.count}</span>
     </button>
   );
 }
@@ -97,6 +99,9 @@ function StarMapAttentionFilterChip(
     activeLocal: props.attention.activeLocal,
     activeRemote: props.showRemoteTurns ? props.attention.activeRemote : undefined,
     review: props.attention.unread,
+    unknownLocal: props.attentionKnown?.local === false,
+    unknownRemote: props.attentionKnown?.remote === false,
+    unknownReview: props.attentionKnown?.unread === false,
   };
   const { card, tooltip } = useAttentionHoverCard({
     ...counts,
@@ -121,6 +126,7 @@ function StarMapAttentionFilterChip(
         aria-label={`${chrome.ariaLabel}. ${describeAttentionCounts(
           counts,
           formatUnreadThreadCount,
+          "Unread count unavailable",
         )}`}
         // The card's consequence lines exist nowhere else — without this
         // they are sighted-only, since the portal sits outside this
@@ -144,8 +150,10 @@ function StarMapAttentionFilterChip(
           <AttentionTurnReadouts
             activeLocal={counts.activeLocal}
             activeRemote={counts.activeRemote}
+            unknownLocal={counts.unknownLocal}
+            unknownRemote={counts.unknownRemote}
           />
-          <AttentionReviewReadout count={counts.review} />
+          <AttentionReviewReadout count={counts.review} unknown={counts.unknownReview} />
         </span>
       </button>
       {tooltip.tooltipNode}

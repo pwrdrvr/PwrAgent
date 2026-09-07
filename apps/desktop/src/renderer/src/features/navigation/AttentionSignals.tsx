@@ -71,20 +71,24 @@ function AttentionTurnScanner(props: { count: number }) {
 export function AttentionTurnReadouts(props: {
   activeLocal: number;
   activeRemote?: number;
+  unknownLocal?: boolean;
+  unknownRemote?: boolean;
 }) {
   return (
     <span aria-hidden="true" className="signal-count-stack">
       <SignalCount
         count={props.activeLocal}
-        data={{ "data-attention-active-count": props.activeLocal }}
-        indicator={<AttentionTurnScanner count={props.activeLocal} />}
+        unknown={props.unknownLocal}
+        data={{ "data-attention-active-count": props.unknownLocal ? undefined : props.activeLocal }}
+        indicator={<AttentionTurnScanner count={props.unknownLocal ? 0 : props.activeLocal} />}
         tone="active"
       />
       {props.activeRemote === undefined ? null : (
         <SignalCount
           count={props.activeRemote}
-          data={{ "data-attention-remote-active-count": props.activeRemote }}
-          indicator={<AttentionTurnScanner count={props.activeRemote} />}
+          unknown={props.unknownRemote}
+          data={{ "data-attention-remote-active-count": props.unknownRemote ? undefined : props.activeRemote }}
+          indicator={<AttentionTurnScanner count={props.unknownRemote ? 0 : props.activeRemote} />}
           tone="remote-active"
         />
       )}
@@ -93,12 +97,13 @@ export function AttentionTurnReadouts(props: {
 }
 
 /** The orange cookie and its count: threads waiting to be looked at. */
-export function AttentionReviewReadout(props: { count: number }) {
+export function AttentionReviewReadout(props: { count: number; unknown?: boolean }) {
   return (
     <SignalCount
       ariaHidden
       count={props.count}
-      data={{ "data-attention-review-count": props.count }}
+      unknown={props.unknown}
+      data={{ "data-attention-review-count": props.unknown ? undefined : props.count }}
       indicator={<span className="thread-row__status-cookie" />}
       tone="idle"
     />
@@ -113,6 +118,7 @@ export function AttentionReviewReadout(props: { count: number }) {
  */
 function AttentionCardRow(props: {
   count: number;
+  unknown?: boolean;
   indicator: "turn" | "remote-turn" | "review";
   label: string;
   /** What quitting does to this row's work. Omitted when nothing is at stake. */
@@ -121,7 +127,7 @@ function AttentionCardRow(props: {
   return (
     <div
       className="attention-card__row"
-      data-zero={props.count === 0 ? "true" : undefined}
+      data-zero={props.unknown || props.count === 0 ? "true" : undefined}
     >
       <span
         aria-hidden="true"
@@ -132,12 +138,12 @@ function AttentionCardRow(props: {
               ? "remote-active"
               : "active"
         }`}
-        data-zero={props.count === 0 ? "true" : undefined}
+        data-zero={props.unknown || props.count === 0 ? "true" : undefined}
       >
         {props.indicator === "review" ? (
           <span className="thread-row__status-cookie" />
         ) : (
-          <AttentionTurnScanner count={props.count} />
+          <AttentionTurnScanner count={props.unknown ? 0 : props.count} />
         )}
       </span>
       <span className="attention-card__row-text">
@@ -146,12 +152,15 @@ function AttentionCardRow(props: {
           <span className="attention-card__row-note">{props.note}</span>
         ) : null}
       </span>
-      <span className="attention-card__row-value">{props.count}</span>
+      <span className="attention-card__row-value">{props.unknown ? "Unavailable" : props.count}</span>
     </div>
   );
 }
 
 export type AttentionCardCounts = {
+  unknownLocal?: boolean;
+  unknownRemote?: boolean;
+  unknownReview?: boolean;
   /** Turns on this machine (or all turns, where the split is off). */
   activeLocal: number;
   /**
@@ -197,6 +206,7 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
       <div className="attention-card__section">
         <AttentionCardRow
           count={props.activeLocal}
+          unknown={props.unknownLocal}
           indicator="turn"
           // Only qualify the row once there is something to tell it apart
           // from.
@@ -208,6 +218,7 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
         {activeRemote === undefined ? null : (
           <AttentionCardRow
             count={activeRemote}
+            unknown={props.unknownRemote}
             indicator="remote-turn"
             label="In progress elsewhere"
             note="Quitting leaves these running"
@@ -215,6 +226,7 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
         )}
         <AttentionCardRow
           count={props.review}
+          unknown={props.unknownReview}
           indicator="review"
           label={props.reviewLabel}
         />
@@ -235,15 +247,16 @@ function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
 export function describeAttentionCounts(
   counts: AttentionCardCounts,
   formatReviewCount: (count: number) => string,
+  unknownReviewLabel = "Review count unavailable",
 ): string {
   return [
     ...(counts.activeRemote === undefined
-      ? [formatActiveThreadCount(counts.activeLocal)]
+      ? [counts.unknownLocal ? "Active thread count unavailable" : formatActiveThreadCount(counts.activeLocal)]
       : [
-        formatLocalActiveThreadCount(counts.activeLocal),
-        formatRemoteActiveThreadCount(counts.activeRemote),
+        counts.unknownLocal ? "Active thread count on this machine unavailable" : formatLocalActiveThreadCount(counts.activeLocal),
+        counts.unknownRemote ? "Active thread count on other instances unavailable" : formatRemoteActiveThreadCount(counts.activeRemote),
       ]),
-    formatReviewCount(counts.review),
+    counts.unknownReview ? unknownReviewLabel : formatReviewCount(counts.review),
   ].join(", ");
 }
 
@@ -285,7 +298,7 @@ export function useAttentionHoverCard(
   const tooltip = useViewportTooltip({
     className: props.className ?? "attention-card",
   });
-  const { activeLocal, activeRemote, review, title, caption, reviewLabel, footer } =
+  const { activeLocal, activeRemote, review, unknownLocal, unknownRemote, unknownReview, title, caption, reviewLabel, footer } =
     props;
   // Built only when its data moves, not on every render of a host that
   // re-renders per streamed item (the tab) or per pan frame (the map chip):
@@ -297,13 +310,16 @@ export function useAttentionHoverCard(
         activeLocal={activeLocal}
         activeRemote={activeRemote}
         review={review}
+        unknownLocal={unknownLocal}
+        unknownRemote={unknownRemote}
+        unknownReview={unknownReview}
         title={title}
         caption={caption}
         reviewLabel={reviewLabel}
         footer={footer}
       />
     ),
-    [activeLocal, activeRemote, review, title, caption, reviewLabel, footer],
+    [activeLocal, activeRemote, review, unknownLocal, unknownRemote, unknownReview, title, caption, reviewLabel, footer],
   );
   const pushedCardRef = useRef<ReactNode>(undefined);
   const tooltipVisible = tooltip.visible;

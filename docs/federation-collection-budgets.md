@@ -239,3 +239,21 @@ an already-aborted read. Selected detail and launchpad configuration release on
 selection change, hiding and unmount; FIFO assembly releases on completion or
 unmount, independently of visible navigation. Cache-hit reuse of completed
 results and process-wide decoded heap accounting remain separate requirements.
+
+### Star Map owner readiness
+
+Remote Attention rows, restored/open card identities, and complete compact
+geometry have independent backing and readiness. A slow geometry read does not
+block rows or cards. Geometry errors retain prior descriptors and offer retry;
+camera restoration waits for both row and geometry operations to settle.
+Connection generations belong to each owner, so reconnecting one owner does not
+restart another owner's pages or pending cards. Query leases release on close,
+hide, disconnect and completion; card leases also release when demand changes.
+
+Modern facet totals come only from owner responses with complete coverage.
+Loading, degraded, unauthorized and disconnected owners remain unknown in the
+filter controls, including accessible names and hover cards. Known local counts
+remain visible when remote counts are unavailable. Unknown counts do not cause
+zero-count filters to disappear. Complete metadata range reads reject incomplete
+coverage, uncertified unchanged replies, oversized wire pages and responses that
+arrive after their original deadline.

@@ -146,6 +146,7 @@ export function useLocalStarMapThreads(params: {
     return [...result.values()];
   }, [rows.state?.page, exactRows]);
   return { threads, directories, geometryReady, refresh, loadMore: rows.loadMore,
-    counts: rows.state?.page?.counts, facets: rows.state?.page?.facets,
+    counts: rows.state?.page?.coverage.state === "complete" ? rows.state.page.counts : undefined,
+    facets: rows.state?.page?.coverage.state === "complete" ? rows.state.page.facets : undefined,
     stale: rows.state?.stale ?? false, error: rows.state?.error ?? metadataError };
 }

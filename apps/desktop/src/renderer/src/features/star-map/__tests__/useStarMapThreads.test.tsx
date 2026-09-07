@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
+  countNavigationStarMapFacets,
   type FederationPeerSummary,
   type NavigationQueryPage,
   type NavigationQueryRequest,
@@ -82,6 +83,25 @@ function buildDesktopApi(): DesktopApi {
 }
 
 describe("useStarMapThreads", () => {
+  it("does not publish authoritative counts from checking owner coverage", async () => {
+    let checking = true;
+    const desktopApi: DesktopApi = { getNavigationQueryPage: vi.fn(async (request) => ({
+      ...queryPage({ instanceId: "a", threadId: request.query.kind === "lens" ? "visible" : undefined }),
+      facets: countNavigationStarMapFacets([], {}),
+      coverage: request.query.kind === "lens" && checking ? { state: "checking" as const } : { state: "complete" as const },
+    })) };
+    const hook = renderHook(() => useStarMapThreads({ desktopApi, peers: [peer("a", "connected")], enabled: true }));
+    await waitFor(() => expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("visible"));
+    expect(hook.result.current.queriedInstanceIds.has("a")).toBe(true);
+    expect(hook.result.current.countsByInstance.has("a")).toBe(false);
+    expect(hook.result.current.facetsByInstance.has("a")).toBe(false);
+    checking = false;
+    await act(async () => hook.result.current.refreshInstance("a"));
+    expect(hook.result.current.countsByInstance.get("a")?.total).toBe(12);
+    expect(hook.result.current.facetsByInstance.get("a")?.active).toBe(0);
+    hook.unmount();
+  });
+
   it("publishes Attention rows while complete project geometry is still pending", async () => {
     const desktopApi = buildDesktopApi();
     const normal = desktopApi.getNavigationQueryPage!;
