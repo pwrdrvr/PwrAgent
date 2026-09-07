@@ -8889,6 +8889,11 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
+      if (session.launchAction === "assign_default_agent" && target.federatedThread?.target.scope === "remote") {
+        await this.deliverDefaultAgentCommandError(event,
+          "Select an Agent owned by this instance for this default route.");
+        return;
+      }
       if (!await this.requireRemoteScope(event, target.federatedThread?.target, "resume:select:remote-instance")) return;
       const targetThread = await this.readExactNavigationThread({ ref: { backend: target.backend, threadId: target.threadId,
         ...(target.federatedThread?.target.scope === "remote" ? { ownerInstanceId: target.federatedThread.target.instanceId } : {}) },

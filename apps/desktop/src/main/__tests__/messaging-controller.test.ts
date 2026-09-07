@@ -2029,6 +2029,26 @@ describe("MessagingController", () => {
     });
   });
 
+  it("rejects a remote default Agent callback before resolving a same-id local Agent", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.agent = {
+      name: "Local Agent", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1500,
+    };
+    const harness = await createHarness({ navigation });
+    const event = buildCommandEvent("/agent default set");
+    await harness.controller.handleInboundEvent(event);
+    harness.getNavigationSelectedDetail.mockClear();
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "browse:select-thread",
+      value: { backend: "codex", threadId: "thread-1", federationInstanceId: "pwr_remote" },
+    }));
+
+    expect(harness.getNavigationSelectedDetail).not.toHaveBeenCalled();
+    await expect(harness.store.findActiveDefaultAgentAssignmentForChannel(event.channel)).resolves.toBeUndefined();
+    expect(JSON.stringify(harness.delivered.at(-1))).toContain("Select an Agent owned by this instance");
+  });
+
   it("assigns and bootstraps ACP Agents with PwrAgent HTTP MCP tools", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads = [
