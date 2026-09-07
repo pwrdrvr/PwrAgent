@@ -18697,6 +18697,23 @@ export class DesktopBackendRegistry {
    * viewers — can render and rehydrate queued messages instead of only
    * the window that submitted them.
    */
+  getQueuedTurnsForThread(ref: { backend: AppServerBackendKind; threadId: string }): ThreadQueuedTurnSummary[] {
+    return this.threadTurnQueue.getQueuedEntries(ref).map((entry, position) => ({
+      queueEntryId: entry.id,
+      origin: entry.origin,
+      displayText: queuedTurnDisplayText(entry.input),
+      createdAt: entry.createdAt,
+      position,
+      ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
+      ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+    }));
+  }
+
+  getQueuedExecutionModeForThread(ref: { backend: AppServerBackendKind; threadId: string }) {
+    const entry = this.queuedExecutionModes.get(buildThreadIdentityKey(ref.backend, ref.threadId));
+    return entry ? { mode: entry.mode, queuedAt: entry.queuedAt } : undefined;
+  }
+
   getQueuedTurnsSnapshot(): Record<string, ThreadQueuedTurnSummary[]> {
     const snapshot: Record<string, ThreadQueuedTurnSummary[]> = {};
     for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {

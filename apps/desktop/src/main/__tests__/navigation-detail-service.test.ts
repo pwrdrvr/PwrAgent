@@ -92,7 +92,7 @@ describe("NavigationDetailService", () => {
     const registry = {
       getCachedThreadSummary: vi.fn(() => undefined),
       resolveThread: vi.fn(async () => thread("selected")),
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedExecutionModeForThread: vi.fn(() => undefined),
       getQueuedTurnsSnapshot: vi.fn(() => { throw new Error("FIFO must remain independent"); }),
       hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
       canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
@@ -136,8 +136,9 @@ describe("NavigationDetailService", () => {
       }),
     );
     const registry = {
-      getQueuedTurnsSnapshot: vi.fn(() => ({ "codex:selected": entries })),
-      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => { throw new Error("Fleet FIFO enumeration is forbidden"); }),
+      getQueuedTurnsForThread: vi.fn(() => entries),
+      getQueuedExecutionModeForThread: vi.fn(() => undefined),
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
     const request = {
@@ -145,6 +146,8 @@ describe("NavigationDetailService", () => {
       ref: { backend: "codex" as const, threadId: "selected" },
     };
     const first = service.readQueueProjection(request);
+    expect(registry.getQueuedTurnsForThread).toHaveBeenCalledExactlyOnceWith(request.ref);
+    expect(registry.getQueuedTurnsSnapshot).not.toHaveBeenCalled();
     expect(first.entries).toHaveLength(100);
     expect(first.complete).toBe(false);
     const second = service.readQueueProjection({
