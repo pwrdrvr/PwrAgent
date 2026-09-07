@@ -163,14 +163,14 @@ function projectNavigationRow(params: {
   childCount: number;
   viewerChildCount?: number;
   needsInput: boolean;
-  thread: NavigationThreadSummary;
+  thread: NavigationThreadSummary & { nativeSubAgentCount?: number };
 }): NavigationRow {
   const { thread } = params;
   const linkedDirectories = limitRecords(thread.linkedDirectories);
   const reactions = limitRecords(thread.reactions);
   const prs = limitRecords(thread.prs);
   const messagingBindings = limitRecords(thread.messagingBindings);
-  const nativeSubAgentCount = thread.codexNativeSubAgents?.length ?? 0;
+  const nativeSubAgentCount = thread.nativeSubAgentCount ?? thread.codexNativeSubAgents?.length ?? 0;
   const projected = {
     ref: navigationIdentity(thread),
     id: thread.id,

@@ -17,6 +17,7 @@ import type {
   NavigationRelativePinMove,
   ThreadQueuedTurnSummary,
   NavigationDirectoryGitStatus,
+  NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -76,6 +77,8 @@ import {
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   buildNavigationSnapshot,
+  buildDirectorySummaries,
+  materializeNavigationThreads,
   buildNavigationSnapshotHash,
   applyNavigationLaunchpadProviderSettingsPatch,
   estimateTokenUsageCost,
@@ -769,6 +772,119 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     });
     reconcile();
     return result;
+  }
+
+  /** Complete owner index inputs. Selected configuration and payload collections never enter this read. */
+  readNavigationQueryIndex(params: {
+    backend: AppServerBackendScope;
+    threads: AppServerThreadSummary[];
+    workspaceRoots?: string[];
+  }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[] } {
+    const backendState = this.getBackend(params.backend);
+    const managed = this.listManagedSubAgentThreadKeys();
+    // Explicit projection before materialization prevents provider additions
+    // from silently expanding retained navigation metadata.
+    let inputBytes = 0;
+    const nativeCounts = new Map<string, number>();
+    const providerRows = params.threads.filter((thread) => !managed.has(buildThreadIdentityKey(thread.source, thread.id))).map((thread) => {
+      nativeCounts.set(buildThreadIdentityKey(thread.source, thread.id), thread.codexNativeSubAgents?.length ?? 0);
+      const row = {
+        id: thread.id, source: thread.source, title: thread.title, titleSource: thread.titleSource,
+        threadStatus: thread.threadStatus, projectKey: thread.projectKey, createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt, archivedAt: thread.archivedAt, linkedDirectories: thread.linkedDirectories,
+        gitBranch: thread.gitBranch, gitOriginUrl: thread.gitOriginUrl, observedGitBranch: thread.observedGitBranch,
+        gitWorkingState: thread.gitWorkingState, executionMode: thread.executionMode, model: thread.model,
+        serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort, fastMode: thread.fastMode,
+        workspaceHandoff: thread.workspaceHandoff, codexNativeSubAgent: thread.codexNativeSubAgent,
+      };
+      inputBytes += Buffer.byteLength(JSON.stringify(row), "utf8");
+      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation metadata exceeds its 32 MiB admission budget.");
+      return row;
+    });
+    const keys = providerRows.map((thread) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.source, thread.id)));
+    const overlays: Record<string, ThreadOverlayState | undefined> = {};
+    const rows = this.stateDb.raw.prepare(`
+      SELECT thread_id, json_object(
+          'backend', json_extract(payload, '$.backend'),
+          'threadId', json_extract(payload, '$.threadId'),
+          'executionMode', json_extract(payload, '$.executionMode'),
+          'executionModeUpdatedAt', json_extract(payload, '$.executionModeUpdatedAt'),
+          'model', json_extract(payload, '$.model'),
+          'reasoningEffort', json_extract(payload, '$.reasoningEffort'),
+          'serviceTier', json_extract(payload, '$.serviceTier'),
+          'fastMode', json(CASE json_type(payload, '$.fastMode') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+          'modelMigrationRevision', json_extract(payload, '$.modelMigrationRevision'),
+          'modelSettingsManuallyUpdatedAt', json_extract(payload, '$.modelSettingsManuallyUpdatedAt'),
+          'gitBranch', json_extract(payload, '$.gitBranch'),
+          'observedGitBranch', json_extract(payload, '$.observedGitBranch'),
+          'snoozedUntil', json_extract(payload, '$.snoozedUntil'),
+          'dismissedAt', json_extract(payload, '$.dismissedAt'),
+          'lastSeenAt', json_extract(payload, '$.lastSeenAt'),
+          'lastSeenUpdatedAt', json_extract(payload, '$.lastSeenUpdatedAt'),
+          'extraLinkedDirectories', json_extract(payload, '$.extraLinkedDirectories'),
+          'pinnedRank', json_extract(payload, '$.pinnedRank'),
+          'parentThreadId', json_extract(payload, '$.parentThreadId'),
+          'parentThreadBackend', json_extract(payload, '$.parentThreadBackend'),
+          'parentThreadInstanceId', json_extract(payload, '$.parentThreadInstanceId'),
+          'subthreadOrder', json_extract(payload, '$.subthreadOrder'),
+          'subthreadsCollapsed', json(CASE json_type(payload, '$.subthreadsCollapsed') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+          'prs', json_extract(payload, '$.prs'),
+          'reactions', json_extract(payload, '$.reactions'),
+          'scheduledStart', json_extract(payload, '$.scheduledStart'),
+          'prAutoDispatchEnabled', json(CASE json_type(payload, '$.prAutoDispatchEnabled') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+          'agent', CASE WHEN json_type(payload, '$.agent') = 'object'
+            AND NOT COALESCE(json_extract(payload, '$.agent.instructions') = ?
+              AND json_type(payload, '$.handoffOrigin') = 'object'
+              AND (json_extract(payload, '$.handoffOrigin.taskTitle') IS NULL
+                OR json_extract(payload, '$.agent.name') = json_extract(payload, '$.handoffOrigin.taskTitle')), 0) THEN json_object(
+            'name', json_extract(payload, '$.agent.name'),
+            'instructions', '',
+            'instructionLineCount', json_extract(payload, '$.agent.instructionLineCount'),
+            'instructionsTooLong', json(CASE json_type(payload, '$.agent.instructionsTooLong') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+            'createdAt', json_extract(payload, '$.agent.createdAt'),
+            'updatedAt', json_extract(payload, '$.agent.updatedAt')
+          ) END
+      ) AS compact FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
+    `).iterate(LEGACY_HANDOFF_AGENT_INSTRUCTIONS, JSON.stringify(keys)) as Iterable<{ thread_id: string; compact: string }>;
+    for (const row of rows) {
+      inputBytes += Buffer.byteLength(row.compact, "utf8");
+      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
+      const value = JSON.parse(row.compact) as Record<string, unknown>;
+      overlays[normalizeThreadIdentityKey(row.thread_id) ?? row.thread_id] = normalizeThreadOverlayState(
+        Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as ThreadOverlayState,
+      );
+    }
+    const launchpads: Record<string, DirectoryLaunchpadOverlayState> = {};
+    const launchpadPresenceKeys = new Set<string>();
+    const drafts = this.stateDb.raw.prepare(`
+      SELECT directory_path, json_object(
+        'directoryKey', json_extract(payload, '$.directoryKey'),
+        'directoryKind', json_extract(payload, '$.directoryKind'),
+        'directoryLabel', json_extract(payload, '$.directoryLabel'),
+        'directoryPath', json_extract(payload, '$.directoryPath'),
+        'backend', json_extract(payload, '$.backend'),
+        'executionMode', json_extract(payload, '$.executionMode'),
+        'createdAt', json_extract(payload, '$.createdAt'),
+        'updatedAt', json_extract(payload, '$.updatedAt'), 'prompt', ''
+      ) AS compact FROM directory_launchpads
+      WHERE length(trim(COALESCE(json_extract(payload, '$.prompt'), ''))) > 0
+        OR COALESCE(json_array_length(payload, '$.imageAttachments'), 0) > 0
+        OR json_extract(payload, '$.registeredAt') IS NOT NULL
+        OR json_extract(payload, '$.settingsTouchedAt') IS NOT NULL
+    `).iterate() as Iterable<{ directory_path: string; compact: string }>;
+    for (const row of drafts) {
+      inputBytes += Buffer.byteLength(row.compact, "utf8");
+      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
+      const value = JSON.parse(row.compact) as Record<string, unknown>;
+      launchpads[row.directory_path] = Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as DirectoryLaunchpadOverlayState;
+      launchpadPresenceKeys.add(row.directory_path);
+    }
+    const threads = materializeNavigationThreads({ threads: providerRows, overlayByThreadKey: overlays,
+      firstSnapshot: !backendState?.lastSnapshotHash, previousKnownThreadKeys: backendState?.knownThreadKeys ?? [] }).map((thread) => ({ ...thread,
+        nativeSubAgentCount: nativeCounts.get(buildThreadIdentityKey(thread.source, thread.id)) ?? 0 }));
+    const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
+      directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots });
+    return { threads, directories };
   }
 
   async reconcileNavigationSnapshot(params: {

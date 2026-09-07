@@ -67,3 +67,39 @@ it("adds zero SQLite commits for real overlay-backed query, model inventory, fac
     expect(writes.commits).toBe(0);
   } finally { db.close(); }
 });
+
+
+it("builds the owner index without materializing private provider, overlay, or launchpad collections", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const db = openInMemoryStateDb();
+  mocks.store = new SqliteOverlayStore(db);
+  const secret = "private selected data ".repeat(100_000);
+  mocks.threads = [{ source: "codex", id: "owner", title: "Owner", titleSource: "explicit",
+    summary: secret, linkedDirectories: [], inbox: { inInbox: false }, updatedAt: 2,
+    codexNativeSubAgents: Array.from({ length: 100 }, (_, i) => ({ threadId: `worker-${i}`, title: secret })),
+  }];
+  await mocks.store.markThreadSeen({ backend: "codex", threadId: "owner", seenUpdatedAt: 1 });
+  db.raw.prepare("UPDATE threads SET payload = ?").run(JSON.stringify({ backend: "codex", threadId: "owner",
+    executionMode: "default", extraLinkedDirectories: [], lastSeenUpdatedAt: 1,
+    fastMode: true, subthreadsCollapsed: false, prAutoDispatchEnabled: true,
+    agent: { name: "Agent", instructions: secret, instructionLineCount: 42, instructionsTooLong: true, createdAt: 1, updatedAt: 2 },
+    questionnaireActivityLog: [{ text: secret }], queuedTurns: [{ prompt: secret }],
+  }));
+  db.raw.prepare("INSERT INTO directory_launchpads(directory_path, payload, created_at, updated_at) VALUES (?, ?, 1, 2)").run("directory:/launchpad", JSON.stringify({
+    directoryKey: "directory:/launchpad", directoryKind: "directory", directoryLabel: "Launchpad", directoryPath: "/launchpad",
+    backend: "codex", executionMode: "default", prompt: secret, codexEnvironmentRuntime: { output: secret }, createdAt: 1, updatedAt: 2,
+  }));
+  const legacy = vi.spyOn(mocks.store, "reconcileNavigationSnapshot");
+  try {
+    const { writes } = await measureSqliteWrites(async () => {
+      const index = await loadLocalNavigationQueryIndex({ callerReason: "compact-index-regression" });
+      expect(legacy).not.toHaveBeenCalled();
+      expect(JSON.stringify(index)).not.toContain("private selected data");
+      expect(Buffer.byteLength(JSON.stringify(index), "utf8")).toBeLessThan(8 * 1024);
+      expect(index.threads[0]).toMatchObject({ fastMode: true, subthreadsCollapsed: false, prAutoDispatchEnabled: true,
+        nativeSubAgentCount: 100, agent: { name: "Agent", instructionLineCount: 42, instructionsTooLong: true } });
+      expect(index.directories.find((directory) => directory.key === "directory:/launchpad")?.launchpad?.backend).toBe("codex");
+    });
+    expect(writes.commits).toBe(0);
+  } finally { legacy.mockRestore(); db.close(); }
+});

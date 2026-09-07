@@ -28,16 +28,14 @@ export async function loadLocalNavigationQueryIndex(params: {
     enrichDirectories: true,
   });
   params.signal?.throwIfAborted();
-  const snapshot = await overlayStore.reconcileNavigationSnapshot({
+  const index = overlayStore.readNavigationQueryIndex({
     backend,
-    fetchedAt: Date.now(),
-    partial: true,
     threads: listedThreads,
     workspaceRoots: resolveScratchProjectsRoots(),
   });
   params.signal?.throwIfAborted();
   const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
-    snapshot.threads,
+    index.threads,
   );
   params.signal?.throwIfAborted();
   const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {
@@ -46,7 +44,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   params.signal?.throwIfAborted();
   const directoryStatusCache = await overlayStore.readDirectoryGitStatusCache();
   params.signal?.throwIfAborted();
-  const directories: NavigationDirectorySummary[] = snapshot.directories.map(
+  const directories: NavigationDirectorySummary[] = index.directories.map(
     (directory) => ({
       ...directory,
       gitStatus: directoryStatusCache[directory.key]?.gitStatus,

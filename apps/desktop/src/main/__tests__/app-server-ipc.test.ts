@@ -372,6 +372,11 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
     executionMode: "default" as const,
   },
 }));
+const readNavigationQueryIndex = vi.fn((params: { backend: string; threads: Array<{ source: string; id: string }> }) => ({
+  threads: params.threads.map((thread) => ({ inbox: { inInbox: false }, ...thread })),
+  directories: [{ key: "directory:/repo/app", kind: "directory", label: "app", path: "/repo/app",
+    threadKeys: params.threads.map((thread) => `${thread.source}:${thread.id}`), needsAttentionCount: 0 }],
+}));
 const rememberCompleteNavigationSnapshot = vi.fn();
 const listRemoteThreadPins = vi.fn(async (): Promise<unknown[]> => []);
 const updateRemoteThreadPinSnapshots = vi.fn(async () => {});
@@ -1020,6 +1025,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot,
+    readNavigationQueryIndex,
     markThreadSeen,
     getThreadOverlayState,
     getThreadOverlayStates,
@@ -1233,6 +1239,7 @@ describe("app server ipc", () => {
     readThread.mockClear();
     getThreadTranscriptImageRoots.mockClear();
     reconcileNavigationSnapshot.mockClear();
+    readNavigationQueryIndex.mockClear();
     rememberCompleteNavigationSnapshot.mockClear();
     readDirectoryStatuses.mockClear();
     readDirectoryStatusEntries.mockClear();
@@ -1700,8 +1707,8 @@ describe("app server ipc", () => {
         enabled: true,
       },
     ]);
-    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ partial: true }));
-    const read = reconcileNavigationSnapshot.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(readNavigationQueryIndex).toHaveBeenCalled();
+    const read = readNavigationQueryIndex.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(read).not.toHaveProperty("messagingBindingsByThreadKey");
     expect(read).not.toHaveProperty("queuedTurnsByThreadKey");
     expect(read).not.toHaveProperty("automationsByThreadKey");
@@ -1721,7 +1728,7 @@ describe("app server ipc", () => {
     expect(owner(buildPullRequestStatusKey(pr))).toBe(true);
     expect(listThreads).toHaveBeenLastCalledWith(expect.objectContaining({ callerReason: "owner-navigation-metadata" }));
     expect(rememberCompleteNavigationSnapshot).toHaveBeenCalledWith(expect.objectContaining({ threads: expect.any(Array) }));
-    expect(reconcileNavigationSnapshot.mock.calls.at(-1)?.[0]).not.toHaveProperty("queuedTurnsByThreadKey");
+    expect(readNavigationQueryIndex.mock.calls.at(-1)?.[0]).not.toHaveProperty("queuedTurnsByThreadKey");
   });
 
   it("starts owner tracking when providers finish after startup without opening navigation", async () => {
