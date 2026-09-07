@@ -4,7 +4,7 @@ import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadCon
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
-import { readNavigationActionThread } from "./navigation-action-authority";
+import { readNavigationActionDetail, readNavigationActionThread } from "./navigation-action-authority";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
@@ -3199,7 +3199,18 @@ export function useThreadNavigation(
           if (!suppressedArchivedThreadKeysRef.current.has(key)) threadRows.set(key, presentedRow);
         }
         for (const key of suppressedArchivedThreadKeysRef.current) threadRows.delete(key);
-        const next: NavigationLoadedRows = { threadRows, directoryRows,
+        const nextDirectoryRows = new Map(directoryRows);
+        const selectedDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKeyRef.current);
+        const previousOwner = current.rows?.federationTarget?.scope === "remote" ? current.rows.federationTarget.instanceId : undefined;
+        const currentOwner = rendererFederationTarget?.scope === "remote" ? rendererFederationTarget.instanceId : undefined;
+        if (selectedDirectoryKey && previousOwner === currentOwner && !removedDirectoryKeysRef.current.has(selectedDirectoryKey)) {
+          const previous = current.rows?.directoryRows.get(selectedDirectoryKey);
+          const descriptor = nextDirectoryRows.get(selectedDirectoryKey);
+          if (previous) nextDirectoryRows.set(selectedDirectoryKey, descriptor
+            ? { ...previous, ...descriptor, gitStatus: descriptor.gitStatus ? { ...previous.gitStatus, ...descriptor.gitStatus } : previous.gitStatus }
+            : previous);
+        }
+        const next: NavigationLoadedRows = { threadRows, directoryRows: nextDirectoryRows,
           launchpadDefaults: launchpadConfiguration.value?.defaults, federationTarget: rendererFederationTarget };
         return { loading, refreshing, error, rows: reconcileLoadedNavigationRows(current.rows, next),
           startupSelectionSettled: pages.get("directory-index")?.coverage.state === "complete" };
@@ -5322,8 +5333,12 @@ export function useThreadNavigation(
         return;
       }
 
+      let workspaceDirectories: Awaited<ReturnType<typeof readNavigationActionDetail>>["workspaceDirectories"];
       try {
-        parent = await readNavigationActionThread({ api: desktopApi, thread: parent, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
+        const detail = await readNavigationActionDetail({ api: desktopApi, thread: parent, target: readRendererFederationTarget(),
+          signal: actionAbortControllerRef.current.signal, includeWorkspaceConfiguration: true });
+        parent = detail.thread;
+        workspaceDirectories = detail.workspaceDirectories;
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
         return;
@@ -5453,7 +5468,8 @@ export function useThreadNavigation(
         const ensuredGitStatus =
           response.gitStatus !== undefined
             ? response.gitStatus
-            : pendingGitStatus;
+            : pendingGitStatus ?? workspaceDirectories?.find((candidate) =>
+              candidate.path === directory.gitStatusSourcePath || candidate.path === launchpadDirectoryPath)?.gitStatus;
         setState((current) => ({
           ...current,
           rows: applyLaunchpadUpdate(current.rows, launchpad, defaults, {

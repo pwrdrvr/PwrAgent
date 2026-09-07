@@ -41,7 +41,10 @@ function useThreadNavigation(api?: DesktopApi, options?: Parameters<typeof useRe
 function actionDetailApi(...threads: NavigationThreadSummary[]): Pick<DesktopApi, "getNavigationSelectedDetail"> {
   return { getNavigationSelectedDetail: vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
     const thread = threads.find((candidate) => candidate.id === request.ref.threadId && candidate.source === request.ref.backend);
-    return { protocol: 2, ref: request.ref, revision: "fixture-detail", readiness: "ready", identity: thread ? "present" : "unresolved", thread };
+    return { protocol: 2, ref: request.ref, revision: "fixture-detail", readiness: "ready", identity: thread ? "present" : "unresolved", thread,
+      ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: thread?.linkedDirectories.map((directory) => ({
+        key: directory.id, label: directory.label, path: directory.path,
+      })) ?? [] } : {}) };
   }) };
 }
 
@@ -9473,7 +9476,6 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       readPopulation,
       onAgentEvent: () => () => undefined,
@@ -9577,7 +9579,6 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       readPopulation: async () => ({
         backend: "all" as const,
@@ -9752,7 +9753,6 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       readPopulation,
       onAgentEvent: (callback) => {
