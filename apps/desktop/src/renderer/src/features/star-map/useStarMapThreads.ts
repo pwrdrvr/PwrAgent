@@ -150,10 +150,10 @@ export function useStarMapThreads(params: {
   const desktopApi = params.desktopApi;
   const viewId = useId();
   const nextQueryConsumer = useRef(0);
-  const queryConsumers = useRef(new Set<string>());
-  const withQueryConsumer = useCallback(async <T>(read: (consumerId: string) => Promise<T>): Promise<T> => {
+  const queryConsumers = useRef(new Map<string, string>());
+  const withQueryConsumer = useCallback(async <T>(instanceId: string, read: (consumerId: string) => Promise<T>): Promise<T> => {
     const consumerId = `${viewId}:remote-query:${++nextQueryConsumer.current}`;
-    queryConsumers.current.add(consumerId);
+    queryConsumers.current.set(consumerId, instanceId);
     try { return await read(consumerId); }
     finally {
       queryConsumers.current.delete(consumerId);
@@ -187,13 +187,21 @@ export function useStarMapThreads(params: {
     .sort()
     .join("\n");
   const generationRef = useRef(0);
+  const nextOwnerGeneration = useRef(0);
+  const ownerGenerations = useRef(new Map<string, number>());
+  const firstPageReads = useRef(new Map<string, { generation: number; ownerGeneration: number; promise: Promise<void> }>());
+  const connectedIdsRef = useRef(connectedIds);
+  connectedIdsRef.current = connectedIds;
   const eventRefreshTimersRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>(),
   );
 
-  const fetchFirstPageForGeneration = useCallback(
+  const readFirstPageForGeneration = useCallback(
     async (instanceId: string, generation: number): Promise<void> => {
       if (!desktopApi?.getNavigationQueryPage) return;
+      const ownerGeneration = ownerGenerations.current.get(instanceId);
+      if (ownerGeneration === undefined) throw new Error("This owner is not connected with navigation query protocol 2.");
+      const isCurrent = () => generationRef.current === generation && ownerGenerations.current.get(instanceId) === ownerGeneration;
       let geometryLease: ReturnType<typeof navigationGeometryBudget.begin> | undefined;
       try {
         const key = `${viewId}:${instanceId}:geometry`;
@@ -204,14 +212,14 @@ export function useStarMapThreads(params: {
         attentionOwnersRef.current.add(instanceId);
         const baseRequest = attentionRequest({ instanceId, filters, attentionView });
         const [rowResult, geometryResult] = await Promise.allSettled([
-          withQueryConsumer((consumerId) => desktopApi.getNavigationQueryPage!({
+          withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!({
             ...baseRequest,
             completeBaselineRevision: previous?.completeRevision,
           }, consumerId)),
-          withQueryConsumer((consumerId) => readNavigationQueryRange({
+          withQueryConsumer(instanceId, (consumerId) => readNavigationQueryRange({
             request: { ...geometryRequest(instanceId), pageSize: 100 },
             read: (request) => desktopApi.getNavigationQueryPage!(request, consumerId),
-            isCancelled: () => generationRef.current !== generation,
+            isCancelled: () => !isCurrent(),
             maxBytes: 8 * 1024 * 1024,
             reserveBytes: lease.reserve,
             releaseBytes: lease.unreserve,
@@ -221,7 +229,7 @@ export function useStarMapThreads(params: {
         if (geometryResult.status === "rejected") throw geometryResult.reason;
         const page = rowResult.value;
         const geometry = geometryResult.value;
-        if (generationRef.current !== generation) return;
+        if (!isCurrent()) return;
         geometryLease.commit();
         setState((current) => {
           const queriesByInstance = new Map(current.queriesByInstance);
@@ -247,7 +255,7 @@ export function useStarMapThreads(params: {
           return { queriesByInstance, unreachableInstanceIds, staleInstanceIds };
         });
       } catch (error) {
-        if (generationRef.current === generation) {
+        if (isCurrent()) {
           setState((current) => {
             const unreachableInstanceIds = new Set(current.unreachableInstanceIds);
             unreachableInstanceIds.add(instanceId);
@@ -264,6 +272,18 @@ export function useStarMapThreads(params: {
     [desktopApi, filters, attentionView, viewId, withQueryConsumer],
   );
 
+  const fetchFirstPageForGeneration = useCallback((instanceId: string, generation: number): Promise<void> => {
+    const ownerGeneration = ownerGenerations.current.get(instanceId);
+    if (ownerGeneration === undefined) return Promise.reject(new Error("This owner is not connected with navigation query protocol 2."));
+    const pending = firstPageReads.current.get(instanceId);
+    if (pending?.generation === generation && pending.ownerGeneration === ownerGeneration) return pending.promise;
+    const promise = readFirstPageForGeneration(instanceId, generation).finally(() => {
+      if (firstPageReads.current.get(instanceId)?.promise === promise) firstPageReads.current.delete(instanceId);
+    });
+    firstPageReads.current.set(instanceId, { generation, ownerGeneration, promise });
+    return promise;
+  }, [readFirstPageForGeneration]);
+
   const refreshInstance = useCallback(
     async (instanceId: string): Promise<void> => {
       await fetchFirstPageForGeneration(instanceId, generationRef.current);
@@ -276,11 +296,13 @@ export function useStarMapThreads(params: {
       const retained = stateRef.current.queriesByInstance.get(instanceId);
       if (!desktopApi?.getNavigationQueryPage || !retained?.nextCursor) return;
       const generation = generationRef.current;
-      const page = await withQueryConsumer((consumerId) => desktopApi.getNavigationQueryPage!(
+      const ownerGeneration = ownerGenerations.current.get(instanceId);
+      if (ownerGeneration === undefined) return;
+      const page = await withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!(
         attentionRequest({ cursor: retained.nextCursor, instanceId, filters, attentionView }),
         consumerId,
       ));
-      if (generationRef.current !== generation) return;
+      if (generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration) return;
       setState((current) => {
         const existing = current.queriesByInstance.get(instanceId);
         if (!existing || existing.generation !== page.generation) return current;
@@ -329,24 +351,45 @@ export function useStarMapThreads(params: {
   useEffect(() => {
     const getNavigationQueryPage = desktopApi?.getNavigationQueryPage;
     if (!params.enabled || !getNavigationQueryPage) return;
-    const instanceIds = connectedIds.length > 0 ? connectedIds.split("\n") : [];
+    const instanceIds = connectedIdsRef.current.length > 0 ? connectedIdsRef.current.split("\n") : [];
     const consumers = queryConsumers.current;
+    const owners = ownerGenerations.current;
     const generation = (generationRef.current += 1);
     for (const instanceId of instanceIds) {
+      owners.set(instanceId, ++nextOwnerGeneration.current);
       void fetchFirstPageForGeneration(instanceId, generation).catch(() => undefined);
     }
     return () => {
       generationRef.current += 1;
-      for (const consumerId of consumers) void desktopApi?.releaseNavigationQuery?.(consumerId).catch(() => undefined);
+      owners.clear();
+      for (const consumerId of consumers.keys()) void desktopApi?.releaseNavigationQuery?.(consumerId).catch(() => undefined);
       consumers.clear();
     };
   }, [
-    connectedIds,
     desktopApi,
     fetchFirstPageForGeneration,
     params.enabled,
     params.refreshNonce,
   ]);
+
+  useEffect(() => {
+    if (!params.enabled) return;
+    const connected = new Set(connectedIds ? connectedIds.split("\n") : []);
+    for (const instanceId of ownerGenerations.current.keys()) {
+      if (connected.has(instanceId)) continue;
+      ownerGenerations.current.delete(instanceId);
+      for (const [consumerId, owner] of queryConsumers.current) {
+        if (owner !== instanceId) continue;
+        queryConsumers.current.delete(consumerId);
+        void desktopApi?.releaseNavigationQuery?.(consumerId).catch(() => undefined);
+      }
+    }
+    for (const instanceId of connected) {
+      if (ownerGenerations.current.has(instanceId)) continue;
+      ownerGenerations.current.set(instanceId, ++nextOwnerGeneration.current);
+      void fetchFirstPageForGeneration(instanceId, generationRef.current).catch(() => undefined);
+    }
+  }, [connectedIds, desktopApi, fetchFirstPageForGeneration, params.enabled]);
 
   useEffect(() => {
     const getNavigationQueryPage = desktopApi?.getNavigationQueryPage;
@@ -370,7 +413,9 @@ export function useStarMapThreads(params: {
     });
     for (const [instanceId, identities] of params.demandedIdentitiesByInstance ?? []) {
       if (identities.length === 0) continue;
-      void withQueryConsumer(async (consumerId) => {
+      const ownerGeneration = ownerGenerations.current.get(instanceId);
+      if (ownerGeneration === undefined) continue;
+      void withQueryConsumer(instanceId, async (consumerId) => {
         exactConsumers.add(consumerId);
         if (!stateRef.current.queriesByInstance.has(instanceId)) {
           await refreshInstance(instanceId);
@@ -387,7 +432,7 @@ export function useStarMapThreads(params: {
             const page = await readNavigationQueryRange({
               request: { ...exactRequest({ identities: identities.slice(offset, offset + 100), instanceId }), deadlineAt },
               read: (request) => getNavigationQueryPage(request, consumerId),
-              isCancelled: () => cancelled || generationRef.current !== generation,
+              isCancelled: () => cancelled || generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration,
               maxBytes: remainingBytes,
               reserveBytes: lease.reserve,
               releaseBytes: lease.unreserve,
@@ -395,7 +440,7 @@ export function useStarMapThreads(params: {
             remainingBytes -= encoder.encode(JSON.stringify(page)).byteLength;
             exactThreads = mergeEntries(exactThreads, page.entries);
           }
-          if (cancelled || generationRef.current !== generation) return;
+          if (cancelled || generationRef.current !== generation || ownerGenerations.current.get(instanceId) !== ownerGeneration) return;
           lease.commit();
           setState((current) => {
             const existing = current.queriesByInstance.get(instanceId);

@@ -82,6 +82,54 @@ function buildDesktopApi(): DesktopApi {
 }
 
 describe("useStarMapThreads", () => {
+  it("reloads only the peer that reconnects and ignores duplicate peer-directory updates", async () => {
+    const desktopApi = buildDesktopApi();
+    const read = vi.mocked(desktopApi.getNavigationQueryPage!);
+    const hook = renderHook(({ peers }) => useStarMapThreads({ desktopApi, peers, enabled: true }), {
+      initialProps: { peers: [peer("a", "connected"), peer("b", "connected")] },
+    });
+    await waitFor(() => expect(hook.result.current.threadsByInstance.size).toBe(2));
+    const readsFor = (id: string) => read.mock.calls.filter(([request]) => request.federationTarget?.scope === "remote"
+      && request.federationTarget.instanceId === id).length;
+    expect(readsFor("a")).toBe(2);
+    expect(readsFor("b")).toBe(2);
+    hook.rerender({ peers: [peer("a", "disconnected"), peer("b", "connected")] });
+    hook.rerender({ peers: [peer("a", "connected"), peer("b", "connected")] });
+    await waitFor(() => expect(hook.result.current.staleInstanceIds.has("a")).toBe(false));
+    expect(readsFor("a")).toBe(4);
+    expect(readsFor("b")).toBe(2);
+    hook.rerender({ peers: [peer("a", "connected"), peer("b", "connected")] });
+    expect(readsFor("a")).toBe(4);
+    expect(readsFor("b")).toBe(2);
+    hook.unmount();
+  });
+
+  it("rejects a late page from the previous connection without restarting a healthy peer", async () => {
+    const desktopApi = buildDesktopApi();
+    const normal = desktopApi.getNavigationQueryPage!;
+    let finish!: (page: NavigationQueryPage) => void;
+    const pending = new Promise<NavigationQueryPage>((resolve) => { finish = resolve; });
+    let first = true;
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>((request) => {
+      if (first && request.query.kind === "lens" && request.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "a") {
+        first = false; return pending;
+      }
+      return normal(request);
+    });
+    desktopApi.getNavigationQueryPage = read;
+    const hook = renderHook(({ peers }) => useStarMapThreads({ desktopApi, peers, enabled: true }), {
+      initialProps: { peers: [peer("a", "connected"), peer("b", "connected")] },
+    });
+    await waitFor(() => expect(hook.result.current.threadsByInstance.has("b")).toBe(true));
+    hook.rerender({ peers: [peer("a", "disconnected"), peer("b", "connected")] });
+    hook.rerender({ peers: [peer("a", "connected"), peer("b", "connected")] });
+    await waitFor(() => expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("thread-a"));
+    await act(async () => finish(queryPage({ instanceId: "a", threadId: "late" })));
+    expect(hook.result.current.threadsByInstance.get("a")?.[0]?.id).toBe("thread-a");
+    expect(read.mock.calls.filter(([request]) => request.federationTarget?.scope === "remote" && request.federationTarget.instanceId === "b")).toHaveLength(2);
+    hook.unmount();
+  });
+
   it("releases pending row and geometry reads when the map closes", async () => {
     let finish!: (page: NavigationQueryPage) => void;
     const pending = new Promise<NavigationQueryPage>((resolve) => { finish = resolve; });
