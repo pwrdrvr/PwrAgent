@@ -161,8 +161,9 @@ export class NavigationDetailService {
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
       partial: true,
-      queuedExecutionModesByThreadKey:
-        this.registry.getQueuedExecutionModesSnapshot(),
+      queuedExecutionModesByThreadKey: {
+        [threadKey]: this.registry.getQueuedExecutionModeForThread(request.ref),
+      },
       threads: [summary],
       workspaceRoots: resolveScratchProjectsRoots(),
     });
@@ -223,13 +224,8 @@ export class NavigationDetailService {
         `Navigation query protocol ${NAVIGATION_QUERY_PROTOCOL_VERSION} is required.`,
       );
     }
-    const threadKey = buildThreadIdentityKey(
-      request.ref.backend,
-      request.ref.threadId,
-    );
-    const entries = this.registry.getQueuedTurnsSnapshot()[threadKey] ?? [];
-    const queuedExecutionMode =
-      this.registry.getQueuedExecutionModesSnapshot()[threadKey]?.mode;
+    const entries = this.registry.getQueuedTurnsForThread(request.ref);
+    const queuedExecutionMode = this.registry.getQueuedExecutionModeForThread(request.ref)?.mode;
     const queueRevision = revision({ entries, queuedExecutionMode });
     if (!request.cursor && request.knownRevision === queueRevision) {
       return {
