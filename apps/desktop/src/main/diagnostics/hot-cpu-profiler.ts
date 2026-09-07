@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Profiler } from "node:inspector";
 import type { ProcessMetric } from "electron";
 import type {
   HotCpuProfileCapturedEvent,
@@ -8,8 +9,12 @@ import type {
 import type { HotCpuProfileConfig } from "./hot-cpu-profile-config";
 import type { HotCpuProfileSession } from "./hot-cpu-profile-session";
 import { getMainLogger } from "../log";
+import { joinCpuProfiles } from "./cpu-profile-history";
 
 const CHROME_DEBUGGER_PROTOCOL_VERSION = "1.3";
+// Rotate only after evaluating the CPU sample, and retain the last complete
+// window as well as the live one. A burst across a rotation stays available.
+const RECORDING_WINDOW_MS = 30_000;
 
 type Logger = Pick<Console, "info" | "warn" | "error">;
 
@@ -61,6 +66,8 @@ function artifactFilename(filePath: string): string {
 export class HotCpuProfiler {
   private readonly detachListener = (_event: unknown, reason: string) => {
     this.debuggerAttached = false;
+    this.recording = false;
+    this.previousRecording = null;
     void this.session.appendEvent({
       capturedAt: this.now().toISOString(),
       type: "debugger-detached",
@@ -85,6 +92,12 @@ export class HotCpuProfiler {
   private readonly session: HotCpuProfileSession;
   private readonly target: HotCpuTarget;
 
+  private startPromise: Promise<void> | null = null;
+  private recording = false;
+  private recordingStartedAtMs = 0;
+  private recordingStartedAtMonotonicMs = 0;
+  private previousRecording: Profiler.Profile | null = null;
+  private previousRecordingStartedAtMs = 0;
   private consecutiveHotSamples = 0;
   private debuggerAttached = false;
   private heapSnapshotLimitReached = false;
@@ -139,12 +152,15 @@ export class HotCpuProfiler {
   }
 
   async start(): Promise<void> {
-    if (this.stopped || this.intervalTimer) {
-      return;
-    }
+    if (this.stopped) return;
+    this.startPromise ??= this.startInner();
+    await this.startPromise;
+  }
 
+  private async startInner(): Promise<void> {
+    const startedAt = this.now();
     await this.session.appendEvent({
-      capturedAt: this.now().toISOString(),
+      capturedAt: startedAt.toISOString(),
       type: "monitor-started",
       detail: {
         intervalMs: this.config.intervalMs,
@@ -156,8 +172,10 @@ export class HotCpuProfiler {
         profileDurationMs: this.config.profileDurationMs,
         captureHeapSnapshot: this.config.captureHeapSnapshot,
         heapSnapshotLimit: this.config.heapSnapshotLimit,
+        recordingWindowMs: this.recordingWindowMs(),
       },
     });
+    await this.ensureRecording(startedAt.getTime());
     this.logger.info("[pwragent:hot-cpu] monitoring started", {
       target: this.session.target ?? "renderer",
       sessionDirectory: this.session.directoryPath,
@@ -182,6 +200,7 @@ export class HotCpuProfiler {
   }
 
   private async stopInner(reason: string): Promise<void> {
+    await this.startPromise?.catch(() => undefined);
     if (this.intervalTimer) {
       clearTimeout(this.intervalTimer);
       this.intervalTimer = null;
@@ -203,6 +222,8 @@ export class HotCpuProfiler {
       await this.stopProfile(reason);
     }
 
+    // An armed recorder without a trigger is discarded, never published.
+    await this.discardRecording();
     this.detachDebugger();
     await this.session.appendEvent({
       capturedAt: this.now().toISOString(),
@@ -254,7 +275,7 @@ export class HotCpuProfiler {
           type: "sample-skipped",
           detail: { reason: "metric-not-found", pid },
         });
-        this.scheduleNextSample();
+        await this.maintainRecording(capturedAtMs);
         return;
       }
 
@@ -298,6 +319,8 @@ export class HotCpuProfiler {
           cpuPercent,
           pid,
         });
+      } else if (!this.stopped && this.profileCount < this.config.maxProfiles) {
+        await this.maintainRecording(capturedAtMs);
       }
     } catch (error) {
       await this.session.appendEvent({
@@ -396,6 +419,90 @@ export class HotCpuProfiler {
     return this.config.triggerMode === "spike" ? 1 : this.config.consecutiveSamples;
   }
 
+  private recordingWindowMs(): number {
+    return Math.max(
+      RECORDING_WINDOW_MS,
+      this.config.intervalMs * this.triggerConsecutiveSamples(),
+    );
+  }
+
+  private async maintainRecording(startedAtMs: number): Promise<void> {
+    await this.ensureRecording(startedAtMs);
+    if (
+      this.recording
+      && performance.now() - this.recordingStartedAtMonotonicMs >= this.recordingWindowMs()
+    ) {
+      await this.rotateRecording(startedAtMs);
+    }
+  }
+
+  private async ensureRecording(startedAtMs: number): Promise<void> {
+    if (
+      this.stopped
+      || this.recording
+      || this.isTargetDestroyed()
+      || this.profileCount >= this.config.maxProfiles
+    ) return;
+    if (this.target.debugger.isAttached()) return;
+    try {
+      this.target.debugger.attach(CHROME_DEBUGGER_PROTOCOL_VERSION);
+      this.debuggerAttached = true;
+      this.target.debugger.on("detach", this.detachListener);
+      await this.target.debugger.sendCommand("Profiler.enable");
+      if (this.stopped) return;
+      await this.target.debugger.sendCommand("Profiler.start");
+      this.recording = true;
+      this.recordingStartedAtMs = startedAtMs;
+      this.recordingStartedAtMonotonicMs = performance.now();
+    } catch (error) {
+      this.recording = false;
+      this.previousRecording = null;
+      this.detachDebugger();
+      await this.session.appendEvent({
+        capturedAt: new Date(startedAtMs).toISOString(),
+        type: "recorder-start-failed",
+        detail: { error: serializeError(error) },
+      });
+    }
+  }
+
+  private async finishRecording(): Promise<Profiler.Profile> {
+    if (!this.recording) throw new Error("CPU recorder is not armed");
+    const result = await this.target.debugger.sendCommand("Profiler.stop") as {
+      profile: Profiler.Profile;
+    };
+    this.recording = false;
+    return result.profile;
+  }
+
+  private async rotateRecording(startedAtMs: number): Promise<void> {
+    try {
+      this.previousRecording = await this.finishRecording();
+      this.previousRecordingStartedAtMs = this.recordingStartedAtMs;
+      if (this.stopped) return;
+      await this.target.debugger.sendCommand("Profiler.start");
+      this.recording = true;
+      this.recordingStartedAtMs = startedAtMs;
+      this.recordingStartedAtMonotonicMs = performance.now();
+    } catch (error) {
+      this.recording = false;
+      this.previousRecording = null;
+      this.detachDebugger();
+      throw error;
+    }
+  }
+
+  private async discardRecording(): Promise<void> {
+    try {
+      if (this.recording && !this.isTargetDestroyed()) await this.finishRecording();
+    } catch (error) {
+      this.logger.warn("[pwragent:hot-cpu] recorder cleanup failed", error);
+    } finally {
+      this.recording = false;
+      this.previousRecording = null;
+    }
+  }
+
   private async startProfile(options: {
     capturedAt: string;
     cpuPercent: number;
@@ -405,29 +512,25 @@ export class HotCpuProfiler {
       return;
     }
 
-    if (this.target.debugger.isAttached()) {
+    if (!this.recording) {
+      // A debugger conflict may have prevented arming. Do not describe a
+      // newly started recording as if it had captured this hot interval.
       await this.session.appendEvent({
         capturedAt: options.capturedAt,
         type: "profile-skipped",
         detail: {
-          reason: "debugger-already-attached",
+          reason: !this.isTargetDestroyed() && this.target.debugger.isAttached()
+            ? "debugger-already-attached"
+            : "recorder-not-armed",
           cpuPercent: options.cpuPercent,
           pid: options.pid,
         },
       });
+      await this.ensureRecording(Date.parse(options.capturedAt));
       return;
     }
 
     try {
-      this.target.debugger.attach(CHROME_DEBUGGER_PROTOCOL_VERSION);
-      this.debuggerAttached = true;
-      this.target.debugger.on("detach", this.detachListener);
-      await this.target.debugger.sendCommand("Profiler.enable");
-      if (this.stopped) {
-        this.detachDebugger();
-        return;
-      }
-      await this.target.debugger.sendCommand("Profiler.start");
       this.profiling = true;
       if (this.stopped) {
         return;
@@ -453,6 +556,12 @@ export class HotCpuProfiler {
           triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
           pid: options.pid,
           durationMs: this.config.profileDurationMs,
+          recordingStartedAt: new Date(this.previousRecording
+            ? this.previousRecordingStartedAtMs
+            : this.recordingStartedAtMs).toISOString(),
+          preTriggerDurationMs: Date.parse(options.capturedAt) - (this.previousRecording
+            ? this.previousRecordingStartedAtMs
+            : this.recordingStartedAtMs),
         },
       });
       this.logger.warn("[pwragent:hot-cpu] CPU profile started", {
@@ -486,6 +595,7 @@ export class HotCpuProfiler {
         detail: { error: serializeError(error) },
       });
       this.logger.error("[pwragent:hot-cpu] CPU profile failed to start", error);
+      await this.discardRecording();
       this.detachDebugger();
     }
   }
@@ -524,12 +634,13 @@ export class HotCpuProfiler {
       };
 
     try {
-      const result = (await this.target.debugger.sendCommand("Profiler.stop")) as {
-        profile?: unknown;
-      };
+      const current = await this.finishRecording();
+      const profile = joinCpuProfiles(this.previousRecording
+        ? [this.previousRecording, current]
+        : [current]);
       await fs.writeFile(
         profilePath,
-        `${JSON.stringify(result.profile ?? {})}\n`,
+        `${JSON.stringify(profile)}\n`,
         "utf8",
       );
       await this.session.registerArtifact(profileFilename);
@@ -576,7 +687,10 @@ export class HotCpuProfiler {
       this.activeProfileTrigger = null;
       this.activeProfileHeapSnapshots = [];
       this.activeProfileHeapSnapshotCaptures.clear();
+      this.previousRecording = null;
+      this.recording = false;
       this.detachDebugger();
+      await this.ensureRecording(this.now().getTime());
       this.resumeSamplingAfterProfile();
     }
   }
