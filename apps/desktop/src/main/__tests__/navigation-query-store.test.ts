@@ -54,6 +54,34 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
+  it("pages a complete group child-first and discovers children of foreign roots absent from the local index", async () => {
+    const children = Array.from({ length: 121 }, (_, index) => ({ ...thread(`child-${index}`), parentThreadId: "root", parentThreadBackend: "codex" as const }));
+    const foreignChild = { ...thread("foreign-child"), parentThreadId: "foreign-root", parentThreadBackend: "codex" as const, parentThreadInstanceId: "peer" };
+    const store = new NavigationQueryStore();
+    const read = (cursor?: string) => store.readPage({ scopeKey: "groups", loadIndex: async () => snapshot([thread("root"), ...children, foreignChild]),
+      request: request({ query: { kind: "group-members", roots: [{ backend: "codex", threadId: "root" },
+        { backend: "codex", threadId: "foreign-root", ownerInstanceId: "peer" }] }, pageSize: 10, cursor }) });
+    const rows: string[] = [];
+    let page = await read();
+    while (true) {
+      expect(page.entries.length).toBeLessThanOrEqual(10);
+      expect(page.counts.total).toBe(123);
+      rows.push(...page.entries.map(({ row }) => row.id));
+      if (!page.nextCursor) break;
+      page = await read(page.nextCursor);
+    }
+    expect(rows).toHaveLength(123);
+    expect(rows.indexOf("root")).toBeGreaterThan(rows.indexOf("child-120"));
+    expect(rows).toContain("foreign-child");
+  });
+
+  it("rejects cyclic group membership before returning a page", async () => {
+    await expect(new NavigationQueryStore().readPage({ scopeKey: "groups",
+      loadIndex: async () => snapshot([{ ...thread("root"), parentThreadId: "child" }, { ...thread("child"), parentThreadId: "root" }]),
+      request: request({ query: { kind: "group-members", roots: [{ backend: "codex", threadId: "root" }] } }) }))
+      .rejects.toThrow("cycle");
+  });
+
   it("filters messaging eligibility before paging and reports the complete collection count", async () => {
     const threads = Array.from({ length: 100 }, (_, index) => ({ ...thread(String(index)),
       executionMode: index % 2 ? "full-access" as const : "default" as const,

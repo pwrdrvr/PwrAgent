@@ -168,6 +168,10 @@ function validateRequest(request: NavigationQueryRequest): void {
       "An exact navigation query accepts at most 100 identities.",
     );
   }
+  if (request.query.kind === "group-members" && (!Array.isArray(request.query.roots)
+    || !request.query.roots.length || request.query.roots.length > 100)) {
+    throw new NavigationQueryError("navigation_invalid_request", "Group discovery accepts one to 100 root identities.");
+  }
   if (
     request.query.kind === "directory"
     && (request.query.disclosedParentThreadKeys?.length ?? 0) > 100

@@ -856,6 +856,8 @@ export type ArchiveThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   federationTarget?: FederationTarget;
+  /** Group archive admission revalidates the exact persisted parent before mutation. */
+  expectedParent?: { threadId: ThreadIdentifier; backend: AppServerBackendKind; instanceId?: FederationInstanceId } | null;
 };
 
 export type ArchiveThreadResponse = {

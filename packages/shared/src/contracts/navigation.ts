@@ -1670,6 +1670,7 @@ export type NavigationQuery =
       disclosedParentThreadKeys?: string[];
     }
   | { kind: "children"; parent: NavigationIdentity }
+  | { kind: "group-members"; roots: NavigationIdentity[] }
   | {
       kind: "exact";
       identities: NavigationIdentity[];
