@@ -43,6 +43,7 @@ export class NavigationQueryPool {
   private readonly queries = new Map<string, Query>();
   private readonly wakeups = new Set<() => void>();
   private readonly admissions = new Map<string, Set<AbortController>>();
+  private readonly consumerKeys = new Map<string, string>();
   private activeReads = 0;
   private pendingReads = 0;
   private retainedBytes = 0;
@@ -92,10 +93,7 @@ export class NavigationQueryPool {
     deadlineAt?: number;
     load: Load<T>;
   }): Promise<T> {
-    const consumers = new Set(this.admissions.keys());
-    for (const query of this.queries.values()) {
-      for (const consumer of query.consumers) consumers.add(consumer);
-    }
+    const consumers = new Set(this.consumerKeys.keys());
     const pendingAdmissions = [...this.admissions.values()].reduce((count, entries) => count + entries.size, 0);
     if ((!consumers.has(params.consumerId) && consumers.size >= MAX_CONSUMERS)
       || this.pendingReads + pendingAdmissions >= MAX_PENDING_READS) {
@@ -111,6 +109,7 @@ export class NavigationQueryPool {
     admissions.add(admission);
     this.admissions.set(params.consumerId, admissions);
     const key = params.key;
+    this.consumerKeys.set(params.consumerId, key);
     // One consumer token owns one canonical query. Changing a search or exact
     // selection releases the previous query instead of retaining every edit.
     for (const [otherKey, other] of this.queries) {
@@ -124,7 +123,20 @@ export class NavigationQueryPool {
       while (!query) {
         this.evictUnused();
         const isQuery = params.kind === "query";
-        const occupied = [...this.queries.values()].filter((entry) => (entry.kind === "query") === isQuery).length;
+        let occupied = [...this.queries.values()].filter((entry) => (entry.kind === "query") === isQuery).length;
+        if (occupied >= (isQuery ? MAX_QUERIES : MAX_EXACT_RESOURCES)) {
+          // Mounted views own their displayed pages and owner cursors. An idle
+          // process cache entry must not reserve admission for their lifetime.
+          // Preserve consumer leases separately so eviction cannot bypass the
+          // consumer budget or cancel physical work still in progress.
+          for (const [idleKey, idle] of this.queries) {
+            if ((idle.kind === "query") !== isQuery || idle.active || idle.reads.size) continue;
+            for (const page of idle.pages.values()) this.retainedBytes -= page.bytes;
+            this.queries.delete(idleKey);
+            occupied -= 1;
+            break;
+          }
+        }
         if (occupied < (isQuery ? MAX_QUERIES : MAX_EXACT_RESOURCES)) {
           query = { kind: params.kind, ownerKey: params.ownerKey, threadKey: params.threadKey,
             active: false, consumers: new Set(), pages: new Map(), reads: new Map() };
@@ -183,6 +195,7 @@ export class NavigationQueryPool {
   }
 
   release(consumerId: string): void {
+    this.consumerKeys.delete(consumerId);
     for (const admission of this.admissions.get(consumerId) ?? []) admission.abort();
     for (const query of this.queries.values()) {
       query.consumers.delete(consumerId);

@@ -213,7 +213,7 @@ describe("NavigationQueryPool", () => {
     expect(pool.getBudgetUsage().activeReads).toBe(0);
   });
 
-  it("queues a ninth query and admits it after an unreferenced query releases", async () => {
+  it("admits a ninth mounted query by evicting idle backing without requiring a view to close", async () => {
     const pool = new NavigationQueryPool();
     for (let index = 0; index < 8; index += 1) {
       await pool.read({
@@ -228,9 +228,8 @@ describe("NavigationQueryPool", () => {
       request: { ...request, query: { kind: "search", text: "ninth" } },
       load: async () => { loaded = true; return page; },
     });
-    expect(loaded).toBe(false);
+    expect(loaded).toBe(true);
     expect(pool.getBudgetUsage().queries).toBe(8);
-    pool.release("0");
     await ninth;
     expect(loaded).toBe(true);
     expect(pool.getBudgetUsage().queries).toBe(8);
@@ -238,12 +237,14 @@ describe("NavigationQueryPool", () => {
 
   it("cancels waiting admission without issuing an owner read", async () => {
     const pool = new NavigationQueryPool();
+    const pending: Array<Promise<NavigationQueryPage>> = [];
+    const finish: Array<() => void> = [];
     for (let index = 0; index < 8; index += 1) {
-      await pool.read({
+      pending.push(pool.read({
         consumerId: String(index),
         request: { ...request, query: { kind: "search", text: String(index) } },
-        load: async () => page,
-      });
+        load: () => new Promise((resolve) => finish.push(() => resolve(page))),
+      }));
     }
     let called = false;
     const waiting = pool.read({
@@ -254,6 +255,21 @@ describe("NavigationQueryPool", () => {
     pool.release("closed");
     await expect(waiting).rejects.toThrow();
     expect(called).toBe(false);
+    for (const done of finish) done();
+    await Promise.all(pending);
+  });
+
+  it("retains the consumer admission budget when inactive backing is evicted", async () => {
+    const pool = new NavigationQueryPool();
+    for (let i = 0; i < 256; i += 1) await pool.read({ consumerId: String(i),
+      request: { ...request, query: { kind: "search", text: String(i) } }, load: async () => page });
+    expect(pool.getBudgetUsage().queries).toBe(8);
+    await expect(pool.read({ consumerId: "extra", request, load: async () => page })).rejects.toMatchObject({ code: "navigation_busy" });
+    pool.release("0");
+    await expect(pool.read({ consumerId: "extra", request, load: async () => page })).resolves.toEqual(page);
+    for (let i = 1; i < 256; i += 1) pool.release(String(i));
+    pool.release("extra");
+    expect(pool.getBudgetUsage()).toEqual({ queries: 0, exactResources: 0, retainedBytes: 0, activeReads: 0 });
   });
 
   it("serializes distinct page reads for the same query", async () => {
