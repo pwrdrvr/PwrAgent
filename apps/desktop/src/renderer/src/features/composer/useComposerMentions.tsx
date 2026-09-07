@@ -290,8 +290,9 @@ export function useComposerMentions(params: {
             localOwnerMatched: sources?.navigationSettledQuery === hashQuery.trim().toLowerCase(),
             query: hashQuery,
             remoteThreads,
+            remoteOwnerMatched: remoteSettledQuery === hashQuery.trim(),
           }),
-    [hashQuery, remoteThreads, sources?.currentThreadKey, sources?.navigationSettledQuery, threads],
+    [hashQuery, remoteThreads, remoteSettledQuery, sources?.currentThreadKey, sources?.navigationSettledQuery, threads],
   );
 
   // Same precedence the full composer uses. A trigger with no candidates
