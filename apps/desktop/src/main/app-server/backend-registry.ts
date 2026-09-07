@@ -25767,7 +25767,7 @@ export class DesktopBackendRegistry {
       if (
         usageCeiling
         && cumulativeUsage
-        && cumulativeUsage.totalTokens > usageCeiling.totalTokens
+        && (cumulativeUsage.totalTokens ?? 0) > (usageCeiling.totalTokens ?? 0)
       ) {
         // A stale turn id (including the turnless completion fallback) cannot
         // own a thread snapshot that already includes a subsequent turn.
