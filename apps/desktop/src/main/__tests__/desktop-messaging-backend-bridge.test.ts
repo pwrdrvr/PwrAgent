@@ -19,12 +19,19 @@ import {
 const {
   getThreadOverlayState,
   readDirectoryGitStatusCache,
+  readNavigationQueryIndex,
   reconcileNavigationSnapshot,
 } = vi.hoisted(() => ({
   getThreadOverlayState: vi.fn(
     async (): Promise<ThreadOverlayState | undefined> => undefined,
   ),
   readDirectoryGitStatusCache: vi.fn(async () => ({})),
+  readNavigationQueryIndex: vi.fn((params: { threads: AppServerThreadSummary[] }) => ({
+    threads: params.threads.map(({ id, source, title, titleSource, linkedDirectories, updatedAt }) => ({
+      id, source, title, titleSource, linkedDirectories, updatedAt, inbox: { inInbox: false },
+    })),
+    directories: [],
+  })),
   reconcileNavigationSnapshot: vi.fn(async (params: {
     backend: NavigationSnapshot["backend"];
     fetchedAt: number;
@@ -50,6 +57,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     getThreadOverlayState,
     readDirectoryGitStatusCache,
+    readNavigationQueryIndex,
     reconcileNavigationSnapshot,
   }),
 }));

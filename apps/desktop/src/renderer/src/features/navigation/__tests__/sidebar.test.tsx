@@ -1135,10 +1135,9 @@ describe("Sidebar", () => {
     fireEvent.dragOver(targetRow, { clientY: 75, dataTransfer });
     fireEvent.drop(targetRow, { clientY: 75, dataTransfer });
 
-    expect(onUpdateSubthreadOrder).toHaveBeenCalledWith(remoteParent, [
-      "remote-child-a",
-      "remote-child-b",
-    ]);
+    expect(onUpdateSubthreadOrder).toHaveBeenCalledWith(remoteParent, {
+      threadId: "remote-child-a", anchorThreadId: "remote-child-b", placement: "before",
+    });
   });
 
   it("does not expose sub-thread disclosure controls for an older remote peer", () => {
