@@ -56,6 +56,8 @@ export function useIndependentQueueProjection(params: {
     let dirty = false;
     const baselines = new Map<string, NavigationQueueProjection>();
     const consumers = new Set<string>();
+    const demandedInstances = new Set<string>();
+    const peerStatuses = new Map<string, string>();
 
     const refresh = async (): Promise<void> => {
       if (running) { dirty = true; return; }
@@ -84,6 +86,11 @@ export function useIndependentQueueProjection(params: {
           if (resolved?.state === "known" && buildOwnedComposerScopeKey(resolved.owner) === key) demand.scopes.add(scope);
           demands.set(key, demand);
         }
+        demandedInstances.clear();
+        for (const { owner } of demands.values()) {
+          if (owner.target.scope === "remote") demandedInstances.add(owner.target.instanceId);
+        }
+        for (const instanceId of peerStatuses.keys()) if (!demandedInstances.has(instanceId)) peerStatuses.delete(instanceId);
         const pending = [...demands];
         await Promise.all(Array.from({ length: Math.min(8, pending.length) }, async () => {
           while (!cancelled) {
@@ -137,6 +144,13 @@ export function useIndependentQueueProjection(params: {
     const unsubscribeQueue = composerDraftStore?.subscribeQueuedTurns(schedule);
     const unsubscribeEvents = desktopApi.onAgentEvent?.((event) => {
       const method = event.notification.method;
+      if (method === "federation/peerStatus/changed") {
+        const peer = event.notification.params as { instanceId: string; status: string };
+        if (!demandedInstances.has(peer.instanceId) || peerStatuses.get(peer.instanceId) === peer.status) return;
+        peerStatuses.set(peer.instanceId, peer.status);
+        if (peer.status === "connected") schedule();
+        return;
+      }
       if (method.startsWith("turn/") || method.startsWith("thread/queued")
         || method === "thread/turnQueue/updated"
         || method.startsWith("thread/executionMode/") || method === "thread/status/changed") schedule();

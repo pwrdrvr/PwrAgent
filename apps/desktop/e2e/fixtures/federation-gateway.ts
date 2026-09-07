@@ -327,7 +327,11 @@ export async function startInProcessFederationGateway(params: {
       calls.push({ method: "getNavigationSelectedDetail", params: request });
       const thread = navigationSnapshot().threads.find((entry) => entry.source === request.ref.backend && entry.id === request.ref.threadId);
       return { protocol: 2, ref: request.ref, revision: revision(thread ?? null), readiness: "ready",
-        identity: thread ? "present" : "unresolved", ...(thread ? { thread } : {}) };
+        identity: thread ? "present" : "unresolved", ...(thread ? { thread } : {}),
+        ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: directories
+          .filter((directory) => thread?.linkedDirectories.some((linked) => linked.path === directory.path))
+          .map((directory) => ({ key: directory.key, path: directory.path, label: directory.label,
+            gitStatus: { currentBranch: "main", branches: ["main"], baseBranches: ["main", "origin/main"] } })) } : {}) };
     },
     async getNavigationQueueProjection(request: NavigationQueueProjectionRequest): Promise<NavigationQueueProjection> {
       calls.push({ method: "getNavigationQueueProjection", params: request });

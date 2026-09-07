@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { NavigationQueueProjection, NavigationThreadSummary } from "@pwragent/shared";
+import type { AgentEvent, NavigationQueueProjection, NavigationThreadSummary } from "@pwragent/shared";
 import type { ComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "../desktop-api";
 import { useIndependentQueueProjection } from "../useIndependentQueueProjection";
@@ -74,6 +74,39 @@ describe("selected FIFO readiness", () => {
     await waitFor(() => expect(hook.result.current.readiness).toBe("ready"));
     expect(read).toHaveBeenCalledTimes(1);
     expect(store.setQueuedTurns).not.toHaveBeenCalled();
+  });
+
+  it("recovers the demanded FIFO on reconnect without waiting for the periodic refresh", async () => {
+    vi.useFakeTimers();
+    let listener!: (event: AgentEvent) => void;
+    const read = vi.fn().mockRejectedValueOnce(new Error("Disconnected")).mockResolvedValue(page());
+    const api: DesktopApi = { getNavigationQueueProjection: read, onAgentEvent: (next) => { listener = next; return () => {}; } };
+    const hook = renderHook(() => useIndependentQueueProjection({ desktopApi: api, selectedThread: selected() }));
+    try {
+      await act(async () => {});
+      expect(hook.result.current.readiness).toBe("failed");
+      const publish = (instanceId: string, status: string) => listener({ backend: "codex",
+        notification: { method: "federation/peerStatus/changed", params: { instanceId, status } },
+      } as AgentEvent);
+      await act(async () => {
+        publish("unrelated", "connected");
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(read).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        publish("owner", "disconnected");
+        publish("owner", "connected");
+        publish("owner", "connected");
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(hook.result.current.readiness).toBe("ready");
+      await act(async () => { publish("owner", "connected"); await vi.advanceTimersByTimeAsync(250); });
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      hook.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("reports unavailable owner reads as failed instead of an empty ready FIFO", async () => {
