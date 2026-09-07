@@ -519,7 +519,7 @@ function DesktopAppShell(props: {
   });
   const newThreadFederationTargets = useMemo(
     () =>
-      desktopApi?.getNavigationSnapshot && desktopApi?.ensureDirectoryLaunchpad
+      desktopApi?.getNavigationQueryPage && desktopApi?.ensureDirectoryLaunchpad
         ? buildFederationThreadTargets(
             liveFederationHealth,
             readRendererFederationTarget()?.instanceId,
@@ -527,7 +527,7 @@ function DesktopAppShell(props: {
         : [],
     [
       desktopApi?.ensureDirectoryLaunchpad,
-      desktopApi?.getNavigationSnapshot,
+      desktopApi?.getNavigationQueryPage,
       liveFederationHealth,
     ],
   );
