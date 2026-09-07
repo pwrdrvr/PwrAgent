@@ -18757,15 +18757,22 @@ export class DesktopBackendRegistry {
    * the window that submitted them.
    */
   getQueuedTurnsForThread(ref: { backend: AppServerBackendKind; threadId: string }): ThreadQueuedTurnSummary[] {
-    return this.threadTurnQueue.getQueuedEntries(ref).map((entry, position) => ({
-      queueEntryId: entry.id,
-      origin: entry.origin,
-      displayText: queuedTurnDisplayText(entry.input),
-      createdAt: entry.createdAt,
-      position,
-      ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
-      ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
-    }));
+    return [...this.iterateQueuedTurnSummaries(ref)];
+  }
+
+  *iterateQueuedTurnSummaries(ref: { backend: AppServerBackendKind; threadId: string }): IterableIterator<ThreadQueuedTurnSummary> {
+    let position = 0;
+    for (const entry of this.threadTurnQueue.iterateQueuedEntries(ref)) {
+      yield {
+        queueEntryId: entry.id,
+        origin: entry.origin,
+        displayText: queuedTurnDisplayText(entry.input),
+        createdAt: entry.createdAt,
+        position: position++,
+        ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
+        ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+      };
+    }
   }
 
   getQueuedExecutionModeForThread(ref: { backend: AppServerBackendKind; threadId: string }) {

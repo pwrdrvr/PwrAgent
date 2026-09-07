@@ -45,7 +45,7 @@ describe("NavigationDetailService", () => {
   it("includes a continuation cursor in the queue wire-byte admission check", () => {
     const entries: ThreadQueuedTurnSummary[] = [{ queueEntryId: "first", createdAt: 1, displayText: "", origin: "manual", position: 0 }];
     const service = new NavigationDetailService({
-      getQueuedTurnsForThread: () => entries,
+      iterateQueuedTurnSummaries: () => entries,
       getQueuedExecutionModeForThread: () => undefined,
     } as unknown as DesktopBackendRegistry);
     const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: "thread" } };
@@ -54,6 +54,23 @@ describe("NavigationDetailService", () => {
     expect(Buffer.byteLength(JSON.stringify(service.readQueueProjection(request)))).toBeLessThan(NAVIGATION_QUERY_MAX_RESULT_BYTES);
     entries.push({ queueEntryId: "second", createdAt: 2, displayText: "next", origin: "manual", position: 1 });
     expect(() => service.readQueueProjection(request)).toThrow("One queue entry exceeds the result budget");
+  });
+
+  it("stops admission before retaining an oversized complete FIFO", () => {
+    let visited = 0;
+    const service = new NavigationDetailService({
+      *iterateQueuedTurnSummaries() {
+        for (let index = 0; index < 100_000; index += 1) {
+          visited += 1;
+          yield { queueEntryId: String(index), createdAt: 1,
+            displayText: "x".repeat(200), origin: "manual", position: index };
+        }
+      },
+      getQueuedExecutionModeForThread: () => undefined,
+    } as unknown as DesktopBackendRegistry);
+    expect(() => service.readQueueProjection({ protocol: 2,
+      ref: { backend: "codex", threadId: "thread" } })).toThrow("8 MiB admission budget");
+    expect(visited).toBeLessThan(100_000);
   });
 
   beforeEach(() => {
@@ -181,7 +198,7 @@ describe("NavigationDetailService", () => {
     );
     const registry = {
       getQueuedTurnsSnapshot: vi.fn(() => { throw new Error("Fleet FIFO enumeration is forbidden"); }),
-      getQueuedTurnsForThread: vi.fn(() => entries),
+      iterateQueuedTurnSummaries: vi.fn(() => entries),
       getQueuedExecutionModeForThread: vi.fn(() => undefined),
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
@@ -190,7 +207,7 @@ describe("NavigationDetailService", () => {
       ref: { backend: "codex" as const, threadId: "selected" },
     };
     const first = service.readQueueProjection(request);
-    expect(registry.getQueuedTurnsForThread).toHaveBeenCalledExactlyOnceWith(request.ref);
+    expect(registry.iterateQueuedTurnSummaries).toHaveBeenCalledWith(request.ref);
     expect(registry.getQueuedTurnsSnapshot).not.toHaveBeenCalled();
     expect(first.entries).toHaveLength(100);
     expect(first.complete).toBe(false);

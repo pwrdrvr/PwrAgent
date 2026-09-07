@@ -7,7 +7,6 @@ import type {
   NavigationLaunchpadConfigResponse,
   NavigationSelectedDetailRequest,
   NavigationSelectedDetailResponse,
-  ThreadQueuedTurnSummary,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
@@ -243,9 +242,22 @@ export class NavigationDetailService {
         `Navigation query protocol ${NAVIGATION_QUERY_PROTOCOL_VERSION} is required.`,
       );
     }
-    const entries = this.registry.getQueuedTurnsForThread(request.ref);
+    // Hash one compact summary at a time. The independent FIFO may outlive
+    // every navigation page; do not clone/stringify its complete population.
+    const hash = createHash("sha256");
+    let entryCount = 0;
+    let projectionBytes = 0;
+    for (const entry of this.registry.iterateQueuedTurnSummaries(request.ref)) {
+      const encoded = JSON.stringify(entry);
+      projectionBytes += Buffer.byteLength(encoded, "utf8");
+      if (projectionBytes > 8 * 1024 * 1024) {
+        throw new NavigationQueryError("navigation_busy", "Queue projection exceeds its 8 MiB admission budget.");
+      }
+      hash.update(encoded).update("\n");
+      entryCount += 1;
+    }
     const queuedExecutionMode = this.registry.getQueuedExecutionModeForThread(request.ref)?.mode;
-    const queueRevision = revision({ entries, queuedExecutionMode });
+    const queueRevision = hash.update(JSON.stringify({ queuedExecutionMode })).digest("base64url");
     if (!request.cursor && request.knownRevision === queueRevision) {
       return {
         protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
@@ -265,7 +277,7 @@ export class NavigationDetailService {
       );
     }
     const offset = cursor?.offset ?? 0;
-    if (offset > entries.length) {
+    if (offset > entryCount) {
       throw new NavigationQueryError(
         "navigation_invalid_request",
         "Queue projection cursor is outside its revision.",
@@ -281,12 +293,15 @@ export class NavigationDetailService {
       ...(queuedExecutionMode ? { queuedExecutionMode } : {}),
     };
     let nextOffset = offset;
-    for (; nextOffset < entries.length && nextOffset - offset < 100; nextOffset += 1) {
+    let position = 0;
+    for (const entry of this.registry.iterateQueuedTurnSummaries(request.ref)) {
+      if (position++ < offset) continue;
+      if (nextOffset - offset >= 100) break;
       const candidate = {
         ...response,
-        entries: [...response.entries, entries[nextOffset]!],
-        complete: nextOffset + 1 >= entries.length,
-        ...(nextOffset + 1 < entries.length ? { nextCursor: encodeQueueCursor({
+        entries: [...response.entries, entry],
+        complete: nextOffset + 1 >= entryCount,
+        ...(nextOffset + 1 < entryCount ? { nextCursor: encodeQueueCursor({
           offset: nextOffset + 1,
           revision: queueRevision,
         }) } : {}),
@@ -300,9 +315,10 @@ export class NavigationDetailService {
         }
         break;
       }
-      response.entries.push(entries[nextOffset] as ThreadQueuedTurnSummary);
+      response.entries.push(entry);
+      nextOffset += 1;
     }
-    response.complete = nextOffset >= entries.length;
+    response.complete = nextOffset >= entryCount;
     if (!response.complete) {
       response.nextCursor = encodeQueueCursor({
         offset: nextOffset,
