@@ -4,7 +4,6 @@ import type {
   AppServerReadThreadResponse,
   AppServerTurnInputItem,
   FederationProtocolEnvelope,
-  NavigationSnapshotTransportResponse,
   NavigationThreadSummary,
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
@@ -519,62 +518,29 @@ describe("federation backend bridge", () => {
     ]);
   });
 
-  it("preserves encoded ACP navigation keys on the protocol-v1 wire", async () => {
-    const backend = {
-      getNavigationSnapshot: vi.fn(async () => ({
-        backend: "all" as const,
-        fetchedAt: 1_000,
-        unchanged: false,
-        threads: [],
-        inboxThreadKeys: ["acp:grok:thread-1"],
-        directories: [{
-          key: "directory-1",
-          kind: "directory" as const,
-          label: "Project",
-          threadKeys: ["acp:grok:thread-1"],
-          needsAttentionCount: 0,
-        }],
-        launchpadDefaults: {
-          backend: "codex" as const,
-          executionMode: "default" as const,
-        },
-      })),
-    } as unknown as FederationBackendOperations;
+  it.each([
+    ["snapshot", FEDERATION_BACKEND_METHODS.getNavigationSnapshot, {}],
+    ["full transport", FEDERATION_BACKEND_METHODS.getNavigationSnapshot, { transport: { protocol: 1 } }],
+    ["delta transport", FEDERATION_BACKEND_METHODS.getNavigationSnapshot, { transport: { protocol: 1, baseRevision: "old" } }],
+    ["sparse transport", FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+      { transport: { protocol: 1, selection: { kind: "threads", threadKeys: ["acp%3Agrok:thread-1"] } } }],
+    ["descendant snapshot", FEDERATION_BACKEND_METHODS.getNavigationDescendantPage, { threadKeys: ["codex:parent"] }],
+  ])("rejects alpha %s requests with an upgrade instruction before loading any collection", async (_label, method, request) => {
+    const backend = { getNavigationSnapshot: vi.fn(), listThreads: vi.fn() } as unknown as FederationBackendOperations;
     const replies: FederationProtocolEnvelope[] = [];
-    const router = new FederationRouter({
-      localInstanceId: "owner_one",
-      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
-    });
-    router.registerConnection({
-      peerId: "viewer_one",
-      capabilities: ["thread_navigation"],
-      sendEnvelope: (envelope) => replies.push(envelope),
-    });
+    const router = new FederationRouter({ localInstanceId: "owner_one", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    router.registerConnection({ peerId: "viewer_one", capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope) });
     registerFederationBackendHandlers({ router, backend });
-
-    await router.routeEnvelope({
-      sourcePeerId: "viewer_one",
-      envelope: {
-        id: "navigation-request",
-        kind: "request",
-        method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
-        params: {},
-        protocolVersion: 1,
-        sourceInstanceId: "viewer_one",
-        targetInstanceId: "owner_one",
-        createdAt: 1_000,
-      },
-    });
-
-    expect(replies[0]).toMatchObject({
-      kind: "response",
-      result: {
-        inboxThreadKeys: ["acp%3Agrok:thread-1"],
-        directories: [{
-          threadKeys: ["acp%3Agrok:thread-1"],
-        }],
-      },
-    });
+    await router.routeEnvelope({ sourcePeerId: "viewer_one", envelope: {
+      id: "alpha-request", kind: "request", method: method as string, params: request,
+      protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1_000,
+    } });
+    expect(replies[0]).toMatchObject({ kind: "error", error: {
+      code: "handler_failed", message: expect.stringContaining("Upgrade the requesting PwrAgent instance"),
+    } });
+    expect(backend.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(backend.listThreads).not.toHaveBeenCalled();
   });
 
   it("filters and bounds jump-search navigation rows before crossing the wire", async () => {
@@ -768,131 +734,6 @@ describe("federation backend bridge", () => {
       deadlineAt: expect.any(Number),
     });
     expect(listThreads).not.toHaveBeenCalled();
-  });
-
-  it("sends unchanged and sparse navigation responses instead of full Federation payloads", async () => {
-    const buildThread = (index: number): NavigationThreadSummary => ({
-      id: `thread-${index}`,
-      title: `Thread ${index}`,
-      titleSource: "explicit",
-      linkedDirectories: [],
-      source: "codex",
-      inbox: { inInbox: true, reason: "new-thread" },
-      createdAt: index,
-      updatedAt: index,
-    });
-    let threads = Array.from({ length: 1_200 }, (_, index) =>
-      buildThread(index),
-    );
-    let fetchedAt = 1_000;
-    const backend = {
-      getNavigationSnapshot: vi.fn(async () => ({
-        backend: "all" as const,
-        fetchedAt: fetchedAt++,
-        unchanged: false,
-        threads,
-        inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
-        directories: [],
-        launchpadDefaults: {
-          backend: "codex" as const,
-          executionMode: "default" as const,
-        },
-      })),
-    } as unknown as FederationBackendOperations;
-    const replies: FederationProtocolEnvelope[] = [];
-    const router = new FederationRouter({
-      localInstanceId: "owner_one",
-      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
-    });
-    router.registerConnection({
-      peerId: "viewer_one",
-      capabilities: ["thread_navigation"],
-      sendEnvelope: (envelope) => replies.push(envelope),
-    });
-    router.registerConnection({
-      peerId: "viewer_two",
-      capabilities: ["thread_navigation"],
-      sendEnvelope: (envelope) => replies.push(envelope),
-    });
-    registerFederationBackendHandlers({ router, backend });
-    const request = async (
-      id: string,
-      baseRevision?: string,
-      peerId = "viewer_one",
-      threadKeys?: string[],
-    ): Promise<NavigationSnapshotTransportResponse> => {
-      await router.routeEnvelope({
-        sourcePeerId: peerId,
-        envelope: {
-          id,
-          kind: "request",
-          method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
-          params: {
-            transport: {
-              protocol: 1,
-              ...(baseRevision ? { baseRevision } : {}),
-              ...(threadKeys
-                ? { selection: { kind: "threads", threadKeys } }
-                : {}),
-            },
-          },
-          protocolVersion: 1,
-          sourceInstanceId: peerId,
-          targetInstanceId: "owner_one",
-          createdAt: 1_000,
-        },
-      });
-      return (replies.at(-1) as { result: NavigationSnapshotTransportResponse })
-        .result;
-    };
-
-    const full = await request("navigation-full");
-    if (full.kind !== "full") throw new Error("Expected a full baseline");
-    const unchanged = await request(
-      "navigation-unchanged",
-      full.revision,
-      "viewer_two",
-    );
-    const sparse = await request(
-      "navigation-sparse",
-      undefined,
-      "viewer_two",
-      ["codex:thread-3", "codex:thread-9"],
-    );
-
-    expect(unchanged).toEqual({
-      kind: "unchanged",
-      revision: full.revision,
-    });
-    expect(JSON.stringify(unchanged).length).toBeLessThan(
-      JSON.stringify(full).length / 1_000,
-    );
-    if (sparse.kind !== "full") throw new Error("Expected sparse baseline");
-    expect(sparse.revision).toBe(full.revision);
-    expect(sparse.snapshot.threads.map((thread) => thread.id)).toEqual([
-      "thread-3",
-      "thread-9",
-    ]);
-
-    threads = threads.map((thread, index) =>
-      index < 10
-        ? { ...thread, title: `${thread.title} updated` }
-        : thread,
-    );
-    const delta = await request("navigation-delta", full.revision);
-
-    expect(delta.kind).toBe("delta");
-    if (delta.kind !== "delta") throw new Error("Expected a sparse delta");
-    expect(delta.upsertedThreads).toHaveLength(10);
-    expect(delta.removedThreadKeys).toEqual([]);
-    expect(delta.threadKeys).toBeUndefined();
-    expect(JSON.stringify(delta).length).toBeLessThan(
-      JSON.stringify(full).length / 50,
-    );
-    expect(backend.getNavigationSnapshot).toHaveBeenLastCalledWith({
-      forceRefresh: undefined,
-      refreshMode: "full",
-    });
   });
 
   it("routes thread reactions through the thread-navigation capability", async () => {

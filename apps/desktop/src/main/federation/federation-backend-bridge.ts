@@ -3,13 +3,10 @@ import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenRes
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import {
-  projectNavigationDescendantPage,
   type FederationNavigationSelectionPage,
   type FederationNavigationSelectionRequest,
 } from "./federation-navigation-selection";
 import {
-  projectFederationArchivedThreads,
-  projectFederationProjectPage,
   validateArchivedThreadLookup,
   type FederationArchivedThreadLookupRequest,
   type FederationProjectPage,
@@ -112,7 +109,6 @@ import type {
   NavigationSelectedDetailResponse,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
-  NavigationSnapshotTransportSelection,
   NavigationThreadSummary,
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -181,10 +177,8 @@ import type {
   UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import {
-  encodeNavigationSnapshotThreadKeysForProtocolV1,
   normalizeNavigationSnapshotThreadKeys,
 } from "@pwragent/shared";
-import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import type { FederationRouter } from "./federation-router";
 import type {
   FederationRpcEndpoint,
@@ -891,12 +885,7 @@ export function registerFederationBackendHandlers(params: {
     targetInstanceId: string,
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
-}): NavigationSnapshotTransport {
-  const navigationSnapshotTransport = new NavigationSnapshotTransport({
-    // Federation has one owner collection and one resource-version history.
-    // Request selectors never create histories of their own.
-    maxScopes: 1,
-  });
+}): void {
   if (params.backend.getNavigationQueryPage) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
@@ -959,24 +948,11 @@ export function registerFederationBackendHandlers(params: {
       ),
     );
   }
-  params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.getNavigationDescendantPage,
-    async (envelope) => {
-      const baseline = navigationSnapshotTransport.encode({
-        request: {},
-        scopeKey: "federation-navigation",
-        snapshot: encodeNavigationSnapshotThreadKeysForProtocolV1(
-          await params.backend.getNavigationSnapshot({ refreshMode: "full" }, { deadlineAt: envelope.deadlineAt }),
-        ),
-      });
-      if (baseline.kind !== "full") throw new Error("Navigation selection requires a complete owner baseline.");
-      return projectNavigationDescendantPage(
-        baseline.snapshot,
-        baseline.revision,
-        envelope.params as FederationNavigationSelectionRequest,
-      );
-    },
-  );
+  for (const method of [FEDERATION_BACKEND_METHODS.getNavigationSnapshot, FEDERATION_BACKEND_METHODS.getNavigationDescendantPage]) {
+    params.router.registerHandler(method, async () => {
+      throw new Error("This alpha navigation snapshot protocol is no longer supported. Upgrade the requesting PwrAgent instance to use bounded navigation query protocol 2.");
+    });
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.getProjectPage,
     async (envelope) => {
@@ -985,10 +961,7 @@ export function registerFederationBackendHandlers(params: {
       if (params.backend.getProjectPage) {
         return await params.backend.getProjectPage(request, rpcOptions);
       }
-      return projectFederationProjectPage(
-        await params.backend.getNavigationSnapshot({}, rpcOptions),
-        request,
-      );
+      throw new Error("Bounded project navigation is unavailable. Upgrade the owner PwrAgent instance to use navigation query protocol 2.");
     },
   );
   params.router.registerHandler(
@@ -1002,59 +975,7 @@ export function registerFederationBackendHandlers(params: {
           deadlineAt: envelope.deadlineAt,
         });
       }
-      const response = await params.backend.listThreads({
-        backend: request.backend,
-        archived: true,
-      });
-      return projectFederationArchivedThreads(response.threads, request);
-    },
-  );
-  params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
-    async (envelope) => {
-      const request = (envelope.params ?? {}) as
-        | GetNavigationSnapshotRequest
-        | GetNavigationSnapshotTransportRequest;
-      const transportRequest =
-        "transport" in request && request.transport?.protocol === 1
-          ? request
-          : undefined;
-      if (!transportRequest) {
-        const { transport: _unsupportedTransport, ...snapshotRequest } =
-          request as GetNavigationSnapshotRequest & {
-            transport?: unknown;
-          };
-        return encodeNavigationSnapshotThreadKeysForProtocolV1(
-          await params.backend.getNavigationSnapshot(snapshotRequest),
-        );
-      }
-      const { transport, ...snapshotRequest } = transportRequest;
-      const selection: NavigationSnapshotTransportSelection =
-        transport.selection?.kind === "threads"
-        && Array.isArray(transport.selection.threadKeys)
-          ? {
-              kind: "threads",
-              threadKeys: transport.selection.threadKeys.filter(
-                (key): key is string => typeof key === "string",
-              ),
-            }
-          : { kind: "all" };
-      const snapshot = encodeNavigationSnapshotThreadKeysForProtocolV1(
-        // One canonical collection drives Federation resource versions.
-        // Backend/filter/search are client-side lenses over that collection;
-        // allowing them into this read would recreate per-query histories.
-        await params.backend.getNavigationSnapshot({
-          forceRefresh: snapshotRequest.forceRefresh,
-          refreshMode: "full",
-        }),
-      );
-      return navigationSnapshotTransport.encode({
-        baseRevision: transport.baseRevision,
-        request: {},
-        scopeKey: "federation-navigation",
-        selection,
-        snapshot,
-      });
+      throw new Error("Exact archived-thread lookup is unavailable. Upgrade the owner PwrAgent instance before resolving archived threads.");
     },
   );
   if (params.backend.searchNavigationThreads) {
@@ -1790,7 +1711,6 @@ export function registerFederationBackendHandlers(params: {
       });
     },
   );
-  return navigationSnapshotTransport;
 }
 
 export class FederationRemoteBackendClient implements FederationBackendOperations {

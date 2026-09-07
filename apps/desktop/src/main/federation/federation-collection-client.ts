@@ -57,7 +57,7 @@ export async function readFederationPinnedSnapshot(
       if (!hasFederationErrorCode(error, "method_not_found")) throw error;
     }
   }
-  return await backend.getNavigationSnapshot({}, rpcOptions);
+  throw new Error("Bounded pinned-thread navigation is unavailable. Upgrade the peer PwrAgent instance to navigation query protocol 2.");
 }
 
 export async function readFederationProjectSnapshot(
@@ -91,9 +91,7 @@ export async function readFederationProjectSnapshot(
       if (!hasFederationErrorCode(error, "method_not_found")) throw error;
     }
   }
-  // Legacy owners (and local adapters) have no project-only RPC. Never widen
-  // an ordinary failed bounded read into a full navigation download.
-  return await backend.getNavigationSnapshot({}, rpcOptions);
+  throw new Error("Bounded project navigation is unavailable. Upgrade the peer PwrAgent instance to navigation query protocol 2.");
 }
 
 export async function lookupFederationArchivedThreads(
@@ -119,7 +117,5 @@ export async function lookupFederationArchivedThreads(
       if (!hasFederationErrorCode(error, "method_not_found")) throw error;
     }
   }
-  const response = await backend.listThreads({ backend: scope, archived: true }, rpcOptions);
-  const selected = new Set(ids);
-  return response.threads.filter((thread) => thread.source === scope && selected.has(thread.id));
+  throw new Error("Exact archived-thread lookup is unavailable. Upgrade the peer PwrAgent instance before resolving archived threads.");
 }

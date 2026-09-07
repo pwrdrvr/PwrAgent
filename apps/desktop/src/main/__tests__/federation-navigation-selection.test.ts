@@ -51,13 +51,12 @@ describe("owner-filtered navigation descendants", () => {
     expect(() => projectNavigationDescendantPage(value, "2", { threadKeys: ["codex:root"], revision: "1" })).toThrow("changed");
   });
 
-  it("only method-not-found permits a legacy full baseline", async () => {
+  it("requires an upgrade for a missing bounded method and never falls back after a timeout", async () => {
     const getNavigationSnapshot = vi.fn(async () => snapshot([]));
     const getNavigationDescendantPage = vi.fn().mockRejectedValue({ code: "method_not_found" });
     const backend = { getNavigationSnapshot, getNavigationDescendantPage } as unknown as FederationBackendOperations;
-    await readFederationPinnedSnapshot(backend, ["codex:root"]);
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
-    getNavigationSnapshot.mockClear();
+    await expect(readFederationPinnedSnapshot(backend, ["codex:root"])).rejects.toThrow("Upgrade");
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
     getNavigationDescendantPage.mockRejectedValue(new Error("timeout"));
     await expect(readFederationPinnedSnapshot(backend, ["codex:root"])).rejects.toThrow("timeout");
     expect(getNavigationSnapshot).not.toHaveBeenCalled();

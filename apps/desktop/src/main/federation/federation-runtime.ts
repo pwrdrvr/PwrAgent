@@ -238,7 +238,6 @@ import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-s
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
-import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
   FederationReplacementReceiver,
   REPLACEMENT_MAX_BYTES,
@@ -952,7 +951,6 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     Map<string, NavigationSnapshotTransportState>
   >();
-  private ownedNavigationSnapshotTransport?: NavigationSnapshotTransport;
   private readonly peerDirectoryReceivers = new Map<string, FederationReplacementReceiver<FederationPeerSummary>>();
   private readonly arrangementBootstrap = new FederationMergeBootstrap<StarMapArrangementEntry>();
   private readonly arrangementBootstrapCursors = new Map<string, FederationBootstrapCursor>();
@@ -1263,8 +1261,6 @@ export class DesktopFederationRuntime {
     this.remoteThreadSummaryCache?.dispose();
     this.remoteThreadSummaryCache = undefined;
     this.remoteNavigationTransportByPeer.clear();
-    this.ownedNavigationSnapshotTransport?.clear();
-    this.ownedNavigationSnapshotTransport = undefined;
     this.peerDirectoryReceivers.clear();
     this.arrangementBootstrap.invalidate();
     this.arrangementBootstrapCursors.clear();
@@ -2941,7 +2937,7 @@ export class DesktopFederationRuntime {
         envelope.sourceInstanceId,
       );
     });
-    this.ownedNavigationSnapshotTransport = registerFederationBackendHandlers({
+    registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
       resolveTurnInput: async (input, sourceInstanceId) =>

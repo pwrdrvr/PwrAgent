@@ -11,9 +11,12 @@ import {
   projectFederationArchivedThreads,
   projectFederationProjectPage,
   partitionFederationCollection,
+  type FederationProjectPageRequest,
+  type FederationArchivedThreadLookupRequest,
 } from "../federation/federation-collection-reads";
 import {
   lookupFederationArchivedThreads,
+  readFederationPinnedSnapshot,
   readFederationProjectSnapshot,
 } from "../federation/federation-collection-client";
 
@@ -127,14 +130,18 @@ describe("bounded Federation collection reads", () => {
     const huge = "private transcript".repeat(100_000);
     const value = {
       ...snapshot(),
-      threads: [{ id: "not-requested", turns: huge }],
+      threads: [{ id: "not-requested", source: "codex" as const, title: "Not requested", titleSource: "derived" as const,
+        linkedDirectories: [], inbox: { inInbox: false }, turns: huge }],
       directories: [{ key: "project", kind: "directory", label: "Project", threadKeys: [huge], needsAttentionCount: 0 }],
     };
-    const backend = { getNavigationSnapshot: vi.fn(async () => value) } as unknown as FederationBackendOperations;
+    const backend = { getNavigationSnapshot: vi.fn(),
+      getProjectPage: vi.fn(async (query: FederationProjectPageRequest) => projectFederationProjectPage(value as NavigationSnapshot, query)),
+    } as unknown as FederationBackendOperations;
     const reply = await request(backend, "backend.getProjectPage", { projectKey: "project" });
     expect(reply).toMatchObject({ kind: "response", result: { directories: [{ key: "project", threadKeys: [] }] } });
     expect(JSON.stringify(reply)).not.toContain("private transcript");
     expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThan(2000);
+    expect(backend.getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("pages projects with stable keys and explicit row and UTF-8 byte bounds", () => {
@@ -163,14 +170,17 @@ describe("bounded Federation collection reads", () => {
 
   it("archive RPC sends only selected exact IDs from a large owner collection", async () => {
     const threads = Array.from({ length: 10_000 }, (_, index) => ({
-      id: `thread-${index}`, source: "codex" as const, title: "Title", titleSource: "native" as const,
+      id: `thread-${index}`, source: "codex" as const, title: "Title", titleSource: "derived" as const,
       linkedDirectories: [], turns: [{ text: "private turns must not cross this boundary" }],
     }));
-    const backend = { listThreads: vi.fn(async () => ({ threads })) } as unknown as FederationBackendOperations;
+    const backend = { listThreads: vi.fn(),
+      lookupArchivedThreads: vi.fn(async (query: FederationArchivedThreadLookupRequest) => projectFederationArchivedThreads(threads, query)),
+    } as unknown as FederationBackendOperations;
     const reply = await request(backend, "backend.lookupArchivedThreads", { backend: "codex", threadIds: ["thread-9999"] });
     expect(reply).toMatchObject({ kind: "response", result: { threads: [{ id: "thread-9999" }] } });
     expect(JSON.stringify(reply)).not.toContain("private turns");
     expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThan(1000);
+    expect(backend.listThreads).not.toHaveBeenCalled();
   });
 
   it("rejects overlarge ID selections before walking the owner collection", async () => {
@@ -214,5 +224,25 @@ describe("bounded Federation collection reads", () => {
       await expect(lookupFederationArchivedThreads(backend, "codex", ["one"])).rejects.toThrow(code);
       expect(legacy).not.toHaveBeenCalled();
     }
+  });
+
+  it.each(["missing", "method_not_found"])("requires an upgrade for %s bounded methods without a full fallback", async (mode) => {
+    const legacy = vi.fn();
+    const unavailable = mode === "missing" ? undefined
+      : vi.fn().mockRejectedValue(Object.assign(new Error("method_not_found"), { code: "method_not_found" }));
+    const backend = { getProjectPage: unavailable, getNavigationDescendantPage: unavailable, lookupArchivedThreads: unavailable,
+      getNavigationSnapshot: legacy, listThreads: legacy } as unknown as FederationBackendOperations;
+    await expect(readFederationPinnedSnapshot(backend, ["codex:one"])).rejects.toThrow("Upgrade");
+    await expect(readFederationProjectSnapshot(backend)).rejects.toThrow("Upgrade");
+    await expect(lookupFederationArchivedThreads(backend, "codex", ["one"])).rejects.toThrow("Upgrade");
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
+  it.each(["backend.getProjectPage", "backend.lookupArchivedThreads"])("refuses to serve %s by loading an unbounded collection", async (method) => {
+    const legacy = vi.fn();
+    const reply = await request({ getNavigationSnapshot: legacy, listThreads: legacy } as unknown as FederationBackendOperations,
+      method, { backend: "codex", threadIds: ["one"], projectKey: "project" });
+    expect(reply).toMatchObject({ kind: "error", error: { message: expect.stringContaining("Upgrade") } });
+    expect(legacy).not.toHaveBeenCalled();
   });
 });
