@@ -1,3 +1,4 @@
+import { hydrateComposerDraft } from "./composer-draft-hydration";
 import { parseOwnedComposerScopeKey } from "@pwragent/shared";
 import {
   useCallback,
@@ -348,13 +349,15 @@ export function useDurableComposerDraftStore(
 export function snapshotFromDraftRecord(
   record: ComposerDraftSnapshotRecord,
 ): ComposerDraftSnapshot {
+  const legacy = record.textFormat === "canonical-markdown"
+    ? hydrateComposerDraft(record.text, [], undefined, undefined) : undefined;
   return {
     ...(record.threadOwner ? { threadOwner: record.threadOwner } : {}),
-    draft: record.text,
+    draft: legacy?.draft ?? record.text,
     editorDocument: record.editorDocument as JSONContent | undefined,
     imageAttachments: record.imageAttachments,
     fileAttachments: record.fileAttachments,
-    skillTokens: record.skillTokens,
+    skillTokens: legacy?.skillTokens ?? record.skillTokens,
   };
 }
 

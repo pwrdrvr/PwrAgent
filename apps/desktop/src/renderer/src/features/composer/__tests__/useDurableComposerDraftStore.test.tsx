@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ComposerDraftSnapshot } from "../useComposerDraftStore";
 import { useComposerDraftStore } from "../useComposerDraftStore";
-import { useDurableComposerDraftStore } from "../useDurableComposerDraftStore";
+import { snapshotFromDraftRecord, useDurableComposerDraftStore } from "../useDurableComposerDraftStore";
+import type { ComposerDraftSnapshotRecord } from "@pwragent/shared";
+import { serializeDraftWithSkillTokens } from "../composer-mention-tokens";
 
 afterEach(() => {
   cleanup();
@@ -11,6 +13,20 @@ afterEach(() => {
 });
 
 describe("useDurableComposerDraftStore", () => {
+  it("hydrates mention Markdown only for an explicitly imported legacy launchpad", () => {
+    const record: ComposerDraftSnapshotRecord = {
+      scopeKey: "launchpad:directory:/repo", scopeKind: "launchpad", textFormat: "canonical-markdown",
+      text: "[$ce:brainstorm](/skills/brainstorm/SKILL.md) ", skillTokens: [], imageAttachments: [],
+      status: "unsent", createdAt: 1, updatedAt: 2, contentHash: "legacy", charCount: 49,
+    };
+    const restored = snapshotFromDraftRecord(record);
+    expect(restored.skillTokens).toHaveLength(1);
+    expect(restored.draft).toBe(" ");
+    expect(serializeDraftWithSkillTokens(restored.draft, restored.skillTokens)).toBe(record.text);
+    const literal = snapshotFromDraftRecord({ ...record, textFormat: undefined });
+    expect(literal.draft).toBe(record.text);
+    expect(literal.skillTokens).toEqual([]);
+  });
   it("distinguishes pending, successful-empty and failed hydration without writing", async () => {
     let resolve!: (value: { drafts: [] }) => void;
     const saveComposerDraft = vi.fn();

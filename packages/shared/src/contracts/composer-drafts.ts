@@ -62,6 +62,8 @@ export type ComposerDraftSnapshotRecord = {
   directoryKey?: string;
   directoryPath?: string;
   text: string;
+  /** Legacy launchpad import; hydrate serialized mention Markdown once in the viewer. */
+  textFormat?: "canonical-markdown";
   editorDocument?: ComposerDraftJsonValue;
   skillTokens: ComposerDraftSkillToken[];
   imageAttachments: NavigationLaunchpadImageAttachment[];

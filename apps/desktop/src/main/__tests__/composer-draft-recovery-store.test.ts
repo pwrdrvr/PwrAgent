@@ -45,6 +45,7 @@ describe("ComposerDraftRecoveryStore", () => {
     expectSqliteWriteBudget({ scenario: "composer-legacy-launchpad-migration", writes: migration.writes,
       note: "One explicit startup transaction imports viewer-local legacy input and its recovery marker; less than 0.1 MB once, 0 additional MB/day" });
     expect(store.listLatest().map((draft) => draft.text).sort()).toEqual(["Legacy recover", "Newer composer input"]);
+    expect(store.listLatest().find((draft) => draft.text === "Legacy recover")?.textFormat).toBe("canonical-markdown");
     store.clear("launchpad:directory:/recover");
     const repeat = await measureSqliteWrites(() => store.migrateLegacyLaunchpadDrafts());
     expect(repeat.result).toBe(0);

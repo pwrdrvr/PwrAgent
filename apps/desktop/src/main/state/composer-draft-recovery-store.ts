@@ -99,6 +99,7 @@ export class ComposerDraftRecoveryStore {
         if (hasHistory(scopeKey) || (!launchpad.prompt.trim() && !launchpad.imageAttachments?.length && !launchpad.fileAttachments?.length)) return [];
         const draft = normalizeDraftRecord({ scopeKey, scopeKind: "launchpad", backend: launchpad.backend,
           directoryKey: launchpad.directoryKey, directoryPath: launchpad.directoryPath, text: launchpad.prompt,
+          textFormat: "canonical-markdown",
           imageAttachments: launchpad.imageAttachments ?? [], fileAttachments: launchpad.fileAttachments ?? [], skillTokens: [],
           status: "unsent", createdAt: launchpad.createdAt, updatedAt: launchpad.updatedAt, contentHash: "", charCount: launchpad.prompt.length });
         return [draft];
