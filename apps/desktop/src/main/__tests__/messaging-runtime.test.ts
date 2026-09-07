@@ -22,6 +22,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
+import { boundedMessagingNavigation } from "./fixtures/bounded-messaging-navigation";
 import type { MessagingControllerDeliveryBudgetEvent } from "../messaging/core/messaging-controller";
 import type {
   DesktopMessagingConfig,
@@ -91,12 +92,11 @@ describe("DesktopMessagingRuntime", () => {
     await adapter.listener?.(buildCommandEvent("/resume"));
 
     expect(adapter.start).toHaveBeenCalledTimes(1);
-    expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
-      filter: undefined,
-    }, {
-      onProgress: expect.any(Function),
-    });
+    expect(bridge.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      protocol: 2, consumer: "messaging-browse", pageSize: 8,
+      query: expect.objectContaining({ kind: "messaging-threads" }),
+    }));
+    expect(bridge.getNavigationSnapshot).not.toHaveBeenCalled();
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
     });
@@ -728,12 +728,11 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     expect(messagingLog.warn).not.toHaveBeenCalled();
-    expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
-      filter: undefined,
-    }, {
-      onProgress: expect.any(Function),
-    });
+    expect(bridge.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      protocol: 2, consumer: "messaging-browse", pageSize: 8,
+      query: expect.objectContaining({ kind: "messaging-threads" }),
+    }));
+    expect(bridge.getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   async function startMentionOnlyRuntime(options: {
@@ -1262,7 +1261,7 @@ describe("DesktopMessagingRuntime", () => {
 
   it("logs inbound controller failures without rejecting the adapter listener", async () => {
     const { runtime, adapter, bridge } = await createRuntimeHarness();
-    vi.mocked(bridge.getNavigationSnapshot).mockRejectedValueOnce(
+    vi.mocked(bridge.getNavigationLaunchpadConfig!).mockRejectedValueOnce(
       new Error("navigation failed"),
     );
 
@@ -1473,7 +1472,7 @@ describe("DesktopMessagingRuntime", () => {
         inInbox: false,
       },
     });
-    bridge.getNavigationSnapshot = vi.fn(async () => navigation);
+    bridge.readNavigationFixturePopulation = vi.fn(async () => navigation);
     const { getDesktopMessagingStore } = await import(
       "../messaging/desktop-messaging-store"
     );
@@ -3638,7 +3637,7 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     await runtime.start();
-    vi.mocked(bridge.getNavigationSnapshot).mockClear();
+    vi.mocked(bridge.getNavigationQueryPage!).mockClear();
     await runtime.applyConfig({
       inputDebounceMs: 0,
       telegram: {
@@ -3668,12 +3667,11 @@ describe("DesktopMessagingRuntime", () => {
       conversationResponseModes: [],
     });
     expect(replacementTelegramAdapter.start).not.toHaveBeenCalled();
-    expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
-      filter: undefined,
-    }, {
-      onProgress: expect.any(Function),
-    });
+    expect(bridge.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      protocol: 2, consumer: "messaging-browse", pageSize: 8,
+      query: expect.objectContaining({ kind: "messaging-threads" }),
+    }));
+    expect(bridge.getNavigationSnapshot).not.toHaveBeenCalled();
     expect(messagingLog.info).toHaveBeenCalledWith(
       "telegram: hot-applied messaging config",
       expect.objectContaining({
@@ -4065,7 +4063,7 @@ async function createFullAccessRuntimeHarness(
   const adapter = createAdapter("telegram");
   const bridge = createBackendBridge();
   const navigation = buildNavigationSnapshot();
-  vi.mocked(bridge.getNavigationSnapshot).mockResolvedValue({
+  vi.mocked(bridge.readNavigationFixturePopulation).mockResolvedValue({
     ...navigation,
     threads: [{
       ...navigation.threads[0]!,
@@ -4226,6 +4224,7 @@ function createAdapter(
 }
 
 function createBackendBridge(): MessagingBackendBridge & {
+  readNavigationFixturePopulation: () => Promise<NavigationSnapshot>;
   emitBackendEvent: (event: AgentEvent) => Promise<void>;
   onEvent: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
   setRemoteEventSubscriptions: (
@@ -4235,14 +4234,16 @@ function createBackendBridge(): MessagingBackendBridge & {
   const backendListeners = new Set<(event: AgentEvent) => void | Promise<void>>();
 
   const bridge: ReturnType<typeof createBackendBridge> = {
-    getNavigationSnapshot: vi.fn(async () => buildNavigationSnapshot()),
+    readNavigationFixturePopulation: vi.fn(async () => buildNavigationSnapshot()),
+    getNavigationSnapshot: vi.fn(async () => { throw new Error("Legacy navigation is forbidden in modern messaging"); }),
+    ...boundedMessagingNavigation(() => bridge.readNavigationFixturePopulation()),
     // Production reads a thread's `agent` from its overlay row on BOTH the
     // navigation path and the admission path, so a fixture whose admission
     // state disagrees with its own navigation describes a state the app
     // cannot reach. Resolve from whatever snapshot this bridge is serving,
     // and answer for the thread that was actually asked about.
     getThreadAdmissionState: vi.fn(async (request) => {
-      const navigation = await bridge.getNavigationSnapshot();
+      const navigation = await bridge.readNavigationFixturePopulation();
       const thread = navigation.threads.find(
         (candidate) =>
           candidate.source === request.backend

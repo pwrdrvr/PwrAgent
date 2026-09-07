@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessagingController } from "../messaging/core/messaging-controller";
 import { MessagingStore } from "../messaging/core/messaging-store";
+import { boundedMessagingNavigation } from "./fixtures/bounded-messaging-navigation";
 import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
@@ -1328,6 +1329,7 @@ async function createControllerHarness(options: {
     authorizedActorIds: [DISCORD_USER_ID],
     backend: {
       getNavigationSnapshot,
+      ...boundedMessagingNavigation(() => options.navigationSnapshot ?? buildNavigationSnapshot()),
       getThreadAdmissionState: async () => ({
         thread: (options.navigationSnapshot ?? buildNavigationSnapshot()).threads[0],
       }),
@@ -1499,6 +1501,7 @@ function buildNavigationSnapshot(threadCount = 2): NavigationSnapshot {
     },
     threads: Array.from({ length: threadCount }, (_, index) => ({
       id: `thread-${index + 1}`,
+      updatedAt: 1_000 - index,
       inbox: {
         inInbox: false,
       },

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessagingController } from "../messaging/core/messaging-controller";
 import { MessagingStore } from "../messaging/core/messaging-store";
+import { boundedMessagingNavigation } from "./fixtures/bounded-messaging-navigation";
 import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
@@ -2246,6 +2247,7 @@ describe("TelegramAdapter", () => {
       authorizedActorIds: ["42"],
       backend: {
         getNavigationSnapshot: async () => buildNavigationSnapshot(),
+        ...boundedMessagingNavigation(buildNavigationSnapshot),
         getThreadAdmissionState: async () => ({
           thread: buildNavigationSnapshot().threads[0],
         }),
@@ -3076,6 +3078,7 @@ async function createControllerHarness(): Promise<{
     authorizedActorIds: ["42"],
     backend: {
       getNavigationSnapshot,
+      ...boundedMessagingNavigation(buildNavigationSnapshot),
       getThreadAdmissionState: async () => ({
         thread: buildNavigationSnapshot().threads[0],
       }),
