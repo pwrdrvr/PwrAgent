@@ -50,7 +50,14 @@ export function ChipContextMenu(props: ChipContextMenuProps) {
   }, [onClose, returnFocusTo]);
 
   useEffect(() => {
-    const closeOnClick = (): void => close(false);
+    const closeOnClick = (event: MouseEvent): void => {
+      // React can mount this listener before the opening click reaches window.
+      // Ignore this menu's invoker, but let that click dismiss any other menu.
+      if (event.target instanceof Node && returnFocusTo.contains(event.target)) {
+        return;
+      }
+      close(false);
+    };
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         close(true);
@@ -66,7 +73,7 @@ export function ChipContextMenu(props: ChipContextMenuProps) {
       window.removeEventListener("contextmenu", closeOnContextMenu, true);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [close]);
+  }, [close, returnFocusTo]);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
