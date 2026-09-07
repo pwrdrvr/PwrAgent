@@ -6095,8 +6095,8 @@ describe("MessagingController", () => {
         target: { scope: "remote", instanceId: "pwr_remote" },
       },
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
+    expect(harness.getNavigationSelectedDetail).toHaveBeenCalledWith({
+      protocol: 2, ref: { backend: "codex", threadId: "remote-thread", ownerInstanceId: "pwr_remote" },
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
     });
     expect(harness.delivered).toContainEqual(
@@ -22446,6 +22446,8 @@ describe("MessagingController", () => {
     navigation.threads[0]!.queuedExecutionMode = "full-access";
     navigation.threads[0]!.queuedExecutionModeAt = 1500;
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    harness.getNavigationSelectedDetail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref,
+      revision: "configuration", readiness: "ready", identity: "present", thread: navigation.threads[0] }));
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
@@ -22843,6 +22845,8 @@ describe("MessagingController", () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.executionMode = "default";
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    harness.getNavigationSelectedDetail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref,
+      revision: "configuration", readiness: "ready", identity: "present", thread: navigation.threads[0] }));
     harness.getThreadAdmissionState.mockResolvedValue({
       thread: navigation.threads[0],
     });
@@ -24702,6 +24706,7 @@ async function createHarness<
   responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
   getNavigationSnapshot?: NonNullable<MessagingBackendBridge["getNavigationSnapshot"]>;
+  getNavigationSelectedDetail?: NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]>;
   getThreadAdmissionState?: NonNullable<MessagingBackendBridge["getThreadAdmissionState"]>;
   createManagedConversation?: MessagingAdapter["createManagedConversation"];
   closeManagedConversation?: MessagingAdapter["closeManagedConversation"];
@@ -24771,6 +24776,7 @@ async function createHarness<
   delivered: MessagingSurfaceIntent[];
   ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
+  getNavigationSelectedDetail: ReturnType<typeof vi.fn>;
   getThreadAdmissionState: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
@@ -24854,6 +24860,17 @@ async function createHarness<
   const getNavigationSnapshot = vi.fn(
     options?.getNavigationSnapshot
       ?? (async () => options?.navigation ?? buildNavigationSnapshot()),
+  );
+  const getNavigationSelectedDetail = vi.fn<NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]>>(
+    options?.getNavigationSelectedDetail ?? (async (request) => {
+      const population = options?.getNavigationSnapshot
+        ? await options.getNavigationSnapshot({ backend: request.ref.backend, federationTarget: request.federationTarget })
+        : options?.navigation ?? buildNavigationSnapshot();
+      const thread = population.threads.find((candidate) => candidate.source === request.ref.backend && candidate.id === request.ref.threadId
+        && (candidate.federation?.ref.target.scope === "remote" ? candidate.federation.ref.target.instanceId
+          : options?.getNavigationSnapshot && request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined) === request.ref.ownerInstanceId);
+      return { protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: thread ? "present" : "unresolved", thread };
+    }),
   );
   const getThreadAdmissionState = vi.fn(
     options?.getThreadAdmissionState
@@ -25231,6 +25248,7 @@ async function createHarness<
     cancelThreadExecutionModeQueue,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
+    getNavigationSelectedDetail,
     getThreadAdmissionState,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
@@ -25313,6 +25331,7 @@ async function createHarness<
     delivered,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
+    getNavigationSelectedDetail,
     getThreadAdmissionState,
     handoffThreadWorkspace,
     interruptTurn,

@@ -1646,3 +1646,20 @@ function createBridge(replay: AppServerThreadReplay): DesktopMessagingBackendBri
   } as unknown as DesktopBackendRegistry;
   return new DesktopMessagingBackendBridge(registry);
 }
+
+it("routes exact messaging configuration through V2 without a legacy snapshot fallback", async () => {
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const ref = { backend: "codex" as const, threadId: "chosen", ownerInstanceId: "peer" };
+  const remoteNavigationSnapshot = vi.fn(async () => { throw new Error("Legacy snapshot is forbidden"); });
+  const remoteNavigationSelectedDetail = vi.fn(async () => ({ protocol: 2 as const, ref, revision: "r",
+    identity: "present" as const, readiness: "ready" as const,
+    thread: { source: "codex" as const, id: "chosen", title: "Chosen", titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } } }));
+  const federation = { remoteNavigationSelectedDetail, remoteNavigationSnapshot } as unknown as DesktopMessagingFederationBridge;
+  const bridge = new DesktopMessagingBackendBridge({} as DesktopBackendRegistry, federation);
+  await expect(bridge.getNavigationSelectedDetail({ protocol: 2, ref, probeWorkingStates: true })).resolves.toMatchObject({ identity: "present" });
+  expect(remoteNavigationSelectedDetail).toHaveBeenCalledWith(target, { protocol: 2, ref, probeWorkingStates: true });
+  const oldPeer = new DesktopMessagingBackendBridge({} as DesktopBackendRegistry,
+    { remoteNavigationSnapshot } as unknown as DesktopMessagingFederationBridge);
+  await expect(oldPeer.getNavigationSelectedDetail({ protocol: 2, ref })).rejects.toThrow("Upgrade");
+  expect(remoteNavigationSnapshot).not.toHaveBeenCalled();
+});

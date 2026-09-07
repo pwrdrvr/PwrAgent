@@ -12,6 +12,21 @@ import type {
 } from "@pwragent/messaging-interface";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 
+/** Exact thread context has no collection membership or completeness semantics. */
+export type MessagingThreadContext = {
+  kind: "thread";
+  thread?: NavigationThreadSummary;
+  defaults?: NavigationLaunchpadDefaults;
+  directory?: Pick<NavigationDirectorySummary, "label" | "path" | "gitStatus">;
+};
+
+/** Legacy complete browse populations remain separate during consumer cutover. */
+export type MessagingNavigationContext = NavigationSnapshot | MessagingThreadContext;
+
+export function isMessagingThreadContext(value: MessagingNavigationContext): value is MessagingThreadContext {
+  return "kind" in value && value.kind === "thread";
+}
+
 export type MessagingResolvedThreadState = {
   activeTurn?: MessagingActiveTurnSummary;
   acpRuntime?: BackendAcpSessionRuntimeState;
@@ -46,10 +61,12 @@ export type MessagingResolvedThreadState = {
 export function resolveMessagingThreadState(params: {
   activeTurn?: MessagingActiveTurnSummary;
   binding: MessagingBindingRecord;
-  navigation: NavigationSnapshot;
+  navigation: MessagingNavigationContext;
 }): MessagingResolvedThreadState {
   const threadKey = buildThreadIdentityKey(params.binding.backend, params.binding.threadId);
-  const thread = params.navigation.threads.find(
+  const exact = isMessagingThreadContext(params.navigation) ? params.navigation : undefined;
+  const defaults = exact ? exact.defaults : (params.navigation as NavigationSnapshot).launchpadDefaults;
+  const thread = exact ? exact.thread : (params.navigation as NavigationSnapshot).threads.find(
     (candidate) =>
       candidate.source === params.binding.backend &&
       candidate.id === params.binding.threadId,
@@ -58,13 +75,13 @@ export function resolveMessagingThreadState(params: {
   if (!thread) {
     return {
       activeTurn: params.activeTurn,
-      launchpadDefaults: params.navigation.launchpadDefaults,
+      launchpadDefaults: defaults,
       missing: true,
       threadKey,
     };
   }
 
-  const directory = primaryDirectoryForThread(params.navigation, threadKey);
+  const directory = exact ? exact.directory : primaryDirectoryForThread(params.navigation as NavigationSnapshot, threadKey);
   const linkedDirectory =
     thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
     thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
@@ -83,7 +100,7 @@ export function resolveMessagingThreadState(params: {
     executionMode: thread.executionMode,
     fastMode: thread.fastMode,
     gitBranch: thread.gitBranch,
-    launchpadDefaults: params.navigation.launchpadDefaults,
+    launchpadDefaults: defaults,
     missing: false,
     model: thread.model,
     observedGitBranch: thread.observedGitBranch,
