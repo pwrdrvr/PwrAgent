@@ -2985,8 +2985,36 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("resolves a delivery diagnostic title from the explicit peer without reading fleet navigation", async () => {
+    const { runtime, bridge } = await createRuntimeHarness();
+    const target = { scope: "remote" as const, instanceId: "peer" };
+    const read = vi.fn<NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]>>(async (request) => ({
+      protocol: 2, ref: request.ref, revision: "owner", readiness: "ready", identity: "present",
+      thread: { ...buildNavigationSnapshot().threads[0]!, title: "Peer title" },
+    }));
+    bridge.getNavigationSelectedDetail = read;
+    const resolveTitle = (runtime as unknown as {
+      resolveDeliveryBudgetThreadTitle: (event: MessagingControllerDeliveryBudgetEvent) => Promise<string | undefined>;
+    }).resolveDeliveryBudgetThreadTitle.bind(runtime);
+    const event: MessagingControllerDeliveryBudgetEvent = {
+      at: Date.now(), backend: "codex", threadId: "thread-1", federationTarget: target,
+      channel: "telegram", intentId: "status", intentKind: "status", outcome: "dropped", priority: "routine_status", slowMode: false,
+    };
+    expect(await resolveTitle(event)).toBe("Peer title");
+    expect(read).toHaveBeenCalledWith({ protocol: 2, federationTarget: target,
+      ref: { backend: "codex", threadId: "thread-1", ownerInstanceId: "peer" } });
+    read.mockResolvedValueOnce({ protocol: 2, ref: { backend: "codex", threadId: "thread-1" },
+      revision: "local", readiness: "ready", identity: "present", thread: buildNavigationSnapshot().threads[0] });
+    expect(await resolveTitle(event)).toBeUndefined();
+    expect(bridge.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
   it("names the constrained binding in delivery budget diagnostics", async () => {
-    const { runtime } = await createRuntimeHarness();
+    const { runtime, bridge } = await createRuntimeHarness();
+    bridge.getNavigationSelectedDetail = vi.fn<NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]>>(async (request) => ({
+      protocol: 2, ref: request.ref, revision: "owner", readiness: "ready", identity: "present",
+      thread: buildNavigationSnapshot().threads.find((thread) => thread.id === request.ref.threadId),
+    }));
     await runtime.start();
 
     const event: MessagingControllerDeliveryBudgetEvent = {

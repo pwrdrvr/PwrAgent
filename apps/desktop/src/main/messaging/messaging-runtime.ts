@@ -2324,14 +2324,19 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return undefined;
     }
     try {
-      const snapshot = await this.options.backendBridge.getNavigationSnapshot({
-        backend: "all",
+      const read = this.options.backendBridge.getNavigationSelectedDetail;
+      if (!read) return undefined;
+      const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined;
+      const detail = await read.call(this.options.backendBridge, {
+        protocol: 2, federationTarget: event.federationTarget,
+        ref: { backend: event.backend, threadId: event.threadId, ...(ownerInstanceId ? { ownerInstanceId } : {}) },
       });
-      const thread = snapshot.threads.find(
-        (candidate) =>
-          candidate.source === event.backend && candidate.id === event.threadId,
-      );
-      return clipStatusText(thread?.title);
+      if (detail.protocol !== 2 || detail.unchanged || detail.readiness !== "ready" || detail.identity !== "present"
+        || detail.ref.backend !== event.backend || detail.ref.threadId !== event.threadId || detail.ref.ownerInstanceId !== ownerInstanceId
+        || detail.thread?.source !== event.backend || detail.thread.id !== event.threadId) return undefined;
+      const returnedOwner = detail.thread.federation?.ref.target;
+      if (returnedOwner && (returnedOwner.scope === "remote" ? returnedOwner.instanceId : undefined) !== ownerInstanceId) return undefined;
+      return clipStatusText(detail.thread.title);
     } catch (error) {
       messagingLog.debug("messaging budget diagnostic thread-title lookup failed", {
         backend: event.backend,

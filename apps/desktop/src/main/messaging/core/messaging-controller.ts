@@ -854,6 +854,7 @@ export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
   backend?: AppServerBackendKind;
   bindingId?: string;
+  federationTarget?: FederationTarget;
   channel: MessagingChannelKind;
   conversation?: MessagingChannelRef["conversation"];
   intentId: string;
@@ -16573,6 +16574,7 @@ export class MessagingController {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
             at: this.now(),
             backend: binding?.backend,
+            federationTarget: binding?.federatedThread?.target,
             bindingId: binding?.id ?? intent.bindingId,
             channel: budgetChannel,
             conversation: binding?.channel.conversation,
@@ -16619,6 +16621,7 @@ export class MessagingController {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
             at: this.now(),
             backend: binding?.backend,
+            federationTarget: binding?.federatedThread?.target,
             bindingId: binding?.id ?? intent.bindingId,
             channel: budgetChannel,
             conversation: binding?.channel.conversation,
