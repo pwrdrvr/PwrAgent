@@ -3,6 +3,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationThreadSummary,
+  NavigationSelectedDetailResponse,
   BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -15,6 +16,7 @@ import { buildThreadIdentityKey } from "@pwragent/shared";
 /** Exact thread context has no collection membership or completeness semantics. */
 export type MessagingThreadContext = {
   kind: "thread";
+  workspaceDirectories?: NavigationSelectedDetailResponse["workspaceDirectories"];
   thread?: NavigationThreadSummary;
   defaults?: NavigationLaunchpadDefaults;
   directory?: Pick<NavigationDirectorySummary, "label" | "path" | "gitStatus">;

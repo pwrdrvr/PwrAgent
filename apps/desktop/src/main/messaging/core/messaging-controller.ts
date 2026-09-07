@@ -2854,10 +2854,7 @@ export class MessagingController {
     // findPreferredReviewWorkspaceCwd and buildReviewBranchOptions below read
     // thread.gitWorkingState to choose a workspace and infer a base branch, so
     // this picker cannot race the background refresh.
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: binding.backend,
-      probeWorkingStates: true,
-    });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const thread = findThreadForBinding(navigation, binding);
     const workspaces = (thread?.linkedDirectories ?? [])
       .map((directory) => ({
@@ -2880,7 +2877,7 @@ export class MessagingController {
     const defaultRepositoryPath =
       selectedWorkspace?.repositoryPath
       ?? workspaces[0]?.repositoryPath;
-    const directory = navigation.directories.find((candidate) =>
+    const directory = (navigation.workspaceDirectories ?? []).find((candidate) =>
       reviewWorkspaceMatches(candidate.path, defaultRepositoryPath),
     );
     const workspaceThread = reviewThreadForWorkspace(
@@ -2916,7 +2913,7 @@ export class MessagingController {
 
   private buildReviewIntent(params: {
     binding: MessagingBindingRecord;
-    navigation: NavigationSnapshot;
+    navigation: MessagingNavigationContext;
     phase: MessagingReviewIntent["review"]["phase"];
     cwd?: string;
     repositoryPath?: string;
@@ -2939,7 +2936,7 @@ export class MessagingController {
           }]
         : [];
     });
-    const directory = params.navigation.directories.find((candidate) =>
+    const directory = (isMessagingThreadContext(params.navigation) ? params.navigation.workspaceDirectories ?? [] : params.navigation.directories).find((candidate) =>
       reviewWorkspaceMatches(
         candidate.path,
         params.repositoryPath
@@ -5420,14 +5417,7 @@ export class MessagingController {
 
     const bindingTarget = readBindingTarget(event);
     if (bindingTarget) {
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
-      const targetThread = navigation.threads.find(
-        (thread) =>
-          thread.source === bindingTarget.backend &&
-          thread.id === bindingTarget.threadId,
-      );
+      const federationTarget = bindingTarget.federatedThread?.target;
       // RBAC scope: binding to a thread that lives on a federated peer is
       // remote control, whatever the thread's execution mode. Gate before the
       // bind so an actor without the scope can never create a remote binding
@@ -5435,10 +5425,20 @@ export class MessagingController {
       if (
         !(await this.requireRemoteScope(
           event,
-          targetThread ? federationTargetForThread(targetThread) : undefined,
+          federationTarget,
           "resume:remote-instance",
         ))
       ) {
+        return;
+      }
+      const targetThread = await this.readExactNavigationThread({
+        ref: { backend: bindingTarget.backend, threadId: bindingTarget.threadId,
+          ...(federationTarget?.scope === "remote" ? { ownerInstanceId: federationTarget.instanceId } : {}) },
+        federationTarget,
+      });
+      if (!targetThread || targetThread.archivedAt) {
+        await this.deliver(buildErrorIntent({ id: this.newIntentId("bind-unavailable"), createdAt: this.now(),
+          title: "Thread unavailable", body: "The owning instance could not resolve an active thread. Refresh the thread picker.", recoverable: true }), undefined, event);
         return;
       }
       if (targetThread?.executionMode === "full-access") {
@@ -5927,10 +5927,7 @@ export class MessagingController {
     // buildReviewBranchOptions below infers the base branch from
     // thread.gitWorkingState, so this callback awaits working state for the
     // same reason presentReviewPicker does.
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: binding.backend,
-      probeWorkingStates: true,
-    });
+    const navigation = await this.readBoundWorkspaceContext(binding);
     const targetSurface = pendingIntent.surface ?? (
       event.kind === "callback" ? event.interaction : undefined
     );
@@ -5952,7 +5949,7 @@ export class MessagingController {
     ) {
       const thread = findThreadForBinding(navigation, binding);
       const workspaceThread = reviewThreadForWorkspace(thread, cwd);
-      const directory = navigation.directories.find((candidate) =>
+      const directory = (navigation.workspaceDirectories ?? []).find((candidate) =>
         reviewWorkspaceMatches(
           candidate.path,
           repositoryPath ?? cwd,
@@ -6077,9 +6074,7 @@ export class MessagingController {
     }
 
     try {
-      const navigation = await this.options.backend.getNavigationSnapshot({
-        backend: params.binding.backend,
-      });
+      const navigation = await this.readBoundThreadConfiguration(params.binding);
       const settings = turnSettingsForBinding(params.binding, navigation);
       const result = await submitReview({
         backend: params.binding.backend,
@@ -19942,7 +19937,7 @@ function paginateReviewWorkspaces(params: {
 }
 
 function messagingReviewBranchOptions(params: {
-  directory: NavigationDirectorySummary | undefined;
+  directory: Pick<NavigationDirectorySummary, "gitStatus"> | undefined;
   thread: NavigationThreadSummary | undefined;
 }): string[] {
   const options = buildReviewBranchOptions(params);
