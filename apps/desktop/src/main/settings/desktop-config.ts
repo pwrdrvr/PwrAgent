@@ -134,6 +134,7 @@ export type DesktopSettingsConfig = {
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;
+    claudeAcp?: boolean;
     diffCondensation?: {
       enabled?: boolean;
     };
@@ -288,6 +289,9 @@ export type DesktopSettingsConfig = {
       cliPath?: string;
       enabled?: boolean;
     };
+    "claude-acp"?: {
+      enabled?: boolean;
+    };
   };
   git?: {
     backgroundPrPolling?: boolean;
@@ -386,14 +390,21 @@ export function acpCliPathOverrideFor(
 }
 
 /**
- * Whether an ACP agent is enabled, from an already-loaded config. Defaults to
- * **true** (agents are on unless explicitly disabled). Prefer this over
+ * Whether an ACP agent is enabled, from an already-loaded config. Ordinary
+ * agents default on unless explicitly disabled. Claude additionally requires
+ * its default-off Experimental gate. Prefer this over
  * {@link resolveAcpAgentEnabled} when resolving multiple agents.
  */
 export function acpAgentEnabledFor(
   config: DesktopSettingsConfig,
   registryId: string,
 ): boolean {
+  if (
+    registryId === "claude-acp"
+    && !claudeAcpExperimentalEnabledFor(config)
+  ) {
+    return false;
+  }
   const agents = config.acpAgents as
     | Record<string, { enabled?: boolean } | undefined>
     | undefined;
@@ -428,6 +439,14 @@ export function managedGrokBuildsEnabledForRuntime(
     return false;
   }
   return managedGrokBuildsEnabledFor(config, !options.isPackaged);
+}
+
+/** Claude's community ACP adapter is invisible and non-runnable unless the
+ * operator explicitly enables its dedicated Experimental feature. */
+export function claudeAcpExperimentalEnabledFor(
+  config: DesktopSettingsConfig,
+): boolean {
+  return config.experimental?.claudeAcp === true;
 }
 
 /**
@@ -769,6 +788,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "managed_review"],
       patch.experimental.managedReview,
+    );
+  }
+  if (patch.experimental?.claudeAcp !== undefined) {
+    set(
+      ["experimental", "claude_acp"],
+      patch.experimental.claudeAcp,
     );
   }
   if (patch.general?.appearance?.theme !== undefined) {
@@ -1558,6 +1583,12 @@ export function desktopSettingsPatchToEdits(
   if (patch.acpAgents?.qwen?.enabled !== undefined) {
     set(["acp_agents", "qwen", "enabled"], patch.acpAgents.qwen.enabled);
   }
+  if (patch.acpAgents?.["claude-acp"]?.enabled !== undefined) {
+    set(
+      ["acp_agents", "claude-acp", "enabled"],
+      patch.acpAgents["claude-acp"].enabled,
+    );
+  }
 
   if (patch.git?.backgroundPrPolling !== undefined) {
     // `[experimental].background_pr_polling` was the pre-Git-settings shape.
@@ -1669,6 +1700,7 @@ function normalizeDesktopConfig(
   const acpAgentsGrok = tables["acp_agents.grok"];
   const acpAgentsKimi = tables["acp_agents.kimi"];
   const acpAgentsQwen = tables["acp_agents.qwen"];
+  const acpAgentsClaude = tables["acp_agents.claude-acp"];
   const git = tables["git"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
@@ -1786,6 +1818,7 @@ function normalizeDesktopConfig(
         experimental?.codex_default_mode_request_user_input,
       ),
       managedReview: readBoolean(experimental?.managed_review),
+      claudeAcp: readBoolean(experimental?.claude_acp),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),
       },
@@ -2019,6 +2052,9 @@ function normalizeDesktopConfig(
       qwen: {
         cliPath: readString(acpAgentsQwen?.cli_path),
         enabled: readBoolean(acpAgentsQwen?.enabled),
+      },
+      "claude-acp": {
+        enabled: readBoolean(acpAgentsClaude?.enabled),
       },
     },
     git: {
@@ -2316,11 +2352,13 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const acpAgentsGrok = config.acpAgents?.grok;
   const acpAgentsKimi = config.acpAgents?.kimi;
   const acpAgentsQwen = config.acpAgents?.qwen;
+  const acpAgentsClaude = config.acpAgents?.["claude-acp"];
   if (
-    (acpAgentsGemini && hasDefinedValue(acpAgentsGemini)) ||
-    (acpAgentsGrok && hasDefinedValue(acpAgentsGrok)) ||
-    (acpAgentsKimi && hasDefinedValue(acpAgentsKimi)) ||
-    (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
+    (acpAgentsGemini && hasDefinedValue(acpAgentsGemini))
+    || (acpAgentsGrok && hasDefinedValue(acpAgentsGrok))
+    || (acpAgentsKimi && hasDefinedValue(acpAgentsKimi))
+    || (acpAgentsQwen && hasDefinedValue(acpAgentsQwen))
+    || (acpAgentsClaude && hasDefinedValue(acpAgentsClaude))
   ) {
     pruned.acpAgents = {
       ...(acpAgentsGemini && hasDefinedValue(acpAgentsGemini)
@@ -2334,6 +2372,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
         : {}),
       ...(acpAgentsQwen && hasDefinedValue(acpAgentsQwen)
         ? { qwen: acpAgentsQwen }
+        : {}),
+      ...(acpAgentsClaude && hasDefinedValue(acpAgentsClaude)
+        ? { "claude-acp": acpAgentsClaude }
         : {}),
     };
   }

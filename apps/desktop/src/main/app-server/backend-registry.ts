@@ -351,6 +351,7 @@ import {
   acpSessionHasConversationHistory,
   acpSessionToThreadSummary,
   createLocalAcpAgentDiscovery,
+  createManagedClaudeAcpDiscovery,
   findAcpModelConfigOption,
   findAcpThoughtLevelConfigOption,
   formatAcpRuntimeLabel,
@@ -359,6 +360,7 @@ import {
   isAcpSessionMissingForProjectError,
   mergeAcpRuntimeState,
   noLocalAcpAgentDiscovery,
+  noManagedClaudeAcpDiscovery,
   readKimiYoloExecutionModeFromText,
   withAcpModelRuntimeSelection,
   type AcpBackendAdapterOptions,
@@ -367,6 +369,7 @@ import {
   type AcpSessionMetadata,
   type AcpSessionStoreLike,
   type LocalAcpDiscovery,
+  type ManagedClaudeAcpDiscovery,
 } from "./acp-backend-adapter";
 import {
   CodexAppServerClient,
@@ -8767,13 +8770,14 @@ export class DesktopBackendRegistry {
     providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike | null;
     acpAvailableCommandProbeBudgetMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
+    discoverManagedClaudeAcpAgent?: ManagedClaudeAcpDiscovery;
     /**
      * Opt in to real machine ACP discovery — scanning the operator's machine,
-     * and installing/probing a managed Grok build under the PwrAgent root.
-     * Only `getDesktopBackendRegistry()` sets this. Every other construction
-     * (all of them in tests) gets `noLocalAcpAgentDiscovery` unless it injects
-     * its own `discoverLocalAcpAgents`, so a test cannot reach the machine by
-     * forgetting an option.
+     * and installing/probing managed Grok and Claude builds under the PwrAgent
+     * root. Only `getDesktopBackendRegistry()` sets this. Every other
+     * construction (all of them in tests) gets inert local and managed-Claude
+     * discovery unless it injects its own seams, so a test cannot reach the
+     * machine by forgetting an option.
      */
     useMachineAcpDiscovery?: boolean;
     isAcpAgentEnabled?: (registryId: string) => boolean;
@@ -9365,6 +9369,18 @@ export class DesktopBackendRegistry {
               },
             )
           : noLocalAcpAgentDiscovery),
+      discoverManagedClaudeAcpAgent:
+        options?.discoverManagedClaudeAcpAgent
+        ?? (options?.useMachineAcpDiscovery
+          ? createManagedClaudeAcpDiscovery(
+              settingsService
+                ? {
+                    resolveEnv: async () =>
+                      await settingsService.resolveTerminalSpawnEnvAsync(),
+                  }
+                : undefined,
+            )
+          : noManagedClaudeAcpDiscovery),
       isAcpAgentEnabled:
         options?.isAcpAgentEnabled
         ?? (options?.configStore
@@ -9382,6 +9398,10 @@ export class DesktopBackendRegistry {
               registryId,
             )?.dependencyFingerprint
         : undefined,
+      isClaudeAcpExperimentalEnabled: options?.configStore
+        ? () =>
+            options.configStore!.read("experimental").claudeAcp === true
+        : () => false,
       emit: async (event) => {
         this.rememberAcpAvailableCommands(event);
         await this.emit(event);
@@ -39230,9 +39250,9 @@ export function getDesktopBackendRegistry(): DesktopBackendRegistry {
   if (!registry) {
     // The one construction that wants the operator's real machine. Every other
     // `new DesktopBackendRegistry(...)` in the tree is a test, and defaults to
-    // `noLocalAcpAgentDiscovery` — keeping the config read, the GitHub release
-    // fetch, the managed-Grok install, and the 5-16s binary probe out of the
-    // suite even when a test forgets to inject its own discovery stub.
+    // inert ACP discovery — keeping config reads, network fetches, managed
+    // installs, and binary probes out of the suite even when a test forgets to
+    // inject its own discovery stubs.
     registry = new DesktopBackendRegistry({
       configStore: getDesktopConfigStore(),
       useMachineAcpDiscovery: true,

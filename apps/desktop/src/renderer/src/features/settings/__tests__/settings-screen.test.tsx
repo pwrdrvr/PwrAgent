@@ -1430,6 +1430,17 @@ describe("SettingsScreen", () => {
       });
     });
 
+    const claudeAcpSwitch = screen.getByRole("switch", {
+      name: "Enable experimental Claude ACP",
+    });
+    expect(claudeAcpSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(claudeAcpSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { claudeAcp: true },
+      });
+    });
+
     fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
     expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
     const imageProfile = screen.getByRole("radiogroup", {

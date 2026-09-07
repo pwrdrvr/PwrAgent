@@ -129,6 +129,38 @@ describe("describeInstalledAcpBackend", () => {
     expect(gemini.capabilities.steerTurn).toBe(false);
   });
 
+  it("identifies Claude credentials as local to the owning federation instance", () => {
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:claude-acp" as AcpBackendId,
+      registryId: "claude-acp",
+      name: "Claude Agent",
+      version: "0.60.0",
+      distributionKind: "npx",
+      authStatus: "authenticated",
+      allowlistRuleId: "managed-claude-agent-acp-0.60.0",
+    });
+
+    expect(backend).toMatchObject({
+      kind: "acp:claude-acp",
+      label: "Claude Agent",
+      available: true,
+      acp: {
+        credentialScope: "owning-instance",
+        authStatus: "authenticated",
+        supportLevel: "experimental",
+      },
+      capabilities: {
+        startReview: false,
+        steerTurn: false,
+        multiDirectoryThreads: true,
+      },
+    });
+    expect(JSON.stringify(backend)).not.toMatch(
+      /ANTHROPIC_API_KEY|auth login|accessToken|refreshToken/i,
+    );
+  });
+
   it("advertises Grok 4.5 reasoning efforts in launchpad options", () => {
     const backend = describeInstalledAcpBackend({
       ...buildInstalledAgent(),
@@ -867,6 +899,130 @@ describe("AcpBackendAdapter", () => {
                 output_tokens: 50,
                 reasoning_output_tokens: 10,
                 total_tokens: 1_250,
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await adapter.close();
+  });
+
+  it("publishes Claude prompt usage and context-window updates", async () => {
+    const backendId = "acp:claude-acp" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": {
+        stopReason: "end_turn",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cachedReadTokens: 900,
+          cachedWriteTokens: 50,
+          totalTokens: 1_070,
+        },
+      },
+    });
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "claude-acp",
+      name: "Claude Agent",
+      version: "0.60.0",
+      distributionKind: "npx",
+      authStatus: "authenticated",
+      launchDescriptor: {
+        backendId,
+        registryId: "claude-acp",
+        distributionKind: "npx",
+        command: process.execPath,
+        args: ["/verified/claude-agent-acp.js"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      discoverLocalAcpAgents: async () => [],
+      discoverManagedClaudeAcpAgent: async () => agent,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+      isClaudeAcpExperimentalEnabled: () => true,
+    });
+
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Answer briefly",
+      turnId: "turn-claude",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Done." },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "usage_update",
+      used: 96_000,
+      size: 200_000,
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        backend: backendId,
+        notification: {
+          method: "thread/contextWindow/updated",
+          params: {
+            threadId: session.sessionId,
+            usedTokens: 96_000,
+            modelContextWindow: 200_000,
+          },
+        },
+      });
+      expect(events).toContainEqual({
+        backend: backendId,
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-claude",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 1_050,
+                cached_input_tokens: 900,
+                output_tokens: 20,
+                total_tokens: 1_070,
               },
             },
           },
@@ -4202,6 +4358,289 @@ describe("AcpBackendAdapter", () => {
         incompatibleInstances: diagnostic.incompatibleInstances,
       }),
     );
+
+    await adapter.close();
+  });
+
+  it("requires a verified managed runtime before launching cached Claude", async () => {
+    const backendId = "acp:claude-acp" as AcpBackendId;
+    const cached: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "claude-acp",
+      name: "Claude Agent",
+      version: "0.60.0",
+      distributionKind: "npx",
+      distributionSource: "@agentclientprotocol/claude-agent-acp@0.60.0",
+      authStatus: "authenticated",
+      verificationStatus: "verified",
+      allowlistRuleId: "managed-claude-agent-acp-0.60.0",
+      launchDescriptor: {
+        backendId,
+        registryId: "claude-acp",
+        distributionKind: "npx",
+        command: "/stale/node",
+        args: ["/stale/claude-agent-acp.js"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => cached,
+        listInstalledAgents: () => [cached],
+        upsertInstalledAgent: vi.fn(),
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      discoverManagedClaudeAcpAgent: async () => undefined,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      isAcpAgentEnabled: () => true,
+      isClaudeAcpExperimentalEnabled: () => true,
+    });
+
+    await expect(adapter.describeInstalledBackends()).resolves.toEqual([
+      expect.objectContaining({
+        kind: backendId,
+        available: false,
+        unavailableReason: expect.stringContaining("failed verification"),
+        acp: expect.objectContaining({
+          installStatus: "unavailable",
+          authStatus: "required",
+          credentialScope: "owning-instance",
+        }),
+      }),
+    ]);
+    await expect(adapter.resolveInstalledAgent(backendId)).rejects.toThrow(
+      `ACP backend is not installed: ${backendId}`,
+    );
+
+    await adapter.close();
+  });
+
+  it("does not advertise or launch Claude when its Experimental opt-in is off", async () => {
+    const backendId = "acp:claude-acp" as AcpBackendId;
+    const cached: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "claude-acp",
+      name: "Claude Agent",
+      version: "0.60.0",
+      distributionKind: "npx",
+      authStatus: "authenticated",
+    };
+    const discoverManagedClaudeAcpAgent = vi.fn(async () => cached);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => cached,
+        listInstalledAgents: () => [cached],
+        upsertInstalledAgent: vi.fn(),
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      discoverManagedClaudeAcpAgent,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      isAcpAgentEnabled: () => true,
+      isClaudeAcpExperimentalEnabled: () => false,
+    });
+
+    await expect(adapter.describeInstalledBackends()).resolves.toEqual([]);
+    await expect(adapter.resolveInstalledAgent(backendId)).rejects.toThrow(
+      "experimental and is not enabled",
+    );
+    await expect(adapter.getClient(backendId)).rejects.toThrow(
+      "experimental and is not enabled",
+    );
+    expect(discoverManagedClaudeAcpAgent).not.toHaveBeenCalled();
+
+    await adapter.close();
+  });
+
+  it("preserves readiness only when Claude discovery verifies the pinned runtime", async () => {
+    const backendId = "acp:claude-acp" as AcpBackendId;
+    const cached: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "claude-acp",
+      name: "Claude Agent",
+      version: "0.60.0",
+      distributionKind: "npx",
+      distributionSource: "@agentclientprotocol/claude-agent-acp@0.60.0",
+      authStatus: "authenticated",
+      verificationStatus: "verified",
+      allowlistRuleId: "managed-claude-agent-acp-0.60.0",
+    };
+    const discovered: AcpInstalledAgentRecord = {
+      ...cached,
+      authStatus: "required",
+      launchDescriptor: {
+        backendId,
+        registryId: "claude-acp",
+        distributionKind: "npx",
+        command: "/verified/node",
+        args: ["/verified/claude-agent-acp.js"],
+        env: {},
+      },
+    };
+    const upsertInstalledAgent = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => cached,
+        listInstalledAgents: () => [cached],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      discoverManagedClaudeAcpAgent: async () => discovered,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      isAcpAgentEnabled: () => true,
+      isClaudeAcpExperimentalEnabled: () => true,
+    });
+
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    await expect(adapter.resolveInstalledAgent(backendId)).resolves.toMatchObject({
+      authStatus: "authenticated",
+      launchDescriptor: {
+        command: "/verified/node",
+      },
+    });
+    await adapter.describeInstalledBackends();
+    expect(upsertInstalledAgent).not.toHaveBeenCalled();
+
+    await adapter.close();
+  });
+
+  it("keeps managed Claude available when generic ACP discovery fails", async () => {
+    const backendId = "acp:claude-acp" as AcpBackendId;
+    const cached: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "claude-acp",
+      name: "Claude Agent",
+      version: "0.60.0",
+      distributionKind: "npx",
+      distributionSource: "@agentclientprotocol/claude-agent-acp@0.60.0",
+      authStatus: "authenticated",
+      verificationStatus: "verified",
+      allowlistRuleId: "managed-claude-agent-acp-0.60.0",
+    };
+    const discovered: AcpInstalledAgentRecord = {
+      ...cached,
+      authStatus: "required",
+      launchDescriptor: {
+        backendId,
+        registryId: "claude-acp",
+        distributionKind: "npx",
+        command: "/verified/node",
+        args: ["/verified/claude-agent-acp.js"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => cached,
+        listInstalledAgents: () => [cached],
+        upsertInstalledAgent: vi.fn(),
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: async () => {
+        throw new Error("Gemini probe failed");
+      },
+      discoverManagedClaudeAcpAgent: async () => discovered,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      isAcpAgentEnabled: () => true,
+      isClaudeAcpExperimentalEnabled: () => true,
+    });
+
+    await adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    await expect(adapter.resolveInstalledAgent(backendId)).resolves.toMatchObject({
+      authStatus: "authenticated",
+      launchDescriptor: { command: "/verified/node" },
+    });
+
+    await adapter.close();
+  });
+
+  it("restarts invalidated managed Claude discovery before persisting it", async () => {
+    const backendId = "acp:claude-acp" as AcpBackendId;
+    const buildClaudeAgent = (command: string): AcpInstalledAgentRecord => ({
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "claude-acp",
+      name: "Claude Agent",
+      version: "0.60.0",
+      distributionKind: "npx",
+      distributionSource: "@agentclientprotocol/claude-agent-acp@0.60.0",
+      authStatus: "required",
+      verificationStatus: "verified",
+      allowlistRuleId: "managed-claude-agent-acp-0.60.0",
+      launchDescriptor: {
+        backendId,
+        registryId: "claude-acp",
+        distributionKind: "npx",
+        command,
+        args: ["/verified/claude-agent-acp.js"],
+        env: {},
+      },
+    });
+    const staleAgent = buildClaudeAgent("/stale/node");
+    const currentAgent = buildClaudeAgent("/current/node");
+    const discoveries: Array<{
+      resolve: (agent: AcpInstalledAgentRecord) => void;
+      promise: Promise<AcpInstalledAgentRecord>;
+    }> = [];
+    const discoverManagedClaudeAcpAgent = vi.fn(() => {
+      let resolve!: (agent: AcpInstalledAgentRecord) => void;
+      const promise = new Promise<AcpInstalledAgentRecord>((done) => {
+        resolve = done;
+      });
+      discoveries.push({ promise, resolve });
+      return promise;
+    });
+    const upsertInstalledAgent = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => undefined,
+        listInstalledAgents: () => [],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      discoverManagedClaudeAcpAgent,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      isClaudeAcpExperimentalEnabled: () => true,
+    });
+
+    const preInvalidationListing = adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    await vi.waitFor(() => expect(discoveries).toHaveLength(1));
+    adapter.invalidateLocalAgentDiscovery();
+    const postInvalidationListing = adapter.discoverAvailableAgents(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    await vi.waitFor(() => expect(discoveries).toHaveLength(2));
+
+    discoveries[0]!.resolve(staleAgent);
+    await Promise.resolve();
+    expect(upsertInstalledAgent).not.toHaveBeenCalled();
+
+    discoveries[1]!.resolve(currentAgent);
+    await expect(preInvalidationListing).resolves.toEqual([currentAgent]);
+    await expect(postInvalidationListing).resolves.toEqual([currentAgent]);
+    expect(upsertInstalledAgent).toHaveBeenCalled();
+    expect(upsertInstalledAgent).not.toHaveBeenCalledWith(staleAgent);
+    for (const [persisted] of upsertInstalledAgent.mock.calls) {
+      expect(persisted).toEqual(currentAgent);
+    }
 
     await adapter.close();
   });
