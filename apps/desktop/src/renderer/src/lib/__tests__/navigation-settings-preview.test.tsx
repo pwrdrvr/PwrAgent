@@ -41,7 +41,7 @@ describe("bounded settings previews", () => {
 
   it("does not turn incomplete provider coverage or a missing resource into a zero count", async () => {
     const api = apiWith(vi.fn().mockResolvedValue(page({ coverage: { state: "degraded", failedProviders: 1 }, modelGroups: [] })));
-    await expect(readNavigationModelInventory(api, "codex")).rejects.toThrow("inventory is incomplete");
+    await expect(readNavigationModelInventory(api, "codex")).rejects.toThrow("Navigation metadata has no complete owner baseline");
     const missing = apiWith(vi.fn().mockResolvedValue(page()));
     await expect(readNavigationModelInventory(missing, "codex")).rejects.toThrow("Upgrade");
   });

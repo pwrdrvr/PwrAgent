@@ -194,12 +194,15 @@ type CardParams = {
   thread: NavigationThreadSummary;
 };
 
+function registerFixtureThread(api: DesktopApi, thread: NavigationThreadSummary): NavigationThreadSummary {
+  const rows = fixtureThreads.get(api) ?? new Map<string, NavigationThreadSummary>();
+  rows.set(JSON.stringify([thread.source, thread.id]), thread);
+  fixtureThreads.set(api, rows);
+  return thread;
+}
+
 function card(params: CardParams) {
-  if (params.desktopApi) {
-    const rows = fixtureThreads.get(params.desktopApi) ?? new Map<string, NavigationThreadSummary>();
-    rows.set(JSON.stringify([params.thread.source, params.thread.id]), params.thread);
-    fixtureThreads.set(params.desktopApi, rows);
-  }
+  registerFixtureThread(params.desktopApi, params.thread);
   return (
     <StarMapChatCard
       cardKey="card-1"
@@ -1130,7 +1133,7 @@ describe("StarMapChatCard slash commands", () => {
           onRaise={() => undefined}
           onRectChange={() => undefined}
           rect={{ ...RECT, left: 500 }}
-          thread={localThread({ id: "t-second", title: "Other work" })}
+          thread={registerFixtureThread(secondApi, localThread({ id: "t-second", title: "Other work" }))}
           scale={1}
           bounds={{ width: 4000, height: 3000 }}
           onToggleContext={() => undefined}
@@ -1319,7 +1322,7 @@ describe("StarMapChatCard slash commands", () => {
         onRaise={() => undefined}
         onRectChange={() => undefined}
         rect={RECT}
-        thread={localThread()}
+        thread={registerFixtureThread(desktopApi, localThread())}
         scale={1}
         bounds={{ width: 4000, height: 3000 }}
         onToggleContext={() => undefined}
