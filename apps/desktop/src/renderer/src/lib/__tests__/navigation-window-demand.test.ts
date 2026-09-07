@@ -54,6 +54,12 @@ it("routes disclosed children and viewer drafts to their explicit owners", () =>
   const local = { backend: "codex" as const, threadId: "same-id" };
   const demand = buildNavigationWindowDemand({ ...base, browseMode: "drafts", disclosedParents: [remote], draftRefs: [remote, local] });
   expect([...demand.values()].find((value) => value.query.kind === "children")).toMatchObject({ federationTarget: { scope: "remote", instanceId: "peer" } });
+  expect(demand.get('children:["peer","codex","same-id"]:viewer')).toMatchObject({
+    inventory: "viewer", query: { kind: "children", parent: remote }, pageSize: 10,
+  });
+  expect(demand.get('children:["peer","codex","same-id"]:viewer')?.federationTarget).toBeUndefined();
+  const remoteWindow = buildNavigationWindowDemand({ ...base, target: { scope: "remote", instanceId: "peer" }, disclosedParents: [remote] });
+  expect([...remoteWindow.keys()].some((key) => key.endsWith(":viewer"))).toBe(false);
   expect(demand.get('drafts:"peer":0')).toMatchObject({ federationTarget: { scope: "remote", instanceId: "peer" }, query: { identities: [remote] } });
   expect(demand.get('drafts:"":0')?.federationTarget).toBeUndefined();
   expect(demand.get('drafts:"":0')?.query).toMatchObject({ identities: [local] });

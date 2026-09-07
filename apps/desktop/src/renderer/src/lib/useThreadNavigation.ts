@@ -819,6 +819,8 @@ function threadSummariesEqual(
   return (
     left.rowRevision === right.rowRevision &&
     left.ordinaryChildCount === right.ordinaryChildCount &&
+    left.viewerChildCount === right.viewerChildCount &&
+    left.ownerOrdinaryChildCount === right.ownerOrdinaryChildCount &&
     left.nativeSubAgentGroupPresent === right.nativeSubAgentGroupPresent &&
     left.nativeSubAgentCount === right.nativeSubAgentCount &&
     left.id === right.id &&
@@ -3159,8 +3161,12 @@ export function useThreadNavigation(
           const ownerPage = boundedNavigation.resources.get(id)?.state.request.federationTarget?.scope === "remote";
           const previous = threadRows.get(key);
           let presentedRow = rendererFederationTarget?.scope !== "remote" && row.ref.ownerInstanceId
-            ? ownerPage ? { ...row, pinnedRank: previous?.pinnedRank }
-              : previous && remoteContextKeys.has(key) ? { ...previous, pinnedRank: row.pinnedRank } : row
+            ? ownerPage ? { ...row, pinnedRank: previous?.pinnedRank,
+                ownerOrdinaryChildCount: row.ordinaryChildCount, viewerChildCount: previous?.viewerChildCount,
+                ordinaryChildCount: row.ordinaryChildCount + (previous?.viewerChildCount ?? 0) }
+              : previous && remoteContextKeys.has(key) ? { ...previous, pinnedRank: row.pinnedRank,
+                viewerChildCount: row.viewerChildCount,
+                ordinaryChildCount: (previous.ownerOrdinaryChildCount ?? 0) + (row.viewerChildCount ?? 0) } : row
             : row;
           const observedName = threadNameObservationsRef.current.get(key);
           if (observedName) {

@@ -1572,6 +1572,8 @@ export type NavigationRow = {
   parentThreadBackend?: AppServerBackendKind;
   parentThreadInstanceId?: FederationInstanceId;
   ordinaryChildCount: number;
+  /** Viewer inventory only: children whose owner differs from this mounted parent. */
+  viewerChildCount?: number;
   nativeSubAgentGroupPresent: boolean;
   nativeSubAgentCount?: number;
   subthreadsCollapsed?: boolean;

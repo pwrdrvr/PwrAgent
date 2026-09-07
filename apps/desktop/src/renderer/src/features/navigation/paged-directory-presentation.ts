@@ -32,7 +32,7 @@ export function buildPagedDirectoryPresentation(params: {
       const parentKey = navigationThreadSelectionKey(entry.placement.parent);
       const children = childThreadsByParentKey.get(parentKey) ?? [];
       const row = params.threadsByKey.get(entry.key);
-      if (!row) continue;
+      if (!row || children.some((child) => threadSummaryIdentityKey(child) === entry.key)) continue;
       children.push(row);
       childThreadsByParentKey.set(parentKey, children);
     }

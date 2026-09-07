@@ -80,6 +80,11 @@ export function buildNavigationWindowDemand(params: {
       inventory: parent.ownerInstanceId || params.target?.scope === "remote" ? "owner" : "viewer",
       federationTarget: parent.ownerInstanceId ? { scope: "remote", instanceId: parent.ownerInstanceId } : params.target,
     });
+    if (parent.ownerInstanceId && params.target?.scope !== "remote") {
+      // A child can belong to this viewer while its parent belongs to a peer.
+      // Keep the two owner inventories independently paged and releasable.
+      demand.set(`children:${navigationIdentityKey(parent)}:viewer`, request({ kind: "children", parent }));
+    }
   }
   return demand;
 }
@@ -103,7 +108,7 @@ export function visibleDisclosedNavigationParents(params: {
       const parent = candidates.get(key);
       if (!parent || visible.has(key)) continue;
       visible.set(key, parent);
-      pending.push(`children:${key}`);
+      pending.push(`children:${key}`, `children:${key}:viewer`);
     }
   }
   return [...visible.values()];

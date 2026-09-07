@@ -2,7 +2,7 @@ import { readNavigationPresentationOrder, type NavigationPresentationOrder } fro
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { useState, type MouseEvent } from "react";
+import { Fragment, useState, type MouseEvent } from "react";
 import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
@@ -138,7 +138,11 @@ export function RecentsList(props: RecentsListProps) {
     const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
     const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
       ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
-    const childResource = props.pagedNavigation?.resources.get(childResourceId);
+    const childResources = [childResourceId, `${childResourceId}:viewer`]
+      .flatMap((id) => {
+        const resource = props.pagedNavigation?.resources.get(id);
+        return resource ? [resource] : [];
+      });
     const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
     const canManageSubthreads = threadSupportsFederationCapability(
       parent,
@@ -276,13 +280,19 @@ export function RecentsList(props: RecentsListProps) {
             ) : null,
           ];
         })}
-        {childResource?.state.error ? <p role="alert">{childResource.state.error}</p> : null}
-        {childResource?.loading ? <p>Loading sub-threads…</p> : null}
-        {childResource?.state.rebaselineRequired ? (
-          <button type="button" onClick={() => void props.pagedNavigation?.restart(childResourceId)}>Reload sub-threads</button>
-        ) : childResource?.state.page?.nextCursor ? (
-          <button type="button" disabled={childResource.loading} onClick={() => void props.pagedNavigation?.loadMore(childResourceId)}>Load more sub-threads</button>
-        ) : null}
+        {childResources.map((childResource) => (
+          <Fragment key={childResource.id}>
+            {childResource.state.error ? <p role="alert">{childResource.state.error}</p> : null}
+            {childResource.loading ? <p>Loading sub-threads…</p> : null}
+            {childResource.state.rebaselineRequired ? (
+              <button type="button" onClick={() => void props.pagedNavigation?.restart(childResource.id)}>Reload sub-threads</button>
+            ) : childResource.state.page?.nextCursor ? (
+              <button type="button" disabled={childResource.loading} onClick={() => void props.pagedNavigation?.loadMore(childResource.id)}>
+                {childResource.id.endsWith(":viewer") ? "Load more sub-threads on this machine" : "Load more sub-threads"}
+              </button>
+            ) : null}
+          </Fragment>
+        ))}
       </div>
     );
   };

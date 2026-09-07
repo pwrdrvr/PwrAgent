@@ -19,8 +19,8 @@ export type NavigationDirectoryView = Pick<NavigationDirectoryRow,
 };
 
 export type NavigationPresentedThread = NavigationThreadSummary & Partial<Pick<NavigationRow,
-  "ref" | "rowRevision" | "ordinaryChildCount" | "nativeSubAgentGroupPresent" | "nativeSubAgentCount"
->>;
+  "ref" | "rowRevision" | "ordinaryChildCount" | "viewerChildCount" | "nativeSubAgentGroupPresent" | "nativeSubAgentCount"
+>> & { ownerOrdinaryChildCount?: number };
 
 /** Loaded row overlays only. Collection membership/count/readiness stays in query resources. */
 export type NavigationLoadedRows = {

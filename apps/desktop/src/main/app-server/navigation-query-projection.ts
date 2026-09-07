@@ -161,6 +161,7 @@ function limitRecords<T>(items: readonly T[] | undefined): {
 
 function projectNavigationRow(params: {
   childCount: number;
+  viewerChildCount?: number;
   needsInput: boolean;
   thread: NavigationThreadSummary;
 }): NavigationRow {
@@ -227,6 +228,7 @@ function projectNavigationRow(params: {
       ? { parentThreadInstanceId: thread.parentThreadInstanceId }
       : {}),
     ordinaryChildCount: params.childCount,
+    ...(params.viewerChildCount !== undefined ? { viewerChildCount: params.viewerChildCount } : {}),
     nativeSubAgentGroupPresent: nativeSubAgentCount > 0,
     ...(nativeSubAgentCount > 0 ? { nativeSubAgentCount } : {}),
     ...(thread.subthreadsCollapsed !== undefined
@@ -666,11 +668,15 @@ export function projectNavigationQuery(params: {
     parentCandidates.set(key, candidates);
   }
   const childCountByParent = new Map<string, number>();
+  const viewerChildCountByParent = new Map<string, number>();
   for (const thread of params.index.threads) {
     const parent = parentIdentity(thread, parentCandidates);
     if (!parent || !isOrdinaryThread(thread)) continue;
     const key = identityKey(parent);
     childCountByParent.set(key, (childCountByParent.get(key) ?? 0) + 1);
+    if (parent.ownerInstanceId && navigationIdentity(thread).ownerInstanceId !== parent.ownerInstanceId) {
+      viewerChildCountByParent.set(key, (viewerChildCountByParent.get(key) ?? 0) + 1);
+    }
   }
   const selectedThreads = selectQueryThreads({
     query,
@@ -718,6 +724,8 @@ export function projectNavigationQuery(params: {
     return {
       row: projectNavigationRow({
         childCount: childCountByParent.get(threadKey(thread)) ?? 0,
+        ...(params.request.inventory === "viewer" && navigationIdentity(thread).ownerInstanceId
+          ? { viewerChildCount: viewerChildCountByParent.get(threadKey(thread)) ?? 0 } : {}),
         needsInput: starMapSignals(thread, params.index).approval,
         thread,
       }),

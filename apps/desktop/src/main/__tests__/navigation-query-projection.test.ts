@@ -223,3 +223,19 @@ it("returns exact off-page directory counts without directory membership arrays"
   expect(exact.entries).toEqual([]);
   expect(exact.directories[0]).not.toHaveProperty("threadKeys");
 });
+
+
+it("counts viewer children separately from cached children on a mounted parent's owner", () => {
+  const remote = (id: string) => ({ ref: { backend: "codex" as const, threadId: id,
+    target: { scope: "remote" as const, instanceId: "peer" } }, instanceLabel: "Peer" });
+  const index = snapshot([
+    thread("parent", { federation: remote("parent") }),
+    thread("local-child", { parentThreadId: "parent", parentThreadBackend: "codex", parentThreadInstanceId: "peer" }),
+    thread("remote-child", { federation: remote("remote-child"), parentThreadId: "parent", parentThreadBackend: "codex" }),
+  ]);
+  const query = { kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: "parent", ownerInstanceId: "peer" }] };
+  const viewer = projectNavigationQuery({ index, request: { ...request(query), inventory: "viewer" } });
+  expect(viewer.entries[0]?.row).toMatchObject({ ordinaryChildCount: 2, viewerChildCount: 1 });
+  const owner = projectNavigationQuery({ index, request: request(query) });
+  expect(owner.entries[0]?.row).not.toHaveProperty("viewerChildCount");
+});

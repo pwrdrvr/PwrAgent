@@ -290,7 +290,7 @@ it("refreshes exact configuration independently of unchanged collection rows", a
   unmount();
 });
 
-it("keeps viewer pin authority separate from off-page remote owner detail", async () => {
+it("keeps viewer pins and cross-owner child counts separate from remote owner detail", async () => {
   const f = fixture();
   const target = { scope: "remote" as const, instanceId: "peer" };
   const remote = { ...row("remote"), ref: { backend: "codex" as const, threadId: "remote", ownerInstanceId: "peer" },
@@ -300,7 +300,9 @@ it("keeps viewer pin authority separate from off-page remote owner detail", asyn
     const page = await original(request);
     if (request.query.kind !== "exact" || request.query.identities[0]?.ownerInstanceId !== "peer") return page;
     return { ...page, entries: [{ row: { ...remote, title: request.federationTarget ? "Owner title" : "Cached viewer title",
-      pinnedRank: request.federationTarget ? "owner-rank" : "viewer-rank" }, placement: { kind: "root" }, orderKey: "r" }] };
+      pinnedRank: request.federationTarget ? "owner-rank" : "viewer-rank",
+      ordinaryChildCount: request.federationTarget ? 3 : 2,
+      ...(!request.federationTarget ? { viewerChildCount: 2 } : {}) }, placement: { kind: "root" }, orderKey: "r" }] };
   });
   f.detail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref, revision: "detail",
     readiness: "ready", identity: "present", thread: request.ref.ownerInstanceId ? { ...remote, pinnedRank: "owner-rank" } : row(request.ref.threadId) }));
@@ -310,6 +312,8 @@ it("keeps viewer pin authority separate from off-page remote owner detail", asyn
   await waitFor(() => expect(result.current.selectedThread?.pinnedRank).toBe("viewer-rank"));
   expect(result.current.selectedThread?.federation?.ref.target).toEqual(target);
   expect(result.current.pagedNavigation.resources.has("selected-viewer-mount")).toBe(true);
-  expect(result.current.threads.find((thread) => thread.id === "remote")?.title).toBe("Owner title");
+  expect(result.current.threads.find((thread) => thread.id === "remote")).toMatchObject({
+    title: "Owner title", ordinaryChildCount: 5, viewerChildCount: 2, ownerOrdinaryChildCount: 3,
+  });
   unmount();
 });
