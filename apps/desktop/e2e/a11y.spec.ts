@@ -604,10 +604,8 @@ for (const theme of AUDIT_THEMES) {
         // same repo give two lists the same name, and an unscoped locator then
         // fails Playwright strict mode rather than reporting anything about
         // accessibility.
-        const threads = app.window
-          .locator(".directory-row")
-          .filter({ has: directory })
-          .getByRole("list", { name: /^Threads in PwrAgent/ });
+        const directoryRow = app.window.locator(".directory-row").filter({ has: directory });
+        const threads = directoryRow.getByRole("list", { name: /^Threads in PwrAgent/ });
 
         // Every scan below must measure the at-rest state, and a Playwright
         // click leaves the pointer where it landed.
@@ -655,31 +653,27 @@ for (const theme of AUDIT_THEMES) {
             }),
           ).toBeVisible();
           await expect(
-            threads.getByRole("button", { name: "Show 2 more", exact: true }),
+            directoryRow.getByRole("button", { name: "Load more threads", exact: true }),
           ).toBeVisible();
-          // Two pinned rows + the pin-drop boundary + the "Directory threads"
-          // disclosure + the ten-row unpinned cap + "Show more". Everything
-          // that is not a row is a `listitem` too, because a list owns only
-          // listitem — including the boundary, whose separator child is
-          // exposed mid-drag.
+          // The owner page admits ten roots including two pins. The pin-drop
+          // boundary and section disclosure are listitems; paging controls
+          // sit outside the list.
           //
           // Direct children: `getByRole` matches DESCENDANTS, so it would also
           // count a sub-thread list's own rows and read as fixture drift.
-          await expect(listItems(threads)).toHaveCount(15);
+          await expect(listItems(threads)).toHaveCount(12);
 
           await settle();
           await runAxe(app.window, "directories lens, expanded directory");
         });
 
         await test.step("expanded unpinned overflow", async () => {
-          // "Show more" reveals the rows past the cap. They mount as
-          // siblings of the control rather than inside a second list, so the
-          // scan is worth repeating with them present.
-          await threads
-            .getByRole("button", { name: "Show 2 more", exact: true })
+          // Fetch the remaining four roots into the same accessible list.
+          await directoryRow
+            .getByRole("button", { name: "Load more threads", exact: true })
             .click();
-          // The two rows past the cap, on top of the 15 above.
-          await expect(listItems(threads)).toHaveCount(17);
+          await expect(listItems(threads)).toHaveCount(16);
+          await expect(directoryRow.getByRole("button", { name: "Load more threads", exact: true })).toHaveCount(0);
           await settle();
           await runAxe(app.window, "directories lens, unpinned overflow");
         });

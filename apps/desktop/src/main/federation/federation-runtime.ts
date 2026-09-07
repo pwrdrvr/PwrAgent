@@ -2175,6 +2175,7 @@ export class DesktopFederationRuntime {
     const instanceLabel = this.connectedPeerTargets().find(
       (peer) => peer.target.instanceId === target.instanceId,
     )?.label ?? target.instanceId;
+    const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
     return {
       ...response,
       ref: { ...response.ref, ownerInstanceId: target.instanceId },
@@ -2184,6 +2185,9 @@ export class DesktopFederationRuntime {
               ...response.thread,
               federation: {
                 instanceLabel,
+                capabilities: this.viewerCapabilitiesFor(target.instanceId, peer),
+                peerStatus: peer?.status ?? "connected",
+                ...(peer?.celestialIcon ? { celestialIcon: peer.celestialIcon } : {}),
                 ref: buildFederatedThreadRef({
                   backend: response.thread.source,
                   instanceId: target.instanceId,

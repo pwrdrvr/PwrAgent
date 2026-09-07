@@ -481,6 +481,32 @@ describe("DesktopFederationRuntime", () => {
     );
   });
 
+  it.each([false, true])("stamps selected detail with viewer PTY permission (granted: %s)", async (granted) => {
+    const runtime = new DesktopFederationRuntime();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    vi.spyOn(runtime, "assertRemoteNavigationQueryProtocol").mockImplementation(() => {});
+    vi.spyOn(runtime, "connectedPeerTargets").mockReturnValue([{ target, label: "Owner", capabilities: ["thread_detail"] }]);
+    vi.spyOn(runtime as unknown as RuntimeHarness, "visiblePeers").mockReturnValue([{
+      id: "owner", label: "Owner", role: "client", status: "connected",
+      capabilities: granted ? ["thread_detail", "remote_pty"] : ["thread_detail"],
+    }]);
+    const read = vi.fn().mockResolvedValue({
+      protocol: 2, ref: { backend: "codex", threadId: "thread" }, revision: "detail",
+      readiness: "ready", identity: "present",
+      thread: { id: "thread", source: "codex", title: "Remote", linkedDirectories: [], inbox: { inInbox: false } },
+    });
+    vi.spyOn(runtime, "remoteBackend").mockReturnValue({ getNavigationSelectedDetail: read } as unknown as ReturnType<DesktopFederationRuntime["remoteBackend"]>);
+    const detail = await runtime.remoteNavigationSelectedDetail(target, {
+      protocol: 2, ref: { backend: "codex", threadId: "thread", ownerInstanceId: "owner" },
+    });
+    expect(detail.thread?.federation).toMatchObject({
+      instanceLabel: "Owner", peerStatus: "connected",
+      capabilities: granted ? ["thread_detail", "remote_pty"] : ["thread_detail"],
+      ref: { backend: "codex", threadId: "thread", target },
+    });
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ ref: { backend: "codex", threadId: "thread" } }), undefined);
+  });
+
   it("reconstructs Federation navigation deltas against the peer revision", async () => {
     const firstSnapshot: NavigationSnapshot = {
       backend: "all",
