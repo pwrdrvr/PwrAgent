@@ -852,7 +852,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
   const reorderDirectoryPins = (nextKeys: string[], move?: NavigationRelativePinMove): void => {
     if (move) void props.onReorderDirectoryPins?.(nextKeys, move);
-    else void props.onReorderDirectoryPins?.(nextKeys);
   };
 
   const movePinnedDirectoryByKeyboard = (
@@ -878,7 +877,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // The owner resolves relative moves against its complete pin order.
   const reorderPins = (nextThreadKeys: string[], move?: NavigationRelativePinMove): void => {
     if (move) void props.onReorderThreadPins?.(nextThreadKeys, move);
-    else void props.onReorderThreadPins?.(nextThreadKeys);
   };
 
   // The directory's pinned thread keys (any backend), in global rank order.

@@ -33,6 +33,55 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("fences a page started before an accepted relative pin move and accepts the next owner baseline", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  let rank = "1024";
+  let hold = false;
+  let release!: () => void;
+  let captured = false;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  f.read.mockImplementation(async (request) => {
+    const page = await originalRead(request);
+    const result = { ...page, entries: page.entries.map((entry) => entry.row.id === "thread-0"
+      ? { ...entry, row: { ...entry.row, pinnedRank: rank } } : entry) };
+    if (hold && request.query.kind === "lens") { captured = true; await pending; }
+    return result;
+  });
+  const reorderThreadPins = vi.fn<NonNullable<DesktopApi["reorderThreadPins"]>>(async () => {
+    rank = "3072";
+    return { pinnedRanks: { "codex:thread-0": rank } };
+  });
+  const api = { ...f.api, reorderThreadPins };
+  const { result } = renderHook(() => useThreadNavigation(api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  hold = true;
+  let refresh!: Promise<void>;
+  act(() => { refresh = result.current.refresh(); });
+  await waitFor(() => expect(captured).toBe(true));
+  await act(() => result.current.reorderThreadPins([], { key: "codex:thread-0", direction: "down" }));
+  await act(async () => { hold = false; release(); await refresh; });
+  expect(result.current.threads.find((thread) => thread.id === "thread-0")?.pinnedRank).toBe("3072");
+  expect(reorderThreadPins).toHaveBeenCalledWith({ federationTarget: undefined, move: { key: "codex:thread-0", direction: "down" } });
+  rank = "4096";
+  await act(() => result.current.refresh());
+  expect(result.current.threads.find((thread) => thread.id === "thread-0")?.pinnedRank).toBe("4096");
+  expect(f.legacy).not.toHaveBeenCalled();
+});
+
+it("rejects partial full-order vectors before sending a pin mutation", async () => {
+  const f = fixture();
+  const reorderThreadPins = vi.fn(async () => ({ pinnedRanks: {} }));
+  const reorderDirectoryPins = vi.fn(async () => ({ pinnedRanks: {} }));
+  const api = { ...f.api, reorderThreadPins, reorderDirectoryPins };
+  const { result } = renderHook(() => useThreadNavigation(api));
+  await waitFor(() => expect(result.current.loaded).toBe(true));
+  await act(() => result.current.reorderThreadPins(["codex:thread-0"]));
+  await act(() => result.current.reorderDirectoryPins(["directory:one"]));
+  expect(reorderThreadPins).not.toHaveBeenCalled();
+  expect(reorderDirectoryPins).not.toHaveBeenCalled();
+});
+
 it("loads one owner lens page and exact selection, preserving complete counts independently", async () => {
   const f = fixture();
   const { result, unmount } = renderHook(() => useThreadNavigation(f.api));

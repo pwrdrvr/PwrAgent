@@ -40,7 +40,6 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
-  buildPinnedRanks,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   classifyDirectory,
@@ -7307,25 +7306,23 @@ export function useThreadNavigation(
   );
 
   const reorderThreadPins = useCallback(
-    async (orderedThreadKeys: string[], move?: NavigationRelativePinMove): Promise<void> => {
+    async (_orderedThreadKeys: string[], move?: NavigationRelativePinMove): Promise<void> => {
       if (!reorderThreadPinsRequest) {
         return;
       }
 
-      const pinnedRanksByThreadKey = move ? {} : buildPinnedRanks(orderedThreadKeys);
-      setState((current) => ({
-        ...current,
-        rows: updateThreadPinsInLoadedRows(current.rows, {
-          pinnedRanksByThreadKey,
-        }),
-      }));
+      if (!move) {
+        setSetThreadModelSettingsError("A pin move requires an owner-relative destination. Refresh the list and try again.");
+        return;
+      }
 
       try {
         const result = await reorderThreadPinsRequest({
           // A federation window reorders the owning instance's pins.
           federationTarget: readRendererFederationTarget(),
-          ...(move ? { move } : { threadKeys: orderedThreadKeys }),
+          move,
         });
+        boundedNavigation.invalidate();
         setState((current) => ({
           ...current,
           rows: updateThreadPinsInLoadedRows(current.rows, {
@@ -7336,7 +7333,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [refresh, reorderThreadPinsRequest],
+    [refresh, reorderThreadPinsRequest, boundedNavigation.invalidate],
   );
 
   const setThreadParent = useCallback(
@@ -7609,21 +7606,19 @@ export function useThreadNavigation(
   );
 
   const reorderDirectoryPins = useCallback(
-    async (directoryKeys: string[], move?: NavigationRelativePinMove): Promise<void> => {
+    async (_directoryKeys: string[], move?: NavigationRelativePinMove): Promise<void> => {
       if (!reorderDirectoryPinsRequest) {
         return;
       }
 
-      const pinnedRanks = move ? {} : buildPinnedRanks(directoryKeys);
-      setState((current) => ({
-        ...current,
-        rows: updateDirectoryPinsInLoadedRows(current.rows, {
-          pinnedRanks,
-        }),
-      }));
+      if (!move) {
+        setSetThreadModelSettingsError("A directory pin move requires an owner-relative destination. Refresh the list and try again.");
+        return;
+      }
 
       try {
-        const result = await reorderDirectoryPinsRequest(move ? { move } : { directoryKeys });
+        const result = await reorderDirectoryPinsRequest({ move });
+        boundedNavigation.invalidate();
         setState((current) => ({
           ...current,
           rows: updateDirectoryPinsInLoadedRows(current.rows, {
@@ -7634,7 +7629,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [refresh, reorderDirectoryPinsRequest],
+    [refresh, reorderDirectoryPinsRequest, boundedNavigation.invalidate],
   );
 
   const setDirectoryThreadsCollapsed = useCallback(
