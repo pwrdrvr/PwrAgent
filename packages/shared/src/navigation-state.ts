@@ -54,9 +54,15 @@ function dedupeLinkedDirectories(
           (directory.kind !== "local" && directory.kind !== "worktree"),
       )
     : normalizedDirectories;
+  // Directory IDs remain stable while provider Git enrichment catches up with
+  // an attachment overlay (local -> worktree, or a corrected worktree path).
+  // Resolve that identity first: otherwise both spellings survive under
+  // different workspace keys and every downstream consumer sees duplicate IDs.
+  // Later overlay metadata wins, as it does for workspace aliases below.
+  const byId = new Map(filteredDirectories.map((directory) => [directory.id, directory]));
   const byWorkspaceIdentity = new Map<string, LinkedDirectorySummary>();
 
-  for (const directory of filteredDirectories) {
+  for (const directory of byId.values()) {
     const worktreePath = directory.kind === "worktree"
       ? directory.worktreePath?.trim()
       : undefined;
