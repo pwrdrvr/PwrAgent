@@ -133,6 +133,20 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     stateDb.close();
     stateDb = StateDb.open(path.join(tempDir, "state.db"));
     store = new SqliteOverlayStore(stateDb);
+    // Even while the final request is missing, the persisted ceiling and
+    // baseline reject a later turn's total or a freshly reset accumulator.
+    await store.upsertThreadUsageLine({ line: {
+      ...first, inputTokens: 3_000, uncachedInputTokens: 2_800,
+      totalTokens: 3_300, cumulativeTotalTokens: 3_300,
+    } });
+    await store.upsertThreadUsageLine({ line: {
+      ...first, totalTokens: 100, cumulativeTotalTokens: 1_900,
+    } });
+    expect(stateDb.raw.prepare(
+      "UPDATE thread_usage_lines SET total_tokens = 3300, cumulative_total_tokens = 3300 WHERE usage_line_id = ?",
+    ).run("line-1").changes).toBe(0);
+    const bounded = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(bounded.lines.find((line) => line.turnId === "turn-1")?.totalTokens).toBe(1_300);
     const final = { ...first, inputTokens: 1_700, uncachedInputTokens: 1_500,
       totalTokens: 2_000, cumulativeTotalTokens: 2_000 };
     await store.upsertThreadUsageLine({ line: final });
