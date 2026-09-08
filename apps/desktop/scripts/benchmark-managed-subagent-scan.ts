@@ -30,7 +30,10 @@ raw.transaction(() => {
   for (let index = 0; index < 629; index += 1) {
     insert.run(`codex:parent-${index}`, JSON.stringify({
       backend: "codex", threadId: `parent-${index}`, immutableUsageActivities: history,
-      subAgents: [{ monitorThreadId: `child-${index}`, backend: "codex", task: "Synthetic worker" }],
+      subAgents: [{
+        monitorThreadId: `child-${index}`, backend: "codex", task: "Synthetic worker",
+        ...(index === 0 ? { title: "x".repeat(2 * 1024 * 1024) } : {}),
+      }],
     }));
     insert.run(`codex:child-${index}`, JSON.stringify({
       backend: "codex", threadId: `child-${index}`, immutableUsageActivities: history,
@@ -96,6 +99,7 @@ function transferredRows(read: () => unknown): object[] {
 }
 
 try {
+  invalidate();
   const baselineTransferredRows = transferredRows(oldScan);
   invalidate();
   const currentTransferredRows = transferredRows(newScan);
@@ -108,10 +112,13 @@ try {
       arch: process.arch,
       cpu: os.cpus()[0]?.model,
     },
-    fixture: { parents: 629, children: 629, unrelated: 3_000, knownThreadKeys: 10_000 },
+    fixture: {
+      parents: 629, children: 629, unrelated: 3_000, knownThreadKeys: 10_000,
+      subagentTitleBytes: 2 * 1024 * 1024,
+    },
     baselineTransferredRows,
     currentTransferredRows,
-    baselineFullHelper: measure(oldScan),
+    baselineFullHelper: measure(oldScan, invalidate),
     currentInvalidatedFullHelper: measure(newScan, invalidate),
     currentUnchangedFullHelper: measure(newScan),
     baselineBackend: measure(() => baseline["getBackend"]("all")),

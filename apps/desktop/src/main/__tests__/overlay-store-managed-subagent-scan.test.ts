@@ -38,6 +38,20 @@ afterEach(() => {
 });
 
 describe("managed subagent navigation reads", () => {
+  it("preserves malformed subagent entry isolation during nested projection", () => {
+    seed("primitive-entries", {
+      subAgents: ["not-json", 42, false, [], { monitorThreadId: "valid" }],
+    });
+    seed("null-entry", {
+      subAgents: [{ monitorThreadId: "before-null" }, null, { monitorThreadId: "after-null" }],
+    });
+    seed("invalid-id", {
+      subAgents: [{ monitorThreadId: 42 }, { monitorThreadId: "after-invalid-id" }],
+    });
+    seed("non-array", { subAgents: { monitorThreadId: "not-a-child" } });
+    expect(keys()).toEqual(["codex:before-null", "codex:valid"]);
+  });
+
   it("preserves identities, malformed-row isolation, and the grouped handoff exception", async () => {
     seed("parent", {
       subAgents: [
@@ -156,7 +170,10 @@ describe("managed subagent navigation reads", () => {
     const largeHistory = Array.from({ length: 2_000 }, (_, id) => ({ id, text: "fixture".repeat(40) }));
     seed("parent", {
       immutableUsageActivities: largeHistory,
-      subAgents: [{ monitorThreadId: "child" }, { monitorThreadId: "grouped" }],
+      subAgents: [
+        { monitorThreadId: "child", title: "x".repeat(2 * 1024 * 1024) },
+        { monitorThreadId: "grouped" },
+      ],
     });
     seed("child", { immutableUsageActivities: largeHistory });
     seed("grouped", { immutableUsageActivities: largeHistory, handoffOrigin: { groupingMode: "subthread" } });

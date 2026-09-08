@@ -6483,9 +6483,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
     const rows = this.stateDb.raw
       .prepare(
-        `SELECT CASE WHEN json_valid(payload) THEN
-           json_extract(payload, '$.backend', '$.threadId', '$.subAgents')
-         END AS projection FROM threads
+        `SELECT CASE WHEN json_valid(payload) THEN json_array(
+           json_extract(payload, '$.backend'), json_extract(payload, '$.threadId'),
+           json(CASE WHEN json_type(payload, '$.subAgents') = 'array' THEN
+             (SELECT json_group_array(CASE WHEN type = 'object' THEN json_object(
+               'backend', json_extract(value, '$.backend'),
+               'monitorThreadId', json_extract(value, '$.monitorThreadId')
+             ) ELSE value END) FROM json_each(payload, '$.subAgents'))
+           ELSE 'null' END)
+         ) END AS projection FROM threads
          WHERE payload LIKE '%"monitorThreadId"%'`,
       )
       .all() as Array<{ projection: string | null }>;
@@ -6495,7 +6501,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         if (!row.projection) continue;
         // Overlay normalization only removes a legacy agent persona; it does
         // not change these relationship fields. Avoid materializing histories,
-        // usage, PRs, and agent instructions just to discover child identities.
+        // usage, PRs, agent instructions, and nested subagent task/title metadata
+        // just to discover child identities.
         const [parentBackend, parentThreadId, subAgents] = JSON.parse(
           row.projection,
         ) as [

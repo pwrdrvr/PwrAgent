@@ -13,7 +13,10 @@ SQLite/V8 boundary even though this path only needs relationship fields.
 ## Read behavior
 
 - The first query keeps the existing `monitorThreadId` substring predicate and
-  projects `[backend, threadId, subAgents]` with one `json_extract` call.
+  projects parent identity plus only `backend` and `monitorThreadId` from each
+  object in `subAgents`. `json_each` and `json_group_array` omit nested task/title
+  metadata. Non-object entries retain the existing iteration behavior; a
+  non-array `subAgents` value projects as null.
 - The second query retains its primary-key candidate lookup and projects only
   `handoffOrigin.groupingMode`. Neither query returns full overlay payloads.
 - `json_valid` guards extraction so malformed unrelated rows cannot abort the
@@ -63,7 +66,8 @@ JSON parsing, normalization, and key construction. Five warmup samples precede
 20 measured samples. Invalidated samples force a local write outside timing;
 byte accounting runs separately from timed samples.
 
-Recorded on Apple M4 arm64, Node 24.18.0, V8 13.6, better-sqlite3's SQLite 3.53.2:
+Initial measurements before the nested subagent projection, on Apple M4 arm64,
+Node 24.18.0, V8 13.6, better-sqlite3's SQLite 3.53.2:
 
 | Read | Baseline median / p95 | Changed median / p95 |
 | --- | --- | --- |
@@ -83,6 +87,38 @@ so absolute timings should not be interpreted independently of machine load.
 This is a synthetic same-runtime comparison, not an Electron recapture or proof
 of a PR #2001 regression. The original M5 capture motivated the investigation;
 no running default app was restarted and no operator database was read.
+
+## Nested subagent projection follow-up
+
+The initial projection still returned complete subagent objects. A task/title
+can itself carry arbitrarily large metadata. The current fixture therefore adds
+a 2 MiB title to one subagent, and the regression still requires both native
+results and parser inputs to remain below 1 KiB for its small relationship set.
+The production query adopts the narrower projection integrated into #2001.
+
+Using the same runtime above and the updated synthetic fixture:
+
+| Comparison | Baseline median / p95 | Narrow projection median / p95 |
+| --- | --- | --- |
+| Original main `314f16851`, invalidated helper | 67.952 / 74.900 ms | 58.314 / 62.311 ms |
+| Previous PR head `aa69e75e0`, invalidated helper | 47.998 / 51.065 ms | 60.076 / 65.787 ms |
+
+The two comparisons are separate same-process runs. Unchanged reads measured
+0.0037–0.0038 ms. The narrower query is about 14% faster than original main on
+this fixture but about 25% slower than the prior projection: reducing transferred
+bytes does not eliminate the SQL cost of extracting fields from every subagent.
+This is an explicit materialization bound, not a claim of another cold CPU win.
+
+Parent/child native text bytes were 17,219,361 / 15,100,344 for original main,
+2,159,843 / 12,631 for the previous PR head, and **46,326 / 12,631** for the new
+projection. Backend handling is unchanged; versus original main its median was
+1.634 → 0.072 ms in the updated run.
+
+The reproduction command above now includes the large title. To compare against
+the prior PR version, export `aa69e75e0` instead of `314f16851`. Both baseline and
+changed cold samples now force invalidation outside timing, so a baseline that
+already has caching cannot accidentally measure warm reads or return no byte
+accounting rows.
 
 ## Regression and write budgets
 
