@@ -223,10 +223,14 @@ export async function openStarMapWindow(app: LaunchedApp): Promise<Page> {
     )
     .toBe("function");
 
-  // A DOM-clickable header can precede native ready-to-show. On macOS an
-  // unfocused window can consume the first click as activation only.
+  // A DOM-clickable header can precede native ready-to-show. Activate the
+  // macOS application too: focusing a window alone does not activate a
+  // background application on the runner's Aqua desktop.
   const nativeWindow = await app.electronApp.browserWindow(app.window);
   await expect.poll(() => nativeWindow.evaluate((window) => window.isVisible())).toBe(true);
+  await app.electronApp.evaluate(({ app }) => {
+    if (process.platform === "darwin") app.focus({ steal: true });
+  });
   await nativeWindow.evaluate((window) => window.focus());
   await expect.poll(() => nativeWindow.evaluate((window) => window.isFocused())).toBe(true);
 
