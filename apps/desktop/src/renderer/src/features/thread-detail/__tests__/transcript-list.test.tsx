@@ -4266,6 +4266,28 @@ Implementation notes remain in a readable bubble.`;
     }
   });
 
+  it.each([1, 24, 140])("keeps exact bottom alignment after remount layout shifts by %i pixels", (shift) => {
+    scrollHeight = 720;
+    const onViewportChange = vi.fn();
+    const view = render(
+      <TranscriptList entries={[{ type: "message", id: "tail", role: "assistant", text: "Cached transcript" }]}
+        loading={false} loadingMore={false} threadId="restored"
+        restoredViewport={{ scrollTop: 480, distanceFromBottom: 0, isGluedToBottom: true }}
+        onViewportChange={onViewportChange} onLoadOlder={async () => undefined} />,
+    );
+    const list = screen.getByRole("list");
+    list.scrollTop = 480;
+    fireEvent.scroll(list);
+    // Chromium scroll anchoring moves the viewport while hydrated rows reflow,
+    // before ResizeObserver gets its turn. No user scroll occurred.
+    scrollHeight += shift;
+    list.scrollTop = 480 - shift;
+    fireEvent.scroll(list);
+    expect(list.scrollTop).toBe(scrollHeight);
+    view.unmount();
+    expect(onViewportChange).toHaveBeenLastCalledWith(expect.objectContaining({ isGluedToBottom: true }));
+  });
+
   it("keeps the bottom pinned when the transcript viewport shrinks without user scroll", () => {
     const entries = Array.from({ length: 18 }, (_, index) => ({
       type: "message" as const,

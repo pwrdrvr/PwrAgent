@@ -14,6 +14,7 @@ import {
 export function useNavigationQueryResource(params: {
   desktopApi?: DesktopApi;
   request?: NavigationQueryRequest;
+  active?: boolean;
 }): {
   state?: NavigationPageState;
   loading: boolean;
@@ -30,6 +31,8 @@ export function useNavigationQueryResource(params: {
   const lifetimeRef = useRef(0);
   const pendingRef = useRef<{ lifetime: number; promise: Promise<void> } | undefined>(undefined);
   const api = params.desktopApi;
+  const activeRef = useRef(params.active !== false);
+  activeRef.current = params.active !== false;
 
   const publish = useCallback((next: NavigationPageState) => {
     currentRef.current = next;
@@ -37,6 +40,7 @@ export function useNavigationQueryResource(params: {
   }, []);
 
   const read = useCallback(async (continuation: boolean): Promise<void> => {
+    if (!activeRef.current) return;
     const lifetime = lifetimeRef.current;
     const pending = pendingRef.current;
     if (pending?.lifetime === lifetime) return pending.promise;
@@ -60,7 +64,7 @@ export function useNavigationQueryResource(params: {
             ? started.page.countsRevision : undefined,
           retainedRange: !cursor && (!started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
             ? navigationRetainedRange(started) : undefined,
-        }, consumerId);
+        }, `${consumerId}:${lifetime}`);
         if (lifetimeRef.current !== lifetime) return;
         publish(applyNavigationPage({
           state: currentRef.current!, sequence: started.pendingSequence, page, cursor,
@@ -79,17 +83,19 @@ export function useNavigationQueryResource(params: {
   }, [api, consumerId, publish]);
 
   useEffect(() => {
-    lifetimeRef.current += 1;
+    const lifetime = ++lifetimeRef.current;
     const request = requestRef.current;
-    currentRef.current = request ? createNavigationPageState(request) : undefined;
+    if (JSON.stringify(currentRef.current?.request) !== JSON.stringify(request)) {
+      currentRef.current = request ? createNavigationPageState(request) : undefined;
+    }
     setState(currentRef.current);
     setLoading(false);
-    if (request) void read(false);
+    if (request && params.active !== false) void read(false);
     return () => {
       lifetimeRef.current += 1;
-      void api?.releaseNavigationQuery?.(consumerId);
+      void api?.releaseNavigationQuery?.(`${consumerId}:${lifetime}`);
     };
-  }, [api, consumerId, read, requestKey]);
+  }, [api, consumerId, read, requestKey, params.active]);
 
   const refresh = useCallback(() => read(false), [read]);
   const loadMore = useCallback(() => read(true), [read]);

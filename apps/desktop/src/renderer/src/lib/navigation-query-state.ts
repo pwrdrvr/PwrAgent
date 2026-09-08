@@ -64,7 +64,15 @@ export function createNavigationPageState(request: NavigationQueryRequest): Navi
 }
 
 export function beginNavigationPageRead(state: NavigationPageState): NavigationPageState {
-  return { ...state, pendingSequence: state.pendingSequence + 1, error: undefined };
+  return { ...state, pendingSequence: state.pendingSequence + 1,
+    error: isNavigationPeerUnavailable(state.error) ? state.error : undefined };
+}
+
+/** Electron may preserve only the message when a typed peer error crosses IPC. */
+export function isNavigationPeerUnavailable(message: string | undefined): boolean {
+  return Boolean(message && (/Federation peer \S+ is not connected\./.test(message)
+    || message.includes("Target federation peer is not connected.")
+    || message.includes("FEDERATION_PEER_UNAVAILABLE")));
 }
 
 function mergeEntries(

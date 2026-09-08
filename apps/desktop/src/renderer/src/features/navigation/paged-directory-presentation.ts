@@ -61,6 +61,23 @@ export function buildPagedDirectoryPresentation(params: {
   }
   const directoryThreadsCollapsed = params.directory.directoryThreadsCollapsed === true;
   const unpinnedThreads = directoryThreadsCollapsed ? [] : roots.filter((thread) => !isPinnedThread(thread));
+  // Exact ancestry also admits the selected child while its independently
+  // paged siblings are loading (or the child lies beyond their loaded range).
+  // Do not change that range's membership or continuation cursor.
+  if (selected?.selectionDirectory?.key === params.directory.key) {
+    const visibleParents = new Set([...directoryPinnedThreads, ...unpinnedThreads].map(threadSummaryIdentityKey));
+    for (const entry of selected.entries) {
+      if (entry.placement.kind !== "child") continue;
+      const parentKey = navigationThreadSelectionKey(entry.placement.parent);
+      if (!visibleParents.has(parentKey)) continue;
+      const key = navigationThreadSelectionKey(entry.row.ref);
+      const child = params.threadsByKey.get(key);
+      const children = childThreadsByParentKey.get(parentKey) ?? [];
+      if (child && !children.some((row) => threadSummaryIdentityKey(row) === key)) {
+        childThreadsByParentKey.set(parentKey, [...children, child]);
+      }
+    }
+  }
   return {
     directoryPinnedThreads, unpinnedThreads, childThreadsByParentKey, directoryThreadsCollapsed,
     directoryUnpinnedThreadCount: params.directory.unpinnedRootCount ?? 0,

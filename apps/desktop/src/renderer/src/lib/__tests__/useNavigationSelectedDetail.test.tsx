@@ -211,3 +211,34 @@ it("replaces a cancelled exact read after an owner-wide provider invalidation", 
   expect(read).toHaveBeenCalledTimes(2);
   unmount();
 });
+
+
+it("retains live Token Miser subagents while the authoritative collection refresh is pending", async () => {
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const refreshed = deferred<NavigationSelectedDetailResponse>();
+  const gate = { monitorId: "system:token-miser:live", parentTurnId: "active-turn", task: "Gate",
+    status: "success" as const, createdAt: 1, updatedAt: 2,
+    tokenMiserAccounting: { baselineParentCostMicros: 100, baselineParentTokens: 10,
+      currency: "USD" as const, gateCostMicros: 1, gateModel: "gpt-5.6-luna", gateTotalTokens: 1,
+      originalModel: "gpt-6-astra", revealedParentCostMicros: 10, revealedParentTokens: 1, savingsMicros: 89 } };
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce({ ...detail("initial", true), collections: [{ name: "subAgents", count: 0, revision: "empty" }] })
+    .mockResolvedValueOnce({ ...detail("fresh", true), collections: [{ name: "subAgents", count: 1, revision: "live" }] })
+    .mockReturnValue(refreshed.promise);
+  const api: DesktopApi = { getNavigationSelectedDetail: read,
+    onAgentEvent: (callback) => { listener = callback; return () => undefined; } };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(result.current.state?.collectionReadiness).toBe("ready"));
+  act(() => listener!({ backend: "codex", notification: { method: "thread/subAgents/updated",
+    params: { threadId: ref.threadId, subAgents: [gate] } } }));
+  expect(result.current.state?.detail?.thread?.subAgents).toEqual([gate]);
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+  expect(result.current.state?.collectionReadiness).toBe("loading");
+  expect(result.current.state?.detail?.thread?.subAgents).toEqual([gate]);
+  await act(async () => refreshed.resolve({ ...detail("fresh", true), collectionPage: {
+    name: "subAgents", revision: "live", complete: true, values: { subAgents: [gate] },
+  } }));
+  await waitFor(() => expect(result.current.state?.collectionReadiness).toBe("ready"));
+  expect(result.current.state?.detail?.thread?.subAgents).toEqual([gate]);
+  unmount();
+});

@@ -318,3 +318,54 @@ test("loads an offscreen transcript image only after scrolling it into view", as
     await fixture.cleanup();
   }
 });
+
+// Contrived mixed media, held active until both real browser decodes complete.
+// This distinguishes missing parts from lazy images without a source or box.
+test("shows GIF and PNG thumbnails before turn completion and keeps them after refresh", async () => {
+  const fixture = await createThreadImageFitFixture();
+  const script = JSON.parse(await readFile(fixture.fixturePath, "utf8"));
+  const read = script.steps.find((step: { method: string }) => step.method === "thread/read");
+  const threadId = script.metadata.threadId;
+  const png = read.result.entries[0].parts[1];
+  const parts = [
+    { type: "text", text: "Inspect both attachments" },
+    { type: "image", url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", alt: "Mixed GIF" },
+    { ...png, alt: "Mixed PNG" },
+  ];
+  const entry = { type: "message", id: "mixed-input", role: "user", text: "Inspect both attachments", parts,
+    turn: { id: "mixed-turn", status: "inProgress" } };
+  read.result = { entries: [entry], messages: [entry], pagination: { supportsPagination: false, hasPreviousPage: false } };
+  // The mixed fixture does not exercise skill discovery; an unconsumed
+  // optional response must not block manual turn notifications.
+  script.steps = script.steps.filter((step: { method?: string }) => step.method !== "skills/list");
+  script.steps.push(
+    { id: "mixed-start", kind: "notification", notification: { method: "turn/started", params: { threadId, turn: { id: "mixed-turn", status: "inProgress" } } } },
+    { id: "mixed-complete", kind: "notification", notification: { method: "turn/completed", params: { threadId, turnId: "mixed-turn", turn: { id: "mixed-turn", status: "completed", output: [] } } } },
+  );
+  await writeFile(fixture.fixturePath, JSON.stringify(script));
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath, windowSize: { width: 1280, height: 900 } });
+  try {
+    await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
+    await expect(app.window.getByAltText("Mixed PNG", { exact: true })).toBeVisible();
+    await app.advance({ stepId: "mixed-start" });
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
+    const verify = async () => {
+      for (const alt of ["Mixed GIF", "Mixed PNG"]) {
+        const image = app.window.getByAltText(alt, { exact: true });
+        await expect(image).toBeVisible();
+        await expect.poll(() => image.evaluate((element) => {
+          const img = element as HTMLImageElement;
+          const rect = img.getBoundingClientRect();
+          return Boolean(img.src && img.complete && img.naturalWidth > 0 && rect.width > 0 && rect.height > 0);
+        })).toBe(true);
+      }
+    };
+    await verify();
+    await app.advance({ stepId: "mixed-complete" });
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
+    await verify();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});

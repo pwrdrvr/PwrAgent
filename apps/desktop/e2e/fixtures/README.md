@@ -157,3 +157,12 @@ The `tangerine-terminal-theme.spec.ts` Playwright spec reuses existing replay
 fixtures to check the desktop visual system at the composed-app level. It is not
 a pixel-perfect design-regression suite. Prefer computed style, contrast,
 focus/state, and screenshot-review checks over brittle full-page snapshots.
+
+### Contrived project paging and mixed-media coverage
+
+`star-map-project-pagination.spec.ts` derives a disposable 15-project / 23-card
+population from the existing Star Map fixture. It tests real owner cursor eviction
+and explicit continuation without sending turns to a live provider.
+`thread-image-fit.spec.ts` also derives a mixed GIF+PNG fixture held active until
+both browser decodes succeed, then advances completion. These are synthetic
+regressions, not captures of the operator's private threads.

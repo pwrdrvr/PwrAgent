@@ -1,3 +1,4 @@
+import "./foreground-fixture";
 import { describe, expect, it } from "vitest";
 import { pointerDeltaToCanvas } from "../star-map-layout";
 

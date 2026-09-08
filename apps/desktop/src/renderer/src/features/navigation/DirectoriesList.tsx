@@ -1,5 +1,5 @@
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
-import { navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -1018,39 +1018,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // matching directory exists instead of consuming it as a no-op.
       return;
     }
+    const selectedResource = props.pagedNavigation?.resources.get("selected-context");
+    const selectedQuery = selectedResource?.state.request.query;
+    const selectedPage = selectedResource?.state.page;
+    // Selection and directory ranges hydrate independently. Only the exact
+    // owner query knows the root; partial loaded summaries cannot establish
+    // ancestry or whether a child belongs to a root-only directory query.
+    if (selectedQuery?.kind !== "exact" || !selectedQuery.identities.some((ref) =>
+      navigationThreadSelectionKey(ref) === selectedItemKey)) return;
+    const rootEntry = selectedPage?.entries.find((entry) => entry.placement.kind === "root");
+    if (!rootEntry) return;
     handledRevealRequestRef.current = request;
-    setExpandedByKey((current) => ({
-      ...current,
-      [matchingDirectory.key]: true,
-    }));
-
-    const selectedThread = threadsByKey.get(selectedItemKey);
-    if (!selectedThread) {
-      return;
-    }
-
-    const directoryThreadKeys = new Set([...threadsByKey.values()].filter((thread) => thread.linkedDirectories.some((linked) => classifyDirectory(linked).key === matchingDirectory.key)).map(threadSummaryIdentityKey));
-    let topLevelThread = selectedThread;
-    const visited = new Set<string>();
-    while (topLevelThread.parentThreadId) {
-      const parentKey = resolveThreadParentKey(topLevelThread, threadsByKey);
-      if (!parentKey) {
-        break;
-      }
-      if (visited.has(parentKey) || !directoryThreadKeys.has(parentKey)) {
-        break;
-      }
-      visited.add(parentKey);
-      const parent = threadsByKey.get(parentKey);
-      if (!parent) {
-        break;
-      }
-      topLevelThread = parent;
-    }
-
-    if (isPinnedThread(topLevelThread)) {
-      return;
-    }
+    setExpandedByKey((current) => ({ ...current, [matchingDirectory.key]: true }));
+    if (rootEntry.row.pinnedRank !== undefined) return;
 
     // The selected child is rendered with its top-level ancestor. Reveal that
     // ancestor through the pinned/unpinned disclosure and its owner page.
@@ -1061,15 +1041,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
     // Reveal the exact ancestor at an explicit owner cursor anchor, including off-page pins.
     const resourceId = `directory:${matchingDirectory.key}`;
-    const rootIdentity = { backend: topLevelThread.source, threadId: topLevelThread.id,
-      ownerInstanceId: topLevelThread.federation?.ref.target.scope === "remote" ? topLevelThread.federation.ref.target.instanceId : undefined };
-    void props.pagedNavigation?.rebaseline(resourceId, { kind: "thread", ref: rootIdentity });
+    void props.pagedNavigation?.rebaseline(resourceId, { kind: "thread", ref: rootEntry.row.ref });
 
   }, [
     handledRevealRequestRef,
     setExpandedByKey,
     revealSelectedThreadRequest,
     selectedItemKeyForReveal,
+    props.pagedNavigation,
     setDirectoryThreadsCollapsed,
     threadsByKey,
     visibleDirectories,
@@ -1282,7 +1261,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               ) : null,
               ];
             })}
-            {childResources.map((childResource) => (
+            {childResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((childResource) => (
               <Fragment key={childResource.id}>
                 {childResource.state.error ? <p role="alert">{childResource.state.error}</p> : null}
                 {childResource.loading && !childResource.state.page ? <p>Loading sub-threads…</p> : null}

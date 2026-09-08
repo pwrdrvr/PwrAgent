@@ -7,12 +7,14 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
 const STABILITY_SAMPLE_COUNT = 8;
 const STABILITY_SAMPLE_INTERVAL_MS = 125;
 
-async function collectScrollSamples(locator: Locator) {
+async function collectScrollSamples(locator: Locator, bottom = false) {
   const values: number[] = [];
 
   for (let index = 0; index < STABILITY_SAMPLE_COUNT; index += 1) {
     values.push(
-      await locator.evaluate((element) => Math.round(element.scrollTop))
+      await locator.evaluate((element, measureBottom) => Math.round(measureBottom
+        ? Math.max(element.scrollHeight - element.clientHeight - element.scrollTop, 0)
+        : element.scrollTop), bottom)
     );
 
     if (index < STABILITY_SAMPLE_COUNT - 1) {
@@ -160,8 +162,10 @@ test("opens a long transcript without drift and restores saved scroll positions 
         initialMetrics.maxScrollTop - initialMetrics.scrollTop
       ).toBeLessThanOrEqual(4);
 
-      const initialSeries = await collectScrollSamples(list);
-      expectStableSeries(initialSeries, "long-thread initial open");
+      // Hydrated rows can change total height after the final message mounts.
+      // At the bottom the invariant is alignment, not an absolute scrollTop.
+      const initialSeries = await collectScrollSamples(list, true);
+      expect(Math.max(...initialSeries), `Bottom offsets: ${initialSeries.join(", ")}`).toBeLessThanOrEqual(1);
     });
 
     const savedTopViewport = await test.step(

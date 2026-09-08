@@ -1,3 +1,4 @@
+import { useStarMapForeground } from "./useStarMapForeground";
 import {
   memo,
   useCallback,
@@ -24,6 +25,7 @@ import {
   type NavigationThreadSummary,
   type StarMapWorkspaceAnchor,
 } from "@pwragent/shared";
+import { useStarMapProjectPages, starMapProjectResource } from "./useStarMapProjectPages";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { SearchIcon } from "../../icons";
@@ -89,6 +91,7 @@ import {
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
+  threadProjectKey,
   projectThreadOwner,
 } from "./star-map-projects";
 import {
@@ -457,6 +460,7 @@ type StarMapScreenProps = {
  * see what needs review.
  */
 export function StarMapScreen(props: StarMapScreenProps) {
+  const active = useStarMapForeground();
   const layerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -464,7 +468,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // The two always-on readouts the edge arrows have to route around.
   const keyHintRef = useRef<HTMLDivElement>(null);
   const selectionBarRef = useRef<HTMLDivElement>(null);
-  const { health } = useFederationHealth({ desktopApi: props.desktopApi });
+  const { health } = useFederationHealth({ desktopApi: props.desktopApi, enabled: active, suspended: !active });
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   const [filterSelection, setFilterSelection] =
     useState<StarMapFilterSelection>(() => readStoredFilterSelection());
@@ -1100,6 +1104,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const localFeed = useLocalStarMapThreads({
     desktopApi: props.desktopApi,
     enabled: localRowsAreOwnerMatched,
+    active,
     filters: filterSelection,
     demandedIdentities: demandedLocalIdentities,
   });
@@ -1108,11 +1113,36 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const remote = useStarMapThreads({
     desktopApi: props.desktopApi,
     peers,
-    enabled: true,
+    enabled: active,
     demandedIdentitiesByInstance,
     filters: filterSelection,
     refreshNonce: remoteRefreshNonce,
   });
+  const projectDescriptorsByInstance = useMemo(() => {
+    const descriptors = new Map(remote.directoriesByInstance);
+    if (localRowsAreOwnerMatched) descriptors.set(localInstanceId, localFeed.directories);
+    return descriptors;
+  }, [remote.directoriesByInstance, localFeed.directories, localInstanceId, localRowsAreOwnerMatched]);
+  const projectPages = useStarMapProjectPages({
+    desktopApi: props.desktopApi, enabled: orbitMode || projectsMode, active,
+    localInstanceId, descriptors: projectDescriptorsByInstance, filters: filterSelection,
+  });
+  useEffect(() => {
+    const error = projectPages.state.admissionError
+      ?? [...projectPages.state.resources.values()].find((resource) => resource.state.error)?.state.error;
+    if (error) setCardError(error);
+  }, [projectPages.state]);
+  const projectThreadsByInstance = useMemo(() => {
+    const result = new Map<string, NavigationThreadSummary[]>();
+    for (const resource of projectPages.state.resources.values()) {
+      const target = resource.state.request.federationTarget;
+      const owner = target?.scope === "remote" ? target.instanceId : localInstanceId;
+      const threads = result.get(owner) ?? [];
+      threads.push(...(resource.state.page?.entries ?? []).map((entry) => entry.row));
+      result.set(owner, threads);
+    }
+    return result;
+  }, [projectPages.state, localInstanceId]);
   const draftIndicatorThreads = useMemo(() => [
     ...localThreads, ...[...remote.threadsByInstance.values()].flat(),
   ], [localThreads, remote.threadsByInstance]);
@@ -1181,6 +1211,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const instanceLoads = useStarMapInstanceLoad({
     desktopApi: props.desktopApi,
     instanceIds: loadCardInstanceIds,
+    active,
   });
   const toggleLoadCard = useCallback(
     (instanceId: string) => {
@@ -1259,7 +1290,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       withLocalEdits(
         selectFilteredThreads({
           ownerMatched: localRowsAreOwnerMatched,
-          threads: localThreads.filter(
+          threads: [...new Map([...localThreads, ...(projectThreadsByInstance.get(localInstanceId) ?? [])]
+            .map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread])).values()].filter(
             (thread) =>
               !thread.federation
               || !isRemoteFederationTarget(thread.federation.ref.target),
@@ -1275,7 +1307,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
         instanceId,
         withLocalEdits(
           selectFilteredThreads({
-            threads,
+            threads: [...new Map([...threads, ...(projectThreadsByInstance.get(instanceId) ?? [])]
+              .map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread])).values()],
             ownerMatched: true,
             selection: filterSelection,
             // Peers get the session keys too. Withholding them dropped
@@ -1322,6 +1355,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [
     archivedThreadKeys,
     filterSelection,
+    projectThreadsByInstance,
     localInstanceId,
     localThreads,
     localRowsAreOwnerMatched,
@@ -1415,7 +1449,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         }
       }
       const cloud = computeClusterCloud({
-        clusters: buildInstanceClusters({ threads, expandedKeys }),
+        clusters: buildInstanceClusters({ threads, expandedKeys, descriptors: projectDescriptorsByInstance.get(instanceId) }),
         cardWidth: ORBIT_CARD_WIDTH,
         heightForThread: (threadKey) =>
           cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
@@ -1430,7 +1464,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       clouds.set(instanceId, cloud);
     }
     return clouds;
-  }, [attentionByInstance, cardHeights, expandedClusters, orbitMode]);
+  }, [attentionByInstance, cardHeights, expandedClusters, orbitMode, projectDescriptorsByInstance]);
 
   /**
    * The anchor a hand-placed card's stored offset is measured from in the
@@ -1517,24 +1551,30 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [toggleClusterExpandedIn],
   );
 
-  const projectDescriptorsByInstance = useMemo(() => {
-    const descriptors = new Map(remote.directoriesByInstance);
-    if (localRowsAreOwnerMatched) descriptors.set(localInstanceId, localFeed.directories);
-    return descriptors;
-  }, [remote.directoriesByInstance, localFeed.directories, localInstanceId, localRowsAreOwnerMatched]);
   const projectPageOwners = useMemo(() => {
     const owners = new Map<string, string[]>();
     for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
-      const hasMore = instanceId === localInstanceId ? localFeed.hasMore : remote.hasMoreInstanceIds.has(instanceId);
-      if (!hasMore || remote.unreachableInstanceIds.has(instanceId)) continue;
+      if (remote.unreachableInstanceIds.has(instanceId)) continue;
       for (const descriptor of descriptors) {
+        if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.page?.nextCursor) continue;
         const instances = owners.get(descriptor.key) ?? [];
         if (!instances.includes(instanceId)) instances.push(instanceId);
         owners.set(descriptor.key, instances);
       }
     }
     return owners;
-  }, [projectDescriptorsByInstance, localInstanceId, localFeed.hasMore, remote.hasMoreInstanceIds, remote.unreachableInstanceIds]);
+  }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
+  const projectRecoveryOwners = useMemo(() => {
+    const owners = new Map<string, string[]>();
+    for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
+      if (remote.unreachableInstanceIds.has(instanceId)) continue;
+      for (const descriptor of descriptors) {
+        if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.rebaselineRequired) continue;
+        owners.set(descriptor.key, [...owners.get(descriptor.key) ?? [], instanceId]);
+      }
+    }
+    return owners;
+  }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
   const [projectGeometryTime] = useState(Date.now);
   const projects = useMemo(
     () => groupThreadsByProject(attentionByInstance, { summonedKeys, now: projectGeometryTime,
@@ -4607,34 +4647,46 @@ export function StarMapScreen(props: StarMapScreenProps) {
               ) : null}
               <span className="star-map__cluster-name">{cluster.label}</span>
               <span className="star-map__cluster-count">
-                {cluster.threads.length}
+                {cluster.totalCount ?? cluster.threads.length}
               </span>
             </button>
           );
         })}
-        {position.clusters?.map((cluster) =>
-          cluster.overflowSlot ? (
+        {position.clusters?.map((cluster) => {
+          const projectKey = cluster.isParentGroup && cluster.threads[0]
+            ? threadProjectKey(cluster.threads[0]) : cluster.key;
+          const resourceId = starMapProjectResource(position.instanceId, projectKey);
+          const resource = projectPages.state.resources.get(resourceId);
+          const hasMore = Boolean(resource?.state.page?.nextCursor);
+          const needsRestart = resource?.state.rebaselineRequired === true;
+          const actionSlot = cluster.overflowSlot ?? (needsRestart
+            ? { dx: cluster.labelSlot.dx, dy: cluster.labelSlot.dy + 28 } : undefined);
+          if (!actionSlot || (!needsRestart && !hasMore && cluster.overflow === 0 && !cluster.expandable)) return null;
+          return (
             <button
               key={`cluster-overflow:${cluster.key}`}
               type="button"
               className="star-map__cluster-overflow"
-              style={{
-                left: cluster.overflowSlot.dx,
-                top: cluster.overflowSlot.dy,
+              style={{ left: actionSlot.dx, top: actionSlot.dy }}
+              disabled={resource?.loading}
+              aria-label={needsRestart ? `Restart ${cluster.label} threads` : hasMore ? `Load more ${cluster.label} threads`
+                : cluster.overflow > 0 ? `Show ${cluster.overflow} more ${cluster.label} threads` : `Show fewer ${cluster.label} threads`}
+              onClick={() => {
+                if (needsRestart) {
+                  void projectPages.controller.restart(resourceId);
+                } else if (hasMore) {
+                  setExpandedClusters((current) => new Set([...current, `${position.instanceId}::${cluster.key}`]));
+                  const first = resource?.state.page?.entries[0]?.row.ref;
+                  if (first) projectPages.controller.setVisibleAnchor(resourceId, { kind: "thread", ref: first });
+                  void projectPages.controller.loadMore(resourceId);
+                } else toggleClusterExpanded(position.instanceId, cluster.key);
               }}
-              aria-label={
-                cluster.overflow > 0
-                  ? `Show ${cluster.overflow} more ${cluster.label} threads`
-                  : `Show fewer ${cluster.label} threads`
-              }
-              onClick={() =>
-                toggleClusterExpanded(position.instanceId, cluster.key)
-              }
             >
-              {cluster.overflow > 0 ? `+${cluster.overflow} more` : "Show fewer"}
+              {resource?.loading ? "Loading…" : needsRestart ? "Restart threads" : hasMore ? "Load more"
+                : cluster.overflow > 0 ? `+${cluster.overflow} more` : "Show fewer"}
             </button>
-          ) : null,
-        )}
+          );
+        })}
       </div>
     );
   };
@@ -4928,10 +4980,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     label={project.label}
                     projectKey={project.key}
                     threadCount={project.totalThreadCount ?? project.threads.length}
+                    onRestartThreads={projectRecoveryOwners.has(project.key)
+                      ? () => { for (const owner of projectRecoveryOwners.get(project.key)!) {
+                        void projectPages.controller.restart(starMapProjectResource(owner, project.key));
+                      } } : undefined}
                     onLoadMoreThreads={projectPageOwners.has(project.key)
-                      ? () => { for (const owner of projectPageOwners.get(project.key)!) loadMoreOwnerThreads(owner); }
+                      ? () => { for (const owner of projectPageOwners.get(project.key)!) {
+                        const id = starMapProjectResource(owner, project.key);
+                        const first = projectPages.state.resources.get(id)?.state.page?.entries[0]?.row.ref;
+                        if (first) projectPages.controller.setVisibleAnchor(id, { kind: "thread", ref: first });
+                        void projectPages.controller.loadMore(id);
+                      } }
                       : undefined}
-                    loadingThreads={projectPageOwners.get(project.key)?.some((owner) => loadingThreadInstances.has(owner))}
+                    loadingThreads={(projectRecoveryOwners.get(project.key) ?? projectPageOwners.get(project.key))?.some((owner) =>
+                      projectPages.state.resources.get(starMapProjectResource(owner, project.key))?.loading)}
                     // In overview the body is the only thing naming the
                     // project, so it counter-scales to stay readable —
                     // the same treatment instance bodies get.
@@ -5116,6 +5178,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           const cardZ = STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key);
           return (
             <StarMapChatCard
+              active={active}
               key={card.key}
               cardKey={card.key}
               composerDraftStore={props.composerDraftStore}

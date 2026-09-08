@@ -23,6 +23,9 @@ const EVENT_REFRESH_DELAY_MS = 250;
 
 type RetainedPeerQuery = {
   attentionBytes: number;
+  ownerEpoch: string;
+  countsRevision: string;
+  selectionKey: string;
   rangeStart: number;
   attentionThreads: NavigationThreadSummary[];
   completeRevision?: string;
@@ -157,6 +160,8 @@ export function useStarMapThreads(params: {
   refreshNonce?: number;
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
+  const enabledRef = useRef(params.enabled);
+  enabledRef.current = params.enabled;
   const viewId = useId();
   const nextQueryConsumer = useRef(0);
   const queryConsumers = useRef(new Map<string, string>());
@@ -225,11 +230,18 @@ export function useStarMapThreads(params: {
       if (ownerGeneration === undefined) throw new Error("This owner is not connected with navigation query protocol 2.");
       const isCurrent = () => generationRef.current === generation && ownerGenerations.current.get(instanceId) === ownerGeneration;
       attentionOwnersRef.current.add(instanceId);
-      const previous = stateRef.current.queriesByInstance.get(instanceId);
+      const request = attentionRequest({ instanceId, filters, attentionView });
+      const selectionKey = JSON.stringify(request.query);
+      const cached = stateRef.current.queriesByInstance.get(instanceId);
+      const previous = cached?.selectionKey === selectionKey ? cached : undefined;
       const rows = withQueryConsumer(instanceId, (consumerId) => desktopApi.getNavigationQueryPage!({
-        ...attentionRequest({ instanceId, filters, attentionView }),
+        ...request,
         deadlineAt,
         completeBaselineRevision: previous?.completeRevision,
+        ...(previous?.attentionThreads.length ? { retainedRange: {
+          revision: previous.countsRevision, ownerEpoch: previous.ownerEpoch,
+          start: previous.rangeStart, count: previous.attentionThreads.length,
+        } } : {}),
       }, consumerId)).then((page) => {
         if (!isCurrent()) return;
         if (Date.now() >= deadlineAt) throw new Error("Navigation refresh exceeded its deadline. Refresh this owner again.");
@@ -241,11 +253,15 @@ export function useStarMapThreads(params: {
         setState((current) => {
           const queriesByInstance = new Map(current.queriesByInstance);
           const retained = queriesByInstance.get(instanceId);
+          const rangeStart = page.unchanged ? retained?.rangeStart ?? 0 : page.rangeStart ?? 0;
           queriesByInstance.set(instanceId, {
             attentionBytes,
-            rangeStart: page.rangeStart ?? 0,
+            ownerEpoch: page.ownerEpoch,
+            countsRevision: page.countsRevision,
+            selectionKey,
+            rangeStart,
             attentionThreads: page.unchanged ? retained?.attentionThreads ?? [] : mergeEntries([], page.entries),
-            completeRevision: page.complete ? page.countsRevision : undefined,
+            completeRevision: page.complete && rangeStart === 0 ? page.countsRevision : undefined,
             counts: page.counts,
             countsReady: page.coverage.state === "complete",
             facets: page.facets,
@@ -326,6 +342,7 @@ export function useStarMapThreads(params: {
 
   const refreshInstance = useCallback(
     async (instanceId: string): Promise<void> => {
+      if (!enabledRef.current) return;
       const generation = generationRef.current;
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       const deadlineAt = Date.now() + 10_000;
@@ -349,6 +366,7 @@ export function useStarMapThreads(params: {
     async (instanceId: string): Promise<void> => {
       const retained = stateRef.current.queriesByInstance.get(instanceId);
       if (!desktopApi?.getNavigationQueryPage || !retained?.nextCursor) return;
+      if (!enabledRef.current) return;
       const generation = generationRef.current;
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       if (ownerGeneration === undefined) return;
@@ -384,6 +402,8 @@ export function useStarMapThreads(params: {
         queriesByInstance.set(instanceId, {
           ...existing,
           attentionBytes,
+          ownerEpoch: page.ownerEpoch,
+          countsRevision: page.countsRevision,
           rangeStart: rebaseline ? page.rangeStart ?? 0 : existing.rangeStart,
           completeRevision: page.complete && (rebaseline ? page.rangeStart ?? 0 : existing.rangeStart) === 0 ? page.countsRevision : undefined,
           counts: page.counts,

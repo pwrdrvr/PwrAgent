@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import type { NavigationDirectoryRow, NavigationQueryPage, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
 import { Sidebar } from "../Sidebar";
 import { buildPagedDirectoryPresentation } from "../paged-directory-presentation";
+import { visibleDisclosedNavigationParents } from "../../../lib/navigation-window-demand";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 
@@ -108,4 +109,83 @@ it("reveals a selected multi-project pin only in its owner-reported home", () =>
   // An exact row without authoritative placement must not infer a home from links.
   exact.state.page!.selectionDirectory = undefined;
   expect(visible()).toEqual([[], [], []]);
+});
+
+
+it("reveals an off-page selected child under its exact pinned ancestor and demands siblings", () => {
+  const parent = { ...rows[0]!, ordinaryChildCount: 25 };
+  const child = { ...rows[1]!, id: "new-child", title: "New child", parentThreadId: parent.id,
+    ref: { backend: "codex" as const, threadId: "new-child" } };
+  const pinId = `directory-pins:${directory.key}`;
+  const pins = resource(pinId, { kind: "directory", directoryKey: directory.key, roots: "pinned" }, {
+    complete: false, nextCursor: "more", entries: [],
+  });
+  const exact = resource("selected-context", { kind: "exact", identities: [child.ref], includeAncestry: true }, {
+    selectionDirectory: directory, entries: [
+      { row: parent, placement: { kind: "root" }, orderKey: "root" },
+      { row: child, placement: { kind: "child", parent: parent.ref }, orderKey: "child" },
+    ],
+  });
+  const resources = new Map([[pinId, pins], ["selected-context", exact]]);
+  const threadsByKey = new Map([parent, child].map((row) => [`codex:${row.id}`, row]));
+  const model = buildPagedDirectoryPresentation({ directory, resources, threadsByKey });
+  expect(model.directoryPinnedThreads.map((row) => row.id)).toEqual([parent.id]);
+  expect(model.childThreadsByParentKey.get(`codex:${parent.id}`)?.map((row) => row.id)).toEqual([child.id]);
+  expect(visibleDisclosedNavigationParents({ collectionIds: resources.keys(),
+    pages: new Map([...resources].map(([id, value]) => [id, value.state.page!])), disclosedParents: [parent.ref],
+  })).toEqual([parent.ref]);
+  expect(pins.state.page?.entries).toEqual([]);
+  expect(pins.state.page?.nextCursor).toBe("more");
+});
+
+
+it("breadcrumb reveal uses exact owner ancestry even when loaded summaries lack directory links", () => {
+  const parent = { ...rows[0]!, pinnedRank: undefined, linkedDirectories: [], ordinaryChildCount: 1 };
+  const child = { ...rows[1]!, pinnedRank: undefined, parentThreadId: parent.id };
+  const rootId = `directory:${directory.key}`;
+  const exact = resource("selected-context", { kind: "exact", identities: [child.ref], includeAncestry: true }, {
+    selectionDirectory: directory, entries: [
+      { row: parent, placement: { kind: "root" }, orderKey: "root" },
+      { row: child, placement: { kind: "child", parent: parent.ref }, orderKey: "child" },
+    ],
+  });
+  const resources = new Map([["selected-context", exact], [rootId,
+    resource(rootId, { kind: "directory", directoryKey: directory.key, roots: "unpinned" }, {})]]);
+  const rebaseline = vi.fn(async () => undefined);
+  const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
+    invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+    rebaseline, restart: async () => undefined, setVisibleAnchor: () => undefined };
+  const view = render(<Sidebar backends={[]} browseMode="directories" directories={[directory]} threads={[parent, child]}
+    loading={false} selectedItemKey={`codex:${child.id}`} selectedThreadDirectoryKeys={[directory.key]}
+    revealSelectedThreadRequest={1} pagedNavigation={navigation}
+    onBrowseModeChange={() => undefined} onSelectThread={() => undefined} onCreateThread={async () => undefined}
+    onOpenLaunchpad={async () => undefined} onSetThreadPin={async () => undefined} />);
+  expect(rebaseline).toHaveBeenCalledWith(rootId, { kind: "thread", ref: parent.ref });
+  view.unmount();
+});
+
+
+it.each(["directories", "inbox"] as const)("keeps expected disconnected child-page failures out of the %s thread list", (browseMode) => {
+  const parent = { ...rows[0]!, ordinaryChildCount: 1 };
+  const childId = 'children:[null,"codex","pin-5"]';
+  const children = resource(childId, { kind: "children", parent: parent.ref }, {});
+  children.state.page = undefined;
+  children.state.error = "Federation peer pwr_offline is not connected.";
+  const pinsId = `directory-pins:${directory.key}`;
+  const resources = new Map([[childId, children], [pinsId, resource(pinsId,
+    { kind: "directory", directoryKey: directory.key, roots: "pinned" },
+    { entries: [{ row: parent, placement: { kind: "root" }, orderKey: "0" }] })]]);
+  resources.set("lens", resource("lens", { kind: "lens", lens: "inbox" }, {
+    entries: [{ row: parent, placement: { kind: "root" }, orderKey: "0" }],
+  }));
+  const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
+    invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+    rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
+  const view = render(<Sidebar backends={[]} browseMode={browseMode} directories={[directory]} threads={[parent]}
+    loading={false} selectedItemKey={`codex:${parent.id}`} selectedThreadDirectoryKeys={[directory.key]}
+    pagedNavigation={navigation} onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+    onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
+  expect(screen.queryByText(/Federation peer.*not connected/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Pin 5/ })).toBeInTheDocument();
+  view.unmount();
 });

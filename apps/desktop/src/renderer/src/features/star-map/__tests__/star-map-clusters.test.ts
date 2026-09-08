@@ -1,3 +1,4 @@
+import { classifyDirectory } from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
@@ -45,6 +46,21 @@ function thread(
 const height = () => 112;
 
 describe("buildInstanceClusters", () => {
+  it("keeps all compact project clouds and continuation when cards have not arrived", () => {
+    const descriptors = Array.from({ length: 15 }, (_, index) => ({
+      key: classifyDirectory({ id: `dir-${index}`, kind: "local", path: `/repo/project-${index}`, label: `project-${index}` }).key, kind: "directory" as const, label: `project-${index}`,
+      counts: { total: 23, active: 0, unread: 0, review: 0 },
+      pinnedRootCount: 0, unpinnedRootCount: 23, launchpadPresent: false,
+    }));
+    const clusters = buildInstanceClusters({ threads: [thread("first", { path: "/repo/project-0" })], descriptors });
+    const cloud = computeClusterCloud({ clusters, cardWidth: 240, heightForThread: height });
+    expect(cloud.clusters).toHaveLength(15);
+    expect(cloud.clusters.every((cluster) => !cluster.chromeless)).toBe(true);
+    expect(cloud.clusters.every((cluster) => cluster.totalCount === 23)).toBe(true);
+    expect(cloud.clusters.every((cluster) => cluster.overflowSlot !== undefined)).toBe(true);
+    expect(cloud.threads).toHaveLength(1);
+  });
+
   it("groups threads by project and keeps within-group order", () => {
     const clusters = buildInstanceClusters({
       threads: [

@@ -1,6 +1,7 @@
 import {
   buildThreadIdentityKey,
   type NavigationThreadSummary,
+  type NavigationDirectoryRow,
 } from "@pwragent/shared";
 import {
   STAR_MAP_ESTIMATED_CARD_HEIGHT,
@@ -92,6 +93,8 @@ export type StarMapClusterSpec = {
   /** Full ordered membership; the first `visibleCount` render. */
   threads: NavigationThreadSummary[];
   visibleCount: number;
+  /** Complete compact membership, independent of hydrated cards. */
+  totalCount?: number;
   overflow: number;
   expanded: boolean;
   /** Whether the expand chip has anything to do. */
@@ -215,10 +218,12 @@ export function orderParentAdjacent(
  */
 export function buildInstanceClusters(params: {
   threads: readonly NavigationThreadSummary[];
+  descriptors?: readonly NavigationDirectoryRow[];
   /** Cluster keys the operator expanded past the per-group cap. */
   expandedKeys?: ReadonlySet<string>;
 }): StarMapClusterSpec[] {
-  const buckets = new Map<string, NavigationThreadSummary[]>();
+  const descriptors = new Map(params.descriptors?.map((descriptor) => [descriptor.key, descriptor]));
+  const buckets = new Map<string, NavigationThreadSummary[]>([...descriptors.keys()].map((key) => [key, []]));
   for (const thread of params.threads) {
     const key = threadProjectKey(thread);
     const members = buckets.get(key);
@@ -239,7 +244,8 @@ export function buildInstanceClusters(params: {
     const ordered = orderParentAdjacent(members);
     const present = new Set(members.map(threadKeyOf));
     const isProject = bucketKey !== STAR_MAP_NO_PROJECT_KEY;
-    const bucketLabel = threadProjectLabel(members[0]);
+    const descriptor = descriptors.get(bucketKey);
+    const bucketLabel = descriptor?.label ?? threadProjectLabel(members[0]);
 
     // Root parents: threads with children in this bucket whose own
     // parent is absent (or self/cyclic). `ordered` is DFS, so a root's
@@ -287,7 +293,7 @@ export function buildInstanceClusters(params: {
       rest.push(thread);
       index += 1;
     }
-    if (rest.length > 0) {
+    if (rest.length > 0 || descriptor) {
       drafts.push({
         key: bucketKey,
         label: bucketLabel,
@@ -312,6 +318,10 @@ export function buildInstanceClusters(params: {
       isParentGroup: draft.isParentGroup,
       threads: draft.threads,
       visibleCount,
+      totalCount: draft.isParentGroup ? draft.threads.length : Math.max(draft.threads.length,
+        (descriptors.get(draft.key)?.counts.total ?? draft.threads.length)
+          - drafts.filter((group) => group.isParentGroup && group.key.startsWith(`${draft.key}::pc:`))
+            .reduce((sum, group) => sum + group.threads.length, 0)),
       overflow: draft.threads.length - visibleCount,
       expanded,
       expandable: draft.threads.length > ORBIT_MAX_CARDS_PER_GROUP,
@@ -660,8 +670,9 @@ export function computeClusterCloud(params: {
       (top, seat) => Math.max(top, seat),
       -1,
     );
+    const geometrySeat = Math.max(highestSeat, Math.min(spec.totalCount ?? 0, ORBIT_MAX_CARDS_PER_GROUP) - 1);
     const needed =
-      highestSeat < 0 ? 0 : seatAddress(highestSeat, params.cardWidth).ring;
+      geometrySeat < 0 ? 0 : seatAddress(geometrySeat, params.cardWidth).ring;
     // Grow-only: an outermost card leaving must not pull the cloud in and
     // shove its neighbours around. Collapsing the cloud is the operator's
     // call and drops this one entry (see `refitCluster`).
@@ -760,10 +771,11 @@ export function computeClusterCloud(params: {
       clusterIndexByCard.push(index);
     });
     const chromeless =
-      cluster.spec.threads.length === 1
+      (cluster.spec.totalCount ?? cluster.spec.threads.length) === 1
       || (sized.length === 1 && !cluster.spec.isProject);
     const showChip =
-      cluster.spec.overflow > 0
+      (cluster.spec.totalCount ?? 0) > cluster.spec.threads.length
+      || cluster.spec.overflow > 0
       || (cluster.spec.expanded && cluster.spec.expandable);
     clusters.push({
       ...cluster.spec,

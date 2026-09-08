@@ -169,6 +169,38 @@ describe("ThreadRow chip flow", () => {
     return { ...utils, onSelectThread, onUnbindMessagingBinding, onSetReaction };
   }
 
+  it("finishes an existing row reveal after its layout scroll and cancels a superseded reveal", () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+    const scroll = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scroll });
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const completed = vi.fn(() => expect(scroll).toHaveBeenCalledTimes(2));
+    const props = { thread: baseThread, selectedThreadKey: "codex:thread-chips", onSelectThread: vi.fn(),
+      onOpenContextMenu: vi.fn(), onRevealSelectedThreadComplete: completed };
+    const view = render(<ThreadRow {...props} />);
+    try {
+      scroll.mockClear();
+      view.rerender(<ThreadRow {...props} revealSelectedThreadRequest={1} />);
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(completed).not.toHaveBeenCalled();
+      act(() => frames[0]!(0));
+      expect(completed).toHaveBeenCalledWith(1);
+      view.rerender(<ThreadRow {...props} revealSelectedThreadRequest={2} />);
+      view.unmount();
+      expect(cancel).toHaveBeenCalledWith(2);
+      expect(completed).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      if (original) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", original);
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+    }
+  });
+
   it("renders content chips as siblings inside a single .thread-row__chips container", () => {
     const { container } = renderRow();
     const chipFlow = container.querySelectorAll(".thread-row__chips");

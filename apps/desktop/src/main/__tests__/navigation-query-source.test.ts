@@ -52,6 +52,10 @@ describe("owner index source event admission", () => {
     const [a, b] = await Promise.all([first, second]);
     expect(source.listThreads).toHaveBeenCalledTimes(1);
     expect(a).toBe(b);
+    expect(await source.read()).toBe(a);
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+    expect(source.listeners.size).toBe(1);
+    source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
   });
 
@@ -66,6 +70,8 @@ describe("owner index source event admission", () => {
     const [a, b] = await Promise.all([first, second]);
     expect(source.listThreads).toHaveBeenCalledTimes(2);
     expect(a).not.toBe(b);
+    expect(source.listeners.size).toBe(1);
+    source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
   });
 });

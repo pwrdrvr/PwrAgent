@@ -4518,6 +4518,128 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("does not copy attachments between historical messages with identical captions", async () => {
+    const earlier = { type: "message" as const, id: "earlier", role: "user" as const, text: "same caption", createdAt: 1000,
+      parts: [{ type: "image" as const, url: "file:///old-a.png" }, { type: "image" as const, url: "file:///old-b.png" }] };
+    const later = { ...earlier, id: "later", createdAt: 2000, parts: [{ type: "image" as const, url: "file:///new.png" }] };
+    let entries = [earlier];
+    const desktopApi: DesktopApi = { readThread: vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", fetchedAt: Date.now(),
+      replay: { entries, messages: entries, pagination: { supportsPagination: false, hasPreviousPage: false } } })) };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 3000 }) }));
+    await waitForThreadHydration(result);
+    entries = [earlier, later];
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.entries.find((entry) => entry.id === "later")).toMatchObject({ parts: later.parts });
+  });
+
+  it("does not guess which repeated-caption message belongs to an optimistic image send", async () => {
+    const messages = ["first", "second"].map((id) => ({ type: "message" as const, id, role: "user" as const,
+      text: "same caption", createdAt: 2000, parts: [{ type: "image" as const, url: `file:///${id}.png` }] }));
+    const desktopApi: DesktopApi = { readThread: vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", fetchedAt: Date.now(),
+      replay: { entries: messages, messages, pagination: { supportsPagination: false, hasPreviousPage: false } } })) };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread: { ...buildThread({ id: "thread-1", updatedAt: 3000 }),
+      optimisticUserMessage: { text: "same caption", createdAt: 1000,
+        imageParts: [{ type: "image", url: "file:///send-a.png" }, { type: "image", url: "file:///send-b.png" }] } } }));
+    await waitForThreadHydration(result);
+    for (const message of messages) expect(result.current.entries.find((entry) => entry.id === message.id)).toMatchObject({ parts: message.parts });
+  });
+
+  it("preserves both GIF and PNG while an active-turn refresh echoes only the GIF", async () => {
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => {
+        return {
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: "hydrated-user",
+                role: "user" as const,
+                text: "what's in this?",
+                parts: [{ type: "image" as const, url: "file:///tmp/echo.gif" }],
+                createdAt: 2_000,
+              },
+              {
+                type: "message" as const,
+                id: "assistant-final",
+                role: "assistant" as const,
+                phase: "commentary" as const,
+                text: "It is a screenshot of PwrAgent.",
+                createdAt: 3_000,
+              },
+            ],
+            messages: [
+              {
+                id: "hydrated-user",
+                role: "user" as const,
+                text: "what's in this?",
+                parts: [{ type: "image" as const, url: "file:///tmp/echo.gif" }],
+                createdAt: 2_000,
+              },
+              {
+                id: "assistant-final",
+                role: "assistant" as const,
+                text: "It is a screenshot of PwrAgent.",
+                createdAt: 3_000,
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        };
+      }
+    );
+    const desktopApi: DesktopApi = { readThread };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 3_000 }),
+          threadStatus: "active",
+          optimisticUserMessage: {
+            text: "what's in this?",
+            createdAt: 1_000,
+            imageParts: [{ type: "image", url: "data:image/gif;base64,R0lG" }, { type: "image", url: "data:image/png;base64,AQID" }],
+          },
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        "user:what's in this?",
+        "assistant:It is a screenshot of PwrAgent.",
+      ]);
+    });
+    const [userEntry] = result.current.entries;
+    expect(userEntry).toMatchObject({
+      type: "message",
+      role: "user",
+      text: "what's in this?",
+      parts: [
+        { type: "text", text: "what's in this?" },
+        { type: "image", url: "data:image/gif;base64,R0lG" },
+        { type: "image", url: "data:image/png;base64,AQID" },
+      ],
+    });
+  });
+
   it("materializes completed steer user messages in the transcript", async () => {
     let agentEventHandler:
       | ((event: {

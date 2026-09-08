@@ -1,3 +1,4 @@
+import "./foreground-fixture";
 import {
   fireEvent,
   render,

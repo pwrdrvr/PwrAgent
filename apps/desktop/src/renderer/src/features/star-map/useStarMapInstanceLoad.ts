@@ -15,7 +15,7 @@ export const STAR_MAP_LOAD_POLL_INTERVAL_MS = 8_000;
  * Two deliberate properties:
  * - The poll set is driven by card membership, so closing a card stops its
  *   queries — there is no background load traffic for an unwatched peer.
- * - Polling pauses while the document is hidden. A backgrounded map must not
+ * - Polling pauses while the map is inactive (unfocused or hidden). A backgrounded map must not
  *   keep waking peers, and a reading taken while you were away is not worth
  *   the round trip.
  *
@@ -28,6 +28,7 @@ export function useStarMapInstanceLoad(params: {
   /** Instance ids with a load card on the map. */
   instanceIds: readonly string[];
   intervalMs?: number;
+  active?: boolean;
 }): Map<string, FederationLoadStatus> {
   const { desktopApi } = params;
   const intervalMs = params.intervalMs ?? STAR_MAP_LOAD_POLL_INTERVAL_MS;
@@ -41,7 +42,7 @@ export function useStarMapInstanceLoad(params: {
   useEffect(() => {
     const read = desktopApi?.readFederationInstanceLoad;
     const instanceIds = instanceKey ? instanceKey.split(",") : [];
-    if (!read || instanceIds.length === 0) {
+    if (params.active === false || !read || instanceIds.length === 0) {
       return;
     }
     // Drop readings for instances whose card was closed. Without this a
@@ -75,27 +76,18 @@ export function useStarMapInstanceLoad(params: {
       );
     };
 
-    const tick = () => {
+    const tick = async () => {
       if (cancelled) return;
-      if (document.visibilityState === "visible") {
-        void sample();
-      }
-      timer = setTimeout(tick, intervalMs);
+      await sample();
+      if (!cancelled) timer = setTimeout(() => { void tick(); }, intervalMs);
     };
-    tick();
-
-    // Coming back to a visible map should not wait out the interval.
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void sample();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
+    void tick();
 
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [desktopApi, instanceKey, intervalMs]);
+  }, [desktopApi, instanceKey, intervalMs, params.active]);
 
   return loads;
 }

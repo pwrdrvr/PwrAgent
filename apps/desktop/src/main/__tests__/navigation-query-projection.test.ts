@@ -239,3 +239,20 @@ it("counts viewer children separately from cached children on a mounted parent's
   const owner = projectNavigationQuery({ index, request: request(query) });
   expect(owner.entries[0]?.row).not.toHaveProperty("viewerChildCount");
 });
+
+it("recovers a legacy handoff's omitted remote group owner from its recorded launcher", () => {
+  const launcher = thread("launcher", { parentThreadId: "root", parentThreadBackend: "codex", parentThreadInstanceId: "peer" });
+  const child = thread("handoff", { parentThreadId: "root", parentThreadBackend: "codex", handoffOrigin: {
+    sourceBackend: "codex", sourceThreadId: "launcher", seedMode: "clean", groupingMode: "subthread", createdAt: 1,
+    workspace: { mode: "none", git: { kind: "none", worktreeCreationAvailable: false, unavailableReason: "Fixture" } },
+  } });
+  const project = (threads: NavigationThreadSummary[]) => projectNavigationQuery({ index: snapshot(threads),
+    request: request({ kind: "children", parent: { backend: "codex", threadId: "root", ownerInstanceId: "peer" } }),
+  });
+  expect(project([launcher, child]).entries.map((entry) => entry.row.id).sort()).toEqual(["handoff", "launcher"]);
+  expect(project([launcher, child]).entries.find((entry) => entry.row.id === "handoff")?.row.parentThreadInstanceId).toBe("peer");
+  expect(child.parentThreadInstanceId).toBeUndefined();
+  // An actual local parent or an explicitly assigned owner is not a broken handoff.
+  expect(project([launcher, child, thread("root")]).entries.map((entry) => entry.row.id)).toEqual(["launcher"]);
+  expect(project([launcher, { ...child, parentThreadInstanceId: "other" }]).entries.map((entry) => entry.row.id)).toEqual(["launcher"]);
+});

@@ -353,3 +353,109 @@ serialization, sampled a 37,321,528-byte heap increase and reached 133,776 KiB R
 These measurements are distinct from enforced serialized-backing admission
 budgets. Sampling does not establish a bound on all V8 allocations or all
 simultaneously mounted application resources.
+
+### Star Map project continuation and transcript hydration regressions
+
+The orbit renderer now seeds every project cloud from the owner's complete compact
+geometry, including projects with no card rows loaded yet. Card discovery uses
+`star-map` queries scoped by primary `projectKey`: ten rows per project initially,
+then explicit continuation for that project. The window query controller schedules
+four reads at a time and admits 8 MiB of retained project-page backing and 1 MiB
+of request metadata across owners. It uses the existing shared main-process pool;
+each response still fits 100 records / 252 KiB. No transcript or image is fetched
+for a closed card. These are serialized backing limits, not a heap measurement.
+
+The first displayed card anchors recovery after owner cursor eviction, so loading
+another page does not discard earlier cards or prematurely exhaust continuation.
+A remote owner that returns rows outside the requested project produces an upgrade
+error instead of an incorrectly populated project. Participating owners must run
+the project-selector implementation for acceptance.
+
+The 15-project, 23-card-per-project regressions cover local and remote renderer
+paging and owner projection/stamping. The Electron regression exercises the real
+eight-generation cursor pool, three pages, and retention of all project clouds.
+These query and renderer changes introduce no SQLite writes: 0 MB/day added WAL.
+
+Transcript regressions cover exact bottom-follow through asynchronous layout and
+intentional scrolled-up restoration. A contrived partial GIF-only echo exposed a
+separate reconciliation defect: a submitted GIF+PNG presentation now survives
+until the complete authoritative image set arrives. Real Electron decoding tests
+verify both in-view thumbnails before completion and afterward. This does not
+establish that partial echo caused the operator's live missing-PNG observation;
+that live cause remains an acceptance question.
+
+Selected-child reveal uses the exact owner's ancestry, not directory membership
+in partially loaded summaries. Exact selection can supplement the displayed
+child and its pinned ancestor without replacing pin or sibling cursors. A
+supplemented pinned parent has the same bounded child-page demand as a parent
+in the loaded pin range; collapsed or unrelated collections remain excluded.
+
+Canonical collection events update the retained selected-detail collection cache
+before configuration revalidation. This prevents a fresh Token Miser subagent
+from appearing on its turn card and then being erased by the older cache while
+replacement history pages load. The isolated regression reproduces the rollback
+without HMR and verifies retention through authoritative collection completion.
+The existing collection budgets and persistence behavior are unchanged.
+
+### Star Map foreground demand
+
+Star Map is active only when its document is visible **and** has window focus.
+Blur pauses local/remote navigation, per-project pages, geometry/exact reads,
+open-chat detail/queue demand, federation health refreshes, and load-card polling.
+Cached cards and geometry remain mounted. Returning to the foreground refreshes
+retained demand once; duplicate focus/visibility events do not start extra reads.
+Attention ordering view IDs remain open until unmount (closing is terminal);
+query consumers still release on blur. Query consumer tokens change across suspended lifetimes so a delayed response or
+release cannot resurrect or cancel a successor query. Load polling schedules its
+next eight-second sample after completion and ignores samples from old lifetimes.
+
+Project invalidation uses the event owner, then an explicit directory key or a
+known card's project where available. Membership changes and unknown thread IDs
+refresh that owner's projects. A local event never refreshes remote projects.
+The sixty-second reconciliation timer runs only while the map is active.
+
+The isolated request-count fixture measures only Star Map demand, excluding
+heartbeat and ordinary navigation. With two remote owners and three projects,
+initial admission and focus restoration each make seven navigation reads (three
+project pages, two row pages, two geometry pages) plus one open load-card read.
+Thirty events during two minutes blurred-but-visible, followed by one minute
+hidden, produce zero additional map reads. Twenty coalesced events for a known
+card produce one project read plus that owner's two metadata reads; unrelated
+owners produce zero. Pending project and remote geometry responses cannot restore
+old continuations after blur/resume. These are application read counts, not live
+wire-byte measurements, and do not attribute the operator's aggregate traffic.
+No persistence was added: 0 SQLite commits and 0 MB/day additional WAL.
+
+### Physical owner scan reuse
+
+Managed-child discovery uses a connection-local `threads` change counter installed
+with TEMP triggers and a JavaScript SQLite function. The triggers write no rows;
+the counter survives rollback conservatively. `data_version` still invalidates
+for commits from other connections, including older processes. Transaction reads
+are never cached, and initial trigger installation is deferred outside a
+transaction so rollback cannot remove the tracking while leaving a cached counter.
+Unrelated local-table writes no longer rescan every thread payload. External
+unrelated commits can still cause conservative invalidation.
+
+Owner index reads retain completed backing for at most one second, keyed by
+registry, overlay store, backend, and the SQLite source version. Canonical events
+invalidate both pending joinability and retained backing. The event listener lives
+only as long as its source/cache lifetime. Expiry, invalidation, or eviction
+releases it. The cache admits at most eight entries / 8 MiB serialized backing;
+oversize indexes are served without retention. Physical/read admission limits are
+unchanged. Transaction-specific source stamps cannot be reused after rollback.
+Viewer-pin projection independently reuses its existing at-most-8-MiB result for
+one second, with database-version and transaction guards; peer status is still
+stamped by the viewer for each response. These caches add no recurring writes.
+
+`navigation-project-scan-budget.test.ts` exercises 1, 5, and 15 sequential project
+queries over 1,200 threads and 50 viewer pins, using real SQLite projections.
+The 15-project uncached control makes 15 physical index builds and 15 pin scans;
+reuse makes one of each. The relationship regression similarly drops 15 rescans
+after unrelated local writes to zero. Existing read write-budgets remain zero.
+Set `PWRAGENT_NAVIGATION_CPU_PROFILE=.local/navigation-projects` when running the
+project test to capture both control and reuse with V8. One local short capture
+measured 75.1 ms versus 7.3 ms inclusive in `readNavigationQueryIndex`, and 5.2 ms
+versus 1.5 ms in pin projection. These sub-second fixture captures establish no
+production CPU percentage or causal relationship to PR #2035. A live capture of
+the upgraded main process remains necessary for production acceptance.

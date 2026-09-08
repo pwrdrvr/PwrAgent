@@ -19,10 +19,12 @@ const METADATA_MAX_BYTES = 8 * 1024 * 1024;
 export function useLocalStarMapThreads(params: {
   desktopApi?: DesktopApi;
   enabled: boolean;
+  active?: boolean;
   filters: NavigationStarMapFilterSelection;
   demandedIdentities: readonly NavigationIdentity[];
   promoteOnTurnEnd?: boolean;
 }) {
+  const active = params.active !== false && params.enabled;
   const id = useId();
   const api = params.desktopApi;
   const request = useMemo<NavigationQueryRequest | undefined>(() => params.enabled ? {
@@ -32,7 +34,7 @@ export function useLocalStarMapThreads(params: {
     attentionView: { id, promoteOnTurnEnd: params.promoteOnTurnEnd ?? true },
     pageSize: 10,
   } : undefined, [id, params.enabled, params.filters, params.promoteOnTurnEnd]);
-  const rows = useNavigationQueryResource({ desktopApi: api, request });
+  const rows = useNavigationQueryResource({ desktopApi: api, request, active });
   useEffect(() => () => {
     void api?.releaseNavigationAttentionView?.({ viewId: id }).catch(() => undefined);
   }, [api, id]);
@@ -48,12 +50,12 @@ export function useLocalStarMapThreads(params: {
   identitiesRef.current = params.demandedIdentities;
 
   useEffect(() => {
-    if (!params.enabled || !api?.getNavigationQueryPage) return;
+    if (!active || !api?.getNavigationQueryPage) return;
     const sequence = ++geometrySequence.current;
-    const consumerId = `${id}:geometry`;
+    const consumerId = `${id}:geometry:${sequence}`;
     setGeometryReady(false);
     void (async () => {
-      const lease = navigationGeometryBudget.begin(consumerId);
+      const lease = navigationGeometryBudget.begin(`${id}:geometry`);
       try {
         const page = await readNavigationQueryRange({
           request: { protocol: 2, consumer: "star-map", query: { kind: "star-map-geometry" }, pageSize: 100 },
@@ -76,15 +78,15 @@ export function useLocalStarMapThreads(params: {
       geometrySequence.current += 1;
       void api.releaseNavigationQuery?.(consumerId);
     };
-  }, [api, id, params.enabled, refreshNonce]);
+  }, [api, id, active, refreshNonce]);
 
   useEffect(() => {
-    if (!params.enabled || !api?.getNavigationQueryPage) return;
+    if (!active || !api?.getNavigationQueryPage) return;
     const sequence = ++exactSequence.current;
-    const consumerId = `${id}:exact`;
+    const consumerId = `${id}:exact:${sequence}`;
     const identities = identitiesRef.current;
     void (async () => {
-      const lease = navigationExactRowsBudget.begin(consumerId);
+      const lease = navigationExactRowsBudget.begin(`${id}:exact`);
       try {
         const deadlineAt = Date.now() + 10_000;
         const selected = new Map<string, NavigationRow>();
@@ -115,7 +117,7 @@ export function useLocalStarMapThreads(params: {
       exactSequence.current += 1;
       void api.releaseNavigationQuery?.(consumerId);
     };
-  }, [api, id, identitiesKey, params.enabled, refreshNonce]);
+  }, [api, id, identitiesKey, active, refreshNonce]);
 
   useEffect(() => () => {
     navigationGeometryBudget.release(`${id}:geometry`);
@@ -124,11 +126,12 @@ export function useLocalStarMapThreads(params: {
 
   const refreshRows = rows.refresh;
   const refresh = useCallback(async () => {
+    if (!active) return;
     setRefreshNonce((value) => value + 1);
     await refreshRows();
-  }, [refreshRows]);
+  }, [active, refreshRows]);
   useEffect(() => {
-    if (!params.enabled) return;
+    if (!active) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = api?.onAgentEvent?.((event) => {
       if (event.federationTarget?.scope === "remote") return;
@@ -138,7 +141,7 @@ export function useLocalStarMapThreads(params: {
       timer = setTimeout(() => { timer = undefined; void refresh(); }, 250);
     });
     return () => { unsubscribe?.(); if (timer) clearTimeout(timer); };
-  }, [api, params.enabled, refresh]);
+  }, [active, api, refresh]);
 
   const threads = useMemo(() => {
     const result = new Map((rows.state?.page?.entries ?? []).map((entry) => [navigationIdentityKey(entry.row.ref), entry.row]));
