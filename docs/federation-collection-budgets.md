@@ -396,3 +396,31 @@ from appearing on its turn card and then being erased by the older cache while
 replacement history pages load. The isolated regression reproduces the rollback
 without HMR and verifies retention through authoritative collection completion.
 The existing collection budgets and persistence behavior are unchanged.
+
+### Star Map foreground demand
+
+Star Map is active only when its document is visible **and** has window focus.
+Blur pauses local/remote navigation, per-project pages, geometry/exact reads,
+open-chat detail/queue demand, federation health refreshes, and load-card polling.
+Cached cards and geometry remain mounted. Returning to the foreground refreshes
+retained demand once; duplicate focus/visibility events do not start extra reads.
+Query consumer tokens change across suspended lifetimes so a delayed response or
+release cannot resurrect or cancel a successor query. Load polling schedules its
+next eight-second sample after completion and ignores samples from old lifetimes.
+
+Project invalidation uses the event owner, then an explicit directory key or a
+known card's project where available. Membership changes and unknown thread IDs
+refresh that owner's projects. A local event never refreshes remote projects.
+The sixty-second reconciliation timer runs only while the map is active.
+
+The isolated request-count fixture measures only Star Map demand, excluding
+heartbeat and ordinary navigation. With two remote owners and three projects,
+initial admission and focus restoration each make seven navigation reads (three
+project pages, two row pages, two geometry pages) plus one open load-card read.
+Thirty events during two minutes blurred-but-visible, followed by one minute
+hidden, produce zero additional map reads. Twenty coalesced events for a known
+card produce one project read plus that owner's two metadata reads; unrelated
+owners produce zero. Pending project and remote geometry responses cannot restore
+old continuations after blur/resume. These are application read counts, not live
+wire-byte measurements, and do not attribute the operator's aggregate traffic.
+No persistence was added: 0 SQLite commits and 0 MB/day additional WAL.

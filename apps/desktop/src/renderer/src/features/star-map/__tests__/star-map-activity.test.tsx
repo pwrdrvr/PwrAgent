@@ -142,3 +142,31 @@ it("fences old load samples and waits for completion before another poll", async
   expect(read).toHaveBeenCalledTimes(3);
   view.unmount();
 });
+
+it("ignores late remote geometry after releasing and restoring the owner", async () => {
+  const finishes: (() => void)[] = [];
+  let old = true;
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>((request) => {
+    if (old) return new Promise((resolve) => finishes.push(() => resolve({ ...page(request),
+      directories: request.query.kind === "star-map-geometry" ? [project("directory:/stale")] : undefined,
+      complete: false, nextCursor: "stale-continuation" })));
+    return Promise.resolve(page(request));
+  });
+  const release = vi.fn(async () => undefined);
+  const api = { getNavigationQueryPage: read, releaseNavigationQuery: release };
+  const view = renderHook(({ active }) => useStarMapThreads({ desktopApi: api, enabled: active, peers: peers.slice(0, 1) }),
+    { initialProps: { active: true } });
+  await act(async () => undefined);
+  expect(read).toHaveBeenCalledTimes(2);
+  view.rerender({ active: false });
+  old = false;
+  view.rerender({ active: true });
+  await act(async () => undefined);
+  expect(read).toHaveBeenCalledTimes(4);
+  const retained = view.result.current.directoriesByInstance.get("peer");
+  await act(async () => { finishes.forEach((finish) => finish()); });
+  expect(view.result.current.directoriesByInstance.get("peer")).toEqual(retained);
+  expect(read).toHaveBeenCalledTimes(4);
+  expect(release).toHaveBeenCalled();
+  view.unmount();
+});
