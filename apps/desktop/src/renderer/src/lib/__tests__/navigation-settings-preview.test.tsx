@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { NavigationDirectoryRow, NavigationQueryPage } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
@@ -53,9 +53,21 @@ describe("bounded settings previews", () => {
     const api = apiWith(read);
     const hook = renderHook(() => useNavigationSettingsPreview(api));
     const result = hook.result.current.readModelInventory("codex").catch((error: unknown) => error);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
     hook.unmount();
     expect(api.releaseNavigationQuery).toHaveBeenCalledWith(read.mock.calls[0]![1]);
     await act(async () => resolve(page({ modelGroups: [] })));
     expect(await result).toMatchObject({ name: "AbortError" });
+  });
+
+  it("cancels a preview closed before dispatch without sending a query", async () => {
+    const read = vi.fn().mockResolvedValue(page({ modelGroups: [] }));
+    const api = apiWith(read);
+    const hook = renderHook(() => useNavigationSettingsPreview(api));
+    const result = hook.result.current.readModelInventory("codex").catch((error: unknown) => error);
+    hook.unmount();
+    expect(await result).toMatchObject({ name: "AbortError" });
+    expect(read).not.toHaveBeenCalled();
+    expect(api.releaseNavigationQuery).toHaveBeenCalled();
   });
 });
