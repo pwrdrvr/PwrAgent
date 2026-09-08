@@ -39,7 +39,7 @@ import {
 } from "./federation-redaction";
 import { FederationSessionRegistry } from "./federation-session-state";
 import type { FederationStore } from "./federation-store";
-import { FederationEnvelopeDiagnostics } from "./federation-envelope-diagnostics";
+import { describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "./federation-envelope-diagnostics";
 
 type EnvelopeDiagnosticsContext = {
   diagnostics: FederationEnvelopeDiagnostics;
@@ -61,6 +61,7 @@ function observeReceivedEnvelope(envelope: FederationProtocolEnvelope, byteCount
     log.info("large federation frame received", {
       byteCount,
       ...envelopeLogFields(envelope, context),
+      ...describeLargeThreadReadResult(envelope),
     });
   }
 }
@@ -1383,6 +1384,7 @@ function sendFrame(
       byteCount: wireByteLength,
       messageKind: message.kind,
       ...(envelope ? envelopeLogFields(envelope, context) : {}),
+      ...(envelope ? describeLargeThreadReadResult(envelope) : {}),
     });
   }
   const wire = transport ? transport.encrypt(payload) : payload;

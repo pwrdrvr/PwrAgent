@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FederationProtocolEnvelope } from "@pwragent/shared";
-import { FederationEnvelopeDiagnostics } from "../federation/federation-envelope-diagnostics";
+import { describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "../federation/federation-envelope-diagnostics";
 
 const request = {
   kind: "request", id: "req", sourceInstanceId: "viewer", targetInstanceId: "owner",
@@ -14,6 +14,26 @@ const response = {
 } satisfies FederationProtocolEnvelope;
 
 describe("federation envelope diagnostics", () => {
+  it("accounts for replay duplication and inline images without logging content", () => {
+    const image = "data:image/png;base64," + "eA==".repeat(100);
+    const message = { id: "message", text: "private transcript 🦀", parts: [{ type: "image", url: image }] };
+    const entries = [{ ...message, type: "message" }];
+    const messages = [message];
+    const pricing = { lines: [{ private: "accounting", amount: 12 }] };
+    const fields = describeLargeThreadReadResult({ ...response, result: {
+      replay: { entries, messages, pagination: { hasMore: false } }, pricing,
+    } });
+    expect(fields).toMatchObject({
+      replayEntryCount: 1, replayMessageCount: 1,
+      replayEntriesBytes: Buffer.byteLength(JSON.stringify(entries)),
+      replayMessagesBytes: Buffer.byteLength(JSON.stringify(messages)),
+      pricingBytes: Buffer.byteLength(JSON.stringify(pricing)),
+      inlineImageUrlCount: 2, inlineImageUrlBytes: 2 * Buffer.byteLength(image),
+    });
+    expect(Object.values(fields).every((value) => typeof value === "number")).toBe(true);
+    expect(describeLargeThreadReadResult(response)).toEqual({});
+    expect(describeLargeThreadReadResult(request)).toEqual({});
+  });
   it("attributes large replay responses to their thread and bounded initiating surface", () => {
     const diagnostics = new FederationEnvelopeDiagnostics();
     diagnostics.observe({ ...request, method: "backend.readThread", params: {

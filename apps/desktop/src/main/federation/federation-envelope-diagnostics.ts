@@ -3,6 +3,43 @@ import { createHash } from "node:crypto";
 
 export type FederationEnvelopeLogFields = Record<string, string | undefined>;
 
+/** Size-only diagnostics for the existing large-frame log, never payload text.
+ * Parts are measured one at a time; no serialized replay is retained.
+ * Inline image counters are a subset of the part bytes and count wire copies.
+ */
+export function describeLargeThreadReadResult(envelope: FederationProtocolEnvelope): Record<string, number> {
+  if (envelope.kind !== "response" || !envelope.result || typeof envelope.result !== "object") return {};
+  const result = envelope.result as Record<string, unknown>;
+  if (!result.replay || typeof result.replay !== "object") return {};
+  const { replay, pricing, toolAccounting, ...other } = result;
+  const { entries, messages, ...metadata } = replay as Record<string, unknown>;
+  let inlineImageUrlCount = 0;
+  let inlineImageUrlBytes = 0;
+  const measure = (value: unknown): number => {
+    if (value === undefined) return 0;
+    const serialized = JSON.stringify(value, (_key, item: unknown) => {
+      if (typeof item === "string" && item.startsWith("data:image/")) {
+        inlineImageUrlCount += 1;
+        inlineImageUrlBytes += Buffer.byteLength(item, "utf8");
+      }
+      return item;
+    });
+    return Buffer.byteLength(serialized, "utf8");
+  };
+  return {
+    replayEntryCount: Array.isArray(entries) ? entries.length : 0,
+    replayMessageCount: Array.isArray(messages) ? messages.length : 0,
+    replayEntriesBytes: measure(entries),
+    replayMessagesBytes: measure(messages),
+    replayMetadataBytes: measure(metadata),
+    pricingBytes: measure(pricing),
+    toolAccountingBytes: measure(toolAccounting),
+    otherResultBytes: measure(other),
+    inlineImageUrlCount,
+    inlineImageUrlBytes,
+  };
+}
+
 /** Volatile metadata only. Shared across gateway sockets to correlate relay hops.
  * Keep completed entries briefly: receiving a response precedes forwarding it.
  */
