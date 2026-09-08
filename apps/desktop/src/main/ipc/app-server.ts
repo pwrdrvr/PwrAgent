@@ -7839,11 +7839,12 @@ const prPollingFocusCleanupSenderIds = new Set<number>();
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
 let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
 
-function invalidateNavigationExactEvent(event: AgentEvent): void {
+function invalidateNavigationEvent(event: AgentEvent): void {
   getDesktopNavigationQueryStore().observeAttentionEvent(event);
   if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
   const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;
   const threadId = params?.threadId ?? params?.parentThreadId ?? params?.thread?.id;
+  navigationQueryPool.invalidateQueryOwner(event.federationTarget);
   navigationQueryPool.invalidateExactOwner(event.federationTarget,
     typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
 }
@@ -7854,9 +7855,9 @@ export function registerAppServerIpcHandlers(): void {
   // previous subscription down first so repeated calls don't stack listeners.
   unsubscribeWorkingStateEvents?.();
   unsubscribeNavigationRemoteEvents?.();
-  unsubscribeNavigationRemoteEvents = getDesktopFederationRuntime().onRemoteBackendEvent(invalidateNavigationExactEvent);
+  unsubscribeNavigationRemoteEvents = getDesktopFederationRuntime().onRemoteBackendEvent(invalidateNavigationEvent);
   unsubscribeWorkingStateEvents = getDesktopBackendRegistry().onEvent((event) => {
-    invalidateNavigationExactEvent(event);
+    invalidateNavigationEvent(event);
     appServerService.handleAgentEventForWorkingState(event);
     appServerService.handleAgentEventForPrAttachments(event);
   });

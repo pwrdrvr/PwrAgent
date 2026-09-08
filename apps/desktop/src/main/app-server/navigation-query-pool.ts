@@ -183,6 +183,19 @@ export class NavigationQueryPool {
     return promise;
   }
 
+  invalidateQueryOwner(target?: FederationTarget): void {
+    const owner = ownerKey(target);
+    for (const query of this.queries.values()) {
+      if (query.kind !== "query" || query.ownerKey !== owner) continue;
+      // A post-event refresh may join an older physical read. Replace its
+      // result under the original deadline before satisfying either reader.
+      query.invalidationSequence += 1;
+      for (const page of query.pages.values()) this.retainedBytes -= page.bytes;
+      query.pages.clear();
+    }
+    this.wake();
+  }
+
   invalidateExactOwner(target?: FederationTarget, ref?: NavigationIdentity): void {
     const owner = ownerKey(target);
     const thread = ref ? JSON.stringify([ref.backend, ref.threadId]) : undefined;

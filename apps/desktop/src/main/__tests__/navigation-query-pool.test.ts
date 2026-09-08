@@ -81,6 +81,37 @@ describe("NavigationQueryPool", () => {
     expect(pool.getBudgetUsage().retainedBytes).toBe(0);
   });
 
+  it("replaces a pre-event query before satisfying a post-event joined refresh", async () => {
+    const pool = new NavigationQueryPool();
+    let finish!: (value: NavigationQueryPage) => void;
+    const load = vi.fn()
+      .mockImplementationOnce(() => new Promise<NavigationQueryPage>((resolve) => { finish = resolve; }))
+      .mockResolvedValue({ ...page, counts: { ...page.counts, active: 1 }, countsRevision: "started" });
+    const first = pool.read({ consumerId: "sidebar", request, load });
+    let finishRemote!: (value: NavigationQueryPage) => void;
+    const remoteLoad = vi.fn(() => new Promise<NavigationQueryPage>((resolve) => { finishRemote = resolve; }));
+    const remote = pool.read({ consumerId: "remote", request: {
+      ...request, federationTarget: { scope: "remote", instanceId: "other-owner" },
+    }, load: remoteLoad });
+    pool.invalidateQueryOwner();
+    const refreshed = pool.read({ consumerId: "map", request, load });
+    finish(page);
+    finishRemote(page);
+    await expect(remote).resolves.toEqual(page);
+    expect(remoteLoad).toHaveBeenCalledTimes(1);
+    for (const result of await Promise.all([first, refreshed])) {
+      expect(result.counts.active).toBe(1);
+      expect(result.countsRevision).toBe("started");
+    }
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(load.mock.calls[0]![0].signal).toBe(load.mock.calls[1]![0].signal);
+    expect(load.mock.calls[0]![0].deadlineAt).toBe(load.mock.calls[1]![0].deadlineAt);
+    pool.release("sidebar");
+    pool.release("map");
+    pool.release("remote");
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
   it("shares eight physical slots between collection and exact configuration reads", async () => {
     const pool = new NavigationQueryPool();
     const resolve: Array<(page: NavigationQueryPage) => void> = [];
