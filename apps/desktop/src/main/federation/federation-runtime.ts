@@ -1283,6 +1283,14 @@ export class DesktopFederationRuntime {
         ...this.endpointStatuses.get(url),
       }));
     }
+    health.activeConnections = this.server?.activeConnections() ?? [];
+    if (this.client && this.gatewayInstanceId && this.gatewayUrl) {
+      health.activeConnections.push({
+        peerId: this.gatewayInstanceId,
+        direction: "outgoing",
+        endpoint: this.gatewayUrl,
+      });
+    }
     if (this.gatewayListenerError) {
       health.status = "degraded";
       health.unavailableReason = this.gatewayListenerError;

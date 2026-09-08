@@ -33877,6 +33877,10 @@ button.pricing-token-miser__folded:focus-visible {
 /* The Star Map trigger already owns its 24px hit target. Reusing MSG's
    wrapper must not add its padding or shift the existing title-bar controls. */
 .federation-status-control { position: relative; padding: 0; }
+.federation-connections { margin: 10px 0; overflow-wrap: anywhere; }
+.federation-connections ul { margin: 6px 0; padding-left: 18px; max-height: 240px; overflow-y: auto; }
+.federation-connections li + li { margin-top: 10px; }
+.federation-connections p { margin: 4px 0; }
 .federation-status-control__details { padding: 10px; overflow-wrap: anywhere; }
 .federation-status-control__details p { margin: 6px 0; }
 /* This report owns its scroll area; the shared Activity chrome stays outside it. */

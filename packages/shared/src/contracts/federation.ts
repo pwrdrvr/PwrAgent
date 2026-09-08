@@ -371,6 +371,17 @@ export type FederationEndpointStatus = {
   lastError?: string;
 };
 
+/** Local authenticated transports only; never advertised in the peer directory. */
+export type FederationActiveConnection = {
+  peerId: FederationInstanceId;
+  direction: "incoming" | "outgoing";
+  /** Configured URL actually dialed by an outgoing connection. */
+  endpoint?: string;
+  /** Observed socket addresses, including ports; a proxy/tunnel may be the remote. */
+  remoteAddress?: string;
+  localAddress?: string;
+};
+
 export type FederationHealthStatus = {
   enabled: boolean;
   role: FederationInstanceRole;
@@ -381,6 +392,7 @@ export type FederationHealthStatus = {
   unavailableReason?: string;
   /** Client-mode gateway endpoints in configured order with live status. */
   gatewayEndpoints?: FederationEndpointStatus[];
+  activeConnections?: FederationActiveConnection[];
   /** This instance's own assigned celestial identity icon. */
   localCelestialIcon?: CelestialIconId;
   /**

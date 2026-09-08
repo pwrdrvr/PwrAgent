@@ -922,6 +922,13 @@ describe("federation transport", () => {
     ) as { kind: string };
     expect(accepted.kind).toBe("auth.accepted");
     await connected;
+    expect(server.activeConnections()).toEqual([{
+      peerId: "client_one",
+      direction: "incoming",
+      remoteAddress: expect.stringMatching(/^127\.0\.0\.1:\d+$/),
+      localAddress: new URL(url).host,
+    }]);
+
 
     const socketClosed = new Promise<void>((resolve) => {
       socket.once("close", () => resolve());
@@ -930,6 +937,7 @@ describe("federation transport", () => {
 
     await socketClosed;
     await disconnected;
+    expect(server.activeConnections()).toEqual([]);
     expect(server.closePeer("client_one")).toBe(false);
     expect(store.listAudit({ peerId: "client_one" })[0]).toMatchObject({
       kind: "disconnected",

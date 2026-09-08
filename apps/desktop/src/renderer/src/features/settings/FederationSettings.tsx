@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ActiveGatewayEndpoint } from "../federation-activity/ActiveGatewayEndpoint";
+import { FederationConnections } from "../federation-activity/FederationConnections";
 import type {
   CelestialIconId,
   DesktopFederationMode,
@@ -613,16 +613,13 @@ export function FederationSettings(props: FederationSettingsProps) {
                 : "Only used when Mode is client or dual."
             }
             control={
-              <div className="federation-peer-summary">
-                <textarea
-                  aria-label="Gateway endpoints"
-                  rows={3}
-                  value={gatewayEndpointsText}
-                  disabled={props.saving || !dialsGateway}
-                  onChange={(event) => setGatewayEndpointsText(event.target.value)}
-                />
-                <ActiveGatewayEndpoint health={effectiveHealth} />
-              </div>
+              <textarea
+                aria-label="Gateway endpoints"
+                rows={3}
+                value={gatewayEndpointsText}
+                disabled={props.saving || !dialsGateway}
+                onChange={(event) => setGatewayEndpointsText(event.target.value)}
+              />
             }
           />
           <SettingsField
@@ -972,6 +969,7 @@ export function FederationSettings(props: FederationSettingsProps) {
         chip={statusLabel(effectiveHealth.status)}
         chipKind={chipKindForStatus(effectiveHealth.status)}
       >
+        <FederationConnections health={effectiveHealth} />
         <div className="settings-fields">
           <SettingsField
             label="Mode"

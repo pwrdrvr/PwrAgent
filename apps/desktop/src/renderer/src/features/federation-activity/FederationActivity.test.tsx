@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FederationActivityTotals, ReadFederationActivityResponse } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { ActiveGatewayEndpoint } from "./ActiveGatewayEndpoint";
+import { FederationConnections } from "./FederationConnections";
 import { FederationStatusControl } from "./FederationStatusControl";
 import { FederationActivityScreen } from "./FederationActivityWindow";
 
@@ -30,18 +30,42 @@ function fixture(): ReadFederationActivityResponse {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("Federation activity surfaces", () => {
-  it("does not present a stopped or lease-denied endpoint as active, and omits gateway-only instances", () => {
+  it("does not present stopped or lease-denied connections as active", () => {
     const health = fixture().health;
     health.role = "dual";
-    health.gatewayEndpoints = [{ url: "ssh://gateway.example.test", state: "active" }];
-    const { rerender } = render(<ActiveGatewayEndpoint health={health} />);
+    health.activeConnections = [{ peerId: "gateway", direction: "outgoing", endpoint: "ssh://gateway.example.test" }];
+    const { rerender } = render(<FederationConnections health={health} />);
     expect(screen.getByText("ssh://gateway.example.test")).toBeInTheDocument();
-    rerender(<ActiveGatewayEndpoint health={{ ...health, enabled: false }} />);
-    expect(screen.getByText("Active gateway: Not connected")).toBeInTheDocument();
-    rerender(<ActiveGatewayEndpoint health={{ ...health, leaseHolder: { instanceId: "other" } }} />);
+    rerender(<FederationConnections health={{ ...health, enabled: false }} />);
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    rerender(<FederationConnections health={{ ...health, leaseHolder: { instanceId: "other" } }} />);
     expect(screen.queryByText("ssh://gateway.example.test")).not.toBeInTheDocument();
-    rerender(<ActiveGatewayEndpoint health={{ ...health, role: "gateway" }} />);
-    expect(screen.queryByText(/Active gateway:/)).not.toBeInTheDocument();
+    rerender(<FederationConnections health={{ ...health, role: "gateway" }} />);
+    expect(screen.getByText("ssh://gateway.example.test")).toBeInTheDocument();
+  });
+
+  it.each(["gateway", "dual"] as const)("lists physical connections for a %s without relayed peers or advertised endpoints", (role) => {
+    const health = fixture().health;
+    health.role = role;
+    health.peers = [
+      { id: "client", label: "Laptop", role: "client", status: "connected", capabilities: [], endpoint: "ws://old.example.test" },
+      { id: "relayed", label: "Relayed workstation", role: "client", status: "connected", capabilities: [] },
+    ];
+    health.activeConnections = [
+      { peerId: "client", direction: "incoming", remoteAddress: "192.168.1.20:54321", localAddress: "192.168.1.10:47830" },
+      { peerId: "second", direction: "incoming", remoteAddress: "[fd00::2]:54322", localAddress: "[fd00::1]:47830" },
+      ...(role === "dual" ? [{ peerId: "upstream", direction: "outgoing" as const, endpoint: "ssh://upstream.example.test" }] : []),
+    ];
+    const { rerender } = render(<FederationConnections health={health} />);
+    expect(screen.getAllByRole("listitem")).toHaveLength(role === "dual" ? 3 : 2);
+    expect(screen.getByText("Laptop")).toBeInTheDocument();
+    expect(screen.getByText("192.168.1.20:54321")).toBeInTheDocument();
+    expect(screen.getByText("[fd00::1]:47830")).toBeInTheDocument();
+    expect(screen.queryByText("Relayed workstation")).not.toBeInTheDocument();
+    expect(screen.queryByText("ws://old.example.test")).not.toBeInTheDocument();
+    rerender(<FederationConnections health={{ ...health, activeConnections: [] }} />);
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
   });
 
   it.each(["popup", "activity"])("shows the actual gateway and follows reconnects in the %s", async (surface) => {
@@ -52,6 +76,7 @@ describe("Federation activity surfaces", () => {
       { url: "ws://192.168.1.20:47830", state: "idle" },
       { url: "ws://gateway.example.ts.net:47830", state: "active" },
     ];
+    snapshot.health.activeConnections = [{ peerId: "gateway", direction: "outgoing", endpoint: snapshot.health.gatewayEndpoints[1].url }];
     const desktopApi = { readFederationActivity: async () => structuredClone(snapshot) };
     render(surface === "popup"
       ? <FederationStatusControl desktopApi={desktopApi} onOpen={vi.fn()} />
@@ -59,10 +84,12 @@ describe("Federation activity surfaces", () => {
     if (surface === "popup") fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
     await screen.findByText("ws://gateway.example.ts.net:47830");
     expect(screen.queryByText("ws://192.168.1.20:47830")).not.toBeInTheDocument();
+    snapshot.health.activeConnections = [];
     snapshot.health.gatewayEndpoints[1].state = "idle";
     snapshot.health.status = "connecting";
-    await screen.findByText("Active gateway: Not connected", {}, { timeout: 3_000 });
+    await screen.findByText("Not connected", {}, { timeout: 3_000 });
     expect(screen.queryByText("ws://gateway.example.ts.net:47830")).not.toBeInTheDocument();
+    snapshot.health.activeConnections = [{ peerId: "gateway", direction: "outgoing", endpoint: snapshot.health.gatewayEndpoints[0].url }];
     snapshot.health.gatewayEndpoints[0].state = "active";
     snapshot.health.status = "connected";
     await screen.findByText("ws://192.168.1.20:47830", {}, { timeout: 3_000 });

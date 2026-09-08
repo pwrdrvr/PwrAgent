@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopFederationMode,
+  FederationActiveConnection,
+  FederationPeerSummary,
 } from "@pwragent/shared";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import type { FederationRuntimeConfig } from "../federation/federation-runtime-config";
@@ -25,6 +27,7 @@ const GatewayServerCtorMock = vi.hoisted(() =>
     return {
       start: mocks.gatewayServerStart,
       stop: mocks.gatewayServerStop,
+      activeConnections: () => [],
     };
   }),
 );
@@ -121,6 +124,43 @@ beforeEach(() => {
 });
 
 describe("DesktopFederationRuntime startup lease fence", () => {
+  it("reports only live local transports and the dialed URL, not advertised or relayed endpoints", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as {
+      readRuntimeConfig(): FederationRuntimeConfig;
+      visiblePeers(): FederationPeerSummary[];
+      ensureLocalInstanceId(): string;
+      readClientEnrollment(): undefined;
+      activeCelestialAssignments(): [];
+      server?: { activeConnections(): FederationActiveConnection[] };
+      client?: object;
+      gatewayInstanceId?: string;
+      gatewayUrl?: string;
+    };
+    vi.spyOn(harness, "readRuntimeConfig").mockReturnValue({ ...fakeSettings, mode: "dual" });
+    vi.spyOn(harness, "ensureLocalInstanceId").mockReturnValue("local");
+    vi.spyOn(harness, "readClientEnrollment").mockReturnValue(undefined);
+    vi.spyOn(harness, "activeCelestialAssignments").mockReturnValue([]);
+    vi.spyOn(harness, "visiblePeers").mockReturnValue([
+      { id: "gateway", label: "Gateway", role: "gateway", status: "connected", capabilities: [], endpoint: "ws://stale.example.test" },
+      { id: "relayed", label: "Relayed", role: "client", status: "connected", capabilities: [] },
+    ]);
+    const incoming: FederationActiveConnection = {
+      peerId: "client", direction: "incoming", remoteAddress: "192.168.1.20:54321", localAddress: "192.168.1.10:47830",
+    };
+    harness.server = { activeConnections: () => [{ ...incoming }] };
+    harness.client = {};
+    harness.gatewayInstanceId = "gateway";
+    harness.gatewayUrl = "ws://192.168.1.30:47830";
+    expect((await runtime.health()).activeConnections).toEqual([
+      incoming, { peerId: "gateway", direction: "outgoing", endpoint: harness.gatewayUrl },
+    ]);
+    harness.client = undefined;
+    expect((await runtime.health()).activeConnections).toEqual([incoming]);
+    harness.server = undefined;
+    expect((await runtime.health()).activeConnections).toEqual([]);
+  });
+
   it("publishes the listener when startup completes uninterrupted", async () => {
     mocks.getNoiseKeyPair.mockResolvedValue(NOISE_KEY);
     mocks.getIdentityKeyPair.mockResolvedValue(IDENTITY_KEY);
