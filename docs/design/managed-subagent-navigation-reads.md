@@ -134,3 +134,26 @@ ten warm helper/backend reads after real database setup: **0 commits, 0 write
 statements, 0 changed rows, 0 observed WAL bytes**. Added write cost is therefore
 0 writes/second × commit cost × 86,400 seconds = **0 MB/day**. Existing full
 reconciliation writes are unchanged.
+
+
+## PR #2001 integration measurement
+
+The integration retains #2001's projection of individual subagent fields and
+adds a large nested subagent title to the materialization regression. The same
+synthetic probe compared signed pre-integration `3c9c61281` with the resolved
+implementation at `720ecffd0`, using Node 24.18.0 / SQLite 3.53.2 on Apple M4.
+The exported baseline's relative imports were redirected to this checkout's
+`src/main/state` modules because #2001 adds a runtime relative-pin helper.
+
+| Read | #2001 before median / p95 | Integrated median / p95 |
+| --- | --- | --- |
+| Complete helper, invalidated | 65.616 / 75.354 ms | 55.011 / 57.734 ms |
+| Complete helper, unchanged database | 65.616 / 75.354 ms | 0.0049 / 0.0129 ms |
+| Backend read, identical payload | 1.660 / 2.411 ms | 0.0784 / 0.1100 ms |
+
+Returned parent/child text changed from 67,083 / 35,904 bytes to
+46,326 / 12,631 bytes. The approximately 16% invalidated-helper improvement is
+relative to #2001's already compact projection, not to main's former full
+payload reads. Existing limitations still apply: unrelated writes invalidate
+reuse, a cold scan remains a scan, and no live Electron CPU improvement has yet
+been measured.

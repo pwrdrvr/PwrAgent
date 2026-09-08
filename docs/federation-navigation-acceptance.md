@@ -90,6 +90,16 @@ typecheck and targeted ESLint. Read-only query budgets remain zero commits and
 0 MB/day additional WAL. No completed-index cache or new persistence was added.
 Live CPU improvement remains to be measured.
 
+The inherited helper repair from PR #2032 is integrated in signed `72f696a83`
+and `720ecffd0`, preserving #2001's narrower subagent-field projection. Its
+same-runtime synthetic comparison against `3c9c61281` measures 65.616 to
+55.011 ms median for invalidated reads and 0.0049 ms for unchanged reads.
+Identical backend normalization drops from 1.660 to 0.0784 ms. The 72 combined
+source/query/helper regressions, desktop typecheck and targeted ESLint pass,
+including shared-profile process writes, between-query commits, rollback and
+zero-write budgets. Another 17 partial-navigation, handoff-repair and pin tests
+pass (89 affected tests total). See the [measurement and limits](design/managed-subagent-navigation-reads.md).
+
 ## Upgrade requirement
 
 Run the cutover build on every viewer, owner and gateway participating in the
