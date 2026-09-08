@@ -20684,6 +20684,33 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("reports accepted Codex turns as active before a provider start notification", async () => {
+    const threads: AppServerThreadSummary[] = [{ id: "thread-1", source: "codex", title: "Starting", titleSource: "explicit", linkedDirectories: [], updatedAt: 1, threadStatus: "active" }];
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/list"] },
+      threads,
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Start" }] });
+      expect(await registry.listThreads({ backend: "codex", forceRefresh: true })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "active" }),
+      ]);
+      // A provider row acknowledges the observation, then an older discovery
+      // result arrives while the locally accepted turn still owns execution.
+      threads[0] = { ...threads[0]!, threadStatus: undefined };
+      expect(await registry.listThreads({ backend: "codex", forceRefresh: true })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "active" }),
+      ]);
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } });
+      expect(await registry.listThreads({ backend: "codex", forceRefresh: true })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "idle" }),
+      ]);
+    } finally { await registry.close(); }
+  });
+
   it("rejects duplicate Codex turn starts while the thread is already active", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

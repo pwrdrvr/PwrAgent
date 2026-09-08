@@ -661,7 +661,9 @@ export function Sidebar(props: SidebarProps) {
   );
   // Counts cover the owner's full population, independently of the visible lens range.
   const ownerCountPage = props.pagedNavigation?.resources.get("directory-index")?.state.page;
-  const ownerCounts = ownerCountPage?.coverage.state === "complete" ? ownerCountPage.counts : undefined;
+  // Coverage reports discovery progress separately. Suppressing the owner's
+  // known counts while checking would make accepted running turns look idle.
+  const ownerCounts = ownerCountPage?.counts;
   const activeRemote = federationTarget ? 0 : ownerCounts?.activeRemote ?? 0;
   const attentionCounts = { activeLocal: (ownerCounts?.active ?? 0) - activeRemote, activeRemote, review: ownerCounts?.review ?? 0 };
   const remoteSignalVisible = useLingeringRemoteActiveSignal(

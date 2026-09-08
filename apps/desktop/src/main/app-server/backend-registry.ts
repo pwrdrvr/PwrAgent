@@ -19408,6 +19408,14 @@ export class DesktopBackendRegistry {
       if (
         reconciledStatus === observedStatus
         && this.observedCodexThreadStatuses.get(thread.id) === observation
+        // Keep a locally owned turn's observation until its terminal event.
+        // A later, older discovery row must not erase accepted activity after
+        // one provider row acknowledges the start. Check ownership only for
+        // active observations, rather than scanning turns for every idle row.
+        && !(observedStatus === "active" && (
+          this.reservedCodexStartThreadIds.has(thread.id)
+          || this.getActiveTurnForThread({ backend: "codex", threadId: thread.id })
+        ))
       ) {
         this.observedCodexThreadStatuses.delete(thread.id);
       }

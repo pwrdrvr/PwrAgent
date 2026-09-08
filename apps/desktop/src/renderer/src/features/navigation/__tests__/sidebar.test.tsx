@@ -1,3 +1,6 @@
+import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
+import { createNavigationPageState } from "../../../lib/navigation-query-state";
+import type { NavigationQueryRequest } from "@pwragent/shared";
 import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import "@testing-library/jest-dom/vitest";
 import {
@@ -799,6 +802,21 @@ describe("Sidebar", () => {
     } finally {
       restore();
     }
+  });
+
+  it("shows owner-known active counts while startup discovery is checking", () => {
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" } };
+    const page = navigationQueryFixture(request, { directories, threads: [{ ...sharedThread, threadStatus: "active" }] });
+    page.coverage = { state: "checking" };
+    render(<Sidebar backends={backends} browseMode="inbox" directories={directories}
+      threads={[sharedThread]} inboxThreads={[]} loading={false} creatingThread={undefined}
+      selectedItemKey="codex:thread-1" onBrowseModeChange={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
+      pagedNavigation={{ resources: new Map([["directory-index", { id: "directory-index", loading: false,
+        state: { ...createNavigationPageState(request), page } }]]), directories: [], selectedDirectoryKeys: undefined, connected: true,
+        invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+        rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined }} />);
+    expect(screen.getByRole("tab", { name: "Attention, 1 active thread, 0 threads to review" })).toBeInTheDocument();
   });
 
   it("renders Inbox as the first thread lens and keeps directory rows available", () => {
