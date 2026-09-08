@@ -2,9 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PWRSNAP_SESSION_REVOKED_DETAIL } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   McpConnectionGatewayService,
+  PWRSNAP_SESSION_REVOKED_ERROR,
 } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 
@@ -27,6 +29,27 @@ function createSettings(initial?: string) {
       credential = value;
     }),
   };
+}
+
+function createAuthorizedCredential(accessToken = "revoked-by-pwrsnap"): string {
+  return JSON.stringify({
+    clientInformation: { client_id: "pwragent-client" },
+    discoveryState: {
+      authorizationServerUrl: "http://127.0.0.1:51729",
+      resourceMetadata: {
+        resource: "http://127.0.0.1:51729/mcp",
+        authorization_servers: ["http://127.0.0.1:51729"],
+      },
+      authorizationServerMetadata: {
+        issuer: "http://127.0.0.1:51729",
+        authorization_endpoint: "http://127.0.0.1:51729/oauth/authorize",
+        token_endpoint: "http://127.0.0.1:51729/oauth/token",
+        response_types_supported: ["code"],
+        code_challenge_methods_supported: ["S256"],
+      },
+    },
+    tokens: { access_token: accessToken, token_type: "bearer" },
+  });
 }
 
 const services: McpConnectionGatewayService[] = [];
@@ -222,5 +245,48 @@ describe("McpConnectionGatewayService", () => {
       undefined,
       { signal: abortController.signal, timeout: 720_000 },
     );
+  });
+
+  it("clears a PwrSnap credential rejected by the MCP endpoint", async () => {
+    const settings = createSettings(createAuthorizedCredential());
+    const service = new McpConnectionGatewayService({
+      fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
+      resolveInstallPaths: () => [],
+      settings,
+      leaseManager: null,
+    });
+    services.push(service);
+
+    await expect(service.readStatus()).resolves.toMatchObject({
+      availability: "running",
+      configured: true,
+    });
+
+    const bridge = service as unknown as {
+      dispatchBridgeOperation: (
+        token: string,
+        grant: { connectionId: string; threadId?: string },
+        operation: unknown,
+        params: unknown,
+      ) => Promise<unknown>;
+    };
+    await expect(bridge.dispatchBridgeOperation(
+      "test-token",
+      { connectionId: "pwrsnap", threadId: "thread-1" },
+      "tools/list",
+      {},
+    )).rejects.toThrow(PWRSNAP_SESSION_REVOKED_ERROR);
+
+    expect(settings.clearMcpConnectionCredentials).toHaveBeenCalledOnce();
+    expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
+    await expect(service.readStatus()).resolves.toMatchObject({
+      availability: "running",
+      configured: false,
+      detail: PWRSNAP_SESSION_REVOKED_DETAIL,
+    });
+
+    // Existing threads keep starting; only PwrSnap calls report the revoke.
+    await expect(service.registerBridge("pwrsnap", "thread-1"))
+      .resolves.toBeTruthy();
   });
 });

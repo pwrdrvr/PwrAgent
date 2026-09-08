@@ -202,6 +202,106 @@ describe("McpOAuthSessionCoordinator", () => {
     expect(coordinator.detail).toContain("invalid_grant");
   });
 
+  it("can discard a credential that the protected resource rejected", async () => {
+    const { vault } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      tokens: { access_token: "rejected-access", token_type: "bearer" },
+    });
+    const onCredentialRejected = vi.fn(async () => undefined);
+    const coordinator = new McpOAuthSessionCoordinator({
+      connectionId: "example",
+      discardRejectedCredentials: true,
+      fetchFn: vi.fn(async () => new Response("expired", { status: 401 })),
+      onCredentialRejected,
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    await expect(
+      coordinator.authorizedFetch()("https://mcp.example.com/mcp"),
+    ).rejects.toBeInstanceOf(McpReauthorizationRequiredError);
+
+    expect(vault.delete).toHaveBeenCalledOnce();
+    expect(onCredentialRejected).toHaveBeenCalledOnce();
+    await expect(coordinator.configured()).resolves.toBe(false);
+  });
+
+  it("keeps a newer authorization when an older request returns 401", async () => {
+    const { vault } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      discoveryState: {
+        authorizationServerUrl: "https://auth.example.com",
+        authorizationServerMetadata: {
+          issuer: "https://auth.example.com",
+          authorization_endpoint: "https://auth.example.com/authorize",
+          token_endpoint: "https://auth.example.com/token",
+          response_types_supported: ["code"],
+        },
+        resourceMetadata: {
+          resource: "https://mcp.example.com/mcp",
+          authorization_servers: ["https://auth.example.com"],
+        },
+      },
+      tokens: { access_token: "stale-access", token_type: "bearer" },
+    });
+    let releaseRequest: (() => void) | undefined;
+    let requestStarted: (() => void) | undefined;
+    const firstRequestStarted = new Promise<void>((resolve) => {
+      requestStarted = resolve;
+    });
+    const firstRequestReleased = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+    let authCall = 0;
+    const authFn = vi.fn(async (provider: OAuthClientProvider) => {
+      authCall += 1;
+      if (authCall === 1) return "REDIRECT" as const;
+      await provider.saveTokens?.({
+        access_token: "fresh-access",
+        token_type: "bearer",
+      });
+      return "AUTHORIZED" as const;
+    }) as unknown as typeof auth;
+    let fetchCall = 0;
+    const fetchFn = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      fetchCall += 1;
+      if (fetchCall === 1) {
+        requestStarted?.();
+        await firstRequestReleased;
+        return new Response("expired", { status: 401 });
+      }
+      expect(new Headers(init?.headers).get("authorization"))
+        .toBe("Bearer fresh-access");
+      return new Response("ok", { status: 200 });
+    });
+    const onCredentialRejected = vi.fn(async () => undefined);
+    const coordinator = new McpOAuthSessionCoordinator({
+      authFn,
+      connectionId: "example",
+      discardRejectedCredentials: true,
+      fetchFn,
+      onCredentialRejected,
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    const pending = coordinator.authorizedFetch()(
+      "https://mcp.example.com/mcp",
+    );
+    await firstRequestStarted;
+    await coordinator.authorize({
+      redirectUrl: new URL("http://127.0.0.1:4040/oauth/callback"),
+      onRedirect: vi.fn(async () => undefined),
+      waitForCode: vi.fn(async () => "authorization-code"),
+    });
+    releaseRequest?.();
+
+    await expect(pending).resolves.toMatchObject({ status: 200 });
+    expect(vault.delete).not.toHaveBeenCalled();
+    expect(onCredentialRejected).not.toHaveBeenCalled();
+    await expect(coordinator.configured()).resolves.toBe(true);
+  });
+
   it("requires reauthorization when the rotated access token is also rejected", async () => {
     const { vault } = createVault({
       resourceUrl: "https://mcp.example.com/mcp",

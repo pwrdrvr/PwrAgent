@@ -31,6 +31,8 @@ export type McpOAuthSessionCoordinatorOptions = {
   vault?: McpCredentialVault;
   fetchFn?: FetchLike;
   authFn?: typeof auth;
+  discardRejectedCredentials?: boolean;
+  onCredentialRejected?: () => Promise<void>;
   onStateChange?: (
     state: McpConnectionRuntimeState,
     detail?: string,
@@ -49,6 +51,8 @@ export class McpOAuthSessionCoordinator {
   private readonly vault: McpCredentialVault;
   private readonly fetchFn: FetchLike;
   private readonly authFn: typeof auth;
+  private readonly discardRejectedCredentials: boolean;
+  private readonly onCredentialRejected?: () => Promise<void>;
   private readonly onStateChange?: McpOAuthSessionCoordinatorOptions["onStateChange"];
   private credential?: McpOAuthCredential;
   private loaded = false;
@@ -75,6 +79,9 @@ export class McpOAuthSessionCoordinator {
     this.vault = options.vault ?? new McpCredentialVault();
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.authFn = options.authFn ?? auth;
+    this.discardRejectedCredentials =
+      options.discardRejectedCredentials ?? false;
+    this.onCredentialRejected = options.onCredentialRejected;
     this.onStateChange = options.onStateChange;
   }
 
@@ -181,7 +188,22 @@ export class McpOAuthSessionCoordinator {
       );
       if (response.status !== 401) return response;
       await response.body?.cancel().catch(() => undefined);
-      await this.refresh(initial.generation);
+      try {
+        await this.refresh(initial.generation);
+      } catch (error) {
+        if (
+          !(error instanceof McpReauthorizationRequiredError)
+          || !this.discardRejectedCredentials
+        ) {
+          throw error;
+        }
+        if (await this.discardRejectedCredential(initial)) {
+          throw error;
+        }
+        // A newer authorization landed while this request was in flight.
+        // Retry with that credential instead of deleting it for the stale
+        // token's rejection.
+      }
       const refreshed = await this.tokenSnapshot();
       const retried = await this.fetchProtectedResource(
         url,
@@ -190,10 +212,11 @@ export class McpOAuthSessionCoordinator {
       );
       if (retried.status === 401) {
         await retried.body?.cancel().catch(() => undefined);
-        this.setState(
-          "reauthorization_required",
-          "The refreshed MCP authorization was rejected.",
-        );
+        const detail = "The refreshed MCP authorization was rejected.";
+        this.setState("reauthorization_required", detail);
+        if (this.discardRejectedCredentials) {
+          await this.discardRejectedCredential(refreshed, detail);
+        }
         throw new McpReauthorizationRequiredError(
           "The refreshed MCP authorization was rejected. Reauthorize it in Settings.",
         );
@@ -210,6 +233,26 @@ export class McpOAuthSessionCoordinator {
       throw new McpReauthorizationRequiredError();
     }
     return { accessToken, generation: this.generation };
+  }
+
+  private async discardRejectedCredential(
+    rejected: TokenSnapshot,
+    detail = this.runtimeDetail,
+  ): Promise<boolean> {
+    await this.ensureLoaded();
+    if (
+      this.generation !== rejected.generation
+      || this.credential?.tokens?.access_token !== rejected.accessToken
+    ) {
+      return false;
+    }
+    this.credential = undefined;
+    this.generation += 1;
+    this.revocationEpoch += 1;
+    this.setState("reauthorization_required", detail);
+    await this.vault.delete(this.connectionId);
+    await this.onCredentialRejected?.();
+    return true;
   }
 
   private async refresh(expectedGeneration: number): Promise<void> {

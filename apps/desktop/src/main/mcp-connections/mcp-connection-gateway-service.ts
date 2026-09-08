@@ -15,6 +15,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
+  PWRSNAP_SESSION_REVOKED_DETAIL,
   type CreateMcpConnectionRequest,
   type McpConnectionRecord,
   type McpConnectionStatus,
@@ -42,6 +43,7 @@ import {
 } from "./mcp-credential-vault";
 import {
   McpOAuthSessionCoordinator,
+  McpReauthorizationRequiredError,
 } from "./mcp-oauth-session-coordinator";
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
 import { MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts";
@@ -61,6 +63,9 @@ const PWRSNAP_SCOPES = [
   "sizzle.preview.read",
   "sizzle.full.read",
 ].join(" ");
+/** Returned to agents through the bridge, where no Connect button is visible. */
+export const PWRSNAP_SESSION_REVOKED_ERROR =
+  "PwrSnap revoked this connection. PwrSnap tools stay unavailable until the operator chooses Connect to PwrSnap on New thread in PwrAgent.";
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 const MAX_RPC_CONNECTIONS = 32;
@@ -339,6 +344,7 @@ export class McpConnectionGatewayService {
    */
   private readonly upstreamStarts = new Map<string, Promise<Client>>();
   private connectPromise?: Promise<ConnectPwrSnapResponse>;
+  private sessionRevoked = false;
   private leaseHeld = false;
   private brokerToken?: string;
   private nonOwnerHolder?: RuntimeLeaseHolder;
@@ -390,6 +396,14 @@ export class McpConnectionGatewayService {
       this.isEndpointAvailable(),
     ]);
     const installed = endpointAvailable || Boolean(this.findInstalledPath());
+    const details: string[] = [];
+    if (!configured && this.sessionRevoked) {
+      details.push(PWRSNAP_SESSION_REVOKED_DETAIL);
+    }
+    if (!endpointAvailable && installed) {
+      details.push("Open PwrSnap and enable Local Agent Access to connect agents.");
+    }
+    const detail = details.join(" ");
     return {
       connectionId: PWRSNAP_MCP_CONNECTION_ID,
       displayName: "PwrSnap",
@@ -399,12 +413,7 @@ export class McpConnectionGatewayService {
           ? "installed"
           : "not_installed",
       configured,
-      ...(!endpointAvailable && installed
-        ? {
-            detail:
-              "Open PwrSnap and enable Local Agent Access to connect agents.",
-          }
-        : {}),
+      ...(detail ? { detail } : {}),
     };
   }
 
@@ -499,6 +508,7 @@ export class McpConnectionGatewayService {
         waitForCode: callback.waitForCode,
       });
       if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
+        this.sessionRevoked = false;
         await this.settings.clearPwrSnapMcpCredential();
       }
       callback.complete(
@@ -532,6 +542,7 @@ export class McpConnectionGatewayService {
     await this.closeConnectionSessions(connectionId);
     await this.coordinatorFor(connection).disconnect();
     if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
+      this.sessionRevoked = false;
       await this.settings.clearPwrSnapMcpCredential();
     }
     return await this.connectionStatus(connection);
@@ -600,7 +611,11 @@ export class McpConnectionGatewayService {
     // problem, and telling the operator to reauthorize would send them to
     // the wrong control.
     const connection = this.requireAvailableConnection(connectionId);
-    if (!(await this.coordinatorFor(connection).configured())) {
+    const configured = await this.coordinatorFor(connection).configured();
+    if (
+      !configured
+      && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked)
+    ) {
       throw new Error(
         `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
       );
@@ -1140,6 +1155,15 @@ export class McpConnectionGatewayService {
           allowLoopback,
           fetchFn: this.fetchFn,
         }),
+        ...(connection.kind === "pwrsnap"
+          ? {
+              discardRejectedCredentials: true,
+              onCredentialRejected: async () => {
+                this.sessionRevoked = true;
+                await this.settings.clearPwrSnapMcpCredential();
+              },
+            }
+          : {}),
         onStateChange: (state, detail) => {
           connectionLog.info("MCP connection state changed", {
             connectionId: connection.id,
@@ -1194,7 +1218,9 @@ export class McpConnectionGatewayService {
     const coordinator = this.coordinatorFor(connection);
     if (!(await coordinator.configured())) {
       throw new Error(
-        `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
+        connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked
+          ? PWRSNAP_SESSION_REVOKED_ERROR
+          : `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
       );
     }
     const transport = new StreamableHTTPClientTransport(
@@ -1224,6 +1250,13 @@ export class McpConnectionGatewayService {
       }
     } catch (error) {
       await transport.close().catch(() => undefined);
+      if (
+        connection.id === PWRSNAP_MCP_CONNECTION_ID
+        && (this.sessionRevoked
+          || error instanceof McpReauthorizationRequiredError)
+      ) {
+        throw new Error(PWRSNAP_SESSION_REVOKED_ERROR, { cause: error });
+      }
       throw error;
     }
     this.upstreamSessions.set(token, { client, transport });
