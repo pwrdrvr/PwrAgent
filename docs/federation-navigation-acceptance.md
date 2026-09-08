@@ -53,6 +53,43 @@ scroll case that verifies an offscreen image has no source or decoded pixels
 until it enters the viewport. Live transfer volume and sidebar stability still
 require comparison on the restarted M4/M5 instances with these fixes.
 
+## Navigation CPU investigation
+
+The operator supplied a main-process capture from the M5 branch instance:
+`hot-cpu-2026-09-07-2109-649f05/main-hot-0002.cpuprofile`. Its trigger at
+2026-09-08T01:16:44.644Z measured 72.62% CPU over 2.001 seconds. Weighted samples
+attribute 1,144.9 ms inclusive to `buildLocalNavigationQueryIndex` /
+`readNavigationQueryIndex`, including 773.1 ms in
+`listManagedSubAgentThreadKeys` and 167.0 ms in `getBackend`. The 75.163-second
+retained recording includes 73.354 seconds idle. The first navigation cluster
+falls within the trigger interval.
+
+This identifies a stall, not a proven regression: main already invokes the
+managed-subagent helper and backend materialization from snapshot reconciliation.
+The reported Python probe of the first helper query returned approximately
+15.18 MB on main versus 447 KB with the branch projection. It excludes the
+second query and normalization and is not a same-runtime end-to-end benchmark.
+The inherited scan cost is assigned to a separate child based on current main;
+[CPU PR coordination](https://github.com/pwrdrvr/PwrAgent/pull/2030#issuecomment-5577694164)
+distinguishes it from Git/SSH deduplication and directory-enrichment diagnostics.
+
+Code inspection on #2001 confirms cursor continuations reuse retained backing,
+but a root-page refresh rebuilds the source index before comparing revisions.
+Only concurrent builds share source work, with limits of eight physical builds
+and 256 readers. The sidebar's fallback refresh is five minutes and foreground /
+activity gated; events and explicit demand also initiate reads. These facts do
+not establish which caller initiated the captured clusters.
+
+A deterministic source test exposed one amplification path: transcript-only
+events invalidated pending source sharing, starting two builds for unchanged
+navigation. The source now uses the existing canonical navigation event filter;
+text and token deltas preserve sharing, while title/status/membership changes
+still require fresh work. The test failed before the repair. All 64 affected
+source, admission, query and SQLite-budget tests pass afterwards, as do desktop
+typecheck and targeted ESLint. Read-only query budgets remain zero commits and
+0 MB/day additional WAL. No completed-index cache or new persistence was added.
+Live CPU improvement remains to be measured.
+
 ## Upgrade requirement
 
 Run the cutover build on every viewer, owner and gateway participating in the

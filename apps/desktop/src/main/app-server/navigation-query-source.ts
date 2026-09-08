@@ -2,6 +2,7 @@ import type {
   AppServerBackendScope,
   NavigationDirectorySummary,
 } from "@pwragent/shared";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
@@ -35,9 +36,12 @@ export async function loadLocalNavigationQueryIndex(params: {
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     overlayStore.readNavigationSourceVersion?.()]);
   return indexReads.read(key, async (signal) => {
-    // Provider events invalidate joinability, not another consumer's read.
+    // Canonical events invalidate joinability, not another consumer's read.
     // A later query must not inherit work begun before a canonical event.
-    const unsubscribe = registry.onEvent?.(() => indexReads.invalidate(key));
+    // Transcript deltas must not multiply the same pending owner scan.
+    const unsubscribe = registry.onEvent?.((event) => {
+      if (navigationQueryEventRequiresRefresh(event.notification.method)) indexReads.invalidate(key);
+    });
     try { return await buildLocalNavigationQueryIndex({ ...params, registry, signal }); }
     finally { unsubscribe?.(); }
   }, params.signal);
