@@ -7861,8 +7861,11 @@ export function Composer(props: ComposerProps) {
       setActiveSkillIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -7938,8 +7941,11 @@ export function Composer(props: ComposerProps) {
       );
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -8009,8 +8015,11 @@ export function Composer(props: ComposerProps) {
       setActiveDirectoryRefIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -8068,8 +8077,11 @@ export function Composer(props: ComposerProps) {
       setActiveHashReferenceIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -8152,8 +8164,11 @@ export function Composer(props: ComposerProps) {
       setActiveDirectoryRefIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
 
     // Feed the reference picker's Files tab — fire-and-forget.
@@ -8240,8 +8255,11 @@ export function Composer(props: ComposerProps) {
       setActiveDirectoryRefIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
