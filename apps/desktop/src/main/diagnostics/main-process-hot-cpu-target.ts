@@ -8,6 +8,7 @@
 // .cpuprofile-shaped object for the main thread.
 
 import { Session } from "node:inspector";
+import { directoryEnrichmentDiagnostics } from "./directory-enrichment-diagnostics";
 import type { HotCpuTarget } from "./hot-cpu-profiler";
 
 export function createMainProcessHotCpuTarget(): HotCpuTarget {
@@ -47,6 +48,7 @@ export function createMainProcessHotCpuTarget(): HotCpuTarget {
       off: () => {},
     },
     getOSProcessId: () => process.pid,
+    readDiagnostics: () => ({ directoryEnrichment: directoryEnrichmentDiagnostics.snapshot() }),
     readHeapUsage: () => {
       const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
       return { heapUsed, heapTotal, external, arrayBuffers };

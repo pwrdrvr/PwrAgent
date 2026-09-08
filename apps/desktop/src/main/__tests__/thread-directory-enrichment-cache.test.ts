@@ -3,14 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createThreadDirectoryEnricher } from "../app-server/thread-directory-enricher";
+import { directoryEnrichmentDiagnostics } from "../diagnostics/directory-enrichment-diagnostics";
 import budgets from "./fixtures/git-subprocess-budgets.json";
 
 const git = vi.hoisted(() => vi.fn());
 const readPointer = vi.hoisted(() => vi.fn());
+const observeStat = vi.hoisted(() => vi.fn());
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   readPointer.mockImplementation(actual.readFile);
-  return { ...actual, readFile: readPointer };
+  observeStat.mockImplementation(actual.stat);
+  return { ...actual, readFile: readPointer, stat: observeStat };
 });
 vi.mock("node:child_process", () => ({ execFile: git }));
 vi.mock("../git-command", () => ({ getGitCommand: () => "git" }));
@@ -74,6 +77,79 @@ async function initializeRealGit(initOptions: string[] = []) {
 }
 
 describe("directory enrichment invalidation", () => {
+  it("records the cache decision and Git budget for each caller", async () => {
+    const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
+    const enrich = createThreadDirectoryEnricher();
+    await enrich(repo, "thread-list");
+    await enrich(repo, "selected-thread");
+    branch = "feature/diagnostics";
+    await fs.writeFile(path.join(repo, ".git", "HEAD"), `ref: refs/heads/${branch}\n`);
+    await enrich(repo, "selected-thread");
+    await fs.writeFile(path.join(repo, ".git", "config"), "[core]\n bare = false\n");
+    await enrich(repo, "missing-worktree-backfill");
+    const decisions = record.mock.calls.filter(([, delta]) => delta.requests);
+    expect(decisions.map(([context]) => [context.caller, context.reason])).toEqual([
+      ["thread-list", "cold"], ["selected-thread", "cache-hit"],
+      ["selected-thread", "head-changed"], ["missing-worktree-backfill", "relationship-changed"],
+    ]);
+    const commands = record.mock.calls.filter(([, delta]) => delta.gitStarted);
+    expect(commands.map(([context]) => context.reason)).toEqual([
+      "cold", "cold", "cold", "head-changed",
+      "relationship-changed", "relationship-changed", "relationship-changed",
+    ]);
+    expect(new Set(record.mock.calls.map(([context]) => context.enricherId)).size).toBe(1);
+    expect(git).toHaveBeenCalledTimes(7);
+  });
+
+  it("counts pending reuse separately from the caller that owns Git", async () => {
+    const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
+    const enrich = createThreadDirectoryEnricher();
+    await Promise.all([enrich(repo, "thread-list"), enrich(repo, "selected-thread")]);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: "selected-thread", reason: "pending-reuse" }),
+      { requests: 1 },
+    );
+    expect(record.mock.calls.filter(([, delta]) => delta.gitStarted)
+      .every(([context]) => context.caller === "thread-list")).toBe(true);
+    expect(git).toHaveBeenCalledTimes(3);
+  });
+
+  it("records failed probes and missing paths without retaining a fallback", async () => {
+    const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
+    const enrich = createThreadDirectoryEnricher();
+    fail = true;
+    await enrich(repo);
+    expect(record.mock.calls.filter(([, delta]) => delta.gitFailed)).toHaveLength(3);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ reason: "cold" }), { resultNotCached: 1 });
+    record.mockClear();
+    await enrich(path.join(root, "missing"));
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "observation-unavailable" }),
+      { requests: 1, observationErrors: 0 },
+    );
+    expect(record.mock.calls.some(([, delta]) => delta.gitStarted)).toBe(false);
+  });
+
+  it("distinguishes observation errors from a cold cache and records rejected publication", async () => {
+    const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
+    const enrich = createThreadDirectoryEnricher();
+    observeStat.mockRejectedValueOnce(new Error("fixture observation error"));
+    expect((await enrich(repo)).observedGitBranch).toBe("main");
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "observation-unavailable" }),
+      { requests: 1, observationErrors: 1 },
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "observation-unavailable" }), { resultNotCached: 1 },
+    );
+    record.mockClear();
+    await enrich(repo);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cold" }), { requests: 1, observationErrors: 0 },
+    );
+    expect(git).toHaveBeenCalledTimes(6);
+  });
+
   it("keeps a confirmed mapping across a day of repeated reads without Git", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const enrich = createThreadDirectoryEnricher();
@@ -234,6 +310,7 @@ describe("directory enrichment invalidation", () => {
   });
 
   it("does not publish a cache entry if HEAD changes while Git is running", async () => {
+    const record = vi.spyOn(directoryEnrichmentDiagnostics, "record");
     const enrich = createThreadDirectoryEnricher();
     const invoke = git.getMockImplementation()!;
     let release: () => void = () => {};
@@ -248,6 +325,9 @@ describe("directory enrichment invalidation", () => {
     await fs.writeFile(path.join(repo, ".git", "HEAD"), "ref: refs/heads/new-head\n");
     release();
     await pending;
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cold" }), { observationChangedDuringProbe: 1 },
+    );
     branch = "new-head";
     git.mockClear();
     expect((await enrich(repo)).observedGitBranch).toBe(branch);

@@ -9,6 +9,12 @@ import { getMainLogger } from "../log";
 import { getGitCommand } from "../git-command";
 import { createGitDirectoryObserver, type GitDirectoryObservation } from "./git-directory-observation";
 
+import {
+  directoryEnrichmentDiagnostics,
+  type DirectoryEnrichmentCaller,
+  type DirectoryEnrichmentContext,
+} from "../diagnostics/directory-enrichment-diagnostics";
+
 const execFile = promisify(execFileCallback);
 const threadDirectoryLog = getMainLogger("pwragent:thread-directory-enricher");
 const GIT_DIRECTORY_PROBE_TIMEOUT_MS = 2_000;
@@ -44,13 +50,24 @@ type GitMetadataEvidence = {
   error?: string;
 };
 
-async function runGit(projectKey: string, args: string[]): Promise<string> {
-  const result = await execFile(getGitCommand(), ["-C", projectKey, ...args], {
-    env: buildPwrAgentChildProcessEnv(process.env),
-    maxBuffer: GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES,
-    timeout: GIT_DIRECTORY_PROBE_TIMEOUT_MS,
-  });
-  return result.stdout.trim();
+async function runGit(
+  projectKey: string,
+  args: string[],
+  context: DirectoryEnrichmentContext,
+): Promise<string> {
+  const finish = directoryEnrichmentDiagnostics.startGit(context, args);
+  try {
+    const result = await execFile(getGitCommand(), ["-C", projectKey, ...args], {
+      env: buildPwrAgentChildProcessEnv(process.env),
+      maxBuffer: GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES,
+      timeout: GIT_DIRECTORY_PROBE_TIMEOUT_MS,
+    });
+    finish(false);
+    return result.stdout.trim();
+  } catch (error) {
+    finish(true);
+    throw error;
+  }
 }
 
 function buildFallbackLinkedDirectory(currentPath: string): LinkedDirectorySummary {
@@ -212,7 +229,8 @@ function findContainingWorktree(
 }
 
 async function loadThreadDirectoryEnrichment(
-  projectKey?: string,
+  projectKey: string,
+  context: DirectoryEnrichmentContext,
 ): Promise<ThreadDirectoryEnrichment> {
   if (!projectKey?.trim()) {
     return { linkedDirectories: [] };
@@ -226,9 +244,9 @@ async function loadThreadDirectoryEnrichment(
   try {
     const [repoRoot, worktreeList, observedGitBranch, gitMetadata] =
       await Promise.all([
-        runGit(currentPath, ["rev-parse", "--show-toplevel"]),
-        runGit(currentPath, ["worktree", "list", "--porcelain"]),
-        runGit(currentPath, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => undefined),
+        runGit(currentPath, ["rev-parse", "--show-toplevel"], context),
+        runGit(currentPath, ["worktree", "list", "--porcelain"], context),
+        runGit(currentPath, ["rev-parse", "--abbrev-ref", "HEAD"], context).catch(() => undefined),
         readGitMetadataEvidence(currentPath),
       ]);
     const worktreePaths = parseGitWorktrees(worktreeList);
@@ -307,16 +325,33 @@ async function loadThreadDirectoryEnrichment(
  */
 export function createThreadDirectoryEnricher(): (
   projectKey?: string,
+  caller?: DirectoryEnrichmentCaller,
 ) => Promise<ThreadDirectoryEnrichment> {
+  const enricherId = directoryEnrichmentDiagnostics.createEnricherId();
   const cache = new Map<string, CachedEnrichment>();
   const pending = new Map<string, Promise<ThreadDirectoryEnrichment>>();
   const observe = createGitDirectoryObserver();
 
-  async function refresh(key: string): Promise<ThreadDirectoryEnrichment> {
-    const before = await observe(key).catch(() => undefined);
+  async function refresh(key: string, caller: DirectoryEnrichmentCaller): Promise<ThreadDirectoryEnrichment> {
+    let observationErrors = 0;
+    const before = await observe(key).catch(() => {
+      observationErrors += 1;
+      return undefined;
+    });
     const cached = cache.get(key);
     const sameRelationship = before
       && cached?.observation.relationship === before.relationship;
+    const context: DirectoryEnrichmentContext = {
+      directory: key,
+      enricherId,
+      caller,
+      reason: !before ? "observation-unavailable"
+        : sameRelationship && cached.observation.head === before.head ? "cache-hit"
+        : !before.repository ? "unversioned"
+        : !cached ? "cold"
+        : sameRelationship ? "head-changed" : "relationship-changed",
+    };
+    directoryEnrichmentDiagnostics.record(context, { requests: 1, observationErrors });
     if (sameRelationship && cached.observation.head === before.head) {
       return cached.value;
     }
@@ -325,30 +360,47 @@ export function createThreadDirectoryEnricher(): (
     if (before && !before.repository) {
       value = { linkedDirectories: [buildFallbackLinkedDirectory(key)] };
     } else if (sameRelationship) {
-      const branch = await runGit(key, ["rev-parse", "--abbrev-ref", "HEAD"])
+      const branch = await runGit(key, ["rev-parse", "--abbrev-ref", "HEAD"], context)
         .catch(() => undefined);
       value = { ...cached.value, observedGitBranch: branch || undefined };
     } else {
-      value = await loadThreadDirectoryEnrichment(key);
+      value = await loadThreadDirectoryEnrichment(key, context);
     }
     // The branch is present only when the complete probe succeeded. Retaining
     // a fallback would hide recovery after a failed executable/filesystem read.
     if (before && (!before.repository || value.observedGitBranch)) {
-      const after = await observe(key).catch(() => undefined);
+      const after = await observe(key).catch(() => {
+        directoryEnrichmentDiagnostics.record(context, { observationErrors: 1 });
+        return undefined;
+      });
       if (after?.relationship === before.relationship && after.head === before.head) {
         cache.set(key, { observation: after, value });
+        directoryEnrichmentDiagnostics.record(context, { cacheStored: 1 });
+      } else {
+        directoryEnrichmentDiagnostics.record(context, { observationChangedDuringProbe: 1 });
       }
+    } else {
+      directoryEnrichmentDiagnostics.record(context, { resultNotCached: 1 });
     }
     return value;
   }
 
-  return async (projectKey) => {
-    if (!projectKey?.trim()) return { linkedDirectories: [] };
+  return async (projectKey, caller = "direct") => {
+    if (!projectKey?.trim()) {
+      directoryEnrichmentDiagnostics.record(
+        { directory: "", enricherId, caller, reason: "empty-path" }, { requests: 1 },
+      );
+      return { linkedDirectories: [] };
+    }
     const key = path.resolve(projectKey.trim());
     let inFlight = pending.get(key);
     if (!inFlight) {
-      inFlight = refresh(key).finally(() => pending.delete(key));
+      inFlight = refresh(key, caller).finally(() => pending.delete(key));
       pending.set(key, inFlight);
+    } else {
+      directoryEnrichmentDiagnostics.record(
+        { directory: key, enricherId, caller, reason: "pending-reuse" }, { requests: 1 },
+      );
     }
     return await inFlight;
   };

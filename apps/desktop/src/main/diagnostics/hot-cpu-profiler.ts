@@ -30,6 +30,7 @@ type HotCpuDebugger = {
 export type HotCpuTarget = {
   debugger: HotCpuDebugger;
   getOSProcessId: () => number;
+  readDiagnostics?: () => Record<string, unknown>;
   isDestroyed?: () => boolean;
   takeHeapSnapshot?: (filePath: string) => Promise<void>;
   readHeapUsage?: () => {
@@ -618,6 +619,22 @@ export class HotCpuProfiler {
     }
   }
 
+  private async writeDiagnostics(profilePath: string): Promise<void> {
+    if (!this.target.readDiagnostics) return;
+    const diagnosticsPath = profilePath.replace(/\.cpuprofile$/, ".diagnostics.json");
+    try {
+      await fs.writeFile(
+        diagnosticsPath,
+        `${JSON.stringify(this.target.readDiagnostics())}\n`,
+        "utf8",
+      );
+      await this.session.registerArtifact(artifactFilename(diagnosticsPath));
+    } catch (error) {
+      // Auxiliary accounting must never prevent delivery of the CPU profile.
+      this.logger.warn("[pwragent:hot-cpu] auxiliary diagnostics failed", error);
+    }
+  }
+
   private async stopProfileInner(reason: string): Promise<void> {
     this.profiling = false;
     this.clearProfileDurationTimer();
@@ -644,6 +661,7 @@ export class HotCpuProfiler {
         "utf8",
       );
       await this.session.registerArtifact(profileFilename);
+      await this.writeDiagnostics(profilePath);
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "profile-written",
