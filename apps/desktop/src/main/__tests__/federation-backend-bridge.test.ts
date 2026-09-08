@@ -26,6 +26,24 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("coalesces concurrent identical transcript reads and releases settled results", async () => {
+    let finish!: (response: AppServerReadThreadResponse) => void;
+    const request = vi.fn(() => new Promise<AppServerReadThreadResponse>((resolve) => { finish = resolve; }));
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    const params = { backend: "codex" as const, threadId: "card", limit: 10, readReason: "star-map-card" as const };
+    const response: AppServerReadThreadResponse = { backend: "codex", threadId: "card", fetchedAt: 1,
+      replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } } };
+    const first = client.readThread(params);
+    const second = client.readThread(params);
+    expect(request).toHaveBeenCalledTimes(1);
+    finish(response);
+    expect(await Promise.all([first, second])).toEqual([response, response]);
+    const fresh = client.readThread(params);
+    expect(request).toHaveBeenCalledTimes(2);
+    finish({ ...response, fetchedAt: 2 });
+    await expect(fresh).resolves.toMatchObject({ fetchedAt: 2 });
+  });
+
   it("prepares start, steer, handoff, and Star Map attachments before remote RPC", async () => {
     const request = vi.fn(async ({ method }: { method: string }) => {
       if (method === FEDERATION_BACKEND_METHODS.startTurn) {

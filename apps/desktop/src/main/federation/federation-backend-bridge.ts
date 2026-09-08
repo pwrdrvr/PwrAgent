@@ -1715,6 +1715,7 @@ export function registerFederationBackendHandlers(params: {
 }
 
 export class FederationRemoteBackendClient implements FederationBackendOperations {
+  private readonly pendingThreadReads = new Map<string, Promise<AppServerReadThreadResponse>>();
   constructor(
     private readonly rpc: FederationRpcEndpoint,
     private readonly transformReadThreadResponse: (
@@ -1897,11 +1898,21 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse> {
-    const response = await this.rpc.request<AppServerReadThreadResponse>({
+    const key = JSON.stringify([request.backend, request.threadId, request.before, request.limit,
+      request.includeTurns, request.includeAllToolInvocations, request.viewOnly, request.knownRevision, request.readReason]);
+    const pending = this.pendingThreadReads.get(key);
+    if (pending) return await pending;
+    const read = this.rpc.request<AppServerReadThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.readThread,
       params: request,
-    });
-    return await this.transformReadThreadResponse(response);
+    }).then((response) => this.transformReadThreadResponse(response));
+    // Share concurrent card/window hydration, without caching a settled replay.
+    // The RPC layer still owns admission; cap only this deduplication metadata.
+    if (this.pendingThreadReads.size < 32) this.pendingThreadReads.set(key, read);
+    try { return await read; }
+    finally {
+      if (this.pendingThreadReads.get(key) === read) this.pendingThreadReads.delete(key);
+    }
   }
 
   async analyzeThreadToolHistory(
