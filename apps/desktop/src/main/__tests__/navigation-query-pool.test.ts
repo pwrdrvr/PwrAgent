@@ -44,18 +44,25 @@ describe("NavigationQueryPool", () => {
     expect(pool.getBudgetUsage().retainedBytes).toBe(0);
   });
 
-  it("fences canonical exact reads by owner and thread without cancelling unrelated configuration", async () => {
+  it("replaces invalidated exact results without rejecting demand or rereading unrelated owners", async () => {
     const pool = new NavigationQueryPool();
     const ref = { backend: "codex" as const, threadId: "same" };
     const pending: Array<Promise<unknown>> = [];
     const signals: AbortSignal[] = [];
     const finish: Array<() => void> = [];
+    const loads: Array<ReturnType<typeof vi.fn>> = [];
     for (const instanceId of ["a", "b"]) {
+      let reads = 0;
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        reads += 1;
+        signals.push(signal);
+        const value = { protocol: 2 as const, ref, revision: reads === 1 ? "stale" : "canonical",
+          readiness: "ready" as const, identity: "unresolved" as const };
+        return reads === 1 ? new Promise<typeof value>((resolve) => finish.push(() => resolve(value))) : Promise.resolve(value);
+      });
+      loads.push(load);
       pending.push(pool.readExact({ kind: "detail", consumerId: instanceId, identity: "same", operation: "full", ref,
-        owner: { scope: "remote", instanceId }, load: ({ signal }) => {
-          signals.push(signal);
-          return new Promise((resolve) => finish.push(() => resolve({ protocol: 2, ref, revision: "detail", readiness: "ready", identity: "unresolved" })));
-        } }));
+        owner: { scope: "remote", instanceId }, load }));
     }
     pending.push(pool.readExact({ kind: "launchpad", consumerId: "config", identity: "directory", operation: "full",
       owner: { scope: "remote", instanceId: "a" }, load: ({ signal }) => {
@@ -64,9 +71,12 @@ describe("NavigationQueryPool", () => {
       } }));
     const settled = Promise.allSettled(pending);
     pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
-    expect(signals.map((signal) => signal.aborted)).toEqual([true, false, false]);
+    pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
+    expect(signals.map((signal) => signal.aborted)).toEqual([false, false, false]);
     for (const done of finish) done();
-    expect((await settled).map((result) => result.status)).toEqual(["rejected", "fulfilled", "fulfilled"]);
+    expect((await settled).map((result) => result.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+    await expect(pending[0]).resolves.toMatchObject({ revision: "canonical" });
+    expect(loads.map((load) => load.mock.calls.length)).toEqual([2, 1]);
     for (const consumer of ["a", "b", "config"]) pool.release(consumer);
     expect(pool.getBudgetUsage().retainedBytes).toBe(0);
   });

@@ -783,6 +783,20 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it("distinguishes unavailable peers from a connected peer's negotiated navigation protocol", () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const visible = vi.spyOn(harness, "visiblePeers").mockReturnValue([]);
+    expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(FederationPeerUnavailableError);
+    visible.mockReturnValue([{ id: "owner", status: "disconnected" }]);
+    expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(FederationPeerUnavailableError);
+    visible.mockReturnValue([{ id: "owner", status: "connected" }]);
+    expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(/Upgrade/);
+    visible.mockReturnValue([Object.assign({ id: "owner", status: "connected" }, { navigationQueryProtocol: 2 })]);
+    expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).not.toThrow();
+  });
+
   it("requires negotiated peer-directory pages and sends an upgrade error instead of a legacy snapshot", () => {
     const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
     try {

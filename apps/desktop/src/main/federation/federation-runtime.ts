@@ -1131,7 +1131,12 @@ export class DesktopFederationRuntime {
     const peer = this.visiblePeers().find(
       (candidate) => candidate.id === target.instanceId,
     );
-    if (peer?.navigationQueryProtocol !== 2) {
+    // Remembered metadata is not a protocol negotiation. During reconnect the
+    // peer may still carry the previous process's capabilities.
+    if (!peer || peer.status !== "connected") {
+      throw new FederationPeerUnavailableError(target.instanceId);
+    }
+    if (peer.navigationQueryProtocol !== 2) {
       throw navigationUpgradeRequired(target.instanceId);
     }
   }

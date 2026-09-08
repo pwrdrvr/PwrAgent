@@ -30,6 +30,7 @@ type Query = {
   ownerKey: string;
   threadKey?: string;
   active: boolean;
+  invalidationSequence: number;
   consumers: Set<string>;
   pages: Map<string, { page: Result; bytes: number }>;
   reads: Map<string, Read>;
@@ -140,7 +141,7 @@ export class NavigationQueryPool {
         }
         if (occupied < (isQuery ? MAX_QUERIES : MAX_EXACT_RESOURCES)) {
           query = { kind: params.kind, ownerKey: params.ownerKey, threadKey: params.threadKey,
-            active: false, consumers: new Set(), pages: new Map(), reads: new Map() };
+            active: false, invalidationSequence: 0, consumers: new Set(), pages: new Map(), reads: new Map() };
           this.queries.set(key, query);
           break;
         }
@@ -188,7 +189,11 @@ export class NavigationQueryPool {
     for (const query of this.queries.values()) {
       if (query.kind === "query" || query.ownerKey !== owner) continue;
       if (thread && query.threadKey !== thread) continue;
-      for (const read of query.reads.values()) read.controller.abort();
+      // Canonical changes invalidate the result, not the consumer's demand.
+      // Finish the physical read and replace it under its existing deadline;
+      // otherwise ordinary owner events reject all mounted configuration/FIFO
+      // readers as though the operator had cancelled them.
+      query.invalidationSequence += 1;
       for (const page of query.pages.values()) this.retainedBytes -= page.bytes;
       query.pages.clear();
     }
@@ -231,8 +236,16 @@ export class NavigationQueryPool {
     const timer = setTimeout(() => params.controller.abort(),
       Math.max(0, params.deadlineAt - Date.now()));
     const completion = (async () => {
-      const page = await params.load({ signal, deadlineAt: params.deadlineAt });
-      signal.throwIfAborted();
+      let page: T;
+      for (;;) {
+        const sequence = params.query.invalidationSequence;
+        page = await params.load({ signal, deadlineAt: params.deadlineAt });
+        signal.throwIfAborted();
+        if (Date.now() >= params.deadlineAt) {
+          throw new NavigationQueryError("navigation_busy", "Navigation read deadline expired.");
+        }
+        if (sequence === params.query.invalidationSequence) break;
+      }
       const bytes = Buffer.byteLength(JSON.stringify(page), "utf8");
       if (bytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         throw new NavigationQueryError("navigation_item_too_large", "Navigation page exceeds its result budget.");
