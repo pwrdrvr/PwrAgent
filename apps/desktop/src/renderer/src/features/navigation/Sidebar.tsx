@@ -227,6 +227,7 @@ type SidebarProps = {
   };
   runtimeIdentity?: RuntimeIdentity;
   activeProfile?: string;
+  onRefreshRateLimits?: () => void;
   automationsActive?: boolean;
   profiles?: DesktopPwrAgentProfileSummary[];
   threadSearchActive?: boolean;
@@ -1971,6 +1972,7 @@ export function Sidebar(props: SidebarProps) {
           <ProfileIdentityButton
             label={profileLabel ?? `profile:${props.activeProfile}`}
             tooltipText={profileTooltip}
+            onRefresh={props.onRefreshRateLimits}
             onToggle={(event) => {
               event.stopPropagation();
               setProfileMenuOpen((open) => !open);
@@ -3016,11 +3018,17 @@ function placeThreadContextMenu(
 
 function ProfileIdentityButton(props: {
   label: string;
+  onRefresh?: () => void;
   tooltipText?: string;
   onToggle: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const updateTooltip = tooltip.update;
+  useEffect(() => {
+    updateTooltip(props.tooltipText);
+  }, [props.tooltipText, updateTooltip]);
   const showTooltip = (target: HTMLButtonElement): void => {
+    props.onRefresh?.();
     if (props.tooltipText) {
       tooltip.show(target, props.tooltipText);
     }
@@ -3030,6 +3038,7 @@ function ProfileIdentityButton(props: {
     <>
       <button
         aria-label="Open PwrAgent profile menu"
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         className="runtime-identity__button"
         type="button"
         onBlur={tooltip.hide}

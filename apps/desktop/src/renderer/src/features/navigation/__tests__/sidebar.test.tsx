@@ -2058,6 +2058,38 @@ describe("Sidebar", () => {
     expect(onForkThread).toHaveBeenCalledWith(childThread, "same-worktree");
   });
 
+  it("refreshes profile quotas on hover and focus and updates the open tooltip", async () => {
+    const onRefreshRateLimits = vi.fn();
+    const props = {
+      activeProfile: "work",
+      backends,
+      browseMode: "recents" as const,
+      directories,
+      inboxThreads: [],
+      loading: false,
+      threads: [],
+      onBrowseModeChange: () => undefined,
+      onCreateThread: async () => undefined,
+      onOpenLaunchpad: async () => undefined,
+      onSelectThread: () => undefined,
+      onRefreshRateLimits,
+    };
+    const { rerender } = render(<Sidebar {...props} />);
+    const button = screen.getByRole("button", { name: "Open PwrAgent profile menu" });
+    fireEvent.mouseEnter(button);
+    expect(onRefreshRateLimits).toHaveBeenCalledTimes(1);
+    await screen.findByRole("tooltip");
+    rerender(<Sidebar {...props} backends={[{
+      ...backends[0]!,
+      rateLimits: [{ name: "Weekly limit", usedPercent: 58 }],
+    }]} />);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Weekly limit: 42% left");
+    expect(button).toHaveAttribute("aria-describedby", screen.getByRole("tooltip").id);
+    fireEvent.mouseLeave(button);
+    fireEvent.focus(button);
+    expect(onRefreshRateLimits).toHaveBeenCalledTimes(2);
+  });
+
   it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {
     render(
       <Sidebar

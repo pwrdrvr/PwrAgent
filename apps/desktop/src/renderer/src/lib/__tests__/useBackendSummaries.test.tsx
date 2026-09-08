@@ -8,6 +8,47 @@ import {
 } from "../useBackendSummaries";
 
 describe("useBackendSummaries", () => {
+  it("refreshes quotas while visible and stops when the sidebar closes", async () => {
+    vi.useFakeTimers();
+    const listBackends = vi.fn().mockResolvedValue({ fetchedAt: 1, backends: [] });
+    const desktopApi = { listBackends };
+    const { result, rerender, unmount } = renderHook(
+      ({ open }) => useBackendSummaries(desktopApi, { pollRateLimits: open }),
+      { initialProps: { open: true } },
+    );
+    try {
+      await act(async () => {});
+      expect(listBackends).toHaveBeenCalledWith({
+        includeUnavailable: true,
+        refreshRateLimits: true,
+      });
+      listBackends.mockClear();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(listBackends).toHaveBeenCalledTimes(1);
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      listBackends.mockClear();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(listBackends).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await act(async () => {});
+      expect(listBackends).toHaveBeenCalledTimes(1);
+      rerender({ open: false });
+      listBackends.mockClear();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(listBackends).not.toHaveBeenCalled();
+      await act(async () => { await result.current.refreshRateLimits(); });
+      expect(listBackends).toHaveBeenCalledWith({
+        includeUnavailable: true,
+        refreshRateLimits: true,
+      });
+    } finally {
+      unmount();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it("distinguishes pending discovery from a completed empty result", async () => {
     let resolveBackends!: (value: {
       fetchedAt: number;

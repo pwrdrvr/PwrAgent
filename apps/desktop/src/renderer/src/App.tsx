@@ -1492,6 +1492,7 @@ function DesktopAppShell(props: {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,
     suspended: remoteReadsSuspended,
+    pollRateLimits: !sidebarHidden,
   });
   const startupBackend = useMemo(
     () => resolveNewThreadBackend(backendSummaries.backends),
@@ -2641,6 +2642,7 @@ function DesktopAppShell(props: {
           }}
           addingProjectDirectory={navigation.pickingDirectory}
           backends={backendSummaries.backends}
+          onRefreshRateLimits={backendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
           creatingThread={navigation.creatingThread}
           directories={navigation.directories}

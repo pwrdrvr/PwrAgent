@@ -284,6 +284,8 @@ export type BackendSummary = {
 };
 
 export type ListBackendsRequest = {
+  /** Refresh account quotas for the already discovered Codex provider. */
+  refreshRateLimits?: boolean;
   includeUnavailable?: boolean;
   /**
    * Re-read model capabilities before describing providers. A backend id
