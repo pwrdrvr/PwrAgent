@@ -249,6 +249,7 @@ import {
   collectFederationHostInfo,
   collectFederationLoadStatus,
 } from "./federation-host-info";
+import { defaultInstanceLabel } from "./federation-instance-label";
 import { FederationActivityLedger } from "./federation-activity-ledger";
 import { FederationTransferLedger } from "./federation-transfer-ledger";
 import { lookupFederationArchivedThreads, readFederationPinnedSnapshot } from "./federation-collection-client";
@@ -5026,16 +5027,6 @@ export class DesktopFederationRuntime {
     }
     return true;
   }
-}
-
-/**
- * Fallback display name when the operator has not set one: the machine
- * hostname (minus the mDNS suffix) beats both the profile name (almost
- * always "default") and the raw instance GUID for recognizing a peer.
- */
-export function defaultInstanceLabel(): string {
-  const host = hostname().trim().replace(/\.local$/i, "");
-  return host || "PwrAgent";
 }
 
 let messagingPlatformStatusReader:
