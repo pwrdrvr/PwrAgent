@@ -1,7 +1,10 @@
 # Bounded-navigation operator acceptance
 
-PR [#2001](https://github.com/pwrdrvr/PwrAgent/pull/2001) is ready for operator
-acceptance testing after the CI repair checkpoint `0d837ec07`. The earlier live
+PR [#2001](https://github.com/pwrdrvr/PwrAgent/pull/2001) has failed live operator
+acceptance and is not ready for merge. The reported failures include cross-owner
+child visibility, unstable directory/pin pages, query pressure, and oversized
+selected detail. Repairs are under validation; passing fixtures alone does not
+close these failures. The earlier live
 host evidence below was collected at `e71397043`. GitHub CI completion and
 explicit operator merge approval are separate gates. The PR
 remains a draft and must not be merged automatically.

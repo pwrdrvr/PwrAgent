@@ -83,7 +83,7 @@ selection independently resolves its local viewer mount and remote configuration
 | Rows per page | 100; detail/blob continuation for an individually oversized record |
 | Request selectors / nested row records | At most 100 exact identities/disclosures per request; nested chip arrays and UTF-8 strings count against the same page bytes and expose continuation/detail availability |
 | Immutable owner generation | Stable owner-backed range/membership metadata, not a serialized copy of the whole collection. The existing 16 MiB/256-page replacement cap is not a cap on reachable Inbox/Recents threads |
-| Owner cursor pool | At most 8 retained generations and 32 MiB backing, process-wide. New admission cannot silently evict a referenced generation; return a typed busy/budget outcome when no safe eviction exists |
+| Owner cursor pool | At most 8 retained generations and 32 MiB backing, process-wide. Evict superseded generations first, then least-recently-used cursor backing. An evicted cursor returns a typed expiry; fresh query admission is not blocked by abandoned cursors |
 | Cursor lifetime | 60 seconds idle; eviction/expiry returns `cursor_expired`. Resume via explicit rebaseline and seek around the visible anchor; deep browsing must remain reachable after human pauses |
 | Viewer retained query pool | At most 8 materialized queries / 64 MiB serialized-equivalent per process, shared across windows/owners. Queue additional active reads. After a read settles, its duplicate process-cache copy may be evicted; the renderer retains its displayed pages and owner cursors. Mounted consumer leases remain charged separately and do not pin idle duplicate backing. Never evict an in-flight read. Exact detail, FIFO, Attention order lifetime and user-owned drag state are separate resources |
 | Geometry / Attention metadata | Separate measured process-wide retained and transient budgets required before enabling these resources; page-cache limits do not bound their membership/order backing |
@@ -105,9 +105,12 @@ rebaseline after cursor expiry. It cannot be combined with a cursor or an
 unchanged-baseline revision. Owners seek within the new immutable generation;
 a removed anchor returns `navigation_anchor_missing` instead of silently
 returning the first page. `NavigationQueryPage.rangeStart` distinguishes a tail
-from a complete collection baseline. The window query controller retains an
-expired range and requires anchor recovery or an explicit restart; consumers
-must supply their visible anchor when wiring the controller.
+from a complete collection baseline. The window query controller retains a
+displayed range while rebuilding its admitted rows around the visible anchor.
+An explicit Load more includes one additional page in that replacement. A
+removed anchor requires an explicit restart; consumers must supply their visible
+anchor when wiring the controller. Routine refresh rebuilds the displayed range
+atomically rather than replacing a multi-page list with only its first page.
 
 Count retained serialized backing explicitly; document and measure transient
 decoding/projection allocations separately rather than describing a JSON byte
@@ -245,3 +248,14 @@ Required regressions include:
 The existing [collection budget report](federation-collection-budgets.md) remains
 the measured implementation and validation record. Operator acceptance is a
 separate approval step; this PR must not be merged automatically.
+
+### Selected historical collections
+
+Exact configuration carries a count/revision manifest for historical arrays;
+sub-agent records, native children, audit logs, worktree snapshots, branch-drift
+pairs and child order are independently paged through selected-detail collection
+requests. Each response remains at most 100 records / 252 KiB. The renderer keeps
+configuration ready while these collections load under a separate lease, fences
+late results by owner/selection sequence, and admits at most 8 MiB of retained
+collection values. Collection failure is reported independently and does not
+disable Send. No collection is silently truncated.

@@ -177,8 +177,8 @@ and `navigation-query-write-budget.test.ts` enforce these boundaries.
 
 ### Main-window paged state
 
-`NavigationWindowQueries` drives the main and remote renderer paged state. It retains at most eight explicitly demanded resources and
-8 MiB of serialized-equivalent accepted page backing. Each incoming result is
+`NavigationWindowQueries` drives the main and remote renderer paged state. It schedules every explicitly demanded resource with four concurrent reads,
+admits at most 1 MiB of request metadata, and retains at most 8 MiB of serialized-equivalent accepted page backing. Each incoming result is
 checked against 252 KiB before it is merged. Collapsing a resource releases its
 main-process lease and page backing; hiding the window releases transport leases
 while retaining its accepted display ranges. Replacement lifetimes use distinct
