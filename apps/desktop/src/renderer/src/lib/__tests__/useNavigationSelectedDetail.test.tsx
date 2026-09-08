@@ -17,6 +17,27 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+it("keeps composer configuration ready while independent history pages load", async () => {
+  const collection = deferred<NavigationSelectedDetailResponse>();
+  const configured = { ...detail("config"), collections: [{ name: "subAgents" as const, count: 1, revision: "history" }] };
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()
+    .mockResolvedValueOnce(configured).mockReturnValueOnce(collection.promise);
+  const release = vi.fn(async () => undefined);
+  const api: DesktopApi = { getNavigationSelectedDetail: read, releaseNavigationQuery: release };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref }));
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(result.current.state?.readiness).toBe("ready");
+  expect(result.current.state?.collectionReadiness).toBe("loading");
+  expect(read.mock.calls[1]?.[1]).not.toBe(read.mock.calls[0]?.[1]);
+  await act(async () => collection.resolve({ protocol: 2, ref, identity: "present", readiness: "ready", revision: "history",
+    collectionPage: { name: "subAgents", revision: "history", complete: true,
+      values: { subAgents: [{ monitorId: "old", task: "Completed task", status: "success", createdAt: 1, updatedAt: 1 }] } } }));
+  await waitFor(() => expect(result.current.state?.collectionReadiness).toBe("ready"));
+  expect(result.current.state?.detail?.thread?.subAgents?.[0]?.monitorId).toBe("old");
+  expect(result.current.state?.readiness).toBe("ready");
+  unmount();
+});
+
 it("revalidates exact workspace configuration after an owner handoff event", async () => {
   let listener: ((event: AgentEvent) => void) | undefined;
   const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>()

@@ -9,6 +9,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 
 const mocks = vi.hoisted(() => ({
   reconcileNavigationSnapshot: vi.fn(),
+  getThreadOverlayState: vi.fn(),
   getLaunchpadDefaults: vi.fn(),
   getDirectoryLaunchpad: vi.fn(),
   listCodexEnvironmentOptions: vi.fn(),
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot: mocks.reconcileNavigationSnapshot,
+    getThreadOverlayState: mocks.getThreadOverlayState,
     getLaunchpadDefaults: mocks.getLaunchpadDefaults,
     getDirectoryLaunchpad: mocks.getDirectoryLaunchpad,
   }),
@@ -75,6 +77,7 @@ describe("NavigationDetailService", () => {
 
   beforeEach(() => {
     mocks.reconcileNavigationSnapshot.mockReset();
+    mocks.getThreadOverlayState.mockReset();
     mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
     mocks.getDirectoryLaunchpad.mockReset().mockResolvedValue(undefined);
     mocks.listCodexEnvironmentOptions.mockReset().mockResolvedValue([]);
@@ -125,6 +128,11 @@ describe("NavigationDetailService", () => {
     const selected = thread("selected");
     selected.linkedDirectories = [{ id: "selected-repo", kind: "local", label: "Selected", path: "/repo/selected" }];
     selected.queuedTurns = [{ queueEntryId: "independent", origin: "manual", displayText: "Private FIFO", createdAt: 1, position: 0 }];
+    selected.subAgents = Array.from({ length: 738 }, (_, index) => ({
+      monitorId: `monitor-${index}`, task: "Historical task", status: "success" as const,
+      createdAt: index, updatedAt: index, lastMessage: "result".repeat(350),
+    }));
+    mocks.getThreadOverlayState.mockResolvedValue({ subAgents: selected.subAgents });
     selected.agent = {
       name: "Operator",
       instructions: "exact detail only",
@@ -166,6 +174,22 @@ describe("NavigationDetailService", () => {
       },
     });
     expect(first.thread).not.toHaveProperty("queuedTurns");
+    expect(first.thread).not.toHaveProperty("subAgents");
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+    expect(first.collections).toContainEqual(expect.objectContaining({ name: "subAgents", count: 738 }));
+    const hydratedBefore = vi.mocked(registry.hydrateThreadGitWorkingStates).mock.calls.length;
+    let cursor: string | undefined;
+    const monitors: string[] = [];
+    do {
+      const response = await service.readSelectedDetail({ protocol: 2, ref: first.ref, collection: { name: "subAgents", cursor } });
+      expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+      expect(response.thread).toBeUndefined();
+      monitors.push(...response.collectionPage!.values.subAgents!.map((agent) => agent.monitorId));
+      cursor = response.collectionPage!.nextCursor;
+      expect(response.collectionPage!.complete).toBe(!cursor);
+    } while (cursor);
+    expect(monitors).toEqual(selected.subAgents.map((agent) => agent.monitorId));
+    expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledTimes(hydratedBefore);
     expect(registry.getQueuedTurnsSnapshot).not.toHaveBeenCalled();
     await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" }, probeWorkingStates: true });
     expect(registry.hydrateThreadGitWorkingStates).toHaveBeenLastCalledWith(expect.any(Array), { probeMissing: true });

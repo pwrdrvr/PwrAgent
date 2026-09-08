@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  NAVIGATION_DETAIL_COLLECTION_NAMES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   NAVIGATION_QUERY_PROTOCOL_VERSION,
 } from "@pwragent/shared";
@@ -159,6 +160,37 @@ export class NavigationDetailService {
       };
     }
     const threadKey = buildThreadIdentityKey(summary.source, summary.id);
+    if (request.collection) {
+      const name = request.collection.name;
+      if (!NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
+      const overlay = await getDesktopOverlayStore().getThreadOverlayState({ backend: summary.source, threadId: summary.id });
+      const values = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
+        : overlay?.[name] ?? (name === "worktreeSnapshots" ? summary.worktreeSnapshots : undefined) ?? [];
+      const manifest = { name, revision: revision({ ref: request.ref, name, values }) };
+      const cursor = request.collection.cursor ? decodeQueueCursor(request.collection.cursor) : undefined;
+      if (cursor && cursor.revision !== manifest.revision) {
+        throw new NavigationQueryError("navigation_cursor_expired", "Selected collection changed while paging; restart this collection.");
+      }
+      const offset = cursor?.offset ?? 0;
+      if (offset > values.length) throw new NavigationQueryError("navigation_invalid_request", "Selected collection cursor is outside its revision.");
+      const response: NavigationSelectedDetailResponse = {
+        protocol: 2, ref: request.ref, revision: manifest.revision, readiness: "ready", identity: "present",
+        collectionPage: { name: manifest.name, revision: manifest.revision,
+          values: { [manifest.name]: [] }, complete: offset === values.length },
+      };
+      for (let end = offset + 1; end <= Math.min(values.length, offset + 100); end += 1) {
+        const candidate = { ...response, collectionPage: { ...response.collectionPage!,
+          values: { [manifest.name]: values.slice(offset, end) }, complete: end === values.length,
+          nextCursor: end < values.length ? encodeQueueCursor({ offset: end, revision: manifest.revision }) : undefined,
+        } };
+        if (responseBytes(candidate) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+          if (end === offset + 1) throw new NavigationQueryError("navigation_item_too_large", "One selected collection record exceeds the result budget.");
+          break;
+        }
+        response.collectionPage = candidate.collectionPage;
+      }
+      return response;
+    }
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey([
       summary,
     ]);
@@ -193,6 +225,12 @@ export class NavigationDetailService {
         identity: "unresolved",
       };
     }
+    const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => ({
+      name, count: thread[name]?.length ?? 0,
+      revision: revision({ ref: request.ref, name, values: thread[name] ?? [] }),
+    }));
+    const configuration = { ...thread };
+    for (const name of NAVIGATION_DETAIL_COLLECTION_NAMES) delete configuration[name];
     let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
     if (request.includeWorkspaceConfiguration) {
       if (thread.linkedDirectories.length > 100) {
@@ -204,7 +242,7 @@ export class NavigationDetailService {
           gitStatus: directory.path ? await this.registry.readSelectedWorkspaceGitStatus(directory.path) : undefined });
       }
     }
-    const detailRevision = revision({ thread, workspaceDirectories });
+    const detailRevision = revision({ thread: configuration, workspaceDirectories });
     if (request.knownRevision === detailRevision) {
       return {
         protocol: NAVIGATION_QUERY_PROTOCOL_VERSION,
@@ -213,6 +251,7 @@ export class NavigationDetailService {
         readiness: "ready",
         identity: "present",
         unchanged: true,
+        collections,
       };
     }
     const response: NavigationSelectedDetailResponse = {
@@ -221,7 +260,8 @@ export class NavigationDetailService {
       revision: detailRevision,
       readiness: "ready",
       identity: "present",
-      thread,
+      thread: configuration,
+      collections,
       ...(workspaceDirectories ? { workspaceDirectories } : {}),
     };
     if (responseBytes(response) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {

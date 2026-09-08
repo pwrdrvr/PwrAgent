@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FederationTarget, FederationPeerSummary, NavigationIdentity } from "@pwragent/shared";
+import type { FederationTarget, FederationPeerSummary, NavigationIdentity, NavigationDetailCollections, NavigationDetailCollectionName } from "@pwragent/shared";
 import { buildPullRequestStatusKey } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationThreadEvent } from "./navigation-thread-event";
@@ -34,6 +34,8 @@ export function useNavigationSelectedDetail(params: {
   const consumerRef = useRef<string | undefined>(undefined);
   if (!consumerRef.current) consumerRef.current = `selected-detail:${++nextDetailConsumer}`;
   const connectionRef = useRef<{ owner: string; status: string } | undefined>(undefined);
+  const collectionsRef = useRef<{ identity?: string; values: NavigationDetailCollections; revisions: Map<NavigationDetailCollectionName, string> }>({ values: {}, revisions: new Map() });
+  const collectionConsumersRef = useRef(new Set<string>());
   const [state, setState] = useState<NavigationSelectionState>();
   const refresh = useCallback(async () => {
     const currentParams = paramsRef.current;
@@ -61,9 +63,57 @@ export function useNavigationSelectedDetail(params: {
       }, consumerRef.current);
       if (sequenceRef.current !== sequence) return;
       const next = applyNavigationSelectedDetail({ state: started, sequence, detail });
+      const collectionIdentity = JSON.stringify([selectedRef, currentParams.federationTarget]);
+      if (collectionsRef.current.identity !== collectionIdentity) collectionsRef.current = { identity: collectionIdentity, values: {}, revisions: new Map() };
+      if (next.detail?.thread) next.detail = { ...next.detail, thread: { ...next.detail.thread, ...collectionsRef.current.values } };
       pullRequestKeysRef.current = new Set(next.detail?.thread?.prs?.map(buildPullRequestStatusKey));
       currentRef.current = next;
       setState(next);
+      // Configuration is usable now. Historical collections have a separate
+      // lease/readiness and may finish after the operator starts composing.
+      if (detail.collections?.length && next.detail?.thread) {
+        const token = `${consumerRef.current}:collections:${sequence}`;
+        collectionConsumersRef.current.add(token);
+        const publish = (patch: Partial<NavigationSelectionState>) => {
+          if (sequenceRef.current !== sequence || !currentRef.current) return;
+          currentRef.current = { ...currentRef.current, ...patch };
+          setState(currentRef.current);
+        };
+        publish({ collectionReadiness: "loading", collectionError: undefined });
+        try {
+          for (const manifest of detail.collections) {
+            if (collectionsRef.current.revisions.get(manifest.name) === manifest.revision) continue;
+            let cursor: string | undefined;
+            let values: unknown[] = [];
+            if (manifest.count) do {
+              const response = await desktopApi.getNavigationSelectedDetail({ protocol: 2, ref: selectedRef,
+                federationTarget: currentParams.federationTarget, collection: { name: manifest.name, cursor } }, token);
+              if (sequenceRef.current !== sequence) return;
+              const page = response.collectionPage;
+              if (!page || page.name !== manifest.name || page.revision !== manifest.revision
+                || page.complete === Boolean(page.nextCursor) || (cursor && cursor === page.nextCursor)) {
+                throw new Error("Selected history collection changed while loading. Refresh this thread to reload its history metadata.");
+              }
+              values = [...values, ...(page.values[manifest.name] ?? [])];
+              if (new TextEncoder().encode(JSON.stringify({ ...collectionsRef.current.values, [manifest.name]: values })).byteLength > 8 * 1024 * 1024) {
+                throw new Error("Selected history metadata exceeds its retained budget.");
+              }
+              cursor = page.nextCursor;
+            } while (cursor);
+            if (sequenceRef.current !== sequence) return;
+            collectionsRef.current.values = { ...collectionsRef.current.values, [manifest.name]: values };
+            collectionsRef.current.revisions.set(manifest.name, manifest.revision);
+            const current = currentRef.current!;
+            publish({ detail: { ...current.detail!, thread: { ...current.detail!.thread!, ...collectionsRef.current.values } } });
+          }
+          publish({ collectionReadiness: "ready" });
+        } catch (error) {
+          publish({ collectionReadiness: "failed", collectionError: error instanceof Error ? error.message : String(error) });
+        } finally {
+          collectionConsumersRef.current.delete(token);
+          void desktopApi.releaseNavigationQuery?.(token).catch(() => undefined);
+        }
+      }
     } catch (error) {
       if (sequenceRef.current !== sequence) return;
       const next: NavigationSelectionState = {
@@ -95,6 +145,9 @@ export function useNavigationSelectedDetail(params: {
     return () => {
       sequenceRef.current += 1;
       void desktopApi?.releaseNavigationQuery?.(consumerRef.current!).catch(() => {});
+      for (const token of collectionConsumersRef.current) void desktopApi?.releaseNavigationQuery?.(token).catch(() => undefined);
+      collectionConsumersRef.current.clear();
+      consumerRef.current = `selected-detail:${++nextDetailConsumer}`;
     };
   }, [identityKey, refresh, targetKey, params.enabled]);
   useEffect(() => {

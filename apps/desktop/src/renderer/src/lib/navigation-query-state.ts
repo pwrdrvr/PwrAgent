@@ -27,6 +27,8 @@ export type NavigationSelectionState = {
   /** A canonical event invalidated this detail revision. */
   stale?: boolean;
   error?: string;
+  collectionReadiness?: "loading" | "ready" | "failed";
+  collectionError?: string;
 };
 
 export function navigationIdentityKey(ref: NavigationIdentity): string {

@@ -8011,7 +8011,7 @@ export function useThreadNavigation(
     forkThread,
     creatingThread,
     directories,
-    error: state.error,
+    error: state.error ?? selectedDetail.state?.collectionError,
     federationTarget:
       activeFederatedLaunchpad?.target ?? state.rows?.federationTarget,
     inboxThreads,

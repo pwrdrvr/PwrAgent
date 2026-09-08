@@ -1828,7 +1828,17 @@ export type NavigationSelectedDetailRequest = {
   ref: NavigationIdentity;
   federationTarget?: FederationTarget;
   knownRevision?: string;
+  /** Historical collections have independent paging and never gate composer configuration. */
+  collection?: { name: NavigationDetailCollectionName; cursor?: string };
 };
+
+export const NAVIGATION_DETAIL_COLLECTION_NAMES = [
+  "subAgents", "codexNativeSubAgents", "permissionTransitionLog",
+  "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog",
+  "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder",
+] as const;
+export type NavigationDetailCollectionName = typeof NAVIGATION_DETAIL_COLLECTION_NAMES[number];
+export type NavigationDetailCollections = Pick<NavigationThreadSummary, NavigationDetailCollectionName>;
 
 export type NavigationSelectedDetailResponse = {
   protocol: typeof NAVIGATION_QUERY_PROTOCOL_VERSION;
@@ -1836,8 +1846,16 @@ export type NavigationSelectedDetailResponse = {
   revision: string;
   readiness: "ready" | "failed";
   identity: "present" | "archived" | "deleted" | "denied" | "unresolved";
-  /** Exact-thread compatibility detail; large collections migrate separately. */
+  /** Exact configuration. Historical arrays are read using the collection manifest. */
   thread?: NavigationThreadSummary;
+  collections?: Array<{ name: NavigationDetailCollectionName; revision: string; count: number }>;
+  collectionPage?: {
+    name: NavigationDetailCollectionName;
+    revision: string;
+    values: NavigationDetailCollections;
+    complete: boolean;
+    nextCursor?: string;
+  };
   workspaceDirectories?: Array<Pick<NavigationDirectorySummary, "key" | "label" | "path" | "gitStatus">>;
   unchanged?: boolean;
 };
