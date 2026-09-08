@@ -24,14 +24,26 @@ test("pauses map load demand for a visible background window and a hidden window
     // Playwright emulates a focused page by default; this regression needs
     // the real native window focus signal.
     await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: false });
-    // Foreground demand needs an actual focused OS window once Playwright's
-    // focus emulation is disabled. Other fixture windows may still be frontmost.
-    await app.electronApp.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().includes("#star-map"))!;
-      window.show();
-      window.focus();
+    // Native window focus and Chromium's focused view are separate on macOS.
+    // CDP focus emulation can leave the view unfocused even when the window
+    // was already key, so focusing that same window does not restore it.
+    const focusWindow = async (starMap: boolean) => {
+      await app.electronApp.evaluate(({ app: electron, BrowserWindow }, isMap) => {
+        const window = BrowserWindow.getAllWindows().find((win) =>
+          win.webContents.getURL().includes("#star-map") === isMap)!;
+        window.show();
+        if (process.platform === "darwin") electron.focus({ steal: true });
+        window.focus();
+        window.webContents.focus();
+      }, starMap);
+    };
+    const mapFocus = async () => ({
+      native: await app.electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().includes("#star-map"))!.isFocused()),
+      document: await map.evaluate(() => document.hasFocus()),
     });
-    await expect.poll(() => map.evaluate(() => document.hasFocus())).toBe(true);
+    await focusWindow(true);
+    await expect.poll(mapFocus).toEqual({ native: true, document: true });
     const load = map.getByRole("button", { name: /^Show load for/ }).first();
     await expect(load).toBeVisible();
     await map.clock.install();
@@ -39,12 +51,8 @@ test("pauses map load demand for a visible background window and a hidden window
     const count = () => app.electronApp.evaluate(() => (globalThis as typeof globalThis & { mapLoadReads: number }).mapLoadReads);
     await expect.poll(count).toBe(1);
     const cards = await map.locator(".star-map-card").count();
-    await app.electronApp.evaluate(({ BrowserWindow }) => {
-      const main = BrowserWindow.getAllWindows().find((win) => !win.webContents.getURL().includes("#star-map"))!;
-      main.show();
-      main.focus();
-    });
-    await expect.poll(() => map.evaluate(() => document.hasFocus())).toBe(false);
+    await focusWindow(false);
+    await expect.poll(mapFocus).toEqual({ native: false, document: false });
     expect(await map.evaluate(() => document.visibilityState)).toBe("visible");
     await map.clock.fastForward(120_000);
     expect(await count()).toBe(1);
@@ -59,12 +67,8 @@ test("pauses map load demand for a visible background window and a hidden window
     expect(await map.evaluate(() => document.hasFocus())).toBe(false);
     await map.clock.fastForward(60_000);
     expect(await count()).toBe(1);
-    await app.electronApp.evaluate(({ BrowserWindow }) => {
-      const mapWindow = BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().includes("#star-map"))!;
-      mapWindow.show();
-      mapWindow.focus();
-    });
-    await expect.poll(() => map.evaluate(() => document.hasFocus())).toBe(true);
+    await focusWindow(true);
+    await expect.poll(mapFocus).toEqual({ native: true, document: true });
     await expect.poll(count).toBe(2);
     expect(await map.locator(".star-map-card").count()).toBe(cards);
   } finally {
