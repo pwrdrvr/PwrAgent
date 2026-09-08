@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.0-alpha.4 - 2026-09-08
+
+This pre-protocol-rewrite alpha captures the current federation behavior as a rollback baseline before the upcoming federation rewrite.
+
+- Federation Reliability - Scoped federation toggles to their owning app instance, surfaced every failed endpoint instead of hiding secondary failures, restored PwrSnap after revoked sessions, and made network-activity traffic readable in one-second bars.
+- Star Map and Transcript - Restored image interactions in Star Map transcripts, added native-context-menu image copying, and corrected transcript message timestamps.
+- Performance - Reduced managed sub-agent navigation CPU work, avoided unnecessary Markdown reparsing and concurrent Git remote lookups, and kept remote pricing cards stable while live state changes.
+- Usage and Pricing - Preserved earlier turns when later usage arrives, refreshed idle Codex usage from the sidebar, and displayed credit balances as rounded credits.
+- Agent Controls - Kept MCP action menus visible and interactive, while preserving source provenance and correctly evaluating mixed Code Mode output.
+- Diagnostics - Added directory-enrichment probe diagnostics and retained CPU profiles until hot-trigger capture completes.
+- Minor - Updated Electron, Undici, node-pty, and compatible development tooling.
+
 ## v1.1.0-alpha.3 - 2026-09-06
 
 - GPT-6 Astra - Added GPT-6 Astra as a selectable provider model, with correct context-window pricing for multi-request turns.
