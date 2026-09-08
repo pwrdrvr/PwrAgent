@@ -172,20 +172,13 @@ function hydrateHoverStableSidebarSnapshot(
           },
         ];
       }),
-      ...latest.threads
-        .filter((thread) => !frozenThreadKeys.has(
-          threadSummaryIdentityKey(thread),
-        ))
-        .map((thread) => ({
-          ...thread,
-          createdAt: 0,
-          parentThreadBackend: undefined,
-          parentThreadId: undefined,
-          parentThreadInstanceId: undefined,
-          pinnedRank: options?.refreshThreadPinRanks
-            ? thread.pinnedRank
-            : undefined,
-        })),
+      // A newly admitted row has no previous position to freeze. Preserve its
+      // owner placement on first paint: clearing pin/parent fields renders a
+      // false unpinned root until hover ends. Retained presentation order
+      // already controls where new entries are appended within each resource.
+      ...latest.threads.filter((thread) => !frozenThreadKeys.has(
+        threadSummaryIdentityKey(thread),
+      )),
     ],
   };
 }

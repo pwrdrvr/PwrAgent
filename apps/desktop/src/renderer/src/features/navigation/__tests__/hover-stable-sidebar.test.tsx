@@ -704,12 +704,15 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
-  it("reveals lazily loaded pins after expanding a folder without moving the pointer away", () => {
+  it.each([false, true])("renders lazy pins correctly on first arrival when hover re-enters before the page: %s", (reenter) => {
     const { rerender } = render(renderSidebar({ browseMode: "directories", directories: [directory], threads: [] }));
     const summary = screen.getByRole("button", { name: "Repo" });
     fireEvent.pointerOver(summary, { pointerType: "mouse" });
     fireEvent.click(summary);
     expect(summary).toHaveAttribute("aria-expanded", "true");
+    // A pointer transition inside the expanded directory can freeze the
+    // loading state again before the asynchronous owner response arrives.
+    if (reenter) fireEvent.pointerOver(summary, { pointerType: "mouse" });
     // The owner page arrives after the click; the mouse remains on the folder.
     rerender(renderSidebar({ browseMode: "directories", directories: [directory],
       threads: [{ ...alpha, pinnedRank: "1024" }, { ...bravo, pinnedRank: "2048" }] }));
