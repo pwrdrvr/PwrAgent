@@ -1799,6 +1799,7 @@ export function ThreadView(props: ThreadViewProps) {
     selectedThreadTerminalRemote,
     terminals,
   ]);
+  const acceptedBranchDriftRef = useRef<string | undefined>(undefined);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
   );
@@ -1988,6 +1989,16 @@ export function ThreadView(props: ThreadViewProps) {
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [branchDriftBusy, branchDriftDialog]);
 
+  const branchDriftRetentionKey = (
+    thread: NavigationThreadSummary,
+    expectedBranch: string,
+    observedBranch: string,
+  ): string => JSON.stringify([
+    thread.source, thread.id,
+    thread.federation?.ref.target ?? readRendererFederationTarget() ?? { scope: "local" },
+    expectedBranch, observedBranch,
+  ]);
+
   const branchDriftRetained = (
     thread: NavigationThreadSummary,
     expectedBranch: string,
@@ -1997,6 +2008,7 @@ export function ThreadView(props: ThreadViewProps) {
     // by an older client — a transition out of detached HEAD is always a
     // meaningful event the user should re-evaluate.
     if (expectedBranch === "HEAD") return false;
+    if (acceptedBranchDriftRef.current === branchDriftRetentionKey(thread, expectedBranch, observedBranch)) return true;
     return (thread.retainedBranchDriftPairs ?? []).some(
       (pair) =>
         pair.expectedBranch === expectedBranch &&
@@ -4168,6 +4180,11 @@ export function ThreadView(props: ThreadViewProps) {
                         expectedBranch: branchDriftDialog.expectedBranch,
                         observedBranch: branchDriftDialog.observedBranch,
                       });
+                      // Keep the owner's receipt while independently paged detail
+                      // catches up. A pending check still holds the old summary.
+                      acceptedBranchDriftRef.current = branchDriftRetentionKey(
+                        selectedThread, branchDriftDialog.expectedBranch, branchDriftDialog.observedBranch,
+                      );
                       await props.onRefreshNavigation?.();
                       setBranchDriftDialog(undefined);
                     } catch (error) {

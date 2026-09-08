@@ -5517,12 +5517,19 @@ describe("ThreadView", () => {
       retainedAt: Date.now(),
     }));
 
+    const checkResult = {
+      backend: "codex" as const, threadId: "thread-branch", checkedAt: Date.now(),
+      expectedBranch: "feature/old", observedBranch: "main", drifted: true,
+    };
+    let finishCheck!: (value: typeof checkResult) => void;
+    const checkThreadBranchDrift = vi.fn(() => new Promise<typeof checkResult>((resolve) => { finishCheck = resolve; }));
+
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[]}
         composerDisabled={false}
-        desktopApi={{ retainThreadBranchDrift }}
+        desktopApi={{ retainThreadBranchDrift, checkThreadBranchDrift }}
         loading={false}
         loadingMore={false}
         messageCount={1}
@@ -5555,6 +5562,7 @@ describe("ThreadView", () => {
       />,
     );
 
+    await waitFor(() => expect(checkThreadBranchDrift).toHaveBeenCalled());
     const dialog = await screen.findByRole("dialog", {
       name: "Thread branch changed",
     });
@@ -5571,6 +5579,11 @@ describe("ThreadView", () => {
         threadId: "thread-branch",
       });
     });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Thread branch changed" })).not.toBeInTheDocument());
+    // A selection check captured the pre-retention summary. Its late result
+    // must not reopen the warning after the owner accepted Keep Warning.
+    await act(async () => { finishCheck(checkResult); });
+    expect(screen.queryByRole("dialog", { name: "Thread branch changed" })).not.toBeInTheDocument();
   });
 
   it("checks branch drift on selection and focus without background polling", async () => {
