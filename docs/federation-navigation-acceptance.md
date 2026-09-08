@@ -31,6 +31,28 @@ unsent probe that was cleared. Stability after reloading the newest fixes and
 the composition of the observed 5.18 MB `backend.readThread` response remain
 unverified. Size-only large-frame diagnostics are now available for that check.
 
+## Star Map image-transfer repair
+
+After both branch instances restarted, the operator measured an 8.27 MB Star Map
+open. Size-only owner logs identify two concurrent `backend.readThread` replies
+for the same card, each 3,450,478 bytes before transport encoding. Each carried
+2,915,334 bytes of inline image URLs across message and activity copies. These
+were transcript replies, not full navigation snapshots. This measurement does
+not retrospectively classify the earlier 5.18 MB frame.
+
+Signed repairs `450a6de8c`, `8708dad12` and `ce0ea97fc` materialize supported
+inline transcript images into owner-scoped image references before Federation
+serialization, include activity-detail images in that transformation, coalesce
+identical concurrent remote reads, and defer lazy image sources until viewport
+intersection. Image content remains available through the existing independent
+image endpoint. No transcript content is truncated.
+
+All 251 focused tests, desktop typecheck and targeted ESLint pass. Electron
+regressions pass for large Star Map history, intrinsic image sizing, and a new
+scroll case that verifies an offscreen image has no source or decoded pixels
+until it enters the viewport. Live transfer volume and sidebar stability still
+require comparison on the restarted M4/M5 instances with these fixes.
+
 ## Upgrade requirement
 
 Run the cutover build on every viewer, owner and gateway participating in the

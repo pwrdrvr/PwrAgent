@@ -21,7 +21,7 @@ function createSvgImageDataUrl(params: {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-async function createThreadImageFitFixture(): Promise<{
+async function createThreadImageFitFixture(scrollProbe = false): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
@@ -41,6 +41,13 @@ async function createThreadImageFitFixture(): Promise<{
     label: "tiny",
     width: 12,
   });
+
+  const secondMessageText = scrollProbe
+    ? Array.from({ length: 60 }, (_, index) => `Scroll probe paragraph ${index + 1}.`).join("\n\n")
+    : "Small pasted image should not be enlarged.";
+  const offscreenImage = scrollProbe
+    ? [{ type: "image", url: imageUrl, alt: "Offscreen scroll probe" }]
+    : [];
 
   await mkdir(rootDir, { recursive: true });
   await writeFile(
@@ -111,11 +118,12 @@ async function createThreadImageFitFixture(): Promise<{
                   type: "message",
                   id: "message-image-fit-2",
                   role: "user",
-                  text: "Small pasted image should not be enlarged.",
+                  text: secondMessageText,
                   parts: [
+                    ...offscreenImage,
                     {
                       type: "text",
-                      text: "Small pasted image should not be enlarged.",
+                      text: secondMessageText,
                     },
                     {
                       type: "image",
@@ -150,11 +158,12 @@ async function createThreadImageFitFixture(): Promise<{
                 {
                   id: "message-image-fit-2",
                   role: "user",
-                  text: "Small pasted image should not be enlarged.",
+                  text: secondMessageText,
                   parts: [
+                    ...offscreenImage,
                     {
                       type: "text",
-                      text: "Small pasted image should not be enlarged.",
+                      text: secondMessageText,
                     },
                     {
                       type: "image",
@@ -276,6 +285,34 @@ test("fits wide, small, and tiny pasted transcript images", async () => {
       expect(metrics.buttonWidth).toBeGreaterThanOrEqual(44);
       expect(metrics.buttonHeight).toBeGreaterThanOrEqual(44);
     });
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("loads an offscreen transcript image only after scrolling it into view", async () => {
+  const fixture = await createThreadImageFitFixture(true);
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    windowSize: { width: 1280, height: 720 },
+  });
+
+  try {
+    await app.window.getByRole("button", { name: /Fix Composer Auto Saves/i }).first().click();
+    const bottomImage = app.window.getByAltText("Tiny intrinsic screenshot");
+    await expect.poll(async () => (await readImageMetrics(bottomImage)).naturalWidth).toBe(12);
+
+    const offscreenImage = app.window.getByAltText("Offscreen scroll probe");
+    await expect(offscreenImage).toBeAttached();
+    await expect(offscreenImage).not.toBeInViewport();
+    expect(await offscreenImage.getAttribute("src")).toBeNull();
+    expect((await readImageMetrics(offscreenImage)).naturalWidth).toBe(0);
+
+    await offscreenImage.scrollIntoViewIfNeeded();
+    await expect(offscreenImage).toBeInViewport();
+    await expect.poll(async () => (await readImageMetrics(offscreenImage)).naturalWidth).toBe(848);
+    await expect(offscreenImage).toHaveAttribute("src", /^pwragent-image:/);
   } finally {
     await app.close();
     await fixture.cleanup();
