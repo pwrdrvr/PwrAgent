@@ -5,6 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 import { openStarMapWindow } from "./fixtures/star-map-window";
 
 test("pauses map load demand when its renderer is blurred or its window is hidden", async () => {
+  test.skip(Boolean(process.env.CI), "Requires an unlocked interactive desktop to restore focus after hide/show; verified on the local macOS host.");
   const app = await launchElectronApp({ fixturePath: path.join(path.dirname(fileURLToPath(import.meta.url)),
     "fixtures/star-map/replay.fixture.json") });
   try {
