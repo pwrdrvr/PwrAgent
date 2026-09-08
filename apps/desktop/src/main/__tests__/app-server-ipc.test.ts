@@ -2326,6 +2326,24 @@ describe("app server ipc", () => {
     ).resolves.toBe(snapshot);
   });
 
+  it("returns offline navigation state without rejecting the Electron handler, but still rejects unexpected failures", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!;
+    const event = { sender: { id: 90009, once: vi.fn() } };
+    const request = { protocol: 2, consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: "offline-peer" },
+      query: { kind: "directory-index" } };
+    const offline = Object.assign(new Error("Federation peer offline-peer is not connected."), {
+      code: "FEDERATION_PEER_UNAVAILABLE", instanceId: "offline-peer",
+    });
+    federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(offline);
+    await expect(handler(event, request)).resolves.toEqual({ navigationReadFailure: true,
+      code: offline.code, instanceId: offline.instanceId, message: offline.message });
+    federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(new Error("Unexpected projection failure"));
+    await expect(handler(event, request)).rejects.toThrow("Unexpected projection failure");
+  });
+
   it("overlays only a bounded remote page's viewer directory preferences without accepting owner-only unchanged proof", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");

@@ -1,3 +1,4 @@
+import { unwrapNavigationRead } from "../shared/navigation-ipc-result";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -1835,7 +1836,7 @@ const desktopApi = Object.freeze({
     request: NavigationQueryRequest,
     consumerId?: string,
   ): Promise<NavigationQueryPage> =>
-    await ipcRenderer.invoke(NAVIGATION_QUERY_PAGE_CHANNEL, request, consumerId),
+    unwrapNavigationRead(await ipcRenderer.invoke(NAVIGATION_QUERY_PAGE_CHANNEL, request, consumerId)),
   releaseNavigationQuery: async (consumerId: string): Promise<void> =>
     await ipcRenderer.invoke(NAVIGATION_QUERY_RELEASE_CHANNEL, consumerId),
   releaseNavigationAttentionView: async (request: NavigationAttentionViewReleaseRequest): Promise<void> =>
@@ -1848,17 +1849,17 @@ const desktopApi = Object.freeze({
     request: NavigationLaunchpadConfigRequest,
     consumerId?: string,
   ): Promise<NavigationLaunchpadConfigResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL, request, consumerId),
+    unwrapNavigationRead(await ipcRenderer.invoke(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL, request, consumerId)),
   getNavigationSelectedDetail: async (
     request: NavigationSelectedDetailRequest,
     consumerId?: string,
   ): Promise<NavigationSelectedDetailResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_SELECTED_DETAIL_CHANNEL, request, consumerId),
+    unwrapNavigationRead(await ipcRenderer.invoke(NAVIGATION_SELECTED_DETAIL_CHANNEL, request, consumerId)),
   getNavigationQueueProjection: async (
     request: NavigationQueueProjectionRequest,
     consumerId?: string,
   ): Promise<NavigationQueueProjection> =>
-    await ipcRenderer.invoke(NAVIGATION_QUEUE_PROJECTION_CHANNEL, request, consumerId),
+    unwrapNavigationRead(await ipcRenderer.invoke(NAVIGATION_QUEUE_PROJECTION_CHANNEL, request, consumerId)),
   getNavigationSnapshotTransport: async (
     request: GetNavigationSnapshotTransportRequest,
   ): Promise<NavigationSnapshotTransportResponse> =>

@@ -1,3 +1,4 @@
+import { offlineNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
@@ -7798,7 +7799,7 @@ const navigationQueryPool = getDesktopNavigationQueryPool();
 const navigationQueryConsumersBySender = new Map<number, Set<string>>();
 let nextTransientNavigationConsumer = 0;
 async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: string | undefined,
-  read: (token: string) => Promise<T>): Promise<T> {
+  read: (token: string) => Promise<T>): Promise<T | NavigationReadFailure> {
   if (consumerId !== undefined
     && (typeof consumerId !== "string" || consumerId.length < 1 || consumerId.length > 128)) {
     throw new Error("Navigation consumer identity must contain 1 to 128 characters.");
@@ -7818,6 +7819,11 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
   if (!consumers.has(token) && consumers.size >= 256) throw new Error("Navigation consumer budget is occupied.");
   consumers.add(token);
   try { return await read(token); }
+  catch (error) {
+    const offline = offlineNavigationReadFailure(error);
+    if (offline) return offline;
+    throw error;
+  }
   finally {
     if (consumerId === undefined) {
       consumers.delete(token);
@@ -8133,7 +8139,7 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: NavigationQueryRequest,
       consumerId?: string,
-    ): Promise<NavigationQueryPage> => {
+    ): Promise<NavigationQueryPage | NavigationReadFailure> => {
       return withNavigationConsumer(event, consumerId, (token) =>
         appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(event.sender.id, request), token));
     },
@@ -8160,7 +8166,7 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: NavigationLaunchpadConfigRequest,
       consumerId?: string,
-    ): Promise<NavigationLaunchpadConfigResponse> =>
+    ): Promise<NavigationLaunchpadConfigResponse | NavigationReadFailure> =>
       withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationLaunchpadConfig(request, token)),
   );
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
@@ -8170,7 +8176,7 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: NavigationSelectedDetailRequest,
       consumerId?: string,
-    ): Promise<NavigationSelectedDetailResponse> =>
+    ): Promise<NavigationSelectedDetailResponse | NavigationReadFailure> =>
       withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationSelectedDetail(request, token)),
   );
   ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
@@ -8180,7 +8186,7 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: NavigationQueueProjectionRequest,
       consumerId?: string,
-    ): Promise<NavigationQueueProjection> =>
+    ): Promise<NavigationQueueProjection | NavigationReadFailure> =>
       withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationQueueProjection(request, token)),
   );
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
