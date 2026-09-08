@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FederationTarget, FederationPeerSummary, NavigationIdentity, NavigationDetailCollections, NavigationDetailCollectionName } from "@pwragent/shared";
-import { buildPullRequestStatusKey } from "@pwragent/shared";
+import { buildPullRequestStatusKey, NAVIGATION_DETAIL_COLLECTION_NAMES } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationThreadEvent } from "./navigation-thread-event";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
@@ -203,6 +203,16 @@ export function useNavigationSelectedDetail(params: {
       if (!navigationQueryEventRequiresRefresh(notification.method)
         && notification.method !== "thread/codexEnvironment/updated"
         && notification.method !== "thread/acpRuntime/updated") return;
+      // A canonical event supersedes the retained collection too. Otherwise
+      // the configuration read overlays its older cache and briefly erases
+      // live accounting while replacement history pages are still loading.
+      if (patchedThread && currentThread) {
+        for (const name of NAVIGATION_DETAIL_COLLECTION_NAMES) {
+          if (patchedThread[name] === currentThread[name]) continue;
+          collectionsRef.current.values = { ...collectionsRef.current.values, [name]: patchedThread[name] };
+          collectionsRef.current.revisions.delete(name);
+        }
+      }
       // Fence an already-running read at event admission, not when the coalesced
       // refresh eventually starts. Its revision no longer describes this detail.
       const sequence = ++sequenceRef.current;
