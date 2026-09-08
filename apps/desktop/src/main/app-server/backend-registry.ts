@@ -8080,6 +8080,8 @@ export class DesktopBackendRegistry {
     rateLimits: BackendRateLimitSummary[];
   };
   private codexRateLimitsNotificationVersion = 0;
+  private codexQuotaRefresh?: Promise<void>;
+  private codexQuotaRefreshAt?: number;
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
   private providerRuntimeInvalidationPromise?: Promise<void>;
   private readonly correspondenceStore: ThreadCorrespondenceStore;
@@ -10257,6 +10259,9 @@ export class DesktopBackendRegistry {
     } else if (request.refreshModels === "codex") {
       this.modelCatalog.invalidate("codex");
     }
+    if (request.refreshRateLimits) {
+      await this.refreshCodexQuotas();
+    }
     const codexSummary =
       request.refreshModels === true || request.refreshModels === "codex"
         ? await this.discoverCodexBackend(discoveryPermit!)
@@ -10291,6 +10296,8 @@ export class DesktopBackendRegistry {
     this.codexBackendGeneration += 1;
     this.codexBackendSummary = undefined;
     this.pendingCodexRateLimits = undefined;
+    this.codexQuotaRefresh = undefined;
+    this.codexQuotaRefreshAt = undefined;
     this.pendingCodexRateLimitBroadcast = undefined;
     this.codexRateLimitLastBroadcastAt = undefined;
     if (this.codexRateLimitBroadcastTimer) {
@@ -24737,7 +24744,7 @@ export class DesktopBackendRegistry {
           || !currentKeys.has(rateLimitSummaryKey(limit)),
       )
     ) {
-      return await this.refetchCodexRateLimitsForNotification({
+      return await this.refetchCodexRateLimits({
         backendGeneration,
         notificationVersion,
       });
@@ -24770,7 +24777,28 @@ export class DesktopBackendRegistry {
     return true;
   }
 
-  private async refetchCodexRateLimitsForNotification(params: {
+  private async refreshCodexQuotas(): Promise<void> {
+    // Quota reads must not launch discovery or persist provider observations.
+    if (this.closed || !this.codexBackendSummary?.available) return;
+    if (this.codexQuotaRefresh) return await this.codexQuotaRefresh;
+    if (
+      this.codexQuotaRefreshAt !== undefined
+      && Date.now() - this.codexQuotaRefreshAt < 5_000
+    ) return;
+    this.codexQuotaRefreshAt = Date.now();
+    const work = this.refetchCodexRateLimits({
+      backendGeneration: this.codexBackendGeneration,
+      notificationVersion: this.codexRateLimitsNotificationVersion,
+    }).then(() => undefined);
+    this.codexQuotaRefresh = work;
+    try {
+      await work;
+    } finally {
+      if (this.codexQuotaRefresh === work) this.codexQuotaRefresh = undefined;
+    }
+  }
+
+  private async refetchCodexRateLimits(params: {
     backendGeneration: number;
     notificationVersion: number;
   }): Promise<boolean> {
@@ -24779,7 +24807,7 @@ export class DesktopBackendRegistry {
       refetchedRateLimits = await readClientRateLimits(this.codexClient);
     } catch (error) {
       backendRegistryLog.warn(
-        "Codex rate-limit refetch after sparse notification failed",
+        "Codex rate-limit refresh failed",
         { error: error instanceof Error ? error.message : String(error) },
       );
       return false;

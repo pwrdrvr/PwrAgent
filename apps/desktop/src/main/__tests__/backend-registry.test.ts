@@ -6278,6 +6278,40 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("refreshes idle Codex quotas without rediscovery and coalesces repeated reads", async () => {
+    const codexClient = new MockBackendClient({
+      rateLimits: [{ name: "Weekly limit", remaining: 91 }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    // A hover before startup discovery must not start the provider.
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(codexClient.readRateLimitsCallCount).toBe(0);
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const initialReads = codexClient.readRateLimitsCallCount;
+    const initialModelReads = codexClient.listModelsCallCount;
+    const read = vi.spyOn(codexClient, "readRateLimits").mockResolvedValue([
+      { name: "Weekly limit", remaining: 42 },
+    ]);
+    const response = await registry.listBackends({ refreshRateLimits: true });
+    expect(response.backends.find((backend) => backend.kind === "codex")?.rateLimits)
+      .toEqual([{ name: "Weekly limit", remaining: 42 }]);
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(initialReads).toBe(1);
+    expect(codexClient.listModelsCallCount).toBe(initialModelReads);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 6_000);
+    read.mockRejectedValueOnce(new Error("temporarily unavailable"));
+    const retained = await registry.listBackends({ refreshRateLimits: true });
+    expect(retained.backends.find((backend) => backend.kind === "codex")?.rateLimits)
+      .toEqual([{ name: "Weekly limit", remaining: 42 }]);
+    clock.mockRestore();
+    await registry.close();
+  });
+
   it("updates cached Codex rate limits from notifications without rewriting unchanged state", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

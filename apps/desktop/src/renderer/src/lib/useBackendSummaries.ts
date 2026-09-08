@@ -10,6 +10,7 @@ type BackendSummaryData = {
 };
 
 type BackendSummaryState = BackendSummaryData & {
+  refreshRateLimits: () => Promise<BackendSummary[]>;
   refreshAcpAgents: () => Promise<BackendSummary[]>;
 };
 
@@ -20,6 +21,7 @@ export function useBackendSummaries(
   desktopApi?: DesktopApi,
   options: {
     enabled?: boolean;
+    pollRateLimits?: boolean;
     federationTarget?: FederationTarget;
     suspended?: boolean;
   } = {},
@@ -38,7 +40,7 @@ export function useBackendSummaries(
   const acpRefreshPromiseRef =
     useRef<Promise<BackendSummary[]> | undefined>(undefined);
 
-  const refresh = useCallback(async (): Promise<BackendSummary[]> => {
+  const readSummaries = useCallback(async (refreshRateLimits = false): Promise<BackendSummary[]> => {
     if (!enabled) {
       setState({
         backends: [],
@@ -64,6 +66,7 @@ export function useBackendSummaries(
     try {
       const response = await desktopApi.listBackends({
         includeUnavailable: true,
+        ...(refreshRateLimits ? { refreshRateLimits: true } : {}),
         ...(federationTarget ? { federationTarget } : {}),
       });
       setState({
@@ -80,13 +83,33 @@ export function useBackendSummaries(
         return stateRef.current.backends;
       }
       setState({
-        backends: [],
+        backends: refreshRateLimits ? stateRef.current.backends : [],
         error: error instanceof Error ? error.message : String(error),
         loaded: true,
       });
       return [];
     }
   }, [desktopApi, enabled, federationTarget, suspended]);
+
+  const refresh = useCallback(() => readSummaries(), [readSummaries]);
+  const refreshRateLimits = useCallback(
+    () => readSummaries(true),
+    [readSummaries],
+  );
+
+  useEffect(() => {
+    if (!enabled || suspended || !options.pollRateLimits) return;
+    const refreshVisible = (): void => {
+      if (document.visibilityState !== "hidden") void refreshRateLimits();
+    };
+    refreshVisible();
+    const timer = window.setInterval(refreshVisible, 30_000);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisible);
+    };
+  }, [enabled, suspended, options.pollRateLimits, refreshRateLimits]);
 
   const refreshAcpAgents = useCallback(async (): Promise<BackendSummary[]> => {
     if (federationTarget?.scope === "remote") {
@@ -156,6 +179,7 @@ export function useBackendSummaries(
 
   return {
     ...state,
+    refreshRateLimits,
     refreshAcpAgents,
   };
 }
