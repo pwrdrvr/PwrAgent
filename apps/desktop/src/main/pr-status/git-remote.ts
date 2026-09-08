@@ -98,9 +98,12 @@ type RemoteCacheEntry = {
 };
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
+const remoteLookups = new Map<string, Promise<ParsedGitRemote[]>>();
 
 export function clearGitHubRemoteCache(): void {
   remoteCache.clear();
+  // Existing callers may finish, but cannot publish into the new cache.
+  remoteLookups.clear();
 }
 
 export type ResolveGitHubRepoOptions = {
@@ -178,18 +181,50 @@ async function readParsedGitRemotes(
     return cached.value;
   }
 
+  const existing = remoteLookups.get(cwd);
+  if (existing) {
+    return existing;
+  }
+
+  const pending = loadParsedGitRemotes(cwd, options).then((value) => {
+    if (remoteLookups.get(cwd) === pending) {
+      remoteCache.set(cwd, { value, fetchedAt: now() });
+    }
+    return value;
+  }).finally(() => {
+    // An invalidation may have already installed a replacement lookup.
+    if (remoteLookups.get(cwd) === pending) {
+      remoteLookups.delete(cwd);
+    }
+  });
+  remoteLookups.set(cwd, pending);
+  return pending;
+}
+
+async function loadParsedGitRemotes(
+  cwd: string,
+  options: ResolveGitHubRepoOptions,
+): Promise<ParsedGitRemote[]> {
   const readRemotes = options.readRemotes ?? defaultReadRemotes;
   const resolveSshHostname =
     options.resolveSshHostname ?? defaultResolveSshHostname;
-  let value: ParsedGitRemote[];
+  // Share exact host inputs across this probe's remotes. Keeping this local
+  // preserves SSH config freshness on expiry/invalidation and alias identity.
+  const sshLookups = new Map<string, Promise<string | undefined>>();
   try {
-    value = await Promise.all(
+    return await Promise.all(
       (await readRemotes(cwd)).map(async (remote) => {
         const repo = parseGitHubRemote(remote.url);
         const sshHost = readSshHost(remote.url);
-        const resolvedHost = sshHost
-          ? await resolveSshHostname(sshHost)
-          : undefined;
+        let hostname: Promise<string | undefined> | undefined;
+        if (sshHost) {
+          hostname = sshLookups.get(sshHost);
+          if (!hostname) {
+            hostname = Promise.resolve().then(() => resolveSshHostname(sshHost));
+            sshLookups.set(sshHost, hostname);
+          }
+        }
+        const resolvedHost = await hostname;
         return {
           ...remote,
           repo: repo && resolvedHost
@@ -199,11 +234,9 @@ async function readParsedGitRemotes(
       }),
     );
   } catch {
-    value = [];
+    // Preserve the bounded negative cache, including non-git directories.
+    return [];
   }
-
-  remoteCache.set(cwd, { value, fetchedAt: now() });
-  return value;
 }
 
 async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  type GitRemote,
   clearGitHubRemoteCache,
   hasGitHubRemoteForDirectory,
   parseGitHubRemote,
@@ -66,6 +67,165 @@ describe("parseGitHubRemote", () => {
 describe("resolveGitHubRepoForDirectory", () => {
   beforeEach(() => {
     clearGitHubRemoteCache();
+  });
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+  }
+
+  const githubRemote = (repo: string): GitRemote[] => [
+    { name: "origin", url: `https://github.com/owner/${repo}.git` },
+  ];
+
+  it("shares a pending cache miss across all directory lookup APIs", async () => {
+    const pending = deferred<GitRemote[]>();
+    const readRemotes = vi.fn(() => pending.promise);
+    const options = { readRemotes };
+    const origin = resolveGitHubRepoForDirectory("/repo", options);
+    const eligible = hasGitHubRemoteForDirectory("/repo", options);
+    const repos = resolveGitHubReposForDirectory("/repo", options);
+    pending.resolve(githubRemote("project"));
+    await expect(origin).resolves.toEqual({ host: "github.com", owner: "owner", repo: "project" });
+    await expect(eligible).resolves.toBe(true);
+    await expect(repos).resolves.toHaveLength(1);
+    expect(readRemotes).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves each exact SSH host once while preserving distinct aliases and remotes", async () => {
+    const pending = deferred<string | undefined>();
+    const readRemotes = vi.fn(async () => [
+      { name: "origin", url: "git@work:fork/project.git" },
+      { name: "upstream", url: "ssh://git@work/team/project.git" },
+      { name: "backup", url: "other:team/project.git" },
+    ]);
+    const resolveSshHostname = vi.fn((host: string) =>
+      host === "work" ? pending.promise : Promise.resolve("gitlab.com"),
+    );
+    const options = { readRemotes, resolveSshHostname };
+    const repos = resolveGitHubReposForDirectory("/repo", options);
+    await Promise.resolve();
+    const origin = resolveGitHubRepoForDirectory("/repo", options);
+    pending.resolve("github.com");
+    await expect(repos).resolves.toEqual([
+      { host: "github.com", owner: "fork", repo: "project" },
+      { host: "github.com", owner: "team", repo: "project" },
+    ]);
+    await expect(origin).resolves.toMatchObject({ owner: "fork" });
+    expect(readRemotes).toHaveBeenCalledTimes(1);
+    expect(resolveSshHostname.mock.calls).toEqual([["work"], ["other"]]);
+  });
+
+  it.each(["old-first", "new-first"])("isolates invalidated pending work (%s)", async (order) => {
+    const old = deferred<GitRemote[]>();
+    const fresh = deferred<GitRemote[]>();
+    const readRemotes = vi.fn().mockReturnValueOnce(old.promise).mockReturnValue(fresh.promise);
+    const options = { readRemotes };
+    const first = resolveGitHubRepoForDirectory("/repo", options);
+    clearGitHubRemoteCache();
+    const second = resolveGitHubRepoForDirectory("/repo", options);
+    if (order === "old-first") {
+      old.resolve(githubRemote("old"));
+      await first;
+    } else {
+      fresh.resolve(githubRemote("fresh"));
+      await second;
+    }
+    const third = resolveGitHubRepoForDirectory("/repo", options);
+    old.resolve(githubRemote("old"));
+    fresh.resolve(githubRemote("fresh"));
+    await expect(first).resolves.toMatchObject({ repo: "old" });
+    await expect(second).resolves.toMatchObject({ repo: "fresh" });
+    await expect(third).resolves.toMatchObject({ repo: "fresh" });
+    await expect(resolveGitHubRepoForDirectory("/repo", options)).resolves.toMatchObject({ repo: "fresh" });
+    expect(readRemotes).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares failed work, preserves negative TTL, and retries at expiry", async () => {
+    const pending = deferred<GitRemote[]>();
+    let clock = 0;
+    const readRemotes = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(githubRemote("recovered"));
+    const options = { readRemotes, now: () => clock };
+    const first = hasGitHubRemoteForDirectory("/repo", options);
+    const second = hasGitHubRemoteForDirectory("/repo", options);
+    pending.reject(new Error("git failed"));
+    await expect(first).resolves.toBe(false);
+    await expect(second).resolves.toBe(false);
+    clock = 5 * 60_000 - 1;
+    await expect(hasGitHubRemoteForDirectory("/repo", options)).resolves.toBe(false);
+    expect(readRemotes).toHaveBeenCalledTimes(1);
+    clock++;
+    await expect(Promise.all([
+      hasGitHubRemoteForDirectory("/repo", options),
+      hasGitHubRemoteForDirectory("/repo", options),
+    ])).resolves.toEqual([true, true]);
+    expect(readRemotes).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["undefined", "reject"])("retries SSH %s results after cache expiry and invalidation", async (failure) => {
+    let clock = 0;
+    const readRemotes = vi.fn(async () => [
+      { name: "origin", url: "work:fork/project.git" },
+      { name: "upstream", url: "work:team/project.git" },
+    ]);
+    const resolveSshHostname = vi.fn(async (): Promise<string | undefined> => {
+      if (failure === "reject") {
+        throw new Error("ssh failed");
+      }
+      return undefined;
+    });
+    const options = { readRemotes, resolveSshHostname, now: () => clock };
+    await expect(hasGitHubRemoteForDirectory("/repo", options)).resolves.toBe(false);
+    await expect(hasGitHubRemoteForDirectory("/repo", options)).resolves.toBe(false);
+    expect(resolveSshHostname).toHaveBeenCalledTimes(1);
+    resolveSshHostname.mockResolvedValue("github.com");
+    clock = 5 * 60_000;
+    await expect(resolveGitHubReposForDirectory("/repo", options)).resolves.toHaveLength(2);
+    expect(resolveSshHostname).toHaveBeenCalledTimes(2);
+    clearGitHubRemoteCache();
+    resolveSshHostname.mockResolvedValue("gitlab.com");
+    await expect(hasGitHubRemoteForDirectory("/repo", options)).resolves.toBe(false);
+    expect(resolveSshHostname).toHaveBeenCalledTimes(3);
+  });
+
+  it("starts the TTL at completion and invalidates during SSH expansion", async () => {
+    let clock = 0;
+    const hostname = deferred<string | undefined>();
+    const started = deferred<void>();
+    const readRemotes = vi.fn(async () => [{ name: "origin", url: "work:owner/project.git" }]);
+    const resolveSshHostname = vi.fn(() => {
+      started.resolve();
+      return hostname.promise;
+    });
+    const options = { readRemotes, resolveSshHostname, now: () => clock };
+    const old = hasGitHubRemoteForDirectory("/repo", options);
+    await started.promise;
+    clearGitHubRemoteCache();
+    resolveSshHostname.mockResolvedValue("gitlab.com");
+    const fresh = hasGitHubRemoteForDirectory("/repo", options);
+    clock = 10 * 60_000;
+    await expect(fresh).resolves.toBe(false);
+    hostname.resolve("github.com");
+    await expect(old).resolves.toBe(true);
+    clock += 5 * 60_000 - 1;
+    await expect(hasGitHubRemoteForDirectory("/repo", options)).resolves.toBe(false);
+    expect(readRemotes).toHaveBeenCalledTimes(2);
+    expect(resolveSshHostname).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps different directories independent", async () => {
+    const pending = deferred<GitRemote[]>();
+    const readRemotes = vi.fn((cwd: string) => cwd === "/slow" ? pending.promise : Promise.resolve(githubRemote("fast")));
+    const slow = resolveGitHubRepoForDirectory("/slow", { readRemotes });
+    await expect(resolveGitHubRepoForDirectory("/fast", { readRemotes })).resolves.toMatchObject({ repo: "fast" });
+    pending.resolve([]);
+    await expect(slow).resolves.toBeUndefined();
+    expect(readRemotes).toHaveBeenCalledTimes(2);
   });
 
   it("resolves a directory through its origin remote", async () => {
