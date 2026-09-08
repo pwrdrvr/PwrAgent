@@ -62,7 +62,7 @@ describe("federation endpoint fallback", () => {
     });
   });
 
-  it("tries the last endpoint that worked first", async () => {
+  it("starts in configured order despite a saved successful fallback from a previous app run", async () => {
     metaStore.set(LAST_ENDPOINT_KEY, CLOUDFLARE);
     const runtime = createHarness([LAN, TAILSCALE, CLOUDFLARE]);
     const attempts: string[] = [];
@@ -72,7 +72,28 @@ describe("federation endpoint fallback", () => {
 
     await runtime.connectToGateway();
 
-    expect(attempts).toEqual([CLOUDFLARE]);
+    expect(attempts).toEqual([LAN]);
+  });
+
+  it("starts again at the first configured endpoint after a fallback succeeds", async () => {
+    const runtime = createHarness([LAN, TAILSCALE, CLOUDFLARE]);
+    const attempts: string[] = [];
+    let lanAvailable = false;
+    runtime.connectClient = async (gatewayUrl) => {
+      attempts.push(gatewayUrl);
+      if (gatewayUrl === LAN && !lanAvailable) {
+        throw new Error("connect ECONNREFUSED");
+      }
+      runtime.markEndpointConnected(gatewayUrl);
+    };
+
+    await runtime.connectToGateway();
+    expect(attempts).toEqual([LAN, TAILSCALE]);
+
+    attempts.length = 0;
+    lanAvailable = true;
+    await runtime.connectToGateway();
+    expect(attempts).toEqual([LAN]);
   });
 
   it("ignores a remembered endpoint that is no longer configured", async () => {
@@ -133,7 +154,7 @@ describe("federation endpoint fallback", () => {
     );
   });
 
-  it("falls back to LAN when the last-good Tailscale endpoint cannot resolve", async () => {
+  it("tries LAN before a remembered Tailscale endpoint that cannot resolve", async () => {
     metaStore.set(LAST_ENDPOINT_KEY, TAILSCALE);
     const runtime = createHarness([LAN, TAILSCALE]);
     const attempts: string[] = [];
@@ -146,7 +167,7 @@ describe("federation endpoint fallback", () => {
 
     await runtime.connectToGateway();
 
-    expect(attempts).toEqual([TAILSCALE, LAN]);
+    expect(attempts).toEqual([LAN]);
   });
 
   it("continues to a healthy fallback after a malformed endpoint", async () => {
@@ -196,13 +217,13 @@ describe("federation endpoint fallback", () => {
     );
   });
 
-  it("records the last-good endpoint only from an established connection", () => {
+  it("records active endpoint status without persisting a preferred endpoint", () => {
     const runtime = createHarness([LAN, TAILSCALE]);
     expect(metaStore.get(LAST_ENDPOINT_KEY)).toBeUndefined();
 
     runtime.markEndpointConnected(TAILSCALE);
 
-    expect(metaStore.get(LAST_ENDPOINT_KEY)).toBe(TAILSCALE);
+    expect(metaStore.get(LAST_ENDPOINT_KEY)).toBeUndefined();
     expect(runtime.endpointStatuses.get(TAILSCALE)).toMatchObject({
       state: "active",
     });

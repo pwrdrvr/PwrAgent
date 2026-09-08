@@ -380,6 +380,7 @@ const INSTANCE_ID_META_KEY = "federation_instance_id";
 const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
 const GATEWAY_NOISE_PUBLIC_KEY_META_KEY = "federation_gateway_noise_public_key";
+// Legacy preference: only cleared when changing pairings; never used for ordering.
 const GATEWAY_LAST_ENDPOINT_META_KEY = "federation_gateway_last_endpoint";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
@@ -2834,7 +2835,7 @@ export class DesktopFederationRuntime {
     }
   }
 
-  // One reconnect cycle: walk the configured endpoints (last-good first) and
+  // One reconnect cycle: walk the endpoints in configured order and
   // stop at the first fully authenticated connection. Every endpoint runs the
   // identical pinned-identity + Noise handshake, so fallback can only change
   // reachability, never which gateway the client will trust.
@@ -2853,12 +2854,7 @@ export class DesktopFederationRuntime {
   private async walkGatewayEndpoints(): Promise<void> {
     const endpoints = this.configuredEndpoints;
     if (endpoints.length === 0) return;
-    const lastGoodEndpoint =
-      getAppStateDb().getMeta(GATEWAY_LAST_ENDPOINT_META_KEY) || undefined;
-    const attempts = orderFederationEndpointAttempts(
-      endpoints,
-      lastGoodEndpoint,
-    );
+    const attempts = orderFederationEndpointAttempts(endpoints);
     // A restart during the walk flips `stopping` back to false, so `stopping`
     // alone would let a superseded walk keep dialing a stale endpoint list and
     // race the new one into `this.client`. `connectionGeneration` can't serve
@@ -3193,8 +3189,7 @@ export class DesktopFederationRuntime {
     log.info("federation client connected", { gatewayUrl });
   }
 
-  // Only a fully authenticated session ever updates the last-good endpoint
-  // memory, so a hostile endpoint can never steer future attempt ordering.
+  // Track the active connection without changing configured endpoint priority.
   private markEndpointConnected(gatewayUrl: string): void {
     this.endpointStatuses.set(gatewayUrl, {
       ...this.endpointStatuses.get(gatewayUrl),
@@ -3202,7 +3197,6 @@ export class DesktopFederationRuntime {
       lastConnectedAt: Date.now(),
       lastError: undefined,
     });
-    getAppStateDb().setMeta(GATEWAY_LAST_ENDPOINT_META_KEY, gatewayUrl);
   }
 
   private recordClientConnection(params: {
@@ -3266,7 +3260,7 @@ export class DesktopFederationRuntime {
   }
 
   // Backoff applies per full cycle through the endpoint list; every cycle
-  // re-walks the endpoints last-good-first via connectToGateway.
+  // re-walks the endpoints in configured order via connectToGateway.
   private scheduleReconnect(): void {
     if (this.stopping || this.reconnectTimer) return;
     if (
