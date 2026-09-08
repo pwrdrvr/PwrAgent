@@ -1411,17 +1411,20 @@ function mergeImagePartsFromSources<
   message: T,
   sources: AppServerThreadMessageEntry[]
 ): T {
-  if (message.role !== "user" || hasImageParts(message)) {
+  if (message.role !== "user") {
     return message;
   }
 
   const source = sources.find((candidate) =>
     messageTextMatchesOptimisticEntry(message, candidate)
   );
-  if (!source?.parts) {
+  if (!source?.parts || source.parts.filter((part) => part.type === "image").length
+    <= (message.parts ?? []).filter((part) => part.type === "image").length) {
     return message;
   }
 
+  // An active-turn echo can carry only some attachments. Keep the complete
+  // submitted presentation until the authoritative image set catches up.
   return {
     ...message,
     parts: source.parts,
