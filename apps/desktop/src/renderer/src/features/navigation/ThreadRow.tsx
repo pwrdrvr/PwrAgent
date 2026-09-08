@@ -205,24 +205,23 @@ export function ThreadRow(props: ThreadRowProps) {
     rowRef.current.scrollIntoView({
       block: "nearest",
     });
-  }, [active, threadKey]);
-  useEffect(() => {
-    if (!active) {
-      return;
+    // Parent effects open directory/subthread disclosures for an explicit
+    // reveal. Keep a temporary sidebar peek visible until that layout has
+    // committed and the selected row has actually been scrolled into view.
+    if (revealSelectedThreadRequest > 0) {
+      const frame = window.requestAnimationFrame(() => {
+        rowRef.current?.scrollIntoView({ block: "nearest" });
+        if (
+          revealSelectedThreadRequest > completedRevealRequestRef.current
+          && onRevealSelectedThreadComplete
+        ) {
+          completedRevealRequestRef.current = revealSelectedThreadRequest;
+          onRevealSelectedThreadComplete(revealSelectedThreadRequest);
+        }
+      });
+      return () => window.cancelAnimationFrame(frame);
     }
-
-    if (
-      revealSelectedThreadRequest > completedRevealRequestRef.current
-      && onRevealSelectedThreadComplete
-    ) {
-      completedRevealRequestRef.current = revealSelectedThreadRequest;
-      onRevealSelectedThreadComplete(revealSelectedThreadRequest);
-    }
-  }, [
-    onRevealSelectedThreadComplete,
-    revealSelectedThreadRequest,
-    active,
-  ]);
+  }, [active, threadKey, revealSelectedThreadRequest, onRevealSelectedThreadComplete]);
   const armHoverPrefetch = (): void => {
     if (isNativeDragInteractionActive()) return;
     if (

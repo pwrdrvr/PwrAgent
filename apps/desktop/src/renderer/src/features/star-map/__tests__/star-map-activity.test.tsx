@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent, FederationPeerSummary, NavigationDirectoryRow, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { useFederationHealth } from "../../../lib/useFederationHealth";
 import { useStarMapForeground } from "../useStarMapForeground";
 import { useStarMapProjectPages } from "../useStarMapProjectPages";
 import { useStarMapThreads } from "../useStarMapThreads";
@@ -198,5 +199,26 @@ it("restores the full remote Lanes range after focus changes", async () => {
   expect(view.result.current.threadsByInstance.get("peer")).toHaveLength(20);
   await act(async () => { await view.result.current.loadMoreInstance("peer"); });
   expect(view.result.current.threadsByInstance.get("peer")).toHaveLength(25);
+  view.unmount();
+});
+
+it("allows explicit health refresh without subscriptions but suspends all inactive map reads", async () => {
+  const read = vi.fn(async () => ({ health: { peers: [] } }));
+  const subscribe = vi.fn(() => vi.fn());
+  const api = { readFederationHealth: read, onAgentEvent: subscribe } as unknown as DesktopApi;
+  const view = renderHook(({ suspended }) => useFederationHealth({ desktopApi: api, enabled: false, suspended }),
+    { initialProps: { suspended: false } });
+  expect(read).not.toHaveBeenCalled();
+  expect(subscribe).not.toHaveBeenCalled();
+  await act(async () => view.result.current.refresh());
+  expect(read).toHaveBeenCalledTimes(1);
+  const retained = view.result.current.health;
+  view.rerender({ suspended: true });
+  await act(async () => view.result.current.refresh());
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(view.result.current.health).toBe(retained);
+  view.rerender({ suspended: false });
+  await act(async () => view.result.current.refresh());
+  expect(read).toHaveBeenCalledTimes(2);
   view.unmount();
 });

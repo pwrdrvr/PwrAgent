@@ -24,9 +24,17 @@ test("pauses map load demand for a visible background window and a hidden window
     // Playwright emulates a focused page by default; this regression needs
     // the real native window focus signal.
     await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: false });
-    await map.clock.install();
+    // Foreground demand needs an actual focused OS window once Playwright's
+    // focus emulation is disabled. Other fixture windows may still be frontmost.
+    await app.electronApp.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().includes("#star-map"))!;
+      window.show();
+      window.focus();
+    });
+    await expect.poll(() => map.evaluate(() => document.hasFocus())).toBe(true);
     const load = map.getByRole("button", { name: /^Show load for/ }).first();
     await expect(load).toBeVisible();
+    await map.clock.install();
     await load.click();
     const count = () => app.electronApp.evaluate(() => (globalThis as typeof globalThis & { mapLoadReads: number }).mapLoadReads);
     await expect.poll(count).toBe(1);

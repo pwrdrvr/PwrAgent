@@ -13,12 +13,14 @@ export function useFederationHealth(params: {
   desktopApi?: DesktopApi;
   /** Suspend event-driven refreshes while the consumer is hidden. */
   enabled?: boolean;
+  /** Also suspend explicit refreshes (for an inactive Star Map). */
+  suspended?: boolean;
 }): { health?: FederationHealthStatus; refresh: () => void } {
   const desktopApi = params.desktopApi;
   const enabled = params.enabled ?? true;
   const lifetime = useRef(0);
-  const active = useRef(enabled);
-  active.current = enabled;
+  const active = useRef(!params.suspended);
+  active.current = !params.suspended;
   const [health, setHealth] = useState<FederationHealthStatus>();
 
   const refresh = useCallback(() => {
@@ -34,7 +36,7 @@ export function useFederationHealth(params: {
 
   useEffect(() => {
     lifetime.current += 1;
-    if (!enabled) return;
+    if (!enabled || params.suspended) return;
     refresh();
     const unsubscribe = desktopApi?.onAgentEvent?.((event) => {
       if (
@@ -48,7 +50,7 @@ export function useFederationHealth(params: {
       lifetime.current += 1;
       unsubscribe?.();
     };
-  }, [desktopApi, enabled, refresh]);
+  }, [desktopApi, enabled, refresh, params.suspended]);
 
   return { health, refresh };
 }

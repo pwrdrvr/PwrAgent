@@ -468,7 +468,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // The two always-on readouts the edge arrows have to route around.
   const keyHintRef = useRef<HTMLDivElement>(null);
   const selectionBarRef = useRef<HTMLDivElement>(null);
-  const { health } = useFederationHealth({ desktopApi: props.desktopApi, enabled: active });
+  const { health } = useFederationHealth({ desktopApi: props.desktopApi, enabled: active, suspended: !active });
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   const [filterSelection, setFilterSelection] =
     useState<StarMapFilterSelection>(() => readStoredFilterSelection());
