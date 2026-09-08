@@ -2326,7 +2326,7 @@ describe("app server ipc", () => {
     ).resolves.toBe(snapshot);
   });
 
-  it("returns offline navigation state without rejecting the Electron handler, but still rejects unexpected failures", async () => {
+  it.each(["FEDERATION_PEER_UNAVAILABLE", "navigation_busy"])("returns expected %s state without rejecting the Electron handler, but still rejects unexpected failures", async (code) => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();
@@ -2335,7 +2335,7 @@ describe("app server ipc", () => {
     const request = { protocol: 2, consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: "offline-peer" },
       query: { kind: "directory-index" } };
     const offline = Object.assign(new Error("Federation peer offline-peer is not connected."), {
-      code: "FEDERATION_PEER_UNAVAILABLE", instanceId: "offline-peer",
+      code, instanceId: "offline-peer",
     });
     federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(offline);
     await expect(handler(event, request)).resolves.toEqual({ navigationReadFailure: true,
@@ -2390,7 +2390,10 @@ describe("app server ipc", () => {
     const onDestroyed = b.sender.once.mock.calls.find(([name]) => name === "destroyed")?.[1] as () => void;
     onDestroyed();
     expect(options.signal.aborted).toBe(true);
-    expect((await settled).every((result) => result.status === "rejected")).toBe(true);
+    expect(await settled).toEqual([
+      expect.objectContaining({ status: "fulfilled", value: expect.objectContaining({ navigationReadFailure: true, code: "navigation_busy" }) }),
+      expect.objectContaining({ status: "fulfilled", value: expect.objectContaining({ navigationReadFailure: true, code: "navigation_busy" }) }),
+    ]);
     finish({ protocol: 2, ref: request.ref, revision: "late", readiness: "ready", identity: "unresolved" });
   });
 

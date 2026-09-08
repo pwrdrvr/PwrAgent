@@ -1,4 +1,4 @@
-import { offlineNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
+import { expectedNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
 import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
@@ -7820,7 +7820,7 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
   consumers.add(token);
   try { return await read(token); }
   catch (error) {
-    const offline = offlineNavigationReadFailure(error);
+    const offline = expectedNavigationReadFailure(error);
     if (offline) return offline;
     throw error;
   }
