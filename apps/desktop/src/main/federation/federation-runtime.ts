@@ -797,6 +797,7 @@ function eventClassAllowedByCapabilities(
 }
 
 export class DesktopFederationRuntime {
+  private sessionEnabledOverride?: boolean;
   private router?: FederationRouter;
   private server?: FederationGatewayWebSocketServer;
   private client?: FederationClientWebSocketClient;
@@ -864,6 +865,7 @@ export class DesktopFederationRuntime {
   private restartPromise: Promise<void> | undefined;
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
   private connectionGeneration = 0;
   /** Bumped only by stop(), so an in-flight endpoint walk can detect teardown. */
@@ -1076,6 +1078,15 @@ export class DesktopFederationRuntime {
     ).includes(capability);
   }
 
+  /** A toolbar toggle belongs to this process, never the shared profile settings. */
+  async setEnabledForSession(enabled: boolean): Promise<void> {
+    // A settings-driven restart may already be running. Apply this choice after
+    // it finishes so restart() cannot coalesce away the operator's toggle.
+    await this.restartPromise?.catch(() => undefined);
+    this.sessionEnabledOverride = enabled;
+    await this.restart();
+  }
+
   async restart(): Promise<void> {
     this.restartPromise ??= this.restartNow().finally(() => {
       this.restartPromise = undefined;
@@ -1085,6 +1096,7 @@ export class DesktopFederationRuntime {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.connectionAttempt = undefined;
     this.connectionGeneration += 1;
     this.walkEpoch += 1;
     if (isAppStateInitialized()) {
@@ -1143,8 +1155,10 @@ export class DesktopFederationRuntime {
     return {
       activity: this.activityLedger.snapshot(Date.now(), request),
       health: await this.health(),
-      configuredMode: this.readRuntimeConfig().mode,
-      running: Boolean(this.listenUrl || this.client || this.reconnectTimer),
+      configuredMode: resolveFederationRuntimeConfig(
+        getDesktopSettingsService().readFederationConfig(),
+      ).mode,
+      running: Boolean(this.listenUrl || this.client || this.reconnectTimer || this.connectionAttempt),
     };
   }
 
@@ -1179,7 +1193,7 @@ export class DesktopFederationRuntime {
           // the panel surfaces the duplicate-identity explanation.
           : this.lastConnectionFailureKind === "replaced"
             ? "degraded"
-            : this.reconnectTimer
+            : this.reconnectTimer || this.connectionAttempt
               ? "connecting"
               : "disconnected";
       health.unavailableReason = this.lastConnectionError;
@@ -1222,6 +1236,9 @@ export class DesktopFederationRuntime {
       ? getExistingRuntimeFederationLeaseCoordinator()?.snapshot()
       : undefined;
     applyFederationLeaseSnapshot(health, federationLeaseSnapshot);
+    if (this.sessionEnabledOverride === false) {
+      health.unavailableReason = "Federation is stopped for this app instance.";
+    }
     return health;
   }
 
@@ -2537,7 +2554,7 @@ export class DesktopFederationRuntime {
     // each other from the gateway in a connect/replace loop.
     if (isAppStateInitialized()) {
       const leaseCoordinator = getRuntimeFederationLeaseCoordinator();
-      const leaseGate = await leaseCoordinator.applyMode(this, mode);
+      const leaseGate = await leaseCoordinator.applyMode(this, mode, this.sessionEnabledOverride === false);
       if (!leaseGate.enabled) {
         if (leaseGate.disabledReasonKind === "lease_held") {
           this.lastConnectionError = leaseGate.disabledReason;
@@ -2563,9 +2580,14 @@ export class DesktopFederationRuntime {
   }
 
   private readRuntimeConfig(): FederationRuntimeConfig {
-    return resolveFederationRuntimeConfig(
+    const config = resolveFederationRuntimeConfig(
       getDesktopSettingsService().readFederationConfig(),
     );
+    if (this.sessionEnabledOverride === false) return { ...config, mode: "disabled" };
+    if (this.sessionEnabledOverride && config.mode === "disabled") {
+      return { ...config, mode: config.gatewayEndpoints.length ? "client" : "gateway" };
+    }
+    return config;
   }
 
   private async startAfterLeaseAcquired(
@@ -2753,6 +2775,18 @@ export class DesktopFederationRuntime {
   // identical pinned-identity + Noise handshake, so fallback can only change
   // reachability, never which gateway the client will trust.
   private async connectToGateway(): Promise<void> {
+    if (this.stopping || this.configuredEndpoints.length === 0) return;
+    const attempt = Symbol("federation connection attempt");
+    this.connectionAttempt = attempt;
+    try {
+      await this.walkGatewayEndpoints();
+    } finally {
+      // A stopped or superseded attempt must not clear a newer dial's state.
+      if (this.connectionAttempt === attempt) this.connectionAttempt = undefined;
+    }
+  }
+
+  private async walkGatewayEndpoints(): Promise<void> {
     const endpoints = this.configuredEndpoints;
     if (endpoints.length === 0) return;
     const lastGoodEndpoint =

@@ -188,13 +188,14 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
   });
   const peers = snapshot ? view === "physical" ? snapshot.activity.peers : snapshot.activity.logical : [];
   const series = peerId ? peers.find((peer) => peer.peerId === peerId)?.series : snapshot?.activity.physical;
-  const enabled = Boolean(snapshot && snapshot.configuredMode !== "disabled");
+  const enabled = Boolean(snapshot?.running);
   const labelFor = (id: string) => snapshot?.health.peers.find((peer) => peer.id === id)?.label || id;
   return <div className="federation-activity">
     <div className="federation-activity__toolbar">
       <div><strong>{snapshot ? federationRuntimeLabel(snapshot) : "Loading Federation activity…"}</strong>
         {snapshot ? <p>Configured {snapshot.configuredMode === "disabled" ? "off" : `on · ${snapshot.configuredMode}`}</p> : null}</div>
       <button type="button" role="switch" aria-label="Federation enabled"
+        title="Turn Federation on or off for this app instance only"
         aria-checked={enabled}
         className={`settings-switch messaging-status-popover__switch${enabled ? " is-on" : ""}`}
         disabled={!snapshot || pending || !desktopApi?.setFederationEnabled} onClick={() => void toggle()}>

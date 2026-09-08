@@ -36,7 +36,7 @@ export function useFederationActivity(
     setPending(true);
     toggleGeneration.current += 1;
     try {
-      const next = await desktopApi.setFederationEnabled(snapshot.configuredMode === "disabled");
+      const next = await desktopApi.setFederationEnabled(!snapshot.running);
       // Preserve the selected chart until the next poll refreshes its history.
       setSnapshot((previous) => ({ ...next, activity: previous?.activity ?? next.activity }));
       setError(undefined);
@@ -61,5 +61,5 @@ export function useFederationActivity(
 export function federationRuntimeLabel(snapshot: ReadFederationActivityResponse): string {
   if (snapshot.health.leaseHolder) return "Not running · lease held by another instance";
   if (snapshot.running) return `Running · ${snapshot.health.status}`;
-  return snapshot.configuredMode === "disabled" ? "Stopped" : "Not running";
+  return !snapshot.health.enabled ? "Stopped" : "Not running";
 }

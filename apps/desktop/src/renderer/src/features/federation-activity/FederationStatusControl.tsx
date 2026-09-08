@@ -22,7 +22,7 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
     document.addEventListener("pointerdown", dismiss);
     return () => document.removeEventListener("pointerdown", dismiss);
   }, [open]);
-  const enabled = Boolean(snapshot && snapshot.configuredMode !== "disabled");
+  const enabled = Boolean(snapshot?.running);
   return (
     <div ref={root} className="messaging-status-bar federation-status-control"
       onPointerEnter={() => { cancelDismiss(); setOpen(true); }}
@@ -56,10 +56,11 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
               <div>
                 <div className="messaging-status-popover__title">Federation</div>
                 <div className="messaging-status-popover__summary">
-                  {snapshot ? `Configured ${enabled ? `on · ${snapshot.configuredMode}` : "off"}` : "Loading…"}
+                  {snapshot ? `Configured ${snapshot.configuredMode !== "disabled" ? `on · ${snapshot.configuredMode}` : "off"}` : "Loading…"}
                 </div>
               </div>
               <button type="button" role="switch" aria-label="Federation enabled"
+                title="Turn Federation on or off for this app instance only"
                 aria-checked={Boolean(snapshot && enabled)} disabled={!snapshot || pending || !props.desktopApi?.setFederationEnabled}
                 className={`settings-switch messaging-status-popover__switch${enabled ? " is-on" : ""}`}
                 onClick={() => void toggle()}>
