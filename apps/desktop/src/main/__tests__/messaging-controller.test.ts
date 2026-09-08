@@ -1,3 +1,4 @@
+import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -134,6 +135,26 @@ afterEach(async () => {
     }),
   );
 });
+
+function boundedPeerBrowseFixture(local: NavigationSnapshot, remote: NavigationSnapshot, gate: Promise<void>, failure?: string): {
+  navigation: NavigationSnapshot;
+  listNavigationOwners: NonNullable<MessagingBackendBridge["listNavigationOwners"]>;
+  getNavigationQueryPage: NonNullable<MessagingBackendBridge["getNavigationQueryPage"]>;
+} {
+  const localStore = new NavigationQueryStore();
+  const peerStore = new NavigationQueryStore();
+  return { navigation: local,
+    listNavigationOwners: async () => ({ owners: [{ label: "This instance" }, { label: "Peer", target: { scope: "remote", instanceId: "peer" } }], omitted: 0 }),
+    getNavigationQueryPage: async (request) => {
+      const isRemote = request.federationTarget?.scope === "remote";
+      if (isRemote) { await gate; if (failure) throw new Error(failure); }
+      const population = isRemote ? remote : local;
+      return (isRemote ? peerStore : localStore).readPage({ request, scopeKey: "peer-browse-test", loadIndex: async () => ({
+        threads: population.threads, directories: population.directories,
+      }) });
+    },
+  };
+}
 
 describe("MessagingController", () => {
   it("logs provider-neutral ingress stages through startTurn acceptance", async () => {
@@ -874,7 +895,10 @@ describe("MessagingController", () => {
   });
 
   it("rejects review before opening a picker for unsupported backends", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:gemini";
     const harness = await createHarness({
+      navigation,
       listBackends: async (): Promise<ListBackendsResponse> => ({
         fetchedAt: 1000,
         backends: [
@@ -1112,7 +1136,10 @@ describe("MessagingController", () => {
   });
 
   it("submits reviews for Kimi when managed review is advertised", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:kimi";
     const harness = await createHarness({
+      navigation,
       listBackends: async (): Promise<ListBackendsResponse> => ({
         fetchedAt: 1000,
         backends: [buildKimiRuntimeBackendSummary()],
@@ -1717,6 +1744,8 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
 
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({ query: expect.objectContaining({ kind: "messaging-threads" }), pageSize: 8 }));
     expect(harness.delivered).toHaveLength(1);
     expect(harness.delivered[0]).toMatchObject({
       kind: "thread_picker",
@@ -1729,6 +1758,107 @@ describe("MessagingController", () => {
           channel: "telegram",
         },
       });
+  });
+
+  it("publishes a usable browse surface before the last peer answers and updates that surface", async () => {
+    const peer = createDeferred<void>();
+    const navigation = buildNavigationSnapshot();
+    const harness = await createHarness(boundedPeerBrowseFixture(navigation, navigation, peer.promise, "Peer disconnected"));
+    const pending = harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "thread_picker", prompt: expect.stringContaining("Still checking 1"),
+    });
+    peer.resolve();
+    await pending;
+    expect(harness.delivered).toHaveLength(2);
+    expect(harness.delivered[1]).toMatchObject({
+      kind: "thread_picker", delivery: { mode: "update" },
+      prompt: expect.stringContaining("Results are incomplete"),
+      browseSessionId: (harness.delivered[0] as { browseSessionId: string }).browseSessionId,
+    });
+    harness.controller.dispose();
+  });
+
+  it.each([
+    ["/resume", "/remote/project", "project_threads"],
+    ["/resume", "remote:project", "project_threads"],
+    ["/agent", "/remote/project", "agents"],
+    ["/agent", "remote:project", "agents"],
+  ])("resolves late peer directory selection for %s --cwd %s", async (command, selector, mode) => {
+    const peer = createDeferred<void>();
+    const local = buildNavigationSnapshot();
+    const remoteDirectory = {
+      ...local.directories[0]!,
+      key: "remote:project", path: "/remote/project", label: "Remote project", threadKeys: [],
+    };
+    const complete = { ...local, directories: [...local.directories, remoteDirectory] };
+    const harness = await createHarness(boundedPeerBrowseFixture(local, complete, peer.promise));
+    const pending = harness.controller.handleInboundEvent(buildCommandEvent(`${command} --cwd ${selector}`));
+    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
+    const browseSessionId = (harness.delivered[0] as { browseSessionId: string }).browseSessionId;
+    peer.resolve();
+    await pending;
+    expect(harness.delivered[1]).toMatchObject({
+      browseSessionId, delivery: { mode: "update" },
+    });
+    await expect(harness.store.getBrowseSession(browseSessionId, { now: 1000 })).resolves.toMatchObject({
+      mode,
+      selectedProject: {
+        directoryKey: remoteDirectory.key, path: remoteDirectory.path, label: remoteDirectory.label,
+      },
+    });
+    expect(JSON.stringify(harness.delivered[1])).not.toContain("Thread one");
+    harness.controller.dispose();
+  });
+
+  it.each(["", " --cwd /remote/project"])("does not overwrite the actor's next action with late peer results%s", async (args) => {
+    const peer = createDeferred<void>();
+    const navigation = buildNavigationSnapshot();
+    const complete = {
+      ...navigation,
+      directories: [...navigation.directories, {
+        ...navigation.directories[0]!, key: "remote:project", path: "/remote/project",
+      }],
+    };
+    const harness = await createHarness(boundedPeerBrowseFixture(navigation, complete, peer.promise));
+    const pending = harness.controller.handleInboundEvent(buildCommandEvent(`/resume${args}`));
+    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+    const afterAction = harness.delivered.length;
+    peer.resolve();
+    await pending;
+    expect(harness.delivered).toHaveLength(afterAction);
+    harness.controller.dispose();
+  });
+
+  it("budgets SQLite writes for initial and completed progressive browse publications", async () => {
+    const previous = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-browse-writes-"));
+    tempDirs.push(tempDir);
+    const db = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const navigation = buildNavigationSnapshot();
+      const harness = await createHarness({
+        store: new SqliteMessagingStore(db),
+        ...boundedPeerBrowseFixture(navigation, { ...navigation, threads: [], directories: [] }, Promise.resolve()),
+      });
+      resetSqliteWriteMetrics();
+      const { writes } = await measureSqliteWrites(async () => {
+        await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+      });
+      harness.controller.dispose();
+      expectSqliteWriteBudget({
+        scenario: "messaging-progressive-browse",
+        note: "one explicit resume command: local publication plus one coalesced remote publication",
+        writes,
+      });
+    } finally {
+      db.close();
+      if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];
+      else process.env[SQLITE_WRITE_METRICS_ENV] = previous;
+    }
   });
 
   it("presents an Agent-only picker for authorized /agent commands", async () => {
@@ -1897,6 +2027,26 @@ describe("MessagingController", () => {
       kind: "confirmation",
       body: expect.stringContaining("conversation default cleared"),
     });
+  });
+
+  it("rejects a remote default Agent callback before resolving a same-id local Agent", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.agent = {
+      name: "Local Agent", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1500,
+    };
+    const harness = await createHarness({ navigation });
+    const event = buildCommandEvent("/agent default set");
+    await harness.controller.handleInboundEvent(event);
+    harness.getNavigationSelectedDetail.mockClear();
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "browse:select-thread",
+      value: { backend: "codex", threadId: "thread-1", federationInstanceId: "pwr_remote" },
+    }));
+
+    expect(harness.getNavigationSelectedDetail).not.toHaveBeenCalled();
+    await expect(harness.store.findActiveDefaultAgentAssignmentForChannel(event.channel)).resolves.toBeUndefined();
+    expect(JSON.stringify(harness.delivered.at(-1))).toContain("Select an Agent owned by this instance");
   });
 
   it("assigns and bootstraps ACP Agents with PwrAgent HTTP MCP tools", async () => {
@@ -5969,8 +6119,8 @@ describe("MessagingController", () => {
         target: { scope: "remote", instanceId: "pwr_remote" },
       },
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
+    expect(harness.getNavigationSelectedDetail).toHaveBeenCalledWith({
+      protocol: 2, ref: { backend: "codex", threadId: "remote-thread", ownerInstanceId: "pwr_remote" },
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
     });
     expect(harness.delivered).toContainEqual(
@@ -7394,8 +7544,7 @@ describe("MessagingController", () => {
   });
 
   it("uses the materialized worktree path in the optimistic status for messaging-started threads", async () => {
-    const harness = await createHarness();
-    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeLaunchpadNavigationSnapshot());
+    const harness = await createHarness({ navigation: buildWorktreeLaunchpadNavigationSnapshot() });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
     await harness.controller.handleInboundEvent(
@@ -7559,6 +7708,9 @@ describe("MessagingController", () => {
         latestUpdatedAt: 8_000,
       },
     ];
+    navigation.threads.push(...["profile-scratchpad-1", "profile-scratchpad-2", "scratchpad-thread", "example-thread"].map((id) => ({
+      ...navigation.threads[0]!, id,
+    })));
     const harness = await createHarness({ navigation });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
@@ -11139,7 +11291,8 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledTimes(1);
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
     });
@@ -11409,6 +11562,15 @@ describe("MessagingController", () => {
       ...navigation.directories[0]!,
       launchpad: {
         ...navigation.directories[0]!.launchpad!,
+        directoryKey: navigation.directories[0]!.key,
+        directoryKind: navigation.directories[0]!.kind,
+        directoryLabel: navigation.directories[0]!.label,
+        directoryPath: navigation.directories[0]!.path,
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 1000,
         backend: "codex",
         codexEnvironmentId: "codex-environment",
         codexEnvironmentExecutionTarget: "local",
@@ -13419,9 +13581,9 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
-    });
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 2, pageSize: 5, query: { kind: "star-map", filters: { pinned: "exclude" } },
+      }));
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Monitor: Recent threads"),
@@ -13471,14 +13633,30 @@ describe("MessagingController", () => {
     });
   });
 
+  it("bounds monitor work to the requested pin and recent sections for a large owner", async () => {
+    const navigation = buildNavigationSnapshot();
+    const base = navigation.threads[0]!;
+    navigation.threads = Array.from({ length: 1000 }, (_, index) => ({ ...base, id: `thread-${index}`,
+      updatedAt: index, ...(index < 500 ? { pinnedRank: `pin-${String(index).padStart(4, "0")}` } : {}) }));
+    const harness = await createHarness({ navigation });
+    harness.getNavigationSnapshot.mockImplementation(() => { throw new Error("Legacy navigation is forbidden"); });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledTimes(2);
+    expect(harness.getNavigationQueryPage.mock.calls.every(([request]) => request.pageSize === 5)).toBe(true);
+    expect(harness.readThreadStatus).toHaveBeenCalledTimes(10);
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "status" });
+    harness.controller.dispose();
+  });
+
   it("starts Monitor in an unbound conversation", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
 
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
-    });
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 2, pageSize: 5, query: { kind: "star-map", filters: { pinned: "exclude" } },
+      }));
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Monitor: Recent threads"),
@@ -13609,13 +13787,13 @@ describe("MessagingController", () => {
     const binding = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/monitor").channel,
     );
-    harness.getNavigationSnapshot.mockClear();
+    harness.getNavigationQueryPage.mockClear();
     harness.readThreadStatus.mockResolvedValue("active");
     harness.delivered.splice(0);
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/MONITOR"));
 
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.getNavigationQueryPage).toHaveBeenCalledTimes(2);
     expect(harness.readThreadStatus).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -14022,12 +14200,12 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     try {
       await bindThread(harness);
-      harness.getNavigationSnapshot.mockClear();
+      harness.getNavigationQueryPage.mockClear();
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
 
-      expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(harness.getNavigationQueryPage).toHaveBeenCalledTimes(4);
       expect(vi.getTimerCount()).toBe(1);
     } finally {
       harness.controller.dispose();
@@ -14046,7 +14224,7 @@ describe("MessagingController", () => {
     const harness = await createHarness({ logger });
     try {
       await bindThread(harness);
-      harness.getNavigationSnapshot.mockRejectedValueOnce(
+      harness.getNavigationQueryPage.mockRejectedValueOnce(
         new Error("navigation unavailable"),
       );
       harness.delivered.splice(0);
@@ -14142,7 +14320,7 @@ describe("MessagingController", () => {
     try {
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
-      harness.getNavigationSnapshot.mockClear();
+      harness.getNavigationQueryPage.mockClear();
       harness.delivered.splice(0);
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor stop"));
@@ -14193,14 +14371,14 @@ describe("MessagingController", () => {
         },
         updatedAt: 1000,
       });
-      harness.getNavigationSnapshot.mockClear();
+      harness.getNavigationQueryPage.mockClear();
 
       await harness.controller.startMonitoringForEnabledBindings();
 
       expect(harness.listBackends).toHaveBeenCalled();
-      expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
-        backend: "all",
-      });
+      expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 2, pageSize: 5, query: { kind: "star-map", filters: { pinned: "exclude" } },
+      }));
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",
         text: expect.stringContaining("Monitor: Recent threads"),
@@ -14228,13 +14406,13 @@ describe("MessagingController", () => {
           updatedAt: 1000,
         },
       });
-      harness.getNavigationSnapshot.mockClear();
+      harness.getNavigationQueryPage.mockClear();
 
       await harness.controller.startMonitoringForEnabledBindings();
 
-      expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
-        backend: "all",
-      });
+      expect(harness.getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+        protocol: 2, pageSize: 5, query: { kind: "star-map", filters: { pinned: "exclude" } },
+      }));
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "status",
         text: expect.stringContaining("Monitor: Recent threads"),
@@ -15956,7 +16134,9 @@ describe("MessagingController", () => {
   });
 
   it("keeps commentary assistant deltas off messaging providers while delivering the final response", async () => {
-    const harness = await createHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:kimi";
+    const harness = await createHarness({ navigation });
     await bindThreadToBackend(harness, "acp:kimi");
     harness.delivered.length = 0;
 
@@ -17280,7 +17460,10 @@ describe("MessagingController", () => {
 
   it("delivers buffered assistant stream text when ACP terminal output is empty", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:gemini";
     const harness = await createHarness({
+      navigation,
       streamingResponsesDefault: true,
       // Fixed clock: the single delta coalesces (no intermediate edit) and only
       // the final discarded stream update fires before the fallback message.
@@ -17731,7 +17914,10 @@ describe("MessagingController", () => {
 
   it("posts buffered delta text as one message when streaming is disabled and terminal output is empty", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:gemini";
     const harness = await createHarness({
+      navigation,
       deliver: async (intent) => {
         delivered.push(intent);
         return {
@@ -18624,7 +18810,9 @@ describe("MessagingController", () => {
   });
 
   it("delivers completed ACP tool updates as generated system messages", async () => {
-    const harness = await createHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.source = "acp:gemini";
+    const harness = await createHarness({ navigation });
     await bindThreadToBackend(harness, "acp:gemini");
     await harness.controller.handleInboundEvent(buildTextEvent("start work"));
     harness.delivered.length = 0;
@@ -22320,6 +22508,8 @@ describe("MessagingController", () => {
     navigation.threads[0]!.queuedExecutionMode = "full-access";
     navigation.threads[0]!.queuedExecutionModeAt = 1500;
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    harness.getNavigationSelectedDetail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref,
+      revision: "configuration", readiness: "ready", identity: "present", thread: navigation.threads[0] }));
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
@@ -22516,6 +22706,32 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       executionMode: "default",
     });
+  });
+
+  it("rejects an unresolved bind target without falling back to a population read", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockImplementation(() => { throw new Error("Legacy navigation is forbidden"); });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "bind:codex:missing", value: { backend: "codex", threadId: "missing" },
+    }));
+    expect(await harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel)).toBeUndefined();
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "error", title: "Thread unavailable" });
+  });
+
+  it("blocks permission changes when exact configuration is unavailable without reading navigation", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.getNavigationSnapshot.mockClear().mockImplementation(() => { throw new Error("Legacy navigation is forbidden"); });
+    harness.getNavigationLaunchpadConfig.mockResolvedValue({ protocol: 2, revision: "missing-defaults" });
+    const before = await harness.store.getBinding("binding:telegram:dm::chat-1:codex:thread-1");
+    await expect(harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "status:set-permissions",
+      value: { executionMode: "full-access" },
+    }))).rejects.toThrow("ready thread configuration and defaults");
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(await harness.store.getBinding("binding:telegram:dm::chat-1:codex:thread-1")).toEqual(before);
   });
 
   it("uses Kimi config-option permissions in the status picker", async () => {
@@ -22717,6 +22933,8 @@ describe("MessagingController", () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.executionMode = "default";
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    harness.getNavigationSelectedDetail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref,
+      revision: "configuration", readiness: "ready", identity: "present", thread: navigation.threads[0] }));
     harness.getThreadAdmissionState.mockResolvedValue({
       thread: navigation.threads[0],
     });
@@ -23229,6 +23447,7 @@ describe("MessagingController", () => {
   it("runs a local-to-worktree handoff from the status menu", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23281,9 +23500,11 @@ describe("MessagingController", () => {
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), false);
     harness.getNavigationSnapshot.mockResolvedValueOnce(
       buildLocalHandoffNavigationSnapshot(),
     );
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), true);
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: confirm.id,
@@ -23321,6 +23542,7 @@ describe("MessagingController", () => {
       handoffBranches: Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`),
     };
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    setHandoffDetailFixture(harness, navigation, false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23378,6 +23600,7 @@ describe("MessagingController", () => {
   it("runs a detached-head worktree handoff without asking for a leave-local branch", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23399,9 +23622,11 @@ describe("MessagingController", () => {
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), false);
     harness.getNavigationSnapshot.mockResolvedValueOnce(
       buildLocalHandoffNavigationSnapshot(),
     );
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), true);
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: confirm.id,
@@ -23432,6 +23657,7 @@ describe("MessagingController", () => {
       },
     };
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    setHandoffDetailFixture(harness, navigation, false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23460,6 +23686,7 @@ describe("MessagingController", () => {
   it("runs a worktree-to-local handoff from the status menu", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23483,9 +23710,11 @@ describe("MessagingController", () => {
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
     harness.getNavigationSnapshot.mockResolvedValue(buildNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildNavigationSnapshot(), false);
     harness.getNavigationSnapshot.mockResolvedValueOnce(
       buildWorktreeHandoffNavigationSnapshot(),
     );
+    setHandoffDetailFixture(harness, buildWorktreeHandoffNavigationSnapshot(), true);
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: confirm.id,
@@ -23515,6 +23744,7 @@ describe("MessagingController", () => {
   it("rejects stale handoff confirmations when workspace metadata changes", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23538,6 +23768,7 @@ describe("MessagingController", () => {
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
 
     harness.getNavigationSnapshot.mockResolvedValue(buildNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildNavigationSnapshot(), false);
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: confirm.id,
@@ -23555,6 +23786,7 @@ describe("MessagingController", () => {
   it("rejects handoff confirmations while a turn is active", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23611,6 +23843,7 @@ describe("MessagingController", () => {
   it("reports handoff as unavailable when the backend bridge does not expose it", async () => {
     const harness = await createHarness({ handoff: false });
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    setHandoffDetailFixture(harness, buildLocalHandoffNavigationSnapshot(), false);
     await bindThread(harness);
     harness.delivered.length = 0;
 
@@ -23642,7 +23875,8 @@ describe("MessagingController", () => {
     const harness = await createHarness({ setConversationTitle });
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.title = "Renamed in Desktop";
-    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    harness.getNavigationSelectedDetail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref,
+      revision: "renamed", readiness: "ready", identity: "present", thread: navigation.threads[0] }));
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(
@@ -24544,6 +24778,22 @@ describe("send_messaging_file agent tool", () => {
   });
 });
 
+function setHandoffDetailFixture(
+  harness: { getNavigationSelectedDetail: ReturnType<typeof vi.fn> },
+  population: NavigationSnapshot,
+  once: boolean,
+): void {
+  const read: NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]> = async (request) => {
+    const thread = population.threads.find((candidate) => candidate.source === request.ref.backend && candidate.id === request.ref.threadId);
+    return { protocol: 2, ref: request.ref, revision: "handoff-fixture", readiness: "ready",
+      identity: thread ? "present" : "unresolved", thread,
+      ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: population.directories.filter((directory) =>
+        thread?.linkedDirectories.some((linked) => linked.path === directory.path)) } : {}) };
+  };
+  if (once) harness.getNavigationSelectedDetail.mockImplementationOnce(read);
+  else harness.getNavigationSelectedDetail.mockImplementation(read);
+}
+
 async function createHarness<
   Store extends MessagingControllerOptions["store"] = MessagingStore,
 >(options?: {
@@ -24576,6 +24826,10 @@ async function createHarness<
   responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
   getNavigationSnapshot?: NonNullable<MessagingBackendBridge["getNavigationSnapshot"]>;
+  getNavigationQueryPage?: NonNullable<MessagingBackendBridge["getNavigationQueryPage"]>;
+  listNavigationOwners?: NonNullable<MessagingBackendBridge["listNavigationOwners"]>;
+  getNavigationSelectedDetail?: NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]>;
+  getNavigationLaunchpadConfig?: NonNullable<MessagingBackendBridge["getNavigationLaunchpadConfig"]>;
   getThreadAdmissionState?: NonNullable<MessagingBackendBridge["getThreadAdmissionState"]>;
   createManagedConversation?: MessagingAdapter["createManagedConversation"];
   closeManagedConversation?: MessagingAdapter["closeManagedConversation"];
@@ -24645,6 +24899,9 @@ async function createHarness<
   delivered: MessagingSurfaceIntent[];
   ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
+  getNavigationSelectedDetail: ReturnType<typeof vi.fn>;
+  getNavigationQueryPage: ReturnType<typeof vi.fn>;
+  getNavigationLaunchpadConfig: ReturnType<typeof vi.fn>;
   getThreadAdmissionState: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
@@ -24729,6 +24986,43 @@ async function createHarness<
     options?.getNavigationSnapshot
       ?? (async () => options?.navigation ?? buildNavigationSnapshot()),
   );
+  const getNavigationSelectedDetail = vi.fn<NonNullable<MessagingBackendBridge["getNavigationSelectedDetail"]>>(
+    options?.getNavigationSelectedDetail ?? (async (request) => {
+      const population = options?.getNavigationSnapshot
+        ? await options.getNavigationSnapshot({ backend: request.ref.backend, federationTarget: request.federationTarget })
+        : options?.navigation ?? buildNavigationSnapshot();
+      const thread = population.threads.find((candidate) => candidate.source === request.ref.backend && candidate.id === request.ref.threadId
+        && (candidate.federation?.ref.target.scope === "remote" ? candidate.federation.ref.target.instanceId
+          : options?.getNavigationSnapshot && request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined) === request.ref.ownerInstanceId);
+      return { protocol: 2, ref: request.ref, revision: "fixture", readiness: "ready", identity: thread ? "present" : "unresolved", thread,
+        ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: population.directories.filter((directory) =>
+          thread?.linkedDirectories.some((linked) => linked.path === directory.path)) } : {}) };
+    }),
+  );
+  const getNavigationLaunchpadConfig = vi.fn<NonNullable<MessagingBackendBridge["getNavigationLaunchpadConfig"]>>(
+    options?.getNavigationLaunchpadConfig ?? (async (request) => {
+      const population = options?.getNavigationSnapshot
+        ? await options.getNavigationSnapshot({ backend: "all", federationTarget: request.federationTarget })
+        : options?.navigation ?? buildNavigationSnapshot();
+      const directory = population.directories.find((candidate) => candidate.key === request.directoryKey);
+      const ensured = [...ensureDirectoryLaunchpad.mock.results].reverse().find((result, index) =>
+        ensureDirectoryLaunchpad.mock.calls[ensureDirectoryLaunchpad.mock.results.length - index - 1]?.[0]?.directoryKey === request.directoryKey
+        && result.type === "return");
+      const launchpad = ensured ? (await ensured.value).launchpad : directory?.launchpad;
+      return { protocol: 2, revision: "fixture", defaults: population.launchpadDefaults,
+        directoryKey: request.directoryKey, launchpad, directoryGitStatus: directory?.gitStatus };
+    }),
+  );
+  const navigationQueryStore = new NavigationQueryStore();
+  const getNavigationQueryPage = vi.fn<NonNullable<MessagingBackendBridge["getNavigationQueryPage"]>>(options?.getNavigationQueryPage ?? (async (request) => {
+    const population = options?.getNavigationSnapshot
+      ? await options.getNavigationSnapshot({ backend: request.backend, federationTarget: request.federationTarget })
+      : options?.navigation ?? buildNavigationSnapshot();
+    return navigationQueryStore.readPage({ request, scopeKey: "messaging-test", loadIndex: async () => ({
+      threads: population.threads.filter((thread) => (thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined)
+        === (request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined)), directories: population.directories,
+    }) });
+  }));
   const getThreadAdmissionState = vi.fn(
     options?.getThreadAdmissionState
       ?? (async (request) => {
@@ -25105,6 +25399,15 @@ async function createHarness<
     cancelThreadExecutionModeQueue,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
+    getNavigationSelectedDetail,
+    getNavigationQueryPage,
+    listNavigationOwners: options?.listNavigationOwners ?? (async () => {
+      const population = options?.navigation ?? buildNavigationSnapshot();
+      const peers = new Map(population.threads.flatMap((thread) => thread.federation?.ref.target.scope === "remote"
+        ? [[thread.federation.ref.target.instanceId, { target: thread.federation.ref.target, label: thread.federation.instanceLabel }] as const] : []));
+      return { owners: [{ label: "This instance" }, ...peers.values()], omitted: 0 };
+    }),
+    getNavigationLaunchpadConfig,
     getThreadAdmissionState,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
@@ -25187,6 +25490,9 @@ async function createHarness<
     delivered,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
+    getNavigationSelectedDetail,
+    getNavigationQueryPage,
+    getNavigationLaunchpadConfig,
     getThreadAdmissionState,
     handoffThreadWorkspace,
     interruptTurn,

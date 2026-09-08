@@ -43,7 +43,11 @@ export function deriveInboxState(params: {
     };
   }
 
-  if (params.firstSnapshot) {
+  // An explicit seen watermark is authoritative even before a legacy full
+  // snapshot has initialized its inventory. Bounded reads never write that
+  // legacy baseline, and must still expose work completed after a reply/focus.
+  const hasSeenWatermark = params.overlay?.lastSeenUpdatedAt !== undefined;
+  if (params.firstSnapshot && !hasSeenWatermark) {
     return {
       inInbox: false,
       lastSeenAt: params.overlay?.lastSeenAt,
@@ -51,7 +55,7 @@ export function deriveInboxState(params: {
     };
   }
 
-  if (params.isNewThread) {
+  if (params.isNewThread && !hasSeenWatermark) {
     return {
       inInbox: true,
       reason: "new-thread",

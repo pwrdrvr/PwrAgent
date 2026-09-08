@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ImgHTMLAttributes } from "react";
 
 type TranscriptImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {
@@ -7,22 +7,36 @@ type TranscriptImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {
 
 export function TranscriptImage(props: TranscriptImageProps) {
   const { src, ...imageProps } = props;
-  const resolvedSrc = useResolvedTranscriptImageSrc(src);
-
-  return <img {...imageProps} src={resolvedSrc} />;
-}
-
-function useResolvedTranscriptImageSrc(src: string): string {
-  const [resolvedSrc, setResolvedSrc] = useState(src);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [visibleSource, setVisibleSource] = useState<string>();
+  const deferred = props.loading === "lazy" && typeof IntersectionObserver !== "undefined";
+  const resolvedSrc = useResolvedTranscriptImageSrc(!deferred || visibleSource === src ? src : undefined);
 
   useEffect(() => {
-    if (!isEmbeddedImageDataUrl(src) || typeof URL.createObjectURL !== "function") {
-      setResolvedSrc(src);
+    if (!deferred || visibleSource === src || !imageRef.current) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setVisibleSource(src);
+      observer.disconnect();
+    });
+    observer.observe(imageRef.current);
+    return () => observer.disconnect();
+  }, [deferred, src, visibleSource]);
+
+  return <img {...imageProps} ref={imageRef} src={resolvedSrc} />;
+}
+
+function useResolvedTranscriptImageSrc(src: string | undefined): string | undefined {
+  const [resolved, setResolved] = useState({ src, url: src });
+
+  useEffect(() => {
+    if (!src || !isEmbeddedImageDataUrl(src) || typeof URL.createObjectURL !== "function") {
+      setResolved({ src, url: src });
       return;
     }
 
     const objectUrl = createObjectUrlFromDataUrl(src);
-    setResolvedSrc(objectUrl ?? src);
+    setResolved({ src, url: objectUrl ?? src });
 
     return () => {
       if (objectUrl) {
@@ -31,7 +45,7 @@ function useResolvedTranscriptImageSrc(src: string): string {
     };
   }, [src]);
 
-  return resolvedSrc;
+  return resolved.src === src ? resolved.url : src;
 }
 
 function isEmbeddedImageDataUrl(src: string): boolean {

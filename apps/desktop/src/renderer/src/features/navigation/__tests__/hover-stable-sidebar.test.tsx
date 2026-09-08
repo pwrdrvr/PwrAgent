@@ -1,3 +1,4 @@
+import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import "@testing-library/jest-dom/vitest";
 import {
   fireEvent,
@@ -12,7 +13,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { BrowseMode } from "../../../lib/useThreadNavigation";
-import { Sidebar } from "../Sidebar";
+import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 
 function thread(params: {
   createdAt?: number;
@@ -73,7 +74,7 @@ function renderSidebar(params: {
   draftThreadKeys?: Record<string, boolean>;
   inboxThreads?: NavigationThreadSummary[];
   onOpenLaunchpad?: (
-    directory: NavigationDirectorySummary,
+    directory: NavigationDirectoryView,
   ) => Promise<void>;
   onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
   onSelectThread?: (thread: NavigationThreadSummary) => void;
@@ -687,7 +688,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       "codex:bravo",
       "codex:alpha",
-    ]);
+    ], { key: "codex:alpha", anchorKey: "codex:bravo", placement: "after" });
 
     view.rerender(renderSidebar({
       browseMode: "directories",
@@ -701,6 +702,23 @@ describe("Sidebar hover-stable thread ordering", () => {
     }));
 
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+  });
+
+  it.each([false, true])("renders lazy pins correctly on first arrival when hover re-enters before the page: %s", (reenter) => {
+    const { rerender } = render(renderSidebar({ browseMode: "directories", directories: [directory], threads: [] }));
+    const summary = screen.getByRole("button", { name: "Repo" });
+    fireEvent.pointerOver(summary, { pointerType: "mouse" });
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    // A pointer transition inside the expanded directory can freeze the
+    // loading state again before the asynchronous owner response arrives.
+    if (reenter) fireEvent.pointerOver(summary, { pointerType: "mouse" });
+    // The owner page arrives after the click; the mouse remains on the folder.
+    rerender(renderSidebar({ browseMode: "directories", directories: [directory],
+      threads: [{ ...alpha, pinnedRank: "1024" }, { ...bravo, pinnedRank: "2048" }] }));
+    const list = screen.getByRole("list", { name: "Threads in Repo" });
+    expect(list.querySelectorAll('[data-thread-pin-state="pinned"]')).toHaveLength(2);
+    expect(within(list).getByRole("button", { name: /Alpha thread/ })).toBeVisible();
   });
 
   it("shows a newly created pinned thread while Directory threads are collapsed", () => {
@@ -722,7 +740,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     });
     fireEvent.pointerOver(launchpadButton, { pointerType: "mouse" });
     fireEvent.click(launchpadButton);
-    expect(onOpenLaunchpad).toHaveBeenCalledWith(collapsedDirectory, undefined);
+    expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: collapsedDirectory.key, directoryThreadsCollapsed: true }), undefined);
 
     const expandedDirectory = {
       ...collapsedDirectory,

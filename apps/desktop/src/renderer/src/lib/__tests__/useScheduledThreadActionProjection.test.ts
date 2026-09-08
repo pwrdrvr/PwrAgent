@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { AgentEvent, ScheduledThreadAction } from "@pwragent/shared";
-import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
+import { buildThreadComposerScopeKey, useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "../desktop-api";
 import {
   applyScheduledActionProjection,
@@ -36,7 +36,7 @@ describe("scheduled thread action projections", () => {
   it("hydrates durable scheduled actions without replacing local queue state", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     store.setQueuedTurns(scopeKey, [{
       id: "local-1",
       text: "Local queue entry",
@@ -59,7 +59,7 @@ describe("scheduled thread action projections", () => {
   it("keeps a stale-steer hold at the queue head during reconciliation", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     store.setQueuedTurns(scopeKey, [{
       id: "local-1",
       text: "Earlier queued message",
@@ -104,7 +104,7 @@ describe("scheduled thread action projections", () => {
   it("removes the projection when the backend action becomes terminal", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     applyScheduledActionProjection(store, scheduledAction());
 
     applyScheduledActionProjection(
@@ -124,7 +124,7 @@ describe("scheduled thread action projections", () => {
       desktopApi: {
         listScheduledThreadActions: vi.fn(async () => ({
           actions: [],
-          observedAt: 1_000,
+          projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 1_000,
         })),
         onAgentEvent: (handler: (event: AgentEvent) => void) => {
           agentEventHandler = handler;
@@ -156,7 +156,7 @@ describe("scheduled thread action projections", () => {
   it("turns a failed backend action into a locally recoverable draft", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
 
     applyScheduledActionProjection(store, scheduledAction({
       status: "failed",
@@ -175,18 +175,19 @@ describe("scheduled thread action projections", () => {
     ).toBeUndefined();
   });
 
-  it("periodically reconciles actions changed by another process", async () => {
+  it("reconciles compact invalidations without idle full-list polling", async () => {
+    let listener!: (event: AgentEvent) => void;
     vi.useFakeTimers();
     const { result } = renderHook(() => useComposerDraftStore());
     const listScheduledThreadActions = vi.fn()
-      .mockResolvedValueOnce({ actions: [], observedAt: 1_000 })
+      .mockResolvedValueOnce({ actions: [], projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 1_000 })
       .mockResolvedValueOnce({
         actions: [scheduledAction()],
-        observedAt: 2_000,
+        projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 2_000,
       });
     const desktopApi = {
       listScheduledThreadActions,
-      onAgentEvent: () => () => undefined,
+      onAgentEvent: (next: (event: AgentEvent) => void) => { listener = next; return () => {}; },
     } as unknown as DesktopApi;
     const projection = renderHook(() => useScheduledThreadActionProjection({
       composerDraftStore: result.current,
@@ -197,20 +198,25 @@ describe("scheduled thread action projections", () => {
       await Promise.resolve();
     });
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
-      federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, deadlineAt: expect.any(Number), federationTarget: undefined,
       includeFailed: true,
-    });
+    }, expect.stringMatching(/^scheduled:/));
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
+    expect(listScheduledThreadActions).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      listener({ backend: "codex", notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/scheduledAction/updated" } } });
+      await vi.advanceTimersByTimeAsync(100);
+    });
     expect(listScheduledThreadActions).toHaveBeenCalledTimes(2);
     expect(listScheduledThreadActions).toHaveBeenLastCalledWith({
-      federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, deadlineAt: expect.any(Number), federationTarget: undefined,
       terminalUpdatedAfter: 1_000,
-    });
+    }, expect.stringMatching(/^scheduled:/));
     expect(
-      result.current.getQueuedTurns("thread:codex:thread-1"),
+      result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toEqual([
       expect.objectContaining({ scheduledActionId: "scheduled-1" }),
     ]);
@@ -223,22 +229,20 @@ describe("scheduled thread action projections", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const ownerTwoAction = scheduledAction({
       id: "owner-two-action",
-      threadId: "owner-two-thread",
+      threadId: "thread-1",
     });
     const listScheduledThreadActions = vi.fn(async (request) => ({
       actions:
         request.federationTarget?.scope === "remote"
         && request.federationTarget.instanceId === "owner-two"
           ? [ownerTwoAction]
-          : [],
-      observedAt: 1_000,
+          : request.federationTarget ? [] : [scheduledAction()],
+      projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 1_000,
     }));
+    const desktopApi = { listScheduledThreadActions, onAgentEvent: () => () => undefined } as unknown as DesktopApi;
     const projection = renderHook(() => useScheduledThreadActionProjection({
       composerDraftStore: result.current,
-      desktopApi: {
-        listScheduledThreadActions,
-        onAgentEvent: () => () => undefined,
-      } as unknown as DesktopApi,
+      desktopApi,
       sources: [
         { federationTarget: undefined },
         {
@@ -262,18 +266,21 @@ describe("scheduled thread action projections", () => {
 
     expect(listScheduledThreadActions).toHaveBeenCalledTimes(3);
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
+      projectionProtocol: 2, cursor: undefined, deadlineAt: expect.any(Number),
       federationTarget: {
         scope: "remote",
         instanceId: "owner-two",
       },
       includeFailed: true,
-    });
+    }, expect.stringMatching(/^scheduled:/));
     expect(
-      result.current.getQueuedTurns("thread:codex:owner-two-thread"),
+      result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1", { scope: "remote", instanceId: "owner-two" })),
     ).toEqual([
       expect.objectContaining({ scheduledActionId: "owner-two-action" }),
     ]);
 
+    expect(result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1")))
+      .toEqual([expect.objectContaining({ scheduledActionId: "scheduled-1" })]);
     projection.unmount();
   });
 
@@ -282,7 +289,7 @@ describe("scheduled thread action projections", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const listScheduledThreadActions = vi.fn(async () => ({
       actions: [],
-      observedAt: 1_000,
+      projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 1_000,
     }));
     const federationTarget = {
       scope: "remote" as const,
@@ -330,7 +337,7 @@ describe("scheduled thread action projections", () => {
         status: "failed",
         errorMessage: "failed before mount",
       })],
-      observedAt: 2_000,
+      projectionProtocol: 2, revision: "scheduled-revision", complete: true, observedAt: 2_000,
     }));
     const projection = renderHook(() => useScheduledThreadActionProjection({
       composerDraftStore: result.current,
@@ -345,11 +352,11 @@ describe("scheduled thread action projections", () => {
     });
 
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
-      federationTarget: undefined,
+      projectionProtocol: 2, cursor: undefined, deadlineAt: expect.any(Number), federationTarget: undefined,
       includeFailed: true,
-    });
+    }, expect.stringMatching(/^scheduled:/));
     expect(
-      result.current.getQueuedTurns("thread:codex:thread-1"),
+      result.current.getQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1")),
     ).toEqual([
       expect.objectContaining({
         errorMessage: "failed before mount",
@@ -362,7 +369,7 @@ describe("scheduled thread action projections", () => {
   it("keeps review display copy separate from its editable slash command", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
 
     applyScheduledActionProjection(store, scheduledAction({
       kind: "review",
@@ -387,7 +394,7 @@ describe("scheduled thread action projections", () => {
   it("carries a picked reviewer onto the projected queued review", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
 
     applyScheduledActionProjection(store, scheduledAction({
       kind: "review",
@@ -420,7 +427,7 @@ describe("scheduled thread action projections", () => {
   it("omits the reviewer when the queued review inherits thread settings", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
 
     applyScheduledActionProjection(store, scheduledAction({
       kind: "review",
@@ -441,7 +448,7 @@ describe("scheduled thread action projections", () => {
   it("deduplicates navigation queue mirrors by backend queue entry id", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const queuedAction = scheduledAction({
       status: "queued",
       queueEntryId: "queue-entry-1",
@@ -476,7 +483,7 @@ describe("scheduled thread action projections", () => {
   it("removes stale projections when a refresh no longer returns their scope", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
-    const scopeKey = "thread:codex:thread-1";
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const projectedScopes = syncScheduledActionProjections(
       store,
       [scheduledAction()],

@@ -1,3 +1,4 @@
+import { buildOwnedComposerScopeKey, parseOwnedComposerScopeKey } from "@pwragent/shared";
 import { useMemo, useRef } from "react";
 import type { JSONContent } from "@tiptap/react";
 import type {
@@ -6,6 +7,8 @@ import type {
   AppServerTurnInputItem,
   ComposerDraftLifecycle,
   ComposerDraftRecoveryCandidate,
+  ComposerThreadOwner,
+  FederationTarget,
   ListComposerDraftRecoveryCandidatesRequest,
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
@@ -15,6 +18,7 @@ import type {
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 
 export type ComposerDraftSnapshot = {
+  threadOwner?: ComposerThreadOwner;
   draft: string;
   editorDocument?: JSONContent;
   imageAttachments: NavigationLaunchpadImageAttachment[];
@@ -24,6 +28,7 @@ export type ComposerDraftSnapshot = {
 };
 
 export type ComposerQueuedTurnSnapshot = {
+  threadOwner?: ComposerThreadOwner;
   id: string;
   /** Apply this follow-up to the first turn once launchpad setup finishes. */
   steerWhenReady?: boolean;
@@ -92,8 +97,9 @@ export function createQueuedTurnId(): string {
 export function buildThreadComposerScopeKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
+  target: FederationTarget = { scope: "local" },
 ): string {
-  return `thread:${backend}:${threadId}`;
+  return buildOwnedComposerScopeKey({ backend, threadId, target });
 }
 
 /**
@@ -118,7 +124,11 @@ export function hasComposerDraftContent(
   );
 }
 
+export type ComposerDraftHydrationStatus = "memory-only" | "loading" | "ready" | "failed";
+
 export type ComposerDraftStore = {
+  retainScopeOwner?: (scopeKey: string, owner: ComposerThreadOwner) => () => void;
+  getScopeOwner?: (scopeKey: string) => ComposerThreadOwner | undefined;
   delete(scopeKey: string): void;
   get(scopeKey: string): ComposerDraftSnapshot | undefined;
   /**
@@ -127,6 +137,11 @@ export type ComposerDraftStore = {
    * surfaces outside the composer can mark a thread as having a draft.
    */
   hasDraftContent(scopeKey: string): boolean;
+  /** Local opaque scopes only: no content, and no inferred remote ownership. */
+  getDraftScopeKeys(): readonly string[];
+  /** Includes off-page local/owner-mirrored queues, independently of navigation. */
+  getQueuedScopeKeys(): readonly string[];
+  hydrationStatus: ComposerDraftHydrationStatus;
   /**
    * Monotonic counter bumped when a scope *gains or loses* draft content.
    * Deliberately not bumped on every edit: the sidebar only cares whether a
@@ -216,6 +231,7 @@ export function useComposerDraftStore(): ComposerDraftStore {
   const draftStackStoreRef = useRef(new Map<string, ComposerDraftSnapshot[]>());
   const pendingSteerStoreRef = useRef(new Map<string, ComposerPendingSteerSnapshot>());
   const queuedTurnStoreRef = useRef(new Map<string, ComposerQueuedTurnSnapshot[]>());
+  const scopeOwnersRef = useRef(new Map<string, Map<string, { owner: ComposerThreadOwner; refs: number }>>());
   // Reactivity bridge for the queued-turn Map. The Map itself is a ref
   // (no React state) so composer writes stay cheap, but subscribers like
   // the sidebar need to know when it changes. Every mutation path below
@@ -231,6 +247,36 @@ export function useComposerDraftStore(): ComposerDraftStore {
   const draftPresenceListenersRef = useRef(new Set<() => void>());
 
   return useMemo(() => {
+    const getScopeOwner = (scopeKey: string): ComposerThreadOwner | undefined => {
+      const owners = new Map<string, ComposerThreadOwner>();
+      const encodedOwner = parseOwnedComposerScopeKey(scopeKey);
+      if (encodedOwner) owners.set(buildOwnedComposerScopeKey(encodedOwner), encodedOwner);
+      for (const registration of scopeOwnersRef.current.get(scopeKey)?.values() ?? []) {
+        owners.set(buildOwnedComposerScopeKey(registration.owner), registration.owner);
+      }
+      for (const snapshot of [
+        storeRef.current.get(scopeKey),
+        ...(draftStackStoreRef.current.get(scopeKey) ?? []),
+        ...(queuedTurnStoreRef.current.get(scopeKey) ?? []),
+      ]) {
+        if (!snapshot?.threadOwner) continue;
+        try {
+          owners.set(buildOwnedComposerScopeKey(snapshot.threadOwner), snapshot.threadOwner);
+        } catch {
+          // Preserve malformed persisted content without authorizing dispatch.
+          return undefined;
+        }
+      }
+      return owners.size === 1 ? owners.values().next().value : undefined;
+    };
+    const tag = <T extends { threadOwner?: ComposerThreadOwner }>(scopeKey: string, snapshot: T): T => {
+      const encodedOwner = parseOwnedComposerScopeKey(scopeKey);
+      if (encodedOwner && snapshot.threadOwner && buildOwnedComposerScopeKey(snapshot.threadOwner) !== scopeKey) {
+        throw new Error("Composer content belongs to another thread owner.");
+      }
+      const threadOwner = snapshot.threadOwner ?? encodedOwner ?? getScopeOwner(scopeKey);
+      return threadOwner && !snapshot.threadOwner ? { ...snapshot, threadOwner } : snapshot;
+    };
     const notifyQueuedTurnChange = (): void => {
       queuedTurnVersionRef.current += 1;
       for (const listener of queuedTurnListenersRef.current) {
@@ -262,12 +308,31 @@ export function useComposerDraftStore(): ComposerDraftStore {
     };
 
     return {
+      getScopeOwner,
+      retainScopeOwner: (scopeKey, owner) => {
+        if (!parseOwnedComposerScopeKey(scopeKey)) return () => undefined;
+        if (buildOwnedComposerScopeKey(owner) !== scopeKey) throw new Error("Composer scope belongs to another thread owner.");
+        const key = buildOwnedComposerScopeKey(owner);
+        const owners = scopeOwnersRef.current.get(scopeKey) ?? new Map();
+        const registered = owners.get(key) ?? { owner, refs: 0 };
+        registered.refs += 1;
+        owners.set(key, registered);
+        scopeOwnersRef.current.set(scopeKey, owners);
+        return () => {
+          registered.refs -= 1;
+          if (registered.refs === 0) owners.delete(key);
+          if (owners.size === 0) scopeOwnersRef.current.delete(scopeKey);
+        };
+      },
       delete: (scopeKey) => {
         storeRef.current.delete(scopeKey);
         syncDraftPresence(scopeKey);
       },
       get: (scopeKey) => storeRef.current.get(scopeKey),
       hasDraftContent: (scopeKey) => draftPresenceRef.current.has(scopeKey),
+      getDraftScopeKeys: () => [...draftPresenceRef.current],
+      getQueuedScopeKeys: () => [...queuedTurnStoreRef.current.keys()],
+      hydrationStatus: "memory-only",
       getDraftPresenceVersion: () => draftPresenceVersionRef.current,
       subscribeDraftPresence: (listener) => {
         draftPresenceListenersRef.current.add(listener);
@@ -297,7 +362,7 @@ export function useComposerDraftStore(): ComposerDraftStore {
       },
       pushDraft: (scopeKey, snapshot) => {
         const current = draftStackStoreRef.current.get(scopeKey) ?? [];
-        draftStackStoreRef.current.set(scopeKey, [...current, snapshot]);
+        draftStackStoreRef.current.set(scopeKey, [...current, tag(scopeKey, snapshot)]);
         syncDraftPresence(scopeKey);
       },
       deletePendingSteer: (scopeKey) => {
@@ -367,19 +432,19 @@ export function useComposerDraftStore(): ComposerDraftStore {
         pendingSteerStoreRef.current.set(scopeKey, snapshot);
       },
       setQueuedTurn: (scopeKey, snapshot) => {
-        queuedTurnStoreRef.current.set(scopeKey, [snapshot]);
+        queuedTurnStoreRef.current.set(scopeKey, [tag(scopeKey, snapshot)]);
         notifyQueuedTurnChange();
       },
       setQueuedTurns: (scopeKey, snapshots) => {
         if (snapshots.length === 0) {
           queuedTurnStoreRef.current.delete(scopeKey);
         } else {
-          queuedTurnStoreRef.current.set(scopeKey, [...snapshots]);
+          queuedTurnStoreRef.current.set(scopeKey, snapshots.map((snapshot) => tag(scopeKey, snapshot)));
         }
         notifyQueuedTurnChange();
       },
       set: (scopeKey, snapshot) => {
-        storeRef.current.set(scopeKey, snapshot);
+        storeRef.current.set(scopeKey, tag(scopeKey, snapshot));
         syncDraftPresence(scopeKey);
       },
     };

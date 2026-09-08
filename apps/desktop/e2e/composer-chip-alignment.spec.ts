@@ -203,6 +203,22 @@ test("composer chips of every structure sit at one height in the prose", async (
     // `$skill` — a chip whose first flex item is its label text.
     await app.window.keyboard.type(" $ce:plan");
     await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeVisible();
+    // Hold post-insertion frames until subsequent typing has finished. A
+    // delayed caret restoration must not steal the caret from the new query.
+    await app.window.evaluate(() => {
+      const original = window.requestAnimationFrame;
+      const pending: Array<() => void> = [];
+      let holding = true;
+      window.requestAnimationFrame = (callback) => original.call(window, (time) => {
+        if (holding) pending.push(() => callback(time));
+        else callback(time);
+      });
+      (window as Window & { flushChipFrames?: () => void }).flushChipFrames = () => {
+        holding = false;
+        window.requestAnimationFrame = original;
+        for (const callback of pending) callback();
+      };
+    });
     await app.window.keyboard.press("Enter");
     await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeHidden();
 
@@ -211,6 +227,11 @@ test("composer chips of every structure sit at one height in the prose", async (
     // wraps and this keeps a text run on the second line for that chip to
     // be measured against.
     await app.window.keyboard.type("on #");
+    await app.window.evaluate(() => {
+      const target = window as Window & { flushChipFrames?: () => void };
+      target.flushChipFrames?.();
+      delete target.flushChipFrames;
+    });
     const hashOptions = app.window.getByRole("listbox", {
       name: "Threads and pull requests",
     });

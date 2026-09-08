@@ -43,8 +43,14 @@ it("updates thread links when membership changes without reparsing unchanged Mar
   expect(onShowThread).toHaveBeenCalledWith(expect.objectContaining({ threadId: id }));
   expect(remarkTableProfile).toHaveBeenCalledTimes(parses);
 
+  // A loaded-page omission is not deletion. Both mounted links retain their
+  // exact identity and remain actionable without reparsing the Markdown.
   rerender(view([]));
-  expect(screen.queryByRole("button", { name: "Open thread Newly available thread" })).not.toBeInTheDocument();
+  const retainedLinks = screen.getAllByRole("button", { name: "Open thread Newly available thread" });
+  expect(retainedLinks).toHaveLength(2);
+  fireEvent.click(retainedLinks[1]);
+  expect(onShowThread).toHaveBeenCalledTimes(2);
+  expect(onShowThread).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: id }));
   expect(remarkTableProfile).toHaveBeenCalledTimes(parses);
 
   rerender(view([], `${text}\n\nNew content.`));

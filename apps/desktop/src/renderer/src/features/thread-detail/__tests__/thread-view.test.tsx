@@ -2041,6 +2041,15 @@ describe("ThreadView", () => {
         clearPendingRequest={() => undefined}
         composerDisabled={false}
         desktopApi={{
+          getNavigationQueryPage: async (request) => ({
+            protocol: 2, queryKey: request.query.kind, generation: "fixture", ownerEpoch: "fixture", countsRevision: "fixture",
+            counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true, directories: [],
+            entries: request.query.kind === "directory-index" ? [] : [{
+              orderKey: "0000", placement: { kind: "root" }, row: { ...referenceThread,
+                ref: { backend: referenceThread.source, threadId: referenceThread.id }, rowRevision: "fixture",
+                ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+            }],
+          }),
           getMessagingPlatformStatuses: vi.fn(async () => statuses),
           onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
           startTurn: async () => ({
@@ -2854,7 +2863,6 @@ describe("ThreadView", () => {
         messageCount={0}
         selectedDirectory={{
           key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
-          threadKeys: [], needsAttentionCount: 0,
         }}
         selectedLaunchpad={{
           backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
@@ -5509,12 +5517,19 @@ describe("ThreadView", () => {
       retainedAt: Date.now(),
     }));
 
+    const checkResult = {
+      backend: "codex" as const, threadId: "thread-branch", checkedAt: Date.now(),
+      expectedBranch: "feature/old", observedBranch: "main", drifted: true,
+    };
+    let finishCheck!: (value: typeof checkResult) => void;
+    const checkThreadBranchDrift = vi.fn(() => new Promise<typeof checkResult>((resolve) => { finishCheck = resolve; }));
+
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[]}
         composerDisabled={false}
-        desktopApi={{ retainThreadBranchDrift }}
+        desktopApi={{ retainThreadBranchDrift, checkThreadBranchDrift }}
         loading={false}
         loadingMore={false}
         messageCount={1}
@@ -5547,6 +5562,7 @@ describe("ThreadView", () => {
       />,
     );
 
+    await waitFor(() => expect(checkThreadBranchDrift).toHaveBeenCalled());
     const dialog = await screen.findByRole("dialog", {
       name: "Thread branch changed",
     });
@@ -5563,6 +5579,11 @@ describe("ThreadView", () => {
         threadId: "thread-branch",
       });
     });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Thread branch changed" })).not.toBeInTheDocument());
+    // A selection check captured the pre-retention summary. Its late result
+    // must not reopen the warning after the owner accepted Keep Warning.
+    await act(async () => { finishCheck(checkResult); });
+    expect(screen.queryByRole("dialog", { name: "Thread branch changed" })).not.toBeInTheDocument();
   });
 
   it("checks branch drift on selection and focus without background polling", async () => {
@@ -6248,7 +6269,7 @@ describe("ThreadView", () => {
     }
   });
 
-  it("submits the launchpad prompt when continuing after environment setup failure", async () => {
+  it.each([false, true])("gates setup-failure continuation on authoritative composer readiness (disabled=%s)", async (disabled) => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-env-failure",
@@ -6261,7 +6282,7 @@ describe("ThreadView", () => {
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[]}
-        composerDisabled={false}
+        composerDisabled={disabled}
         desktopApi={{ startTurn }}
         loading={false}
         loadingMore={false}
@@ -6310,6 +6331,13 @@ describe("ThreadView", () => {
       />
     );
 
+    if (disabled) {
+      expect(screen.getByRole("button", { name: "Continue anyway" })).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(onPendingStatusChange).not.toHaveBeenCalled();
+      return;
+    }
     fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
 
     await waitFor(() => {

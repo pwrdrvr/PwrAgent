@@ -140,6 +140,9 @@ const federationMock = vi.hoisted(() => {
       remoteBackend: vi.fn(() => remoteBackend),
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
+      remoteNavigationQueryPage: vi.fn(),
+      remoteNavigationSelectedDetail: vi.fn(),
+      onRemoteBackendEvent: vi.fn(() => () => {}),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
       ungroupRemoteChildrenOfArchivedThread: vi.fn(async () => undefined),
     },
@@ -368,6 +371,11 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
     backend: "codex" as const,
     executionMode: "default" as const,
   },
+}));
+const readNavigationQueryIndex = vi.fn((params: { backend: string; threads: Array<{ source: string; id: string }> }) => ({
+  threads: params.threads.map((thread) => ({ inbox: { inInbox: false }, ...thread })),
+  directories: [{ key: "directory:/repo/app", kind: "directory", label: "app", path: "/repo/app",
+    threadKeys: params.threads.map((thread) => `${thread.source}:${thread.id}`), needsAttentionCount: 0 }],
 }));
 const rememberCompleteNavigationSnapshot = vi.fn();
 const listRemoteThreadPins = vi.fn(async (): Promise<unknown[]> => []);
@@ -774,6 +782,7 @@ const registerDirectoryFromDiskService = vi.fn(async (request: { path: string })
 });
 const getThreadOverlayState = vi.fn();
 const getThreadOverlayStates = vi.fn(async () => ({}));
+const readDetachedThreadPullRequests = vi.fn(() => ({}));
 const addLinkedDirectory = vi.fn(async (request: {
   backend: "codex" | "acp:grok";
   threadId: string;
@@ -1017,6 +1026,9 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot,
+    readNavigationQueryIndex,
+    initializeNavigationUnreadBaseline: vi.fn(() => false),
+    readDetachedThreadPullRequests,
     markThreadSeen,
     getThreadOverlayState,
     getThreadOverlayStates,
@@ -1029,6 +1041,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     readPrLookupCache,
     writePrLookupCacheEntry,
     syncThreadPrAutoDispatchCandidates,
+    syncThreadPrAutoDispatchCandidatesBatch: vi.fn(async () => undefined),
     getPrAutoDispatchCandidateWinner,
     resetThreadPrAutoDispatchForOperator,
     getPrAutoDispatchBudgetStatus,
@@ -1093,6 +1106,8 @@ vi.mock("../app-server/backend-registry", () => {
     invalidateDirectoryStatus,
     readWorktreeWorkingStateEntries,
     hydrateThreadGitWorkingStates,
+    canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+    getNavigationInputRequestThreadKeys: () => new Set<string>(),
     refreshThreadGitWorkingStates,
     scheduleWorktreeGitWorkingStateRefresh,
     getThreadGitWorkingStateCache,
@@ -1104,6 +1119,7 @@ vi.mock("../app-server/backend-registry", () => {
     publishLocalEvent,
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
+    setThreadPrimaryGitRepositoryReader: vi.fn(),
     setLocalPullRequestAuthorityResolver,
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
@@ -1115,8 +1131,11 @@ vi.mock("../app-server/backend-registry", () => {
     updateDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     getQueuedTurnsSnapshot: () => ({}),
+    getQueuedTurnsForThread: () => [],
+    getQueuedExecutionModeForThread: () => undefined,
     getStartupProviderRefreshStatus,
     rememberCompleteNavigationSnapshot,
+    rememberNavigationVisibilityIndex: rememberCompleteNavigationSnapshot,
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
   return {
@@ -1161,6 +1180,13 @@ describe("app server ipc", () => {
   type AppServerIpcModule = typeof import("../ipc/app-server");
   let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
   let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];
+  // Historical owner materialization coverage is deliberately separate from IPC.
+  const readLegacyOwnerMaterialization = async (_event: unknown, request?: GetNavigationSnapshotRequest) =>
+    (await import("../ipc/app-server")).appServerService.getNavigationSnapshot(request);
+  const refreshOwnerMetadata = async () => {
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    await (await import("../ipc/app-server")).startAppServerOwnerNavigation();
+  };
 
   beforeAll(async () => {
     // Import after the hoisted mocks exist, but before an individual test can
@@ -1224,6 +1250,7 @@ describe("app server ipc", () => {
     readThread.mockClear();
     getThreadTranscriptImageRoots.mockClear();
     reconcileNavigationSnapshot.mockClear();
+    readNavigationQueryIndex.mockClear();
     rememberCompleteNavigationSnapshot.mockClear();
     readDirectoryStatuses.mockClear();
     readDirectoryStatusEntries.mockClear();
@@ -1276,6 +1303,8 @@ describe("app server ipc", () => {
     removeLinkedDirectory.mockClear();
     getThreadOverlayState.mockReset();
     getThreadOverlayState.mockResolvedValue(undefined);
+    readDetachedThreadPullRequests.mockReset();
+    readDetachedThreadPullRequests.mockReturnValue({});
     getThreadOverlayStates.mockReset();
     getThreadOverlayStates.mockResolvedValue({});
     setThreadPullRequests.mockClear();
@@ -1347,15 +1376,7 @@ describe("app server ipc", () => {
       FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
     } = await import("../../shared/ipc");
     const searchForJump = federationMock.remoteThreadSummaries.searchForJump;
-    searchForJump.mockImplementation(async (request, onProgress) => {
-      onProgress?.({
-        results: [],
-        completedPeerCount: 1,
-        totalPeerCount: 2,
-        complete: false,
-      });
-      return { results: [] };
-    });
+    searchForJump.mockRejectedValue(new Error("Legacy navigation search must not run."));
     const firstSend = vi.fn();
     const secondSend = vi.fn();
     const firstSender = { isDestroyed: () => false, send: firstSend };
@@ -1384,6 +1405,7 @@ describe("app server ipc", () => {
       FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
       expect.objectContaining({ requestId: 73 }),
     );
+    expect(searchForJump).not.toHaveBeenCalled();
   });
 
   it("invalidates the GraphQL token during an auth recheck", async () => {
@@ -1698,10 +1720,97 @@ describe("app server ipc", () => {
         enabled: true,
       },
     ]);
+    expect(readNavigationQueryIndex).toHaveBeenCalled();
+    const read = readNavigationQueryIndex.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(read).not.toHaveProperty("messagingBindingsByThreadKey");
+    expect(read).not.toHaveProperty("queuedTurnsByThreadKey");
+    expect(read).not.toHaveProperty("automationsByThreadKey");
+  });
+
+  it("initializes owner PR tracking without requesting a navigation page or snapshot", async () => {
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const pr = githubPr({ number: 91, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Off-page PR",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/91" });
+    listThreads.mockResolvedValueOnce([{ id: "off-page", source: "codex", title: "Off-page", titleSource: "explicit",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git", linkedDirectories: [], prs: [pr] }] as never);
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    registerAppServerIpcHandlers();
+    await startAppServerOwnerNavigation();
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    expect(owner(buildPullRequestStatusKey(pr))).toBe(true);
+    expect(listThreads).toHaveBeenLastCalledWith(expect.objectContaining({ callerReason: "owner-navigation-metadata" }));
+    expect(rememberCompleteNavigationSnapshot).toHaveBeenCalledWith(expect.objectContaining({ threads: expect.any(Array) }));
+    expect(readNavigationQueryIndex.mock.calls.at(-1)?.[0]).not.toHaveProperty("queuedTurnsByThreadKey");
+  });
+
+  it("starts owner tracking when providers finish after startup without opening navigation", async () => {
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const pr = githubPr({ number: 92, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Provider PR",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/92" });
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
+    registerAppServerIpcHandlers();
+    await startAppServerOwnerNavigation();
+    expect(listThreads).not.toHaveBeenCalled();
+    listThreads.mockResolvedValueOnce([{ id: "provider-thread", source: "codex", title: "Provider", titleSource: "explicit",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git", linkedDirectories: [], prs: [pr] }] as never);
+    emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: {} } });
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    await vi.waitFor(() => expect(owner(buildPullRequestStatusKey(pr))).toBe(true));
+  });
+
+  it("does not repopulate owner metadata when startup finishes after shutdown", async () => {
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    let finish!: (threads: never[]) => void;
+    const pending = new Promise<never[]>((resolve) => { finish = resolve; });
+    listThreads.mockImplementationOnce(async () => await pending);
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    registerAppServerIpcHandlers();
+    const started = startAppServerOwnerNavigation();
+    await vi.waitFor(() => expect(listThreads).toHaveBeenCalledTimes(1));
+    await disposeAppServerIpcHandlers();
+    finish([]);
+    await started;
+    expect(rememberCompleteNavigationSnapshot).not.toHaveBeenCalled();
+    expect(reconcileNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a newer canonical PR event instead of applying an older startup inventory", async () => {
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
+    const { buildPullRequestStatusKey } = await import("@pwragent/shared");
+    const pr = githubPr({ number: 93, org: "pwrdrvr", repo: "PwrAgent", state: "passing", title: "Detached PR",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/93" });
+    const thread = { id: "detached-before-startup-finished", source: "codex", title: "Thread", titleSource: "explicit",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git", linkedDirectories: [], prs: [pr] };
+    let finish!: (threads: never[]) => void;
+    const pending = new Promise<never[]>((resolve) => { finish = resolve; });
+    listThreads.mockImplementationOnce(async () => await pending).mockResolvedValueOnce([{ ...thread, prs: [] }] as never);
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    registerAppServerIpcHandlers();
+    const started = startAppServerOwnerNavigation();
+    await vi.waitFor(() => expect(listThreads).toHaveBeenCalledTimes(1));
+    emitRegistryEvent({ backend: "codex", notification: { method: "thread/pullRequests/updated", params: { threadId: thread.id, prs: [] } } });
+    finish([thread] as never);
+    await started;
+    expect(listThreads).toHaveBeenCalledTimes(2);
+    const owner = setLocalPullRequestAuthorityResolver.mock.calls.at(-1)?.[0];
+    expect(owner(buildPullRequestStatusKey(pr))).toBe(false);
+    expect(rememberCompleteNavigationSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      threads: [expect.objectContaining({ id: thread.id, prs: [] })],
+    }));
+  });
+
+  it.each(["checking", "degraded"])("does not apply bulk Auto-fix changes to a %s owner inventory", async (state) => {
+    const { NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL } = await import("../../shared/ipc");
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state });
+    registerAppServerIpcHandlers();
+    await expect(handlers.get(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL)?.({}, { enabled: true }))
+      .rejects.toThrow("Thread discovery is incomplete");
+    expect(setThreadPrAutoDispatchBatch).not.toHaveBeenCalled();
   });
 
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     listThreads.mockResolvedValueOnce([
       {
         id: "thread-1",
@@ -1728,7 +1837,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
     expect(autoDispatchHandlers).toBeDefined();
     await vi.waitFor(async () => {
@@ -1747,7 +1856,6 @@ describe("app server ipc", () => {
   });
 
   it("tells an active Auto-fix turn that it owns the repair", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const primaryPr = githubPr({
       number: 1695,
       org: "pwrdrvr",
@@ -1782,7 +1890,7 @@ describe("app server ipc", () => {
     } as never);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
     await vi.waitFor(async () => {
       const status = await autoDispatchHandlers?.inspect(
@@ -1838,7 +1946,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps Auto-fix PR disabled globally without overwriting its thread setting", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     prAutomationSettings.state.prAutoDispatchAllowed = false;
     getThreadOverlayState.mockResolvedValue({
       backend: "codex",
@@ -1849,7 +1956,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
     expect(autoDispatchHandlers).toBeDefined();
     await vi.waitFor(async () => {
@@ -1935,7 +2042,6 @@ describe("app server ipc", () => {
     const {
       APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
       APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
-      NAVIGATION_SNAPSHOT_CHANNEL,
     } = await import("../../shared/ipc");
     prAutomationSettings.state.budgetPaused = true;
     getThreadOverlayState.mockResolvedValue({
@@ -1947,7 +2053,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
     await vi.waitFor(async () => {
       const status = await autoDispatchHandlers?.inspect({
@@ -1976,7 +2082,6 @@ describe("app server ipc", () => {
   });
 
   it("applies a published kill switch without an asynchronous settings race", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     getThreadOverlayState.mockResolvedValue({
       backend: "codex",
       threadId: "thread-1",
@@ -1986,15 +2091,13 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
-    await vi.waitFor(() => {
-      expect(prAutomationSettings.read).toHaveBeenCalledTimes(1);
-    });
+    await refreshOwnerMetadata();
+    prAutomationSettings.read.mockClear();
 
     prAutomationSettings.state.prAutoDispatchAllowed = false;
     prAutomationSettings.emitConfigWritten();
     await vi.waitFor(() => {
-      expect(prAutomationSettings.read).toHaveBeenCalledTimes(2);
+      expect(prAutomationSettings.read).toHaveBeenCalledTimes(1);
     });
 
     const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
@@ -2022,7 +2125,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps a new PR watch pending when the cached outcome is stale", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 1128,
       org: "pwrdrvr",
@@ -2068,7 +2170,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
     await vi.waitFor(async () => {
       const status = await autoDispatchHandlers?.inspect({
@@ -2104,7 +2206,6 @@ describe("app server ipc", () => {
       "../federation/federation-peer-unavailable-error"
     );
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "peer_navigation_stale",
@@ -2145,7 +2246,7 @@ describe("app server ipc", () => {
       );
 
     registerAppServerIpcHandlers();
-    const handler = handlers.get(NAVIGATION_SNAPSHOT_CHANNEL);
+    const handler = readLegacyOwnerMaterialization;
 
     await expect(handler?.({}, { federationTarget })).resolves.toBe(fresh);
     const stale = await handler?.({}, {
@@ -2169,7 +2270,6 @@ describe("app server ipc", () => {
   // a quit dialog somewhere, not this window's contents.
   it("remembers remote thread names without letting that break the snapshot", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "peer_remembers_names",
@@ -2197,7 +2297,7 @@ describe("app server ipc", () => {
       .mockResolvedValueOnce(snapshot);
 
     registerAppServerIpcHandlers();
-    const handler = handlers.get(NAVIGATION_SNAPSHOT_CHANNEL);
+    const handler = readLegacyOwnerMaterialization;
 
     await expect(handler?.({}, { federationTarget })).resolves.toBe(snapshot);
     const reserve =
@@ -2226,9 +2326,79 @@ describe("app server ipc", () => {
     ).resolves.toBe(snapshot);
   });
 
+  it.each(["FEDERATION_PEER_UNAVAILABLE", "navigation_busy"])("returns expected %s state without rejecting the Electron handler, but still rejects unexpected failures", async (code) => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!;
+    const event = { sender: { id: 90009, once: vi.fn() } };
+    const request = { protocol: 2, consumer: "main-sidebar", federationTarget: { scope: "remote", instanceId: "offline-peer" },
+      query: { kind: "directory-index" } };
+    const offline = Object.assign(new Error("Federation peer offline-peer is not connected."), {
+      code, instanceId: "offline-peer",
+    });
+    federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(offline);
+    await expect(handler(event, request)).resolves.toEqual({ navigationReadFailure: true,
+      code: offline.code, instanceId: offline.instanceId, message: offline.message });
+    federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(new Error("Unexpected projection failure"));
+    await expect(handler(event, request)).rejects.toThrow("Unexpected projection failure");
+  });
+
+  it("overlays only a bounded remote page's viewer directory preferences without accepting owner-only unchanged proof", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "peer_v2_disclosure" };
+    const directoryKey = "directory:/remote/project";
+    readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } });
+    const counts = { total: 100, active: 0, unread: 0, review: 0 };
+    const directory = { key: directoryKey, kind: "directory", label: "Project", counts,
+      pinnedRootCount: 0, unpinnedRootCount: 100, launchpadPresent: true, directoryThreadsCollapsed: false };
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({ protocol: 2, queryKey: "directories", generation: "g",
+      ownerEpoch: "owner", countsRevision: "r", counts, coverage: { state: "complete" }, entries: [],
+      directories: [directory], selectionDirectory: directory, complete: true });
+    registerAppServerIpcHandlers();
+    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)?.({ sender: { id: 90001, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", federationTarget, query: { kind: "directory-index" },
+      completeBaselineRevision: "owner-only-revision",
+    }) as { directories: Array<{ directoryThreadsCollapsed: boolean }>; selectionDirectory: { directoryThreadsCollapsed: boolean } };
+    expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenLastCalledWith(federationTarget,
+      expect.objectContaining({ completeBaselineRevision: undefined }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(readRemoteDirectoryOverlays).toHaveBeenLastCalledWith({ instanceId: federationTarget.instanceId, directoryKeys: [directoryKey] });
+    expect(page.directories[0]?.directoryThreadsCollapsed).toBe(true);
+    expect(page.selectionDirectory.directoryThreadsCollapsed).toBe(true);
+    expect(directory.directoryThreadsCollapsed).toBe(false);
+  });
+
+  it("shares exact owner reads across native windows and aborts only after the last window releases", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SELECTED_DETAIL_CHANNEL, NAVIGATION_QUERY_RELEASE_CHANNEL } = await import("../../shared/ipc");
+    let finish!: (value: unknown) => void;
+    federationMock.runtime.remoteNavigationSelectedDetail.mockReset().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    registerAppServerIpcHandlers();
+    const a = { sender: { id: 90011, once: vi.fn() } };
+    const b = { sender: { id: 90012, once: vi.fn() } };
+    const request = { protocol: 2, federationTarget: { scope: "remote", instanceId: "exact-owner" },
+      ref: { backend: "codex", threadId: "same", ownerInstanceId: "exact-owner" } };
+    const first = handlers.get(NAVIGATION_SELECTED_DETAIL_CHANNEL)!(a, request, "detail");
+    const second = handlers.get(NAVIGATION_SELECTED_DETAIL_CHANNEL)!(b, request, "detail");
+    const settled = Promise.allSettled([first, second]);
+    expect(federationMock.runtime.remoteNavigationSelectedDetail).toHaveBeenCalledTimes(1);
+    const options = federationMock.runtime.remoteNavigationSelectedDetail.mock.calls[0]![2] as { signal: AbortSignal; deadlineAt: number };
+    expect(options.deadlineAt).toBeGreaterThan(Date.now());
+    await handlers.get(NAVIGATION_QUERY_RELEASE_CHANNEL)!(a, "detail");
+    expect(options.signal.aborted).toBe(false);
+    const onDestroyed = b.sender.once.mock.calls.find(([name]) => name === "destroyed")?.[1] as () => void;
+    onDestroyed();
+    expect(options.signal.aborted).toBe(true);
+    expect(await settled).toEqual([
+      expect.objectContaining({ status: "fulfilled", value: expect.objectContaining({ navigationReadFailure: true, code: "navigation_busy" }) }),
+      expect.objectContaining({ status: "fulfilled", value: expect.objectContaining({ navigationReadFailure: true, code: "navigation_busy" }) }),
+    ]);
+    finish({ protocol: 2, ref: request.ref, revision: "late", readiness: "ready", identity: "unresolved" });
+  });
+
   it("overlays viewer-owned directory disclosure state on remote snapshots", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "peer_navigation_preferences",
@@ -2263,7 +2433,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    const snapshot = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {
+    const snapshot = await readLegacyOwnerMaterialization?.({}, {
       federationTarget,
     }) as {
       unchanged: boolean;
@@ -2309,14 +2479,13 @@ describe("app server ipc", () => {
 
   it("keeps unexpected remote navigation failures actionable", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     federationMock.runtime.remoteNavigationSnapshot.mockRejectedValueOnce(
       new Error("invalid remote navigation payload"),
     );
 
     registerAppServerIpcHandlers();
 
-    await expect(handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {
+    await expect(readLegacyOwnerMaterialization?.({}, {
       federationTarget: {
         scope: "remote",
         instanceId: "peer_navigation_broken",
@@ -2325,12 +2494,11 @@ describe("app server ipc", () => {
   });
 
   it("aggregates navigation snapshots across backends by default", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     );
@@ -2390,7 +2558,6 @@ describe("app server ipc", () => {
   });
 
   it("merges pinned remote threads into the main-window navigation snapshot", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     const ref = buildFederatedThreadRef({
@@ -2439,7 +2606,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as {
@@ -2490,7 +2657,6 @@ describe("app server ipc", () => {
   });
 
   it("shows an unconfigured project for a mounted remote thread until Add Directory matches it", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const ref = buildFederatedThreadRef({
       backend: "codex",
@@ -2568,7 +2734,7 @@ describe("app server ipc", () => {
     });
     registerAppServerIpcHandlers();
 
-    const first = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const first = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as { directories: Array<{
@@ -2590,7 +2756,7 @@ describe("app server ipc", () => {
     // Registering the same project locally gives the next snapshot a real
     // directory row. The mounted thread converges into it by project identity;
     // the temporary owner-path-free placeholder does not survive beside it.
-    const second = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const second = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as typeof first;
@@ -2605,7 +2771,6 @@ describe("app server ipc", () => {
   });
 
   it("marks a pinned remote snapshot changed when only reactions change", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const ref = buildFederatedThreadRef({
       backend: "codex",
@@ -2659,8 +2824,8 @@ describe("app server ipc", () => {
       });
     registerAppServerIpcHandlers();
 
-    const first = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
-    const second = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const first = await readLegacyOwnerMaterialization?.({}, {});
+    const second = await readLegacyOwnerMaterialization?.({}, {});
 
     expect(first).toMatchObject({ unchanged: false });
     expect(second).toMatchObject({
@@ -2669,43 +2834,18 @@ describe("app server ipc", () => {
     });
   });
 
-  it("keeps delta transport opt-in with shared renderer revisions", async () => {
+  it("rejects both retired snapshot wire formats before reading owner data", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
-    const firstRenderer = { sender: { id: 42 } };
-    const secondRenderer = { sender: { id: 43 } };
     registerAppServerIpcHandlers();
     const handler = handlers.get(NAVIGATION_SNAPSHOT_CHANNEL);
-
-    const first = await handler?.(firstRenderer, {
-      transport: { protocol: 1 },
-    }) as { kind: string; revision: string };
-    const second = await handler?.(secondRenderer, {
-      transport: {
-        protocol: 1,
-        baseRevision: first.revision,
-      },
-    }) as { kind: string; revision: string };
-    const third = await handler?.(firstRenderer, {
-      transport: {
-        protocol: 1,
-        baseRevision: second.revision,
-      },
-    });
-
-    expect(first.kind).toBe("full");
-    expect(second).toMatchObject({
-      kind: "delta",
-      upsertedThreads: [],
-    });
-    expect(third).toEqual({
-      kind: "unchanged",
-      revision: second.revision,
-    });
+    await expect(handler?.({}, {})).rejects.toThrow("navigation query protocol 2");
+    await expect(handler?.({}, { transport: { protocol: 1 } })).rejects.toThrow("navigation query protocol 2");
+    expect(listThreads).not.toHaveBeenCalled();
+    expect(reconcileNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     const ref = buildFederatedThreadRef({
@@ -2724,7 +2864,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as { threads: Array<{ id: string }> };
@@ -2736,7 +2876,6 @@ describe("app server ipc", () => {
   });
 
   it("groups a multi-directory remote thread into exactly one local project", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     // Two local project groups; "agent-kit" sorts before "PwrAgent", which is
@@ -2826,7 +2965,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as {
@@ -2845,7 +2984,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps a pinned remote thread in its owner's primary project", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
@@ -2932,7 +3070,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as {
@@ -2951,7 +3089,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps a partial remote pin summary ungrouped", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     const ref = buildFederatedThreadRef({
@@ -2985,7 +3122,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as { threads: Array<{ id: string }> };
@@ -2996,7 +3133,6 @@ describe("app server ipc", () => {
   });
 
   it("stamps the viewer-owned local rank onto merged remote rows", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     const ref = buildFederatedThreadRef({
@@ -3032,7 +3168,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as { threads: Array<{ id: string; pinnedRank?: string }> };
@@ -3042,7 +3178,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps viewer pin ranks separate across colliding remote owners", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const firstRef = buildFederatedThreadRef({
       backend: "codex",
@@ -3104,7 +3239,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as {
@@ -3176,7 +3311,6 @@ describe("app server ipc", () => {
     );
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const ref = buildFederatedThreadRef({
       backend: "codex",
       instanceId: "peer-laptop",
@@ -3211,7 +3345,7 @@ describe("app server ipc", () => {
     }));
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     );
@@ -3273,6 +3407,8 @@ describe("app server ipc", () => {
     hasRemoteThreadPin.mockClear();
     hasRemoteThreadPin.mockResolvedValueOnce(false);
     const parentSummary = {
+      ref: { backend: "codex", threadId: "parent-1", ownerInstanceId: "peer-parent" },
+      rowRevision: "parent-revision",
       source: "codex" as const,
       id: "parent-1",
       title: "MCP registration",
@@ -3280,9 +3416,11 @@ describe("app server ipc", () => {
       linkedDirectories: [],
       inbox: { inInbox: false },
     };
-    federationMock.remoteThreadSummaries.threadFromPeer.mockResolvedValueOnce(
-      parentSummary,
-    );
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({
+      protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+      counts: { total: 1, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true,
+      entries: [{ row: parentSummary, orderKey: "0", placement: { kind: "root" } }],
+    });
 
     registerAppServerIpcHandlers();
 
@@ -3321,12 +3459,12 @@ describe("app server ipc", () => {
       pinnedVia: "companion",
     });
     expect(
-      federationMock.remoteThreadSummaries.threadFromPeer,
-    ).toHaveBeenCalledWith({
-      target: { scope: "remote", instanceId: "peer-parent" },
-      backend: "codex",
-      threadId: "parent-1",
-    });
+      federationMock.runtime.remoteNavigationQueryPage,
+    ).toHaveBeenLastCalledWith({ scope: "remote", instanceId: "peer-parent" }, expect.objectContaining({
+      protocol: 2, consumer: "exact-link", inventory: "owner", pageSize: 1,
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "parent-1", ownerInstanceId: "peer-parent" }], includeAncestry: false },
+    }), expect.objectContaining({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) }));
+    expect(federationMock.remoteThreadSummaries.threadFromPeer).not.toHaveBeenCalled();
   });
 
   it("does not companion-pin an already-pinned or unreachable parent", async () => {
@@ -3361,19 +3499,52 @@ describe("app server ipc", () => {
     await handler?.({}, childRequest("child-1"));
     expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(1);
 
-    // Parent missing from the peer snapshot (archived / peer gone): no
+    // Parent missing from the exact owner query (archived / peer gone): no
     // phantom row.
     addRemoteThreadPinStore.mockClear();
     hasRemoteThreadPin.mockResolvedValueOnce(false);
-    federationMock.remoteThreadSummaries.threadFromPeer.mockResolvedValueOnce(
-      undefined,
-    );
+    federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({
+      protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+      counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: true, entries: [],
+    });
     await handler?.({}, childRequest("child-2"));
     expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(1);
     expect(addRemoteThreadPinStore.mock.calls[0][0]).toMatchObject({
       pinnedVia: "explicit",
     });
   });
+
+  it.each(["wrong-owner", "wrong-backend", "archived", "incomplete", "unchanged", "cursor"])(
+    "keeps the explicit pin without accepting a %s companion parent page", async (failure) => {
+      const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
+      const { buildFederatedThreadRef } = await import("@pwragent/shared");
+      registerAppServerIpcHandlers();
+      addRemoteThreadPinStore.mockClear();
+      hasRemoteThreadPin.mockResolvedValueOnce(false);
+      const parent = {
+        ref: { backend: failure === "wrong-backend" ? "acp:test" : "codex", threadId: "parent-1",
+          ownerInstanceId: failure === "wrong-owner" ? "another-peer" : "peer-laptop" },
+        rowRevision: "r", source: "codex", id: "parent-1", title: "Parent", titleSource: "explicit",
+        linkedDirectories: [], inbox: { inInbox: false }, archivedAt: failure === "archived" ? 1 : undefined,
+      };
+      federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce({
+        protocol: 2, queryKey: "parent-exact", generation: "g", ownerEpoch: "owner", countsRevision: "r",
+        counts: { total: 1, active: 0, unread: 0, review: 0 },
+        coverage: { state: failure === "incomplete" ? "checking" : "complete" }, complete: true,
+        unchanged: failure === "unchanged", nextCursor: failure === "cursor" ? "next" : undefined,
+        entries: [{ row: parent, orderKey: "0", placement: { kind: "root" } }],
+      });
+      await handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+        ref: buildFederatedThreadRef({ backend: "codex", instanceId: "peer-laptop", threadId: "child-1" }),
+        instanceLabel: "Laptop",
+        summary: { source: "codex", id: "child-1", title: "Child", titleSource: "explicit", parentThreadId: "parent-1",
+          linkedDirectories: [], inbox: { inInbox: false } },
+      });
+      expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(1);
+      expect(addRemoteThreadPinStore.mock.calls[0][0]).toMatchObject({ pinnedVia: "explicit" });
+      expect(federationMock.remoteThreadSummaries.threadFromPeer).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects malformed pin refs at the service boundary", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
@@ -3428,7 +3599,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
     const ref = buildFederatedThreadRef({
@@ -3463,7 +3633,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = (await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     )) as {
@@ -3485,7 +3655,6 @@ describe("app server ipc", () => {
   });
 
   it("publishes the primary repository resolved from a worktree to the composer", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const thread = {
       id: "thread-1",
       title: "Clipboard fallback",
@@ -3510,7 +3679,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const response = await readLegacyOwnerMaterialization?.({}, {});
 
     expect(resolveGitHubRepoForDirectory).toHaveBeenCalledWith(
       "/repo/.worktrees/clipboard-fallback",
@@ -3526,7 +3695,6 @@ describe("app server ipc", () => {
   });
 
   it("invalidates unchanged snapshots when primary repository resolution recovers", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const thread = {
       id: "thread-1",
       title: "Clipboard fallback",
@@ -3577,9 +3745,9 @@ describe("app server ipc", () => {
       });
 
     registerAppServerIpcHandlers();
-    const first = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
-    const recovered = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
-    const stable = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const first = await readLegacyOwnerMaterialization?.({}, {});
+    const recovered = await readLegacyOwnerMaterialization?.({}, {});
+    const stable = await readLegacyOwnerMaterialization?.({}, {});
 
     expect(first).toMatchObject({
       unchanged: false,
@@ -3602,12 +3770,11 @@ describe("app server ipc", () => {
   });
 
   it("uses one active recent page for lightweight navigation refreshes", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = await readLegacyOwnerMaterialization?.(
       {},
       {
         forceRefresh: true,
@@ -3636,7 +3803,6 @@ describe("app server ipc", () => {
   });
 
   it("merges lightweight navigation refreshes into the last full thread list", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const staleThread = {
       id: "thread-stale",
@@ -3665,11 +3831,11 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     );
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    await readLegacyOwnerMaterialization?.(
       {},
       {
         forceRefresh: true,
@@ -3694,7 +3860,6 @@ describe("app server ipc", () => {
   });
 
   it("treats an empty full thread list as a complete lightweight baseline", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const discoveredThread = {
       id: "thread-discovered",
@@ -3710,11 +3875,11 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    await readLegacyOwnerMaterialization?.(
       {},
       {} satisfies GetNavigationSnapshotRequest,
     );
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    await readLegacyOwnerMaterialization?.(
       {},
       {
         forceRefresh: true,
@@ -4589,7 +4754,6 @@ describe("app server ipc", () => {
   });
 
   it("resolves federated PR refresh inputs from the owner's thread state", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     listThreads.mockResolvedValueOnce([
       {
         id: "thread-owner",
@@ -4609,7 +4773,7 @@ describe("app server ipc", () => {
       },
     ] as never);
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     detectPullRequestsForThread.mockClear();
 
     const refreshFromOwnerState =
@@ -6779,7 +6943,6 @@ describe("app server ipc", () => {
   });
 
   it("preserves unchanged snapshots when directory statuses are unchanged", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     reconcileNavigationSnapshot
       .mockResolvedValueOnce({
@@ -6878,7 +7041,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await readLegacyOwnerMaterialization({}, {});
     await vi.waitFor(() => {
       expect(publishLocalEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -6888,8 +7051,8 @@ describe("app server ipc", () => {
         }),
       );
     });
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
-    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await readLegacyOwnerMaterialization({}, {});
+    const response = await readLegacyOwnerMaterialization?.({}, {});
 
     expect(readDirectoryStatuses).not.toHaveBeenCalled();
     expect(response).toEqual({
@@ -6920,7 +7083,6 @@ describe("app server ipc", () => {
   });
 
   it("marks snapshots changed when canonical PR statuses update thread PRs", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 727,
       org: "OpenAI",
@@ -6991,8 +7153,8 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
-    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await readLegacyOwnerMaterialization({}, {});
+    const response = await readLegacyOwnerMaterialization?.({}, {});
 
     expect(response).toMatchObject({
       unchanged: false,
@@ -7006,7 +7168,6 @@ describe("app server ipc", () => {
   });
 
   it("marks snapshots changed when hydrated launchpad environment options change", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-env-"));
     const environmentsDir = path.join(root, ".codex", "environments");
@@ -7081,13 +7242,13 @@ describe("app server ipc", () => {
     try {
       registerAppServerIpcHandlers();
 
-      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await readLegacyOwnerMaterialization({}, {});
       await writeFile(
         path.join(environmentsDir, "new-environment.toml"),
         'name = "New environment"\n',
         "utf8",
       );
-      const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      const response = await readLegacyOwnerMaterialization?.({}, {});
 
       expect(response).toMatchObject({
         unchanged: false,
@@ -7108,7 +7269,6 @@ describe("app server ipc", () => {
   });
 
   it("uses cached directory git status without refreshing unchanged directories", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     readDirectoryGitStatusCache.mockResolvedValueOnce({
       "directory:/repo/app": {
@@ -7122,7 +7282,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const response = await readLegacyOwnerMaterialization?.({}, {});
 
     expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
     expect(response).toEqual(
@@ -7138,7 +7298,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes stale cached directory git status in the background", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     readDirectoryGitStatusCache.mockResolvedValueOnce({
       "directory:/repo/app": {
@@ -7152,7 +7311,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
 
     await vi.waitFor(() => {
       expect(readDirectoryStatusEntries).toHaveBeenCalled();
@@ -7162,10 +7321,9 @@ describe("app server ipc", () => {
     ]);
   });
 
-  it("refreshes cached directory git status when explicitly requested", async () => {
+  it("refreshes exact directory git status without warming the legacy snapshot", async () => {
     const {
       NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
-      NAVIGATION_SNAPSHOT_CHANNEL,
     } = await import("../../shared/ipc");
 
     readDirectoryGitStatusCache.mockResolvedValueOnce({
@@ -7183,7 +7341,6 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
     expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
 
     await expect(
@@ -7204,6 +7361,16 @@ describe("app server ipc", () => {
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
       expect.objectContaining({ key: "directory:/repo/app" }),
     ]);
+  });
+
+  it("does not probe removed directories and bounds explicit directory refresh admission", async () => {
+    const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const refresh = handlers.get(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL)!;
+    await expect(refresh({}, { directoryKeys: ["directory:/removed"] })).resolves.toEqual({ scheduledCount: 0 });
+    await expect(refresh({}, { directoryKeys: Array.from({ length: 101 }, (_, index) => `directory:/repo-${index}`) }))
+      .rejects.toThrow("Refresh at most 100 directories");
+    expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
   });
 
   it("routes remote directory git status refreshes to the owning federation peer", async () => {
@@ -7298,7 +7465,6 @@ describe("app server ipc", () => {
   it("coalesces rapid forced directory git status re-enqueues for the same key", async () => {
     const {
       NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
-      NAVIGATION_SNAPSHOT_CHANNEL,
     } = await import("../../shared/ipc");
 
     // Stale seed so the snapshot's automatic refresh probes once and writes a
@@ -7315,7 +7481,7 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(readDirectoryStatusEntries).toHaveBeenCalled();
     });
@@ -7338,7 +7504,6 @@ describe("app server ipc", () => {
   });
 
   it("publishes a working-state chip update when a snapshot probe lands", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
       {
@@ -7365,7 +7530,7 @@ describe("app server ipc", () => {
     );
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
 
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledWith(
@@ -7385,7 +7550,6 @@ describe("app server ipc", () => {
   });
 
   it("reprobes stale working state after the automatic startup batch", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const now = 10_000_000;
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const threads = Array.from({ length: 8 }, (_, index) => ({
@@ -7401,14 +7565,14 @@ describe("app server ipc", () => {
 
     try {
       registerAppServerIpcHandlers();
-      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await refreshOwnerMetadata();
       await vi.waitFor(() => {
         expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
         expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(8);
       });
 
       nowSpy.mockReturnValue(now + 31_000);
-      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await refreshOwnerMetadata();
 
       await vi.waitFor(() => {
         expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
@@ -7423,7 +7587,6 @@ describe("app server ipc", () => {
   });
 
   it("rotates bounded automatic working-state refreshes past the first batch", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const now = 20_000_000;
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const threads = Array.from({ length: 9 }, (_, index) => ({
@@ -7439,7 +7602,7 @@ describe("app server ipc", () => {
 
     try {
       registerAppServerIpcHandlers();
-      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await refreshOwnerMetadata();
 
       await vi.waitFor(() => {
         expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
@@ -7451,7 +7614,7 @@ describe("app server ipc", () => {
       );
 
       nowSpy.mockReturnValue(now + 31_000);
-      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await refreshOwnerMetadata();
 
       await vi.waitFor(() => {
         expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
@@ -7469,7 +7632,6 @@ describe("app server ipc", () => {
   });
 
   it("coalesces navigation while a registry fleet batch is still in flight", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const threads = Array.from({ length: 9 }, (_unused, index) => ({
       id: `thread-${index}`,
       title: `Thread ${index}`,
@@ -7496,7 +7658,7 @@ describe("app server ipc", () => {
 
     try {
       registerAppServerIpcHandlers();
-      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await refreshOwnerMetadata();
       await vi.waitFor(() => {
         expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
       });
@@ -7506,7 +7668,7 @@ describe("app server ipc", () => {
 
       // Nothing has been written yet, but serving-path frequency must not
       // rotate into another fleet batch while the global round is active.
-      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await refreshOwnerMetadata();
       expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
 
       releaseFirstProbe?.();
@@ -7516,7 +7678,7 @@ describe("app server ipc", () => {
 
       // A later snapshot starts the next bounded batch, so the tail still
       // converges without overlapping automatic rounds.
-      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await refreshOwnerMetadata();
       await vi.waitFor(() => {
         expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
         expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(9);
@@ -7532,7 +7694,6 @@ describe("app server ipc", () => {
   it("lets a user-triggered working-state refresh bypass fresh cache", async () => {
     const {
       NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
-      NAVIGATION_SNAPSHOT_CHANNEL,
     } = await import("../../shared/ipc");
     const worktreePath = "/repo/wt";
     const gitWorkingState = {
@@ -7564,7 +7725,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     expect(readWorktreeWorkingStateEntries).not.toHaveBeenCalled();
 
     await expect(
@@ -7618,7 +7779,6 @@ describe("app server ipc", () => {
   });
 
   it("hydrates working state from linked worktrees when the thread has no project key", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const worktreePath =
       "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service";
@@ -7657,7 +7817,7 @@ describe("app server ipc", () => {
     });
 
     registerAppServerIpcHandlers();
-    const snapshot = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const snapshot = await readLegacyOwnerMaterialization?.({}, {});
 
     expect(snapshot).toMatchObject({
       threads: [
@@ -7682,7 +7842,6 @@ describe("app server ipc", () => {
     // satisfied the registry's own `if (thread.gitWorkingState)` short-circuit
     // — so a registry-lane probe's result was discarded here until the next
     // cold start.
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const worktreePath = "/repo/wt";
     const gitWorkingState = {
       dirtyFiles: 2,
@@ -7705,7 +7864,7 @@ describe("app server ipc", () => {
     ] as never);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await readLegacyOwnerMaterialization({}, {});
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(1);
     });
@@ -7717,14 +7876,13 @@ describe("app server ipc", () => {
       worktreePath,
     });
 
-    const snapshot = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const snapshot = await readLegacyOwnerMaterialization?.({}, {});
     expect(snapshot).toMatchObject({
       threads: [expect.objectContaining({ gitWorkingState, id: "thread-1" })],
     });
   });
 
   it("passes merged PR commit SHAs into working-state probes", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const mergedPrSha = "a".repeat(40);
 
     listThreads.mockResolvedValueOnce([
@@ -7752,7 +7910,7 @@ describe("app server ipc", () => {
     ] as never);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
 
     await vi.waitFor(() => {
       expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
@@ -7767,7 +7925,7 @@ describe("app server ipc", () => {
   });
 
   it("passes detached merged PR commit SHAs into working-state probes", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { startAppServerOwnerNavigation } = await import("../ipc/app-server");
     const mergedPrSha = "b".repeat(40);
     const detachedPr = githubPr({
       number: 807,
@@ -7780,16 +7938,8 @@ describe("app server ipc", () => {
       commitShas: [mergedPrSha],
     });
 
-    getThreadOverlayStates.mockResolvedValue({
-      "thread-1": {
-        backend: "codex",
-        threadId: "thread-1",
-        executionMode: "default",
-        extraLinkedDirectories: [],
-        detachedPrKeys: ["github.com/pwrdrvr/pwragent#807"],
-        detachedPrs: [detachedPr],
-      },
-    });
+    readDetachedThreadPullRequests.mockReturnValue({ "thread-1": [detachedPr] });
+    getThreadOverlayStates.mockResolvedValue({ "thread-1": { detachedPrs: [detachedPr] } });
     listThreads.mockResolvedValueOnce([
       {
         id: "thread-1",
@@ -7804,7 +7954,8 @@ describe("app server ipc", () => {
     ] as never);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "ready" });
+    await startAppServerOwnerNavigation();
 
     await vi.waitFor(() => {
       expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
@@ -7960,7 +8111,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes a thread's working state after the agent finishes a turn", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
       {
@@ -7975,7 +8125,7 @@ describe("app server ipc", () => {
     ] as never);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8005,7 +8155,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes a thread's working state after its expected branch changes", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
       {
@@ -8020,7 +8169,7 @@ describe("app server ipc", () => {
     ] as never);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8049,7 +8198,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes pull requests for the rendered branch when a turn completes", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const discoveredPr = githubPr({
       number: 813,
       org: "pwrdrvr",
@@ -8083,7 +8231,7 @@ describe("app server ipc", () => {
     detectPullRequestsForThread.mockResolvedValueOnce([discoveredPr]);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8126,7 +8274,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes post-turn pull requests for an adopted branch instead of stale snapshot context", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const discoveredPr = githubPr({
       number: 814,
       org: "pwrdrvr",
@@ -8160,7 +8307,7 @@ describe("app server ipc", () => {
     detectPullRequestsForThread.mockResolvedValueOnce([discoveredPr]);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8204,7 +8351,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes pull requests when branch adoption finishes after turn completion", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const discoveredPr = githubPr({
       number: 815,
       org: "pwrdrvr",
@@ -8240,7 +8386,7 @@ describe("app server ipc", () => {
       .mockResolvedValueOnce([discoveredPr]);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8294,7 +8440,6 @@ describe("app server ipc", () => {
   });
 
   it("preserves PR history when late branch adoption overlaps the post-turn lookup", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const oldBranchPr = githubPr({
       number: 816,
       org: "pwrdrvr",
@@ -8360,7 +8505,7 @@ describe("app server ipc", () => {
     );
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8403,7 +8548,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes post-turn pull requests for a scoped linked worktree branch", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
       {
@@ -8436,7 +8580,7 @@ describe("app server ipc", () => {
     detectPullRequestsForThread.mockResolvedValue([]);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8471,7 +8615,6 @@ describe("app server ipc", () => {
   });
 
   it("routes post-turn retained PR refreshes back to HEAD worktree threads", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 981,
       org: "pwrdrvr",
@@ -8534,7 +8677,7 @@ describe("app server ipc", () => {
     fetchPullRequestByUrl.mockResolvedValueOnce(passingPr);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8590,7 +8733,6 @@ describe("app server ipc", () => {
   });
 
   it("ignores a completed non-git command for working-state refresh", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
       {
@@ -8605,7 +8747,7 @@ describe("app server ipc", () => {
     ] as never);
 
     registerAppServerIpcHandlers();
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
     });
@@ -8657,7 +8799,6 @@ describe("app server ipc", () => {
   });
 
   it("caps automatic startup directory git status refreshes", async () => {
-    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const directories = Array.from({ length: 6 }, (_, index) => ({
       key: `directory:/repo/app-${index}`,
@@ -8668,31 +8809,11 @@ describe("app server ipc", () => {
       needsAttentionCount: 0,
       latestUpdatedAt: 1000 + index,
     }));
-    reconcileNavigationSnapshot.mockResolvedValueOnce({
-      backend: "all",
-      fetchedAt: 1234,
-      unchanged: false,
-      threads: [
-        {
-          id: "thread-1",
-          title: "Thread one",
-          titleSource: "explicit" as const,
-          source: "codex" as const,
-          linkedDirectories: [],
-          updatedAt: 2000,
-        },
-      ],
-      inboxThreadKeys: [],
-      directories,
-      launchpadDefaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
-      },
-    });
+    readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories } as never);
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await refreshOwnerMetadata();
     await vi.waitFor(() => {
       expect(readDirectoryStatusEntries).toHaveBeenCalled();
     });

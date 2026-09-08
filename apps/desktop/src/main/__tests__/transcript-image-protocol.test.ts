@@ -268,6 +268,9 @@ describe("transcript image protocol", () => {
         threadId: "codex:thread/images",
         replay: {
           entries: [
+            { type: "activity", id: "tool", summary: "Screenshot", details: [
+              { id: "image", kind: "read", label: "Screenshot", images: [{ type: "image", url: dataUrl }] },
+            ] },
             {
               type: "message",
               id: "entry-1",
@@ -308,8 +311,8 @@ describe("transcript image protocol", () => {
       }
     );
 
-    const entryPart = response.replay.entries[0]?.type === "message"
-      ? response.replay.entries[0].parts?.[1]
+    const entryPart = response.replay.entries[1]?.type === "message"
+      ? response.replay.entries[1].parts?.[1]
       : undefined;
     const messagePart = response.replay.messages[0]?.parts?.[0];
     expect(entryPart).toMatchObject({
@@ -317,6 +320,13 @@ describe("transcript image protocol", () => {
       url: expect.stringMatching(/^pwragent-image:\/\/file\//),
     });
     expect(messagePart).toEqual(entryPart);
+    expect(response.replay.entries[0]?.type === "activity"
+      ? response.replay.entries[0].details[0]?.images?.[0] : undefined).toEqual(entryPart);
+    expect(JSON.stringify(response)).not.toContain("data:image/");
+    const { rewriteFederatedTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const remote = rewriteFederatedTranscriptImageUrlsForRenderer(response, "owner");
+    expect(remote.replay.entries[0]?.type === "activity"
+      ? remote.replay.entries[0].details[0]?.images?.[0]?.url : undefined).toMatch(/^pwragent-image:\/\/federation\/owner\//);
     expect(writes).toHaveLength(1);
     const materializedPath =
       entryPart?.type === "image" ? filePathFromProtocolUrl(entryPart.url) : "";

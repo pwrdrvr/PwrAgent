@@ -398,15 +398,19 @@ export function broadcastAgentEvent(event: AgentEvent): void {
       continue;
     }
     if (hydratedEvent.federationTarget?.scope === "remote") {
-      const isLocalPeerStatus =
+      // This process's connection state is window liveness, not thread data.
+      // Deliver it even after disconnected-peer detail demand has been removed.
+      const isWindowPeerStatus =
         hydratedEvent.notification.method === "federation/peerStatus/changed"
-        && !windowTarget;
+        && (!windowTarget
+          || windowTarget.instanceId === hydratedEvent.federationTarget.instanceId);
       if (
-        !isLocalPeerStatus
+        !isWindowPeerStatus
         && !federationRuntime.rendererWantsRemoteEvent(
           webContents.id,
           hydratedEvent.federationTarget.instanceId,
           federationEventClassForMethod(hydratedEvent.notification.method),
+          hydratedEvent,
         )
       ) {
         continue;

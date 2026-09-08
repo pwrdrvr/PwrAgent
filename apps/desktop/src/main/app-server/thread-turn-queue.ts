@@ -292,6 +292,14 @@ export class ThreadTurnQueue {
     return [...this.queueFor(this.keyFor(params))];
   }
 
+  /** Synchronous projection reads borrow entries without cloning the complete FIFO. */
+  *iterateQueuedEntries(params: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+  }): IterableIterator<ThreadTurnQueueEntry> {
+    yield* this.queueFor(this.keyFor(params));
+  }
+
   getAllQueuedEntries(): ThreadTurnQueueEntry[] {
     return [...this.queuedEntries.values()].flatMap((queue) => [...queue]);
   }

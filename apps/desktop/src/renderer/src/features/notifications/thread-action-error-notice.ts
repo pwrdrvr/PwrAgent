@@ -23,6 +23,7 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
  * discard.
  */
 export type ThreadActionErrorKind =
+  | "mark-directory-read"
   | "add-directory"
   | "archive-thread"
   | "create-thread"
@@ -35,6 +36,7 @@ export type ThreadActionErrorSignal = {
 };
 
 const THREAD_ACTION_ERROR_TITLES: Record<ThreadActionErrorKind, string> = {
+  "mark-directory-read": "Could not mark directory read",
   "add-directory": "Could not add directory",
   "archive-thread": "Archive failed",
   "create-thread": "Could not start thread",

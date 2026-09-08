@@ -276,6 +276,8 @@ function pinOverridesFilters(
  */
 export function selectFilteredThreads(params: {
   selection: StarMapFilterSelection;
+  /** The owner already matched the complete metadata and assigned order. */
+  ownerMatched?: boolean;
   sessionKeys?: StarMapSessionKeys;
   threads: readonly NavigationThreadSummary[];
   /** Identity keys the operator summoned from the ⌘K palette. */
@@ -297,7 +299,8 @@ export function selectFilteredThreads(params: {
     .filter((thread) => thread.archivedAt === undefined)
     .filter(
       (thread) =>
-        summoned(thread)
+        params.ownerMatched
+        || summoned(thread)
         || pinOverridesFilters(params.selection, thread)
         || threadPassesFilters({
           selection: params.selection,
@@ -313,7 +316,7 @@ export function selectFilteredThreads(params: {
       const rightPinned = isPinnedThread(right);
       if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
       if (leftPinned && rightPinned) return comparePinnedThreads(left, right);
-      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+      return params.ownerMatched ? 0 : (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
     });
 }
 

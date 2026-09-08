@@ -63,14 +63,19 @@ export type FederationEventSubscription = {
   eventClasses: FederationEventClass[];
   /** Absent means `all` for peers that predate filtered subscriptions. */
   threadSelection?: FederationThreadSelection;
+  /** Class-specific demand. When present, a missing class has no thread interest. */
+  eventClassSelections?: Partial<Record<FederationEventClass, FederationThreadSelection>>;
 };
 
 export type FederationEventSubscriptionConsumer =
   | "star_map"
-  | "thread_view";
+  | "thread_view"
+  | "queue_projection";
 
 export type SetFederationEventSubscriptionsRequest = {
   consumer?: FederationEventSubscriptionConsumer;
+  /** Independent mounted queue consumers must not replace one another. */
+  consumerInstanceId?: string;
   subscriptions: FederationEventSubscription[];
 };
 
@@ -216,6 +221,8 @@ export type FederationPeerSummary = {
   capabilities: FederationCapability[];
   canRevoke?: boolean;
   protocolVersion?: number;
+  /** Negotiated bounded application read contract; independent of grants. */
+  navigationQueryProtocol?: 2;
   endpoint?: string;
   profileName?: string;
   /** Assigned celestial identity icon, when the assignment map knows one. */

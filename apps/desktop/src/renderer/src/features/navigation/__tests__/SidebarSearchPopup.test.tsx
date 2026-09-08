@@ -6,6 +6,7 @@ import {
   type FederationJumpSearchProgress,
   type FederationJumpSearchRequest,
   type NavigationThreadSummary,
+  type NavigationQueryPage,
   type PrSummary,
 } from "@pwragent/shared";
 import { SidebarSearchPopup } from "../SidebarSearchPopup";
@@ -20,9 +21,10 @@ const readRendererFederationTarget = vi.fn<
   () => { scope: "remote"; instanceId: string } | undefined
 >(() => undefined);
 
-vi.mock("../../../lib/desktop-api", () => ({
-  getDesktopApi: () => ({ jumpSearchRemoteThreads }),
-}));
+const getNavigationQueryPage = vi.fn<() => Promise<NavigationQueryPage>>();
+const releaseNavigationQuery = vi.fn(async () => undefined);
+const desktopApi = { jumpSearchRemoteThreads, getNavigationQueryPage, releaseNavigationQuery };
+vi.mock("../../../lib/desktop-api", () => ({ getDesktopApi: () => desktopApi }));
 
 vi.mock("../../../lib/federation-window", () => ({
   readRendererFederationTarget: () => readRendererFederationTarget(),
@@ -92,6 +94,10 @@ beforeEach(() => {
   jumpSearchRemoteThreads.mockClear();
   jumpSearchRemoteThreads.mockResolvedValue({ results: [] });
   readRendererFederationTarget.mockReturnValue(undefined);
+  getNavigationQueryPage.mockReset();
+  getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "search", generation: "generation", ownerEpoch: "owner",
+    countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries: [], complete: true });
+  releaseNavigationQuery.mockClear();
 });
 
 afterEach(() => {
@@ -100,6 +106,27 @@ afterEach(() => {
 });
 
 describe("SidebarSearchPopup", () => {
+  it("finds an unloaded owner match and releases the query when the palette closes", async () => {
+    const row = { ...localThread({ id: "off-page", title: "Agent outside the loaded page" }),
+      ref: { backend: "codex" as const, threadId: "off-page" }, rowRevision: "revision", ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" as const };
+    const empty = await getNavigationQueryPage();
+    getNavigationQueryPage.mockClear();
+    getNavigationQueryPage.mockResolvedValue({ ...empty, entries: [{ row, orderKey: "one", placement: { kind: "root" } }] });
+    const select = vi.fn();
+    const view = render(<SidebarSearchPopup threads={[]} onJumpToThread={select} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), { target: { value: "owner persona match" } });
+    expect(getNavigationQueryPage).not.toHaveBeenCalled();
+    await settleRemoteSearch();
+    expect(screen.getByText("Agent outside the loaded page")).toBeInTheDocument();
+    expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({ inventory: "owner", pageSize: 8,
+      query: { kind: "search", text: "owner persona match" } }), expect.any(String));
+    fireEvent.click(screen.getByText("Agent outside the loaded page"));
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ id: "off-page" }));
+    view.unmount();
+    expect(releaseNavigationQuery).toHaveBeenCalled();
+  });
+
   it("finds Agent threads by role and marks the result", async () => {
     const threads: NavigationThreadSummary[] = [
       localThread({

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationDirectoryRow, NavigationThreadSummary } from "@pwragent/shared";
 import {
   STAR_MAP_NO_PROJECT_KEY,
   groupThreadsByProject,
-  instanceIdByThreadKey,
+  projectThreadOwner,
+  starMapThreadKey,
   projectMass,
   threadProjectKey,
 } from "../star-map-projects";
@@ -134,32 +135,17 @@ describe("groupThreadsByProject", () => {
   });
 });
 
-describe("instanceIdByThreadKey", () => {
-  const local = thread({ id: "l1", repoPath: "/repos/A" });
-  const remote = thread({ id: "r1", repoPath: "/repos/A" });
-  const byInstance = new Map([
-    ["local", [local]],
-    ["peer", [remote]],
-  ]);
-
-  it("maps each thread to its owning instance", () => {
-    const owners = instanceIdByThreadKey(byInstance);
-    expect(owners.get("codex:r1")).toBe("peer");
-    expect(owners.get("codex:l1")).toBe("local");
-  });
-
-  it("has no entry for a thread from nowhere", () => {
-    expect(instanceIdByThreadKey(byInstance).get("codex:gone")).toBeUndefined();
-  });
-
-  it("keys on thread identity, not object identity", () => {
-    // A clone must resolve the same way — the previous implementation
-    // scanned with `===` and would have missed this entirely.
-    const owners = instanceIdByThreadKey(byInstance);
-    const clone = { ...remote } as typeof remote;
-    expect(
-      owners.get(`${clone.source}:${clone.id}`),
-    ).toBe("peer");
+describe("project owner identity", () => {
+  it("preserves equal backend/thread ids from separate owners, including clones", () => {
+    const source = thread({ id: "same", repoPath: "/repos/A" });
+    const [project] = groupThreadsByProject(new Map([
+      ["local", [source]], ["peer", [{ ...source }]],
+    ]));
+    expect(project.threads.map((entry) => projectThreadOwner({ ...entry })))
+      .toEqual(["local", "peer"]);
+    expect(project.threads.map(starMapThreadKey))
+      .toEqual(["local::codex:same", "peer::codex:same"]);
+    expect(projectThreadOwner(source)).toBeUndefined();
   });
 });
 
@@ -462,4 +448,20 @@ describe("groupThreadsByProject summons", () => {
       "stale",
     ]);
   });
+});
+
+
+it("keeps project mass and off-page bodies stable while another row page arrives", () => {
+  const visible = thread({ id: "visible", repoPath: "/repos/large", updatedAt: 1 });
+  const descriptor = (key: string, total: number): NavigationDirectoryRow => ({
+    key, label: key, kind: "directory", counts: { total, active: 0, unread: 0, review: 0 },
+    pinnedRootCount: 0, unpinnedRootCount: total, launchpadPresent: false, latestUpdatedAt: 100,
+  });
+  const descriptors = new Map([["owner", [descriptor(threadProjectKey(visible), 1000), descriptor("off-page", 500)]]]);
+  const first = groupThreadsByProject(new Map([["owner", [visible]]]), { descriptorsByInstance: descriptors, now: 100 });
+  const next = groupThreadsByProject(new Map([["owner", [visible, thread({ id: "next", repoPath: "/repos/large" })]]]),
+    { descriptorsByInstance: descriptors, now: 100 });
+  expect(first.map((project) => [project.key, project.mass, project.totalThreadCount]))
+    .toEqual(next.map((project) => [project.key, project.mass, project.totalThreadCount]));
+  expect(first.find((project) => project.key === "off-page")?.threads).toEqual([]);
 });

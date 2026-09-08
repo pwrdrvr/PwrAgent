@@ -1,4 +1,12 @@
+import { expectedNavigationReadFailure, type NavigationReadFailure } from "../../shared/navigation-ipc-result";
+import { NavigationAttentionViewLeases } from "../app-server/navigation-attention-view-leases";
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared";
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { BrowserWindow, dialog, ipcMain } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -52,7 +60,6 @@ import {
   type FocusedDiffAnalysisRequest,
   type FocusedDiffAnalysisResponse,
   type GetNavigationSnapshotRequest,
-  type GetNavigationSnapshotTransportRequest,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type GetGhStatusRequest,
@@ -86,10 +93,19 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type NavigationDirectorySummary,
+  type NavigationDirectoryRow,
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
+  type NavigationQueryPage,
+  type NavigationQueryRequest,
+  type NavigationQueueProjection,
+  type NavigationQueueProjectionRequest,
+  type NavigationLaunchpadConfigRequest,
+  type NavigationLaunchpadConfigResponse,
+  type NavigationSelectedDetailRequest,
+  type NavigationSelectedDetailResponse,
   type NavigationSnapshot,
-  type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
   type AutomationThreadSummary,
   type PrSummary,
@@ -129,6 +145,8 @@ import {
   type SetThreadToolIncidentNoticeResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
   type AcknowledgeThreadEnvironmentFailureResponse,
+  type ListPendingThreadSpendAlertsRequest,
+  type ListPendingThreadSpendAlertsResponse,
   type AcknowledgeThreadSpendAlertRequest,
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
@@ -168,7 +186,6 @@ import {
   type PwrAgentThreadInspectionResponse,
   type PwrAgentThreadInspectionContext,
 } from "@pwragent/shared";
-import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -270,6 +287,7 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+  NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
@@ -287,6 +305,14 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_QUERY_PAGE_CHANNEL,
+  NAVIGATION_QUERY_RELEASE_CHANNEL,
+  NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
+  NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+  NAVIGATION_REMOVE_DIRECTORY_CHANNEL,
+  NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL,
+  NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
+  NAVIGATION_SELECTED_DETAIL_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -295,6 +321,12 @@ import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
+import { searchNavigationOwners } from "../app-server/navigation-jump-search";
+import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex } from "../app-server/navigation-viewer-pins";
+import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   isFederationPeerUnavailableError,
 } from "../federation/federation-peer-unavailable-error";
@@ -372,9 +404,13 @@ const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT =
 const PR_DISCOVERY_TICK_INTERVAL_MS = 60_000;
 const PR_DISCOVERY_CADENCE_MS = 5 * 60_000;
 const PR_DISCOVERY_MAX_PER_TICK = 3;
+type DirectoryGitRefreshTarget = Pick<NavigationDirectoryRow, "key" | "path" | "latestUpdatedAt">;
+
 type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
     SqliteOverlayStore,
+    | "readDetachedThreadPullRequests"
+    | "initializeNavigationUnreadBaseline"
     | "readDirectoryGitStatusCache"
     | "writeDirectoryGitStatusCacheEntry"
     | "readThreadGitWorkingStateCache"
@@ -387,6 +423,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "listRemoteThreadPins"
     | "updateRemoteThreadPinSnapshots"
     | "setThreadToolIncidentNotice"
+    | "listPendingThreadSpendAlerts"
     | "acknowledgeThreadSpendAlert"
     | "acknowledgeThreadEnvironmentFailure"
   >;
@@ -559,190 +596,6 @@ async function renderExplicitComposerPdfPreview(
     fileIdentity: file.fileIdentity,
     unchanged: false,
   };
-}
-
-/**
- * Consolidate pinned remote threads into the LOCAL project groups they
- * correspond to, so the Directories lens shows them and the title-bar
- * breadcrumb (selectedDirectory resolves by threadKeys membership) carries
- * the project name. Peer paths never match viewer paths, so matching is by
- * project identity: the linked directory's label, or its path basename.
- *
- * Mirrors `buildDirectorySummaries`' one-row-per-thread invariant
- * (`pickHomeDirectory`): a multi-directory thread joins exactly ONE local
- * group — its home directory — never every group it can match. Duplicating
- * the row made selection "jump" groups, because `selectedDirectory` resolves
- * to the first directory containing the key, which is whichever sorts first,
- * not the group the user clicked in. The owner's `projectKey` is authoritative
- * when it identifies a linked directory; fallback preference is a local
- * checkout before a worktree, then linked-directory order.
- *
- * Remote threads whose project has no local counterpart receive an
- * unconfigured placeholder group. That keeps Cmd+K-mounted rows discoverable
- * in the Directories lens until Add Directory registers a matching checkout.
- */
-/**
- * The single local directory group a remote thread belongs to, by project
- * identity (directory label / path basename — peer paths never match viewer
- * paths). When the owner's projectKey identifies one of its linked
- * directories, that primary project wins even if a secondary @-referenced
- * directory is a local checkout. Otherwise, home preference mirrors
- * `pickHomeDirectory`: repo checkouts (`kind: "local"`) before worktree
- * links, then the owner's linked order.
- */
-function findRemoteHomeDirectoryIndex(
-  directories: ReadonlyArray<{ label: string; path?: string }>,
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
-): number | undefined {
-  const directoryIndexByName = new Map<string, number>();
-  directories.forEach((directory, index) => {
-    const names = new Set(
-      [directory.label, directory.path ? path.basename(directory.path) : ""]
-        .map((name) => name.trim().toLowerCase())
-        .filter(Boolean),
-    );
-    for (const name of names) {
-      if (!directoryIndexByName.has(name)) {
-        directoryIndexByName.set(name, index);
-      }
-    }
-  });
-  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
-  for (const linked of linkedByHomePreference) {
-    const names = [linked.label, path.basename(linked.path)]
-      .map((name) => (name ?? "").trim().toLowerCase())
-      .filter(Boolean);
-    for (const name of names) {
-      const index = directoryIndexByName.get(name);
-      if (index !== undefined) {
-        return index;
-      }
-    }
-  }
-  return undefined;
-}
-
-function remoteLinkedDirectoriesByHomePreference(
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
-): LinkedDirectorySummary[] {
-  const linkedDirectories = thread.linkedDirectories ?? [];
-  const projectKey = thread.projectKey;
-  const primaryProjectDirectory = projectKey
-    ? linkedDirectories.find((directory) =>
-        linkedDirectoryMatchesProjectKey(directory, projectKey)
-      )
-    : undefined;
-  if (primaryProjectDirectory) {
-    return [primaryProjectDirectory];
-  }
-
-  return [...linkedDirectories].sort((left, right) => {
-    if (left.kind !== right.kind) {
-      return left.kind === "worktree" ? 1 : -1;
-    }
-    return 0;
-  });
-}
-
-function remoteDirectoryPlaceholder(
-  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
-): NavigationDirectorySummary | undefined {
-  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
-  if (!home) {
-    return undefined;
-  }
-  const label = home.label.trim() || path.basename(home.path).trim();
-  if (!label) {
-    return undefined;
-  }
-
-  return {
-    key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
-    kind: "directory",
-    label,
-    localAvailability: "unconfigured",
-    threadKeys: [],
-    needsAttentionCount: 0,
-  };
-}
-
-function linkedDirectoryMatchesProjectKey(
-  directory: Pick<LinkedDirectorySummary, "path" | "worktreePath">,
-  projectKey: string,
-): boolean {
-  const normalizedProjectKey = normalizeFederatedPath(projectKey);
-  if (!normalizedProjectKey) {
-    return false;
-  }
-  return [directory.path, directory.worktreePath].some(
-    (candidate) => normalizeFederatedPath(candidate) === normalizedProjectKey,
-  );
-}
-
-function normalizeFederatedPath(value: string | undefined): string | undefined {
-  const normalized = value?.trim().replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalized || undefined;
-}
-
-function attachRemoteThreadsToLocalDirectories(
-  directories: NavigationSnapshot["directories"],
-  remoteThreads: NavigationThreadSummary[],
-): NavigationSnapshot["directories"] {
-  if (remoteThreads.length === 0) {
-    return directories;
-  }
-  const mergedDirectories = [...directories];
-  const addedByDirectoryIndex = new Map<
-    number,
-    Array<{ threadKey: string; inInbox: boolean }>
-  >();
-  for (const thread of remoteThreads) {
-    const threadKey = thread.federation?.ref
-      ? federatedThreadIdentityKey(thread.federation.ref)
-      : buildThreadIdentityKey(thread.source, thread.id);
-    let homeIndex = findRemoteHomeDirectoryIndex(
-      mergedDirectories,
-      thread,
-    );
-    if (homeIndex === undefined) {
-      const placeholder = remoteDirectoryPlaceholder(thread);
-      if (!placeholder) {
-        continue;
-      }
-      homeIndex = mergedDirectories.findIndex(
-        (directory) => directory.key === placeholder.key,
-      );
-      if (homeIndex === -1) {
-        homeIndex = mergedDirectories.push(placeholder) - 1;
-      }
-    }
-    const added = addedByDirectoryIndex.get(homeIndex) ?? [];
-    added.push({ threadKey, inInbox: Boolean(thread.inbox?.inInbox) });
-    addedByDirectoryIndex.set(homeIndex, added);
-  }
-  if (addedByDirectoryIndex.size === 0) {
-    return directories;
-  }
-  return mergedDirectories.map((directory, index) => {
-    const added = addedByDirectoryIndex
-      .get(index)
-      ?.filter((entry) => !directory.threadKeys.includes(entry.threadKey));
-    if (!added?.length) {
-      return directory;
-    }
-    return {
-      ...directory,
-      threadKeys: [
-        ...directory.threadKeys,
-        ...added.map((entry) => entry.threadKey),
-      ],
-      // Unread remote rows count toward the group's "N to review" badge
-      // just like local rows do.
-      needsAttentionCount:
-        directory.needsAttentionCount
-        + added.filter((entry) => entry.inInbox).length,
-    };
-  });
 }
 
 /**
@@ -1504,7 +1357,11 @@ class DesktopAppServerService {
   private prAutoDispatchBudgetPausedAt: number | undefined;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
-  /** Visible thread→PR attachments plus the primary workspace's repository. */
+  private ownerNavigationActive = false;
+  private ownerNavigationMetadataVersion = 0;
+  private ownerNavigationMetadataRead: Promise<void> | undefined;
+  private ownerNavigationMetadataAbort: AbortController | undefined;
+  /** Owner thread→PR attachments plus the primary workspace's repository. */
   private readonly attachedPrsByThreadKey = new Map<
     string,
     {
@@ -1809,6 +1666,8 @@ class DesktopAppServerService {
           includeTurns: request.includeTurns,
           limit: request.limit,
           viewOnly: request.viewOnly,
+          knownRevision: request.knownRevision,
+          readReason: request.readReason,
         });
     }
     const backend = request.backend ?? "codex";
@@ -2100,6 +1959,162 @@ class DesktopAppServerService {
     this.pendingNavigationSnapshots.set(requestKey, promise);
 
     return await promise;
+  }
+
+  async getNavigationQueryPage(
+    request: NavigationQueryRequest,
+    consumerId?: string,
+  ): Promise<NavigationQueryPage> {
+    if (consumerId) {
+      return navigationQueryPool.read({
+        consumerId,
+        request,
+        load: async ({ signal, deadlineAt }) => {
+          signal.throwIfAborted();
+          return this.readNavigationQueryPage(request, { signal, deadlineAt });
+        },
+      });
+    }
+    return this.readNavigationQueryPage(request);
+  }
+
+  private async readNavigationQueryPage(
+    request: NavigationQueryRequest,
+    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
+  ): Promise<NavigationQueryPage> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const page = await getDesktopFederationRuntime().remoteNavigationQueryPage(
+        request.federationTarget,
+        // Owner revisions cannot certify viewer-owned directory disclosure.
+        // Always fetch the bounded page before applying that independent state.
+        { ...request, completeBaselineRevision: undefined },
+        rpcOptions,
+      );
+      rpcOptions?.signal.throwIfAborted();
+      const directoryKeys = [...new Set([...(page.directories ?? []).map((directory) => directory.key),
+        ...(page.selectionDirectory ? [page.selectionDirectory.key] : [])])];
+      if (!directoryKeys.length) return page;
+      const overlays = await this.getOverlayStore().readRemoteDirectoryOverlays({
+        instanceId: request.federationTarget.instanceId, directoryKeys,
+      });
+      rpcOptions?.signal.throwIfAborted();
+      const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
+        const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
+        return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
+          ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
+      };
+      const result = { ...page, directories: page.directories?.map(apply),
+        selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
+      if (Buffer.byteLength(JSON.stringify(result), "utf8") > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+        throw new Error("Navigation page with viewer preferences exceeds the byte budget. Request a smaller page.");
+      }
+      return result;
+    }
+    return await getDesktopNavigationQueryStore().readPage({
+      loadIndex: async () => {
+        rpcOptions?.signal.throwIfAborted();
+        const index = await loadLocalNavigationQueryIndex({
+          backend: request.backend,
+          callerReason: "renderer-navigation-query",
+          signal: rpcOptions?.signal,
+        });
+        rpcOptions?.signal.throwIfAborted();
+        if (request.inventory === "viewer") {
+          const pins = await getDesktopOverlayStore().readRemoteThreadPinNavigationRows();
+          rpcOptions?.signal.throwIfAborted();
+          return pins.length ? appendViewerNavigationPins(index, getDesktopFederationRuntime().stampViewerNavigationPins(pins)) : index;
+        }
+        return index;
+      },
+      request,
+      scopeKey: request.inventory === "viewer" ? "renderer-viewer" : "renderer-local",
+    });
+  }
+
+  async releaseNavigationAttentionView(request: NavigationAttentionViewReleaseRequest): Promise<void> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteReleaseNavigationAttentionView(request.federationTarget, request);
+    }
+    getDesktopNavigationQueryStore().releaseAttentionView("renderer-local", request.viewId);
+    getDesktopNavigationQueryStore().releaseAttentionView("renderer-viewer", request.viewId);
+  }
+
+  async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest): Promise<MarkNavigationDirectorySeenResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteMarkNavigationDirectorySeen(request.federationTarget, request);
+    }
+    return markLocalNavigationDirectorySeen(request);
+  }
+
+  async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest): Promise<RemoveNavigationDirectoryResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return getDesktopFederationRuntime().remoteRemoveNavigationDirectory(request.federationTarget, request);
+    }
+    return removeLocalNavigationDirectory(request);
+  }
+
+  async getNavigationLaunchpadConfig(
+    request: NavigationLaunchpadConfigRequest,
+    consumerId?: string,
+  ): Promise<NavigationLaunchpadConfigResponse> {
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "launchpad", consumerId: token,
+        owner: request.federationTarget,
+        identity: JSON.stringify([request.directoryKey ?? null]),
+        operation: JSON.stringify([request.knownRevision ?? null]),
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationLaunchpadConfig(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readLaunchpadConfig(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
+  }
+
+  async getNavigationSelectedDetail(
+    request: NavigationSelectedDetailRequest,
+    consumerId?: string,
+  ): Promise<NavigationSelectedDetailResponse> {
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "detail", consumerId: token,
+        owner: request.federationTarget, ref: request.ref,
+        identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
+        operation: JSON.stringify([request.knownRevision ?? null, request.probeWorkingStates === true, request.includeWorkspaceConfiguration === true, request.collection ?? null]),
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationSelectedDetail(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readSelectedDetail(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
+  }
+
+  async getNavigationQueueProjection(
+    request: NavigationQueueProjectionRequest,
+    consumerId?: string,
+  ): Promise<NavigationQueueProjection> {
+    if (request.protocol !== 2) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
+    const token = consumerId ?? `service-exact:${++nextTransientNavigationConsumer}`;
+    try {
+      return await navigationQueryPool.readExact({ kind: "queue", consumerId: token,
+        owner: request.federationTarget, ref: request.ref,
+        identity: JSON.stringify([request.ref.backend, request.ref.threadId]),
+        operation: JSON.stringify([request.knownRevision ?? null, request.cursor ?? null]),
+        deadlineAt: request.deadlineAt,
+        load: async (options) => {
+          if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+            return getDesktopFederationRuntime().remoteNavigationQueueProjection(request.federationTarget, request, options);
+          }
+          return getDesktopNavigationDetailService().readQueueProjection(request);
+        },
+      });
+    } finally { if (!consumerId) navigationQueryPool.release(token); }
   }
 
   async setNavigationBrowseMode(
@@ -2655,7 +2670,7 @@ class DesktopAppServerService {
 
   private async rememberThreadPrAttachments(
     threads: NavigationSnapshot["threads"],
-    options: { replace: boolean },
+    options: { replace: boolean; isCurrent?: () => boolean },
   ): Promise<void> {
     const primaryRepoResolutionByPath = new Map<
       string,
@@ -2670,7 +2685,9 @@ class DesktopAppServerService {
       ),
     );
     const liveThreadKeys = new Set<string>();
+    const candidates: Array<{ backend: AppServerBackendKind; threadId: string; prKeys: string[] }> = [];
     for (const [index, thread] of threads.entries()) {
+      if (options.isCurrent && !options.isCurrent()) return;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       liveThreadKeys.add(threadKey);
       const primaryRepoKey = primaryRepoKeys[index];
@@ -2679,22 +2696,26 @@ class DesktopAppServerService {
         ...(primaryRepoKey ? { primaryRepoKey } : {}),
         prs: thread.prs ?? [],
       });
-      await this.syncThreadPrAutoDispatchCandidates({
+      candidates.push({
         backend: thread.source,
         threadId: thread.id,
+        prKeys: (thread.prs ?? []).filter((pr) => pullRequestMatchesRepositoryKey(pr, primaryRepoKey)).map(getPrStatusKey),
       });
     }
     if (options.replace) {
       for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+        if (options.isCurrent && !options.isCurrent()) return;
         if (!liveThreadKeys.has(threadKey)) {
           this.attachedPrsByThreadKey.delete(threadKey);
           const identity = parseThreadIdentityKey(threadKey);
           if (identity) {
-            await this.syncThreadPrAutoDispatchCandidates(identity);
+            candidates.push({ ...identity, prKeys: [] });
           }
         }
       }
     }
+    if (options.isCurrent && !options.isCurrent()) return;
+    await this.getOverlayStore().syncThreadPrAutoDispatchCandidatesBatch({ threads: candidates, now: Date.now() });
   }
 
   private async rememberThreadPrAttachmentUpdate(params: {
@@ -2715,6 +2736,10 @@ class DesktopAppServerService {
       },
     );
     await this.syncThreadPrAutoDispatchCandidates(params);
+  }
+
+  readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
+    return this.attachedPrsByThreadKey.get(buildThreadIdentityKey(backend, threadId))?.primaryRepoKey;
   }
 
   private applyPrimaryGitRepositories(
@@ -2842,15 +2867,15 @@ class DesktopAppServerService {
     const detachedPrsByThreadKey = new Map<string, PrSummary[]>();
     await Promise.all(
       [...threadIdsByBackend.entries()].map(async ([backend, threadIds]) => {
-        const overlays = await this.getOverlayStore().getThreadOverlayStates({
+        const detached = this.getOverlayStore().readDetachedThreadPullRequests({
           backend,
           threadIds: [...threadIds],
         });
-        for (const [threadId, overlay] of Object.entries(overlays)) {
-          if (overlay?.detachedPrs?.length) {
+        for (const [threadId, prs] of Object.entries(detached)) {
+          if (prs.length) {
             detachedPrsByThreadKey.set(
               buildThreadIdentityKey(backend, threadId),
-              overlay.detachedPrs,
+              prs,
             );
           }
         }
@@ -2995,11 +3020,32 @@ class DesktopAppServerService {
     const directoryKeys = [
       ...new Set(request.directoryKeys.map((key) => key.trim()).filter(Boolean)),
     ];
-    const directories = directoryKeys
-      .map((key) => this.lastDirectoriesByKey.get(key))
-      .filter((directory): directory is NavigationSnapshot["directories"][number] =>
-        Boolean(directory?.path?.trim()),
-      );
+    if (directoryKeys.length > 100) throw new Error("Refresh at most 100 directories at a time.");
+    if (!directoryKeys.length) return { scheduledCount: 0 };
+    const token = `directory-git-refresh:${randomUUID()}`;
+    const deadlineAt = Date.now() + 10_000;
+    const directories: DirectoryGitRefreshTarget[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    let bytes = 0;
+    try {
+      for (let count = 0; count < 16; count += 1) {
+        const page = await this.getNavigationQueryPage({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
+          query: { kind: "directory-index", keys: directoryKeys }, pageSize: 100, cursor, deadlineAt,
+        }, token);
+        if (page.coverage.state !== "complete" || page.unchanged) throw new Error("Directory metadata is incomplete. Retry after the owner finishes refreshing.");
+        bytes += Buffer.byteLength(JSON.stringify(page), "utf8");
+        if (bytes > 512 * 1024) throw new Error("Directory refresh metadata exceeds its bounded budget.");
+        for (const directory of page.directories ?? []) {
+          if (!directoryKeys.includes(directory.key) || seen.has(directory.key)) throw new Error("Directory refresh returned inconsistent owner membership.");
+          seen.add(directory.key);
+          if (directory.path?.trim()) directories.push({ key: directory.key, path: directory.path, latestUpdatedAt: directory.latestUpdatedAt });
+        }
+        if (page.complete) break;
+        if (!page.nextCursor || count === 15) throw new Error("Directory refresh did not reach a complete owner page range.");
+        cursor = page.nextCursor;
+      }
+    } finally { navigationQueryPool.release(token); }
     const scheduledCount = this.startDirectoryGitStatusRefresh({
       automatic: false,
       directories,
@@ -3024,7 +3070,7 @@ class DesktopAppServerService {
 
   private startDirectoryGitStatusRefresh(params: {
     automatic: boolean;
-    directories: NavigationSnapshot["directories"];
+    directories: DirectoryGitRefreshTarget[];
     force?: boolean;
     requestKey: string;
   }): number {
@@ -3081,9 +3127,9 @@ class DesktopAppServerService {
 
   private selectDirectoryGitStatusRefreshCandidates(params: {
     automatic: boolean;
-    directories: NavigationSnapshot["directories"];
+    directories: DirectoryGitRefreshTarget[];
     force?: boolean;
-  }): NavigationSnapshot["directories"] {
+  }): DirectoryGitRefreshTarget[] {
     const candidates = params.directories.filter((directory) => {
       if (!directory.path?.trim()) {
         return false;
@@ -3237,7 +3283,7 @@ class DesktopAppServerService {
   }
 
   private async refreshDirectoryGitStatuses(
-    directories: NavigationSnapshot["directories"],
+    directories: DirectoryGitRefreshTarget[],
     force = false,
   ): Promise<void> {
     const refreshableDirectories = directories.filter((directory) => directory.path?.trim());
@@ -3267,7 +3313,7 @@ class DesktopAppServerService {
   }
 
   async writeDirectoryGitStatusEntry(params: {
-    directory?: NavigationSnapshot["directories"][number];
+    directory?: DirectoryGitRefreshTarget;
     directoryKey: string;
     fetchedAt: number;
     gitStatus?: NavigationDirectoryGitStatus;
@@ -3470,7 +3516,17 @@ class DesktopAppServerService {
   }
 
   handleAgentEventForPrAttachments(event: AgentEvent): void {
+    if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    if (["navigation/providerThreads/refreshed", "thread/started", "thread/archived", "thread/unarchived",
+      "navigation/threadDirectories/updated", "navigation/directory/removed", "thread/parent/set", "thread/parent/cleared",
+      "thread/branch/updated"].includes(event.notification.method)) {
+      if (this.ownerNavigationActive) void this.refreshOwnerNavigationMetadata().catch((error) => {
+        appServerLog.warn("failed to refresh owner navigation metadata", { error: String(error) });
+      });
+      return;
+    }
     if (event.notification.method !== "thread/pullRequests/updated") return;
+    this.ownerNavigationMetadataVersion += 1;
     const params = event.notification.params as {
       threadId: string;
       prs: PrSummary[];
@@ -3486,6 +3542,76 @@ class DesktopAppServerService {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  async startOwnerNavigation(): Promise<void> {
+    this.ownerNavigationActive = true;
+    this.syncPrPollingSchedulerState();
+    const state = getDesktopBackendRegistry().getStartupProviderRefreshStatus()?.state;
+    if (state === "ready" || state === "degraded") {
+      await this.refreshOwnerNavigationMetadata();
+    }
+  }
+
+  private refreshOwnerNavigationMetadata(): Promise<void> {
+    this.ownerNavigationMetadataVersion += 1;
+    if (this.ownerNavigationMetadataRead) {
+      return this.ownerNavigationMetadataAbort?.signal.aborted
+        ? this.ownerNavigationMetadataRead.then(() => this.ownerNavigationActive ? this.refreshOwnerNavigationMetadata() : undefined)
+        : this.ownerNavigationMetadataRead;
+    }
+    const abort = new AbortController();
+    this.ownerNavigationMetadataAbort = abort;
+    const read = (async () => {
+      while (this.ownerNavigationActive) {
+        const version = this.ownerNavigationMetadataVersion;
+        const isCurrent = () => this.ownerNavigationActive && this.ownerNavigationMetadataVersion === version;
+        const index = await loadLocalNavigationQueryIndex({ backend: "all", callerReason: "owner-navigation-metadata", signal: abort.signal });
+        if (!this.ownerNavigationActive) return;
+        if (!isCurrent()) continue;
+        if (index.coverage?.state === "checking") return;
+        if (!index.coverage || index.coverage.state === "complete") {
+          this.getOverlayStore().initializeNavigationUnreadBaseline(index.threads);
+        }
+        await Promise.all([this.loadPrStatusRegistry(), this.loadPrLookupRegistry()]);
+        if (!isCurrent()) continue;
+        this.seedPrStatusRegistryFromThreads(index.threads);
+        const canonical = this.applyCanonicalPrStatuses(index.threads);
+        const complete = !index.coverage || index.coverage.state === "complete";
+        await this.rememberThreadPrAttachments(canonical.threads, { replace: complete, isCurrent });
+        if (!isCurrent()) continue;
+        const ownerThreads = this.applyPrimaryGitRepositories(canonical.threads);
+        this.rememberPublishedPrimaryGitRepositories(ownerThreads, { replace: complete });
+        await Promise.all([this.loadDirectoryGitStatusCache(), this.loadThreadGitWorkingStateCache()]);
+        if (!isCurrent()) continue;
+        for (const directory of index.directories) this.lastDirectoriesByKey.set(directory.key, directory);
+        this.startDirectoryGitStatusRefresh({ automatic: true, directories: index.directories, requestKey: "owner-navigation-metadata" });
+        this.rememberThreadWorktreePaths(ownerThreads);
+        this.rememberThreadPrRefreshContexts(ownerThreads);
+        const detachedPrs = await this.readDetachedPrsByThreadKey(ownerThreads);
+        if (!isCurrent()) continue;
+        this.rememberMergedPrCommitShas(ownerThreads, detachedPrs);
+        this.syncPrPollingSchedulerState();
+        void getDesktopBackendRegistry().refreshThreadGitWorkingStates(ownerThreads).catch((error: unknown) => {
+          appServerLog.warn("owner worktree status refresh failed", { error: String(error) });
+        });
+        if (complete) {
+          const live = new Set(canonical.threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+          for (const map of [this.prRefreshContextByThreadKey, this.worktreePathByThreadKey, this.mergedPrCommitShasByThread]) {
+            for (const key of map.keys()) if (!live.has(key)) map.delete(key);
+          }
+          const liveDirectories = new Set(index.directories.map((directory) => directory.key));
+          for (const key of this.lastDirectoriesByKey.keys()) if (!liveDirectories.has(key)) this.lastDirectoriesByKey.delete(key);
+          getDesktopBackendRegistry().rememberNavigationVisibilityIndex(index);
+        }
+        await this.getPrAutoDispatchCoordinator().resume();
+        if (isCurrent()) return;
+      }
+    })().catch((error: unknown) => { if (!abort.signal.aborted) throw error; }).finally(() => {
+      if (this.ownerNavigationMetadataRead === read) this.ownerNavigationMetadataRead = undefined;
+    });
+    this.ownerNavigationMetadataRead = read;
+    return read;
   }
 
   async markThreadSeen(
@@ -3515,6 +3641,9 @@ class DesktopAppServerService {
       seenUpdatedAt: request.seenUpdatedAt ?? null,
     });
 
+    await getDesktopBackendRegistry().publishLocalEvent({ backend, notification: {
+      method: "navigation/thread/seen", params: { threadId: request.threadId, seenUpdatedAt: request.seenUpdatedAt },
+    } });
     return response;
   }
 
@@ -5186,8 +5315,8 @@ class DesktopAppServerService {
 
   /**
    * Start or stop background PR polling and automatic repair dispatch to match
-   * the Git settings. Public + idempotent: called on every navigation snapshot
-   * and after every settings write, so both gates take effect without a restart.
+   * the Git settings. Called at owner startup and after settings writes, so
+   * both gates take effect independently of renderer navigation demand.
    */
   syncPrPollingSchedulerState(): void {
     const settingsSyncGeneration = ++this.prPollingSettingsSyncGeneration;
@@ -5201,10 +5330,8 @@ class DesktopAppServerService {
       };
       let budgetStatus: PrAutoDispatchBudgetStatus | undefined;
       try {
-        // Subscribe lazily on the first sync (which the first navigation
-        // snapshot triggers), so a later toggle re-syncs immediately without a
-        // restart. Done here rather than at IPC-registration time so tests that
-        // don't stub the settings singleton aren't forced to construct it.
+        // Owner startup establishes this subscription even when no renderer
+        // opens a navigation collection.
         if (!this.prPollingSettingsUnsubscribe) {
           this.prPollingSettingsUnsubscribe = getDesktopConfigStore().subscribe(
             ["git"],
@@ -5601,7 +5728,7 @@ class DesktopAppServerService {
    * Every tracked, non-terminal PR the poller should keep fresh, with the
    * threads that display it.
    *
-   * Uses the visible per-thread attachment set populated by navigation and
+   * Uses the owner attachment set populated at startup/provider completion and
    * attachment events. This includes explicit PRs on directoryless threads
    * and excludes detached PRs even though lookup history retains them for
    * non-UI bookkeeping.
@@ -5787,11 +5914,19 @@ class DesktopAppServerService {
   async setEligibleThreadsPrAutoDispatch(
     request: SetEligibleThreadsPrAutoDispatchRequest,
   ): Promise<SetEligibleThreadsPrAutoDispatchResponse> {
-    const snapshot = await this.getNavigationSnapshot({
+    const index = await loadLocalNavigationQueryIndex({
       backend: "all",
-      refreshMode: "full",
+      callerReason: "settings-bulk-pr-auto-dispatch",
     });
-    const eligibleThreads = snapshot.threads.filter((thread) => {
+    if (index.coverage && index.coverage.state !== "complete") {
+      throw new Error("Thread discovery is incomplete. Wait for providers to finish loading before changing Auto-fix for all eligible threads.");
+    }
+    await this.loadPrStatusRegistry();
+    await this.loadPrLookupRegistry();
+    this.seedPrStatusRegistryFromThreads(index.threads);
+    const canonical = this.applyCanonicalPrStatuses(index.threads);
+    await this.rememberThreadPrAttachments(canonical.threads, { replace: true });
+    const eligibleThreads = canonical.threads.filter((thread) => {
       const attachment = this.attachedPrsByThreadKey.get(
         buildThreadIdentityKey(thread.source, thread.id),
       );
@@ -5953,6 +6088,10 @@ class DesktopAppServerService {
     };
   }
 
+  async listPendingThreadSpendAlerts(request: ListPendingThreadSpendAlertsRequest): Promise<ListPendingThreadSpendAlertsResponse> {
+    return this.getOverlayStore().listPendingThreadSpendAlerts(request);
+  }
+
   async acknowledgeThreadSpendAlert(
     request: AcknowledgeThreadSpendAlertRequest,
   ): Promise<AcknowledgeThreadSpendAlertResponse> {
@@ -6057,6 +6196,9 @@ class DesktopAppServerService {
       // it locally would only create a phantom pin on the viewer machine
       // that the next remote snapshot overwrites.
       const { federationTarget, ...remoteRequest } = request;
+      if (request.pinned !== undefined) {
+        getDesktopFederationRuntime().assertRemoteNavigationQueryProtocol(federationTarget);
+      }
       return await getDesktopFederationRuntime()
         .remoteBackend(federationTarget)
         .setThreadPin(remoteRequest);
@@ -6066,6 +6208,7 @@ class DesktopAppServerService {
     const overlay = await this.getOverlayStore().setThreadPin({
       backend,
       threadId: request.threadId,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
 
@@ -6179,9 +6322,24 @@ class DesktopAppServerService {
       && isRemoteFederationTarget(request.federationTarget)
     ) {
       const { federationTarget, ...remoteRequest } = request;
-      return await getDesktopFederationRuntime()
+      if (request.move) {
+        getDesktopFederationRuntime().assertRemoteNavigationQueryProtocol(federationTarget);
+      }
+      const ownerPrefix = `remote:${federationTarget.instanceId}:`;
+      const ownerKey = (key: string): string => key.startsWith(ownerPrefix) ? key.slice(ownerPrefix.length) : key;
+      const result = await getDesktopFederationRuntime()
         .remoteBackend(federationTarget)
-        .reorderThreadPins(remoteRequest);
+        .reorderThreadPins({
+          ...remoteRequest,
+          threadKeys: remoteRequest.threadKeys?.map(ownerKey),
+          move: remoteRequest.move ? (remoteRequest.move.direction
+            ? { key: ownerKey(remoteRequest.move.key), direction: remoteRequest.move.direction }
+            : { key: ownerKey(remoteRequest.move.key), anchorKey: ownerKey(remoteRequest.move.anchorKey), placement: remoteRequest.move.placement })
+            : undefined,
+        });
+      return { pinnedRanks: Object.fromEntries(Object.entries(result.pinnedRanks).map(([key, rank]) => [
+        key.startsWith("remote:") ? key : `${ownerPrefix}${key}`, rank,
+      ])) };
     }
     // The pinned section interleaves local pins and viewer-owned remote
     // pins. The store assigns ranks from the FULL requested order in one
@@ -6190,7 +6348,7 @@ class DesktopAppServerService {
     // and a mixed reorder is atomic.
     const overlayStore = this.getOverlayStore();
     const remotePins =
-      typeof overlayStore.listRemoteThreadPins === "function"
+      !request.move && typeof overlayStore.listRemoteThreadPins === "function"
         ? await overlayStore.listRemoteThreadPins()
         : [];
     const remoteRefsByKey = Object.fromEntries(
@@ -6201,11 +6359,12 @@ class DesktopAppServerService {
     );
     const pinnedRanks = await overlayStore.reorderThreadPins({
       threadKeys: request.threadKeys,
+      ...(request.move ? { move: request.move } : {}),
       remoteRefsByKey,
     });
 
     logDebug("reorderThreadPins", {
-      pinCount: request.threadKeys.length,
+      pinCount: request.threadKeys?.length ?? 1,
       remotePinCount: Object.keys(remoteRefsByKey).length,
     });
 
@@ -6312,14 +6471,31 @@ class DesktopAppServerService {
       if (await overlayStore.hasRemoteThreadPin({ ref: parentRef })) {
         return parentRef;
       }
-      const parentSummary = await getDesktopFederationRuntime()
-        .remoteThreadSummaries()
-        .threadFromPeer({
-          target: { scope: "remote", instanceId: parentInstanceId },
-          backend: parentBackend,
-          threadId: parentThreadId,
-        });
-      if (!parentSummary) {
+      const consumer = `pin-parent:${randomUUID()}`;
+      let page: NavigationQueryPage;
+      try {
+        page = await this.getNavigationQueryPage({
+          protocol: 2,
+          consumer: "exact-link",
+          inventory: "owner",
+          federationTarget: { scope: "remote", instanceId: parentInstanceId },
+          query: {
+            kind: "exact",
+            identities: [{ backend: parentBackend, threadId: parentThreadId, ownerInstanceId: parentInstanceId }],
+            includeAncestry: false,
+          },
+          pageSize: 1,
+        }, consumer);
+      } finally {
+        navigationQueryPool.release(consumer);
+      }
+      if (page.protocol !== 2 || page.coverage.state !== "complete" || !page.complete || page.nextCursor || page.unchanged) {
+        return undefined;
+      }
+      const parentSummary = page.entries.find(({ row }) => row.ref.backend === parentBackend
+        && row.ref.threadId === parentThreadId && row.ref.ownerInstanceId === parentInstanceId
+        && row.source === parentBackend && row.id === parentThreadId)?.row;
+      if (!parentSummary || parentSummary.archivedAt !== undefined) {
         return undefined;
       }
       await overlayStore.addRemoteThreadPin({
@@ -6495,6 +6671,7 @@ class DesktopAppServerService {
     const instanceId = validateRemoteThreadPinRef(request.ref);
     const result = await this.getOverlayStore().setRemoteThreadLocalPin({
       ref: request.ref,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
     await getDesktopBackendRegistry().publishLocalEvent({
@@ -6515,9 +6692,14 @@ class DesktopAppServerService {
     request: FederationJumpSearchRequest,
     onProgress?: (progress: FederationJumpSearchProgress) => void,
   ): Promise<FederationJumpSearchResponse> {
-    return await getDesktopFederationRuntime()
-      .remoteThreadSummaries()
-      .searchForJump(request, onProgress);
+    return await searchNavigationOwners({ request, onProgress,
+      owners: getDesktopFederationRuntime().connectedPeerTargets().filter((peer) => peer.capabilities.includes("thread_navigation")),
+      readPage: async (query) => {
+        const consumer = `jump-search:${randomUUID()}`;
+        try { return await this.getNavigationQueryPage(query, consumer); }
+        finally { navigationQueryPool.release(consumer); }
+      },
+    });
   }
 
   async setThreadParent(
@@ -6529,6 +6711,9 @@ class DesktopAppServerService {
     ) {
       const { federationTarget, ...ownerRequest } = request;
       const federationRuntime = getDesktopFederationRuntime();
+      if (request.expectedParent !== undefined) {
+        federationRuntime.assertRemoteNavigationQueryProtocol(federationTarget);
+      }
       const response = await federationRuntime
         .remoteBackend(federationTarget)
         .setThreadParent(ownerRequest);
@@ -6579,6 +6764,7 @@ class DesktopAppServerService {
       parentThreadId: request.parentThreadId,
       parentThreadBackend: request.parentThreadBackend,
       parentThreadInstanceId: request.parentThreadInstanceId,
+      expectedParent: request.expectedParent,
     });
 
     logDebug("setThreadParent", {
@@ -6631,10 +6817,25 @@ class DesktopAppServerService {
         .updateSubthreadOrder(ownerRequest);
     }
     const backend = request.backend ?? "codex";
+    let children: { id: string; createdAt?: number }[] | undefined;
+    if (request.move || request.insertAfter) {
+      const index = await loadLocalNavigationQueryIndex({ backend, callerReason: "relative-child-move" });
+      if (index.coverage && index.coverage.state !== "complete") {
+        throw new Error("Wait for complete owner discovery before moving a child.");
+      }
+      if (!index.threads.some((thread) => thread.source === backend && thread.id === request.parentThreadId
+        && !thread.archivedAt && !thread.federation)) throw new Error("The owning group no longer exists.");
+      children = index.threads.filter((thread) => thread.source === backend
+        && thread.parentThreadId === request.parentThreadId
+        && (thread.parentThreadBackend ?? thread.source) === backend
+        && !thread.parentThreadInstanceId && !thread.archivedAt && !thread.federation && !thread.codexNativeSubAgent)
+        .map(({ id, createdAt }) => ({ id, createdAt }));
+    }
     const threadIds = await this.getOverlayStore().updateSubthreadOrder({
       backend,
       parentThreadId: request.parentThreadId,
-      threadIds: request.threadIds,
+      ...(request.move ? { move: request.move, children }
+        : request.insertAfter ? { insertAfter: request.insertAfter, children } : { threadIds: request.threadIds }),
     });
 
     logDebug("updateSubthreadOrder", {
@@ -6649,12 +6850,12 @@ class DesktopAppServerService {
         method: "thread/subthreadOrder/updated",
         params: {
           parentThreadId: request.parentThreadId,
-          threadIds,
+          ...(request.move || request.insertAfter ? {} : { threadIds }),
         },
       },
     });
 
-    return { backend, parentThreadId: request.parentThreadId, threadIds };
+    return { backend, parentThreadId: request.parentThreadId, ...(request.move || request.insertAfter ? {} : { threadIds }) };
   }
 
   async setSubthreadsCollapsed(
@@ -6723,6 +6924,7 @@ class DesktopAppServerService {
 
     const overlay = await this.getOverlayStore().setDirectoryPin({
       directoryKey: request.directoryKey,
+      pinned: request.pinned,
       pinnedRank: request.pinnedRank,
     });
 
@@ -6758,16 +6960,17 @@ class DesktopAppServerService {
   async reorderDirectoryPins(
     request: ReorderDirectoryPinsRequest,
   ): Promise<ReorderDirectoryPinsResponse> {
-    for (const directoryKey of request.directoryKeys) {
+    for (const directoryKey of request.directoryKeys ?? [request.move?.key, request.move?.anchorKey].filter((key): key is string => Boolean(key))) {
       rejectNonUserDirectoryKey(directoryKey);
     }
 
     const pinnedRanks = await this.getOverlayStore().reorderDirectoryPins({
       directoryKeys: request.directoryKeys,
+      ...(request.move ? { move: request.move } : {}),
     });
 
     logDebug("reorderDirectoryPins", {
-      pinCount: request.directoryKeys.length,
+      pinCount: request.directoryKeys?.length ?? 1,
     });
 
     await getDesktopBackendRegistry().publishLocalEvent({
@@ -7321,6 +7524,9 @@ class DesktopAppServerService {
   }
 
   async close(): Promise<void> {
+    this.ownerNavigationActive = false;
+    this.ownerNavigationMetadataVersion += 1;
+    this.ownerNavigationMetadataAbort?.abort();
     this.focusedDiffService = null;
     this.prFetcher = undefined;
     this.prPollingScheduler?.stop();
@@ -7589,20 +7795,75 @@ function commandLooksLikeGitMutation(command: string): boolean {
 const GIT_MUTATION_COMMAND =
   /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
 
-const appServerService = new DesktopAppServerService();
-const navigationSnapshotTransport = new NavigationSnapshotTransport();
+const navigationQueryPool = getDesktopNavigationQueryPool();
+const navigationQueryConsumersBySender = new Map<number, Set<string>>();
+let nextTransientNavigationConsumer = 0;
+async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: string | undefined,
+  read: (token: string) => Promise<T>): Promise<T | NavigationReadFailure> {
+  if (consumerId !== undefined
+    && (typeof consumerId !== "string" || consumerId.length < 1 || consumerId.length > 128)) {
+    throw new Error("Navigation consumer identity must contain 1 to 128 characters.");
+  }
+  const senderId = event.sender.id;
+  let consumers = navigationQueryConsumersBySender.get(senderId);
+  if (!consumers) {
+    consumers = new Set();
+    navigationQueryConsumersBySender.set(senderId, consumers);
+    event.sender.once("destroyed", () => {
+      for (const token of navigationQueryConsumersBySender.get(senderId) ?? []) navigationQueryPool.release(token);
+      navigationQueryConsumersBySender.delete(senderId);
+      void navigationAttentionViewLeases.releaseSender(senderId);
+    });
+  }
+  const token = JSON.stringify([senderId, consumerId ?? ++nextTransientNavigationConsumer]);
+  if (!consumers.has(token) && consumers.size >= 256) throw new Error("Navigation consumer budget is occupied.");
+  consumers.add(token);
+  try { return await read(token); }
+  catch (error) {
+    const offline = expectedNavigationReadFailure(error);
+    if (offline) return offline;
+    throw error;
+  }
+  finally {
+    if (consumerId === undefined) {
+      consumers.delete(token);
+      navigationQueryPool.release(token);
+    }
+  }
+}
+/** Internal owner service; legacy materialization is retained only for unit regression coverage. */
+export const appServerService = new DesktopAppServerService();
+
+export async function startAppServerOwnerNavigation(): Promise<void> {
+  await appServerService.startOwnerNavigation();
+}
+const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
 
 /** Sender ids that already have a destroyed-listener reaping their PR focus. */
 const prPollingFocusCleanupSenderIds = new Set<number>();
 
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
+let unsubscribeNavigationRemoteEvents: (() => void) | undefined;
+
+function invalidateNavigationEvent(event: AgentEvent): void {
+  getDesktopNavigationQueryStore().observeAttentionEvent(event);
+  if (!navigationQueryEventRequiresRefresh(event.notification.method)) return;
+  const params = event.notification.params as { threadId?: string; parentThreadId?: string; thread?: { id?: string } } | undefined;
+  const threadId = params?.threadId ?? params?.parentThreadId ?? params?.thread?.id;
+  navigationQueryPool.invalidateQueryOwner(event.federationTarget);
+  navigationQueryPool.invalidateExactOwner(event.federationTarget,
+    typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
+}
 
 export function registerAppServerIpcHandlers(): void {
   // Refresh a thread's working-state chips when the agent finishes a turn
   // or a git-mutating command in its worktree. Re-registering tears the
   // previous subscription down first so repeated calls don't stack listeners.
   unsubscribeWorkingStateEvents?.();
+  unsubscribeNavigationRemoteEvents?.();
+  unsubscribeNavigationRemoteEvents = getDesktopFederationRuntime().onRemoteBackendEvent(invalidateNavigationEvent);
   unsubscribeWorkingStateEvents = getDesktopBackendRegistry().onEvent((event) => {
+    invalidateNavigationEvent(event);
     appServerService.handleAgentEventForWorkingState(event);
     appServerService.handleAgentEventForPrAttachments(event);
   });
@@ -7613,6 +7874,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(
     async (prs) =>
       await appServerService.canonicalizeStoredPullRequests(prs),
+  );
+  getDesktopBackendRegistry().setThreadPrimaryGitRepositoryReader((backend, threadId) =>
+    appServerService.readPrimaryGitRepository(backend, threadId)
   );
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
@@ -7865,38 +8129,65 @@ export function registerAppServerIpcHandlers(): void {
     }
   );
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
+  ipcMain.handle(NAVIGATION_SNAPSHOT_CHANNEL, async () => {
+    throw new Error("Full navigation snapshots are retired. Upgrade this window and its owning instance to navigation query protocol 2.");
+  });
+  ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
   ipcMain.handle(
-    NAVIGATION_SNAPSHOT_CHANNEL,
+    NAVIGATION_QUERY_PAGE_CHANNEL,
     async (
-      _event,
-      request?:
-        | GetNavigationSnapshotRequest
-        | GetNavigationSnapshotTransportRequest,
-    ): Promise<NavigationSnapshot | NavigationSnapshotTransportResponse> => {
-      const transportRequest =
-        request && "transport" in request ? request : undefined;
-      return await timeStartupProfileOperation({
-        type: "ipc-main:getNavigationSnapshot",
-        detail: {
-          forceRefresh: Boolean(request?.forceRefresh),
-          transport: transportRequest?.transport.protocol ?? null,
-        },
-        operation: async () => {
-          if (!transportRequest) {
-            return await appServerService.getNavigationSnapshot(request);
-          }
-          const { transport, ...snapshotRequest } = transportRequest;
-          const snapshot = await appServerService.getNavigationSnapshot(
-            snapshotRequest,
-          );
-          return navigationSnapshotTransport.encode({
-            baseRevision: transport.baseRevision,
-            request: snapshotRequest,
-            snapshot,
-          });
-        },
-      });
+      event,
+      request: NavigationQueryRequest,
+      consumerId?: string,
+    ): Promise<NavigationQueryPage | NavigationReadFailure> => {
+      return withNavigationConsumer(event, consumerId, (token) =>
+        appServerService.getNavigationQueryPage(navigationAttentionViewLeases.qualify(event.sender.id, request), token));
     },
+  );
+  ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
+  ipcMain.handle(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL, async (event, request: NavigationAttentionViewReleaseRequest) =>
+    navigationAttentionViewLeases.release(event.sender.id, request));
+  ipcMain.removeHandler(NAVIGATION_QUERY_RELEASE_CHANNEL);
+  ipcMain.handle(NAVIGATION_QUERY_RELEASE_CHANNEL, async (event, consumerId: string) => {
+    const token = JSON.stringify([event.sender.id, consumerId]);
+    navigationQueryConsumersBySender.get(event.sender.id)?.delete(token);
+    navigationQueryPool.release(token);
+  });
+  ipcMain.removeHandler(NAVIGATION_REMOVE_DIRECTORY_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
+  ipcMain.handle(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL, async (_event, request: MarkNavigationDirectorySeenRequest) =>
+    appServerService.markNavigationDirectorySeen(request));
+  ipcMain.handle(NAVIGATION_REMOVE_DIRECTORY_CHANNEL, async (_event, request: RemoveNavigationDirectoryRequest) =>
+    appServerService.removeNavigationDirectory(request));
+  ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL,
+    async (
+      event,
+      request: NavigationLaunchpadConfigRequest,
+      consumerId?: string,
+    ): Promise<NavigationLaunchpadConfigResponse | NavigationReadFailure> =>
+      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationLaunchpadConfig(request, token)),
+  );
+  ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SELECTED_DETAIL_CHANNEL,
+    async (
+      event,
+      request: NavigationSelectedDetailRequest,
+      consumerId?: string,
+    ): Promise<NavigationSelectedDetailResponse | NavigationReadFailure> =>
+      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationSelectedDetail(request, token)),
+  );
+  ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_QUEUE_PROJECTION_CHANNEL,
+    async (
+      event,
+      request: NavigationQueueProjectionRequest,
+      consumerId?: string,
+    ): Promise<NavigationQueueProjection | NavigationReadFailure> =>
+      withNavigationConsumer(event, consumerId, (token) => appServerService.getNavigationQueueProjection(request, token)),
   );
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.handle(
@@ -7938,6 +8229,9 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setThreadToolIncidentNotice(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL);
+  ipcMain.handle(NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL, async (_event, request: ListPendingThreadSpendAlertsRequest) =>
+    appServerService.listPendingThreadSpendAlerts(request));
   ipcMain.removeHandler(NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL);
   ipcMain.handle(
     NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
@@ -8574,6 +8868,14 @@ export function registerAppServerIpcHandlers(): void {
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
+  await navigationAttentionViewLeases.dispose();
+  ipcMain.removeHandler(NAVIGATION_QUERY_RELEASE_CHANNEL);
+  for (const consumers of navigationQueryConsumersBySender.values()) {
+    for (const token of consumers) navigationQueryPool.release(token);
+  }
+  navigationQueryConsumersBySender.clear();
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
@@ -8594,6 +8896,11 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_REMOVE_DIRECTORY_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_LAUNCHPAD_CONFIG_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
@@ -8620,10 +8927,12 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
-  navigationSnapshotTransport.clear();
+  unsubscribeNavigationRemoteEvents?.();
+  unsubscribeNavigationRemoteEvents = undefined;
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
+  registry?.setThreadPrimaryGitRepositoryReader(undefined);
   registry?.setLocalPullRequestAuthorityResolver(undefined);
   registry?.setThreadPullRequestWatchToolHandler(undefined);
   registry?.setDirectoryGitStatusWriter(undefined);

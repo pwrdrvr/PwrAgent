@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import type {
   ClearComposerDraftRequest,
   ClearComposerDraftResponse,
+  ListComposerDraftLatestRequest,
   ListComposerDraftLatestResponse,
   ListComposerDraftRecoveryCandidatesRequest,
   ListComposerDraftRecoveryCandidatesResponse,
@@ -78,8 +79,11 @@ export function registerComposerDraftIpcHandlers(): void {
   ipcMain.removeHandler(COMPOSER_DRAFT_LIST_LATEST_CHANNEL);
   ipcMain.handle(
     COMPOSER_DRAFT_LIST_LATEST_CHANNEL,
-    async (): Promise<ListComposerDraftLatestResponse> => {
-      return { drafts: getStore().listLatest() };
+    async (_event, request?: ListComposerDraftLatestRequest): Promise<ListComposerDraftLatestResponse> => {
+      const store = getStore();
+      if (request?.migrateKnownOwners === true) store.migrateKnownOwnerScopes();
+      if (request?.migrateLegacyLaunchpads === true) store.migrateLegacyLaunchpadDrafts();
+      return { drafts: store.listLatest() };
     },
   );
 }

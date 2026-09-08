@@ -504,6 +504,8 @@ function sortDirectoryThreadKeysByCreation(
 export function buildDirectorySummaries(params: {
   threads: NavigationThreadSummary[];
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
+  /** Compact owner indexes carry presence independently of private draft content. */
+  launchpadPresenceKeys?: ReadonlySet<string>;
   gitStatusByKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
   /**
    * Per-directory pin and display preferences, keyed by the same
@@ -588,7 +590,7 @@ export function buildDirectorySummaries(params: {
   }
 
   for (const [directoryKey, launchpad] of Object.entries(params.launchpadsByKey ?? {})) {
-    if (!launchpad || !hasPersistableLaunchpadState(launchpad)) {
+    if (!launchpad || (!params.launchpadPresenceKeys?.has(directoryKey) && !hasPersistableLaunchpadState(launchpad))) {
       continue;
     }
     // Sub-thread launchpads (`subthread:<source>:<parent>:<mode>`) are

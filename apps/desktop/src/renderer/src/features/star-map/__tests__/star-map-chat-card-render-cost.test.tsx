@@ -57,6 +57,14 @@ function streamingApi(overrides: Partial<DesktopApi> = {}): {
 } {
   const listeners = new Set<(event: unknown) => void>();
   const desktopApi = {
+    getNavigationSelectedDetail: vi.fn(async () => ({
+      protocol: 2, ref: { backend: "codex", threadId: "t-local" }, revision: "detail",
+      readiness: "ready", identity: "present", thread: localThread(),
+    })),
+    getNavigationQueueProjection: vi.fn(async () => ({
+      protocol: 2, ref: { backend: "codex", threadId: "t-local" }, revision: "fifo",
+      readiness: "ready", complete: true, entries: [],
+    })),
     readThread: vi.fn(async () => ({
       backend: "codex",
       threadId: "t-local",
@@ -134,9 +142,7 @@ async function settleInitialRead(desktopApi: DesktopApi): Promise<void> {
   await waitFor(() => {
     expect(desktopApi.readThread).toHaveBeenCalled();
   });
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Local work" }).getAttribute("contenteditable")).toBe("true"));
 }
 
 const composerRenders = (): number => vi.mocked(CompactComposer).mock.calls.length;

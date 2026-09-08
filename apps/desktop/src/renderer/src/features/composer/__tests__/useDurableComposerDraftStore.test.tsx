@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ComposerDraftSnapshot } from "../useComposerDraftStore";
 import { useComposerDraftStore } from "../useComposerDraftStore";
-import { useDurableComposerDraftStore } from "../useDurableComposerDraftStore";
+import { snapshotFromDraftRecord, useDurableComposerDraftStore } from "../useDurableComposerDraftStore";
+import type { ComposerDraftSnapshotRecord } from "@pwragent/shared";
+import { serializeDraftWithSkillTokens } from "../composer-mention-tokens";
 
 afterEach(() => {
   cleanup();
@@ -11,6 +13,75 @@ afterEach(() => {
 });
 
 describe("useDurableComposerDraftStore", () => {
+  it("hydrates mention Markdown only for an explicitly imported legacy launchpad", () => {
+    const record: ComposerDraftSnapshotRecord = {
+      scopeKey: "launchpad:directory:/repo", scopeKind: "launchpad", textFormat: "canonical-markdown",
+      text: "[$ce:brainstorm](/skills/brainstorm/SKILL.md) ", skillTokens: [], imageAttachments: [],
+      status: "unsent", createdAt: 1, updatedAt: 2, contentHash: "legacy", charCount: 49,
+    };
+    const restored = snapshotFromDraftRecord(record);
+    expect(restored.skillTokens).toHaveLength(1);
+    expect(restored.draft).toBe(" ");
+    expect(serializeDraftWithSkillTokens(restored.draft, restored.skillTokens)).toBe(record.text);
+    const literal = snapshotFromDraftRecord({ ...record, textFormat: undefined });
+    expect(literal.draft).toBe(record.text);
+    expect(literal.skillTokens).toEqual([]);
+  });
+  it("distinguishes pending, successful-empty and failed hydration without writing", async () => {
+    let resolve!: (value: { drafts: [] }) => void;
+    const saveComposerDraft = vi.fn();
+    const firstApi = {
+      listComposerDraftLatest: vi.fn(() => new Promise<{ drafts: [] }>((done) => { resolve = done; })),
+      saveComposerDraft,
+    } as unknown as DesktopApi;
+    const rendered = renderHook(({ api }) =>
+      useDurableComposerDraftStore(useComposerDraftStore(), api),
+    { initialProps: { api: firstApi } });
+    expect(rendered.result.current.hydrationStatus).toBe("loading");
+    await act(async () => { resolve({ drafts: [] }); });
+    expect(rendered.result.current.hydrationStatus).toBe("ready");
+    expect(rendered.result.current.hydrationVersion).toBe(0);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const failedApi = { listComposerDraftLatest: vi.fn(async () => { throw new Error("unavailable"); }) } as unknown as DesktopApi;
+      rendered.rerender({ api: failedApi });
+      expect(rendered.result.current.hydrationStatus).toBe("loading");
+      await waitFor(() => expect(rendered.result.current.hydrationStatus).toBe("failed"));
+      expect(saveComposerDraft).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it("draft_and_queue_identity_survive_a_partial_cold_index: enumerates scopes without navigation rows", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    act(() => {
+      result.current.set("thread:codex:off-page", buildSnapshot("Private unsent input"));
+      result.current.pushDraft("thread:codex:parked", buildSnapshot("Parked input"));
+      result.current.setQueuedTurns("thread:codex:queued-off-page", [{
+        id: "local-queue", text: "Private queued input", imageAttachments: [], fileAttachments: [],
+      }]);
+    });
+    const drafts = result.current.getDraftScopeKeys();
+    expect(drafts).toEqual(["thread:codex:off-page", "thread:codex:parked"]);
+    expect(result.current.getQueuedScopeKeys()).toEqual(["thread:codex:queued-off-page"]);
+    // The scope string is not evidence of owner identity. These reads neither
+    // parse it nor expose content, and callers cannot mutate store membership.
+    expect(JSON.stringify(drafts)).not.toContain("Private");
+    (drafts as string[]).length = 0;
+    expect(result.current.getDraftScopeKeys()).toHaveLength(2);
+    const presenceVersion = result.current.getDraftPresenceVersion();
+    act(() => result.current.set("thread:codex:off-page", buildSnapshot("Another edit")));
+    expect(result.current.getDraftPresenceVersion()).toBe(presenceVersion);
+    act(() => {
+      result.current.delete("thread:codex:off-page");
+      result.current.popDraft("thread:codex:parked");
+      result.current.deleteQueuedTurn("thread:codex:queued-off-page");
+    });
+    expect(result.current.getDraftScopeKeys()).toEqual([]);
+    expect(result.current.getQueuedScopeKeys()).toEqual([]);
+  });
+
   it("does not rewrite a hydrated draft when a thread is merely opened and left", async () => {
     // The PR's headline claim, and the one that depends on a fragile
     // round-trip: hydration seeds the persisted-hash map from the STORED

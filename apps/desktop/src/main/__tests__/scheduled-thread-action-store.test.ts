@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store";
 import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 let stateDb: StateDb;
 let store: ScheduledThreadActionStore;
@@ -349,4 +351,56 @@ describe("ScheduledThreadActionStore", () => {
       fs.rmSync(temporaryDirectory, { recursive: true, force: true });
     }
   });
+});
+
+
+it("pages scheduled inputs under the wire budget and rejects stale cursors with zero read writes", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const db = StateDb.open(":memory:");
+  const paged = new ScheduledThreadActionStore(db);
+  try {
+    for (let i = 0; i < 205; i += 1) paged.create({
+      id: `page-${i}`, backend: "codex", threadId: `thread-${i}`, kind: "turn", origin: "desktop",
+      scheduledFor: 1_000, now: 1_000, displayText: "a".repeat(4_000),
+      turn: { input: [{ type: "text", text: "b".repeat(4_000) }] },
+    });
+    const { writes } = await measureSqliteWrites(async () => {
+      const ids = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = paged.listProjectionPage({ projectionProtocol: 2, cursor });
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(252 * 1024);
+        expect(page.actions.length).toBeLessThanOrEqual(100);
+        for (const action of page.actions) { expect(ids.has(action.id)).toBe(false); ids.add(action.id); }
+        cursor = page.nextCursor;
+      } while (cursor);
+      expect(ids.size).toBe(205);
+      expect(paged.observeExternalProjectionChange()).toBe(false);
+      expect(paged.observeExternalProjectionChange()).toBe(false);
+    });
+    expectSqliteWriteBudget({ scenario: "scheduled-bounded-projection-reads", writes,
+      note: "205 payload-backed schedules, complete bounded paging and external version observation: zero commits; 0 MB/day added WAL" });
+    const first = paged.listProjectionPage({ projectionProtocol: 2 });
+    paged.update("page-0", { displayText: "changed", now: 2_000 });
+    expect(() => paged.listProjectionPage({ projectionProtocol: 2, cursor: first.nextCursor })).toThrow("navigation_cursor_expired");
+    paged.update("page-0", { displayText: "x".repeat(300_000), now: 3_000 });
+    expect(() => paged.listProjectionPage({ projectionProtocol: 2 })).toThrow("budget");
+  } finally { db.close(); vi.unstubAllEnvs(); }
+});
+
+it("observes cross-process scheduled changes without publishing unrelated SQLite changes", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "scheduled-page-version-"));
+  const ownerDb = StateDb.open(path.join(directory, "state.db"));
+  const writerDb = StateDb.open(path.join(directory, "state.db"));
+  try {
+    const owner = new ScheduledThreadActionStore(ownerDb);
+    const writer = new ScheduledThreadActionStore(writerDb);
+    expect(owner.observeExternalProjectionChange()).toBe(false);
+    writer.create({ id: "external", backend: "codex", threadId: "thread-1", kind: "turn", origin: "desktop",
+      scheduledFor: 1_000, now: 1_000, displayText: "External process", turn: { input: [] } });
+    expect(owner.observeExternalProjectionChange()).toBe(true);
+    expect(owner.observeExternalProjectionChange()).toBe(false);
+    writerDb.raw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("unrelated-test", "1");
+    expect(owner.observeExternalProjectionChange()).toBe(false);
+  } finally { ownerDb.close(); writerDb.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });

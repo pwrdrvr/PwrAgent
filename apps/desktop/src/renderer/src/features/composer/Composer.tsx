@@ -1,3 +1,5 @@
+import { hydrateComposerDraft } from "./composer-draft-hydration";
+import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import {
   beginLaunchpadComposition,
   getLaunchpadComposerDestination,
@@ -44,7 +46,6 @@ import type {
   FederationTarget,
   HandoffThreadWorkspaceRequest,
   ModelSettingsRecent,
-  NavigationDirectorySummary,
   NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
   NavigationLaunchpadFileAttachment,
@@ -103,13 +104,11 @@ import {
   buildDirectoryReferenceMarkdown,
   buildDirectoryReferenceTooltip,
   buildFileReferenceTooltip,
-  decodeMarkdownDestination,
   fileLabelFromPath,
   filterDirectoryReferenceCandidates,
   findDirectoryReferenceTrigger,
   listReferencedDirectories,
 } from "../../lib/directory-references";
-import { expandTildePath } from "../../lib/tildify-path";
 import {
   buildHashReferenceOptions,
   describeHashReferenceThread,
@@ -117,6 +116,7 @@ import {
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
   hashReferenceAnchorKey,
+  hashReferenceThreadIdentity,
   HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
@@ -128,9 +128,7 @@ import {
 } from "../../lib/agent-thread";
 import {
   parsePullRequestUrl,
-  resolveLivePullRequest,
   usePullRequestLinks,
-  type PullRequestLinkContextValue,
 } from "../../lib/pull-request-links";
 import {
   prChipModifierClasses,
@@ -141,7 +139,6 @@ import {
   resolveThreadIdText,
   useThreadLinks,
   type ResolvedThreadLink,
-  type ThreadLinkContextValue,
 } from "../../lib/thread-links";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -154,7 +151,6 @@ import {
   findSkillTrigger,
   hydrateSkillLabelsWithMarkdown,
   listMentionedSkills,
-  parseSkillMentionParts,
   buildSkillMentionMarkdown,
 } from "../../lib/skill-mentions";
 import {
@@ -219,6 +215,8 @@ import {
   type ComposerPendingSteerSnapshot,
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
+import { useComposerMentionSources } from "./useComposerMentionSources";
+import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -1567,95 +1565,6 @@ function mergeDerivedLocalFileInputs(
   return merged;
 }
 
-function hydrateComposerDraft(
-  canonicalDraft: string,
-  skills: AppServerSkillSummary[],
-  threadLinks: ThreadLinkContextValue | undefined,
-  pullRequestLinks: PullRequestLinkContextValue | undefined,
-): {
-  draft: string;
-  skillTokens: ComposerSkillToken[];
-} {
-  let draft = "";
-  const skillTokens: ComposerSkillToken[] = [];
-
-  const hydrateSkillAndDirectoryParts = (text: string): void => {
-    for (const part of parseSkillMentionParts(text)) {
-      if (part.type === "text") {
-        draft += part.text;
-        continue;
-      }
-
-      if (part.type === "directory") {
-        // Serialized paths are percent-encoded tilde form; the token
-        // carries the decoded absolute path so send-time attach can use
-        // it directly. File-reference chips serialize to the same
-        // `[@label](~/path)` form, so restored Markdown starts as a
-        // generic reference chip. The bounded main-process inspection
-        // upgrades regular files to `kind: "file"` without ever scanning
-        // free-form typed paths.
-        skillTokens.push(
-          createComposerDirectoryToken(
-            {
-              label: part.name,
-              path: expandTildePath(decodeMarkdownDestination(part.path)),
-            },
-            draft.length,
-          ),
-        );
-        continue;
-      }
-
-      const matchingSkill =
-        skills.find((skill) => skill.path === part.path) ??
-        skills.find((skill) => skill.name === part.name);
-      skillTokens.push(
-        createComposerSkillToken(
-          matchingSkill ?? {
-            name: part.name,
-            path: part.path,
-          },
-          draft.length,
-        ),
-      );
-    }
-  };
-
-  // Thread and PR labels may legitimately begin with `$` or `@`, so recognize
-  // their destinations before passing surrounding Markdown through the skill
-  // and directory parser. Unknown links remain literal Markdown.
-  const referenceLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+|https:\/\/[^)\s]+)\)/gi;
-  let cursor = 0;
-  for (const match of canonicalDraft.matchAll(referenceLinkPattern)) {
-    const matchIndex = match.index ?? 0;
-    hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor, matchIndex));
-    const href = match[2] ?? "";
-    const resolvedThread = resolveThreadHref(href, threadLinks);
-    if (resolvedThread) {
-      skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
-    } else {
-      const pullRequest = parsePullRequestUrl(href);
-      if (pullRequest) {
-        // The parsed summary knows the repo and the number and nothing else.
-        // Upgrading it through the live store before minting the token is what
-        // gives a restored draft the same colored chip the sidebar shows; an
-        // unseen PR falls back to the parsed summary and stays gray.
-        skillTokens.push(
-          createComposerPullRequestToken(
-            resolveLivePullRequest(pullRequest, pullRequestLinks),
-            draft.length,
-          ),
-        );
-      } else {
-        draft += match[0];
-      }
-    }
-    cursor = matchIndex + match[0].length;
-  }
-  hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor));
-
-  return { draft, skillTokens };
-}
 
 function ComposerThreadOptionsMenu(props: {
   agentThread: boolean;
@@ -2860,11 +2769,19 @@ export function Composer(props: ComposerProps) {
   const composerScopeKey = props.launchpad
     ? `launchpad:${props.launchpad.directoryKey}`
     : props.thread
-      ? buildThreadComposerScopeKey(props.thread.source, props.thread.id)
+      ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
       : "empty";
   const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
   const localDraftStore = useComposerDraftStore();
-  const draftStore = props.draftStore ?? localDraftStore;
+  const draftStore = useOwnedComposerDraftStore(
+    props.draftStore ?? localDraftStore,
+    composerScopeKey,
+    props.thread ? {
+      backend: props.thread.source,
+      threadId: props.thread.id,
+      target: props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" },
+    } : undefined,
+  );
   const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
   const savedInitialDraft = draftStore.get(composerScopeKey);
   const savedInitialQueuedTurns = props.thread || props.launchpad
@@ -4529,6 +4446,19 @@ export function Composer(props: ComposerProps) {
     !federatedHashSearchAvailable
     || (!federatedHashSearchLoading
       && federatedHashSearchSettledQuery === (rawHashReferenceQuery ?? "").trim());
+  const mentionNavigation = useComposerMentionSources({ desktopApi: props.desktopApi });
+  const mentionNavigationQuery = directoryRefTrigger?.query ?? rawHashReferenceQuery;
+  const ensureMentionNavigation = mentionNavigation.ensureLoaded;
+  const releaseMentionNavigation = mentionNavigation.release;
+  useEffect(() => {
+    if (mentionNavigationQuery === undefined) {
+      releaseMentionNavigation();
+    } else {
+      ensureMentionNavigation(mentionNavigationQuery);
+    }
+  }, [ensureMentionNavigation, mentionNavigationQuery, releaseMentionNavigation]);
+  const localHashSearchSettled = !mentionNavigation.loading
+    && mentionNavigation.settledQuery === (rawHashReferenceQuery ?? "").trim().toLowerCase();
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -4574,28 +4504,31 @@ export function Composer(props: ComposerProps) {
     }
 
     return filterDirectoryReferenceCandidates(
-      props.directories ?? [],
+      [...mentionNavigation.directories],
       directoryRefTrigger.query,
     );
-  }, [props.directories, directoryRefTrigger]);
+  }, [mentionNavigation.directories, directoryRefTrigger]);
   const filteredHashReferenceOptions = useMemo(() => {
     if (!hashReferenceTrigger) {
       return [];
     }
     return buildHashReferenceOptions({
       currentThreadKey: props.thread
-        ? buildThreadIdentityKey(props.thread.source, props.thread.id)
+        ? hashReferenceThreadIdentity(props.thread)
         : undefined,
-      localThreads: props.threads ?? [],
+      localThreads: mentionNavigation.threads,
+      localOwnerMatched: mentionNavigation.settledQuery === hashReferenceTrigger.query.trim().toLowerCase(),
       query: hashReferenceTrigger.query,
       remoteThreads: federatedHashSearchResults,
+      remoteOwnerMatched: federatedHashSearchSettledQuery === hashReferenceTrigger.query.trim(),
     });
   }, [
     federatedHashSearchResults,
+    federatedHashSearchSettledQuery,
     hashReferenceTrigger,
-    props.thread?.id,
-    props.thread?.source,
-    props.threads,
+    props.thread,
+    mentionNavigation.threads,
+    mentionNavigation.settledQuery,
   ]);
   const hashReferenceCount = filteredHashReferenceOptions.length;
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
@@ -4707,8 +4640,6 @@ export function Composer(props: ComposerProps) {
           kind: "directory",
           label: token.name,
           path: token.path,
-          threadKeys: [],
-          needsAttentionCount: 0,
         },
       );
     }
@@ -5031,6 +4962,7 @@ export function Composer(props: ComposerProps) {
       // once the federated search has answered for this exact query,
       // otherwise the anchor dies a beat before the remote rows land.
       || !federatedHashSearchSettled
+      || !localHashSearchSettled
       || filteredHashReferenceOptions.length > 0
     ) {
       return;
@@ -5042,6 +4974,7 @@ export function Composer(props: ComposerProps) {
     );
   }, [
     federatedHashSearchSettled,
+    localHashSearchSettled,
     filteredHashReferenceOptions.length,
     rawHashReferenceQuery,
   ]);
@@ -5101,7 +5034,7 @@ export function Composer(props: ComposerProps) {
     });
   }, [activeAutocompleteIndex, autocompleteKind]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!autocompleteKind) {
       return;
     }
@@ -5122,14 +5055,19 @@ export function Composer(props: ComposerProps) {
       const available = placement === "above" ? availableAbove : availableBelow;
       setAutocompleteLayout({
         placement,
-        maxHeight: Math.max(140, Math.min(320, available)),
+        maxHeight: Math.max(0, Math.min(320, available)),
       });
     };
 
     updateAutocompleteLayout();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateAutocompleteLayout);
+    if (inputWrapRef.current) observer?.observe(inputWrapRef.current);
     window.addEventListener("resize", updateAutocompleteLayout);
+    window.addEventListener("scroll", updateAutocompleteLayout, true);
     return () => {
+      observer?.disconnect();
       window.removeEventListener("resize", updateAutocompleteLayout);
+      window.removeEventListener("scroll", updateAutocompleteLayout, true);
     };
   }, [activeAutocompleteIndex, autocompleteKind]);
 
@@ -5287,6 +5225,7 @@ export function Composer(props: ComposerProps) {
         const mirrorScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
+          event.federationTarget ?? { scope: "local" },
         );
         const mirrorCurrent = draftStore.getQueuedTurns(mirrorScopeKey);
         const matchingIndex = mirrorCurrent.findIndex(
@@ -5344,7 +5283,7 @@ export function Composer(props: ComposerProps) {
         typeof turnQueueRecord?.queueEntryId === "string" &&
         (
           draftStore.getQueuedTurns(
-            buildThreadComposerScopeKey(event.backend, notificationThreadId),
+            buildThreadComposerScopeKey(event.backend, notificationThreadId, event.federationTarget ?? { scope: "local" }),
           ).some(
             (queued) => queued.queueEntryId === turnQueueRecord.queueEntryId,
           )
@@ -5360,6 +5299,7 @@ export function Composer(props: ComposerProps) {
         const queueScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
+          event.federationTarget ?? { scope: "local" },
         );
         const queueEventIsCurrentThread =
           agentEventMatchesThread(event, thread, notificationThreadId);
@@ -7921,8 +7861,11 @@ export function Composer(props: ComposerProps) {
       setActiveSkillIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -7998,8 +7941,11 @@ export function Composer(props: ComposerProps) {
       );
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -8069,8 +8015,11 @@ export function Composer(props: ComposerProps) {
       setActiveDirectoryRefIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -8128,8 +8077,11 @@ export function Composer(props: ComposerProps) {
       setActiveHashReferenceIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -8212,8 +8164,11 @@ export function Composer(props: ComposerProps) {
       setActiveDirectoryRefIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
 
     // Feed the reference picker's Files tab — fire-and-forget.
@@ -8300,8 +8255,11 @@ export function Composer(props: ComposerProps) {
       setActiveDirectoryRefIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      // Typing can beat this frame after the picker closes. A stale insertion
+      // must not move the caret behind the operator's subsequent text.
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -12258,7 +12216,7 @@ export function Composer(props: ComposerProps) {
           Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
         </p>
       ) : null}
-      {props.disabled ? (
+      {props.disabled && backend?.available === false && !backend.discoveryPending ? (
         <p className="composer__meta">
           {props.launchpad
             ? "This backend is unavailable right now. Your draft stays here until send is available again."

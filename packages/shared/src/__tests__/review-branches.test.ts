@@ -53,12 +53,6 @@ describe("buildReviewBranchOptions", () => {
   it("uses a remote-only stacked PR target branch", () => {
     const options = buildReviewBranchOptions({
       directory: {
-        key: "directory:app",
-        kind: "directory",
-        label: "App",
-        path: "/repo/app",
-        threadKeys: [],
-        needsAttentionCount: 0,
         gitStatus: {
           currentBranch: "agent/pr-auto-dispatch-budget",
           branches: ["agent/pr-auto-dispatch-budget"],

@@ -1,3 +1,6 @@
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { useEffect, useState } from "react";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../../../shared/renderer-diagnostic";
@@ -92,6 +95,14 @@ import type {
   GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationQueueProjection,
+  NavigationQueueProjectionRequest,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
   GetNavigationSnapshotRequest,
   GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
@@ -187,6 +198,8 @@ import type {
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
   AcknowledgeThreadEnvironmentFailureResponse,
+  ListPendingThreadSpendAlertsRequest,
+  ListPendingThreadSpendAlertsResponse,
   AcknowledgeThreadSpendAlertRequest,
   AcknowledgeThreadSpendAlertResponse,
   SetThreadParentRequest,
@@ -355,6 +368,7 @@ import type {
   CompleteOnboardingCodexBootstrapResponse,
   ClearComposerDraftRequest,
   ClearComposerDraftResponse,
+  ListComposerDraftLatestRequest,
   ListComposerDraftLatestResponse,
   ListComposerDraftRecoveryCandidatesRequest,
   ListComposerDraftRecoveryCandidatesResponse,
@@ -750,6 +764,7 @@ export type DesktopApi = {
   ) => Promise<ReleaseQueuedTurnResponse>;
   listScheduledThreadActions?: (
     request?: ListScheduledThreadActionsRequest,
+    consumerId?: string,
   ) => Promise<ListScheduledThreadActionsResponse>;
   createScheduledThreadAction?: (
     request: CreateScheduledThreadActionRequest,
@@ -830,6 +845,26 @@ export type DesktopApi = {
   getNavigationSnapshot?: (
     request?: GetNavigationSnapshotRequest
   ) => Promise<NavigationSnapshot>;
+  getNavigationQueryPage?: (
+    request: NavigationQueryRequest,
+    consumerId?: string,
+  ) => Promise<NavigationQueryPage>;
+  releaseNavigationQuery?: (consumerId: string) => Promise<void>;
+  releaseNavigationAttentionView?: (request: NavigationAttentionViewReleaseRequest) => Promise<void>;
+  markNavigationDirectorySeen?: (request: MarkNavigationDirectorySeenRequest) => Promise<MarkNavigationDirectorySeenResponse>;
+  removeNavigationDirectory?: (request: RemoveNavigationDirectoryRequest) => Promise<RemoveNavigationDirectoryResponse>;
+  getNavigationLaunchpadConfig?: (
+    request: NavigationLaunchpadConfigRequest,
+    consumerId?: string,
+  ) => Promise<NavigationLaunchpadConfigResponse>;
+  getNavigationSelectedDetail?: (
+    request: NavigationSelectedDetailRequest,
+    consumerId?: string,
+  ) => Promise<NavigationSelectedDetailResponse>;
+  getNavigationQueueProjection?: (
+    request: NavigationQueueProjectionRequest,
+    consumerId?: string,
+  ) => Promise<NavigationQueueProjection>;
   getNavigationSnapshotTransport?: (
     request: GetNavigationSnapshotTransportRequest,
   ) => Promise<NavigationSnapshotTransportResponse>;
@@ -1017,6 +1052,7 @@ export type DesktopApi = {
   setThreadToolIncidentNotice?: (
     request: SetThreadToolIncidentNoticeRequest,
   ) => Promise<SetThreadToolIncidentNoticeResponse>;
+  listPendingThreadSpendAlerts?: (request: ListPendingThreadSpendAlertsRequest) => Promise<ListPendingThreadSpendAlertsResponse>;
   acknowledgeThreadSpendAlert?: (
     request: AcknowledgeThreadSpendAlertRequest,
   ) => Promise<AcknowledgeThreadSpendAlertResponse>;
@@ -1152,7 +1188,7 @@ export type DesktopApi = {
   listComposerDraftRecoveryCandidates?: (
     request: ListComposerDraftRecoveryCandidatesRequest,
   ) => Promise<ListComposerDraftRecoveryCandidatesResponse>;
-  listComposerDraftLatest?: () => Promise<ListComposerDraftLatestResponse>;
+  listComposerDraftLatest?: (request?: ListComposerDraftLatestRequest) => Promise<ListComposerDraftLatestResponse>;
   /**
    * Project-directory picker (issue #223): two-step flow so the renderer
    * can show inline validation errors. `pickDirectoryFromDisk` opens the

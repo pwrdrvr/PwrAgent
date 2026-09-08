@@ -2,7 +2,26 @@ import {
   buildThreadIdentityKey,
   classifyDirectory,
   type NavigationThreadSummary,
+  type NavigationDirectoryRow,
 } from "@pwragent/shared";
+
+/** Presentation identity retained when a project pools multiple owners. */
+export type StarMapProjectThread = NavigationThreadSummary & {
+  starMapOwnerInstanceId: string;
+};
+
+export function projectThreadOwner(thread: NavigationThreadSummary): string | undefined {
+  return "starMapOwnerInstanceId" in thread
+    && typeof thread.starMapOwnerInstanceId === "string"
+    ? thread.starMapOwnerInstanceId
+    : undefined;
+}
+
+export function starMapThreadKey(thread: NavigationThreadSummary): string {
+  const key = buildThreadIdentityKey(thread.source, thread.id);
+  const owner = projectThreadOwner(thread);
+  return owner === undefined ? key : `${owner}::${key}`;
+}
 
 export type StarMapProject = {
   /** Stable identity: the repo root path, or a sentinel when there is none. */
@@ -16,7 +35,9 @@ export type StarMapProject = {
    */
   mass: number;
   /** Threads pooled from every instance, most recently active first. */
-  threads: NavigationThreadSummary[];
+  threads: StarMapProjectThread[];
+  /** Complete primary-membership count from compact owner geometry. */
+  totalThreadCount?: number;
 };
 
 /**
@@ -92,6 +113,7 @@ export function groupThreadsByProject(
   threadsByInstance: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
   params?: {
     now?: number;
+    descriptorsByInstance?: ReadonlyMap<string, readonly NavigationDirectoryRow[]>;
     /**
      * Identity keys the operator summoned from the ⌘K palette. A project
      * body caps how many cards it seats, and recency is the wrong tie-break
@@ -104,8 +126,25 @@ export function groupThreadsByProject(
   },
 ): StarMapProject[] {
   const projects = new Map<string, StarMapProject>();
-  for (const threads of threadsByInstance.values()) {
-    for (const thread of threads) {
+  for (const descriptors of params?.descriptorsByInstance?.values() ?? []) {
+    for (const descriptor of descriptors) {
+      const existing = projects.get(descriptor.key);
+      if (existing) {
+        existing.totalThreadCount = (existing.totalThreadCount ?? 0) + descriptor.counts.total;
+        existing.lastActivityAt = Math.max(existing.lastActivityAt, descriptor.latestUpdatedAt ?? 0);
+      } else {
+        projects.set(descriptor.key, { key: descriptor.key, label: descriptor.label,
+          totalThreadCount: descriptor.counts.total, lastActivityAt: descriptor.latestUpdatedAt ?? 0,
+          mass: 0, threads: [] });
+      }
+    }
+  }
+  const owners = params?.descriptorsByInstance
+    ? [...threadsByInstance.entries()].sort(([left], [right]) => left.localeCompare(right))
+    : threadsByInstance.entries();
+  for (const [instanceId, threads] of owners) {
+    for (const sourceThread of threads) {
+      const thread: StarMapProjectThread = { ...sourceThread, starMapOwnerInstanceId: instanceId };
       const key = threadProjectKey(thread);
       const existing = projects.get(key);
       if (existing) {
@@ -137,14 +176,14 @@ export function groupThreadsByProject(
       const leftSummoned = summoned(left);
       const rightSummoned = summoned(right);
       if (leftSummoned !== rightSummoned) return leftSummoned ? -1 : 1;
-      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+      return params?.descriptorsByInstance ? 0 : (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
     });
-    project.lastActivityAt = project.threads.reduce(
+    if (project.totalThreadCount === undefined) project.lastActivityAt = project.threads.reduce(
       (latest, thread) => Math.max(latest, thread.updatedAt ?? 0),
       0,
     );
     project.mass = projectMass({
-      cardCount: project.threads.length,
+      cardCount: project.totalThreadCount ?? project.threads.length,
       lastActivityAt: project.lastActivityAt,
       now,
     });
@@ -157,22 +196,3 @@ export function groupThreadsByProject(
   );
 }
 
-/**
- * Owning instance per thread, for the card's instance chip.
- *
- * Built once and looked up by identity key rather than scanned per card:
- * a per-card scan is O(instances x threads) on every render, and matching
- * on object identity would break silently the moment any layer cloned a
- * summary instead of passing the same reference through.
- */
-export function instanceIdByThreadKey(
-  threadsByInstance: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
-): Map<string, string> {
-  const owners = new Map<string, string>();
-  for (const [instanceId, threads] of threadsByInstance) {
-    for (const thread of threads) {
-      owners.set(buildThreadIdentityKey(thread.source, thread.id), instanceId);
-    }
-  }
-  return owners;
-}

@@ -20684,6 +20684,51 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("invalidates a warm idle list when a local turn starts before provider notification", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/list"] },
+      threads: [{ id: "thread-1", source: "codex", title: "Starting", titleSource: "explicit",
+        linkedDirectories: [], updatedAt: 1, threadStatus: "idle" }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      expect(await registry.listThreads({ backend: "codex" })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "idle" }),
+      ]);
+      await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Start" }] });
+      expect(await registry.listThreads({ backend: "codex" })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "active" }),
+      ]);
+    } finally { await registry.close(); }
+  });
+
+  it("reports accepted Codex turns as active before a provider start notification", async () => {
+    const threads: AppServerThreadSummary[] = [{ id: "thread-1", source: "codex", title: "Starting", titleSource: "explicit", linkedDirectories: [], updatedAt: 1, threadStatus: "active" }];
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/list"] },
+      threads,
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Start" }] });
+      expect(await registry.listThreads({ backend: "codex", forceRefresh: true })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "active" }),
+      ]);
+      // A provider row acknowledges the observation, then an older discovery
+      // result arrives while the locally accepted turn still owns execution.
+      threads[0] = { ...threads[0]!, threadStatus: undefined };
+      expect(await registry.listThreads({ backend: "codex", forceRefresh: true })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "active" }),
+      ]);
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } });
+      expect(await registry.listThreads({ backend: "codex", forceRefresh: true })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "idle" }),
+      ]);
+    } finally { await registry.close(); }
+  });
+
   it("rejects duplicate Codex turn starts while the thread is already active", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -44660,6 +44705,17 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("rejects a group archive when the owner parent changed before admission", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list", "thread/archive"] }, threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: { "codex:child": { backend: "codex", threadId: "child",
+        parentThreadId: "new-parent", parentThreadBackend: "codex", extraLinkedDirectories: [] } } }) });
+    await expect(registry.archiveThread({ backend: "codex", threadId: "child",
+      expectedParent: { backend: "codex", threadId: "old-parent" } })).rejects.toThrow("grouping changed");
+    expect(codexClient.lastArchiveThreadParams).toBeUndefined();
+    await registry.close();
+  });
+
   it("snapshots and removes linked worktrees when archiving a thread", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
@@ -46568,6 +46624,8 @@ script = "printf setup"
       } as never,
     });
 
+    const publish = vi.spyOn(registry, "publishLocalEvent");
+
     const response = await registry.handoffThreadWorkspace({
       backend: "codex",
       threadId: "thread-1",
@@ -46583,6 +46641,13 @@ script = "printf setup"
       repositoryPath: "/repo/app",
       sourcePath: "/repo/app",
       sourceBranch: undefined,
+    });
+    expect(publish).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: { reason: "selected-thread", threadIds: ["thread-1"] },
+      },
     });
     expect(response.workMode).toBe("worktree");
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
@@ -51147,6 +51212,14 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     expect(
       await registry.canonicalizeNavigationThreadPullRequests(threads),
     ).toBe(threads);
+    registry.setThreadPrimaryGitRepositoryReader((_backend, threadId) =>
+      threadId === "thread-2" ? "github.com/pwrdrvr/pwragent" : undefined,
+    );
+    const withPrimary = await registry.canonicalizeNavigationThreadPullRequests(threads);
+    expect(withPrimary[1]?.primaryGitRepository).toBe("github.com/pwrdrvr/pwragent");
+    expect(withPrimary[0]?.primaryGitRepository).toBeUndefined();
+    registry.setThreadPrimaryGitRepositoryReader(undefined);
+
   });
 
   /**

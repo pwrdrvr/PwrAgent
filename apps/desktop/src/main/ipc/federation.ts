@@ -147,6 +147,10 @@ export function registerFederationIpcHandlers(): void {
       request: SetFederationEventSubscriptionsRequest,
     ): Promise<SetFederationEventSubscriptionsResponse> => {
       const runtime = getDesktopFederationRuntime();
+      if (request.consumer === "queue_projection"
+        && !/^[0-9]{1,16}$/.test(request.consumerInstanceId ?? "")) {
+        throw new Error("Queue subscriptions require a bounded consumer identity.");
+      }
       if (!rendererSubscriptionCleanupIds.has(event.sender.id)) {
         const webContentsId = event.sender.id;
         rendererSubscriptionCleanupIds.add(webContentsId);
@@ -179,6 +183,7 @@ export function registerFederationIpcHandlers(): void {
                   sourceInstanceId: peer.target.instanceId,
                   eventClasses,
                   threadSelection: subscription.threadSelection,
+                  ...(subscription.eventClassSelections ? { eventClassSelections: subscription.eventClassSelections } : {}),
                 }]
               : [];
           })
@@ -186,7 +191,8 @@ export function registerFederationIpcHandlers(): void {
       return {
         subscriptions: runtime.setRendererEventSubscriptions(
           event.sender.id,
-          request.consumer === "thread_view" ? "thread-view" : "star-map",
+          request.consumer === "queue_projection" ? `queue-projection:${request.consumerInstanceId}`
+            : request.consumer === "thread_view" ? "thread-view" : "star-map",
           subscriptions,
         ),
       };

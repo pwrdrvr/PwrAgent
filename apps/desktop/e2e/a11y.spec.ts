@@ -584,6 +584,9 @@ for (const theme of AUDIT_THEMES) {
         },
       });
       try {
+        // The initial exact selection owns automatic directory expansion.
+        // Wait for that selection before changing the lens under its startup read.
+        await expect(app.window.getByRole("heading", { level: 2, name: "Directories lens thread 01" })).toBeVisible();
         await app.window.getByRole("tab", { name: "directories" }).click();
 
         // Anchored, because Playwright matches an accessible name as a
@@ -604,10 +607,8 @@ for (const theme of AUDIT_THEMES) {
         // same repo give two lists the same name, and an unscoped locator then
         // fails Playwright strict mode rather than reporting anything about
         // accessibility.
-        const threads = app.window
-          .locator(".directory-row")
-          .filter({ has: directory })
-          .getByRole("list", { name: /^Threads in PwrAgent/ });
+        const directoryRow = app.window.locator(".directory-row").filter({ has: directory });
+        const threads = directoryRow.getByRole("list", { name: /^Threads in PwrAgent/ });
 
         // Every scan below must measure the at-rest state, and a Playwright
         // click leaves the pointer where it landed.
@@ -622,6 +623,12 @@ for (const theme of AUDIT_THEMES) {
         const settle = async () => {
           await app.window.mouse.move(0, 0);
         };
+
+        // Establish an explicit user disclosure before paging and selection.
+        await directory.click();
+        await expect(directory).toHaveAttribute("aria-expanded", "false");
+        await directory.click();
+        await expect(directory).toHaveAttribute("aria-expanded", "true");
 
         await test.step("expanded directory thread list", async () => {
           // This row arrives open rather than being clicked open: the launch
@@ -655,33 +662,51 @@ for (const theme of AUDIT_THEMES) {
             }),
           ).toBeVisible();
           await expect(
-            threads.getByRole("button", { name: "Show 2 more", exact: true }),
+            directoryRow.getByRole("button", { name: "Load more threads", exact: true }),
           ).toBeVisible();
-          // Two pinned rows + the pin-drop boundary + the "Directory threads"
-          // disclosure + the ten-row unpinned cap + "Show more". Everything
-          // that is not a row is a `listitem` too, because a list owns only
-          // listitem — including the boundary, whose separator child is
-          // exposed mid-drag.
+          // Independent owner pages admit ten unpinned roots and two pins. The pin-drop
+          // boundary and section disclosure are listitems; paging controls
+          // sit outside the list.
           //
           // Direct children: `getByRole` matches DESCENDANTS, so it would also
           // count a sub-thread list's own rows and read as fixture drift.
-          await expect(listItems(threads)).toHaveCount(15);
+          await expect(listItems(threads)).toHaveCount(14);
 
           await settle();
           await runAxe(app.window, "directories lens, expanded directory");
         });
 
         await test.step("expanded unpinned overflow", async () => {
-          // "Show more" reveals the rows past the cap. They mount as
-          // siblings of the control rather than inside a second list, so the
-          // scan is worth repeating with them present.
-          await threads
-            .getByRole("button", { name: "Show 2 more", exact: true })
-            .click();
-          // The two rows past the cap, on top of the 15 above.
-          await expect(listItems(threads)).toHaveCount(17);
+          const more = directoryRow.getByRole("button", { name: "Load more threads", exact: true });
+          await more.scrollIntoViewIfNeeded();
+          const lastRow = threads.locator(".thread-row-shell").last();
+          const lastRowKey = await lastRow.getAttribute("data-thread-pin-key");
+          const before = await lastRow.boundingBox();
+          await more.click();
+          await expect(listItems(threads)).toHaveCount(16);
+          await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
+          if (!before || !lastRowKey) throw new Error("Missing pagination scroll anchor");
+          await expect.poll(async () => {
+            const after = await threads.locator(`[data-thread-pin-key="${lastRowKey}"]`).boundingBox();
+            return after ? Math.abs(after.y - before.y) : Infinity;
+          }).toBeLessThanOrEqual(2);
+          await expect(directoryRow.getByRole("button", { name: "Load more threads", exact: true })).toHaveCount(0);
           await settle();
           await runAxe(app.window, "directories lens, unpinned overflow");
+        });
+
+        await test.step("bulk context menu preserves the accumulated directory range", async () => {
+          const unpinned = threads.locator('[data-thread-pin-state="unpinned"]');
+          await unpinned.first().locator(".thread-row__open").click();
+          await unpinned.last().locator(".thread-row__open").click({ modifiers: ["Shift"] });
+          await unpinned.last().click({ button: "right" });
+          const menu = app.window.getByRole("menu", { name: "Actions for 12 threads selected" });
+          await expect(menu).toBeVisible();
+          await menu.hover();
+          await expect(unpinned).toHaveCount(12);
+          await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
+          await expect(listItems(threads)).toHaveCount(16);
+          await app.window.keyboard.press("Escape");
         });
 
         await test.step("collapsed directory rows", async () => {
@@ -701,6 +726,13 @@ for (const theme of AUDIT_THEMES) {
           await expect(threads).toHaveCount(0);
           await settle();
           await runAxe(app.window, "directories lens, collapsed");
+        });
+        await test.step("user expansion reveals lazy pins under a stationary pointer", async () => {
+          await directory.click();
+          await expect(directory).toHaveAttribute("aria-expanded", "true");
+          // No mouse move or hover release before the asynchronous pages arrive.
+          await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
+          await expect(threads.locator('[data-thread-pin-state="unpinned"]')).toHaveCount(10);
         });
       } finally {
         await app.close();

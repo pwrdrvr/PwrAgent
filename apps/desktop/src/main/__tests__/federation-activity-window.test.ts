@@ -30,6 +30,7 @@ vi.mock("../native-appearance", () => ({ themedWindowBackgroundColor: () => "the
 vi.mock("../auxiliary-window-chrome", () => ({
   auxiliaryWindowChromeOptions: () => ({ titleBarStyle: "hiddenInset" }),
   hideAuxiliaryWindowMenuBar: vi.fn(), registerAuxiliaryWindowTitle: vi.fn(),
+  setAuxiliaryWindowAlwaysOnTop: (window: { setAlwaysOnTop: (enabled: boolean) => void }, enabled: boolean) => window.setAlwaysOnTop(enabled),
   showAndFocusAuxiliaryWindow: vi.fn(), showAuxiliaryWindowWhenReady: vi.fn(),
 }));
 vi.mock("../window-placement", () => ({ placementForSourceDisplay: () => ({}), positionWindowForSourceDisplay: vi.fn() }));

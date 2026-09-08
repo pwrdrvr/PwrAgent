@@ -1,3 +1,17 @@
+import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
+import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
+import { conditionalThreadRead } from "../app-server/conditional-thread-read";
+import {
+  type FederationNavigationSelectionPage,
+  type FederationNavigationSelectionRequest,
+} from "./federation-navigation-selection";
+import {
+  validateArchivedThreadLookup,
+  type FederationArchivedThreadLookupRequest,
+  type FederationProjectPage,
+  type FederationProjectPageRequest,
+} from "./federation-collection-reads";
 import type {
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
@@ -85,9 +99,16 @@ import type {
   SendThreadPrAutoDispatchNowResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  NavigationQueryPage,
+  NavigationQueryRequest,
+  NavigationQueueProjection,
+  NavigationQueueProjectionRequest,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
-  NavigationSnapshotTransportSelection,
   NavigationThreadSummary,
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -156,10 +177,8 @@ import type {
   UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import {
-  encodeNavigationSnapshotThreadKeysForProtocolV1,
   normalizeNavigationSnapshotThreadKeys,
 } from "@pwragent/shared";
-import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import type { FederationRouter } from "./federation-router";
 import type {
   FederationRpcEndpoint,
@@ -370,9 +389,21 @@ function authenticateScheduledTurnOrigin<
 }
 
 export const FEDERATION_BACKEND_METHODS = {
+  getNavigationQueryPage: "backend.getNavigationQueryPage",
+  removeNavigationDirectory: "backend.removeNavigationDirectory",
+  markNavigationDirectorySeen: "backend.markNavigationDirectorySeen",
+  releaseNavigationAttentionView: "backend.releaseNavigationAttentionView",
+  getNavigationLaunchpadConfig: "backend.getNavigationLaunchpadConfig",
+  getNavigationSelectedDetail: "backend.getNavigationSelectedDetail",
+  getNavigationQueueProjection: "backend.getNavigationQueueProjection",
+  getProjectPage: "backend.getProjectPage",
+  getNavigationDescendantPage: "backend.getNavigationDescendantPage",
+  lookupArchivedThreads: "backend.lookupArchivedThreads",
+  /** @deprecated Alpha collection contract; migrate per docs/federation-navigation-v2.md before removal. */
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   searchNavigationThreads: "backend.searchNavigationThreads",
   searchFederatedThreads: "backend.searchFederatedThreads",
+  /** @deprecated Collection enumeration; use bounded queries or exact-ID archive lookup. */
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
@@ -471,6 +502,16 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   FederationBackendMethod,
   FederationCapability
 > = {
+  [FEDERATION_BACKEND_METHODS.getNavigationQueryPage]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.removeNavigationDirectory]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.getNavigationQueueProjection]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.getProjectPage]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.getNavigationDescendantPage]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.lookupArchivedThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchNavigationThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchFederatedThreads]: "federated_search",
@@ -488,7 +529,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
-  [FEDERATION_BACKEND_METHODS.setThreadParent]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.setThreadParent]: "thread_grouping",
   [FEDERATION_BACKEND_METHODS.updateSubthreadOrder]: "thread_grouping",
   [FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed]: "thread_grouping",
   // PR detach cancels pending auto-dispatch work and auto-dispatch arms
@@ -580,6 +621,37 @@ export function additionalFederationBackendCapabilities(
 }
 
 export type FederationBackendOperations = {
+  getNavigationQueryPage?(
+    request: NavigationQueryRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueryPage>;
+  releaseNavigationAttentionView?(request: NavigationAttentionViewReleaseRequest, rpcOptions?: FederationRpcRequestOptions): Promise<void>;
+  markNavigationDirectorySeen?(request: MarkNavigationDirectorySeenRequest, rpcOptions?: FederationRpcRequestOptions): Promise<MarkNavigationDirectorySeenResponse>;
+  removeNavigationDirectory?(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse>;
+  getNavigationLaunchpadConfig?(
+    request: NavigationLaunchpadConfigRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationLaunchpadConfigResponse>;
+  getNavigationSelectedDetail?(
+    request: NavigationSelectedDetailRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationSelectedDetailResponse>;
+  getNavigationQueueProjection?(
+    request: NavigationQueueProjectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueueProjection>;
+  getNavigationDescendantPage?(
+    request: FederationNavigationSelectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationNavigationSelectionPage>;
+  getProjectPage?(
+    request: FederationProjectPageRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationProjectPage>;
+  lookupArchivedThreads?(
+    request: FederationArchivedThreadLookupRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<Pick<AppServerListThreadsResponse, "threads">>;
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -681,6 +753,7 @@ export type FederationBackendOperations = {
   startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
   listScheduledThreadActions(
     request?: ListScheduledThreadActionsRequest,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<ListScheduledThreadActionsResponse>;
   createScheduledThreadAction(
     request: CreateScheduledThreadActionRequest,
@@ -813,58 +886,97 @@ export function registerFederationBackendHandlers(params: {
     targetInstanceId: string,
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
-}): NavigationSnapshotTransport {
-  const navigationSnapshotTransport = new NavigationSnapshotTransport({
-    // Federation has one owner collection and one resource-version history.
-    // Request selectors never create histories of their own.
-    maxScopes: 1,
-  });
+}): void {
+  if (params.backend.getNavigationQueryPage) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
+      async (envelope) => {
+        const request = envelope.params as NavigationQueryRequest;
+        if (request.inventory === "viewer") throw new Error("Viewer navigation inventory is available only on its local machine.");
+        return await params.backend.getNavigationQueryPage!(request, {
+          deadlineAt: envelope.deadlineAt,
+          requesterInstanceId: envelope.sourceInstanceId,
+        });
+      },
+    );
+  }
+  if (params.backend.releaseNavigationAttentionView) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView,
+      async (envelope) => params.backend.releaseNavigationAttentionView!(envelope.params as NavigationAttentionViewReleaseRequest,
+        { requesterInstanceId: envelope.sourceInstanceId, deadlineAt: envelope.deadlineAt }));
+  }
+  if (params.backend.markNavigationDirectorySeen) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen,
+      async (envelope) => params.backend.markNavigationDirectorySeen!(envelope.params as MarkNavigationDirectorySeenRequest));
+  }
+  if (params.backend.removeNavigationDirectory) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.removeNavigationDirectory,
+      async (envelope) => params.backend.removeNavigationDirectory!(envelope.params as RemoveNavigationDirectoryRequest));
+  }
+  if (params.backend.getNavigationLaunchpadConfig) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig,
+      async (envelope) => await params.backend.getNavigationLaunchpadConfig!(
+        envelope.params as NavigationLaunchpadConfigRequest,
+        {
+          deadlineAt: envelope.deadlineAt,
+          requesterInstanceId: envelope.sourceInstanceId,
+        },
+      ),
+    );
+  }
+  if (params.backend.getNavigationSelectedDetail) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
+      async (envelope) => await params.backend.getNavigationSelectedDetail!(
+        envelope.params as NavigationSelectedDetailRequest,
+        {
+          deadlineAt: envelope.deadlineAt,
+          requesterInstanceId: envelope.sourceInstanceId,
+        },
+      ),
+    );
+  }
+  if (params.backend.getNavigationQueueProjection) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.getNavigationQueueProjection,
+      async (envelope) => await params.backend.getNavigationQueueProjection!(
+        envelope.params as NavigationQueueProjectionRequest,
+        {
+          deadlineAt: envelope.deadlineAt,
+          requesterInstanceId: envelope.sourceInstanceId,
+        },
+      ),
+    );
+  }
+  for (const method of [FEDERATION_BACKEND_METHODS.getNavigationSnapshot, FEDERATION_BACKEND_METHODS.getNavigationDescendantPage]) {
+    params.router.registerHandler(method, async () => {
+      throw new Error("This alpha navigation snapshot protocol is no longer supported. Upgrade the requesting PwrAgent instance to use bounded navigation query protocol 2.");
+    });
+  }
   params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+    FEDERATION_BACKEND_METHODS.getProjectPage,
     async (envelope) => {
-      const request = (envelope.params ?? {}) as
-        | GetNavigationSnapshotRequest
-        | GetNavigationSnapshotTransportRequest;
-      const transportRequest =
-        "transport" in request && request.transport?.protocol === 1
-          ? request
-          : undefined;
-      if (!transportRequest) {
-        const { transport: _unsupportedTransport, ...snapshotRequest } =
-          request as GetNavigationSnapshotRequest & {
-            transport?: unknown;
-          };
-        return encodeNavigationSnapshotThreadKeysForProtocolV1(
-          await params.backend.getNavigationSnapshot(snapshotRequest),
-        );
+      const request = (envelope.params ?? {}) as FederationProjectPageRequest;
+      const rpcOptions = { deadlineAt: envelope.deadlineAt };
+      if (params.backend.getProjectPage) {
+        return await params.backend.getProjectPage(request, rpcOptions);
       }
-      const { transport, ...snapshotRequest } = transportRequest;
-      const selection: NavigationSnapshotTransportSelection =
-        transport.selection?.kind === "threads"
-        && Array.isArray(transport.selection.threadKeys)
-          ? {
-              kind: "threads",
-              threadKeys: transport.selection.threadKeys.filter(
-                (key): key is string => typeof key === "string",
-              ),
-            }
-          : { kind: "all" };
-      const snapshot = encodeNavigationSnapshotThreadKeysForProtocolV1(
-        // One canonical collection drives Federation resource versions.
-        // Backend/filter/search are client-side lenses over that collection;
-        // allowing them into this read would recreate per-query histories.
-        await params.backend.getNavigationSnapshot({
-          forceRefresh: snapshotRequest.forceRefresh,
-          refreshMode: "full",
-        }),
-      );
-      return navigationSnapshotTransport.encode({
-        baseRevision: transport.baseRevision,
-        request: {},
-        scopeKey: "federation-navigation",
-        selection,
-        snapshot,
-      });
+      throw new Error("Bounded project navigation is unavailable. Upgrade the owner PwrAgent instance to use navigation query protocol 2.");
+    },
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.lookupArchivedThreads,
+    async (envelope) => {
+      const request = envelope.params as FederationArchivedThreadLookupRequest;
+      const ids = validateArchivedThreadLookup(request);
+      if (ids.size === 0) return { threads: [] };
+      if (params.backend.lookupArchivedThreads) {
+        return await params.backend.lookupArchivedThreads(request, {
+          deadlineAt: envelope.deadlineAt,
+        });
+      }
+      throw new Error("Exact archived-thread lookup is unavailable. Upgrade the owner PwrAgent instance before resolving archived threads.");
     },
   );
   if (params.backend.searchNavigationThreads) {
@@ -896,10 +1008,9 @@ export function registerFederationBackendHandlers(params: {
   }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
-    async (envelope) =>
-      await params.backend.listThreads(
-        (envelope.params ?? {}) as AppServerListThreadsRequest,
-      ),
+    async () => {
+      throw new Error("Upgrade the requesting PwrAgent instance: full federation thread lists are retired; use bounded navigation queries or exact resolution.");
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.resolveThread,
@@ -991,7 +1102,7 @@ export function registerFederationBackendHandlers(params: {
             "utf8",
           ),
       });
-      return { ...response, replay };
+      return conditionalThreadRead({ ...response, replay }, request.knownRevision);
     },
   );
   params.router.registerHandler(
@@ -1205,6 +1316,7 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.listScheduledThreadActions(
         (envelope.params ?? {}) as ListScheduledThreadActionsRequest,
+        { deadlineAt: envelope.deadlineAt, requesterInstanceId: envelope.sourceInstanceId },
       ),
   );
   params.router.registerHandler(
@@ -1600,10 +1712,10 @@ export function registerFederationBackendHandlers(params: {
       });
     },
   );
-  return navigationSnapshotTransport;
 }
 
 export class FederationRemoteBackendClient implements FederationBackendOperations {
+  private readonly pendingThreadReads = new Map<string, Promise<AppServerReadThreadResponse>>();
   constructor(
     private readonly rpc: FederationRpcEndpoint,
     private readonly transformReadThreadResponse: (
@@ -1613,6 +1725,99 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       | Promise<AppServerReadThreadResponse> = (response) => response,
     private readonly prepareTurnInput?: PrepareOutgoingFederationTurnInput,
   ) {}
+
+  async getNavigationQueryPage(
+    request: NavigationQueryRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueryPage> {
+    return await this.rpc.request<NavigationQueryPage>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async releaseNavigationAttentionView(request: NavigationAttentionViewReleaseRequest, rpcOptions?: FederationRpcRequestOptions): Promise<void> {
+    return this.rpc.request<void>({ method: FEDERATION_BACKEND_METHODS.releaseNavigationAttentionView, params: request, ...rpcOptions });
+  }
+
+  async markNavigationDirectorySeen(request: MarkNavigationDirectorySeenRequest, rpcOptions?: FederationRpcRequestOptions): Promise<MarkNavigationDirectorySeenResponse> {
+    return this.rpc.request<MarkNavigationDirectorySeenResponse>({
+      method: FEDERATION_BACKEND_METHODS.markNavigationDirectorySeen, params: request, ...rpcOptions,
+    });
+  }
+
+  async removeNavigationDirectory(request: RemoveNavigationDirectoryRequest, rpcOptions?: FederationRpcRequestOptions): Promise<RemoveNavigationDirectoryResponse> {
+    return this.rpc.request<RemoveNavigationDirectoryResponse>({
+      method: FEDERATION_BACKEND_METHODS.removeNavigationDirectory, params: request, ...rpcOptions,
+    });
+  }
+
+  async getNavigationLaunchpadConfig(
+    request: NavigationLaunchpadConfigRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationLaunchpadConfigResponse> {
+    return await this.rpc.request<NavigationLaunchpadConfigResponse>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationLaunchpadConfig,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async getNavigationSelectedDetail(
+    request: NavigationSelectedDetailRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationSelectedDetailResponse> {
+    return await this.rpc.request<NavigationSelectedDetailResponse>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationSelectedDetail,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async getNavigationQueueProjection(
+    request: NavigationQueueProjectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<NavigationQueueProjection> {
+    return await this.rpc.request<NavigationQueueProjection>({
+      method: FEDERATION_BACKEND_METHODS.getNavigationQueueProjection,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async getProjectPage(
+    request: FederationProjectPageRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationProjectPage> {
+    return await this.rpc.request({
+      method: FEDERATION_BACKEND_METHODS.getProjectPage,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async getNavigationDescendantPage(
+    request: FederationNavigationSelectionRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<FederationNavigationSelectionPage> {
+    return await this.rpc.request({
+      method: FEDERATION_BACKEND_METHODS.getNavigationDescendantPage,
+      params: request,
+      ...rpcOptions,
+    });
+  }
+
+  async lookupArchivedThreads(
+    request: FederationArchivedThreadLookupRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<Pick<AppServerListThreadsResponse, "threads">> {
+    return await this.rpc.request({
+      method: FEDERATION_BACKEND_METHODS.lookupArchivedThreads,
+      params: request,
+      ...rpcOptions,
+    });
+  }
 
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
@@ -1663,14 +1868,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   }
 
   async listThreads(
-    request: AppServerListThreadsRequest = {},
-    rpcOptions?: FederationRpcRequestOptions,
+    _request: AppServerListThreadsRequest = {},
+    _rpcOptions?: FederationRpcRequestOptions,
   ): Promise<AppServerListThreadsResponse> {
-    return await this.rpc.request<AppServerListThreadsResponse>({
-      method: FEDERATION_BACKEND_METHODS.listThreads,
-      params: request,
-      ...rpcOptions,
-    });
+    throw new Error("Upgrade the requesting PwrAgent instance: full federation thread lists are retired; use bounded navigation queries or exact resolution.");
   }
 
   async resolveThread(
@@ -1697,11 +1898,21 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse> {
-    const response = await this.rpc.request<AppServerReadThreadResponse>({
+    const key = JSON.stringify([request.backend, request.threadId, request.before, request.limit,
+      request.includeTurns, request.includeAllToolInvocations, request.viewOnly, request.knownRevision, request.readReason]);
+    const pending = this.pendingThreadReads.get(key);
+    if (pending) return await pending;
+    const read = this.rpc.request<AppServerReadThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.readThread,
       params: request,
-    });
-    return await this.transformReadThreadResponse(response);
+    }).then((response) => this.transformReadThreadResponse(response));
+    // Share concurrent card/window hydration, without caching a settled replay.
+    // The RPC layer still owns admission; cap only this deduplication metadata.
+    if (this.pendingThreadReads.size < 32) this.pendingThreadReads.set(key, read);
+    try { return await read; }
+    finally {
+      if (this.pendingThreadReads.get(key) === read) this.pendingThreadReads.delete(key);
+    }
   }
 
   async analyzeThreadToolHistory(
@@ -1931,10 +2142,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async listScheduledThreadActions(
     request: ListScheduledThreadActionsRequest = {},
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<ListScheduledThreadActionsResponse> {
     return await this.rpc.request<ListScheduledThreadActionsResponse>({
       method: FEDERATION_BACKEND_METHODS.listScheduledThreadActions,
       params: request,
+      ...rpcOptions,
     });
   }
 

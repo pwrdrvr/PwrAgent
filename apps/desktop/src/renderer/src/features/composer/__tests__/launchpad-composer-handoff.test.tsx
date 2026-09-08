@@ -1,3 +1,4 @@
+import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { applyScheduledActionProjection, syncScheduledActionProjections } from "../../../lib/useScheduledThreadActionProjection";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -16,7 +17,7 @@ const thread: NavigationThreadSummary = {
   optimisticActiveTurn: { id: "first-turn" },
 };
 const source = "launchpad:project";
-const target = "thread:codex:new-thread";
+const target = buildThreadComposerScopeKey("codex", "new-thread");
 const draft = (text: string) => ({
   draft: text,
   imageAttachments: [],

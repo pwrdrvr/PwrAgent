@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("useAutomationRunArtifact", () => {
-  it("debounces refetches when buffered transcript events change", async () => {
+  it.each([false, true])("debounces artifact refreshes (compact=%s)", async (compact) => {
     vi.useFakeTimers();
     let listener: ((event: AgentEvent) => void) | undefined;
     const getAutomationRunArtifact = vi.fn()
@@ -58,16 +58,20 @@ describe("useAutomationRunArtifact", () => {
     act(() => {
       listener?.({
         backend: "codex",
-        notification: {
-          method: "automation/run/transcript/updated",
-          params: { runId: "run-1" },
+        notification: compact ? {
+          method: "navigation/invalidated",
+          params: { runId: "run-1", sourceMethod: "automation/run/transcript/updated" },
+        } : {
+          method: "automation/run/transcript/updated", params: { runId: "run-1" },
         },
       });
       listener?.({
         backend: "codex",
-        notification: {
-          method: "automation/run/transcript/updated",
-          params: { runId: "run-1" },
+        notification: compact ? {
+          method: "navigation/invalidated",
+          params: { runId: "run-1", sourceMethod: "automation/run/transcript/updated" },
+        } : {
+          method: "automation/run/transcript/updated", params: { runId: "run-1" },
         },
       });
     });

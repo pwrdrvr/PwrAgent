@@ -1,5 +1,8 @@
-import { createHash } from "node:crypto";
-import { compactNavigationSearchResult } from "../federation/navigation-search-result";
+import { createHash, randomUUID } from "node:crypto";
+import { NavigationDetailService } from "../app-server/navigation-detail-service";
+import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
+import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -39,6 +42,12 @@ import type {
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
+  NavigationQueryRequest,
+  NavigationQueryPage,
+  NavigationSelectedDetailRequest,
+  NavigationSelectedDetailResponse,
+  NavigationLaunchpadConfigRequest,
+  NavigationLaunchpadConfigResponse,
   NavigationSnapshot,
   NavigationThreadSummary,
   SetAcpSessionRuntimeOptionRequest,
@@ -66,11 +75,10 @@ import type {
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
 import type { MessagingImagePart } from "@pwragent/messaging-interface";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
 import {
-  buildThreadIdentityKey,
   buildFederatedThreadRef,
   isRemoteFederationTarget,
-  rankThreadJumpMatches,
 } from "@pwragent/shared";
 import type {
   MessagingBackendBridge,
@@ -109,25 +117,23 @@ export type DesktopMessagingFederationBridge = {
     subscriptions: readonly FederationEventSubscription[],
   ): FederationEventSubscription[];
   remoteBackend(target: FederationRemoteTarget): FederationBackendOperations;
+  remoteNavigationQueryPage?(target: FederationRemoteTarget, request: NavigationQueryRequest,
+    rpcOptions?: { deadlineAt: number; signal: AbortSignal }): Promise<NavigationQueryPage>;
+  remoteNavigationSelectedDetail?(target: FederationRemoteTarget, request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse>;
+  remoteNavigationLaunchpadConfig?(target: FederationRemoteTarget, request: NavigationLaunchpadConfigRequest): Promise<NavigationLaunchpadConfigResponse>;
   remoteNavigationSnapshot(
     target: FederationRemoteTarget,
     request: GetNavigationSnapshotRequest,
     selectionOverride?: FederationThreadSelection,
+    rpcOptions?: { deadlineAt?: number },
   ): Promise<NavigationSnapshot>;
 };
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
-  private static readonly navigationSearchCacheTtlMs = 15_000;
-
   private readonly assistantImageResolutions = new Map<
     string,
     Promise<MessagingImagePart[]>
   >();
-  private navigationSearchCache?: {
-    expiresAt: number;
-    threads: NavigationThreadSummary[];
-  };
-  private navigationSearchInFlight?: Promise<NavigationThreadSummary[]>;
 
   constructor(
     private readonly registry: DesktopBackendRegistry = getDesktopBackendRegistry(),
@@ -151,27 +157,20 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           "Remote messaging admission requires a federation target.",
         );
       }
-      let state: MessagingThreadAdmissionState;
       if (!remote.resolveThreadAdmissionState) {
-        state = await this.readLegacyRemoteThreadAdmissionState(
-          target,
-          request,
-        );
-      } else {
-        try {
-          state = await remote.resolveThreadAdmissionState({
-            backend: request.backend,
-            threadId: request.threadId,
-          });
-        } catch (error) {
-          if (!isFederationMethodNotFoundError(error)) {
-            throw error;
-          }
-          state = await this.readLegacyRemoteThreadAdmissionState(
-            target,
-            request,
-          );
+        throw new Error("Upgrade the owning instance to support exact messaging admission before sending to this thread.");
+      }
+      let state: MessagingThreadAdmissionState;
+      try {
+        state = await remote.resolveThreadAdmissionState({ backend: request.backend, threadId: request.threadId });
+      } catch (error) {
+        if (isFederationMethodNotFoundError(error)) {
+          throw new Error("Upgrade the owning instance to support exact messaging admission before sending to this thread.", { cause: error });
         }
+        throw error;
+      }
+      if (state.thread && (state.thread.source !== request.backend || state.thread.id !== request.threadId)) {
+        throw new Error("Messaging admission belongs to a different thread.");
       }
       const instanceLabel = this.federation.connectedPeerTargets().find(
         (peer) => peer.target.instanceId === target.instanceId,
@@ -211,10 +210,8 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     const threadStatus = this.registry.isThreadTurnOccupied(request)
       ? "active"
       : "idle";
-    const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
-    const queuedExecutionMode =
-      this.registry.getQueuedExecutionModesSnapshot()[threadKey];
-    const queuedTurns = this.registry.getQueuedTurnsSnapshot()[threadKey];
+    const queuedExecutionMode = this.registry.getQueuedExecutionModeForThread(request);
+    const queuedTurns = this.registry.getQueuedTurnsForThread(request);
     const thread = cached || overlay
       ? buildAdmissionThreadSummary({
           overlay,
@@ -236,40 +233,52 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     };
   }
 
-  private async readLegacyRemoteThreadAdmissionState(
-    target: FederationRemoteTarget,
-    request: {
-      backend: AppServerBackendKind;
-      federationTarget?: FederationTarget;
-      threadId: string;
-    },
-  ): Promise<MessagingThreadAdmissionState> {
-    if (!this.federation) {
-      throw new Error("Remote messaging admission requires federation.");
+  async listNavigationOwners(): Promise<{ owners: Array<{ target?: FederationRemoteTarget; label: string }>; omitted: number }> {
+    const peers = this.federation?.connectedPeerTargets().filter((peer) => peer.capabilities.includes("messaging_route")) ?? [];
+    return { owners: [{ label: "This instance" }, ...peers.slice(0, 7).map((peer) => ({ target: peer.target, label: peer.label }))],
+      omitted: Math.max(0, peers.length - 7) };
+  }
+
+  async getNavigationQueryPage(request: NavigationQueryRequest): Promise<NavigationQueryPage> {
+    if (request.inventory === "viewer") throw new Error("Messaging navigation requires owner inventory.");
+    const consumerId = `messaging-query:${randomUUID()}`;
+    const pool = getDesktopNavigationQueryPool();
+    try {
+      return await pool.read({ consumerId, request, load: async (options) => {
+        const target = request.federationTarget;
+        if (target?.scope === "remote") {
+          if (!this.federation?.remoteNavigationQueryPage) throw new Error("Upgrade the owning instance to navigation query protocol 2.");
+          return this.federation.remoteNavigationQueryPage(target, request, options);
+        }
+        options.signal.throwIfAborted();
+        return getDesktopNavigationQueryStore().readPage({ request, scopeKey: "renderer-local",
+          loadIndex: () => loadLocalNavigationQueryIndex({ backend: request.backend,
+            callerReason: "messaging-bounded-navigation", registry: this.registry }) });
+      } });
+    } finally { pool.release(consumerId); }
+  }
+
+  async getNavigationSelectedDetail(request: NavigationSelectedDetailRequest): Promise<NavigationSelectedDetailResponse> {
+    const target = request.federationTarget ?? (request.ref.ownerInstanceId ? { scope: "remote" as const, instanceId: request.ref.ownerInstanceId } : undefined);
+    if (target?.scope === "remote") {
+      if (!this.federation?.remoteNavigationSelectedDetail) throw new Error("Upgrade the owning instance to navigation query protocol 2.");
+      return this.federation.remoteNavigationSelectedDetail(target, request);
     }
-    const navigation = await this.federation.remoteNavigationSnapshot(
-      target,
-      {
-        backend: request.backend,
-        federationTarget: target,
-      },
-      {
-        kind: "threads",
-        threads: [{ backend: request.backend, threadId: request.threadId }],
-      },
-    );
-    const thread = navigation.threads.find(
-      (candidate) => candidate.source === request.backend
-        && candidate.id === request.threadId,
-    );
-    return {
-      ...(thread ? { thread } : {}),
-      ...(thread?.threadStatus ? { threadStatus: thread.threadStatus } : {}),
-    };
+    return new NavigationDetailService(this.registry).readSelectedDetail(request);
+  }
+
+  async getNavigationLaunchpadConfig(request: NavigationLaunchpadConfigRequest): Promise<NavigationLaunchpadConfigResponse> {
+    const target = request.federationTarget;
+    if (target?.scope === "remote") {
+      if (!this.federation?.remoteNavigationLaunchpadConfig) throw new Error("Upgrade the owning instance to navigation query protocol 2.");
+      return this.federation.remoteNavigationLaunchpadConfig(target, request);
+    }
+    return new NavigationDetailService(this.registry).readLaunchpadConfig(request);
   }
 
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
+    options?: { onProgress?: (snapshot: NavigationSnapshot) => Promise<void> },
   ): Promise<NavigationSnapshot> {
     if (
       request.federationTarget &&
@@ -402,27 +411,17 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       directories: directoriesWithLaunchpads,
     };
     if (!this.federation) {
+      await options?.onProgress?.(localSnapshot);
       return localSnapshot;
     }
-    const remoteSnapshots = await Promise.allSettled(
-      this.federation
-        .connectedPeerTargets()
-        // messaging_route is the peer's opt-in for messaging surfaces to
-        // browse and drive its threads — skip peers that don't grant it.
-        .filter(({ capabilities }) => capabilities.includes("messaging_route"))
-        .map(({ target }) =>
-          this.federation!.remoteNavigationSnapshot(
-            target,
-            request,
-            { kind: "all" },
-          )
-        ),
-    );
-    const availableRemoteSnapshots = remoteSnapshots.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : []
-    );
-    return {
+    const peers = this.federation.connectedPeerTargets()
+      .filter(({ capabilities }) => capabilities.includes("messaging_route"));
+    const availableRemoteSnapshots: NavigationSnapshot[] = [];
+    let pendingPeers = peers.length;
+    let failedPeers = 0;
+    const merged = (): NavigationSnapshot => ({
       ...localSnapshot,
+      ...(peers.length ? { federationRefresh: { pendingPeers, failedPeers } } : {}),
       fetchedAt: Math.max(
         localSnapshot.fetchedAt,
         ...availableRemoteSnapshots.map((remote) => remote.fetchedAt),
@@ -436,29 +435,84 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ...localSnapshot.inboxThreadKeys,
         ...availableRemoteSnapshots.flatMap((remote) => remote.inboxThreadKeys),
       ],
+    });
+    // Coalesce arrivals during a provider edit. A slow messaging provider must
+    // not accumulate one growing snapshot (or one DB-backed edit) per peer.
+    let publication: Promise<void> | undefined;
+    let dirty = false;
+    let publicationError: unknown;
+    let publicationFailed = false;
+    let publicationCount = 0;
+    let lastPublishedPendingPeers: number | undefined;
+    let finalPublication = false;
+    const publish = (): void => {
+      if (!options?.onProgress || publicationFailed) return;
+      // Each durable picker publication has a write/delivery cost. Keep it
+      // independent of Federation size: local, one early aggregate, final.
+      if (!finalPublication && publicationCount >= 2) return;
+      dirty = true;
+      if (publication) return;
+      publication = Promise.resolve().then(async () => {
+        while (dirty) {
+          dirty = false;
+          if (!finalPublication && publicationCount >= 2) return;
+          publicationCount += 1;
+          lastPublishedPendingPeers = pendingPeers;
+          await options.onProgress!(merged());
+        }
+      }).catch((error) => {
+        publicationFailed = true;
+        publicationError = error;
+        dirty = false;
+      }).finally(() => {
+        publication = undefined;
+        if (dirty) publish();
+      });
     };
+    publish();
+    const deadlineAt = Date.now() + 10_000;
+    const results = new IterableMapper(peers, async ({ target }) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const remainingMs = deadlineAt - Date.now();
+        if (remainingMs <= 0) throw new Error("Federation browse deadline expired.");
+        const response = await Promise.race([
+          this.federation!.remoteNavigationSnapshot(target, request, { kind: "all" }, {
+            deadlineAt,
+          }),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("Remote navigation timed out.")), remainingMs);
+          }),
+        ]);
+        availableRemoteSnapshots.push(response);
+      } catch {
+        failedPeers += 1;
+      } finally {
+        clearTimeout(timer);
+        pendingPeers -= 1;
+        publish();
+      }
+      return true;
+    }, { concurrency: 8, maxUnread: 8 });
+    for await (const completed of results) void completed;
+    while (publication) await publication;
+    finalPublication = true;
+    if (lastPublishedPendingPeers !== pendingPeers) publish();
+    while (publication) await publication;
+    if (publicationFailed) throw publicationError;
+    return merged();
   }
 
-  /**
-   * Serve owner-side Cmd+K matching from a short-lived, read-only projection.
-   * A full navigation reconciliation persists its baseline, which is correct
-   * for navigation refreshes but would turn every debounced search query into
-   * a SQLite commit. The partial projection reads overlays without updating
-   * them, and the cache preserves the former 15-second remote-search cadence.
-   */
+  /** Owner matching and projection share the bounded navigation query pool. */
   async searchNavigationThreads(
     request: FederationJumpSearchRequest,
   ): Promise<FederationJumpSearchResponse> {
-    const query = request.query.trim();
-    if (!query) {
-      return { results: [] };
-    }
-    const limit = Math.max(1, Math.min(request.limit ?? 8, 50));
-    const threads = await this.navigationThreadsForSearch();
-    return {
-      results: rankThreadJumpMatches(threads, query).slice(0, limit)
-        .map((thread) => compactNavigationSearchResult(thread, query)),
-    };
+    const text = request.query.trim();
+    if (!text) return { results: [] };
+    const page = await this.getNavigationQueryPage({ protocol: 2, consumer: "search",
+      query: { kind: "search", text }, pageSize: Math.max(1, Math.min(request.limit ?? 8, 50)),
+    });
+    return { results: page.entries.map(({ row }) => row) };
   }
 
   /**
@@ -490,51 +544,6 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     );
   }
 
-  private async navigationThreadsForSearch(): Promise<NavigationThreadSummary[]> {
-    const now = Date.now();
-    if (this.navigationSearchCache && this.navigationSearchCache.expiresAt > now) {
-      return this.navigationSearchCache.threads;
-    }
-    if (this.navigationSearchInFlight) {
-      return await this.navigationSearchInFlight;
-    }
-
-    const pending = (async () => {
-      const listedThreads = await this.registry.listThreads({
-        callerReason: "messaging-navigation-snapshot",
-      });
-      const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
-        backend: "all",
-        fetchedAt: Date.now(),
-        messagingBindingsByThreadKey:
-          await buildMessagingBindingsByThreadKey(listedThreads),
-        partial: true,
-        queuedExecutionModesByThreadKey:
-          this.registry.getQueuedExecutionModesSnapshot(),
-        queuedTurnsByThreadKey: this.registry.getQueuedTurnsSnapshot(),
-        threads: listedThreads,
-        workspaceRoots: resolveScratchProjectsRoots(),
-      });
-      return await this.registry.canonicalizeNavigationThreadPullRequests(
-        snapshot.threads,
-      );
-    })();
-    this.navigationSearchInFlight = pending;
-    try {
-      const threads = await pending;
-      this.navigationSearchCache = {
-        expiresAt:
-          Date.now() + DesktopMessagingBackendBridge.navigationSearchCacheTtlMs,
-        threads,
-      };
-      return threads;
-    } finally {
-      if (this.navigationSearchInFlight === pending) {
-        this.navigationSearchInFlight = undefined;
-      }
-    }
-  }
-
   async resolveThreadTarget(request: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -542,28 +551,16 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     includeRemote?: boolean;
   }) {
     if (!request.instanceId) {
-      const localThreads = await this.registry.listThreads({
-        backend: request.backend,
-        archived: false,
-        callerReason: "messaging-attach-thread-target",
-      });
-      const localThread = localThreads.find(
-        (thread) => thread.id === request.threadId,
-      );
-      if (localThread) {
-        const navigation = await this.getNavigationSnapshot({
-          backend: request.backend,
-        });
-        const thread = navigation.threads.find(
-          (candidate) =>
-            candidate.source === request.backend
-            && candidate.id === request.threadId,
-        );
-        if (thread) {
-          return { navigation, thread };
-        }
+      const detail = await this.getNavigationSelectedDetail({ protocol: 2,
+        ref: { backend: request.backend, threadId: request.threadId } });
+      if (detail.protocol !== 2 || detail.unchanged || detail.readiness !== "ready") {
+        throw new Error("The local instance did not provide ready thread configuration.");
+      }
+      if (detail.identity === "present" && detail.thread && !detail.thread.archivedAt) {
+        return { thread: detail.thread };
       }
     }
+
     if (request.includeRemote === false || !this.federation) {
       return undefined;
     }
@@ -583,24 +580,16 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         );
       }
       const federationTarget = match.peer.target;
-      const navigation = await this.federation.remoteNavigationSnapshot(
-        federationTarget,
-        {
-          backend: request.backend,
-          federationTarget,
-        },
-        { kind: "all" },
-      );
-      const thread = navigation.threads.find(
-        (candidate) =>
-          candidate.source === request.backend
-          && candidate.id === request.threadId,
-      );
-      if (!thread) {
-        return undefined;
+      const detail = await this.getNavigationSelectedDetail({ protocol: 2, federationTarget,
+        ref: { backend: request.backend, threadId: request.threadId, ownerInstanceId: federationTarget.instanceId } });
+      if (detail.protocol !== 2 || detail.unchanged || detail.readiness !== "ready"
+        || detail.ref.backend !== request.backend || detail.ref.threadId !== request.threadId
+        || detail.ref.ownerInstanceId !== federationTarget.instanceId) {
+        throw new Error("The owning instance did not provide matching ready thread configuration.");
       }
+      const thread = detail.identity === "present" ? detail.thread : undefined;
+      if (!thread || thread.archivedAt) return undefined;
       return {
-        navigation,
         thread,
         federatedThread: buildFederatedThreadRef({
           backend: request.backend,

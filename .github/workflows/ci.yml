@@ -454,11 +454,16 @@ jobs:
           node-version: 24.18.0
           cache-electron: "true"
 
+      - name: Install Linux window manager
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y openbox x11-utils
+
       - name: Run desktop replay-backed Electron tests
         timeout-minutes: 10
         run: >-
           xvfb-run --auto-servernum
-          pnpm --filter @pwragent/desktop test:e2e
+          bash .github/scripts/run-linux-desktop-e2e.sh
           --shard=${{ matrix.lane }}/2
 
       - name: Upload desktop Playwright artifacts

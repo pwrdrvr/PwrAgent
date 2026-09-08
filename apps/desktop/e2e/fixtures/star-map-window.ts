@@ -223,6 +223,12 @@ export async function openStarMapWindow(app: LaunchedApp): Promise<Page> {
     )
     .toBe("function");
 
+  // A DOM-clickable header can precede native ready-to-show. Wait for the
+  // window to be shown, but do not require OS focus: the runner can deliver
+  // Playwright input without macOS making this the foreground application.
+  const nativeWindow = await app.electronApp.browserWindow(app.window);
+  await expect.poll(() => nativeWindow.evaluate((window) => window.isVisible())).toBe(true);
+
   const errorLog = recordRendererErrors(app.window);
   try {
     await app.window.getByRole("button", { name: "Open Star Map" }).click();

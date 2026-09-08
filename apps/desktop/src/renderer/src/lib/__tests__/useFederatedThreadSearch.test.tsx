@@ -9,6 +9,19 @@ vi.mock("../desktop-api", () => ({ getDesktopApi: () => undefined }));
 afterEach(() => vi.useRealTimers());
 
 describe("federated search scheduling", () => {
+  it("retains upgrade guidance with an empty partial result and clears it for a new query", async () => {
+    vi.useFakeTimers();
+    const search = vi.fn(async () => ({ results: [], incomplete: true,
+      notes: ["Upgrade the owning instance to navigation query protocol 2."] }));
+    const hook = renderHook(({ query }) => useFederatedThreadSearch({ query, search }), { initialProps: { query: "Navigation" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS); });
+    expect(hook.result.current.results).toEqual([]);
+    expect(hook.result.current.notes).toEqual(["Upgrade the owning instance to navigation query protocol 2."]);
+    hook.rerender({ query: "Different" });
+    expect(hook.result.current.notes).toEqual([]);
+    hook.unmount();
+  });
+
   it("debounces typing and coalesces in-flight changes to only the latest query", async () => {
     vi.useFakeTimers();
     let finish!: (value: FederationJumpSearchResponse) => void;

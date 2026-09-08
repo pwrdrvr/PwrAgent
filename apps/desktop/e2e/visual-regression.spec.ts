@@ -82,7 +82,19 @@ test.describe("visual regression", () => {
 
     try {
       await expectPinnedDeviceScale(app.window);
+      // Absolute read deadlines cross renderer/main IPC. Keep both clocks in
+      // the same epoch while pinning relative-date presentation for the golden.
+      await app.electronApp.evaluate((_electron, now) => {
+        // Playwright evaluates in a separate VM context. Patch the application's
+        // realm too, since its IPC deadlines use that realm's Date constructor.
+        const { runInThisContext } = process.getBuiltinModule("vm");
+        runInThisContext(`Date.now = () => ${now}`);
+      }, VISUAL_CLOCK_TIME.getTime());
       await app.window.clock.setFixedTime(VISUAL_CLOCK_TIME);
+      // Start a fresh document only after both clocks agree. Startup requests
+      // admitted before the clock change must not become the visual baseline.
+      await app.window.reload();
+      expect(await app.window.evaluate(() => Date.now())).toBe(VISUAL_CLOCK_TIME.getTime());
       await app.window
         .getByRole("button", { name: /Add AGENTS docs for media VCL/i })
         .first()
@@ -150,7 +162,19 @@ test.describe("visual regression", () => {
 
     try {
       await expectPinnedDeviceScale(app.window);
+      // Absolute read deadlines cross renderer/main IPC. Keep both clocks in
+      // the same epoch while pinning relative-date presentation for the golden.
+      await app.electronApp.evaluate((_electron, now) => {
+        // Playwright evaluates in a separate VM context. Patch the application's
+        // realm too, since its IPC deadlines use that realm's Date constructor.
+        const { runInThisContext } = process.getBuiltinModule("vm");
+        runInThisContext(`Date.now = () => ${now}`);
+      }, VISUAL_CLOCK_TIME.getTime());
       await app.window.clock.setFixedTime(VISUAL_CLOCK_TIME);
+      // Start a fresh document only after both clocks agree. Startup requests
+      // admitted before the clock change must not become the visual baseline.
+      await app.window.reload();
+      expect(await app.window.evaluate(() => Date.now())).toBe(VISUAL_CLOCK_TIME.getTime());
       await app.window
         .getByRole("button", { name: /Approval pending replay/i })
         .first()

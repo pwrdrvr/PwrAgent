@@ -7,6 +7,35 @@ afterEach(() => {
 });
 
 describe("FederationRpcEndpoint", () => {
+  it("releases cancelled query requests and ignores their late responses", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const endpoint = new FederationRpcEndpoint({
+      localInstanceId: "client_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+    const controller = new AbortController();
+    const pending = endpoint.request({
+      method: "backend.getNavigationQueryPage",
+      params: {},
+      signal: controller.signal,
+    });
+    controller.abort(new Error("Last window closed"));
+    await expect(pending).rejects.toThrow("Last window closed");
+    expect((endpoint as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+    expect(sent[0]).not.toHaveProperty("signal");
+    expect(endpoint.receiveEnvelope({
+      id: "late",
+      protocolVersion: 1,
+      kind: "response",
+      requestId: sent[0]!.id,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "client_one",
+      createdAt: 1,
+      result: {},
+    })).toBe(false);
+  });
+
   it("rejects and removes a request when its route fails synchronously", async () => {
     const endpoint = new FederationRpcEndpoint({
       localInstanceId: "client_one",

@@ -28,6 +28,7 @@ function InstanceAction(props: {
   className: string;
   label: string;
   pressed?: boolean;
+  disabled?: boolean;
   children: ReactNode;
   onClick: () => void;
 }) {
@@ -43,6 +44,7 @@ function InstanceAction(props: {
         type="button"
         className={`star-map-instance__action ${props.className}`}
         aria-label={props.label}
+        disabled={props.disabled}
         {...(props.pressed !== undefined
           ? { "aria-pressed": props.pressed }
           : {})}
@@ -101,6 +103,8 @@ export function StarMapInstanceCard(props: {
   /** Toggles this instance's load card on the map. */
   onToggleLoad?: () => void;
   loadShown?: boolean;
+  onLoadMoreThreads?: () => void;
+  loadingThreads?: boolean;
 }) {
   // Display stacks the two lines to stay narrow, but every accessible name
   // has to keep the profile inline: two instances on one machine would
@@ -122,6 +126,15 @@ export function StarMapInstanceCard(props: {
       data-instance-id={props.instanceId}
     >
       <span className="star-map-instance__actions">
+        {props.onLoadMoreThreads ? (
+          <InstanceAction className="star-map-instance__action--more"
+            label={`Load more threads on ${fullLabel}`}
+            disabled={props.loadingThreads}
+            onClick={props.onLoadMoreThreads}
+          >
+            ↓
+          </InstanceAction>
+        ) : null}
         {props.onIntake ? (
           <InstanceAction
             className="star-map-instance__action--intake"

@@ -1,3 +1,5 @@
+import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { parseOwnedComposerScopeKey } from "@pwragent/shared";
 import {
   useCallback,
   useEffect,
@@ -19,6 +21,7 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   ComposerDraftSnapshot,
+  ComposerDraftHydrationStatus,
   ComposerDraftStore,
 } from "./useComposerDraftStore";
 
@@ -65,6 +68,17 @@ export function useDurableComposerDraftStore(
   const localRecoveryCandidatesRef = useRef<LocalRecoveryCandidate[]>([]);
   const localRecoverySequenceRef = useRef(0);
   const [hydrationVersion, setHydrationVersion] = useState(0);
+  const [hydration, setHydration] = useState<{
+    baseStore: ComposerDraftStore;
+    desktopApi: DesktopApi;
+    status: ComposerDraftHydrationStatus;
+  }>();
+  // A replaced IPC/store cannot render one frame of the previous source's
+  // readiness while the new hydration effect is waiting to run.
+  const hydrationStatus: ComposerDraftHydrationStatus = !desktopApi?.listComposerDraftLatest
+    ? "memory-only"
+    : hydration?.baseStore === baseStore && hydration.desktopApi === desktopApi
+      ? hydration.status : "loading";
 
   const rememberLocalRecoveryCandidate = useCallback(
     (record: ComposerDraftSnapshotRecord): void => {
@@ -146,7 +160,8 @@ export function useDurableComposerDraftStore(
     }
 
     let cancelled = false;
-    void desktopApi.listComposerDraftLatest()
+    setHydration({ baseStore, desktopApi, status: "loading" });
+    void desktopApi.listComposerDraftLatest({ migrateKnownOwners: true, migrateLegacyLaunchpads: true })
       .then((response) => {
         if (cancelled) {
           return;
@@ -163,8 +178,11 @@ export function useDurableComposerDraftStore(
         if (hydratedAny) {
           setHydrationVersion((current) => current + 1);
         }
+        setHydration({ baseStore, desktopApi, status: "ready" });
       })
       .catch((error) => {
+        if (cancelled) return;
+        setHydration({ baseStore, desktopApi, status: "failed" });
         console.warn("Failed to hydrate composer drafts", error);
       });
 
@@ -228,6 +246,7 @@ export function useDurableComposerDraftStore(
     () => ({
       ...baseStore,
       hydrationVersion,
+      hydrationStatus,
       delete: (scopeKey) => {
         baseStore.delete(scopeKey);
         createdAtRef.current.delete(scopeKey);
@@ -257,6 +276,8 @@ export function useDurableComposerDraftStore(
         );
       },
       pushDraft: (scopeKey, snapshot) => {
+        const threadOwner = snapshot.threadOwner ?? baseStore.getScopeOwner?.(scopeKey);
+        if (threadOwner) snapshot = { ...snapshot, threadOwner };
         baseStore.pushDraft(scopeKey, snapshot);
         persistDraftHistory(scopeKey, snapshot, "abandoned", true);
       },
@@ -265,9 +286,13 @@ export function useDurableComposerDraftStore(
         snapshot: ComposerDraftSnapshot,
         status: ComposerDraftLifecycle,
       ): void => {
+        const threadOwner = snapshot.threadOwner ?? baseStore.getScopeOwner?.(scopeKey);
+        if (threadOwner) snapshot = { ...snapshot, threadOwner };
         persistDraftHistory(scopeKey, snapshot, status);
       },
       set: (scopeKey, snapshot) => {
+        const threadOwner = snapshot.threadOwner ?? baseStore.getScopeOwner?.(scopeKey);
+        if (threadOwner) snapshot = { ...snapshot, threadOwner };
         baseStore.set(scopeKey, snapshot);
         if (!desktopApi?.saveComposerDraft) {
           return;
@@ -315,6 +340,7 @@ export function useDurableComposerDraftStore(
       desktopApi,
       flushPendingSave,
       hydrationVersion,
+      hydrationStatus,
       persistDraftHistory,
     ],
   );
@@ -323,12 +349,15 @@ export function useDurableComposerDraftStore(
 export function snapshotFromDraftRecord(
   record: ComposerDraftSnapshotRecord,
 ): ComposerDraftSnapshot {
+  const legacy = record.textFormat === "canonical-markdown"
+    ? hydrateComposerDraft(record.text, [], undefined, undefined) : undefined;
   return {
-    draft: record.text,
+    ...(record.threadOwner ? { threadOwner: record.threadOwner } : {}),
+    draft: legacy?.draft ?? record.text,
     editorDocument: record.editorDocument as JSONContent | undefined,
     imageAttachments: record.imageAttachments,
     fileAttachments: record.fileAttachments,
-    skillTokens: record.skillTokens,
+    skillTokens: legacy?.skillTokens ?? record.skillTokens,
   };
 }
 
@@ -345,6 +374,7 @@ function buildDraftRecord(
   const contentHash = hashDraftContent(snapshot);
 
   return {
+    ...(snapshot.threadOwner ? { threadOwner: snapshot.threadOwner } : {}),
     scopeKey,
     scopeKind: scope.scopeKind,
     backend: scope.backend,
@@ -369,6 +399,8 @@ function parseScope(scopeKey: string): {
   scopeKind: ComposerDraftScopeKind;
   threadId?: string;
 } {
+  const owned = parseOwnedComposerScopeKey(scopeKey);
+  if (owned) return { backend: owned.backend, threadId: owned.threadId, scopeKind: "thread" };
   if (scopeKey.startsWith("thread:")) {
     const remainder = scopeKey.slice("thread:".length);
     const separatorIndex = remainder.indexOf(":");
@@ -543,6 +575,7 @@ function shouldReplacePreviousUnsentCandidate(
  */
 function hashDraftContent(snapshot: ComposerDraftSnapshot): string {
   const content = JSON.stringify({
+    ...(snapshot.threadOwner ? { threadOwner: snapshot.threadOwner } : {}),
     text: snapshot.draft,
     editorDocument: snapshot.editorDocument,
     skillTokens: snapshot.skillTokens.map((token) => ({

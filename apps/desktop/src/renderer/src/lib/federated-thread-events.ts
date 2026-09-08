@@ -28,7 +28,7 @@ export function threadSupportsFederationCapability(
     || thread.federation.capabilities?.includes(capability) === true;
 }
 
-export function threadSummaryIdentityKey(thread: NavigationThreadSummary): string {
+export function threadSummaryIdentityKey(thread: Pick<NavigationThreadSummary, "id" | "source" | "federation">): string {
   return thread.federation?.ref
     ? federatedThreadIdentityKey(thread.federation.ref)
     : buildThreadIdentityKey(thread.source, thread.id);

@@ -8,6 +8,7 @@ import {
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
   hashReferenceAnchorKey,
+  hashReferenceThreadIdentity,
   HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../hash-references";
 
@@ -234,6 +235,22 @@ describe("buildHashReferenceOptions", () => {
       ["t-1", false],
       ["t-2", true],
     ]);
+  });
+
+  it("keeps equal ids on different owners and excludes only the current owner identity", () => {
+    const current = remote("t-1", "Parser work", "current-owner");
+    const options = buildHashReferenceOptions({ currentThreadKey: hashReferenceThreadIdentity(current),
+      localThreads: [thread("t-1", "Parser local"), current], query: "parser",
+      remoteThreads: [current, remote("t-1", "Parser remote", "other-owner")] });
+    expect(options).toHaveLength(2);
+    expect(options.map((option) => option.kind === "thread" && option.thread.title)).toEqual(["Parser local", "Parser remote"]);
+  });
+
+  it("keeps an owner-matched Agent after private matching instructions are projected away", () => {
+    const options = buildHashReferenceOptions({ localThreads: [], query: "private persona match",
+      remoteThreads: [remote("t-1", "Agent")], remoteOwnerMatched: true });
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({ kind: "thread", thread: { title: "Agent" } });
   });
 
   it("drops the thread being written in", () => {

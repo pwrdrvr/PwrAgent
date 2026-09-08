@@ -1,3 +1,5 @@
+import { navigationQueryFixture } from "../../test/navigation-query-fixture";
+import { threadSummaryIdentityKey } from "../federated-thread-events";
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
@@ -15,13 +17,37 @@ import type {
   NavigationThreadSummary,
   PrSummary,
 } from "@pwragent/shared";
-import type { DesktopApi } from "../desktop-api";
+import { useMemo } from "react";
+import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
+import { navigationOwnerApiFixture, type NavigationOwnerFixtureApi as DesktopApi } from "../../test/navigation-owner-api-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
 } from "../native-drag-interaction";
-import { useThreadNavigation } from "../useThreadNavigation";
+import { useThreadNavigation as useRealThreadNavigation } from "../useThreadNavigation";
+function useThreadNavigation(api?: DesktopApi, options?: Parameters<typeof useRealThreadNavigation>[1]) {
+  const localStore = useComposerDraftStore();
+  const composerDraftStore = options?.composerDraftStore ?? localStore;
+  const ownerApi = useMemo(() => api ? navigationOwnerApiFixture(api, (launchpads) => {
+    for (const launchpad of launchpads) {
+      const scope = `launchpad:${launchpad.directoryKey}`;
+      if (!composerDraftStore.get(scope)) composerDraftStore.set(scope, { draft: launchpad.prompt,
+        imageAttachments: launchpad.imageAttachments ?? [], fileAttachments: launchpad.fileAttachments ?? [], skillTokens: [] });
+    }
+  }) : undefined, [api, composerDraftStore]);
+  return useRealThreadNavigation(ownerApi, { ...options, composerDraftStore });
+}
+
+function actionDetailApi(...threads: NavigationThreadSummary[]): Pick<DesktopApi, "getNavigationSelectedDetail"> {
+  return { getNavigationSelectedDetail: vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
+    const thread = threads.find((candidate) => candidate.id === request.ref.threadId && candidate.source === request.ref.backend);
+    return { protocol: 2, ref: request.ref, revision: "fixture-detail", readiness: "ready", identity: thread ? "present" : "unresolved", thread,
+      ...(request.includeWorkspaceConfiguration ? { workspaceDirectories: thread?.linkedDirectories.map((directory) => ({
+        key: directory.id, label: directory.label, path: directory.path,
+      })) ?? [] } : {}) };
+  }) };
+}
 
 /**
  * Create / rename / archive failures leave the hook through
@@ -131,7 +157,7 @@ describe("useThreadNavigation", () => {
       },
     };
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot: vi.fn(async () => snapshot),
+      readPopulation: vi.fn(async () => snapshot),
       onAgentEvent: () => () => undefined,
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
@@ -160,376 +186,7 @@ describe("useThreadNavigation", () => {
     return { promise, resolve, reject };
   }
 
-  it("uses the renderer transport revision for subsequent refreshes", async () => {
-    const snapshot: NavigationSnapshot = {
-      backend: "all",
-      fetchedAt: 1,
-      unchanged: false,
-      inboxThreadKeys: [],
-      threads: [],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex",
-        executionMode: "default",
-      },
-    };
-    const getNavigationSnapshot = vi.fn(async () => snapshot);
-    const getNavigationSnapshotTransport = vi
-      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
-      .mockResolvedValueOnce({
-        kind: "full",
-        revision: "revision-1",
-        snapshot,
-      })
-      .mockResolvedValueOnce({
-        kind: "unchanged",
-        revision: "revision-1",
-      });
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-      getNavigationSnapshotTransport,
-      onAgentEvent: () => () => undefined,
-    };
-
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
-
-    await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(1);
-    });
-    await act(async () => {
-      await result.current.refresh();
-    });
-
-    expect(getNavigationSnapshot).not.toHaveBeenCalled();
-    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(1, {
-      transport: { protocol: 1 },
-    });
-    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(2, {
-      transport: {
-        protocol: 1,
-        baseRevision: "revision-1",
-      },
-    });
-    expect(result.current.error).toBeUndefined();
-  });
-
-  it("renders a recent page before reconciling the full startup snapshot", async () => {
-    const recentSnapshot: NavigationSnapshot = {
-      backend: "all",
-      fetchedAt: 1,
-      unchanged: false,
-      inboxThreadKeys: ["codex:thread-recent"],
-      threads: [
-        {
-          id: "thread-recent",
-          title: "Recent thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-          inbox: { inInbox: true, reason: "updated-since-seen" },
-          pinnedRank: "1024",
-          updatedAt: 3_000,
-        },
-      ],
-      directories: [
-        {
-          key: "directory:/repo/alpha",
-          kind: "directory",
-          label: "alpha",
-          path: "/repo/alpha",
-          threadKeys: ["codex:thread-recent"],
-          needsAttentionCount: 1,
-          latestUpdatedAt: 3_000,
-        },
-      ],
-      launchpadDefaults: {
-        backend: "codex",
-        executionMode: "default",
-      },
-    };
-    const fullSnapshot: NavigationSnapshot = {
-      ...recentSnapshot,
-      fetchedAt: 2,
-      inboxThreadKeys: ["codex:thread-new", "codex:thread-recent"],
-      threads: [
-        {
-          id: "thread-new",
-          title: "Newer thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-          inbox: { inInbox: true, reason: "updated-since-seen" },
-          updatedAt: 4_000,
-        },
-        recentSnapshot.threads[0]!,
-      ],
-      directories: [
-        ...recentSnapshot.directories,
-        {
-          key: "directory:/repo/beta",
-          kind: "directory",
-          label: "beta",
-          path: "/repo/beta",
-          threadKeys: ["codex:thread-new"],
-          needsAttentionCount: 1,
-          latestUpdatedAt: 4_000,
-        },
-      ],
-    };
-    const recentResponse = createDeferred<
-      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
-    >();
-    const fullResponse = createDeferred<
-      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
-    >();
-    const getNavigationSnapshotTransport = vi
-      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
-      .mockReturnValueOnce(recentResponse.promise)
-      .mockReturnValueOnce(fullResponse.promise);
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshotTransport,
-      onAgentEvent: () => () => undefined,
-    };
-
-    const { result } = renderHook(() =>
-      useThreadNavigation(desktopApi, { progressiveInitialRefresh: true }),
-    );
-
-    await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(1);
-    });
-    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(1, {
-      refreshMode: "active-recent",
-      transport: { protocol: 1 },
-    });
-
-    act(() => {
-      recentResponse.resolve({
-        kind: "full",
-        revision: "recent-revision",
-        snapshot: recentSnapshot,
-      });
-    });
-    await waitFor(() => {
-      expect(result.current.threads.map((thread) => thread.id)).toEqual([
-        "thread-recent",
-      ]);
-      expect(result.current.selectedThread?.id).toBe("thread-recent");
-    });
-    await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
-    });
-    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(2, {
-      refreshMode: "full",
-      transport: { protocol: 1 },
-    });
-
-    act(() => {
-      fullResponse.resolve({
-        kind: "full",
-        revision: "full-revision",
-        snapshot: fullSnapshot,
-      });
-    });
-    await waitFor(() => {
-      expect(result.current.threads.map((thread) => thread.id)).toEqual([
-        "thread-new",
-        "thread-recent",
-      ]);
-    });
-
-    expect(result.current.selectedThread?.id).toBe("thread-recent");
-    expect(result.current.threads.find((thread) => thread.id === "thread-recent"))
-      .toMatchObject({
-        inbox: { inInbox: true, reason: "updated-since-seen" },
-        pinnedRank: "1024",
-      });
-    expect(result.current.directories.map((directory) => directory.path)).toEqual([
-      "/repo/alpha",
-      "/repo/beta",
-    ]);
-    expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
-      "thread-new",
-      "thread-recent",
-    ]);
-  });
-
-  it("never displays startup rows without their initial fallback selection", async () => {
-    const emptySnapshot: NavigationSnapshot = {
-      backend: "all",
-      fetchedAt: 1,
-      unchanged: false,
-      inboxThreadKeys: [],
-      threads: [],
-      directories: [],
-      providerRefresh: { state: "ready" },
-      launchpadDefaults: {
-        backend: "codex",
-        executionMode: "default",
-      },
-    };
-    const populatedSnapshot: NavigationSnapshot = {
-      ...emptySnapshot,
-      fetchedAt: 2,
-      inboxThreadKeys: ["codex:thread-1"],
-      threads: [
-        {
-          id: "thread-1",
-          title: "First discovered thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-          updatedAt: 1_000,
-        },
-      ],
-    };
-    const recentResponse = createDeferred<
-      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
-    >();
-    const fullResponse = createDeferred<
-      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
-    >();
-    const getNavigationSnapshotTransport = vi
-      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
-      .mockReturnValueOnce(recentResponse.promise)
-      .mockReturnValueOnce(fullResponse.promise);
-    const renderedStates: Array<{
-      selectedThreadId?: string;
-      threadCount: number;
-    }> = [];
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshotTransport,
-      onAgentEvent: () => () => undefined,
-    };
-
-    const { result } = renderHook(() => {
-      const navigation = useThreadNavigation(desktopApi, {
-        progressiveInitialRefresh: true,
-      });
-      renderedStates.push({
-        selectedThreadId: navigation.selectedThread?.id,
-        threadCount: navigation.threads.length,
-      });
-      return navigation;
-    });
-
-    act(() => {
-      recentResponse.resolve({
-        kind: "full",
-        revision: "empty-revision",
-        snapshot: emptySnapshot,
-      });
-    });
-    await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
-    });
-    expect(result.current.selectedThread).toBeUndefined();
-
-    act(() => {
-      fullResponse.resolve({
-        kind: "full",
-        revision: "populated-revision",
-        snapshot: populatedSnapshot,
-      });
-    });
-    await waitFor(() => {
-      expect(result.current.selectedThread?.id).toBe("thread-1");
-    });
-
-    expect(
-      renderedStates.filter((state) => state.threadCount > 0),
-    ).toEqual([
-      {
-        selectedThreadId: "thread-1",
-        threadCount: 1,
-      },
-    ]);
-  });
-
-  it("reconciles an automatic partial selection against the full startup rows", async () => {
-    const partialSnapshot: NavigationSnapshot = {
-      backend: "all",
-      fetchedAt: 1,
-      unchanged: false,
-      inboxThreadKeys: ["codex:partial-thread"],
-      threads: [
-        {
-          id: "partial-thread",
-          title: "Partial thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-          updatedAt: 2_000,
-        },
-      ],
-      directories: [],
-      providerRefresh: { state: "ready" },
-      launchpadDefaults: {
-        backend: "codex",
-        executionMode: "default",
-      },
-    };
-    const fullSnapshot: NavigationSnapshot = {
-      ...partialSnapshot,
-      fetchedAt: 2,
-      inboxThreadKeys: ["codex:full-thread"],
-      threads: [
-        {
-          id: "full-thread",
-          title: "Full thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-          updatedAt: 1_000,
-        },
-      ],
-    };
-    const recentResponse = createDeferred<
-      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
-    >();
-    const fullResponse = createDeferred<
-      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
-    >();
-    const getNavigationSnapshotTransport = vi
-      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
-      .mockReturnValueOnce(recentResponse.promise)
-      .mockReturnValueOnce(fullResponse.promise);
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshotTransport,
-      onAgentEvent: () => () => undefined,
-    };
-
-    const { result } = renderHook(() =>
-      useThreadNavigation(desktopApi, { progressiveInitialRefresh: true })
-    );
-
-    act(() => {
-      recentResponse.resolve({
-        kind: "full",
-        revision: "partial-revision",
-        snapshot: partialSnapshot,
-      });
-    });
-    await waitFor(() => {
-      expect(result.current.selectedThread?.id).toBe("partial-thread");
-    });
-
-    act(() => {
-      fullResponse.resolve({
-        kind: "full",
-        revision: "full-revision",
-        snapshot: fullSnapshot,
-      });
-    });
-    await waitFor(() => {
-      expect(result.current.selectedThread?.id).toBe("full-thread");
-    });
-  });
-
-  it("defers navigation deltas during a drag and preserves the dropped pin rank", async () => {
+  it("rejects a pre-move navigation page after the owner accepts a dropped pin rank", async () => {
     const buildSnapshot = (title: string): NavigationSnapshot => ({
       backend: "all",
       fetchedAt: 1,
@@ -554,12 +211,12 @@ describe("useThreadNavigation", () => {
     });
     const deferredDelta = createDeferred<
       Awaited<
-        ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>
+        ReturnType<NonNullable<DesktopApi["readPopulationTransport"]>>
       >
     >();
-    const getNavigationSnapshot = vi.fn(async () => buildSnapshot("Initial"));
-    const getNavigationSnapshotTransport = vi
-      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
+    const readPopulation = vi.fn(async () => buildSnapshot("Initial"));
+    const readPopulationTransport = vi
+      .fn<NonNullable<DesktopApi["readPopulationTransport"]>>()
       .mockResolvedValueOnce({
         kind: "full",
         revision: "revision-1",
@@ -572,8 +229,8 @@ describe("useThreadNavigation", () => {
       pinnedRanks: { "codex:thread-1": "1024" },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-      getNavigationSnapshotTransport,
+      readPopulation,
+      readPopulationTransport,
       onAgentEvent: () => () => undefined,
       reorderThreadPins,
     };
@@ -588,12 +245,12 @@ describe("useThreadNavigation", () => {
       refresh = result.current.refresh();
     });
     await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
+      expect(readPopulationTransport).toHaveBeenCalledTimes(2);
     });
 
     beginNativeDragInteraction();
     await act(async () => {
-      await result.current.reorderThreadPins(["codex:thread-1"]);
+      await result.current.reorderThreadPins([], { key: "codex:thread-1", direction: "up" });
     });
     expect(result.current.threads[0]?.pinnedRank).toBe("1024");
 
@@ -618,103 +275,10 @@ describe("useThreadNavigation", () => {
       await refresh;
     });
     expect(result.current.threads[0]).toMatchObject({
-      title: "Updated during drag",
+      title: "Initial",
       pinnedRank: "1024",
     });
-    expect(getNavigationSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("keeps separate transport revisions while lightweight refresh scopes alternate", async () => {
-    let intervalHandler: (() => void) | undefined;
-    let focusListener: (() => void) | undefined;
-    const originalSetInterval = globalThis.setInterval;
-    vi.spyOn(globalThis, "setInterval").mockImplementation(
-      (handler, timeout, ...args) => {
-        if (timeout !== 5 * 60_000) {
-          return originalSetInterval(handler, timeout, ...args);
-        }
-        intervalHandler =
-          typeof handler === "function" ? () => handler() : undefined;
-        return 1 as unknown as ReturnType<typeof setInterval>;
-      },
-    );
-    const snapshot: NavigationSnapshot = {
-      backend: "all",
-      fetchedAt: 1,
-      unchanged: false,
-      inboxThreadKeys: [],
-      threads: [],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex",
-        executionMode: "default",
-      },
-    };
-    const getNavigationSnapshot = vi.fn(async () => snapshot);
-    const getNavigationSnapshotTransport = vi.fn<
-      NonNullable<DesktopApi["getNavigationSnapshotTransport"]>
-    >(async (request) => {
-      const revision = request.refreshMode === "active-recent"
-        ? "active-recent-revision"
-        : "full-revision";
-      return request.transport.baseRevision === revision
-        ? { kind: "unchanged", revision }
-        : { kind: "full", revision, snapshot };
-    });
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-      getNavigationSnapshotTransport,
-      onWindowFocus: (callback) => {
-        focusListener = callback;
-        return () => {
-          focusListener = undefined;
-        };
-      },
-    };
-    const { unmount } = renderHook(() =>
-      useThreadNavigation(desktopApi, { lightweightNavigationRefresh: true }),
-    );
-
-    await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(1);
-    });
-    act(() => {
-      intervalHandler?.();
-    });
-    await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
-    });
-    act(() => {
-      focusListener?.();
-    });
-    await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(3);
-    });
-    act(() => {
-      intervalHandler?.();
-    });
-    await waitFor(() => {
-      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(4);
-    });
-
-    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(3, {
-      forceRefresh: true,
-      refreshMode: "full",
-      transport: {
-        baseRevision: "full-revision",
-        protocol: 1,
-      },
-    });
-    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(4, {
-      forceRefresh: true,
-      refreshMode: "active-recent",
-      transport: {
-        baseRevision: "active-recent-revision",
-        protocol: 1,
-      },
-    });
-    expect(getNavigationSnapshot).not.toHaveBeenCalled();
-    unmount();
+    expect(readPopulation).not.toHaveBeenCalled();
   });
 
   it("does not let a late launchpad update replace a directory label with its internal key", async () => {
@@ -735,7 +299,7 @@ describe("useThreadNavigation", () => {
       createdAt: 1,
       updatedAt: 2,
     };
-    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+    const readPopulation = vi.fn(async (): Promise<NavigationSnapshot> => ({
       backend: "all",
       fetchedAt: Date.now(),
       unchanged: false,
@@ -758,7 +322,7 @@ describe("useThreadNavigation", () => {
       defaults,
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -788,7 +352,7 @@ describe("useThreadNavigation", () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -815,7 +379,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
         return () => undefined;
@@ -863,14 +427,14 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads[0]?.threadStatus).toBe("idle");
   });
 
-  it("does not let an in-flight remote snapshot overwrite a live status event", async () => {
+  it.each([true, false])("fences an in-flight peer page before canonical refresh (remote window: %s)", async (remoteWindow) => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "instance-m2-max",
     };
     (window as unknown as {
       __pwragentFederationTarget?: unknown;
-    }).__pwragentFederationTarget = federationTarget;
+    }).__pwragentFederationTarget = remoteWindow ? federationTarget : undefined;
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
@@ -909,16 +473,17 @@ describe("useThreadNavigation", () => {
         backend: "codex",
         executionMode: "default",
       },
-      federationTarget,
+      federationTarget: remoteWindow ? federationTarget : undefined,
     });
     const staleRefresh = createDeferred<NavigationSnapshot>();
-    const getNavigationSnapshot = vi
+    const canonicalRefresh = createDeferred<NavigationSnapshot>();
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(snapshot("idle"))
       .mockReturnValueOnce(staleRefresh.promise)
-      .mockResolvedValueOnce(snapshot("idle"));
+      .mockReturnValueOnce(canonicalRefresh.promise);
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
         return () => undefined;
@@ -934,7 +499,7 @@ describe("useThreadNavigation", () => {
       refresh = result.current.refresh();
     });
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
     });
 
     act(() => {
@@ -954,12 +519,13 @@ describe("useThreadNavigation", () => {
 
     await act(async () => {
       staleRefresh.resolve(snapshot("idle"));
-      await refresh;
     });
+    await waitFor(() => expect(readPopulation).toHaveBeenCalledTimes(3));
     expect(result.current.threads[0]?.threadStatus).toBe("active");
 
     await act(async () => {
-      await result.current.refresh();
+      canonicalRefresh.resolve(snapshot("idle"));
+      await refresh;
     });
     expect(result.current.threads[0]?.threadStatus).toBe("idle");
   });
@@ -975,7 +541,7 @@ describe("useThreadNavigation", () => {
       seenAt: Date.now(),
       seenUpdatedAt: 1_000,
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1004,7 +570,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: () => () => undefined,
     };
@@ -1055,7 +621,7 @@ describe("useThreadNavigation", () => {
       seenAt: Date.now(),
       seenUpdatedAt: 1_000,
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1084,7 +650,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: () => () => undefined,
     };
@@ -1127,7 +693,7 @@ describe("useThreadNavigation", () => {
       seenAt: Date.now(),
       seenUpdatedAt: 1_000,
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1171,7 +737,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: () => () => undefined,
     };
@@ -1197,7 +763,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.inboxThreads).toHaveLength(1);
       expect(result.current.inboxThreads[0]?.inbox.inInbox).toBe(false);
-      expect(result.current.directories[0]?.needsAttentionCount).toBe(0);
+      expect(result.current.directories[0]?.counts?.unread).toBe(0);
     });
   });
 
@@ -1243,7 +809,7 @@ describe("useThreadNavigation", () => {
       },
       updatedAt: 4_000,
     };
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1284,7 +850,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: () => () => undefined,
     };
@@ -1326,16 +892,16 @@ describe("useThreadNavigation", () => {
       expect(
         result.current.threads.map((thread) => thread.inbox.inInbox),
       ).toEqual([false, false, false, false]);
-      expect(result.current.snapshot?.inboxThreadKeys).toEqual([]);
+      expect(result.current.threads.filter((thread) => thread.inbox.inInbox).map(threadSummaryIdentityKey)).toEqual([]);
       expect(
-        result.current.directories.map((directory) => directory.needsAttentionCount),
+        result.current.directories.map((directory) => directory.counts?.unread),
       ).toEqual([0, 0]);
     });
   });
 
   it("refreshes selected thread directory git status on demand", async () => {
     const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 1 }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1346,7 +912,7 @@ describe("useThreadNavigation", () => {
           title: "First thread",
           titleSource: "explicit" as const,
           source: "codex" as const,
-          linkedDirectories: [],
+          linkedDirectories: [{ id: "directory:/repo/app", kind: "local" as const, label: "app", path: "/repo/app" }],
           inbox: {
             inInbox: false,
           },
@@ -1370,7 +936,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       refreshDirectoryGitStatuses,
     };
@@ -1390,6 +956,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(refreshDirectoryGitStatuses).toHaveBeenCalledWith({
         directoryKeys: ["directory:/repo/app"],
+        federationTarget: { scope: "local" },
         force: true,
       });
     });
@@ -1402,7 +969,7 @@ describe("useThreadNavigation", () => {
       seenAt: Date.now(),
       seenUpdatedAt: 2_000,
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1443,7 +1010,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: () => () => undefined,
     };
@@ -1498,7 +1065,7 @@ describe("useThreadNavigation", () => {
         seenUpdatedAt: request.seenUpdatedAt,
       }),
     );
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1542,7 +1109,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: () => () => undefined,
     };
@@ -1579,7 +1146,7 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.threads.find((thread) => !thread.federation)?.inbox.inInbox)
       .toBe(false);
-    expect(result.current.snapshot?.inboxThreadKeys).toEqual([]);
+    expect(result.current.threads.filter((thread) => thread.inbox.inInbox).map(threadSummaryIdentityKey)).toEqual([]);
   });
 
   it("marks a remote read thread unread until the user returns to it", async () => {
@@ -1597,7 +1164,7 @@ describe("useThreadNavigation", () => {
         seenUpdatedAt: request.seenUpdatedAt,
       }),
     );
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1645,7 +1212,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: () => () => undefined,
     };
@@ -1670,7 +1237,7 @@ describe("useThreadNavigation", () => {
       reason: "updated-since-seen",
       lastSeenUpdatedAt: 1_999,
     });
-    expect(result.current.snapshot?.inboxThreadKeys).toEqual([
+    expect(result.current.threads.filter((thread) => thread.inbox.inInbox).map(threadSummaryIdentityKey)).toEqual([
       "remote:remote-instance:codex:thread-read",
     ]);
 
@@ -1712,7 +1279,7 @@ describe("useThreadNavigation", () => {
       })
     );
     let refreshed = false;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1758,7 +1325,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: (callback) => {
         listeners.add(callback);
@@ -1831,7 +1398,7 @@ describe("useThreadNavigation", () => {
         seenAt: 2_000,
         seenUpdatedAt: 1_000,
       });
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1866,7 +1433,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: () => () => undefined,
     };
@@ -1923,7 +1490,7 @@ describe("useThreadNavigation", () => {
       }
     );
     let refreshed = false;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1969,7 +1536,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: (callback) => {
         listeners.add(callback);
@@ -2049,7 +1616,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("keeps selected refreshes unread while the window is backgrounded", async () => {
+  it("retains stale rows without marking unseen activity read while the window is backgrounded", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const markThreadSeen = vi.fn(
       async (
@@ -2062,7 +1629,7 @@ describe("useThreadNavigation", () => {
       })
     );
     let refreshed = false;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2108,7 +1675,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: (callback) => {
         listeners.add(callback);
@@ -2141,6 +1708,7 @@ describe("useThreadNavigation", () => {
       window.dispatchEvent(new Event("blur"));
     });
 
+    const readsBeforeBackgroundEvent = readPopulation.mock.calls.length;
     refreshed = true;
     await act(async () => {
       for (const listener of listeners) {
@@ -2162,9 +1730,9 @@ describe("useThreadNavigation", () => {
       }
     });
 
-    await waitFor(() => {
-      expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
-    });
+    await act(() => result.current.refresh());
+    expect(readPopulation).toHaveBeenCalledTimes(readsBeforeBackgroundEvent);
+    expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
     expect(markThreadSeen).not.toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-read",
@@ -2185,7 +1753,7 @@ describe("useThreadNavigation", () => {
       })
     );
     let refreshed = false;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2231,7 +1799,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen,
       onAgentEvent: (callback) => {
         listeners.add(callback);
@@ -2311,7 +1879,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("orders recent threads by creation time without changing inbox order", async () => {
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2346,7 +1914,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -2366,7 +1934,7 @@ describe("useThreadNavigation", () => {
 
   it("coalesces transcript-affecting notifications into one navigation refresh", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2394,7 +1962,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen: vi.fn(async () => ({
         backend: "codex",
         threadId: "thread-1",
@@ -2414,7 +1982,7 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.id).toBe("thread-1");
     });
 
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
 
     const refreshNotifications: AgentEvent["notification"][] = [
       {
@@ -2481,223 +2049,13 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
     });
   });
 
-  it("uses broad forced background polling by default", async () => {
-    let intervalHandler: (() => void) | undefined;
-    const originalSetInterval = globalThis.setInterval;
-    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
-      if (timeout !== 5 * 60_000) {
-        return originalSetInterval(handler, timeout, ...args);
-      }
-      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
-
-    const getNavigationSnapshot = vi.fn(async () => ({
-      backend: "all" as const,
-      fetchedAt: Date.now(),
-      unchanged: false,
-      inboxThreadKeys: ["codex:thread-1"],
-      threads: [
-        {
-          id: "thread-1",
-          title: "First thread",
-          titleSource: "explicit" as const,
-          summary: "First thread summary",
-          source: "codex" as const,
-          linkedDirectories: [],
-          inbox: {
-            inInbox: true,
-            reason: "new-thread" as const,
-          },
-          updatedAt: 1_000,
-        },
-      ],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
-      },
-    }));
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-    };
-
-    const { result, unmount } = renderHook(() => useThreadNavigation(desktopApi));
-
-    await waitFor(() => {
-      expect(result.current.selectedThread?.id).toBe("thread-1");
-    });
-
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
-    expect(getNavigationSnapshot.mock.calls[0]).toEqual([]);
-    expect(intervalHandler).toBeDefined();
-
-    act(() => {
-      intervalHandler?.();
-    });
-
-    await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-        forceRefresh: true,
-      });
-    });
-
-    unmount();
-  });
-
-  it("uses a cheap active-recent refresh for opt-in foreground background polling", async () => {
-    let intervalHandler: (() => void) | undefined;
-    const originalSetInterval = globalThis.setInterval;
-    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
-      if (timeout !== 5 * 60_000) {
-        return originalSetInterval(handler, timeout, ...args);
-      }
-      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
-
-    const getNavigationSnapshot = vi.fn(async () => ({
-      backend: "all" as const,
-      fetchedAt: Date.now(),
-      unchanged: false,
-      inboxThreadKeys: ["codex:thread-1"],
-      threads: [
-        {
-          id: "thread-1",
-          title: "First thread",
-          titleSource: "explicit" as const,
-          summary: "First thread summary",
-          source: "codex" as const,
-          linkedDirectories: [],
-          inbox: {
-            inInbox: true,
-            reason: "new-thread" as const,
-          },
-          updatedAt: 1_000,
-        },
-      ],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
-      },
-    }));
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-    };
-
-    const { result, unmount } = renderHook(() =>
-      useThreadNavigation(desktopApi, { lightweightNavigationRefresh: true }),
-    );
-
-    await waitFor(() => {
-      expect(result.current.selectedThread?.id).toBe("thread-1");
-    });
-
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
-    expect(getNavigationSnapshot.mock.calls[0]).toEqual([]);
-    expect(intervalHandler).toBeDefined();
-
-    act(() => {
-      intervalHandler?.();
-    });
-
-    await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-        forceRefresh: true,
-        refreshMode: "active-recent",
-      });
-    });
-
-    unmount();
-  });
-
-  it("pauses opt-in foreground background polling while navigation is idle", async () => {
-    let intervalHandler: (() => void) | undefined;
-    const originalSetInterval = globalThis.setInterval;
-    vi.spyOn(globalThis, "setInterval").mockImplementation((handler, timeout, ...args) => {
-      if (timeout !== 5 * 60_000) {
-        return originalSetInterval(handler, timeout, ...args);
-      }
-      intervalHandler = typeof handler === "function" ? () => handler() : undefined;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    });
-    const dateNowSpy = vi.spyOn(Date, "now");
-    dateNowSpy.mockReturnValue(1_000_000);
-
-    const getNavigationSnapshot = vi.fn(async () => ({
-      backend: "all" as const,
-      fetchedAt: Date.now(),
-      unchanged: false,
-      inboxThreadKeys: ["codex:thread-1"],
-      threads: [
-        {
-          id: "thread-1",
-          title: "First thread",
-          titleSource: "explicit" as const,
-          summary: "First thread summary",
-          source: "codex" as const,
-          linkedDirectories: [],
-          inbox: {
-            inInbox: true,
-            reason: "new-thread" as const,
-          },
-          updatedAt: 1_000,
-        },
-      ],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
-      },
-    }));
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-    };
-
-    const { result, unmount } = renderHook(() =>
-      useThreadNavigation(desktopApi, { lightweightNavigationRefresh: true }),
-    );
-
-    await waitFor(() => {
-      expect(result.current.selectedThread?.id).toBe("thread-1");
-    });
-
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
-    expect(intervalHandler).toBeDefined();
-
-    dateNowSpy.mockReturnValue(1_000_000 + 31 * 60_000);
-    act(() => {
-      intervalHandler?.();
-    });
-
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
-
-    dateNowSpy.mockReturnValue(1_000_000 + 31 * 60_000 + 1_000);
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
-    });
-
-    await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-        forceRefresh: true,
-        refreshMode: "active-recent",
-      });
-    });
-
-    unmount();
-  });
-
-  it("uses the ordinary scheduled refresh on focus by default", async () => {
+  it("refreshes bounded owner resources on focus by default", async () => {
     let focusListener: (() => void) | undefined;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2724,7 +2082,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onWindowFocus: (callback) => {
         focusListener = callback;
         return () => {
@@ -2744,14 +2102,13 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-      expect(getNavigationSnapshot.mock.calls.at(-1)).toEqual([]);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
     });
 
     unmount();
   });
 
-  it("throttles full focus refreshes to one per minute after completion", async () => {
+  it("coalesces bounded focus refreshes to one per minute after completion", async () => {
     let focusListener: (() => void) | undefined;
     let delayedFocusHandler: (() => void) | undefined;
     const originalSetTimeout = globalThis.setTimeout;
@@ -2769,7 +2126,7 @@ describe("useThreadNavigation", () => {
     const dateNowSpy = vi.spyOn(Date, "now");
     dateNowSpy.mockReturnValue(1_000_000);
 
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2796,7 +2153,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onWindowFocus: (callback) => {
         focusListener = callback;
         return () => {
@@ -2818,11 +2175,7 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-        forceRefresh: true,
-        refreshMode: "full",
-      });
+      expect(readPopulation).toHaveBeenCalledTimes(2);
     });
 
     dateNowSpy.mockReturnValue(1_030_000);
@@ -2832,7 +2185,7 @@ describe("useThreadNavigation", () => {
     });
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    expect(readPopulation).toHaveBeenCalledTimes(2);
 
     dateNowSpy.mockReturnValue(1_060_000);
     act(() => {
@@ -2840,11 +2193,7 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(3);
-      expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-        forceRefresh: true,
-        refreshMode: "full",
-      });
+      expect(readPopulation).toHaveBeenCalledTimes(3);
     });
 
     unmount();
@@ -2852,7 +2201,7 @@ describe("useThreadNavigation", () => {
 
   it("applies streamed directory git status updates without refreshing the snapshot", async () => {
     const listeners = new Set<(event: any) => void>();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2889,7 +2238,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -2927,7 +2276,7 @@ describe("useThreadNavigation", () => {
       }
     });
 
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
     expect(result.current.directories[0]?.gitStatus).toMatchObject({
       currentBranch: "main",
       syncState: "in-sync",
@@ -2936,7 +2285,7 @@ describe("useThreadNavigation", () => {
 
   it("applies streamed thread working-state updates without refreshing the snapshot", async () => {
     const listeners = new Set<(event: any) => void>();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2972,7 +2321,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -3012,7 +2361,7 @@ describe("useThreadNavigation", () => {
     });
 
     // Patched in place — no extra snapshot fetch.
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
     expect(result.current.threads[0]?.gitWorkingState).toMatchObject({
       dirtyFiles: 3,
       unpushedCommits: 2,
@@ -3055,14 +2404,14 @@ describe("useThreadNavigation", () => {
       }
     });
 
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
     expect(result.current.threads[0]?.gitWorkingState).toBeUndefined();
   });
 
   it("does not move selection to another thread when refresh temporarily drops the selected thread", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     let includeSelectedThread = true;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -3105,7 +2454,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -3117,11 +2466,11 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.selectedThread?.id).toBe("thread-1");
+      expect(result.current.loaded).toBe(true);
     });
 
     act(() => {
-      result.current.selectThread(result.current.threads[1]!);
+      result.current.selectThread(result.current.threads.find((thread) => thread.id === "thread-2")!);
     });
 
     expect(result.current.selectedThread?.id).toBe("thread-2");
@@ -3149,7 +2498,7 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
     });
 
     expect(result.current.selectedItemKey).toBe("codex:thread-2");
@@ -3157,7 +2506,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("keeps an archived thread hidden when the post-archive refresh is stale", async () => {
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -3220,7 +2569,7 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       archiveThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -3242,7 +2591,7 @@ describe("useThreadNavigation", () => {
       threadId: "thread-archived",
     });
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
     });
     expect(result.current.threads.map((thread) => thread.id)).toEqual([
       "thread-remaining",
@@ -3250,8 +2599,8 @@ describe("useThreadNavigation", () => {
     expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
       "thread-remaining",
     ]);
-    expect(result.current.directories[0]?.threadKeys).toEqual([]);
-    expect(result.current.directories[0]?.needsAttentionCount).toBe(0);
+    expect(result.current.directories[0]?.counts?.total).toBe(0);
+    expect(result.current.directories[0]?.counts?.unread).toBe(0);
   });
 
   it("archives a remote thread through its owning federation target", async () => {
@@ -3259,7 +2608,7 @@ describe("useThreadNavigation", () => {
       scope: "remote" as const,
       instanceId: "remote-instance",
     };
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 1_000,
       unchanged: false,
@@ -3297,7 +2646,7 @@ describe("useThreadNavigation", () => {
     const removeRemoteThreadPin = vi.fn(async () => ({ removed: true }));
     const desktopApi: DesktopApi = {
       archiveThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       removeRemoteThreadPin,
     };
@@ -3330,7 +2679,7 @@ describe("useThreadNavigation", () => {
       instanceId: "remote-instance",
     };
     const remoteKey = "remote:remote-instance:codex:shared-thread";
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -3382,7 +2731,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       archiveThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       removeRemoteThreadPin: vi.fn(async () => ({ removed: true })),
     };
@@ -3401,12 +2750,10 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads.map((thread) => thread.title)).toEqual([
       "Local collision",
     ]);
-    expect(result.current.snapshot?.inboxThreadKeys).toEqual([
+    expect(result.current.threads.filter((thread) => thread.inbox.inInbox).map(threadSummaryIdentityKey)).toEqual([
       "codex:shared-thread",
     ]);
-    expect(result.current.directories[0]?.threadKeys).toEqual([
-      "codex:shared-thread",
-    ]);
+    expect(result.current.directories[0]?.counts?.total).toBe(1);
   });
 
   it("pins a main-window remote row through the viewer-owned local pin API", async () => {
@@ -3419,7 +2766,7 @@ describe("useThreadNavigation", () => {
       target: federationTarget,
       threadId: "thread-remote",
     };
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 1_000,
       unchanged: false,
@@ -3462,7 +2809,7 @@ describe("useThreadNavigation", () => {
       pinnedRank: "1024",
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       setThreadPin,
       setRemoteThreadLocalPin,
       onAgentEvent: () => () => undefined,
@@ -3483,7 +2830,7 @@ describe("useThreadNavigation", () => {
     // setThreadPin API must not be touched.
     expect(setRemoteThreadLocalPin).toHaveBeenCalledWith({
       ref: remoteRef,
-      pinnedRank: expect.any(String),
+      pinned: true,
     });
     expect(setThreadPin).not.toHaveBeenCalled();
     expect(result.current.threads.find((thread) => !thread.federation)?.pinnedRank)
@@ -3500,7 +2847,7 @@ describe("useThreadNavigation", () => {
     (window as typeof window & {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget = federationTarget;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 1_000,
       unchanged: false,
@@ -3543,7 +2890,7 @@ describe("useThreadNavigation", () => {
       pinnedRank: "1024",
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       setThreadPin,
       setRemoteThreadLocalPin,
       onAgentEvent: () => () => undefined,
@@ -3563,7 +2910,7 @@ describe("useThreadNavigation", () => {
       backend: "codex",
       threadId: "thread-remote",
       federationTarget,
-      pinnedRank: expect.any(String),
+      pinned: true,
     });
     expect(setRemoteThreadLocalPin).not.toHaveBeenCalled();
   });
@@ -3576,7 +2923,7 @@ describe("useThreadNavigation", () => {
     (window as typeof window & {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget = federationTarget;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 1_000,
       unchanged: false,
@@ -3612,7 +2959,7 @@ describe("useThreadNavigation", () => {
       reactions: ["✋", "👀"],
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       setThreadReaction,
       onAgentEvent: () => () => undefined,
     };
@@ -3651,7 +2998,7 @@ describe("useThreadNavigation", () => {
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
     >();
     let title = "Before disconnect";
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       federationTarget,
       fetchedAt: Date.now(),
@@ -3674,7 +3021,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -3727,15 +3074,11 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
       expect(result.current.selectedThread?.title).toBe("After reconnect");
       expect(result.current.error).toBeUndefined();
     });
-    expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-      federationTarget,
-      forceRefresh: true,
-      refreshMode: "full",
-    });
+    expect(result.current.federationTarget).toEqual(federationTarget);
   });
 
   it("reconciles a status-only remote thread change after reconnect", async () => {
@@ -3750,7 +3093,7 @@ describe("useThreadNavigation", () => {
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
     >();
     let peerStatus: "connected" | "disconnected" = "connected";
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       federationTarget,
       fetchedAt: Date.now(),
@@ -3782,7 +3125,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -3821,7 +3164,7 @@ describe("useThreadNavigation", () => {
     await act(async () => {
       await result.current.refresh();
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
 
     peerStatus = "connected";
     act(() => {
@@ -3841,7 +3184,7 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
       expect(result.current.selectedThread?.federation?.peerStatus).toBe(
         "connected",
       );
@@ -3858,7 +3201,7 @@ describe("useThreadNavigation", () => {
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
     >();
     let peerStatus: "connected" | "disconnected" = "connected";
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -3897,7 +3240,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -3959,18 +3302,14 @@ describe("useThreadNavigation", () => {
       "connected",
     );
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
       expect(result.current.threads[1]?.federation?.peerStatus).toBe(
         "connected",
       );
     });
-    expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-      forceRefresh: true,
-      refreshMode: "full",
-    });
   });
 
-  it("retries a failed remote snapshot until its route recovers", async () => {
+  it("recovers bounded remote reads after its route reconnects", async () => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "remote-instance",
@@ -3978,8 +3317,10 @@ describe("useThreadNavigation", () => {
     (window as unknown as {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget = federationTarget;
+    const listeners = new Set<(event: AgentEvent) => void>();
     const snapshot = {
       backend: "all" as const,
+      federationTarget,
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: ["codex:thread-remote"],
@@ -3999,33 +3340,34 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     };
-    const getNavigationSnapshot = vi.fn()
+    const readPopulation = vi.fn()
       .mockRejectedValueOnce(new Error("Unexpected server response: 502"))
       .mockResolvedValue(snapshot);
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-      onAgentEvent: () => () => undefined,
+      readPopulation,
+      onAgentEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
       expect(result.current.error).toBe("Unexpected server response: 502");
     });
+    for (const status of ["disconnected", "connected"] as const) {
+      await act(async () => {
+        for (const listener of listeners) listener({ backend: "codex", federationTarget,
+          notification: { method: "federation/peerStatus/changed", params: { instanceId: federationTarget.instanceId, status } } });
+      });
+    }
     await waitFor(() => {
       expect(result.current.selectedThread?.title).toBe("Recovered remotely");
       expect(result.current.error).toBeUndefined();
-    }, { timeout: 2_500 });
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
-    expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
-      federationTarget,
-      forceRefresh: true,
-      refreshMode: "full",
     });
+    expect(readPopulation).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces archive worktree cleanup failures returned by the desktop bridge", async () => {
     let archived = false;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -4079,7 +3421,7 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       archiveThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -4109,7 +3451,7 @@ describe("useThreadNavigation", () => {
 
   it("surfaces archive cleanup metadata lookup skips without requiring a worktree path", async () => {
     let archived = false;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -4155,7 +3497,7 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       archiveThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -4185,7 +3527,7 @@ describe("useThreadNavigation", () => {
 
   it("surfaces shared worktree archive cleanup skips as informational notices", async () => {
     let archived = false;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -4228,7 +3570,7 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       archiveThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -4283,7 +3625,7 @@ describe("useThreadNavigation", () => {
       inbox: { inInbox: false },
       updatedAt: 2_000,
     };
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -4309,21 +3651,21 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       archiveThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.threads.map((thread) => thread.id)).toEqual([
-        "thread-parent",
+      expect(result.current.threads.map((thread) => thread.id).sort()).toEqual([
         "thread-child",
+        "thread-parent",
       ]);
     });
 
     await act(async () => {
-      await result.current.archiveThread(result.current.threads[0]!, {
+      await result.current.archiveThread(result.current.threads.find((thread) => thread.id === "thread-parent")!, {
         includeSubthreads: true,
       });
     });
@@ -4369,7 +3711,7 @@ describe("useThreadNavigation", () => {
     };
     const childB = { ...childA, id: "thread-b", title: "Child B", createdAt: 3_000 };
 
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -4394,16 +3736,17 @@ describe("useThreadNavigation", () => {
       async (request: {
         backend?: string;
         parentThreadId: string;
-        threadIds: string[];
+        threadIds?: string[];
       }) => ({
         backend: "codex" as const,
         parentThreadId: request.parentThreadId,
-        threadIds: request.threadIds,
+        threadIds: ["thread-a", "thread-fork", "thread-b"],
       }),
     );
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      ...actionDetailApi(childA, childB, rootThread),
+      readPopulation,
       forkThread,
       updateSubthreadOrder,
       onAgentEvent: () => () => undefined,
@@ -4412,14 +3755,10 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.threads.map((thread) => thread.id)).toEqual([
-        "thread-root",
-        "thread-a",
-        "thread-b",
-      ]);
+      expect(result.current.threads.map((thread) => thread.id)).toContain("thread-root");
     });
 
-    const sourceChild = result.current.threads.find((thread) => thread.id === "thread-a")!;
+    const sourceChild = childA;
     await act(async () => {
       await result.current.forkThread(sourceChild, "same-worktree");
     });
@@ -4436,7 +3775,7 @@ describe("useThreadNavigation", () => {
     expect(updateSubthreadOrder).toHaveBeenCalledTimes(1);
     expect(updateSubthreadOrder.mock.calls[0]![0]).toMatchObject({
       parentThreadId: "thread-root",
-      threadIds: ["thread-a", "thread-fork", "thread-b"],
+      insertAfter: { threadId: "thread-fork", sourceThreadId: "thread-a" },
     });
   });
 
@@ -4520,9 +3859,10 @@ describe("useThreadNavigation", () => {
       threadIds: request.threadIds,
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(localChild, remoteRoot),
       ensureDirectoryLaunchpad,
       forkThread,
-      getNavigationSnapshot: vi.fn(async () => ({
+      readPopulation: vi.fn(async () => ({
         backend: "all" as const,
         fetchedAt: Date.now(),
         unchanged: false,
@@ -4606,7 +3946,7 @@ describe("useThreadNavigation", () => {
     const updateSubthreadOrder = vi.fn();
     const setSubthreadsCollapsed = vi.fn();
     const desktopApi = {
-      getNavigationSnapshot: vi.fn(async () => ({
+      readPopulation: vi.fn(async () => ({
         backend: "all" as const,
         fetchedAt: Date.now(),
         unchanged: false,
@@ -4626,19 +3966,19 @@ describe("useThreadNavigation", () => {
     await waitFor(() => expect(result.current.threads).toHaveLength(1));
 
     await act(async () => {
-      await result.current.updateSubthreadOrder(remoteParent, [
-        "thread-b",
-        "thread-a",
-      ]);
+      await result.current.updateSubthreadOrder(remoteParent, {
+        threadId: "thread-b", anchorThreadId: "thread-a", placement: "before",
+      });
       await result.current.setSubthreadsCollapsed(remoteParent, true);
     });
 
     expect(updateSubthreadOrder).not.toHaveBeenCalled();
     expect(setSubthreadsCollapsed).not.toHaveBeenCalled();
     expect(result.current.threads[0]).toMatchObject({
-      subthreadOrder: ["thread-a", "thread-b"],
       subthreadsCollapsed: false,
     });
+    expect(result.current.threads[0]?.subthreadOrder).toBeUndefined();
+    await waitFor(() => expect(result.current.selectedThread?.subthreadOrder).toEqual(["thread-a", "thread-b"]));
   });
 
   it("pins unlinked siblings together immediately above their pinned parent", async () => {
@@ -4701,10 +4041,11 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot: vi.fn(async () => snapshot),
+      readPopulation: vi.fn(async () => snapshot),
       onAgentEvent: () => () => undefined,
       reorderThreadPins,
       setThreadParent,
+      setThreadPin: async (request) => ({ backend: "codex", threadId: request.threadId, pinnedRank: "10000" }),
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
     await waitFor(() => expect(result.current.threads).toHaveLength(4));
@@ -4714,18 +4055,17 @@ describe("useThreadNavigation", () => {
     });
 
     expect(setThreadParent.mock.calls.map(([request]) => request)).toEqual([
-      { backend: "codex", federationTarget: undefined, threadId: "thread-child-b" },
-      { backend: "codex", federationTarget: undefined, threadId: "thread-child-a" },
+      { backend: "codex", federationTarget: { scope: "local" }, threadId: "thread-child-a",
+        expectedParent: { backend: "codex", threadId: "thread-parent", instanceId: "parent-owner" } },
+      { backend: "codex", federationTarget: { scope: "local" }, threadId: "thread-child-b",
+        expectedParent: { backend: "codex", threadId: "thread-parent", instanceId: "parent-owner" } },
     ]);
-    expect(reorderThreadPins).toHaveBeenCalledWith({
-      federationTarget: undefined,
-      threadKeys: [
-        "codex:thread-before",
-        "codex:thread-child-a",
-        "codex:thread-child-b",
-        "remote:parent-owner:codex:thread-parent",
-      ],
-    });
+    expect(reorderThreadPins.mock.calls).toEqual([
+      [{ federationTarget: { scope: "local" }, move: { key: "codex:thread-child-a",
+        anchorKey: "remote:parent-owner:codex:thread-parent", placement: "before" } }],
+      [{ federationTarget: { scope: "local" }, move: { key: "codex:thread-child-b",
+        anchorKey: "remote:parent-owner:codex:thread-parent", placement: "before" } }],
+    ]);
   });
 
   it("routes remote-child unlinking to its owner", async () => {
@@ -4749,6 +4089,7 @@ describe("useThreadNavigation", () => {
       pinnedRank: undefined,
       parentThreadId: "thread-parent",
       parentThreadBackend: "codex",
+      parentThreadInstanceId: "viewer",
       federation: {
         ref: {
           backend: "codex",
@@ -4783,7 +4124,10 @@ describe("useThreadNavigation", () => {
     const reorderThreadPins = vi.fn(async () => ({ pinnedRanks: {} }));
     const desktopApi: DesktopApi = {
       addRemoteThreadPin,
-      getNavigationSnapshot: vi.fn(async () => snapshot),
+      readFederationHealth: async () => ({ health: { enabled: true, role: "client", status: "connected", instanceId: "viewer", peers: [] } }),
+      setThreadPin: async (request) => ({ backend: "codex", threadId: request.threadId, pinnedRank: "2048" }),
+      setRemoteThreadLocalPin: async () => ({ ref: child.federation!.ref, pinnedRank: "2048" }),
+      readPopulation: vi.fn(async () => snapshot),
       onAgentEvent: () => () => undefined,
       reorderThreadPins,
       setThreadParent,
@@ -4799,6 +4143,7 @@ describe("useThreadNavigation", () => {
       backend: "codex",
       federationTarget: remoteTarget,
       threadId: "thread-child",
+      expectedParent: { backend: "codex", threadId: "thread-parent", instanceId: "viewer" },
     });
     expect(addRemoteThreadPin).toHaveBeenCalledWith({
       ref: child.federation?.ref,
@@ -4809,11 +4154,8 @@ describe("useThreadNavigation", () => {
       setThreadParent.mock.invocationCallOrder[0]!,
     );
     expect(reorderThreadPins).toHaveBeenCalledWith({
-      federationTarget: undefined,
-      threadKeys: [
-        "remote:child-owner:codex:thread-child",
-        "codex:thread-parent",
-      ],
+      federationTarget: { scope: "local" },
+      move: { key: "remote:child-owner:codex:thread-child", anchorKey: "codex:thread-parent", placement: "before" },
     });
   });
 
@@ -4855,14 +4197,14 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     };
-    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
+    const readPopulation = vi.fn(async () => navigationSnapshot);
     const archiveThread = vi.fn(async () => {
       throw new Error("Archive failed");
     });
 
     const desktopApi: DesktopApi = {
       archiveThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -4876,11 +4218,11 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
-      await result.current.archiveThread(result.current.threads[0]!);
+      await result.current.archiveThread(result.current.threads.find((thread) => thread.id === "thread-archived")!);
     });
 
     expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBe("Archive failed");
-    expect(result.current.threads.map((thread) => thread.id)).toEqual([
+    expect(result.current.threads.map((thread) => thread.id).sort()).toEqual([
       "thread-archived",
       "thread-fallback",
     ]);
@@ -4903,7 +4245,7 @@ describe("useThreadNavigation", () => {
         renamedAt: Date.now(),
       };
     });
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -4931,7 +4273,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen: vi.fn(async () => ({
         backend: "codex",
         threadId: "thread-1",
@@ -4992,13 +4334,13 @@ describe("useThreadNavigation", () => {
         executionMode: "default",
       },
     });
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(snapshot("Initial title", 1_000))
       .mockResolvedValueOnce(snapshot("Generated title", 2_000))
       .mockResolvedValueOnce(snapshot("Newer remote title", 3_000));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
         return () => undefined;
@@ -5052,11 +4394,11 @@ describe("useThreadNavigation", () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValue(acpFallbackTitleSnapshot("ACP session", 1_000));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
         return () => undefined;
@@ -5091,7 +4433,7 @@ describe("useThreadNavigation", () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(acpFallbackTitleSnapshot("ACP session", 1_000))
       .mockResolvedValueOnce(
@@ -5101,7 +4443,7 @@ describe("useThreadNavigation", () => {
         acpDerivedTitleSnapshot("Newer remote title", 3_000),
       );
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
         return () => undefined;
@@ -5169,7 +4511,7 @@ describe("useThreadNavigation", () => {
       },
     };
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot: vi.fn(async () => navigationSnapshot),
+      readPopulation: vi.fn(async () => navigationSnapshot),
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
         return () => undefined;
@@ -5201,7 +4543,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("isolates observed names for same-id threads owned by different peers", async () => {
+  it.each(["native", "mounted"])("isolates observed names for same-id threads owned by different peers in %s navigation", async (surface) => {
     const firstTarget = {
       scope: "remote" as const,
       instanceId: "first-owner",
@@ -5210,7 +4552,7 @@ describe("useThreadNavigation", () => {
       scope: "remote" as const,
       instanceId: "second-owner",
     };
-    (window as unknown as {
+    if (surface === "native") (window as unknown as {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget = firstTarget;
     let agentEventHandler:
@@ -5263,9 +4605,9 @@ describe("useThreadNavigation", () => {
         executionMode: "default",
       },
     };
-    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
+    const readPopulation = vi.fn(async () => navigationSnapshot);
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
         return () => undefined;
@@ -5309,6 +4651,14 @@ describe("useThreadNavigation", () => {
       "first-owner": "Renamed first owner",
       "second-owner": "Second owner title",
     });
+
+    // Once the owner acknowledges the observation, a later authoritative
+    // baseline may carry another name without being pinned to the old event.
+    navigationSnapshot.threads[0] = { ...navigationSnapshot.threads[0]!, title: "Renamed first owner" };
+    await act(() => result.current.refresh());
+    navigationSnapshot.threads[0] = { ...navigationSnapshot.threads[0]!, title: "Later owner name" };
+    await act(() => result.current.refresh());
+    expect(titlesByOwner()).toEqual({ "first-owner": "Later owner name", "second-owner": "Second owner title" });
   });
 
   it("keeps an eager generated name that arrives while a scheduled thread materializes", async () => {
@@ -5394,7 +4744,7 @@ describe("useThreadNavigation", () => {
         },
       ],
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValue(staleHydratedSnapshot);
@@ -5432,7 +4782,7 @@ describe("useThreadNavigation", () => {
       };
     });
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -5512,7 +4862,7 @@ describe("useThreadNavigation", () => {
       ],
       launchpadDefaults: defaults,
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValue({
@@ -5548,7 +4898,7 @@ describe("useThreadNavigation", () => {
       defaults,
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       resetDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
@@ -5614,7 +4964,7 @@ describe("useThreadNavigation", () => {
       directories: [],
       launchpadDefaults: defaults,
     };
-    const getNavigationSnapshot: NonNullable<DesktopApi["getNavigationSnapshot"]> = vi.fn(
+    const readPopulation: NonNullable<DesktopApi["readPopulation"]> = vi.fn(
       async (request) => request?.federationTarget ? remoteSnapshot : localSnapshot,
     );
     const ensureDirectoryLaunchpad: NonNullable<
@@ -5658,7 +5008,8 @@ describe("useThreadNavigation", () => {
     const desktopApi: DesktopApi = {
       addRemoteThreadPin,
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request, request.federationTarget ? remoteSnapshot : localSnapshot),
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
       resetDirectoryLaunchpad,
@@ -5671,13 +5022,12 @@ describe("useThreadNavigation", () => {
       await result.current.openFederatedWorkspaceLaunchpad(federationTarget);
     });
 
-    expect(getNavigationSnapshot).toHaveBeenCalledWith({ federationTarget });
     expect(result.current.selectedLaunchpad).toMatchObject({
       directoryKey: workspace.key,
       federationTarget,
     });
     expect(result.current.launchpadDirectories).toEqual(expect.arrayContaining([
-      expect.objectContaining(project),
+      expect.objectContaining({ key: project.key, label: project.label, path: project.path }),
     ]));
 
     await act(async () => {
@@ -5761,7 +5111,7 @@ describe("useThreadNavigation", () => {
       },
       defaults,
     });
-    const getNavigationSnapshot: NonNullable<DesktopApi["getNavigationSnapshot"]> = vi.fn(
+    const readPopulation: NonNullable<DesktopApi["readPopulation"]> = vi.fn(
       async (request) => {
         const target = request?.federationTarget;
         if (!target || target.scope !== "remote") {
@@ -5786,7 +5136,7 @@ describe("useThreadNavigation", () => {
       : secondEnsure.promise);
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -5872,7 +5222,7 @@ describe("useThreadNavigation", () => {
       },
     };
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot: vi.fn(async () => snapshot),
+      readPopulation: vi.fn(async () => snapshot),
       materializeDirectoryLaunchpad: vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "remote-thread-new",
@@ -5907,7 +5257,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("shows a newly materialized detached worktree thread as HEAD before the backend snapshot catches up", async () => {
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -5959,7 +5309,7 @@ describe("useThreadNavigation", () => {
     );
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
       setThreadPin,
@@ -6019,8 +5369,9 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.selectedThread?.gitBranch).toBe("HEAD");
     expect(result.current.selectedThread?.observedGitBranch).toBe("HEAD");
-    expect(result.current.directories[0]?.threadKeys).toEqual(["codex:thread-new"]);
-    expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
+    // The optimistic selected card cannot mint authoritative owner counts.
+    expect(result.current.directories[0]?.counts?.total).toBe(0);
+    expect(result.current.directories[0]?.counts?.unread).toBe(0);
     expect(setThreadPin).not.toHaveBeenCalled();
   });
 
@@ -6037,7 +5388,7 @@ describe("useThreadNavigation", () => {
       updatedAt: 1,
       pinnedRank: "1024",
     };
-    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+    const readPopulation = vi.fn(async (): Promise<NavigationSnapshot> => ({
       backend: "all",
       fetchedAt: Date.now(),
       unchanged: false,
@@ -6087,7 +5438,7 @@ describe("useThreadNavigation", () => {
       }),
     );
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
       setThreadPin,
@@ -6111,7 +5462,7 @@ describe("useThreadNavigation", () => {
 
   it("carries the started review turn from launchpad materialization", async () => {
     const directoryKey = "directory:/Users/fixture-user/github/PwrAgent";
-    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+    const readPopulation = vi.fn(async (): Promise<NavigationSnapshot> => ({
       backend: "all",
       fetchedAt: Date.now(),
       unchanged: false,
@@ -6154,7 +5505,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -6249,7 +5600,7 @@ describe("useThreadNavigation", () => {
         },
       ],
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(hydratedSnapshot)
@@ -6263,7 +5614,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -6299,7 +5650,7 @@ describe("useThreadNavigation", () => {
 
   it("rejects materialize failures after recording the launchpad error", async () => {
     const directoryKey = "directory:/Users/fixture-user/github/PwrAgent";
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -6338,7 +5689,7 @@ describe("useThreadNavigation", () => {
     });
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -6397,7 +5748,7 @@ describe("useThreadNavigation", () => {
       },
     };
     let snapshotCalls = 0;
-    const getNavigationSnapshot = vi.fn(async () => {
+    const readPopulation = vi.fn(async () => {
       snapshotCalls += 1;
       if (snapshotCalls > 1) {
         throw new Error("refresh failed");
@@ -6412,7 +5763,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -6473,7 +5824,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce({
@@ -6520,7 +5871,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -6581,7 +5932,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce({
@@ -6625,7 +5976,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -6685,7 +6036,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     };
-    const getNavigationSnapshot = vi.fn().mockResolvedValue(initialSnapshot);
+    const readPopulation = vi.fn().mockResolvedValue(initialSnapshot);
     const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,
       threadId,
@@ -6698,7 +6049,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -6722,7 +6073,7 @@ describe("useThreadNavigation", () => {
 
   it("does not let a materialized thread refresh override a newer user thread selection", async () => {
     const directoryKey = "directory:/Users/fixture-user/github/PwrAgent";
-    const refreshedSnapshot = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>>>();
+    const refreshedSnapshot = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["readPopulation"]>>>>();
     const initialSnapshot = {
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -6770,7 +6121,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(initialSnapshot)
       .mockImplementationOnce(async () => await refreshedSnapshot.promise);
@@ -6782,7 +6133,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -6911,7 +6262,7 @@ describe("useThreadNavigation", () => {
       ],
       launchpadDefaults: defaults,
     };
-    const getNavigationSnapshot = vi.fn(async () => initialSnapshot);
+    const readPopulation = vi.fn(async () => initialSnapshot);
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
       launchpad,
       defaults,
@@ -6922,7 +6273,7 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -7046,7 +6397,7 @@ describe("useThreadNavigation", () => {
       ],
       launchpadDefaults: defaults,
     };
-    const getNavigationSnapshot = vi.fn(async () => initialSnapshot);
+    const readPopulation = vi.fn(async () => initialSnapshot);
     const ensureDirectoryLaunchpad = vi.fn(
       async ({ directoryKey }: { directoryKey: string }) => ({
         launchpad: launchpadsByDirectory.get(directoryKey)!,
@@ -7062,7 +6413,7 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -7142,7 +6493,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("does not keep a directory launchpad selected when a thread in that directory is selected", async () => {
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -7210,7 +6561,7 @@ describe("useThreadNavigation", () => {
       updatedAt: 1,
     };
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       ensureDirectoryLaunchpad: vi.fn(async () => ({
         launchpad,
         defaults: {
@@ -7286,7 +6637,7 @@ describe("useThreadNavigation", () => {
       .fn()
       .mockReturnValueOnce(olderUpdate.promise)
       .mockReturnValueOnce(newerUpdate.promise);
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -7306,7 +6657,7 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -7441,7 +6792,7 @@ describe("useThreadNavigation", () => {
       defaults: NavigationLaunchpadDefaults;
       launchpad: NavigationLaunchpadDraft;
     };
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -7461,7 +6812,7 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -7551,7 +6902,7 @@ describe("useThreadNavigation", () => {
       launchpad: typeof launchpad;
     }>();
     const updateDirectoryLaunchpad = vi.fn().mockReturnValueOnce(promptUpdate.promise);
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -7571,7 +6922,7 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -7661,7 +7012,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot: vi.fn(async () => ({
+      readPopulation: vi.fn(async () => ({
         backend: "all" as const,
         fetchedAt: Date.now(),
         unchanged: false,
@@ -7721,7 +7072,7 @@ describe("useThreadNavigation", () => {
       __pwragentFederationTarget?: typeof federationTarget;
     }).__pwragentFederationTarget = federationTarget;
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot: vi.fn(async () => ({
+      readPopulation: vi.fn(async () => ({
         backend: "all" as const,
         fetchedAt: Date.now(),
         unchanged: false,
@@ -7777,7 +7128,7 @@ describe("useThreadNavigation", () => {
       launchpad: NavigationLaunchpadDraft;
     }>();
     const updateDirectoryLaunchpad = vi.fn().mockReturnValueOnce(stickyUpdate.promise);
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -7797,7 +7148,7 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -7867,7 +7218,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -7891,7 +7242,7 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -7955,7 +7306,7 @@ describe("useThreadNavigation", () => {
         },
       };
     });
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -7979,7 +7330,7 @@ describe("useThreadNavigation", () => {
 
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -8045,13 +7396,13 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockReturnValueOnce(initialSnapshot.promise)
       .mockResolvedValue(emptySnapshot);
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -8102,7 +7453,8 @@ describe("useThreadNavigation", () => {
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: [],
-      threads: [],
+      threads: [{ id: "scratch-thread", source: "codex", title: "Scratch thread", titleSource: "explicit",
+        linkedDirectories: [], inbox: { inInbox: true } }],
       directories: [{
         key: workspaceKey,
         kind: "workspace",
@@ -8146,13 +7498,13 @@ describe("useThreadNavigation", () => {
       launchpad: fallbackLaunchpad,
       defaults: canonicalSnapshot.launchpadDefaults,
     }));
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockReturnValueOnce(initialSnapshot.promise)
       .mockResolvedValue(canonicalSnapshot);
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
@@ -8185,8 +7537,7 @@ describe("useThreadNavigation", () => {
       expect(result.current.directories[0]).toMatchObject({
         key: workspaceKey,
         path: "/Users/test/.pwragent/profiles/default/projects",
-        threadKeys: ["codex:scratch-thread"],
-        needsAttentionCount: 1,
+        counts: { total: 1, unread: 1 },
         pinnedRank: "6144",
         launchpad: {
           directoryKey: workspaceKey,
@@ -8220,7 +7571,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -8270,7 +7621,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -8333,7 +7684,7 @@ describe("useThreadNavigation", () => {
         title: "Remote work",
         titleSource: "explicit",
         source: "codex",
-        linkedDirectories: [],
+        linkedDirectories: [{ id: directoryKey, label: "Owner PwrAgent", kind: "local", path: "/shared/PwrAgent" }],
         projectKey: "/shared/PwrAgent",
         inbox: { inInbox: true },
         updatedAt: 1,
@@ -8371,7 +7722,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot: vi.fn(async () => snapshot),
+      readPopulation: vi.fn(async () => snapshot),
       onAgentEvent: () => () => undefined,
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
@@ -8448,7 +7799,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -8498,7 +7849,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -8550,7 +7901,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -8564,14 +7915,14 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalled();
+      expect(readPopulation).toHaveBeenCalled();
     });
 
     await act(async () => {
@@ -8609,7 +7960,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -8652,7 +8003,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -8696,7 +8047,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -8731,7 +8082,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -8761,7 +8112,7 @@ describe("useThreadNavigation", () => {
     );
   });
 
-  it("removes server-backed launchpads when a refreshed snapshot omits them", async () => {
+  it("clears removed owner launchpad configuration while preserving the viewer draft", async () => {
     const directoryKey = "directory:/Users/test/PwrAgent";
     const snapshotWithLaunchpad: NavigationSnapshot = {
       backend: "all",
@@ -8810,16 +8161,20 @@ describe("useThreadNavigation", () => {
         },
       ],
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce(snapshotWithLaunchpad)
       .mockResolvedValueOnce(snapshotWithoutLaunchpad);
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    let draftStore!: ReturnType<typeof useComposerDraftStore>;
+    const { result } = renderHook(() => {
+      draftStore = useComposerDraftStore();
+      return useThreadNavigation(desktopApi, { composerDraftStore: draftStore });
+    });
 
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad?.prompt).toBe(
@@ -8834,6 +8189,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad).toBeUndefined();
       expect(result.current.selectedLaunchpad).toBeUndefined();
+      expect(draftStore.get(`launchpad:${directoryKey}`)?.draft).toBe("Build the feature");
     });
   });
 
@@ -8844,7 +8200,7 @@ describe("useThreadNavigation", () => {
       executionMode: "default" as const,
       workMode: "local" as const,
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -8879,7 +8235,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
     };
@@ -8980,7 +8336,7 @@ describe("useThreadNavigation", () => {
         },
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -8993,8 +8349,9 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       forkThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9085,7 +8442,7 @@ describe("useThreadNavigation", () => {
       workMode: "worktree";
     }>();
     const forkThread = vi.fn(() => forkDeferred.promise);
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9098,8 +8455,9 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       forkThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9181,7 +8539,7 @@ describe("useThreadNavigation", () => {
         kind: "worktree" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9194,8 +8552,9 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       forkThread,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9280,7 +8639,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9293,8 +8652,9 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -9390,7 +8750,7 @@ describe("useThreadNavigation", () => {
       directoryKey: "subthread:codex:thread-parent:local",
       defaults,
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9400,10 +8760,11 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       updateDirectoryLaunchpad,
       resetDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9486,7 +8847,7 @@ describe("useThreadNavigation", () => {
     // The main-process snapshot deliberately omits sub-thread launchpads, so a
     // refresh while the composer is open wipes the row from state.response —
     // it survives only in localLaunchpads.
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9496,10 +8857,11 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
       updateDirectoryLaunchpad,
       resetDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9565,7 +8927,7 @@ describe("useThreadNavigation", () => {
       directoryKey: "directory:/repo/app",
       defaults,
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9588,7 +8950,7 @@ describe("useThreadNavigation", () => {
     const desktopApi: DesktopApi = {
       updateDirectoryLaunchpad,
       resetDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9637,7 +8999,7 @@ describe("useThreadNavigation", () => {
       reason: "not-a-git-repo" as const,
       message: "/Users/test/not-a-repo is not a git repository.",
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9653,7 +9015,7 @@ describe("useThreadNavigation", () => {
     const desktopApi: DesktopApi = {
       pickDirectoryFromDisk,
       registerDirectoryFromDisk,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9714,7 +9076,7 @@ describe("useThreadNavigation", () => {
     const updateDirectoryLaunchpad = vi.fn(async () => {
       throw new Error("Launchpad overlay is read-only");
     });
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9736,7 +9098,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       updateDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9784,11 +9146,11 @@ describe("useThreadNavigation", () => {
       backend: "codex" as const,
       executionMode: "default" as const,
     };
-    const resetDirectoryLaunchpad = vi.fn(async () => ({
+    const removeNavigationDirectory = vi.fn(async () => ({
       directoryKey: "directory:/repo/app",
       defaults,
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9809,8 +9171,8 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
-      resetDirectoryLaunchpad,
-      getNavigationSnapshot,
+      removeNavigationDirectory,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9830,8 +9192,9 @@ describe("useThreadNavigation", () => {
 
     // The empty row is pruned immediately and its overlay row is deleted so it
     // can't reappear on the next snapshot.
-    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
+    expect(removeNavigationDirectory).toHaveBeenCalledWith({
       directoryKey: "directory:/repo/app",
+      federationTarget: undefined,
     });
     expect(
       result.current.directories.some(
@@ -9858,11 +9221,10 @@ describe("useThreadNavigation", () => {
       backend: "codex" as const,
       executionMode: "default" as const,
     };
-    const resetDirectoryLaunchpad = vi.fn(async () => ({
-      directoryKey: "directory:/repo/app",
-      defaults,
-    }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const removeNavigationDirectory = vi.fn(async () => {
+      throw new Error("This directory contains threads.");
+    });
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9882,8 +9244,8 @@ describe("useThreadNavigation", () => {
       launchpadDefaults: defaults,
     }));
     const desktopApi: DesktopApi = {
-      resetDirectoryLaunchpad,
-      getNavigationSnapshot,
+      removeNavigationDirectory,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -9903,7 +9265,7 @@ describe("useThreadNavigation", () => {
 
     // Deleting the overlay row would strip the directory's registration and
     // sticky settings while its threads kept the row on screen.
-    expect(resetDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(removeNavigationDirectory).toHaveBeenCalled();
     expect(
       result.current.directories.some(
         (directory) => directory.key === "directory:/repo/app",
@@ -9973,7 +9335,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -9986,8 +9348,9 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -10097,7 +9460,7 @@ describe("useThreadNavigation", () => {
       ],
       syncState: "untracked" as const,
     };
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -10121,7 +9484,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -10144,7 +9507,7 @@ describe("useThreadNavigation", () => {
       defaultBranch: "develop",
       baseBranches: expect.arrayContaining(["develop", "origin/develop"]),
     });
-    expect(result.current.selectedDirectory?.threadKeys).toEqual([]);
+    expect(result.current.selectedDirectory?.counts).toBeUndefined();
   });
 
   it("uses the live repository to materialize a new-worktree sub-thread from a missing parent worktree", async () => {
@@ -10224,7 +9587,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot: async () => ({
+      readPopulation: async () => ({
         backend: "all" as const,
         fetchedAt: Date.now(),
         unchanged: false,
@@ -10375,7 +9738,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -10398,7 +9761,7 @@ describe("useThreadNavigation", () => {
     }));
     const desktopApi: DesktopApi = {
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -10490,7 +9853,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -10503,8 +9866,9 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
+      ...actionDetailApi(parentThread),
       ensureDirectoryLaunchpad,
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       updateDirectoryLaunchpad,
     };
@@ -10555,7 +9919,7 @@ describe("useThreadNavigation", () => {
   it("refreshes the selected thread when only the observed branch changes", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     let navigationCallCount = 0;
-    const getNavigationSnapshot = vi.fn(async () => {
+    const readPopulation = vi.fn(async () => {
       navigationCallCount += 1;
       return {
         backend: "all" as const,
@@ -10588,7 +9952,7 @@ describe("useThreadNavigation", () => {
     });
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -10635,7 +9999,7 @@ describe("useThreadNavigation", () => {
   it("refreshes the selected thread when only reactions change", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     let navigationCallCount = 0;
-    const getNavigationSnapshot = vi.fn(async () => {
+    const readPopulation = vi.fn(async () => {
       navigationCallCount += 1;
       return {
         backend: "all" as const,
@@ -10666,7 +10030,7 @@ describe("useThreadNavigation", () => {
     });
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -10712,7 +10076,7 @@ describe("useThreadNavigation", () => {
   it("refreshes the selected thread when review sub-agents change", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     let navigationCallCount = 0;
-    const getNavigationSnapshot = vi.fn(async () => {
+    const readPopulation = vi.fn(async () => {
       navigationCallCount += 1;
       return {
         backend: "all" as const,
@@ -10756,7 +10120,7 @@ describe("useThreadNavigation", () => {
     });
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -10799,7 +10163,7 @@ describe("useThreadNavigation", () => {
 
   it("applies live Token Miser sub-agents without waiting for navigation refresh", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -10824,7 +10188,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => listeners.delete(callback);
@@ -10864,14 +10228,14 @@ describe("useThreadNavigation", () => {
         monitorId: "system:token-miser:gate-live",
       }),
     ]);
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
   });
 
   it("restores backend state and surfaces errors when rename fails", async () => {
     const renameThread = vi.fn(async () => {
       throw new Error("rename failed");
     });
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -10899,7 +10263,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       markThreadSeen: vi.fn(async () => ({
         backend: "codex",
         threadId: "thread-1",
@@ -10930,7 +10294,7 @@ describe("useThreadNavigation", () => {
 
   it("patches the snapshot for thread/executionMode/updated without refetching", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -10955,7 +10319,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -10969,7 +10333,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.executionMode).toBe("default");
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       for (const listener of listeners) {
@@ -10994,7 +10358,7 @@ describe("useThreadNavigation", () => {
     // registry just appended an `applied` entry to) reaches the
     // renderer for transcript rendering.
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -11012,7 +10376,7 @@ describe("useThreadNavigation", () => {
       ...initialPr,
       title: "Preserve PR title updates",
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce({
         backend: "all" as const,
@@ -11051,7 +10415,7 @@ describe("useThreadNavigation", () => {
       });
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -11063,7 +10427,8 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.selectedThread?.prs?.[0]?.title).toBeUndefined();
+      expect(result.current.selectedThreadConfigurationReady).toBe(true);
+      expect(result.current.selectedThread?.prs).toEqual([initialPr]);
     });
 
     await act(async () => {
@@ -11111,7 +10476,7 @@ describe("useThreadNavigation", () => {
       number: 256,
       url: "https://github.com/ExampleOrg/ExampleApp/pull/256",
     };
-    const getNavigationSnapshot = vi
+    const readPopulation = vi
       .fn()
       .mockResolvedValueOnce({
         backend: "all" as const,
@@ -11170,7 +10535,7 @@ describe("useThreadNavigation", () => {
       });
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -11216,7 +10581,7 @@ describe("useThreadNavigation", () => {
         .toBe(unrelatedPr);
     });
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -11245,10 +10610,10 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     };
-    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
+    const readPopulation = vi.fn(async () => navigationSnapshot);
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -11356,9 +10721,9 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("patches the snapshot for thread/modelSettings/updated without refetching", async () => {
+  it("patches exact selected configuration for thread/modelSettings/updated", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -11385,7 +10750,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -11399,7 +10764,6 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.model).toBe("gpt-5");
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       for (const listener of listeners) {
@@ -11445,14 +10809,13 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.fastMode).toBe(false);
     });
     // Push-driven patch — no full snapshot re-fetch.
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("persists and patches the per-thread PR auto-dispatch preference", async () => {
     const listeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
     >();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -11478,7 +10841,17 @@ describe("useThreadNavigation", () => {
         request: Parameters<
           NonNullable<DesktopApi["setThreadPrAutoDispatch"]>
         >[0],
-      ) => request,
+      ) => {
+        // The owner publishes the canonical preference before acknowledging it.
+        for (const listener of listeners) listener({
+          backend: request.backend,
+          federationTarget: request.federationTarget,
+          notification: { method: "thread/prAutoDispatch/updated", params: {
+            threadId: request.threadId, enabled: request.enabled,
+          } },
+        });
+        return request;
+      },
     );
     const cancelThreadPrAutoDispatch = vi.fn(
       async (
@@ -11496,7 +10869,7 @@ describe("useThreadNavigation", () => {
     );
     const desktopApi: DesktopApi = {
       cancelThreadPrAutoDispatch,
-      getNavigationSnapshot,
+      readPopulation,
       sendThreadPrAutoDispatchNow,
       setThreadPrAutoDispatch,
       onAgentEvent: (callback) => {
@@ -11592,7 +10965,6 @@ describe("useThreadNavigation", () => {
       }
     });
     expect(result.current.selectedThread?.prAutoDispatchPending).toBeUndefined();
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("applies PR auto-dispatch events to the matching mounted remote thread", async () => {
@@ -11617,7 +10989,7 @@ describe("useThreadNavigation", () => {
       createdAt: 1_000,
       scheduledAt: 31_000,
     });
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -11677,7 +11049,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => listeners.delete(callback);
@@ -11726,16 +11098,24 @@ describe("useThreadNavigation", () => {
     expect(firstRemoteThread?.prAutoDispatchEnabled).toBe(false);
     expect(firstRemoteThread?.prAutoDispatchPending).toBeUndefined();
     expect(localThread?.prAutoDispatchEnabled).toBe(true);
-    expect(localThread?.prAutoDispatchPending?.fingerprint).toBe("local-pending");
+    expect(localThread?.prAutoDispatchPending).toBeUndefined();
     expect(secondRemoteThread?.prAutoDispatchEnabled).toBe(true);
-    expect(secondRemoteThread?.prAutoDispatchPending?.fingerprint).toBe(
-      "second-owner-pending",
-    );
+    expect(secondRemoteThread?.prAutoDispatchPending).toBeUndefined();
+    // Pending dispatch configuration is independently resolved for selection,
+    // and an event for the first owner must not clear either other owner.
+    act(() => result.current.selectThread(localThread!));
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prAutoDispatchPending?.fingerprint).toBe("local-pending");
+    });
+    act(() => result.current.selectThread(secondRemoteThread!));
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prAutoDispatchPending?.fingerprint).toBe("second-owner-pending");
+    });
   });
 
   it("reconciles a primary workspace repository resolved after an earlier refresh", async () => {
     const snapshotState: { primaryGitRepository?: string } = {};
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -11760,7 +11140,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -11782,7 +11162,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("preserves the current thread model when patching non-model settings", async () => {
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -11816,7 +11196,9 @@ describe("useThreadNavigation", () => {
     );
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      ...actionDetailApi({ id: "thread-1", source: "codex", title: "First thread", titleSource: "explicit", linkedDirectories: [],
+        model: "gpt-5.6-sol", reasoningEffort: "medium", fastMode: false, inbox: { inInbox: true, reason: "new-thread" }, updatedAt: 1000 }),
+      readPopulation,
       onAgentEvent: () => () => undefined,
       setThreadModelSettings,
     };
@@ -11843,7 +11225,7 @@ describe("useThreadNavigation", () => {
 
   it("patches the snapshot for thread/codexEnvironment/updated without refetching", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -11867,7 +11249,7 @@ describe("useThreadNavigation", () => {
     }));
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -11882,7 +11264,7 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.id).toBe("thread-1");
     });
     expect(result.current.selectedThread?.codexEnvironmentRuntime).toBeUndefined();
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       for (const listener of listeners) {
@@ -11921,7 +11303,7 @@ describe("useThreadNavigation", () => {
       ).toBe("Fixture Env");
     });
     // Push-driven patch — no full snapshot re-fetch.
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes the snapshot when thread directory metadata is repaired", async () => {
@@ -11955,9 +11337,9 @@ describe("useThreadNavigation", () => {
         executionMode: "default",
       },
     };
-    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
+    const readPopulation = vi.fn(async () => navigationSnapshot);
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (callback) => {
         listeners.add(callback);
         return () => {
@@ -11971,7 +11353,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.id).toBe("thread-1");
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPopulation).toHaveBeenCalledTimes(1);
 
     navigationSnapshot = {
       ...navigationSnapshot,
@@ -12003,7 +11385,7 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
       expect(result.current.directories[0]?.label).toBe("ProjectA");
     });
   });
@@ -12011,7 +11393,7 @@ describe("useThreadNavigation", () => {
   it("removes a revoked messaging binding from the thread row after onMessagingBindingsChanged fires", async () => {
     const bindingsListeners = new Set<(event: { at: number }) => void>();
     let navigationCallCount = 0;
-    const getNavigationSnapshot = vi.fn(async () => {
+    const readPopulation = vi.fn(async () => {
       navigationCallCount += 1;
       const messagingBindings =
         navigationCallCount === 1
@@ -12075,7 +11457,7 @@ describe("useThreadNavigation", () => {
     });
 
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       onMessagingBindingsChanged: (callback: (event: { at: number }) => void) => {
         bindingsListeners.add(callback);
@@ -12111,7 +11493,7 @@ describe("useThreadNavigation", () => {
 
   it("reconciles a Token Miser override when the backend thread timestamp is unchanged", async () => {
     let navigationCallCount = 0;
-    const getNavigationSnapshot = vi.fn(async () => {
+    const readPopulation = vi.fn(async () => {
       navigationCallCount += 1;
       return {
         backend: "all" as const,
@@ -12140,7 +11522,7 @@ describe("useThreadNavigation", () => {
       };
     });
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -12161,7 +11543,7 @@ describe("useThreadNavigation", () => {
   it("reconciles queued turns when the backend thread timestamp is unchanged", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     let navigationCallCount = 0;
-    const getNavigationSnapshot = vi.fn(async () => {
+    const readPopulation = vi.fn(async () => {
       navigationCallCount += 1;
       return {
         backend: "all" as const,
@@ -12198,7 +11580,7 @@ describe("useThreadNavigation", () => {
       };
     });
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -12235,7 +11617,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("keeps the public refresh callback stable across navigation renders", async () => {
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -12248,7 +11630,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -12271,7 +11653,7 @@ describe("useThreadNavigation", () => {
       configurable: true,
       value: { browseMode: "recents" },
     });
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -12284,7 +11666,7 @@ describe("useThreadNavigation", () => {
       },
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
     };
 
@@ -12294,7 +11676,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("persists browse mode changes through the desktop bridge", async () => {
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -12308,7 +11690,7 @@ describe("useThreadNavigation", () => {
     }));
     const setNavigationBrowseMode = vi.fn(async (request) => request);
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       setNavigationBrowseMode,
     };
@@ -12334,7 +11716,7 @@ describe("useThreadNavigation", () => {
       threadKeys: [],
       needsAttentionCount: 0,
     };
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -12353,7 +11735,7 @@ describe("useThreadNavigation", () => {
       collapsed: request.collapsed,
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: () => () => undefined,
       setDirectoryThreadsCollapsed,
     };
@@ -12391,7 +11773,7 @@ describe("useThreadNavigation", () => {
       needsAttentionCount: 0,
       directoryThreadsCollapsed: false,
     };
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       federationTarget,
@@ -12414,7 +11796,7 @@ describe("useThreadNavigation", () => {
       collapsed: request.collapsed,
     }));
     const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (handler) => {
         agentEventHandler = handler;
         return () => undefined;
@@ -12483,7 +11865,8 @@ describe("useThreadNavigation", () => {
       | undefined;
     // Both threads deliberately share an id: only the federation origin
     // distinguishes them.
-    const getNavigationSnapshot = vi.fn(async () => ({
+    let remotePrs = [buildPr({})];
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -12518,12 +11901,12 @@ describe("useThreadNavigation", () => {
               threadId: "shared-thread-id",
             },
           },
-          prs: [buildPr({})],
+          prs: remotePrs,
         },
       ],
     }));
     const desktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (
         callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0],
       ) => {
@@ -12540,6 +11923,7 @@ describe("useThreadNavigation", () => {
     });
 
     await act(async () => {
+      remotePrs = [buildPr({ state: "merged", lifecycleState: "merged" })];
       agentEventHandler?.({
         backend: "codex",
         federationTarget,
@@ -12562,6 +11946,7 @@ describe("useThreadNavigation", () => {
     // A peer's attachment-list event must not rewrite the local thread
     // that shares its id.
     await act(async () => {
+      remotePrs = [buildPr({ number: 4242 })];
       agentEventHandler?.({
         backend: "codex",
         federationTarget,
@@ -12589,7 +11974,7 @@ describe("useThreadNavigation", () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -12629,7 +12014,7 @@ describe("useThreadNavigation", () => {
       ],
     }));
     const desktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (
         callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0],
       ) => {
@@ -12671,7 +12056,7 @@ describe("useThreadNavigation", () => {
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
     let updatedAt = 1_000;
-    const getNavigationSnapshot = vi.fn(async () => ({
+    const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -12702,7 +12087,7 @@ describe("useThreadNavigation", () => {
       ],
     }));
     const desktopApi = {
-      getNavigationSnapshot,
+      readPopulation,
       onAgentEvent: (
         callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0],
       ) => {
@@ -12739,7 +12124,7 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
       expect(result.current.threads[0]?.updatedAt).toBe(2_000);
     });
   });
@@ -12796,7 +12181,7 @@ describe("useThreadNavigation", () => {
       },
     };
     const desktopApi = {
-      getNavigationSnapshot: vi.fn(async () => ({
+      readPopulation: vi.fn(async () => ({
         backend: "all" as const,
         fetchedAt: Date.now(),
         unchanged: false,
@@ -12821,6 +12206,10 @@ describe("useThreadNavigation", () => {
     await waitFor(() => expect(result.current.threads).toHaveLength(4));
 
     act(() => {
+      remoteParent.subthreadOrder = ["remote-child"];
+      remoteParent.subthreadsCollapsed = true;
+      remoteChild.parentThreadId = "shared-parent";
+      remoteChild.parentThreadBackend = "codex";
       agentEventHandler?.({
         backend: "codex",
         federationTarget,
@@ -12860,20 +12249,24 @@ describe("useThreadNavigation", () => {
     const localRows = result.current.threads.filter((thread) => !thread.federation);
     const remoteRows = result.current.threads.filter((thread) => thread.federation);
     expect(localRows.find((thread) => thread.id === "shared-parent")).toMatchObject({
-      subthreadOrder: ["local-child"],
       subthreadsCollapsed: false,
     });
-    expect(localRows.find((thread) => thread.id === "shared-child"))
-      .not.toHaveProperty("parentThreadId");
+    expect(localRows.find((thread) => thread.id === "shared-parent")?.subthreadOrder).toBeUndefined();
+    expect(localRows.find((thread) => thread.id === "shared-child")?.parentThreadId).toBeUndefined();
     expect(remoteRows.find((thread) => thread.id === "shared-parent")).toMatchObject({
-      subthreadOrder: ["remote-child"],
       subthreadsCollapsed: true,
     });
+    expect(remoteRows.find((thread) => thread.id === "shared-parent")?.subthreadOrder).toBeUndefined();
     expect(remoteRows.find((thread) => thread.id === "shared-child"))
       .toMatchObject({
         parentThreadId: "shared-parent",
         parentThreadBackend: "codex",
       });
+    act(() => result.current.selectThread(localRows.find((thread) => thread.id === "shared-parent")!));
+    await waitFor(() => expect(result.current.selectedThread?.subthreadOrder).toEqual(["local-child"]));
+    act(() => result.current.selectThread(remoteRows.find((thread) => thread.id === "shared-parent")!));
+    await waitFor(() => expect(result.current.selectedThread?.subthreadOrder).toEqual(["remote-child"]));
+
   });
 
   describe("pickAndRegisterDirectory (issue #223)", () => {
@@ -12918,7 +12311,7 @@ describe("useThreadNavigation", () => {
       overrides: Partial<DesktopApi> = {},
     ): DesktopApi {
       return {
-        getNavigationSnapshot: vi.fn(async () => buildSnapshot()),
+        readPopulation: vi.fn(async () => buildSnapshot()),
         onAgentEvent: () => () => undefined,
         ...overrides,
       };
@@ -12952,7 +12345,7 @@ describe("useThreadNavigation", () => {
           executionMode: "default" as const,
         },
       }));
-      const getNavigationSnapshot = vi.fn(async () => ({
+      const readPopulation = vi.fn(async () => ({
         backend: "all" as const,
         fetchedAt: Date.now(),
         unchanged: false,
@@ -12983,7 +12376,7 @@ describe("useThreadNavigation", () => {
       }));
 
       const desktopApi = buildBaseDesktopApi({
-        getNavigationSnapshot,
+        readPopulation,
         pickDirectoryFromDisk,
         registerDirectoryFromDisk,
       });
@@ -13073,7 +12466,7 @@ describe("useThreadNavigation", () => {
         launchpad,
         defaults: launchpadDefaults,
       }));
-      const getNavigationSnapshot = vi
+      const readPopulation = vi
         .fn()
         .mockResolvedValueOnce(buildSnapshot())
         .mockResolvedValueOnce(
@@ -13093,7 +12486,7 @@ describe("useThreadNavigation", () => {
         scheduledCount: 1,
       }));
       const desktopApi = buildBaseDesktopApi({
-        getNavigationSnapshot,
+        readPopulation,
         pickDirectoryFromDisk,
         registerDirectoryFromDisk,
         refreshDirectoryGitStatuses,
@@ -13128,7 +12521,7 @@ describe("useThreadNavigation", () => {
         launchpad,
         defaults: launchpadDefaults,
       }));
-      const getNavigationSnapshot = vi
+      const readPopulation = vi
         .fn()
         .mockResolvedValueOnce(buildSnapshot())
         .mockReturnValueOnce(refreshSnapshot.promise);
@@ -13140,7 +12533,7 @@ describe("useThreadNavigation", () => {
         defaults: launchpadDefaults,
       }));
       const desktopApi = buildBaseDesktopApi({
-        getNavigationSnapshot,
+        readPopulation,
         pickDirectoryFromDisk,
         registerDirectoryFromDisk,
         refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
@@ -13282,9 +12675,9 @@ describe("useThreadNavigation", () => {
 
     it("addProjectDirectory tracks an empty repo and reveals the Directories lens", async () => {
       const launchpad = buildPickedLaunchpad({ registeredAt: 1_500 });
-      const getNavigationSnapshot = vi.fn(async () => buildSnapshot());
+      const readPopulation = vi.fn(async () => buildSnapshot());
       const desktopApi = buildBaseDesktopApi({
-        getNavigationSnapshot,
+        readPopulation,
         pickDirectoryFromDisk: vi.fn(async () => ({
           canceled: false as const,
           path: "/Users/me/repos/PwrAgent",
@@ -13308,14 +12701,13 @@ describe("useThreadNavigation", () => {
       });
 
       expect(result.current.browseMode).toBe("directories");
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(readPopulation).toHaveBeenCalledTimes(2);
       expect(result.current.selectedItemKey).toBeUndefined();
       expect(result.current.directories).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             key: launchpad.directoryKey,
             label: "PwrAgent",
-            threadKeys: [],
             launchpad: expect.objectContaining({
               registeredAt: launchpad.registeredAt,
             }),
@@ -13351,5 +12743,45 @@ describe("useThreadNavigation", () => {
       expect(result.current.pickDirectoryError).toContain("not inside a git");
       expect(result.current.selectedItemKey).toBeUndefined();
     });
+  });
+});
+
+describe("main selected detail authority", () => {
+  beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  });
+  afterEach(() => vi.restoreAllMocks());
+  it("keeps an off-page peer selection and hydrates configuration independently of row refresh", async () => {
+    const snapshot = acpTitleSnapshot("Loaded row", "explicit", 1);
+    const thread = { ...snapshot.threads[0]!, id: "off-page", model: "owner-model" };
+    const target = { scope: "remote" as const, instanceId: "peer" };
+    let resolveDetail!: (value: Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>) => void;
+    const pending = new Promise<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>>>((resolve) => { resolveDetail = resolve; });
+    const readDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => {
+      if (request.ref.threadId === "off-page") return pending;
+      return { protocol: 2, ref: request.ref, revision: "loaded", readiness: "ready", identity: "present", thread: snapshot.threads[0] };
+    });
+    const api = {
+      readPopulation: vi.fn(async () => snapshot), getNavigationSelectedDetail: readDetail,
+    } as unknown as DesktopApi;
+    const hook = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+    await act(() => hook.result.current.showThread({ backend: "acp:kimi", threadId: "off-page", federationTarget: target }));
+    expect(hook.result.current.selectedThreadKey).toBe("remote:peer:acp:kimi:off-page");
+    expect(hook.result.current.selectedThreadConfigurationReady).toBe(false);
+    expect(readDetail).toHaveBeenLastCalledWith(expect.objectContaining({
+      ref: { backend: "acp:kimi", threadId: "off-page", ownerInstanceId: "peer" }, federationTarget: target,
+    }), expect.stringMatching(/^selected-detail:/));
+    await act(async () => resolveDetail({
+      protocol: 2, ref: { backend: "acp:kimi", threadId: "off-page", ownerInstanceId: "peer" },
+      revision: "exact", readiness: "ready", identity: "present", thread,
+    }));
+    expect(hook.result.current.selectedThreadConfigurationReady).toBe(true);
+    expect(hook.result.current.selectedThread?.model).toBe("owner-model");
+    await act(() => hook.result.current.refresh());
+    expect(hook.result.current.threads.some((row) => row.id === "off-page")).toBe(false);
+    expect(hook.result.current.selectedThread?.id).toBe("off-page");
+    expect(hook.result.current.selectedThreadKey).toBe("remote:peer:acp:kimi:off-page");
   });
 });

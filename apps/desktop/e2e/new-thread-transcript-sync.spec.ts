@@ -93,6 +93,7 @@ async function createNewThreadTranscriptFixture(): Promise<{
             id: "thread-list-2",
             kind: "response",
             method: "thread/list",
+            afterResponseId: "thread-start-1",
             result: [
               {
                 id: "thread-existing",
@@ -337,6 +338,7 @@ async function createNewThreadFocusFixture(): Promise<{
             id: "thread-list-2",
             kind: "response",
             method: "thread/list",
+            afterResponseId: "thread-start-1",
             result: [
               {
                 id: "thread-new",
@@ -584,22 +586,20 @@ test("does not move focus back to a new thread after the user selects another th
     await app.window.evaluate(() => {
       const api = (
         window as typeof window & {
-          pwragent: { getNavigationSnapshot: () => Promise<unknown> };
+          pwragent: { getNavigationQueryPage: (request: { query: { kind: string } }, consumerId?: string) => Promise<unknown> };
         }
       ).pwragent;
-      const originalGetNavigationSnapshot = api.getNavigationSnapshot.bind(api);
-      let calls = 0;
+      const originalGetNavigationQueryPage = api.getNavigationQueryPage.bind(api);
       let releaseRefresh: (() => void) | undefined;
       const refreshGate = new Promise<void>((resolve) => {
         releaseRefresh = resolve;
       });
 
-      api.getNavigationSnapshot = async () => {
-        calls += 1;
-        if (calls > 0) {
+      api.getNavigationQueryPage = async (request, consumerId) => {
+        if (request.query.kind !== "exact") {
           await refreshGate;
         }
-        return await originalGetNavigationSnapshot();
+        return await originalGetNavigationQueryPage(request, consumerId);
       };
       (
         window as typeof window & { __releaseFocusRegressionRefresh?: () => void }

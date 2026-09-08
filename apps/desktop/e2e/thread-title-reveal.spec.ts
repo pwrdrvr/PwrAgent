@@ -226,6 +226,8 @@ async function launchThreadTitleRevealApp() {
       }
     },
   });
+  await expect(app.window.getByRole("region", { name: "Transcript" }))
+    .toContainText("Pin this thread before exercising the reveal.");
   return { app, fixture };
 }
 

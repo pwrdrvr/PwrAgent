@@ -1,4 +1,6 @@
+import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
+import { relativePinRanks } from "./relative-pin-order";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
@@ -12,8 +14,11 @@ import type {
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
   NavigationBrowseMode,
+  NavigationRelativePinMove,
+  NavigationRelativeChildMove,
   ThreadQueuedTurnSummary,
   NavigationDirectoryGitStatus,
+  NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -34,6 +39,8 @@ import type {
   ThreadPermissionTransition,
   ThreadPricingSummary,
   ThreadSpendAlert,
+  ListPendingThreadSpendAlertsRequest,
+  ListPendingThreadSpendAlertsResponse,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
@@ -64,11 +71,15 @@ import {
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
+  NAVIGATION_QUERY_MAX_RESULT_BYTES,
   buildPullRequestStatusKey,
   buildFederatedThreadRef,
+  federatedThreadIdentityKey,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   buildNavigationSnapshot,
+  buildDirectorySummaries,
+  materializeNavigationThreads,
   buildNavigationSnapshotHash,
   applyNavigationLaunchpadProviderSettingsPatch,
   estimateTokenUsageCost,
@@ -617,6 +628,9 @@ function stripFederationStamp(
   return rest;
 }
 
+const NAVIGATION_UNREAD_BASELINE_KEY = "navigation-unread-baseline-v2";
+type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
+
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private managedSubAgentCache?: {
     dataVersion: number;
@@ -628,7 +642,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     state: { knownThreadKeys: string[]; lastSnapshotHash?: string };
   };
 
+  private navigationUnreadBaseline?: NavigationUnreadBaseline;
   constructor(private readonly stateDb: StateDb) {}
+
+  /** Read-only stamp prevents a post-mutation query joining pre-mutation work. */
+  readNavigationSourceVersion(): string {
+    const external = this.stateDb.raw.pragma("data_version", { simple: true });
+    const local = this.stateDb.raw.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    return `${external}:${local.changes}`;
+  }
 
   /**
    * Finalize sub-agents whose creating PwrAgent runtime no longer exists.
@@ -762,6 +784,177 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     });
     reconcile();
     return result;
+  }
+
+  /** Owner worktree maintenance reads PR metadata without selected thread payloads. */
+  readDetachedThreadPullRequests(params: { backend: AppServerBackendKind; threadIds: string[] }): Record<string, PrSummary[]> {
+    const result: Record<string, PrSummary[]> = {};
+    let bytes = 0;
+    const keys = params.threadIds.map((id) => buildThreadIdentityKey(params.backend, id));
+    for (const row of this.stateDb.raw.prepare(`
+      SELECT json_extract(payload, '$.threadId') AS threadId,
+        json_extract(payload, '$.detachedPrs') AS prs
+      FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
+        AND json_type(payload, '$.detachedPrs') = 'array'
+    `).iterate(JSON.stringify(keys)) as Iterable<{ threadId: string; prs: string }>) {
+      bytes += Buffer.byteLength(row.prs, "utf8");
+      if (bytes > 8 * 1024 * 1024) throw new Error("Detached pull-request metadata exceeds its 8 MiB budget.");
+      result[row.threadId] = JSON.parse(row.prs) as PrSummary[];
+    }
+    return result;
+  }
+
+  /** Owner startup initializes this once; ordinary navigation reads never persist a baseline. */
+  initializeNavigationUnreadBaseline(threads: readonly NavigationThreadSummary[]): boolean {
+    if (this.readNavigationUnreadBaseline()) return false;
+    const legacy = this.getBackend("all");
+    const baseline: NavigationUnreadBaseline = legacy?.lastSnapshotHash
+      ? { seenUpdatedAt: {}, knownThreadKeys: legacy.knownThreadKeys }
+      : { seenUpdatedAt: Object.fromEntries(threads.map((thread) => [
+          buildThreadIdentityKey(thread.source, thread.id), thread.updatedAt ?? 0,
+        ])), knownThreadKeys: [] };
+    const serialized = JSON.stringify(baseline);
+    if (Buffer.byteLength(serialized, "utf8") > 8 * 1024 * 1024) {
+      throw new Error("Initial navigation unread baseline exceeds its 8 MiB metadata budget.");
+    }
+    // A concurrent process sharing this profile must not replace the first
+    // owner's baseline with later provider versions and clear unread work.
+    const result = this.stateDb.raw.prepare("INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)")
+      .run(NAVIGATION_UNREAD_BASELINE_KEY, serialized);
+    this.navigationUnreadBaseline = result.changes ? baseline : this.readNavigationUnreadBaseline();
+    return result.changes > 0;
+  }
+
+  private readNavigationUnreadBaseline(): NavigationUnreadBaseline | undefined {
+    if (this.navigationUnreadBaseline) return this.navigationUnreadBaseline;
+    const value = this.stateDb.getMeta(NAVIGATION_UNREAD_BASELINE_KEY);
+    if (!value) return undefined;
+    if (Buffer.byteLength(value, "utf8") > 8 * 1024 * 1024) throw new Error("Navigation unread baseline exceeds its metadata budget.");
+    this.navigationUnreadBaseline = JSON.parse(value) as NavigationUnreadBaseline;
+    return this.navigationUnreadBaseline;
+  }
+
+  /** Complete owner index inputs. Selected configuration and payload collections never enter this read. */
+  readNavigationQueryIndex(params: {
+    backend: AppServerBackendScope;
+    threads: AppServerThreadSummary[];
+    workspaceRoots?: string[];
+  }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[] } {
+    const backendState = this.getBackend(params.backend);
+    const baseline = this.readNavigationUnreadBaseline();
+    const managed = this.listManagedSubAgentThreadKeys();
+    // Explicit projection before materialization prevents provider additions
+    // from silently expanding retained navigation metadata.
+    let inputBytes = 0;
+    const nativeCounts = new Map<string, number>();
+    const providerRows = params.threads.filter((thread) => !managed.has(buildThreadIdentityKey(thread.source, thread.id))).map((thread) => {
+      nativeCounts.set(buildThreadIdentityKey(thread.source, thread.id), thread.codexNativeSubAgents?.length ?? 0);
+      const row = {
+        id: thread.id, source: thread.source, title: thread.title, titleSource: thread.titleSource,
+        threadStatus: thread.threadStatus, projectKey: thread.projectKey, createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt, archivedAt: thread.archivedAt, linkedDirectories: thread.linkedDirectories,
+        gitBranch: thread.gitBranch, gitOriginUrl: thread.gitOriginUrl, observedGitBranch: thread.observedGitBranch,
+        gitWorkingState: thread.gitWorkingState, executionMode: thread.executionMode, model: thread.model,
+        serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort, fastMode: thread.fastMode,
+        workspaceHandoff: thread.workspaceHandoff, codexNativeSubAgent: thread.codexNativeSubAgent,
+      };
+      inputBytes += Buffer.byteLength(JSON.stringify(row), "utf8");
+      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation metadata exceeds its 32 MiB admission budget.");
+      return row;
+    });
+    const keys = providerRows.map((thread) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.source, thread.id)));
+    const overlays: Record<string, ThreadOverlayState | undefined> = {};
+    const rows = this.stateDb.raw.prepare(`
+      SELECT thread_id, json_object(
+          'backend', json_extract(payload, '$.backend'),
+          'threadId', json_extract(payload, '$.threadId'),
+          'executionMode', json_extract(payload, '$.executionMode'),
+          'executionModeUpdatedAt', json_extract(payload, '$.executionModeUpdatedAt'),
+          'model', json_extract(payload, '$.model'),
+          'reasoningEffort', json_extract(payload, '$.reasoningEffort'),
+          'serviceTier', json_extract(payload, '$.serviceTier'),
+          'fastMode', json(CASE json_type(payload, '$.fastMode') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+          'modelMigrationRevision', json_extract(payload, '$.modelMigrationRevision'),
+          'modelSettingsManuallyUpdatedAt', json_extract(payload, '$.modelSettingsManuallyUpdatedAt'),
+          'gitBranch', json_extract(payload, '$.gitBranch'),
+          'observedGitBranch', json_extract(payload, '$.observedGitBranch'),
+          'snoozedUntil', json_extract(payload, '$.snoozedUntil'),
+          'dismissedAt', json_extract(payload, '$.dismissedAt'),
+          'lastSeenAt', json_extract(payload, '$.lastSeenAt'),
+          'lastSeenUpdatedAt', json_extract(payload, '$.lastSeenUpdatedAt'),
+          'extraLinkedDirectories', json_extract(payload, '$.extraLinkedDirectories'),
+          'pinnedRank', json_extract(payload, '$.pinnedRank'),
+          'parentThreadId', json_extract(payload, '$.parentThreadId'),
+          'parentThreadBackend', json_extract(payload, '$.parentThreadBackend'),
+          'parentThreadInstanceId', json_extract(payload, '$.parentThreadInstanceId'),
+          'subthreadOrder', json_extract(payload, '$.subthreadOrder'),
+          'subthreadsCollapsed', json(CASE json_type(payload, '$.subthreadsCollapsed') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+          'prs', json_extract(payload, '$.prs'),
+          'reactions', json_extract(payload, '$.reactions'),
+          'scheduledStart', json_extract(payload, '$.scheduledStart'),
+          'prAutoDispatchEnabled', json(CASE json_type(payload, '$.prAutoDispatchEnabled') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+          'agent', CASE WHEN json_type(payload, '$.agent') = 'object'
+            AND NOT COALESCE(json_extract(payload, '$.agent.instructions') = ?
+              AND json_type(payload, '$.handoffOrigin') = 'object'
+              AND (json_extract(payload, '$.handoffOrigin.taskTitle') IS NULL
+                OR json_extract(payload, '$.agent.name') = json_extract(payload, '$.handoffOrigin.taskTitle')), 0) THEN json_object(
+            'name', json_extract(payload, '$.agent.name'),
+            'instructions', '',
+            'instructionLineCount', json_extract(payload, '$.agent.instructionLineCount'),
+            'instructionsTooLong', json(CASE json_type(payload, '$.agent.instructionsTooLong') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
+            'createdAt', json_extract(payload, '$.agent.createdAt'),
+            'updatedAt', json_extract(payload, '$.agent.updatedAt')
+          ) END
+      ) AS compact FROM threads WHERE thread_id IN (SELECT value FROM json_each(?))
+    `).iterate(LEGACY_HANDOFF_AGENT_INSTRUCTIONS, JSON.stringify(keys)) as Iterable<{ thread_id: string; compact: string }>;
+    for (const row of rows) {
+      inputBytes += Buffer.byteLength(row.compact, "utf8");
+      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
+      const value = JSON.parse(row.compact) as Record<string, unknown>;
+      overlays[normalizeThreadIdentityKey(row.thread_id) ?? row.thread_id] = normalizeThreadOverlayState(
+        Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as ThreadOverlayState,
+      );
+    }
+    const launchpads: Record<string, DirectoryLaunchpadOverlayState> = {};
+    const launchpadPresenceKeys = new Set<string>();
+    const drafts = this.stateDb.raw.prepare(`
+      SELECT directory_path, json_object(
+        'directoryKey', json_extract(payload, '$.directoryKey'),
+        'directoryKind', json_extract(payload, '$.directoryKind'),
+        'directoryLabel', json_extract(payload, '$.directoryLabel'),
+        'directoryPath', json_extract(payload, '$.directoryPath'),
+        'backend', json_extract(payload, '$.backend'),
+        'executionMode', json_extract(payload, '$.executionMode'),
+        'createdAt', json_extract(payload, '$.createdAt'),
+        'updatedAt', json_extract(payload, '$.updatedAt'), 'prompt', ''
+      ) AS compact FROM directory_launchpads
+      WHERE length(trim(COALESCE(json_extract(payload, '$.prompt'), ''))) > 0
+        OR COALESCE(json_array_length(payload, '$.imageAttachments'), 0) > 0
+        OR json_extract(payload, '$.registeredAt') IS NOT NULL
+        OR json_extract(payload, '$.settingsTouchedAt') IS NOT NULL
+    `).iterate() as Iterable<{ directory_path: string; compact: string }>;
+    for (const row of drafts) {
+      inputBytes += Buffer.byteLength(row.compact, "utf8");
+      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
+      const value = JSON.parse(row.compact) as Record<string, unknown>;
+      launchpads[row.directory_path] = Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as DirectoryLaunchpadOverlayState;
+      launchpadPresenceKeys.add(row.directory_path);
+    }
+    for (const thread of providerRows) {
+      const key = buildThreadIdentityKey(thread.source, thread.id);
+      const seenUpdatedAt = baseline?.seenUpdatedAt[key];
+      if (seenUpdatedAt !== undefined && overlays[key]?.lastSeenUpdatedAt === undefined) {
+        overlays[key] = { backend: thread.source, threadId: thread.id, executionMode: thread.executionMode ?? "default",
+          extraLinkedDirectories: [], ...overlays[key], lastSeenUpdatedAt: seenUpdatedAt };
+      }
+    }
+    const threads = materializeNavigationThreads({ threads: providerRows, overlayByThreadKey: overlays,
+      firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
+      previousKnownThreadKeys: baseline?.knownThreadKeys ?? backendState?.knownThreadKeys ?? [] }).map((thread) => ({ ...thread,
+        nativeSubAgentCount: nativeCounts.get(buildThreadIdentityKey(thread.source, thread.id)) ?? 0 }));
+    const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
+      directoryOverlayByKey: this.readAllDirectoryOverlaysSync(), workspaceRoots: params.workspaceRoots });
+    return { threads, directories };
   }
 
   async reconcileNavigationSnapshot(params: {
@@ -1009,6 +1202,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     seenUpdatedAt?: number;
     threadId: string;
   }): Promise<MarkThreadSeenResponse> {
+    return this.putThreadSeen(params);
+  }
+
+  /** One explicit owner action commits once, regardless of directory size. */
+  markNavigationThreadsSeen(threads: readonly {
+    backend: ThreadOverlayState["backend"]; threadId: string; seenUpdatedAt?: number;
+  }[]): number {
+    if (!threads.length) return 0;
+    const seenAt = Date.now();
+    return this.stateDb.raw.transaction(() => {
+      for (const thread of threads) this.putThreadSeen({ ...thread, seenAt });
+      return threads.length;
+    })();
+  }
+
+  private putThreadSeen(params: {
+    backend: ThreadOverlayState["backend"];
+    seenAt?: number;
+    seenUpdatedAt?: number;
+    threadId: string;
+  }): MarkThreadSeenResponse {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey);
     const seenAt = params.seenAt ?? Date.now();
@@ -2901,6 +3115,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  /** Bounded local inbox read; unrelated overlay payloads never leave SQLite. */
+  async listPendingThreadSpendAlerts(request: ListPendingThreadSpendAlertsRequest): Promise<ListPendingThreadSpendAlertsResponse> {
+    const limit = request.limit ?? 10;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error("Spend alert page size must be between one and ten.");
+    const rows = this.stateDb.raw.prepare(`SELECT
+      COALESCE(json_extract(payload, '$.backend'), 'codex') AS backend,
+      CASE WHEN length(CAST(json_extract(payload, '$.threadSpendAlertPending') AS BLOB)) <= 16384
+        THEN json_extract(payload, '$.threadSpendAlertPending') END AS alert
+      FROM threads WHERE json_type(payload, '$.threadSpendAlertPending') = 'object'
+      ORDER BY thread_id LIMIT ?`).all(limit + 1) as Array<{ backend: AppServerBackendKind; alert: string | null }>;
+    const alerts = rows.slice(0, limit).map((row) => {
+      if (row.alert === null) throw new Error("Pending spend alert exceeds its bounded payload budget.");
+      return { backend: row.backend, alert: JSON.parse(row.alert) as ThreadSpendAlert };
+    });
+    return { alerts, hasMore: rows.length > limit };
+  }
+
   /** Retains the threshold-crossing payload until a renderer receives it. */
   async setThreadSpendAlertPending(params: {
     alert: ThreadSpendAlert;
@@ -3031,25 +3262,44 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  private appendThreadPinRank(): string {
+    const ranks = this.stateDb.raw.prepare(
+      `SELECT json_extract(payload, '$.pinnedRank') AS rank FROM threads
+       WHERE json_type(payload, '$.pinnedRank') = 'text'
+       UNION ALL
+       SELECT json_extract(payload, '$.localPinnedRank') AS rank FROM remote_thread_pins
+       WHERE revoked_at IS NULL AND json_type(payload, '$.localPinnedRank') = 'text'`,
+    ).all() as Array<{ rank: string }>;
+    return buildAppendPinRank(ranks.map((row) => row.rank));
+  }
+
   async setThreadPin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
+    pinned?: boolean;
     pinnedRank?: string | null;
   }): Promise<ThreadOverlayState> {
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const pinnedRank = params.pinnedRank?.trim();
-    const nextState: ThreadOverlayState = {
-      ...current,
-      pinnedRank: pinnedRank || undefined,
-    };
-    this.putThread(threadKey, nextState);
-    return nextState;
+    if (params.pinned !== undefined
+      && (typeof params.pinned !== "boolean" || params.pinnedRank != null)) {
+      throw new Error("Provide either pin intent or an explicit legacy rank.");
+    }
+    return this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim()
+        : params.pinned ? current.pinnedRank ?? this.appendThreadPinRank() : undefined;
+      const nextState: ThreadOverlayState = {
+        ...current,
+        pinnedRank: pinnedRank || undefined,
+      };
+      this.putThread(threadKey, nextState);
+      return nextState;
+    })();
   }
 
   async addRemoteThreadPin(params: {
@@ -3183,45 +3433,54 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
    */
   async setRemoteThreadLocalPin(params: {
     ref: FederatedThreadRef;
+    pinned?: boolean;
     pinnedRank?: string | null;
   }): Promise<{ pinnedRank?: string }> {
-    const instanceId = remotePinInstanceId(params.ref);
-    const row = this.stateDb.raw
-      .prepare(
-        `SELECT payload FROM remote_thread_pins
-         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
-      )
-      .get(instanceId, params.ref.backend, params.ref.threadId) as
-        | { payload: string }
-        | undefined;
-    if (!row) {
-      return {};
+    if (params.pinned !== undefined
+      && (typeof params.pinned !== "boolean" || params.pinnedRank != null)) {
+      throw new Error("Provide either pin intent or an explicit legacy rank.");
     }
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(row.payload) as Record<string, unknown>;
-    } catch {
-      parsed = {};
-    }
-    const pinnedRank = params.pinnedRank?.trim() || undefined;
-    if (pinnedRank === undefined) {
-      delete parsed.localPinnedRank;
-    } else {
-      parsed.localPinnedRank = pinnedRank;
-    }
-    this.stateDb.raw
-      .prepare(
-        `UPDATE remote_thread_pins
-         SET payload = ?
-         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
-      )
-      .run(
-        JSON.stringify(parsed),
-        instanceId,
-        params.ref.backend,
-        params.ref.threadId,
-      );
-    return pinnedRank === undefined ? {} : { pinnedRank };
+    return this.stateDb.raw.transaction(() => {
+      const instanceId = remotePinInstanceId(params.ref);
+      const row = this.stateDb.raw
+        .prepare(
+          `SELECT payload FROM remote_thread_pins
+           WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+        )
+        .get(instanceId, params.ref.backend, params.ref.threadId) as
+          | { payload: string }
+          | undefined;
+      if (!row) {
+        return {};
+      }
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        parsed = {};
+      }
+      const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim() || undefined
+        : params.pinned ? (typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
+          ? parsed.localPinnedRank : this.appendThreadPinRank()) : undefined;
+      if (pinnedRank === undefined) {
+        delete parsed.localPinnedRank;
+      } else {
+        parsed.localPinnedRank = pinnedRank;
+      }
+      this.stateDb.raw
+        .prepare(
+          `UPDATE remote_thread_pins
+           SET payload = ?
+           WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+        )
+        .run(
+          JSON.stringify(parsed),
+          instanceId,
+          params.ref.backend,
+          params.ref.threadId,
+        );
+      return pinnedRank === undefined ? {} : { pinnedRank };
+    })();
   }
 
   /**
@@ -3366,6 +3625,75 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       });
     }
     return pins;
+  }
+
+  /** Viewer membership only: never materialize cached detail, FIFO, bindings or draft payloads. */
+  async readRemoteThreadPinNavigationRows(): Promise<NavigationThreadSummary[]> {
+    const rows = this.stateDb.raw.prepare(`
+      WITH pins AS (
+        SELECT instance_id, backend, thread_id, added_at,
+          CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS data
+        FROM remote_thread_pins WHERE revoked_at IS NULL
+      ), projected AS (
+      SELECT instance_id, backend, thread_id, added_at,
+        COALESCE(json_array_length(data, '$.summary.linkedDirectories'), 0) AS directory_count,
+        json_object(
+          'title', substr(COALESCE(json_extract(data, '$.summary.title'), thread_id), 1, 2048),
+          'titleSource', COALESCE(json_extract(data, '$.summary.titleSource'), 'fallback'),
+          'createdAt', json_extract(data, '$.summary.createdAt'),
+          'updatedAt', json_extract(data, '$.summary.updatedAt'),
+          'archivedAt', json_extract(data, '$.summary.archivedAt'),
+          'threadStatus', json_extract(data, '$.summary.threadStatus'),
+          'projectKey', json_extract(data, '$.summary.projectKey'),
+          'gitBranch', json_extract(data, '$.summary.gitBranch'),
+          'parentThreadId', json_extract(data, '$.summary.parentThreadId'),
+          'parentThreadBackend', json_extract(data, '$.summary.parentThreadBackend'),
+          'parentThreadInstanceId', json_extract(data, '$.summary.parentThreadInstanceId'),
+          'subthreadsCollapsed', json_extract(data, '$.summary.subthreadsCollapsed'),
+          'pinnedRank', json_extract(data, '$.localPinnedRank'),
+          'inbox', json_object(
+            'inInbox', json(CASE WHEN json_extract(data, '$.summary.inbox.inInbox') = 1 THEN 'true' ELSE 'false' END),
+            'reason', json_extract(data, '$.summary.inbox.reason'),
+            'lastSeenUpdatedAt', json_extract(data, '$.summary.inbox.lastSeenUpdatedAt')
+          ),
+          'linkedDirectories', json((SELECT json_group_array(json_object(
+            'id', json_extract(value, '$.id'), 'kind', json_extract(value, '$.kind'),
+            'label', json_extract(value, '$.label'), 'path', json_extract(value, '$.path'),
+            'worktreePath', json_extract(value, '$.worktreePath')
+          )) FROM json_each(data, '$.summary.linkedDirectories') WHERE json_array_length(data, '$.summary.linkedDirectories') <= 100)),
+          'instanceLabel', substr(COALESCE(json_extract(data, '$.instanceLabel'), instance_id), 1, 512)
+        ) AS compact
+      FROM pins
+      ) SELECT instance_id, backend, thread_id, directory_count,
+        CASE WHEN length(CAST(compact AS BLOB)) <= ? THEN compact END AS compact
+      FROM projected ORDER BY added_at DESC
+    `).iterate(NAVIGATION_QUERY_MAX_RESULT_BYTES) as Iterable<{ instance_id: string; backend: string; thread_id: string; directory_count: number; compact: string | null }>;
+    const result: NavigationThreadSummary[] = [];
+    let retainedBytes = 2;
+    for (const row of rows) {
+      if (row.directory_count > 100 || row.compact === null) {
+        throw new Error("A pinned thread exceeds the navigation index row budget. Reduce its linked directories or cached metadata before refreshing.");
+      }
+      const parsed = JSON.parse(row.compact) as NavigationThreadSummary & { instanceLabel: string };
+      const { instanceLabel, ...fields } = parsed;
+      // SQLite JSON null represents an absent cached optional field. Do not
+      // pass it to consumers that distinguish absence from an explicit value.
+      const summary = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null)) as NavigationThreadSummary;
+      const ref = buildFederatedThreadRef({ backend: row.backend as FederatedThreadRef["backend"],
+        instanceId: row.instance_id, threadId: row.thread_id });
+      const projected: NavigationThreadSummary = { ...summary, id: row.thread_id, source: ref.backend,
+        federation: { ref, instanceLabel, peerStatus: "disconnected" } };
+      const rowBytes = Buffer.byteLength(JSON.stringify(projected), "utf8");
+      if (rowBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+        throw new Error("A pinned thread exceeds the navigation index row budget. Reduce its linked directories or cached metadata before refreshing.");
+      }
+      retainedBytes += rowBytes + (result.length ? 1 : 0);
+      if (retainedBytes > 8 * 1024 * 1024) {
+        throw new Error("Pinned navigation exceeds the 8 MiB viewer index budget. Remove unused pins before refreshing.");
+      }
+      result.push(projected);
+    }
+    return result;
   }
 
   async updateRemoteThreadPinSnapshots(
@@ -3606,7 +3934,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
    * skipped without consuming a rank.
    */
   async reorderThreadPins(params: {
-    threadKeys: string[];
+    threadKeys?: string[];
+    move?: NavigationRelativePinMove;
     /**
      * Keys owned by remote thread pins: their rank writes patch the
      * remote_thread_pins payload (viewer-owned) instead of the local thread
@@ -3614,7 +3943,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
      */
     remoteRefsByKey?: Record<string, FederatedThreadRef>;
   }): Promise<Record<string, string>> {
+    if (Boolean(params.move) === Boolean(params.threadKeys)) {
+      throw new Error("Provide either a complete pin order or one relative move.");
+    }
     const pinnedRanks: Record<string, string> = {};
+    const remoteRefsByKey = { ...params.remoteRefsByKey };
     const selectRemote = this.stateDb.raw.prepare(
       `SELECT payload FROM remote_thread_pins
        WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
@@ -3625,9 +3958,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
        WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
     );
     const write = this.stateDb.raw.transaction(() => {
+      let moveRanks: Record<string, string> | undefined;
+      if (params.move) {
+        const localPins = this.stateDb.raw.prepare(
+          `SELECT json_extract(payload, '$.backend') AS backend,
+                  json_extract(payload, '$.threadId') AS threadId,
+                  json_extract(payload, '$.pinnedRank') AS rank
+           FROM threads WHERE json_extract(payload, '$.pinnedRank') IS NOT NULL`,
+        ).all() as Array<{ backend: AppServerBackendKind; threadId: string; rank: string }>;
+        const remotePins = this.stateDb.raw.prepare(
+          `SELECT instance_id, backend, thread_id,
+                  json_extract(payload, '$.localPinnedRank') AS rank
+           FROM remote_thread_pins WHERE revoked_at IS NULL
+             AND json_extract(payload, '$.localPinnedRank') IS NOT NULL`,
+        ).all() as Array<{ instance_id: string; backend: AppServerBackendKind; thread_id: string; rank: string }>;
+        const pins = localPins.map((pin) => ({ key: buildThreadIdentityKey(pin.backend, pin.threadId), rank: pin.rank }));
+        for (const pin of remotePins) {
+          const ref = buildFederatedThreadRef({ backend: pin.backend, instanceId: pin.instance_id, threadId: pin.thread_id });
+          const key = federatedThreadIdentityKey(ref);
+          remoteRefsByKey[key] = ref;
+          pins.push({ key, rank: pin.rank });
+        }
+        moveRanks = relativePinRanks(pins, params.move);
+      }
       let rankIndex = 0;
-      for (const threadKey of params.threadKeys) {
-        const remoteRef = params.remoteRefsByKey?.[threadKey];
+      for (const threadKey of moveRanks ? Object.keys(moveRanks) : params.threadKeys ?? []) {
+        const remoteRef = remoteRefsByKey[threadKey];
         if (remoteRef) {
           const instanceId = remotePinInstanceId(remoteRef);
           const row = selectRemote.get(
@@ -3645,7 +4001,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             parsed = {};
           }
           rankIndex += 1;
-          const pinnedRank = String(rankIndex * 1024);
+          const pinnedRank = moveRanks?.[threadKey] ?? String(rankIndex * 1024);
           pinnedRanks[threadKey] = pinnedRank;
           parsed.localPinnedRank = pinnedRank;
           updateRemote.run(
@@ -3667,7 +4023,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           extraLinkedDirectories: [],
         };
         rankIndex += 1;
-        const pinnedRank = String(rankIndex * 1024);
+        const pinnedRank = moveRanks?.[threadKey] ?? String(rankIndex * 1024);
         pinnedRanks[threadKey] = pinnedRank;
         this.putThread(threadKey, {
           ...current,
@@ -3676,7 +4032,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
     });
     write();
-    return pinnedRanks;
+    return params.move
+      ? (pinnedRanks[params.move.key] ? { [params.move.key]: pinnedRanks[params.move.key]! } : {})
+      : pinnedRanks;
   }
 
   async setThreadParent(params: {
@@ -3685,6 +4043,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     parentThreadId?: string | null;
     parentThreadBackend?: ThreadOverlayState["backend"] | null;
     parentThreadInstanceId?: string | null;
+    expectedParent?: { threadId: string; backend: ThreadOverlayState["backend"]; instanceId?: string } | null;
   }): Promise<ThreadOverlayState> {
     if (
       params.parentThreadId === params.threadId
@@ -3692,70 +4051,130 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ) {
       throw new Error("A thread cannot be its own parent.");
     }
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const parentThreadId = params.parentThreadId?.trim();
-    const parentThreadBackend = parentThreadId
-      ? params.parentThreadBackend ?? params.backend
-      : undefined;
-    const parentThreadInstanceId = parentThreadId
-      ? params.parentThreadInstanceId?.trim() || undefined
-      : undefined;
-    const nextState: ThreadOverlayState = {
-      ...current,
-      parentThreadId: parentThreadId || undefined,
-      parentThreadBackend,
-      parentThreadInstanceId,
-      pinnedRank: parentThreadId ? undefined : current.pinnedRank,
-    };
-    this.putThread(threadKey, nextState);
-    if (parentThreadId && !parentThreadInstanceId) {
-      const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
-      const parent = this.getThread(parentKey) ?? {
-        backend: parentThreadBackend!,
-        threadId: parentThreadId,
+    return this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = this.getThread(threadKey) ?? {
+        backend: params.backend,
+        threadId: params.threadId,
         executionMode: "default" as const,
         extraLinkedDirectories: [],
       };
-      this.putThread(parentKey, {
-        ...parent,
-        subthreadOrder: [
-          ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
-          params.threadId,
-        ],
-      });
-    }
-    return nextState;
+      if (params.expectedParent !== undefined) {
+        const expected = params.expectedParent;
+        if (expected === null ? Boolean(current.parentThreadId)
+          : current.parentThreadId !== expected.threadId
+            || (current.parentThreadBackend ?? params.backend) !== expected.backend
+            || current.parentThreadInstanceId !== expected.instanceId) {
+          throw new Error("Thread parent changed. Refresh the group before changing its relationship.");
+        }
+      }
+      const parentThreadId = params.parentThreadId?.trim();
+      const parentThreadBackend = parentThreadId
+        ? params.parentThreadBackend ?? params.backend
+        : undefined;
+      const parentThreadInstanceId = parentThreadId
+        ? params.parentThreadInstanceId?.trim() || undefined
+        : undefined;
+      const nextState: ThreadOverlayState = {
+        ...current,
+        parentThreadId: parentThreadId || undefined,
+        parentThreadBackend,
+        parentThreadInstanceId,
+        pinnedRank: parentThreadId ? undefined : current.pinnedRank,
+      };
+      this.putThread(threadKey, nextState);
+      if (parentThreadId && !parentThreadInstanceId) {
+        const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
+        const parent = this.getThread(parentKey) ?? {
+          backend: parentThreadBackend!,
+          threadId: parentThreadId,
+          executionMode: "default" as const,
+          extraLinkedDirectories: [],
+        };
+        this.putThread(parentKey, {
+          ...parent,
+          subthreadOrder: [
+            ...(parent.subthreadOrder ?? []).filter((id) => id !== params.threadId),
+            params.threadId,
+          ],
+        });
+      }
+      return nextState;
+    })();
   }
 
   async updateSubthreadOrder(params: {
     backend: ThreadOverlayState["backend"];
     parentThreadId: string;
-    threadIds: string[];
+    threadIds?: string[];
+    insertAfter?: { threadId: string; sourceThreadId: string };
+    move?: NavigationRelativeChildMove;
+    children?: { id: string; createdAt?: number }[];
   }): Promise<string[]> {
-    const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
-    const parent = this.getThread(parentKey) ?? {
-      backend: params.backend,
-      threadId: params.parentThreadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const seen = new Set<string>();
-    const threadIds = params.threadIds.filter((threadId) => {
-      if (seen.has(threadId)) return false;
-      seen.add(threadId);
-      return threadId !== params.parentThreadId;
-    });
-    this.putThread(parentKey, {
-      ...parent,
-      subthreadOrder: threadIds,
-    });
-    return threadIds;
+    return this.stateDb.raw.transaction(() => {
+      const parentKey = buildThreadIdentityKey(params.backend, params.parentThreadId);
+      const parent = this.getThread(parentKey) ?? {
+        backend: params.backend,
+        threadId: params.parentThreadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      let requestedOrder = params.threadIds;
+      if (params.move) {
+        const { threadId, anchorThreadId, placement } = params.move;
+        if (params.threadIds || params.insertAfter || !params.children || !threadId || !anchorThreadId
+          || threadId === anchorThreadId || (placement !== "before" && placement !== "after")
+          || parent.archiveTombstonedAt !== undefined) {
+          throw new Error("A relative child move requires distinct live children and an owner order.");
+        }
+        for (const id of [threadId, anchorThreadId]) {
+          const child = this.getThread(buildThreadIdentityKey(params.backend, id));
+          if (!child || child.archiveTombstonedAt !== undefined || child.parentThreadId !== params.parentThreadId
+            || (child.parentThreadBackend ?? child.backend) !== params.backend || child.parentThreadInstanceId
+            || !params.children.some((entry) => entry.id === id)) {
+            throw new Error("The owning instance no longer places that child in this group.");
+          }
+        }
+        // Re-read manual ranks inside the write transaction, then retain every
+        // live owner child, including siblings absent from the viewer's pages.
+        requestedOrder = sortSubthreadSummaries(parent, params.children).map((child) => child.id)
+          .filter((id) => id !== threadId);
+        const anchor = requestedOrder.indexOf(anchorThreadId);
+        requestedOrder.splice(anchor + Number(placement === "after"), 0, threadId);
+      }
+      if (params.insertAfter) {
+        if (params.threadIds !== undefined || !params.insertAfter.threadId || !params.insertAfter.sourceThreadId) {
+          throw new Error("A relative child move requires exactly one source and child identity.");
+        }
+        const { threadId, sourceThreadId } = params.insertAfter;
+        for (const id of [threadId, sourceThreadId]) {
+          if (id === params.parentThreadId && id === sourceThreadId) continue;
+          const child = this.getThread(buildThreadIdentityKey(params.backend, id));
+          if (!child || child.archiveTombstonedAt !== undefined || child.parentThreadId !== params.parentThreadId
+            || (child.parentThreadBackend ?? child.backend) !== params.backend || child.parentThreadInstanceId) {
+            throw new Error("The owning instance no longer places that child in this group.");
+          }
+        }
+        if (parent.archiveTombstonedAt !== undefined || threadId === params.parentThreadId || threadId === sourceThreadId) {
+          throw new Error("The relative child move targets an invalid group identity.");
+        }
+        const ownerOrder = params.children
+          ? sortSubthreadSummaries(parent, params.children).map((child) => child.id)
+          : parent.subthreadOrder ?? [];
+        requestedOrder = insertSubthreadIdAfter(ownerOrder, sourceThreadId, threadId);
+      }
+      if (!requestedOrder) throw new Error("A child order or relative insertion is required.");
+      const seen = new Set<string>();
+      const threadIds = requestedOrder.filter((threadId) => {
+        if (seen.has(threadId)) return false;
+        seen.add(threadId);
+        return threadId !== params.parentThreadId;
+      });
+      if (JSON.stringify(threadIds) !== JSON.stringify(parent.subthreadOrder ?? [])) {
+        this.putThread(parentKey, { ...parent, subthreadOrder: threadIds });
+      }
+      return threadIds;
+    })();
   }
 
   async setSubthreadsCollapsed(params: {
@@ -3790,25 +4209,48 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
    */
   async setDirectoryPin(params: {
     directoryKey: string;
+    pinned?: boolean;
     pinnedRank?: string | null;
   }): Promise<DirectoryOverlayState> {
-    const pinnedRank = params.pinnedRank?.trim();
-    const nextState: DirectoryOverlayState = {
-      ...this.getDirectoryOverlay(params.directoryKey),
-      directoryKey: params.directoryKey,
-      pinnedRank: pinnedRank || undefined,
-    };
-    this.putDirectoryOverlay(params.directoryKey, nextState);
-    return nextState;
+    if (params.pinned !== undefined
+      && (typeof params.pinned !== "boolean" || params.pinnedRank != null)) {
+      throw new Error("Provide either pin intent or an explicit legacy rank.");
+    }
+    return this.stateDb.raw.transaction(() => {
+      const current = this.getDirectoryOverlay(params.directoryKey);
+      const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim()
+        : params.pinned ? current?.pinnedRank ?? buildAppendPinRank(
+          (this.stateDb.raw.prepare(
+            `SELECT json_extract(payload, '$.pinnedRank') AS rank FROM directory_overlay
+             WHERE json_type(payload, '$.pinnedRank') = 'text'`,
+          ).all() as Array<{ rank: string }>).map((row) => row.rank),
+        ) : undefined;
+      const nextState: DirectoryOverlayState = {
+        ...current,
+        directoryKey: params.directoryKey,
+        pinnedRank: pinnedRank || undefined,
+      };
+      this.putDirectoryOverlay(params.directoryKey, nextState);
+      return nextState;
+    })();
   }
 
   async reorderDirectoryPins(params: {
-    directoryKeys: string[];
+    directoryKeys?: string[];
+    move?: NavigationRelativePinMove;
   }): Promise<Record<string, string>> {
+    if (Boolean(params.move) === Boolean(params.directoryKeys)) {
+      throw new Error("Provide either a complete directory pin order or one relative move.");
+    }
     const pinnedRanks: Record<string, string> = {};
     const write = this.stateDb.raw.transaction(() => {
-      params.directoryKeys.forEach((directoryKey, index) => {
-        const pinnedRank = String((index + 1) * 1024);
+      const pins = params.move ? this.stateDb.raw.prepare(
+        `SELECT directory_key AS key, json_extract(payload, '$.pinnedRank') AS rank
+         FROM directory_overlay WHERE json_extract(payload, '$.pinnedRank') IS NOT NULL`,
+      ).all() as Array<{ key: string; rank: string }> : [];
+      const moveRanks = params.move ? relativePinRanks(pins, params.move) : undefined;
+      (moveRanks ? Object.keys(moveRanks) : params.directoryKeys ?? []).forEach((directoryKey, index) => {
+        const pinnedRank = moveRanks?.[directoryKey] ?? String((index + 1) * 1024);
         pinnedRanks[directoryKey] = pinnedRank;
         this.putDirectoryOverlay(directoryKey, {
           ...this.getDirectoryOverlay(directoryKey),
@@ -3818,7 +4260,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       });
     });
     write();
-    return pinnedRanks;
+    return params.move
+      ? (pinnedRanks[params.move.key] ? { [params.move.key]: pinnedRanks[params.move.key]! } : {})
+      : pinnedRanks;
   }
 
   async setDirectoryThreadsCollapsed(params: {
@@ -3872,13 +4316,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   async readRemoteDirectoryOverlays(params: {
     instanceId: string;
+    directoryKeys?: string[];
   }): Promise<Record<string, DirectoryOverlayState>> {
-    const rows = this.stateDb.raw
-      .prepare(
+    const keys = params.directoryKeys ? [...new Set(params.directoryKeys)] : undefined;
+    if (keys && keys.length > 101) throw new Error("Remote directory overlay lookup exceeds the bounded page budget.");
+    if (keys && !keys.length) return {};
+    const rows = (keys
+      ? this.stateDb.raw.prepare(
         `SELECT directory_key, payload FROM remote_directory_overlay
-         WHERE instance_id = ?`,
-      )
-      .all(params.instanceId) as Array<{
+         WHERE instance_id = ? AND directory_key IN (SELECT value FROM json_each(?))`,
+      ).all(params.instanceId, JSON.stringify(keys))
+      : this.stateDb.raw.prepare(
+        `SELECT directory_key, payload FROM remote_directory_overlay WHERE instance_id = ?`,
+      ).all(params.instanceId)) as Array<{
         directory_key: string;
         payload: string;
       }>;
@@ -3908,6 +4358,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .map((row) => JSON.parse(row.payload) as unknown)
       .filter(isStarMapArrangementEntry)
       .map(normalizeStarMapArrangementEntry);
+  }
+
+  async readStarMapArrangementPage(afterKey?: string): Promise<{
+    entries: StarMapArrangementEntry[];
+    nextKey?: string;
+  }> {
+    const rows = this.stateDb.raw.prepare(
+      "SELECT entry_key, payload FROM star_map_arrangement WHERE entry_key > ? ORDER BY entry_key LIMIT 100",
+    ).all(afterKey ?? "") as { entry_key: string; payload: string }[];
+    return {
+      entries: rows.map((row) => JSON.parse(row.payload) as unknown)
+        .filter(isStarMapArrangementEntry).map(normalizeStarMapArrangementEntry),
+      ...(rows.length === 100 ? { nextKey: rows.at(-1)!.entry_key } : {}),
+    };
   }
 
   /**
@@ -4577,55 +5041,43 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     prKeys: string[];
     now: number;
   }): Promise<void> {
-    const sync = this.stateDb.raw.transaction(() => {
-      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-      const enabled = this.getThread(threadKey)?.prAutoDispatchEnabled === true;
-      const prKeys = enabled ? [...new Set(params.prKeys)] : [];
-      if (prKeys.length === 0) {
-        this.stateDb.raw
-          .prepare(
-            `DELETE FROM pr_auto_dispatch_candidates
-             WHERE backend = ? AND thread_id = ?`,
-          )
-          .run(params.backend, params.threadId);
-        return;
-      }
+    await this.syncThreadPrAutoDispatchCandidatesBatch({ threads: [params], now: params.now });
+  }
 
-      const retainedPrKeys = new Set(prKeys);
-      const existingCandidates = this.stateDb.raw
-        .prepare(
-          `SELECT pr_key
-           FROM pr_auto_dispatch_candidates
-           WHERE backend = ? AND thread_id = ?`,
-        )
-        .all(params.backend, params.threadId) as Array<{ pr_key: string }>;
-      const removeCandidate = this.stateDb.raw.prepare(
-        `DELETE FROM pr_auto_dispatch_candidates
-         WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
+  async syncThreadPrAutoDispatchCandidatesBatch(params: {
+    threads: Array<{ backend: ThreadOverlayState["backend"]; threadId: string; prKeys: string[] }>;
+    now: number;
+  }): Promise<void> {
+    const existing = this.stateDb.raw.prepare(
+      `SELECT pr_key FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ?`,
+    );
+    const changesFor = (thread: typeof params.threads[number]) => {
+      const enabled = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId))?.prAutoDispatchEnabled === true;
+      const desired = new Set(enabled ? thread.prKeys : []);
+      const retained = new Set((existing.all(thread.backend, thread.threadId) as Array<{ pr_key: string }>).map((row) => row.pr_key));
+      return { add: [...desired].filter((key) => !retained.has(key)), remove: [...retained].filter((key) => !desired.has(key)) };
+    };
+    // Do not create even an empty transaction for an unchanged owner index.
+    if (!params.threads.some((thread) => {
+      const changes = changesFor(thread);
+      return changes.add.length > 0 || changes.remove.length > 0;
+    })) return;
+    this.stateDb.raw.transaction(() => {
+      const remove = this.stateDb.raw.prepare(
+        `DELETE FROM pr_auto_dispatch_candidates WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
       );
-      for (const candidate of existingCandidates) {
-        if (!retainedPrKeys.has(candidate.pr_key)) {
-          removeCandidate.run(candidate.pr_key, params.backend, params.threadId);
-        }
-      }
       const insert = this.stateDb.raw.prepare(
-        `INSERT INTO pr_auto_dispatch_candidates(
-           pr_key, backend, thread_id, eligible_since, updated_at
-         ) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(pr_key, backend, thread_id) DO UPDATE SET
-           updated_at = excluded.updated_at`,
+        `INSERT INTO pr_auto_dispatch_candidates(pr_key, backend, thread_id, eligible_since, updated_at)
+         VALUES (?, ?, ?, ?, ?) ON CONFLICT(pr_key, backend, thread_id) DO NOTHING`,
       );
-      for (const prKey of prKeys) {
-        insert.run(
-          prKey,
-          params.backend,
-          params.threadId,
-          params.now,
-          params.now,
-        );
+      for (const thread of params.threads) {
+        // Revalidate eligibility and membership inside the write transaction;
+        // another process may have changed them after the read-only preflight.
+        const changes = changesFor(thread);
+        for (const key of changes.remove) remove.run(key, thread.backend, thread.threadId);
+        for (const key of changes.add) insert.run(key, thread.backend, thread.threadId, params.now, params.now);
       }
-    });
-    sync();
+    })();
   }
 
   async getPrAutoDispatchCandidateWinner(params: {
@@ -6214,6 +6666,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         next.settingsTouchedAt ?? null,
       );
     return next;
+  }
+
+  async removeDirectoryRegistration(params: { directoryKey: string }): Promise<void> {
+    this.stateDb.raw.transaction(() => {
+      this.stateDb.raw.prepare("DELETE FROM directory_launchpads WHERE directory_path = ?")
+        .run(params.directoryKey);
+      const current = this.getDirectoryOverlay(params.directoryKey);
+      if (current?.pinnedRank) {
+        this.putDirectoryOverlay(params.directoryKey, { ...current, pinnedRank: undefined });
+      }
+    })();
   }
 
   async resetDirectoryLaunchpad(params: { directoryKey: string }): Promise<void> {
@@ -8150,6 +8613,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadMcpConnectionIds"
   | "setThreadPrAutoDispatchEnabled"
   | "syncThreadPrAutoDispatchCandidates"
+  | "syncThreadPrAutoDispatchCandidatesBatch"
   | "getPrAutoDispatchCandidateWinner"
   | "resetThreadPrAutoDispatchForOperator"
   | "scheduleThreadPrAutoDispatch"

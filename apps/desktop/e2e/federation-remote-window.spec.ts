@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import type { ThreadPrAutoDispatchPending } from "@pwragent/shared";
+import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
 import { generateFederationNoiseStaticKeyPair } from "../src/main/federation/federation-noise";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
@@ -438,30 +439,20 @@ test.describe("federation remote window", () => {
       });
       await window.getByRole("button", { name: /Exit Settings/i }).click();
       const collidingSnapshotThreads = await window.evaluate(
-        async (collidingThreadId) => {
-          const api = (window as typeof window & {
-            pwragent?: {
-              getNavigationSnapshot?: () => Promise<{
-                threads: Array<{
-                  id: string;
-                  title: string;
-                  federation?: { ref?: { target?: { instanceId?: string } } };
-                }>;
-              }>;
-            };
-          }).pwragent;
-          if (!api?.getNavigationSnapshot) {
-            throw new Error("getNavigationSnapshot API is unavailable");
-          }
-          const snapshot = await api.getNavigationSnapshot();
-          return snapshot.threads
-            .filter((thread) => thread.id === collidingThreadId)
-            .map((thread) => ({
-              instanceId: thread.federation?.ref?.target?.instanceId,
-              title: thread.title,
-            }));
+        async ({ collidingThreadId, ownerInstanceId }) => {
+          const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+          const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+            query: { kind: "exact", identities: [
+              { backend: "codex", threadId: collidingThreadId },
+              { backend: "codex", threadId: collidingThreadId, ownerInstanceId },
+            ] },
+          });
+          return page.entries.map(({ row }) => ({
+            instanceId: row.federation?.ref.target.scope === "remote" ? row.federation.ref.target.instanceId : undefined,
+            title: row.title,
+          }));
         },
-        threadId,
+        { collidingThreadId: threadId, ownerInstanceId: gateway.instanceId },
       );
       expect(collidingSnapshotThreads).toEqual(expect.arrayContaining([
         { instanceId: undefined, title: "Local colliding thread" },
@@ -1468,35 +1459,20 @@ test.describe("federation remote window", () => {
       expect(viewerInstanceId).toBeTruthy();
 
       const viewerDirectoryKey = await viewer.window.evaluate(async (directoryPath) => {
-        const api = (window as typeof window & {
-          pwragent?: {
-            getNavigationSnapshot?: (request: unknown) => Promise<{
-              directories: Array<{ key: string; path?: string }>;
-            }>;
-            setDirectoryThreadsCollapsed?: (request: unknown) => Promise<unknown>;
-            setThreadPin?: (request: unknown) => Promise<unknown>;
-          };
-        }).pwragent;
-        if (
-          !api?.getNavigationSnapshot
-          || !api.setDirectoryThreadsCollapsed
-          || !api.setThreadPin
-        ) {
-          throw new Error("Viewer navigation APIs are unavailable");
-        }
-        const snapshot = await api.getNavigationSnapshot({ backend: "all" });
-        const directory = snapshot.directories.find(
-          (candidate) => candidate.path === directoryPath,
-        );
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar",
+          query: { kind: "directory-index", paths: [directoryPath] },
+        });
+        const directory = page.directories?.find((candidate) => candidate.path === directoryPath);
         if (!directory) {
           throw new Error(`Viewer directory was not materialized: ${directoryPath}`);
         }
-        await api.setThreadPin({
+        await api.setThreadPin!({
           backend: "acp:kimi",
           threadId: "viewer-pin-anchor",
           pinnedRank: "1024",
         });
-        await api.setDirectoryThreadsCollapsed({
+        await api.setDirectoryThreadsCollapsed!({
           directoryKey: directory.key,
           collapsed: true,
         });
@@ -1551,32 +1527,15 @@ test.describe("federation remote window", () => {
       const readViewerRelationship = async () =>
         await viewer!.window.evaluate(
           async ({ childThreadId, parentInstanceId }) => {
-            const api = (window as typeof window & {
-              pwragent?: {
-                getNavigationSnapshot?: (request: unknown) => Promise<{
-                  threads: Array<{
-                    federation?: { ref?: { target?: { instanceId?: string } } };
-                    id: string;
-                    parentThreadBackend?: string;
-                    parentThreadId?: string;
-                    parentThreadInstanceId?: string;
-                    pinnedRank?: string;
-                    source: string;
-                    title: string;
-                  }>;
-                }>;
-              };
-            }).pwragent;
-            const snapshot = await api?.getNavigationSnapshot?.({ backend: "all" });
-            const childThread = snapshot?.threads.find(
-              (thread) => thread.source === "acp:kimi" && thread.id === childThreadId,
-            );
-            const parentThread = snapshot?.threads.find(
-              (thread) =>
-                thread.source === "acp:kimi"
-                && thread.id === "federated-kimi-parent"
-                && thread.federation?.ref?.target?.instanceId === parentInstanceId,
-            );
+            const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+            const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+              query: { kind: "exact", identities: [
+                { backend: "acp:kimi", threadId: childThreadId },
+                { backend: "acp:kimi", threadId: "federated-kimi-parent", ownerInstanceId: parentInstanceId },
+              ] },
+            });
+            const childThread = page.entries.find(({ row }) => row.id === childThreadId && !row.ref.ownerInstanceId)?.row;
+            const parentThread = page.entries.find(({ row }) => row.id === "federated-kimi-parent" && row.ref.ownerInstanceId === parentInstanceId)?.row;
             return { childThread, parentThread };
           },
           {
@@ -1594,7 +1553,7 @@ test.describe("federation remote window", () => {
         parentThreadId: "federated-kimi-parent",
         parentThreadInstanceId: ownerInstanceId,
       });
-      expect(relationship.parentThread?.pinnedRank).toBeTruthy();
+      expect(relationship.parentThread).toMatchObject({ pinnedRank: expect.any(String) });
 
       const viewerHomeRoot = viewer.homeRoot;
       await viewer.closeApplication();
@@ -1636,7 +1595,7 @@ test.describe("federation remote window", () => {
         )
         .toBe(ownerInstanceId);
       relationship = await readViewerRelationship();
-      expect(relationship.parentThread?.pinnedRank).toBeTruthy();
+      expect(relationship.parentThread).toMatchObject({ pinnedRank: expect.any(String) });
 
       const ownerHomeRoot = owner.homeRoot;
       await owner.closeApplication();
@@ -1767,6 +1726,11 @@ test.describe("federation remote window", () => {
     const launchMarkerPath = path.join(protocolDir, "fake-codex.launched");
     await mkdir(protocolDir, { recursive: true });
 
+    const navigationDiagnostics: string[] = [];
+    const recordDiagnostic = (message: string) => {
+      navigationDiagnostics.push(message.slice(0, 4000));
+      if (navigationDiagnostics.length > 100) navigationDiagnostics.shift();
+    };
     let owner: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
     let viewer: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
     try {
@@ -1912,6 +1876,9 @@ test.describe("federation remote window", () => {
         )
         .toContain('"status":"connected"');
 
+      for (const [name, instance] of [["owner", owner], ["viewer", viewer]] as const) {
+        instance.electronApp.process().stderr?.on("data", (data) => recordDiagnostic(`${name}: ${String(data)}`));
+      }
       const remoteWindowPromise = viewer.electronApp.waitForEvent("window");
       await viewer.window.evaluate(async (instanceId) => {
         const api = (window as typeof window & {
@@ -1927,6 +1894,7 @@ test.describe("federation remote window", () => {
         });
       }, enrollment.gatewayInstanceId);
       const remote = await remoteWindowPromise;
+      remote.on("console", (message) => recordDiagnostic(`renderer: ${message.text()}`));
       await remote.waitForLoadState("domcontentloaded");
 
       const remoteKimiParent = remote.getByRole("button", {
@@ -1980,23 +1948,14 @@ test.describe("federation remote window", () => {
         .poll(
           async () => await owner!.window.evaluate(
             async ({ parentThreadId }) => {
-              const api = (window as typeof window & {
-                pwragent?: {
-                  getNavigationSnapshot?: (request: unknown) => Promise<{
-                    threads: Array<{
-                      codexEnvironmentRuntime?: { environmentId?: string };
-                      parentThreadId?: string;
-                      source: string;
-                    }>;
-                  }>;
-                };
-              }).pwragent;
-              const snapshot = await api?.getNavigationSnapshot?.({ backend: "all" });
-              return snapshot?.threads.find(
-                (thread) =>
-                  thread.source === "codex"
-                  && thread.parentThreadId === parentThreadId,
-              )?.codexEnvironmentRuntime?.environmentId;
+              const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+              const children = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar",
+                query: { kind: "children", parent: { backend: "acp:kimi", threadId: parentThreadId } }, pageSize: 10,
+              });
+              const child = children.entries.find(({ row }) => row.source === "codex")?.row;
+              if (!child) return undefined;
+              const detail = await api.getNavigationSelectedDetail!({ protocol: 2, ref: child.ref });
+              return detail.thread?.codexEnvironmentRuntime?.environmentId;
             },
             { parentThreadId: parent.threadId },
           ),
@@ -2061,6 +2020,9 @@ test.describe("federation remote window", () => {
       expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
       expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at);
     } finally {
+      if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach("navigation-diagnostics", {
+        body: navigationDiagnostics.join("\n"), contentType: "text/plain",
+      });
       if (existsSync(requestLogPath)) {
         await testInfo.attach("fake-codex-protocol", {
           path: requestLogPath,

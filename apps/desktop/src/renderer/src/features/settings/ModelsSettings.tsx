@@ -12,6 +12,7 @@ import type {
   DesktopUpdateChannel,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
   SettingsContextStrip,
@@ -654,6 +655,7 @@ function ProviderModelDefaultsSettings(props: {
     model: string;
     reasoningEffort?: string;
   }>();
+  const previews = useNavigationSettingsPreview(props.desktopApi);
   const [pendingMigration, setPendingMigration] =
     useState<PendingThreadMigration>();
   const [pendingFastAction, setPendingFastAction] = useState<{
@@ -684,14 +686,16 @@ function ProviderModelDefaultsSettings(props: {
     model: string,
     reasoningEffort?: string,
   ): Promise<void> => {
-    if (!props.desktopApi?.getNavigationSnapshot) {
+    if (!props.desktopApi?.getNavigationQueryPage) {
       setStatus("Launchpad updates are unavailable in this build.");
       return;
     }
-    const navigation = await props.desktopApi.getNavigationSnapshot();
-    const directoryKeys = navigation.directories
-      .filter((directory) => directory.launchpad?.backend === backend.kind)
-      .map((directory) => directory.key);
+    const directoryKeys = await previews.readLaunchpadKeys(backend.kind).catch((error: unknown) => {
+      if (isNavigationPreviewCancelled(error)) return undefined;
+      setStatus(error instanceof Error ? error.message : String(error));
+      return undefined;
+    });
+    if (!directoryKeys) return;
     if (directoryKeys.length === 0) {
       setStatus(`No ${backend.label} launchpads need updating.`);
       return;
@@ -740,15 +744,17 @@ function ProviderModelDefaultsSettings(props: {
     model: string,
     reasoningEffort?: string,
   ): Promise<void> => {
-    if (!props.desktopApi?.getNavigationSnapshot) {
+    if (!props.desktopApi?.getNavigationQueryPage) {
       setStatus("Thread migration is unavailable in this build.");
       return;
     }
-    const navigation = await props.desktopApi.getNavigationSnapshot();
-    const threads = navigation.threads.filter(
-      (thread) => thread.source === backend.kind,
-    );
-    if (threads.length === 0) {
+    const groups = await previews.readModelInventory(backend.kind).catch((error: unknown) => {
+      if (isNavigationPreviewCancelled(error)) return undefined;
+      setStatus(error instanceof Error ? error.message : String(error));
+      return undefined;
+    });
+    if (!groups) return;
+    if (groups.length === 0) {
       setStatus(`No existing ${backend.label} threads need a migration.`);
       return;
     }
@@ -763,8 +769,8 @@ function ProviderModelDefaultsSettings(props: {
       acknowledgedCurrentRevisionCount: number;
       count: number;
     }>();
-    for (const thread of threads) {
-      const key = thread.model?.trim() || UNSPECIFIED_SOURCE_MODEL_KEY;
+    for (const group of groups) {
+      const key = group.model?.trim() || UNSPECIFIED_SOURCE_MODEL_KEY;
       const current = sourceCounts.get(key) ?? {
         acknowledgedCurrentRevisionCount: 0,
         count: 0,
@@ -773,11 +779,11 @@ function ProviderModelDefaultsSettings(props: {
         acknowledgedCurrentRevisionCount:
           current.acknowledgedCurrentRevisionCount
           + (
-            thread.modelMigrationRevision === currentMigration?.revision
-              ? 1
+            group.modelMigrationRevision === currentMigration?.revision
+              ? group.threadCount
               : 0
           ),
-        count: current.count + 1,
+        count: current.count + group.threadCount,
       });
     }
     const sourceGroups = [...sourceCounts.entries()]
@@ -899,19 +905,22 @@ function ProviderModelDefaultsSettings(props: {
   const previewFastAction = async (
     kind: "disable" | "turn-off",
   ): Promise<void> => {
-    if (!props.desktopApi?.getNavigationSnapshot) {
+    if (!props.desktopApi?.getNavigationQueryPage) {
       setStatus("Codex Fast cleanup is unavailable in this build.");
       return;
     }
-    const navigation = await props.desktopApi.getNavigationSnapshot();
+    const groups = await previews.readModelInventory("codex").catch((error: unknown) => {
+      if (isNavigationPreviewCancelled(error)) return undefined;
+      setStatus(error instanceof Error ? error.message : String(error));
+      return undefined;
+    });
+    if (!groups) return;
     setStatus(undefined);
     setPendingApply(undefined);
     setPendingMigration(undefined);
     setPendingFastAction({
       kind,
-      threadCount: navigation.threads.filter(
-        (thread) => thread.source === "codex" && thread.fastMode === true,
-      ).length,
+      threadCount: groups.reduce((count, group) => count + group.fastThreadCount, 0),
     });
   };
 

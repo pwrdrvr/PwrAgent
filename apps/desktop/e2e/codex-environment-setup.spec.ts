@@ -9,6 +9,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 async function createCodexEnvironmentSetupFixture(params?: {
   includeExistingRunningSteps?: boolean;
   includeExistingThread?: boolean;
+  includeCreatedThread?: boolean;
 }): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
@@ -172,7 +173,7 @@ command = "pwd -P > .pwragent-e2e-action-cwd"
             method: "thread/list",
             result: [
               ...initialThreads,
-              {
+              ...(params?.includeCreatedThread === false ? [] : [{
                 id: "thread-env",
                 title: "hello env",
                 titleSource: "derived",
@@ -187,7 +188,7 @@ command = "pwd -P > .pwragent-e2e-action-cwd"
                   },
                 ],
                 updatedAt: 2_000,
-              },
+              }]),
             ],
           },
           {
@@ -517,11 +518,10 @@ test("thread environment Run command uses the current cwd after workspace handof
         async () =>
           await app.window.evaluate(async () => {
             const desktopApi = (window as any).pwragent;
-            const snapshot = await desktopApi.getNavigationSnapshot({ backend: "codex" });
-            const thread = snapshot.threads.find(
-              (candidate: { id: string }) => candidate.id === "thread-existing",
-            );
-            const runs = thread?.codexEnvironmentRuntime?.actionRuns ?? [];
+            const detail = await desktopApi.getNavigationSelectedDetail({
+              protocol: 2, ref: { backend: "codex", threadId: "thread-existing" },
+            });
+            const runs = detail.thread?.codexEnvironmentRuntime?.actionRuns ?? [];
             // Take the most recently started run's status, which is the
             // one the Run-button click just kicked off. (Multi-instance
             // refactor: see PR #505.) This action is intentionally short,
@@ -571,9 +571,12 @@ test("thread environment Run command uses the current cwd after workspace handof
   }
 });
 
-test("directory launchpad keeps selected environment controls after snapshot reload", async () => {
+test("directory launchpad keeps selected environment controls after restart", async () => {
   const fixture = await createCodexEnvironmentSetupFixture({
     includeExistingThread: false,
+    // This scenario never starts a thread. Additional bounded owner reads must
+    // not advance the fixture to a future thread-creation response.
+    includeCreatedThread: false,
   });
   let firstApp: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
   let secondApp: Awaited<ReturnType<typeof launchElectronApp>> | undefined;

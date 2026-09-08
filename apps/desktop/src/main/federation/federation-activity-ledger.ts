@@ -18,19 +18,7 @@ const counts = (): FederationActivityCounts => ({
   dataBytes: 0, wireBytes: 0,
 });
 const totals = (): FederationActivityTotals => ({ sent: counts(), received: counts() });
-const COUNT_FIELDS = ["requests", "responses", "notifications", "other", "dataBytes", "wireBytes"] as const;
-function addCounts(target: FederationActivityCounts, source: FederationActivityCounts) {
-  target.requests += source.requests;
-  target.responses += source.responses;
-  target.notifications += source.notifications;
-  target.other += source.other;
-  target.dataBytes += source.dataBytes;
-  target.wireBytes += source.wireBytes;
-}
-function add(target: FederationActivityTotals, source: FederationActivityTotals) {
-  addCounts(target.sent, source.sent);
-  addCounts(target.received, source.received);
-}
+const EVENT_FIELDS = ["requests", "responses", "notifications", "other"] as const;
 function addBucket(target: FederationActivityTotals, values: Float64Array, offset: number) {
   for (const direction of ["sent", "received"] as const) {
     const value = target[direction];
@@ -52,24 +40,27 @@ class Series {
   // Timestamp tags make idle/expired slots invisible without a per-event sweep.
   private times?: Float64Array;
   private values?: Float64Array;
-  record(at: number, delta: FederationActivityTotals) {
-    add(this.lifetime, delta);
-    for (const direction of ["sent", "received"] as const) {
-      const value = delta[direction];
-      if (value.requests) this.sizes[direction].requests.record(value.dataBytes);
-      if (value.responses) this.sizes[direction].responses.record(value.dataBytes);
-    }
+  record(at: number, direction: "sent" | "received", kind: number, dataBytes: number, wireBytes: number) {
+    // An event changes one direction and three counters. Avoid constructing
+    // and walking twelve-field zero-filled deltas on every physical/logical hop.
+    const field = EVENT_FIELDS[kind];
+    const lifetime = this.lifetime[direction];
+    lifetime[field] += 1;
+    lifetime.dataBytes += dataBytes;
+    lifetime.wireBytes += wireBytes;
+    if (field === "requests" || field === "responses") this.sizes[direction][field].record(dataBytes);
     this.times ??= new Float64Array(HOUR).fill(-Infinity);
     this.values ??= new Float64Array(HOUR * 12);
     const slot = ((at % HOUR) + HOUR) % HOUR;
-    let offset = slot * 12;
+    const bucketOffset = slot * 12;
     if (this.times[slot] !== at) {
-      this.values.fill(0, offset, offset + 12);
+      this.values.fill(0, bucketOffset, bucketOffset + 12);
       this.times[slot] = at;
     }
-    for (const direction of ["sent", "received"] as const) {
-      for (const field of COUNT_FIELDS) this.values[offset++] += delta[direction][field];
-    }
+    const offset = bucketOffset + (direction === "sent" ? 0 : 6);
+    this.values[offset + kind] += 1;
+    this.values[offset + 4] += dataBytes;
+    this.values[offset + 5] += wireBytes;
   }
   snapshot(at: number, includeHistory: boolean): FederationActivitySeries {
     const windows = { "1m": totals(), "5m": totals(), "10m": totals(), "1h": totals() };
@@ -143,21 +134,17 @@ export class FederationActivityLedger {
       || !Number.isSafeInteger(info.dataByteCount) || info.dataByteCount < 0) return;
     const second = Math.max(this.lastSecond, Math.floor((info.at ?? Date.now()) / SECOND));
     this.lastSecond = second;
-    const delta = totals();
-    const value = delta[info.direction];
-    const kind = info.envelope.kind;
-    value[kind === "request" ? "requests" : kind === "response" || kind === "error"
-      ? "responses" : kind === "notification" ? "notifications" : "other"] = 1;
-    value.dataBytes = info.dataByteCount;
-    value.wireBytes = info.byteCount;
-    this.physical.record(second, delta);
-    this.series(this.peers, info.peerId).record(second, delta);
+    const envelopeKind = info.envelope.kind;
+    const kind = envelopeKind === "request" ? 0 : envelopeKind === "response" || envelopeKind === "error"
+      ? 1 : envelopeKind === "notification" ? 2 : 3;
+    this.physical.record(second, info.direction, kind, info.dataByteCount, info.byteCount);
+    this.series(this.peers, info.peerId).record(second, info.direction, kind, info.dataByteCount, info.byteCount);
     // A gateway's forwarding leg is physical traffic, never a second logical event.
     if (info.direction === "sent" && info.envelope.sourceInstanceId === info.localInstanceId) {
-      this.series(this.logical, info.envelope.targetInstanceId ?? "Broadcast").record(second, delta);
+      this.series(this.logical, info.envelope.targetInstanceId ?? "Broadcast").record(second, info.direction, kind, info.dataByteCount, info.byteCount);
     } else if (info.direction === "received"
       && (!info.envelope.targetInstanceId || info.envelope.targetInstanceId === info.localInstanceId)) {
-      this.series(this.logical, info.envelope.sourceInstanceId).record(second, delta);
+      this.series(this.logical, info.envelope.sourceInstanceId).record(second, info.direction, kind, info.dataByteCount, info.byteCount);
     }
   }
   snapshot(now = Date.now(), request: ReadFederationActivityRequest = {}): FederationActivitySnapshot {

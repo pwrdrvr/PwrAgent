@@ -13,6 +13,7 @@ import {
   type DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -71,6 +72,7 @@ export function GitSettings(props: {
   onSaveGhPath: (path: string) => Promise<void>;
   onSaveGitPath: (path: string) => Promise<void>;
 }) {
+  const previews = useNavigationSettingsPreview(props.desktopApi);
   const backgroundPrPolling =
     props.snapshot.git?.backgroundPrPolling ??
     DEFAULT_BACKGROUND_PR_POLLING_VALUE;
@@ -108,15 +110,12 @@ export function GitSettings(props: {
   const actionsDisabled = props.saving || applying || !automationAvailable;
 
   const previewLaunchpadApply = async (): Promise<void> => {
-    if (!props.desktopApi?.getNavigationSnapshot) {
+    if (!props.desktopApi?.getNavigationQueryPage) {
       setBulkStatus("Launchpad updates are unavailable in this build.");
       return;
     }
     try {
-      const navigation = await props.desktopApi.getNavigationSnapshot();
-      const directoryKeys = navigation.directories
-        .filter((directory) => Boolean(directory.launchpad))
-        .map((directory) => directory.key);
+      const directoryKeys = await previews.readLaunchpadKeys();
       if (directoryKeys.length === 0) {
         setBulkStatus("No launchpads are available to update.");
         return;
@@ -128,6 +127,7 @@ export function GitSettings(props: {
         enabled: defaultPrAutoDispatchEnabled.value,
       });
     } catch (error) {
+      if (isNavigationPreviewCancelled(error)) return;
       setBulkStatus(error instanceof Error ? error.message : String(error));
     }
   };
@@ -313,7 +313,7 @@ export function GitSettings(props: {
                     disabled={
                       actionsDisabled
                       || hasPendingBulkAction
-                      || !props.desktopApi?.getNavigationSnapshot
+                      || !props.desktopApi?.getNavigationQueryPage
                       || !props.desktopApi?.updateDirectoryLaunchpad
                     }
                     type="button"

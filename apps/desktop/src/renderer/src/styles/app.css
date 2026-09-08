@@ -6553,6 +6553,7 @@ a.button {
    as a quiet index control, not a card; left padding aligns its label
    with the thread-row titles above it. */
 .directory-row__show-more {
+  overflow-anchor: none;
   align-self: flex-start;
   margin-top: 2px;
   /* WCAG 2.5.8, same as the divider above. Without it this lands at

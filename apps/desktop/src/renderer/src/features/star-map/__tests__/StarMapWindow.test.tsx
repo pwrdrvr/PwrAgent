@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { StarMapWindow } from "../StarMapWindow";
 
 const testState = vi.hoisted(() => ({
-  markThreadsSeen: vi.fn(),
+  markThreadSeen: vi.fn(),
   remoteThread: {
     id: "thread-remote",
     title: "Remote work",
@@ -26,15 +26,7 @@ const testState = vi.hoisted(() => ({
 
 vi.mock("../../../lib/desktop-api", () => ({
   getDesktopApi: () => ({ platform: "linux" }),
-  useDesktopApi: () => ({ markThreadSeen: vi.fn() }),
-}));
-
-vi.mock("../../../lib/useThreadNavigation", () => ({
-  useThreadNavigation: () => ({
-    markThreadsSeen: testState.markThreadsSeen,
-    refresh: vi.fn(),
-    threads: [],
-  }),
+  useDesktopApi: () => ({ markThreadSeen: testState.markThreadSeen }),
 }));
 
 vi.mock("../../../lib/useThreadSessionState", () => ({
@@ -77,15 +69,15 @@ vi.mock("../StarMapScreen", () => ({
 }));
 
 beforeEach(() => {
-  testState.markThreadsSeen.mockReset();
+  testState.markThreadSeen.mockReset();
 });
 
-it("routes an accepted remote reply through navigation seen state", () => {
+it("routes an accepted remote reply directly to its owner", () => {
   render(<StarMapWindow />);
 
   fireEvent.click(screen.getByRole("button", { name: "Report accepted reply" }));
 
-  expect(testState.markThreadsSeen).toHaveBeenCalledWith([
-    testState.remoteThread,
-  ]);
+  expect(testState.markThreadSeen).toHaveBeenCalledWith({
+    backend: "codex", threadId: "thread-remote", federationTarget: { scope: "remote", instanceId: "pwr_peer" }, seenUpdatedAt: 42,
+  });
 });

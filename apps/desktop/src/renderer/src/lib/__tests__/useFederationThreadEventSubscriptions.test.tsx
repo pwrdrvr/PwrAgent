@@ -49,6 +49,26 @@ const fullCapabilities: FederationCapability[] = [
 ];
 
 describe("useFederationThreadEventSubscriptions", () => {
+  it("does not subscribe other pins on the selected owner to detail payloads", () => {
+    const selected = remoteThread({ capabilities: fullCapabilities, id: "A", instanceId: "owner_one" });
+    const background = remoteThread({ capabilities: fullCapabilities, id: "B", instanceId: "owner_one" });
+    const [subscription] = buildFederationThreadEventSubscriptions({
+      selectedThread: selected,
+      threads: [selected, background],
+    });
+    const selectedOnly = { kind: "threads", threads: [{ backend: "codex", threadId: "A" }] };
+    const both = { kind: "threads", threads: [
+      { backend: "codex", threadId: "A" },
+      { backend: "codex", threadId: "B" },
+    ] };
+    expect(subscription.eventClassSelections).toEqual({
+      navigation: both,
+      scheduled_actions: selectedOnly,
+      transcript: selectedOnly,
+      pending_requests: selectedOnly,
+    });
+  });
+
   it("keeps pinned owners live and adds detail events for the selected owner", () => {
     const selected = remoteThread({
       capabilities: fullCapabilities,
@@ -86,7 +106,7 @@ describe("useFederationThreadEventSubscriptions", () => {
       },
       {
         sourceInstanceId: "owner_two",
-        eventClasses: ["navigation", "scheduled_actions"],
+        eventClasses: ["navigation"],
         threadSelection: {
           kind: "threads",
           threads: [{ backend: "codex", threadId: "background" }],

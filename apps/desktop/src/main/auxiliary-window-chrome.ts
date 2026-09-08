@@ -15,6 +15,7 @@ const postLoadRaiseDelayMs = 100;
 
 const hiddenMenuBarWindows = new Set<BrowserWindow>();
 const auxiliaryWindowTitles = new Map<number, string>();
+const explicitTopmostChoices = new WeakMap<BrowserWindow, boolean>();
 const auxiliaryWindowRaiseRetryTimers = new Map<
   number,
   Array<ReturnType<typeof setTimeout>>
@@ -195,11 +196,23 @@ function pulseAuxiliaryWindowToTop(window: BrowserWindow): void {
   const wasAlwaysOnTop = window.isAlwaysOnTop();
   window.setAlwaysOnTop(true);
   setTimeout(() => {
-    if (window.isDestroyed() || wasAlwaysOnTop) {
+    if (window.isDestroyed()) {
       return;
     }
-    window.setAlwaysOnTop(false);
+    const explicitChoice = explicitTopmostChoices.get(window);
+    if (explicitChoice !== undefined) {
+      window.setAlwaysOnTop(explicitChoice);
+    } else if (!wasAlwaysOnTop) {
+      window.setAlwaysOnTop(false);
+    }
   }, 250);
+}
+
+/** User ownership supersedes transient Linux window-raise pulses. */
+export function setAuxiliaryWindowAlwaysOnTop(window: BrowserWindow, enabled: boolean): void {
+  explicitTopmostChoices.set(window, enabled);
+  clearAuxiliaryWindowRaiseRetries(window);
+  window.setAlwaysOnTop(enabled);
 }
 
 export function reapplyAuxiliaryWindowMenuBars(): void {

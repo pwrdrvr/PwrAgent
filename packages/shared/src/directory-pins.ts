@@ -32,8 +32,8 @@ export function isPinnedDirectory(
 }
 
 export function comparePinnedDirectories(
-  left: NavigationDirectorySummary,
-  right: NavigationDirectorySummary,
+  left: Pick<NavigationDirectorySummary, "key" | "pinnedRank" | "latestUpdatedAt">,
+  right: Pick<NavigationDirectorySummary, "key" | "pinnedRank" | "latestUpdatedAt">,
 ): number {
   return comparePinnedThreads(
     {

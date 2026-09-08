@@ -367,7 +367,7 @@ describe("thread links in transcript markdown", () => {
     );
   });
 
-  it("drops live metadata when a federated thread leaves the snapshot", () => {
+  it("retains mounted federated link metadata across page omission and releases it on unmount", () => {
     const text =
       `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex&instanceId=pwr_harold)`;
     const onShowThread = vi.fn();
@@ -400,11 +400,48 @@ describe("thread links in transcript markdown", () => {
       </ThreadLinkProvider>,
     );
 
-    expect(
-      screen.getByRole("button", { name: "Open thread Remote handoff" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open thread Old remote title" }))
-      .not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open thread Old remote title" }));
+    expect(onShowThread).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      instanceId: "pwr_harold",
+      threadId: CHILD_THREAD_ID,
+    }));
+
+    rerender(<ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+      <span>No transcript mounted</span>
+    </ThreadLinkProvider>);
+    rerender(<ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+      <ThreadMarkdown text={text} />
+    </ThreadLinkProvider>);
+    expect(screen.getByRole("button", { name: "Open thread Remote handoff" }))
+      .toBeInTheDocument();
+  });
+
+  it("keeps a mounted local child actionable when its directory page is collapsed", () => {
+    const text = `Open [linked child](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`;
+    const onShowThread = vi.fn();
+    const { rerender } = render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[threadSummary()]}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+    rerender(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open thread RELATED query deranking issue" }));
+    expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: CHILD_THREAD_ID });
+  });
+
+  it("opens explicit local identities that have never been admitted to a page", () => {
+    const onShowThread = vi.fn();
+    renderWithLinks(`Open [off-page child](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`, {
+      onShowThread,
+      threads: [],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open thread off-page child" }));
+    expect(onShowThread).toHaveBeenCalledWith({ backend: "codex", threadId: CHILD_THREAD_ID });
   });
 
   it("linkifies a bare thread id written as inline code", () => {

@@ -29,7 +29,50 @@ function runtimeWithBackend(
 }
 
 describe("resolveFederatedThreadTarget", () => {
-  it("uses exact list scanning only when an older peer lacks resolveThread", async () => {
+  it("uses one deadline for active and exact archive resolution", async () => {
+    const resolveThread = vi.fn(async () => ({ thread: undefined }));
+    const lookupArchivedThreads = vi.fn(async () => ({ threads: [thread] }));
+    const runtime = runtimeWithBackend({ resolveThread, lookupArchivedThreads } as unknown as FederationBackendOperations);
+    await expect(resolveFederatedThreadTarget({
+      runtime,
+      request: { backend: "codex", instanceId: "pwr_remote", threadId: thread.id },
+    })).resolves.toMatchObject({ thread });
+    const options = (resolveThread.mock.calls[0] as unknown[])[1];
+    expect(options).toEqual({ deadlineAt: expect.any(Number) });
+    expect(lookupArchivedThreads).toHaveBeenCalledWith({
+      backend: "codex", threadIds: [thread.id],
+    }, options);
+  });
+
+  it("bounds unknown-owner discovery concurrency without ignoring duplicate owners", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let active = 0;
+    let maximum = 0;
+    const resolveThread = vi.fn(async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await gate;
+      active -= 1;
+      return { thread };
+    });
+    const runtime = runtimeWithBackend({ resolveThread } as unknown as FederationBackendOperations);
+    runtime.connectedPeerTargets = () => Array.from({ length: 12 }, (_, index) => ({
+      target: { scope: "remote", instanceId: `peer-${index}` },
+      label: `Peer ${index}`, capabilities: ["thread_navigation"],
+    }));
+    const resolving = resolveFederatedThreadTarget({
+      runtime, request: { backend: "codex", threadId: thread.id },
+    });
+    const rejected = expect(resolving).rejects.toThrow("multiple federation instances");
+    await vi.waitFor(() => expect(resolveThread).toHaveBeenCalledTimes(8));
+    release();
+    await rejected;
+    expect(resolveThread).toHaveBeenCalledTimes(12);
+    expect(maximum).toBe(8);
+  });
+
+  it("requires an upgrade when an older peer lacks exact resolution", async () => {
     const listThreads = vi.fn(async () => ({
       backend: "codex" as const,
       fetchedAt: 1_000,
@@ -51,8 +94,8 @@ describe("resolveFederatedThreadTarget", () => {
         instanceId: "pwr_remote",
         threadId: thread.id,
       },
-    })).resolves.toMatchObject({ thread: { id: thread.id } });
-    expect(listThreads).toHaveBeenCalledExactlyOnceWith({ backend: "codex" });
+    })).rejects.toThrow("Upgrade this PwrAgent peer");
+    expect(listThreads).not.toHaveBeenCalled();
   });
 
   it.each([

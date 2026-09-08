@@ -1,6 +1,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { threadSummaryIdentityKey } from "./federated-thread-events";
+import { readRendererFederationTarget } from "./federation-window";
 import {
   buildThreadComposerScopeKey,
   type ComposerDraftStore,
@@ -49,11 +50,11 @@ export function useThreadQueuedMessageIndicators(params: {
         thread.prAutoDispatchPending
         || thread.scheduledStart?.state === "scheduled"
       ) {
-        indicators[buildThreadIdentityKey(thread.source, thread.id)] =
+        indicators[threadSummaryIdentityKey(thread)] =
           "scheduled";
       }
       const queuedTurns = composerDraftStore.getQueuedTurns(
-        buildThreadComposerScopeKey(thread.source, thread.id),
+        buildThreadComposerScopeKey(thread.source, thread.id, thread.federation?.ref.target ?? readRendererFederationTarget() ?? { scope: "local" }),
       );
       if (queuedTurns.length === 0) {
         continue;
@@ -64,7 +65,7 @@ export function useThreadQueuedMessageIndicators(params: {
           && Number.isFinite(turn.scheduledSendAt)
           && turn.scheduledSendAt > now,
       );
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const threadKey = threadSummaryIdentityKey(thread);
       indicators[threadKey] =
         hasScheduled || indicators[threadKey] === "scheduled"
           ? "scheduled"

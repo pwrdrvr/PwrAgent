@@ -1,0 +1,366 @@
+import { describe, expect, it, vi } from "vitest";
+import type { NavigationQueryPage, NavigationQueryRequest, NavigationLaunchpadConfigResponse } from "@pwragent/shared";
+import { NavigationQueryPool } from "../app-server/navigation-query-pool";
+
+const request: NavigationQueryRequest = {
+  protocol: 2,
+  consumer: "main-sidebar",
+  query: { kind: "lens", lens: "inbox" },
+};
+const page: NavigationQueryPage = {
+  protocol: 2,
+  queryKey: "query",
+  generation: "generation",
+  ownerEpoch: "owner",
+  countsRevision: "revision",
+  coverage: { state: "complete" },
+  counts: { total: 0, active: 0, unread: 0, review: 0 },
+  entries: [],
+  complete: true,
+};
+
+describe("NavigationQueryPool", () => {
+  it("bounds coalesced waiters even when all requests reuse one consumer token", async () => {
+    const pool = new NavigationQueryPool();
+    let finish!: (value: NavigationLaunchpadConfigResponse) => void;
+    const load = vi.fn(() => new Promise<NavigationLaunchpadConfigResponse>((resolve) => { finish = resolve; }));
+    const params = { kind: "launchpad" as const, consumerId: "same-window", identity: "directory", operation: "full", load };
+    const pending = Array.from({ length: 256 }, () => pool.readExact(params));
+    await expect(pool.readExact(params)).rejects.toMatchObject({ code: "navigation_busy" });
+    expect(load).toHaveBeenCalledTimes(1);
+    finish({ protocol: 2, revision: "complete" });
+    expect(await Promise.all(pending)).toHaveLength(256);
+    pool.release("same-window");
+  });
+
+  it("replaces exact backing across conditional revisions instead of retaining the window's read history", async () => {
+    const pool = new NavigationQueryPool();
+    const value: NavigationLaunchpadConfigResponse = { protocol: 2, revision: "config" };
+    for (let revision = 0; revision < 20; revision++) {
+      await pool.readExact({ kind: "launchpad", consumerId: "window", identity: "directory", operation: String(revision), load: async () => value });
+      expect(pool.getBudgetUsage().retainedBytes).toBe(Buffer.byteLength(JSON.stringify(value)));
+    }
+    pool.release("window");
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("replaces invalidated exact results without rejecting demand or rereading unrelated owners", async () => {
+    const pool = new NavigationQueryPool();
+    const ref = { backend: "codex" as const, threadId: "same" };
+    const pending: Array<Promise<unknown>> = [];
+    const signals: AbortSignal[] = [];
+    const finish: Array<() => void> = [];
+    const loads: Array<ReturnType<typeof vi.fn>> = [];
+    for (const instanceId of ["a", "b"]) {
+      let reads = 0;
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        reads += 1;
+        signals.push(signal);
+        const value = { protocol: 2 as const, ref, revision: reads === 1 ? "stale" : "canonical",
+          readiness: "ready" as const, identity: "unresolved" as const };
+        return reads === 1 ? new Promise<typeof value>((resolve) => finish.push(() => resolve(value))) : Promise.resolve(value);
+      });
+      loads.push(load);
+      pending.push(pool.readExact({ kind: "detail", consumerId: instanceId, identity: "same", operation: "full", ref,
+        owner: { scope: "remote", instanceId }, load }));
+    }
+    pending.push(pool.readExact({ kind: "launchpad", consumerId: "config", identity: "directory", operation: "full",
+      owner: { scope: "remote", instanceId: "a" }, load: ({ signal }) => {
+        signals.push(signal);
+        return new Promise((resolve) => finish.push(() => resolve({ protocol: 2, revision: "config" })));
+      } }));
+    const settled = Promise.allSettled(pending);
+    pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
+    pool.invalidateExactOwner({ scope: "remote", instanceId: "a" }, ref);
+    expect(signals.map((signal) => signal.aborted)).toEqual([false, false, false]);
+    for (const done of finish) done();
+    expect((await settled).map((result) => result.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+    await expect(pending[0]).resolves.toMatchObject({ revision: "canonical" });
+    expect(loads.map((load) => load.mock.calls.length)).toEqual([2, 1]);
+    for (const consumer of ["a", "b", "config"]) pool.release(consumer);
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("replaces a pre-event query before satisfying a post-event joined refresh", async () => {
+    const pool = new NavigationQueryPool();
+    let finish!: (value: NavigationQueryPage) => void;
+    const load = vi.fn()
+      .mockImplementationOnce(() => new Promise<NavigationQueryPage>((resolve) => { finish = resolve; }))
+      .mockResolvedValue({ ...page, counts: { ...page.counts, active: 1 }, countsRevision: "started" });
+    const first = pool.read({ consumerId: "sidebar", request, load });
+    let finishRemote!: (value: NavigationQueryPage) => void;
+    const remoteLoad = vi.fn(() => new Promise<NavigationQueryPage>((resolve) => { finishRemote = resolve; }));
+    const remote = pool.read({ consumerId: "remote", request: {
+      ...request, federationTarget: { scope: "remote", instanceId: "other-owner" },
+    }, load: remoteLoad });
+    pool.invalidateQueryOwner();
+    const refreshed = pool.read({ consumerId: "map", request, load });
+    finish(page);
+    finishRemote(page);
+    await expect(remote).resolves.toEqual(page);
+    expect(remoteLoad).toHaveBeenCalledTimes(1);
+    for (const result of await Promise.all([first, refreshed])) {
+      expect(result.counts.active).toBe(1);
+      expect(result.countsRevision).toBe("started");
+    }
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(load.mock.calls[0]![0].signal).toBe(load.mock.calls[1]![0].signal);
+    expect(load.mock.calls[0]![0].deadlineAt).toBe(load.mock.calls[1]![0].deadlineAt);
+    pool.release("sidebar");
+    pool.release("map");
+    pool.release("remote");
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("shares eight physical slots between collection and exact configuration reads", async () => {
+    const pool = new NavigationQueryPool();
+    const resolve: Array<(page: NavigationQueryPage) => void> = [];
+    const pending = Array.from({ length: 8 }, (_, index) => pool.read({ consumerId: `page-${index}`,
+      request: { ...request, query: { kind: "search", text: String(index) } },
+      load: () => new Promise<NavigationQueryPage>((done) => { resolve.push(done); }),
+    }));
+    const config: NavigationLaunchpadConfigResponse = { protocol: 2, revision: "config" };
+    const load = vi.fn(async () => config);
+    const exact = pool.readExact({ kind: "launchpad", consumerId: "selected-config", identity: "local-directory", operation: "full", load });
+    expect(load).not.toHaveBeenCalled();
+    expect(pool.getBudgetUsage().activeReads).toBe(8);
+    resolve[0]!(page);
+    await pending[0];
+    await expect(exact).resolves.toEqual(config);
+    expect(load).toHaveBeenCalledTimes(1);
+    for (const done of resolve.slice(1)) done(page);
+    await Promise.all(pending);
+    for (let index = 0; index < 8; index++) pool.release(`page-${index}`);
+    pool.release("selected-config");
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("releases exact consumers independently and never rejoins an aborted physical read", async () => {
+    const pool = new NavigationQueryPool();
+    const config: NavigationLaunchpadConfigResponse = { protocol: 2, revision: "config" };
+    let finish!: (value: NavigationLaunchpadConfigResponse) => void;
+    let signal!: AbortSignal;
+    const load = vi.fn(({ signal: current }: { signal: AbortSignal }) => {
+      signal = current;
+      return new Promise<NavigationLaunchpadConfigResponse>((resolve) => { finish = resolve; });
+    });
+    const params = { kind: "launchpad" as const, identity: "owner-directory", operation: "full", load };
+    const a = pool.readExact({ ...params, consumerId: "window-a" });
+    const b = pool.readExact({ ...params, consumerId: "window-b" });
+    const old = Promise.allSettled([a, b]);
+    pool.release("window-a");
+    expect(signal.aborted).toBe(false);
+    pool.release("window-b");
+    expect(signal.aborted).toBe(true);
+    const freshLoad = vi.fn(async () => ({ ...config, revision: "fresh" }));
+    const fresh = pool.readExact({ ...params, consumerId: "window-c", load: freshLoad });
+    expect(freshLoad).not.toHaveBeenCalled();
+    expect((await old).every((result) => result.status === "rejected")).toBe(true);
+    expect(pool.getBudgetUsage().activeReads).toBe(1);
+    finish(config);
+    await expect(fresh).resolves.toMatchObject({ revision: "fresh" });
+    expect(freshLoad).toHaveBeenCalledTimes(1);
+    pool.release("window-c");
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("returns at the transaction deadline while retaining an unresponsive provider's physical slot", async () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new NavigationQueryPool();
+      let resolve!: (value: NavigationQueryPage) => void;
+      const pending = pool.read({ consumerId: "window", request: { ...request, deadlineAt: Date.now() + 20 },
+        load: () => new Promise((done) => { resolve = done; }) });
+      const rejected = expect(pending).rejects.toMatchObject({ code: "navigation_busy" });
+      await vi.advanceTimersByTimeAsync(21);
+      await rejected;
+      expect(pool.getBudgetUsage().activeReads).toBe(1);
+      resolve(page);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pool.getBudgetUsage().activeReads).toBe(0);
+      expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("honors a coalesced consumer's shorter deadline without cancelling the shared owner read", async () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new NavigationQueryPool();
+      let resolve!: (value: NavigationQueryPage) => void;
+      const load = vi.fn(() => new Promise<NavigationQueryPage>((done) => { resolve = done; }));
+      const first = pool.read({ consumerId: "first", request, load });
+      const second = pool.read({ consumerId: "second", request: { ...request, deadlineAt: Date.now() + 5 }, load });
+      const rejected = expect(second).rejects.toMatchObject({ code: "navigation_busy" });
+      await vi.advanceTimersByTimeAsync(6);
+      await rejected;
+      expect(load).toHaveBeenCalledTimes(1);
+      resolve(page);
+      await expect(first).resolves.toEqual(page);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("reconnect_deduplicates_consumer_cold_reads", async () => {
+    const pool = new NavigationQueryPool();
+    let resolve!: (value: NavigationQueryPage) => void;
+    let calls = 0;
+    const load = () => {
+      calls += 1;
+      return new Promise<NavigationQueryPage>((done) => { resolve = done; });
+    };
+    const a = pool.read({ consumerId: "window-a", request, load });
+    const b = pool.read({ consumerId: "window-b", request: { ...request, consumer: "star-map" }, load });
+    expect(calls).toBe(1);
+    pool.release("window-a");
+    resolve(page);
+    expect(await a).toEqual(page);
+    expect(await b).toEqual(page);
+    expect(pool.getBudgetUsage().retainedBytes).toBe(Buffer.byteLength(JSON.stringify(page)));
+  });
+
+  it("shares physical admission but never shares results across authenticated requester scopes", async () => {
+    const pool = new NavigationQueryPool();
+    const completions: (() => void)[] = [];
+    const load = vi.fn(() => new Promise<NavigationQueryPage>((resolve) => completions.push(() => resolve(page))));
+    const first = pool.read({ consumerId: "peer-a-1", scopeKey: "federation:a", request, load });
+    const duplicate = pool.read({ consumerId: "peer-a-2", scopeKey: "federation:a", request, load });
+    const other = pool.read({ consumerId: "peer-b", scopeKey: "federation:b", request, load });
+    const local = pool.read({ consumerId: "window", request, load });
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(pool.getBudgetUsage().activeReads).toBe(3);
+    for (const complete of completions) complete();
+    await Promise.all([first, duplicate, other, local]);
+    for (const consumer of ["peer-a-1", "peer-a-2", "peer-b", "window"]) pool.release(consumer);
+    expect(pool.getBudgetUsage().activeReads).toBe(0);
+    expect(pool.getBudgetUsage().retainedBytes).toBe(0);
+  });
+
+  it("aborts the owner read only after the last consumer releases", async () => {
+    const pool = new NavigationQueryPool();
+    let ownerSignal!: AbortSignal;
+    const load = ({ signal }: { signal: AbortSignal }) => {
+      ownerSignal = signal;
+      return new Promise<NavigationQueryPage>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    };
+    const a = pool.read({ consumerId: "a", request, load });
+    const b = pool.read({ consumerId: "b", request, load });
+    const settled = Promise.allSettled([a, b]);
+    pool.release("a");
+    expect(ownerSignal.aborted).toBe(false);
+    pool.release("b");
+    expect(ownerSignal.aborted).toBe(true);
+    expect((await settled).every((result) => result.status === "rejected")).toBe(true);
+    expect(pool.getBudgetUsage().activeReads).toBe(0);
+  });
+
+  it("admits a ninth mounted query by evicting idle backing without requiring a view to close", async () => {
+    const pool = new NavigationQueryPool();
+    for (let index = 0; index < 8; index += 1) {
+      await pool.read({
+        consumerId: String(index),
+        request: { ...request, query: { kind: "search", text: String(index) } },
+        load: async () => page,
+      });
+    }
+    let loaded = false;
+    const ninth = pool.read({
+      consumerId: "ninth",
+      request: { ...request, query: { kind: "search", text: "ninth" } },
+      load: async () => { loaded = true; return page; },
+    });
+    expect(loaded).toBe(true);
+    expect(pool.getBudgetUsage().queries).toBe(8);
+    await ninth;
+    expect(loaded).toBe(true);
+    expect(pool.getBudgetUsage().queries).toBe(8);
+  });
+
+  it("cancels waiting admission without issuing an owner read", async () => {
+    const pool = new NavigationQueryPool();
+    const pending: Array<Promise<NavigationQueryPage>> = [];
+    const finish: Array<() => void> = [];
+    for (let index = 0; index < 8; index += 1) {
+      pending.push(pool.read({
+        consumerId: String(index),
+        request: { ...request, query: { kind: "search", text: String(index) } },
+        load: () => new Promise((resolve) => finish.push(() => resolve(page))),
+      }));
+    }
+    let called = false;
+    const waiting = pool.read({
+      consumerId: "closed",
+      request: { ...request, query: { kind: "search", text: "closed" } },
+      load: async () => { called = true; return page; },
+    });
+    pool.release("closed");
+    await expect(waiting).rejects.toThrow();
+    expect(called).toBe(false);
+    for (const done of finish) done();
+    await Promise.all(pending);
+  });
+
+  it("retains the consumer admission budget when inactive backing is evicted", async () => {
+    const pool = new NavigationQueryPool();
+    for (let i = 0; i < 256; i += 1) await pool.read({ consumerId: String(i),
+      request: { ...request, query: { kind: "search", text: String(i) } }, load: async () => page });
+    expect(pool.getBudgetUsage().queries).toBe(8);
+    await expect(pool.read({ consumerId: "extra", request, load: async () => page })).rejects.toMatchObject({ code: "navigation_busy" });
+    pool.release("0");
+    await expect(pool.read({ consumerId: "extra", request, load: async () => page })).resolves.toEqual(page);
+    for (let i = 1; i < 256; i += 1) pool.release(String(i));
+    pool.release("extra");
+    expect(pool.getBudgetUsage()).toEqual({ queries: 0, exactResources: 0, retainedBytes: 0, activeReads: 0 });
+  });
+
+  it("serializes distinct page reads for the same query", async () => {
+    const pool = new NavigationQueryPool();
+    let finish!: (page: NavigationQueryPage) => void;
+    const first = pool.read({
+      consumerId: "view", request,
+      load: () => new Promise((resolve) => { finish = resolve; }),
+    });
+    let secondStarted = false;
+    const second = pool.read({
+      consumerId: "view", request: { ...request, cursor: "next" },
+      load: async () => { secondStarted = true; return page; },
+    });
+    expect(secondStarted).toBe(false);
+    finish(page);
+    await Promise.all([first, second]);
+    expect(secondStarted).toBe(true);
+  });
+});
+
+it("does not coalesce different visible anchors into the same page transaction", async () => {
+  const pool = new NavigationQueryPool();
+  let resolve!: (value: NavigationQueryPage) => void;
+  const first = pool.read({ consumerId: "a", request: { ...request,
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "a" } },
+  }, load: () => new Promise((done) => { resolve = done; }) });
+  const loadSecond = vi.fn(async () => ({ ...page, rangeStart: 50 }));
+  const second = pool.read({ consumerId: "b", request: { ...request,
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "b" } },
+  }, load: loadSecond });
+  expect(loadSecond).not.toHaveBeenCalled();
+  resolve(page);
+  await first;
+  await expect(second).resolves.toMatchObject({ rangeStart: 50 });
+  expect(loadSecond).toHaveBeenCalledTimes(1);
+  pool.release("a"); pool.release("b");
+});
+
+it("does not coalesce viewer mounts with the otherwise identical owner inventory", async () => {
+  const pool = new NavigationQueryPool();
+  let resolveOwner!: (value: NavigationQueryPage) => void;
+  const owner = pool.read({ consumerId: "owner", request,
+    load: () => new Promise((resolve) => { resolveOwner = resolve; }) });
+  const viewerLoad = vi.fn(async () => ({ ...page, counts: { ...page.counts, total: 1 } }));
+  const viewer = await pool.read({ consumerId: "viewer", request: { ...request, inventory: "viewer" }, load: viewerLoad });
+  expect(viewerLoad).toHaveBeenCalledTimes(1);
+  expect(viewer.counts.total).toBe(1);
+  resolveOwner(page);
+  expect((await owner).counts.total).toBe(0);
+  pool.release("owner");
+  pool.release("viewer");
+});

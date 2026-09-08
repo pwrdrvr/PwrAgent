@@ -86,9 +86,12 @@ export function useAutomations(
     }
 
     return desktopApi.onAgentEvent((event) => {
+      const method = event.notification.method === "navigation/invalidated"
+        && typeof event.notification.params.sourceMethod === "string"
+        ? event.notification.params.sourceMethod : event.notification.method;
       if (
-        event.notification.method === "thread/automations/updated" ||
-        event.notification.method === "automation/run/updated"
+        method === "thread/automations/updated" ||
+        method === "automation/run/updated"
       ) {
         void refresh();
       }
@@ -221,7 +224,10 @@ export function useAutomationRuns(
     }
 
     return desktopApi.onAgentEvent((event) => {
-      if (event.notification.method !== "automation/run/updated") {
+      const method = event.notification.method === "navigation/invalidated"
+        && typeof event.notification.params.sourceMethod === "string"
+        ? event.notification.params.sourceMethod : event.notification.method;
+      if (method !== "automation/run/updated") {
         return;
       }
 
@@ -287,13 +293,16 @@ export function useAutomationRunArtifact(
 
     void load(true);
     const unsubscribe = desktopApi.onAgentEvent?.((event) => {
+      const method = event.notification.method === "navigation/invalidated"
+        && typeof event.notification.params.sourceMethod === "string"
+        ? event.notification.params.sourceMethod : event.notification.method;
       if (
-        event.notification.method !== "automation/run/transcript/updated"
-        && event.notification.method !== "automation/run/updated"
+        method !== "automation/run/transcript/updated"
+        && method !== "automation/run/updated"
       ) {
         return;
       }
-      if (event.notification.params.runId !== runId) return;
+      if ((event.notification.params as { runId?: string }).runId !== runId) return;
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = undefined;

@@ -1,9 +1,11 @@
+import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
 import type {
   AppServerBackendKind,
   FederatedThreadRef,
   NavigationDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
+  NavigationRow,
   ThreadIdentifier,
 } from "@pwragent/shared";
 import type {
@@ -159,11 +161,56 @@ export function buildResumeIntent(params: {
   navigation: NavigationSnapshot;
   session: MessagingBrowseSessionRecord;
 }): MessagingThreadPickerIntent | MessagingProjectPickerIntent {
-  if (params.session.mode === "projects" || params.session.mode === "new_project") {
-    return buildProjectPickerIntent(params);
-  }
+  const intent = params.session.mode === "projects" || params.session.mode === "new_project"
+    ? buildProjectPickerIntent(params)
+    : buildThreadPickerIntent(params);
+  const progress = params.navigation.federationRefresh;
+  const notes = [
+    progress?.pendingPeers ? `Still checking ${progress.pendingPeers} Federation instances.` : undefined,
+    progress?.failedPeers ? `${progress.failedPeers} Federation instances could not be checked. Results are incomplete.` : undefined,
+  ].filter(Boolean).join(" ");
+  return notes ? {
+    ...intent,
+    prompt: `${intent.prompt}\n${notes}`,
+    fallbackText: `${intent.fallbackText}\n${notes}`,
+  } : intent;
+}
 
-  return buildThreadPickerIntent(params);
+/** Presentation consumes exactly the bounded page supplied by the owner query merge. */
+export function buildBoundedResumeIntent(params: {
+  createdAt: number;
+  id: string;
+  page: MessagingBrowsePage;
+  session: MessagingBrowseSessionRecord;
+}): MessagingThreadPickerIntent | MessagingProjectPickerIntent {
+  const page = params.page;
+  const session = { ...params.session, pageIndex: page.pageIndex };
+  const projects = session.mode === "projects" || session.mode === "new_project";
+  const totalPages = Math.max(1, Math.ceil(page.totalItems / page.pageSize));
+  const start = page.pageIndex * page.pageSize;
+  const itemActions: MessagingSurfaceAction[] = projects ? page.projects.map((project, index) => {
+    const label = isNewThreadLaunchAction(session.launchAction) && project.kind === "workspace" ? WORKSPACES_SCRATCHPAD_LABEL : project.label;
+    const owner = project.owner?.target;
+    return { id: "browse:select-project", label: `${start + index + 1}. ${owner ? `[${project.owner!.label}] ` : ""}${label} (${project.counts.total})`,
+      style: "primary", fallbackText: String(index + 1), value: { directoryKey: project.key, label,
+        ...(project.path ? { path: project.path } : {}), ...(owner ? { federationInstanceId: owner.instanceId } : {}) } };
+  }) : page.threads.map((thread, index) => ({ id: "browse:select-thread", label: `${start + index + 1}. ${formatThreadLabel(thread)}`,
+    style: "primary", fallbackText: String(index + 1), value: { backend: thread.source, threadId: thread.id,
+      ...(thread.ref.ownerInstanceId ? { federationInstanceId: thread.ref.ownerInstanceId } : {}) } }));
+  const actions = [...itemActions, ...navigationActions(session, page.pageIndex, page.hasNext ? Math.max(totalPages, page.pageIndex + 2) : page.pageIndex + 1)];
+  const incomplete = !page.totalItemsComplete;
+  const prompt = [projects ? projectPickerPromptText(session, totalPages, incomplete && !page.totalItems ? 1 : page.totalItems)
+    : threadPickerPromptText(session, totalPages, incomplete && !page.totalItems ? 1 : page.totalItems),
+    ...page.notes, incomplete ? "Results are incomplete; totals cover only the responding owners." : undefined].filter(Boolean).join("\n");
+  const common = { id: params.id, bindingId: session.bindingId, browseSessionId: session.id, createdAt: params.createdAt,
+    delivery: { mode: session.surface ? "update" as const : "present" as const, fallback: "present_new" as const },
+    fallbackText: [prompt, ...itemActions.map((action) => action.label), `Reply with a number, or reply ${formatControlList(actions.slice(itemActions.length).map((action) => action.fallbackText))}.`].join("\n"),
+    navigation: { backend: "all" as const, fetchedAt: params.createdAt, unchanged: false },
+    prompt, targetSurface: session.surface };
+  const metadata = { actions, filter: session.query, pageIndex: page.pageIndex, pageSize: page.pageSize,
+    totalItems: page.totalItems, totalItemsComplete: !incomplete };
+  return projects ? { ...common, kind: "project_picker", page: { ...metadata, items: page.projects } }
+    : { ...common, kind: "thread_picker", page: { ...metadata, items: page.threads } };
 }
 
 export function selectProjectFromValue(
@@ -174,6 +221,7 @@ export function selectProjectFromValue(
   }
 
   return {
+    ...(typeof value.federationInstanceId === "string" ? { federationTarget: { scope: "remote" as const, instanceId: value.federationInstanceId } } : {}),
     directoryKey:
       typeof value.directoryKey === "string" ? value.directoryKey : undefined,
     label: value.label,
@@ -787,7 +835,7 @@ function projectPickerFallbackText(
     .join("\n");
 }
 
-function formatThreadLabel(thread: NavigationThreadSummary): string {
+function formatThreadLabel(thread: NavigationThreadSummary | NavigationRow): string {
   const directory = thread.linkedDirectories.find((item) => item.kind === "worktree") ??
     thread.linkedDirectories[0];
   const suffix = directory?.label ? ` (${directory.label})` : "";
@@ -858,6 +906,7 @@ export function resumeReturnTargetForSession(
     pageIndex: session.pageIndex,
     preferences: session.preferences,
     query: session.query,
+    directorySelector: session.directorySelector,
     selectedProject: session.selectedProject,
   };
 }

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
-  NavigationDirectorySummary,
+  NavigationDirectoryRow,
   StarMapIntakeCandidate,
   StarMapIntakePhase,
   StarMapIntakeRequest,
@@ -9,7 +9,7 @@ import type {
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { resolveActiveProfileDir, resolvePwragentRoot } from "../profile";
-import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import { readLocalNavigationDirectoryIndex } from "./navigation-directory-index";
 import {
   getDesktopBackendRegistry,
   type DesktopBackendRegistry,
@@ -84,20 +84,20 @@ async function readIntakePreferences(): Promise<string | undefined> {
   return undefined;
 }
 
-function describeDirectory(directory: NavigationDirectorySummary): string {
+function describeDirectory(directory: NavigationDirectoryRow): string {
   const parts = [
     `key=${directory.key}`,
     `label=${directory.label}`,
   ];
   if (directory.path) parts.push(`path=${directory.path}`);
-  parts.push(`threads=${directory.threadKeys.length}`);
+  parts.push(`threads=${directory.counts.total}`);
   return parts.join(" | ");
 }
 
 async function resolveViaConfiguredBackend(params: {
   text: string;
   preferences?: string;
-  directories: NavigationDirectorySummary[];
+  directories: NavigationDirectoryRow[];
 }): Promise<IntakeResolution | undefined> {
   try {
     const result = await getDesktopBackendRegistry().generateStructuredObject({
@@ -155,8 +155,8 @@ async function resolveViaConfiguredBackend(params: {
 /** Deterministic fallback: rank directories by label-token hits. */
 function fuzzyMatchDirectories(
   text: string,
-  directories: NavigationDirectorySummary[],
-): NavigationDirectorySummary[] {
+  directories: NavigationDirectoryRow[],
+): NavigationDirectoryRow[] {
   const haystack = text.toLowerCase();
   return directories
     .map((directory) => {
@@ -172,7 +172,7 @@ function fuzzyMatchDirectories(
 }
 
 function candidateOf(
-  directory: NavigationDirectorySummary,
+  directory: NavigationDirectoryRow,
 ): StarMapIntakeCandidate {
   return {
     directoryKey: directory.key,
@@ -183,7 +183,7 @@ function candidateOf(
 
 export async function ensureStarMapIntakeLaunchpad(
   registry: Pick<DesktopBackendRegistry, "ensureDirectoryLaunchpad">,
-  directory: NavigationDirectorySummary,
+  directory: NavigationDirectoryRow,
 ) {
   return (await registry.ensureDirectoryLaunchpad({
     directoryKey: directory.key,
@@ -191,7 +191,7 @@ export async function ensureStarMapIntakeLaunchpad(
     directoryLabel: directory.label,
     directoryPath: directory.path,
     currentBranch: directory.gitStatus?.currentBranch,
-    preferredBackend: directory.launchpad?.backend,
+    preferredBackend: directory.launchpadBackend,
   })).launchpad;
 }
 
@@ -216,9 +216,7 @@ export async function dispatchStarMapIntake(
   }
   try {
     publishIntakeStatus({ requestId, phase: "resolving" });
-    const snapshot = await new DesktopMessagingBackendBridge()
-      .getNavigationSnapshot({});
-    const directories = snapshot.directories.filter(
+    const directories = (await readLocalNavigationDirectoryIndex()).filter(
       (directory) => directory.kind !== "unlinked",
     );
 

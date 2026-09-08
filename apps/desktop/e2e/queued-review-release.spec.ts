@@ -279,6 +279,7 @@ test("background queued review releases after active turn branch adoption", asyn
     ).toBeVisible();
 
     await app.window.getByRole("textbox", { name: "Reply" }).fill("Make a PR");
+    await expect(app.window.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
     await app.window.getByRole("button", { name: "Send" }).click();
     await expect
       .poll(async () => await app.getLastStartTurn())
