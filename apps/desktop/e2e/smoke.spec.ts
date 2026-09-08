@@ -2,8 +2,39 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { seedThreadSubAgents } from "./fixtures/sub-agent-state-seeding";
 
 const smokeSpecDir = path.dirname(fileURLToPath(import.meta.url));
+
+test("opens a thread and enables replies with oversized historical sub-agent detail", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(smokeSpecDir, "fixtures/smoke/replay.fixture.json"),
+  });
+  try {
+    const subAgents = Array.from({ length: 738 }, (_, index) => ({
+      monitorId: `history-${index}`,
+      task: `Historical task ${index}: ${"bounded history record ".repeat(80)}`,
+      status: "success" as const,
+      createdAt: 1_800_000_000_000 + index,
+      updatedAt: 1_800_000_000_000 + index,
+    }));
+    expect(Buffer.byteLength(JSON.stringify(subAgents))).toBeGreaterThan(1024 * 1024);
+    seedThreadSubAgents({
+      stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
+      subAgents,
+      threadId: "thread-smoke",
+    });
+    await app.window.reload();
+    await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+    await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    await app.window.getByLabel("Reply").fill("A reply remains available with a large history.");
+    await expect(app.window.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+    await expect(app.window.getByText(/Selected thread detail exceeds the result budget/)).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
 
 test("loads the hydrated desktop shell with its main-process window title", async () => {
   const app = await launchElectronApp({
