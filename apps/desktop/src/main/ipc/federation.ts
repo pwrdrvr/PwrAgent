@@ -59,7 +59,6 @@ import {
   showFederationActivityWindow,
   setFederationActivityTopmost,
 } from "../federation-activity-window";
-import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   federationTailscaleAdvertisementFromStatus,
@@ -89,7 +88,6 @@ function peerAllowsEventClass(
   }
 }
 
-let previousEnabledMode: "client" | "gateway" | "dual" | undefined;
 let activityToggle: Promise<unknown> = Promise.resolve();
 
 export function registerFederationIpcHandlers(): void {
@@ -123,14 +121,7 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.handle(FEDERATION_SET_ENABLED_CHANNEL, (_event, enabled: unknown) => {
     if (typeof enabled !== "boolean") throw new Error("Expected a boolean.");
     const change = activityToggle.catch(() => undefined).then(async () => {
-      const service = getDesktopSettingsService();
-      const current = service.readFederationConfig();
-      if (current.mode !== "disabled") previousEnabledMode = current.mode;
-      const resumeMode = previousEnabledMode
-        ?? (current.gatewayUrl || current.gatewayEndpoints?.length ? "client" : "gateway");
-      const mode = enabled ? resumeMode : "disabled";
-      await service.writeConfigPatchTargeted({ federation: { mode } });
-      await getDesktopFederationRuntime().restart();
+      await getDesktopFederationRuntime().setEnabledForSession(enabled);
       return getDesktopFederationRuntime().activity();
     });
     activityToggle = change;

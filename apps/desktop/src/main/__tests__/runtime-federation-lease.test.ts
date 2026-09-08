@@ -87,6 +87,22 @@ afterEach(() => {
 });
 
 describe("RuntimeFederationLeaseCoordinator", () => {
+  it("a local stop preserves a sibling's lease and an enable attempt cannot evict it", async () => {
+    const runtime = createRuntime();
+    const owner = createCoordinator({ instanceId: "instance-a", now: () => 1_000, store });
+    const sibling = createCoordinator({ instanceId: "instance-b", now: () => 1_000, store });
+    await owner.applyMode(runtime, "client");
+    await expect(sibling.applyMode(runtime, "disabled", true)).resolves.toMatchObject({
+      enabled: false, disabledReasonKind: "runtime_stopped",
+    });
+    expect(owner.snapshot().leaseHeld).toBe(true);
+    await expect(sibling.applyMode(runtime, "client")).resolves.toMatchObject({
+      enabled: false, disabledReasonKind: "lease_held",
+    });
+    await owner.applyMode(runtime, "disabled", true);
+    await expect(sibling.applyMode(runtime, "client")).resolves.toMatchObject({ enabled: true });
+  });
+
   it("acquires the profile lease when federation is enabled", async () => {
     const runtime = createRuntime();
     recordInstance("instance-a", {

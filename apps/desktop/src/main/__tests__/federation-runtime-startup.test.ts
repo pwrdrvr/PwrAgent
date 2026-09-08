@@ -8,6 +8,7 @@ import type { FederationRuntimeConfig } from "../federation/federation-runtime-c
 // vi.hoisted so the mock factories (which run when the statically imported
 // federation-runtime module first resolves them) can reach these fns.
 const mocks = vi.hoisted(() => ({
+  readFederationConfig: vi.fn(),
   getNoiseKeyPair: vi.fn(),
   getIdentityKeyPair: vi.fn(),
   gatewayServerStart: vi.fn(),
@@ -30,9 +31,14 @@ const GatewayServerCtorMock = vi.hoisted(() =>
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: vi.fn(() => ({
+    readFederationConfig: mocks.readFederationConfig,
     getOrCreateFederationNoiseStaticKeyPair: mocks.getNoiseKeyPair,
     getOrCreateFederationIdentityKeyPair: mocks.getIdentityKeyPair,
   })),
+}));
+
+vi.mock("../federation/federation-host-info", () => ({
+  collectFederationHostInfo: vi.fn(async () => undefined),
 }));
 
 vi.mock("../state/app-state", () => ({
@@ -105,6 +111,7 @@ function deferred<T>(): {
 }
 
 beforeEach(() => {
+  mocks.readFederationConfig.mockReturnValue(fakeSettings);
   mocks.getNoiseKeyPair.mockReset();
   mocks.getIdentityKeyPair.mockReset();
   mocks.gatewayServerStart.mockReset();
@@ -175,5 +182,62 @@ describe("DesktopFederationRuntime startup lease fence", () => {
     expect(runtime.listenUrl).toBeUndefined();
     expect(runtime.server).toBeUndefined();
     expect(mocks.gatewayServerStop).toHaveBeenCalled();
+  });
+});
+
+
+describe("DesktopFederationRuntime session toggle", () => {
+  it("keeps a stopped instance off across restarts without changing a sibling or the saved mode", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const sibling = new DesktopFederationRuntime();
+    const start = vi.spyOn(runtime as unknown as StartupHarness, "startAfterLeaseAcquired").mockResolvedValue(undefined);
+    const siblingStart = vi.spyOn(sibling as unknown as StartupHarness, "startAfterLeaseAcquired").mockResolvedValue(undefined);
+    await runtime.setEnabledForSession(false);
+    await runtime.restart();
+    await sibling.restart();
+    expect(start).not.toHaveBeenCalled();
+    expect(siblingStart).toHaveBeenCalledWith("gateway", expect.objectContaining({ mode: "gateway" }));
+    expect(fakeSettings.mode).toBe("gateway");
+    mocks.readFederationConfig.mockReturnValue({ ...fakeSettings, mode: "dual" });
+    await runtime.restart();
+    expect(start).not.toHaveBeenCalled();
+    await runtime.setEnabledForSession(true);
+    expect(start).toHaveBeenCalledWith("dual", expect.objectContaining({ mode: "dual" }));
+    expect(siblingStart).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { gatewayEndpoints: [], mode: "gateway" },
+    { gatewayEndpoints: ["wss://fixture.invalid"], mode: "client" },
+  ])("enables a saved-disabled profile as $mode only for this instance", async ({ gatewayEndpoints, mode }) => {
+    const saved = { ...fakeSettings, mode: "disabled", gatewayEndpoints };
+    mocks.readFederationConfig.mockReturnValue(saved);
+    const runtime = new DesktopFederationRuntime();
+    const start = vi.spyOn(runtime as unknown as StartupHarness, "startAfterLeaseAcquired").mockResolvedValue(undefined);
+    await runtime.setEnabledForSession(true);
+    await runtime.restart();
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenLastCalledWith(mode, expect.objectContaining({ mode }));
+    expect(saved.mode).toBe("disabled");
+    vi.spyOn(runtime, "health").mockResolvedValue({ enabled: true, role: "gateway", status: "connected", peers: [] });
+    expect((await runtime.activity({ includeHistory: false })).configuredMode).toBe("disabled");
+    const fresh = new DesktopFederationRuntime();
+    const freshStart = vi.spyOn(fresh as unknown as StartupHarness, "startAfterLeaseAcquired").mockResolvedValue(undefined);
+    await fresh.restart();
+    expect(freshStart).not.toHaveBeenCalled();
+  });
+
+  it("applies a toggle after an in-flight restart finishes", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const pendingStart = deferred<void>();
+    const start = vi.spyOn(runtime as unknown as StartupHarness, "startAfterLeaseAcquired")
+      .mockImplementation(() => pendingStart.promise);
+    const restarting = runtime.restart();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    const stopping = runtime.setEnabledForSession(false);
+    pendingStart.resolve();
+    await Promise.all([restarting, stopping]);
+    await runtime.restart();
+    expect(start).toHaveBeenCalledTimes(1);
   });
 });

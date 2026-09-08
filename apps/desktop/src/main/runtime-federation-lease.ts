@@ -77,20 +77,21 @@ export class RuntimeFederationLeaseCoordinator {
    * DesktopFederationRuntime.restartNow after the previous runtime has been
    * torn down. An enabled mode must hold the profile federation lease before
    * any socket is opened; a live holder elsewhere keeps this instance
-   * stopped. Unlike messaging there is no session override or runnable-
-   * adapter gate: the federation mode is the whole ladder.
+   * stopped. The runtime supplies its effective mode, including any local
+   * session override, without changing the saved profile configuration.
    */
   async applyMode(
     _runtime: FederationLeaseRuntime,
     mode: DesktopFederationMode,
+    disabledForSession = false,
   ): Promise<RuntimeFederationLeaseApplyResult> {
     if (mode === "disabled") {
       this.leaseManager.release("federation");
-      this.disabledReasonKind = "saved_disabled";
+      this.disabledReasonKind = disabledForSession ? "runtime_stopped" : "saved_disabled";
       return {
         enabled: false,
-        disabledReasonKind: "saved_disabled",
-        disabledReason: "Federation is disabled in saved settings.",
+        disabledReasonKind: this.disabledReasonKind,
+        disabledReason: federationDisabledReasonMessage(this.disabledReasonKind),
       };
     }
 

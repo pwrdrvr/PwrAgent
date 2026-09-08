@@ -72,19 +72,34 @@ describe("Federation activity surfaces", () => {
     denied.health.enabled = false;
     denied.health.leaseHolder = { instanceId: "other-app", processId: 123, cwdHint: "/fixture/other" };
     denied.health.unavailableReason = "This profile is already served by another app.";
-    const off = { ...fixture(), configuredMode: "disabled" as const, running: false };
-    const setFederationEnabled = vi.fn(async () => off);
+    const setFederationEnabled = vi.fn(async () => denied);
     render(<FederationStatusControl desktopApi={{ readFederationActivity: async () => denied, setFederationEnabled }} onOpen={vi.fn()} />);
     fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
     await screen.findByText("Not running · lease held by another instance");
     expect(screen.getByText("Configured on · gateway")).toBeInTheDocument();
     expect(screen.getByText(/Holder: other-app · PID 123/)).toBeInTheDocument();
     const toggle = screen.getByRole("switch", { name: "Federation enabled" });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(toggle);
-    await screen.findByText("Configured off");
-    expect(setFederationEnabled).toHaveBeenCalledWith(false);
     expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setFederationEnabled).toHaveBeenCalledWith(true));
+    expect(screen.getByText("Configured on · gateway")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
+
+  it.each(["popup", "activity"])("turns off only the runtime in the %s while preserving configured-on", async (surface) => {
+    const off = { ...fixture(), running: false, health: { ...fixture().health, enabled: false } };
+    const setFederationEnabled = vi.fn(async () => off);
+    const desktopApi = { readFederationActivity: async () => fixture(), setFederationEnabled };
+    render(surface === "popup"
+      ? <FederationStatusControl desktopApi={desktopApi} onOpen={vi.fn()} />
+      : <FederationActivityScreen desktopApi={desktopApi} />);
+    if (surface === "popup") fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    await screen.findByText("Running · connected");
+    fireEvent.click(screen.getByRole("switch", { name: "Federation enabled" }));
+    await screen.findByText("Stopped");
+    expect(setFederationEnabled).toHaveBeenCalledWith(false);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Configured on · gateway")).toBeInTheDocument();
   });
 
   it("labels chart axes with amounts and units, exposes periods and per-peer attribution, and confirms topmost", async () => {
@@ -146,15 +161,15 @@ describe("Federation activity surfaces", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
-  it("keeps the switch state and reports errors if a configuration change fails", async () => {
+  it("keeps the switch state and reports errors if a runtime toggle fails", async () => {
     render(<FederationStatusControl desktopApi={{
       readFederationActivity: async () => fixture(),
-      setFederationEnabled: async () => { throw new Error("Config is read-only"); },
+      setFederationEnabled: async () => { throw new Error("Startup failed"); },
     }} onOpen={vi.fn()} />);
     fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
     await screen.findByText("Running · connected");
     fireEvent.click(screen.getByRole("switch"));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Config is read-only");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Startup failed");
     expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
   });
   it("shows recent bursts beside lifetime totals regardless of chart range", async () => {

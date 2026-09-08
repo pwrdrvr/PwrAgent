@@ -6,7 +6,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
-  runtime: { activity: vi.fn(), resetActivity: vi.fn(), restart: vi.fn() },
+  runtime: { activity: vi.fn(), resetActivity: vi.fn(), restart: vi.fn(), setEnabledForSession: vi.fn() },
   service: { readFederationConfig: vi.fn(), writeConfigPatchTargeted: vi.fn() },
   show: vi.fn(), topmost: vi.fn(), fromWebContents: vi.fn(),
 }));
@@ -53,26 +53,22 @@ describe("Federation Activity IPC", () => {
     expect(mocks.runtime.restart).not.toHaveBeenCalled();
   });
 
-  it("disables then restores the previous mode and reports actual lease-denied runtime state", async () => {
+  it("toggles only the local runtime and reports a lease-denied enable attempt", async () => {
     await invoke(FEDERATION_SET_ENABLED_CHANNEL, false);
-    expect(mocks.service.writeConfigPatchTargeted).toHaveBeenLastCalledWith({ federation: { mode: "disabled" } });
-    mocks.service.readFederationConfig.mockReturnValue({ mode: "disabled" });
+    expect(mocks.runtime.setEnabledForSession).toHaveBeenLastCalledWith(false);
     const result = await invoke(FEDERATION_SET_ENABLED_CHANNEL, true);
-    expect(mocks.service.writeConfigPatchTargeted).toHaveBeenLastCalledWith({ federation: { mode: "dual" } });
-    expect(mocks.runtime.restart).toHaveBeenCalledTimes(2);
+    expect(mocks.runtime.setEnabledForSession).toHaveBeenLastCalledWith(true);
+    expect(mocks.service.writeConfigPatchTargeted).not.toHaveBeenCalled();
+    expect(mocks.service.readFederationConfig).not.toHaveBeenCalled();
     expect(result).toMatchObject({ configuredMode: "dual", running: false, health: { leaseHolder: { instanceId: "holder" } } });
   });
 
-  it("uses enrollment endpoints to restore a client after a process starts disabled", async () => {
-    mocks.service.readFederationConfig.mockReturnValue({ mode: "disabled", gatewayEndpoints: ["wss://fixture.invalid"] });
-    await invoke(FEDERATION_SET_ENABLED_CHANNEL, true);
-    expect(mocks.service.writeConfigPatchTargeted).toHaveBeenCalledWith({ federation: { mode: "client" } });
-  });
-
-  it("does not restart on failed writes and rejects malformed toggle/topmost requests", async () => {
-    mocks.service.writeConfigPatchTargeted.mockRejectedValue(new Error("Read-only settings"));
-    await expect(invoke(FEDERATION_SET_ENABLED_CHANNEL, false)).rejects.toThrow("Read-only settings");
-    expect(mocks.runtime.restart).not.toHaveBeenCalled();
+  it("reports runtime failures, permits a subsequent toggle, and rejects malformed requests", async () => {
+    mocks.runtime.setEnabledForSession.mockRejectedValueOnce(new Error("Startup failed"));
+    await expect(invoke(FEDERATION_SET_ENABLED_CHANNEL, true)).rejects.toThrow("Startup failed");
+    await invoke(FEDERATION_SET_ENABLED_CHANNEL, false);
+    expect(mocks.runtime.setEnabledForSession).toHaveBeenLastCalledWith(false);
+    expect(mocks.service.writeConfigPatchTargeted).not.toHaveBeenCalled();
     expect(() => invoke(FEDERATION_SET_ENABLED_CHANNEL, "false")).toThrow("boolean");
     expect(() => invoke(FEDERATION_ACTIVITY_TOPMOST_CHANNEL, {})).toThrow("boolean");
   });
