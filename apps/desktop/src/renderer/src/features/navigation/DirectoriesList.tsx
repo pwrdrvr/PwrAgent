@@ -883,7 +883,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
   };
 
   const isAdmittedDirectoryRoot = (directory: NavigationDirectorySummary, threadKey: string): boolean => {
-    const entries = props.pagedNavigation?.resources.get(`directory:${directory.key}`)?.state.page?.entries;
+    const entries = [
+      ...(props.pagedNavigation?.resources.get(`directory-pins:${directory.key}`)?.state.page?.entries ?? []),
+      ...(props.pagedNavigation?.resources.get(`directory:${directory.key}`)?.state.page?.entries ?? []),
+    ];
     return entries
       ? entries.some((entry) => entry.placement.kind === "root" && navigationThreadSelectionKey(entry.row.ref) === threadKey)
       : false;
@@ -1110,6 +1113,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const activeThreadCount = directory.counts?.active ?? 0;
     const reviewThreadCount = directory.counts?.review ?? 0;
     const visibleThreadCount = directory.counts?.total ?? 0;
+    const pinResourceId = `directory-pins:${directory.key}`;
+    const pinResource = props.pagedNavigation?.resources.get(pinResourceId);
     const rootResourceId = `directory:${directory.key}`;
     const rootResource = props.pagedNavigation?.resources.get(rootResourceId);
     const directorySummaryLabel = [
@@ -1834,6 +1839,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           className="directory-row__pin-drop-slot"
                           role="separator"
                         />
+                      </div>
+                    ) : null}
+
+                    {pinResource && (pinResource.state.error || (pinResource.loading && !pinResource.state.page)
+                      || pinResource.state.rebaselineRequired || pinResource.state.page?.nextCursor) ? (
+                      <div role="listitem">
+                        {pinResource.state.error ? <p className="sidebar-error">{pinResource.state.error}</p> : null}
+                        {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
+                        {pinResource.state.rebaselineRequired ? (
+                          <button type="button" className="directory-row__show-more" onClick={() => void props.pagedNavigation?.restart(pinResourceId)}>Reload pinned threads</button>
+                        ) : pinResource.state.page?.nextCursor ? (
+                          <button type="button" className="directory-row__show-more" disabled={pinResource.loading} onClick={() => void props.pagedNavigation?.loadMore(pinResourceId)}>Load more pinned threads</button>
+                        ) : null}
                       </div>
                     ) : null}
 

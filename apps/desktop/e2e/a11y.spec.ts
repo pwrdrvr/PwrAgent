@@ -658,24 +658,32 @@ for (const theme of AUDIT_THEMES) {
           await expect(
             directoryRow.getByRole("button", { name: "Load more threads", exact: true }),
           ).toBeVisible();
-          // The owner page admits ten roots including two pins. The pin-drop
+          // Independent owner pages admit ten unpinned roots and two pins. The pin-drop
           // boundary and section disclosure are listitems; paging controls
           // sit outside the list.
           //
           // Direct children: `getByRole` matches DESCENDANTS, so it would also
           // count a sub-thread list's own rows and read as fixture drift.
-          await expect(listItems(threads)).toHaveCount(12);
+          await expect(listItems(threads)).toHaveCount(14);
 
           await settle();
           await runAxe(app.window, "directories lens, expanded directory");
         });
 
         await test.step("expanded unpinned overflow", async () => {
-          // Fetch the remaining four roots into the same accessible list.
-          await directoryRow
-            .getByRole("button", { name: "Load more threads", exact: true })
-            .click();
+          const more = directoryRow.getByRole("button", { name: "Load more threads", exact: true });
+          await more.scrollIntoViewIfNeeded();
+          const lastRow = threads.locator(".thread-row-shell").last();
+          const lastRowKey = await lastRow.getAttribute("data-thread-pin-key");
+          const before = await lastRow.boundingBox();
+          await more.click();
           await expect(listItems(threads)).toHaveCount(16);
+          await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
+          if (!before || !lastRowKey) throw new Error("Missing pagination scroll anchor");
+          await expect.poll(async () => {
+            const after = await threads.locator(`[data-thread-pin-key="${lastRowKey}"]`).boundingBox();
+            return after ? Math.abs(after.y - before.y) : Infinity;
+          }).toBeLessThanOrEqual(2);
           await expect(directoryRow.getByRole("button", { name: "Load more threads", exact: true })).toHaveCount(0);
           await settle();
           await runAxe(app.window, "directories lens, unpinned overflow");

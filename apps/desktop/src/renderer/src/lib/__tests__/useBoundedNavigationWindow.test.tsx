@@ -37,7 +37,8 @@ it.each([5, 35])("restores selected root %s without discarding the first page wh
   fixture.read.mockImplementation(async (request) => {
     if (request.query.kind === "directory-index") return page({ directories: [directory] });
     if (request.query.kind === "exact") return page({ entries: [{ row: row(index), placement: { kind: "root" }, orderKey: "selected" }] });
-    const offset = request.anchor?.kind === "thread" ? Number(request.anchor.ref.threadId.slice("thread-".length)) : 0;
+    if (request.query.kind === "directory" && request.query.roots === "pinned") return page({ entries: [{ row: row(0), placement: { kind: "root" }, orderKey: "0" }] });
+    const offset = request.cursor ? Number(request.cursor) : request.anchor?.kind === "thread" ? Number(request.anchor.ref.threadId.slice("thread-".length)) : 1;
     return page({ complete: false, nextCursor: String(offset + 10), ...(offset ? { rangeStart: offset } : {}),
       entries: Array.from({ length: 10 }, (_, i) => ({ row: row(offset + i), placement: { kind: "root" as const }, orderKey: String(offset + i) })),
     });
@@ -47,11 +48,20 @@ it.each([5, 35])("restores selected root %s without discarding the first page wh
   }));
   const id = `directory:${directory.key}`;
   await waitFor(() => expect(result.current.resources.get(id)?.state.page?.entries.some((entry) => entry.row.id === selectedRef.threadId)).toBe(true));
-  const reads = fixture.read.mock.calls.map(([request]) => request).filter((request) => request.query.kind === "directory");
+  const reads = fixture.read.mock.calls.map(([request]) => request).filter((request) => request.query.kind === "directory" && request.query.roots === "unpinned");
   expect(reads[0]?.anchor).toBeUndefined();
   expect(reads).toHaveLength(index < 10 ? 1 : 2);
-  expect(result.current.resources.get(id)?.state.page?.entries[0]?.row.id).toBe(index < 10 ? "thread-0" : "thread-35");
+  expect(result.current.resources.get(id)?.state.page?.entries[0]?.row.id).toBe(index < 10 ? "thread-1" : "thread-35");
   if (index >= 10) expect(reads[1]?.anchor).toEqual({ kind: "thread", ref: selectedRef });
+  const pinsId = `directory-pins:${directory.key}`;
+  const pins = () => result.current.resources.get(pinsId)?.state.page?.entries.map((entry) => entry.row.id);
+  expect(pins()).toEqual(["thread-0"]);
+  await act(() => result.current.loadMore(id));
+  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(20);
+  expect(pins()).toEqual(["thread-0"]);
+  await act(() => result.current.refresh());
+  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(20);
+  expect(pins()).toEqual(["thread-0"]);
   unmount();
 });
 
@@ -64,11 +74,12 @@ it("resolves selected off-page descriptors exactly without repeatedly dropping t
   expect(result.current.directories).toEqual([directory]);
   expect(fixture.read.mock.calls.map(([request]) => request.query)).toEqual([
     { kind: "directory-index" }, { kind: "directory-index", keys: [directory.key] },
-    { kind: "directory", directoryKey: directory.key, roots: "all" },
+    { kind: "directory", directoryKey: directory.key, roots: "pinned" },
+    { kind: "directory", directoryKey: directory.key, roots: "unpinned" },
   ]);
   expect(result.current.resources.has("selected-directories")).toBe(true);
   unmount();
-  expect(fixture.release).toHaveBeenCalledTimes(3);
+  expect(fixture.release).toHaveBeenCalledTimes(4);
 });
 
 it("does not fetch hidden demand, survives StrictMode restart, and retains pages when hidden", async () => {

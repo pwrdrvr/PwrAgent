@@ -53,8 +53,8 @@ export function buildNavigationWindowDemand(params: {
       const selectedDirectory = params.selectedDirectoryKeys?.includes(directory.key);
       if (selectedDirectory && params.selectedRef && params.selectedContextReady === false) continue;
       const showUnpinned = params.unpinnedExpandedByKey[directory.key] ?? !directory.directoryThreadsCollapsed;
-      demand.set(`directory:${directory.key}`, request({ kind: "directory", directoryKey: directory.key,
-        roots: showUnpinned ? "all" : "pinned" }));
+      demand.set(`directory-pins:${directory.key}`, request({ kind: "directory", directoryKey: directory.key, roots: "pinned" }));
+      if (showUnpinned) demand.set(`directory:${directory.key}`, request({ kind: "directory", directoryKey: directory.key, roots: "unpinned" }));
     }
 
   } else if (params.browseMode === "drafts") {
@@ -98,7 +98,7 @@ export function visibleDisclosedNavigationParents(params: {
 }): NavigationIdentity[] {
   const candidates = new Map(params.disclosedParents.map((ref) => [navigationIdentityKey(ref), ref]));
   const visible = new Map<string, NavigationIdentity>();
-  const pending = [...params.collectionIds].filter((id) => id === "lens" || id.startsWith("directory:") || id.startsWith("drafts:"));
+  const pending = [...params.collectionIds].filter((id) => id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("drafts:"));
   const visited = new Set<string>();
   while (pending.length) {
     const id = pending.pop()!;
@@ -126,7 +126,7 @@ export function addVisibleMountedOwnerDemand(params: {
   const owners = new Map<string, Map<string, NavigationIdentity>>();
   for (const [id, request] of params.demand) {
     if (request.federationTarget?.scope === "remote"
-      || !(id === "lens" || id.startsWith("directory:") || id.startsWith("children:"))) continue;
+      || !(id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("children:"))) continue;
     for (const { row } of params.pages.get(id)?.entries ?? []) {
       const owner = row.ref.ownerInstanceId;
       if (!owner || (params.selectedRef && navigationIdentityKey(params.selectedRef) === navigationIdentityKey(row.ref))) continue;

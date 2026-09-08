@@ -106,8 +106,8 @@ describe("Directories lens thread list ARIA", () => {
     const nonRows = children.filter(
       (child) => !child.classList.contains("thread-row-shell"),
     );
-    // The owner admits ten roots total, including the two pinned roots.
-    expect(rows).toHaveLength(10);
+    // Pins and the ten unpinned roots have independent owner pages.
+    expect(rows).toHaveLength(12);
     // The sub-thread list, the pin-drop boundary, and the disclosure.
     expect(nonRows).toHaveLength(3);
 

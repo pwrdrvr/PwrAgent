@@ -22,7 +22,14 @@ export function buildPagedDirectoryPresentation(params: {
   threadsByKey: ReadonlyMap<string, NavigationThreadSummary>;
 }): PagedDirectoryPresentation {
   const presentation = params.presentationOrder ?? readNavigationPresentationOrder(params.resources);
-  const roots = (presentation.get(`directory:${params.directory.key}`) ?? []).filter((entry) => entry.placement.kind === "root")
+  const rootEntries = [...(presentation.get(`directory-pins:${params.directory.key}`) ?? []),
+    ...(presentation.get(`directory:${params.directory.key}`) ?? [])];
+  const seen = new Set<string>();
+  const roots = rootEntries.filter((entry) => {
+    if (entry.placement.kind !== "root" || seen.has(entry.key)) return false;
+    seen.add(entry.key);
+    return true;
+  })
     .map((entry) => params.threadsByKey.get(entry.key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
   const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
   for (const resource of params.resources.values()) {

@@ -97,7 +97,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     const selection = navigationIdentityKey(params.selectedRef);
     const rootKey = navigationIdentityKey(selectedRoot.row.ref);
     for (const directoryKey of selectedDirectoryKeys ?? []) {
-      const id = `directory:${directoryKey}`;
+      const id = `${selectedRoot.row.pinnedRank ? "directory-pins" : "directory"}:${directoryKey}`;
       const resource = state.resources.get(id);
       const query = resource?.state.request.query;
       const page = resource?.state.page;
@@ -106,7 +106,7 @@ export function useBoundedNavigationWindow(params: Demand & {
       const checked = JSON.stringify([selection, rootKey, query.roots]);
       if (selectedRangeCheckedRef.current.get(id) === checked) continue;
       selectedRangeCheckedRef.current.set(id, checked);
-      // First show the ordinary page, including pins before the selection.
+      // Seek only within the selected section; the other section retains its page.
       // Seek only when an exact restored/selected ancestor is outside it.
       if (!page.entries.some((entry) => navigationIdentityKey(entry.row.ref) === rootKey)) {
         void controller.rebaseline(id, { kind: "thread", ref: selectedRoot.row.ref });

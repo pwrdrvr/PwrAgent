@@ -42,7 +42,7 @@ function usePresentationOwner(props: FixtureProps) {
     let page = navigationQueryFixture(request, { directories: props.directories, threads }, { ownerLensOrder: true });
     if (query.kind === "directory" && selectedThread && !selectedThread.parentThreadId
       && selectedThreadDirectoryKeys.includes(query.directoryKey)
-      && (query.roots !== "pinned" || selectedThread.pinnedRank)
+      && (query.roots === "pinned" ? Boolean(selectedThread.pinnedRank) : !selectedThread.pinnedRank)
       && !page.entries.some((entry) => entry.row.id === selectedThread.id && entry.row.source === selectedThread.source
         && entry.row.ref.ownerInstanceId === (selectedThread.federation?.ref.target.scope === "remote" ? selectedThread.federation.ref.target.instanceId : undefined))) {
       request.anchor = { kind: "thread", ref: { backend: selectedThread.source, threadId: selectedThread.id,
@@ -59,8 +59,10 @@ function usePresentationOwner(props: FixtureProps) {
     .map((thread) => ({ backend: thread.source, threadId: thread.id })), includeAncestry: true });
   else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, mode === "attention" ? attention.threads
     : mode === "recents" ? props.recentThreads ?? ownerThreads : ownerThreads);
-  for (const directory of props.directories) add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key,
-    roots: directory.directoryThreadsCollapsed ? "pinned" : "all" });
+  for (const directory of props.directories) {
+    add(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" });
+    if (!directory.directoryThreadsCollapsed) add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned" });
+  }
   const byKey = new Map(ownerThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
   const parents = new Set(ownerThreads.map((thread) => resolveThreadParentKey(thread, byKey)).filter(Boolean));
   for (const thread of ownerThreads) {

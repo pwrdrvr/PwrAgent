@@ -13,8 +13,8 @@ const base = { browseMode: "directories" as const, attentionView: { id: "window"
 it("cold navigation fetches only visible membership and collapsed directories use counts only", () => {
   expect([...buildNavigationWindowDemand(base).keys()]).toEqual(["directory-index"]);
   const demand = buildNavigationWindowDemand({ ...base, expandedByKey: { "directory:42": true } });
-  expect([...demand.keys()]).toEqual(["directory-index", "directory:directory:42"]);
-  expect(demand.get("directory:directory:42")).toMatchObject({ pageSize: 10, query: { kind: "directory", directoryKey: "directory:42", roots: "all" } });
+  expect([...demand.keys()]).toEqual(["directory-index", "directory-pins:directory:42", "directory:directory:42"]);
+  expect(demand.get("directory:directory:42")).toMatchObject({ pageSize: 10, query: { kind: "directory", directoryKey: "directory:42", roots: "unpinned" } });
 });
 
 it("selection can survive an unloaded project and explicit collapse overrides automatic reveal", () => {
@@ -28,7 +28,7 @@ it("unpinned disclosure and child disclosure create independent explicit demand"
   const parent = { backend: "codex" as const, threadId: "parent" };
   const demand = buildNavigationWindowDemand({ ...base, expandedByKey: { "directory:42": true },
     unpinnedExpandedByKey: { "directory:42": false }, disclosedParents: [parent] });
-  expect(demand.get("directory:directory:42")?.query).toMatchObject({ roots: "pinned" });
+  expect(demand.get("directory-pins:directory:42")?.query).toMatchObject({ roots: "pinned" });
   expect([...demand.values()].find((value) => value.query.kind === "children")).toMatchObject({ pageSize: 10, query: { kind: "children", parent } });
 });
 
