@@ -707,6 +707,13 @@ for (const theme of AUDIT_THEMES) {
           await settle();
           await runAxe(app.window, "directories lens, collapsed");
         });
+        await test.step("user expansion reveals lazy pins under a stationary pointer", async () => {
+          await directory.click();
+          await expect(directory).toHaveAttribute("aria-expanded", "true");
+          // No mouse move or hover release before the asynchronous pages arrive.
+          await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
+          await expect(threads.locator('[data-thread-pin-state="unpinned"]')).toHaveCount(10);
+        });
       } finally {
         await app.close();
       }

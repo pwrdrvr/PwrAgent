@@ -704,6 +704,20 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
+  it("reveals lazily loaded pins after expanding a folder without moving the pointer away", () => {
+    const { rerender } = render(renderSidebar({ browseMode: "directories", directories: [directory], threads: [] }));
+    const summary = screen.getByRole("button", { name: "Repo" });
+    fireEvent.pointerOver(summary, { pointerType: "mouse" });
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    // The owner page arrives after the click; the mouse remains on the folder.
+    rerender(renderSidebar({ browseMode: "directories", directories: [directory],
+      threads: [{ ...alpha, pinnedRank: "1024" }, { ...bravo, pinnedRank: "2048" }] }));
+    const list = screen.getByRole("list", { name: "Threads in Repo" });
+    expect(list.querySelectorAll('[data-thread-pin-state="pinned"]')).toHaveLength(2);
+    expect(within(list).getByRole("button", { name: /Alpha thread/ })).toBeVisible();
+  });
+
   it("shows a newly created pinned thread while Directory threads are collapsed", () => {
     const onOpenLaunchpad = vi.fn(async () => undefined);
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };

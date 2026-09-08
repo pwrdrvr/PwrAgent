@@ -1287,9 +1287,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 {childResource.state.error ? <p role="alert">{childResource.state.error}</p> : null}
                 {childResource.loading && !childResource.state.page ? <p>Loading sub-threads…</p> : null}
                 {childResource.state.rebaselineRequired ? (
-                  <button type="button" onClick={() => void props.pagedNavigation?.restart(childResource.id)}>Reload sub-threads</button>
+                  <button type="button" data-hover-stable-release="pagination" onClick={() => void props.pagedNavigation?.restart(childResource.id)}>Reload sub-threads</button>
                 ) : childResource.state.page?.nextCursor ? (
-                  <button type="button" disabled={childResource.loading} onClick={() => void props.pagedNavigation?.loadMore(childResource.id)}>
+                  <button type="button" data-hover-stable-release="pagination" disabled={childResource.loading} onClick={() => void props.pagedNavigation?.loadMore(childResource.id)}>
                     {childResource.id.endsWith(":viewer") ? "Load more sub-threads on this machine" : "Load more sub-threads"}
                   </button>
                 ) : null}
@@ -1547,6 +1547,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
           }
         >
           <button
+            data-hover-stable-release="directory"
             aria-label={directorySummaryLabel}
             aria-expanded={expanded}
             aria-pressed={selectedDirectory}
@@ -1848,9 +1849,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         {pinResource.state.error ? <p className="sidebar-error">{pinResource.state.error}</p> : null}
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
                         {pinResource.state.rebaselineRequired ? (
-                          <button type="button" className="directory-row__show-more" onClick={() => void props.pagedNavigation?.restart(pinResourceId)}>Reload pinned threads</button>
+                          <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" onClick={() => void props.pagedNavigation?.restart(pinResourceId)}>Reload pinned threads</button>
                         ) : pinResource.state.page?.nextCursor ? (
-                          <button type="button" className="directory-row__show-more" disabled={pinResource.loading} onClick={() => void props.pagedNavigation?.loadMore(pinResourceId)}>Load more pinned threads</button>
+                          <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" disabled={pinResource.loading} onClick={() => void props.pagedNavigation?.loadMore(pinResourceId)}>Load more pinned threads</button>
                         ) : null}
                       </div>
                     ) : null}
@@ -1911,9 +1912,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 {rootResource?.state.error ? <p className="sidebar-error">{rootResource.state.error}</p> : null}
                 {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty">Loading threads…</p> : null}
                 {rootResource?.state.rebaselineRequired ? (
-                  <button type="button" className="directory-row__show-more" onClick={() => void props.pagedNavigation?.restart(rootResourceId)}>Reload this directory</button>
+                  <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" onClick={() => void props.pagedNavigation?.restart(rootResourceId)}>Reload this directory</button>
                 ) : rootResource?.state.page?.nextCursor ? (
-                  <button type="button" className="directory-row__show-more" disabled={rootResource.loading} onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)}>Load more threads</button>
+                  <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" disabled={rootResource.loading} onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)}>Load more threads</button>
                 ) : null}
               </div>
             ) : null}
