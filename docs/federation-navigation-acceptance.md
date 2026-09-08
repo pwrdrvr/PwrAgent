@@ -15,6 +15,22 @@ Electron E2E cases. The E2E cases include opening a thread and enabling Send wit
 738 historical sub-agent records exceeding 1 MiB. These are contrived-data
 checks; comparison with the operator's existing M4/M5 Federation remains open.
 
+The subsequent refresh/reconnect repairs at `fffdfb3ca` pass the full unit suite:
+755 files, 10,856 tests, 7 skipped (131.60 seconds), plus desktop typecheck and
+targeted ESLint. Loaded lists no longer insert loading paragraphs during
+background refresh; canonical invalidation replaces pending exact results
+within the original deadline instead of rejecting consumer demand. Disconnected
+peers are distinguished from connected peers requiring an upgrade.
+All 15 affected Electron E2E cases also pass at this checkpoint, covering
+accessibility in both themes, thread-row lifecycle, shell readiness, and the
+oversized selected-history composer regression.
+
+Live Computer Use on the M4 confirmed the restored project pin order, local
+child beneath its M5 parent, rendered transcript, and enabled Send with an
+unsent probe that was cleared. Stability after reloading the newest fixes and
+the composition of the observed 5.18 MB `backend.readThread` response remain
+unverified. Size-only large-frame diagnostics are now available for that check.
+
 ## Upgrade requirement
 
 Run the cutover build on every viewer, owner and gateway participating in the
