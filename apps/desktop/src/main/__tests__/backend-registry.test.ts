@@ -32131,7 +32131,7 @@ script = "printf setup"
     await rm(root, { recursive: true, force: true });
   });
 
-  it("groups handoffs from a persisted grandchild under the root parent", async () => {
+  it.each([undefined, "remote-owner"])("groups handoffs from a persisted grandchild under the root owner %s", async (parentThreadInstanceId) => {
     const rootDirectory = {
       id: expectedDir("/repo/app"),
       kind: "local" as const,
@@ -32153,6 +32153,7 @@ script = "printf setup"
           executionMode: "default",
           extraLinkedDirectories: [rootDirectory],
           parentThreadId: "root-thread",
+          parentThreadInstanceId,
           subthreadOrder: ["source-grandchild"],
         },
         "codex:source-grandchild": {
@@ -32249,6 +32250,7 @@ script = "printf setup"
       }),
     ).resolves.toMatchObject({
       parentThreadId: "root-thread",
+      ...(parentThreadInstanceId ? { parentThreadInstanceId } : {}),
     });
     await expect(
       overlayStore.getThreadOverlayState({
@@ -32256,7 +32258,7 @@ script = "printf setup"
         threadId: "root-thread",
       }),
     ).resolves.toMatchObject({
-      subthreadOrder: [
+      subthreadOrder: parentThreadInstanceId ? ["older-child", "intermediate-child"] : [
         "older-child",
         "intermediate-child",
         "source-grandchild",
