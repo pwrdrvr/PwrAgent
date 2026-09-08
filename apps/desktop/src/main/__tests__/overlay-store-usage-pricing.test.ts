@@ -158,6 +158,81 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(pricing.summaries[0]?.totalTokens).toBe(3_300);
   });
 
+  it.each([false, true])("enriches protected metadata without accepting stale usage (priced=%s)", async (priced) => {
+    const first = buildUsageLine({
+      source: "live", model: priced ? "gpt-5.5" : undefined,
+      serviceTier: undefined, reasoningEffort: undefined,
+      cumulativeTotalTokens: 1_300,
+    });
+    await store.upsertThreadUsageLine({ line: first });
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: 2_600,
+    }) });
+    const before = (await store.readThreadPricing({ backend: "codex", threadId: "thread-1" }))
+      .lines.find((line) => line.turnId === "turn-1")!;
+    // Simulate v60's restriction on filling a missing pricing field. Reopening
+    // must replace that trigger while retaining the separate token guards.
+    stateDb.raw.exec(`
+      DROP TRIGGER protect_finalized_thread_usage_update;
+      CREATE TRIGGER protect_finalized_thread_usage_update
+      BEFORE UPDATE ON thread_usage_lines
+      WHEN OLD.service_tier IS NOT NEW.service_tier
+      BEGIN SELECT RAISE(IGNORE); END;
+      PRAGMA user_version = 60;
+    `);
+    stateDb.close();
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    store = new SqliteOverlayStore(stateDb);
+    const hydration = buildUsageLine({
+      source: "hydration", usageLineId: "hydrated-replacement", model: "gpt-5.5",
+      startedAt: first.createdAt - 100, completedAt: first.createdAt + 1_000,
+      finalContextTokens: 600, peakContextTokens: 900, modelContextWindow: 258_400,
+      inputTokens: 100_000, uncachedInputTokens: 99_800,
+      totalTokens: 100_300, cumulativeTotalTokens: 100_300,
+      totalCostMicros: 900_000_000,
+    });
+    await store.upsertThreadUsageLine({ line: hydration });
+    const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.lines).toHaveLength(2);
+    const enriched = pricing.lines.find((line) => line.turnId === "turn-1")!;
+    expect(enriched).toMatchObject({
+      usageLineId: "line-1", source: "live", model: "gpt-5.5", serviceTier: "standard",
+      startedAt: first.createdAt - 100, completedAt: first.createdAt + 1_000,
+      finalContextTokens: 600, peakContextTokens: 900, modelContextWindow: 258_400,
+      inputTokens: before.inputTokens, totalTokens: before.totalTokens,
+      cumulativeTotalTokens: before.cumulativeTotalTokens, priceStatus: "priced",
+    });
+    expect(enriched.totalCostMicros).toBe(priced ? before.totalCostMicros : 16_100);
+    await store.upsertThreadUsageLine({ line: {
+      ...hydration, model: "gpt-6-astra", completedAt: first.createdAt + 9_000,
+      modelContextWindow: 999_999,
+    } });
+    expect(await store.readThreadPricing({ backend: "codex", threadId: "thread-1" })).toEqual(pricing);
+  });
+
+  it("prices a protected Astra aggregate when hydration supplies its missing context ceiling", async () => {
+    const first = buildUsageLine(buildAstraAggregateOverrides({
+      source: "live", cumulativeTotalTokens: 1_658_805,
+    }));
+    await store.upsertThreadUsageLine({ line: first });
+    await store.upsertThreadUsageLine({ line: {
+      ...first, usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: 3_317_610,
+    } });
+    const before = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(before.lines.find((line) => line.turnId === "turn-1")?.priceStatus).toBe("unpriced");
+    await store.upsertThreadUsageLine({ line: {
+      ...first, source: "hydration", usageLineId: "hydrated-astra",
+      modelContextWindow: 258_400, totalTokens: 9_999_999, cumulativeTotalTokens: 9_999_999,
+    } });
+    const after = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(after.lines).toHaveLength(2);
+    expect(after.lines.find((line) => line.turnId === "turn-1")).toMatchObject({
+      priceStatus: "priced", modelContextWindow: 258_400,
+      totalTokens: 1_658_805, cumulativeTotalTokens: 1_658_805,
+      totalCostMicros: 3_269_538,
+    });
+  });
+
   it("upserts a priced usage line and cached summary idempotently", async () => {
     const line = buildUsageLine();
 

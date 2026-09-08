@@ -1299,7 +1299,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // Finalized rows and summaries are immutable to this path. A fully stale
     // batch is read-only and must not open even an empty SQLite transaction.
     const finalizedBatch = lines.map((line) => this.readProtectedThreadUsageSync(line));
-    if (finalizedBatch.every((entry) => entry !== undefined)) {
+    if (
+      finalizedBatch.every((entry) => entry !== undefined)
+      && finalizedBatch.every((entry, index) =>
+        !enrichProtectedThreadUsage(entry.line, lines[index]!),
+      )
+    ) {
       const summaries = new Map<string, ThreadPricingSummary>();
       for (const entry of finalizedBatch) {
         const summary = entry.summary;
@@ -1346,15 +1351,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       let line = inputLine;
       const finalized = this.readProtectedThreadUsageSync(line);
       if (finalized) {
-        const summary = finalized.summary;
-        unchangedSummaries.set(JSON.stringify([
-          summary.provider, summary.backend, summary.threadId, summary.currency,
-        ]), summary);
-        return finalized.line;
+        const enriched = enrichProtectedThreadUsage(finalized.line, inputLine);
+        if (!enriched) {
+          const summary = finalized.summary;
+          unchangedSummaries.set(JSON.stringify([
+            summary.provider, summary.backend, summary.threadId, summary.currency,
+          ]), summary);
+          return finalized.line;
+        }
+        // Only allowlisted metadata was copied. All identity, token, replay,
+        // and finalized price fields still come from the authoritative row.
+        line = enriched;
       }
       this.boundPrecedingThreadUsageSync(line);
       const existing = this.readThreadUsageLineSync(line.usageLineId);
-      if (existing) {
+      if (existing && !finalized) {
         line = mergeThreadUsageLineForUpsert(line, existing);
       }
       // Codex hydration records expose either the last request or the
@@ -6821,6 +6832,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       return undefined;
     }
     const preserved = threadUsageLineFromRow(row);
+    this.attachUsageTurnMetadataSync(preserved.backend, preserved.threadId, [preserved]);
     const summaryRow = this.stateDb.raw.prepare(
       `SELECT * FROM thread_pricing_summaries
        WHERE provider = ? AND backend = ? AND thread_id = ? AND currency = ?`,
@@ -7505,6 +7517,38 @@ function mergeUsageSettingValue<T extends string>(
     return existing;
   }
   return next;
+}
+
+function enrichProtectedThreadUsage(
+  preserved: ThreadUsageLineRecord,
+  incoming: ThreadUsageLineRecord,
+): ThreadUsageLineRecord | undefined {
+  let enriched = { ...preserved };
+  let changed = false;
+  for (const key of [
+    "model", "reasoningEffort", "serviceTier", "fastMode", "completedAt",
+    "finalContextTokens", "peakContextTokens", "modelContextWindow",
+  ] as const) {
+    if (preserved[key] === undefined && incoming[key] !== undefined) {
+      enriched = { ...enriched, [key]: incoming[key] };
+      changed = true;
+    }
+  }
+  // Live usage can precede hydration of the actual start time; the turn table
+  // initially uses the observation time. Replace that fallback once, without
+  // overwriting an already-enriched start time on subsequent replays.
+  if (incoming.startedAt !== undefined
+    && (preserved.startedAt === undefined
+      || (preserved.startedAt === preserved.createdAt && incoming.startedAt < preserved.startedAt))) {
+    enriched.startedAt = incoming.startedAt;
+    changed = true;
+  }
+  if (!changed) {
+    return undefined;
+  }
+  // Never copy the incoming cost or reprice a finalized priced row. A missing
+  // model/context ceiling can price an unpriced row using its frozen tokens.
+  return preserved.priceStatus === "priced" ? enriched : repriceTokenUsageLine(enriched);
 }
 
 function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {

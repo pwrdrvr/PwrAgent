@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 60;
+export const CURRENT_STATE_DB_USER_VERSION = 61;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -840,8 +840,9 @@ WHEN EXISTS (
     OR OLD.output_cost_micros IS NOT NEW.output_cost_micros
     OR OLD.price_status IS NOT NEW.price_status
     OR OLD.currency IS NOT NEW.currency
-    OR OLD.model IS NOT NEW.model OR OLD.service_tier IS NOT NEW.service_tier
-    OR OLD.fast_mode IS NOT NEW.fast_mode
+    OR (OLD.model IS NOT NULL AND OLD.model IS NOT NEW.model)
+    OR (OLD.service_tier IS NOT NULL AND OLD.service_tier IS NOT NEW.service_tier)
+    OR (OLD.fast_mode IS NOT NULL AND OLD.fast_mode IS NOT NEW.fast_mode)
   ))
 )
 BEGIN
@@ -1770,6 +1771,15 @@ export class StateDb {
       }
       if ((db.pragma("user_version", { simple: true }) as number) < 60) {
         db.transaction(() => {
+          db.exec(THREAD_USAGE_FINALIZATION_SCHEMA);
+          db.pragma("user_version = 60");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 61) {
+        db.transaction(() => {
+          // Missing pricing metadata may be filled without changing a priced
+          // row's existing cost. Token and boundary guards remain unchanged.
+          db.exec("DROP TRIGGER IF EXISTS protect_finalized_thread_usage_update");
           db.exec(THREAD_USAGE_FINALIZATION_SCHEMA);
           db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
         })();
