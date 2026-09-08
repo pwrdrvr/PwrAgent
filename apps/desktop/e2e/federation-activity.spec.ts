@@ -71,6 +71,23 @@ for (const theme of ["dark", "light"] as const) {
       await expect(activity.getByText("Running · connected")).toBeVisible();
       await expect(activity.getByRole("switch", { name: "Federation enabled" })).toHaveClass(/settings-switch/);
       await expect(activity.getByRole("img", { name: /Data and wire amounts/ })).toBeVisible();
+      for (const period of ["10m", "1h"]) {
+        await activity.getByLabel("Chart window").selectOption(period);
+        for (const chart of await activity.locator(".federation-activity__chart").all()) {
+          const axis = chart.locator(".federation-activity__chart-axis");
+          const scroller = chart.locator(".federation-activity__chart-scroll");
+          await expect.poll(() => scroller.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+          const recentAxis = await axis.boundingBox();
+          const viewport = await chart.boundingBox();
+          expect(recentAxis).not.toBeNull();
+          expect(viewport).not.toBeNull();
+          expect(recentAxis!.x).toBeGreaterThanOrEqual(viewport!.x);
+          expect(recentAxis!.x + recentAxis!.width).toBeLessThanOrEqual(viewport!.x + viewport!.width);
+          await scroller.evaluate((element) => { element.scrollLeft = 0; });
+          expect(await axis.boundingBox()).toEqual(recentAxis);
+        }
+      }
+      await activity.getByLabel("Chart window").selectOption("1m");
       const topmost = activity.getByRole("checkbox", { name: "Always on top", exact: true });
       await topmost.click();
       await expect(topmost).toBeChecked();

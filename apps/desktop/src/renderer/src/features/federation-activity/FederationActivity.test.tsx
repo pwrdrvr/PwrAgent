@@ -114,6 +114,21 @@ describe("Federation activity surfaces", () => {
     expect(setFederationActivityTopmost).toHaveBeenCalledWith(true);
   });
 
+  it("keeps numeric axes outside scrolling history in longer windows", async () => {
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture() }} />);
+    await screen.findByRole("img", { name: /Data and wire amounts/ });
+    for (const period of ["10m", "1h"]) {
+      fireEvent.change(screen.getByLabelText("Chart window"), { target: { value: period } });
+      for (const plot of screen.getAllByRole("img")) {
+        const scroller = plot.parentElement!;
+        const axis = scroller.parentElement!.querySelector(".federation-activity__chart-axis")!;
+        expect(axis).toHaveTextContent("0");
+        expect(axis.querySelectorAll("text")).toHaveLength(4);
+        expect(scroller).not.toContainElement(axis as HTMLElement);
+      }
+    }
+  });
+
   it("shows exact one-second amounts on hover and keyboard focus", async () => {
     render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture() }} />);
     const chart = await screen.findByRole("img", { name: /Data and wire amounts/ });

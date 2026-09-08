@@ -99,19 +99,25 @@ export function FederationAmountChart({ history, period, bytes }: {
   const scale = bytes ? byteUnit.scale : 1;
   const unit = bytes ? byteUnit.unit : "envelopes";
   const axisNumber = (value: number) => value.toLocaleString(undefined, { maximumSignificantDigits: 3 });
-  const width = Math.max(640, 95 + length * 8 + 10);
-  const step = (width - 105) / length;
+  const width = Math.max(545, length * 8 + 10);
+  const step = (width - 10) / length;
   const selectedIndex = points.findIndex((point) => point.at === selectedAt);
   const selected = points[selectedIndex];
   const time = (at: number) => new Date(at).toLocaleTimeString();
   return <figure className="federation-activity__chart">
     <figcaption>{bytes ? "Data and wire" : "Envelopes"} · {unit} per one-second bar</figcaption>
+    <div className="federation-activity__chart-frame">
+    <svg className="federation-activity__chart-axis" viewBox="0 0 95 165" aria-hidden="true">
+      <text x="87" y="12" textAnchor="end">{unit}</text>
+      {[0, 0.5, 1].map((fraction) => <text key={fraction} x="87"
+        y={134 - fraction * 110} textAnchor="end">{axisNumber(max * fraction / scale)}</text>)}
+    </svg>
     <div className="federation-activity__chart-scroll" ref={scrollRef}>
-    <svg viewBox={`0 0 ${width} 165`} style={{ minWidth: width }} role="img" tabIndex={0}
+    <svg viewBox={`0 0 ${width} 165`} style={{ minWidth: width }} preserveAspectRatio="none" role="img" tabIndex={0}
       aria-labelledby={`${id}-title ${id}-description`} aria-describedby={selected ? `${id}-tooltip` : undefined}
       onPointerMove={(event) => {
         const bounds = event.currentTarget.getBoundingClientRect();
-        const index = Math.floor(((event.clientX - bounds.left) * width / bounds.width - 95) / step);
+        const index = Math.floor(((event.clientX - bounds.left) * width / bounds.width) / step);
         setSelectedAt(points[index]?.at);
       }}
       onPointerLeave={() => setSelectedAt(undefined)} onBlur={() => setSelectedAt(undefined)}
@@ -123,31 +129,30 @@ export function FederationAmountChart({ history, period, bytes }: {
         const index = Math.max(0, Math.min(points.length - 1,
           (selectedIndex < 0 ? points.length - 1 : selectedIndex) + (event.key === "ArrowLeft" ? -1 : 1)));
         setSelectedAt(points[index]?.at);
-        if (scrollRef.current) scrollRef.current.scrollLeft = 95 + index * step - 150;
+        if (scrollRef.current) scrollRef.current.scrollLeft = index * step - 150;
       }}>
       <title id={`${id}-title`}>{bytes ? "Data and wire" : "Envelope"} amounts, {unit}</title>
       <desc id={`${id}-description`}>One-second totals. Peak {axisNumber(max / scale)} {unit}.
         Sent uses accent bars; received uses neutral bars. Faded bars show uncompressed data.
         Hover or use left and right arrow keys for exact amounts. The latest second may be incomplete.</desc>
-      <text x="87" y="12" textAnchor="end">{unit}</text>
-      {[0, 0.5, 1].map((fraction) => <g key={fraction}>
-        <line x1="95" x2={width - 10} y1={130 - fraction * 110} y2={130 - fraction * 110} className="federation-activity__grid" />
-        <text x="87" y={134 - fraction * 110} textAnchor="end">{axisNumber(max * fraction / scale)}</text>
-      </g>)}
+      {[0, 0.5, 1].map((fraction) => <line key={fraction}
+        x1="0" x2={width - 10} y1={130 - fraction * 110} y2={130 - fraction * 110}
+        className="federation-activity__grid" />)}
       {lines.map((line, index) => <path key={line.label}
         className={`federation-activity__bar federation-activity__bar--${line.direction}`}
         opacity={line.dashed ? 0.4 : 1}
         d={values[index].map((value, point) => {
           if (value <= 0) return "";
-          const x = 95 + point * step + index * step / lines.length;
+          const x = point * step + index * step / lines.length;
           const height = value / max * 110;
           return `M${x},130v${-height}h${step / lines.length - 0.5}v${height}Z`;
         }).join(" ")} />)}
-      {selected ? <rect x={95 + selectedIndex * step} y="20" width={step} height="110"
+      {selected ? <rect x={selectedIndex * step} y="20" width={step} height="110"
         className="federation-activity__selection" /> : null}
-      <text x="95" y="155">{period} ago</text>
+      <text x="0" y="155">{period} ago</text>
       <text x={width - 10} y="155" textAnchor="end">Now</text>
     </svg>
+    </div>
     </div>
     <div className="federation-activity__legend">{lines.map((line) => <span key={line.label}
       className={`federation-activity__legend--${line.direction}`}>
