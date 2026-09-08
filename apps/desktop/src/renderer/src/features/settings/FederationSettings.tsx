@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ActiveGatewayEndpoint } from "../federation-activity/ActiveGatewayEndpoint";
 import type {
   CelestialIconId,
   DesktopFederationMode,
@@ -608,17 +609,20 @@ export function FederationSettings(props: FederationSettingsProps) {
             label="Gateway endpoints"
             sub={
               dialsGateway
-                ? "Endpoints for one pinned gateway, one per line in fallback order. ws://, wss://, and ssh:// (user@host, optional ?forward=host:port) are supported."
+                ? "Endpoints for one pinned gateway, one per line in fallback order. Reconnects try the last successful endpoint first. ws://, wss://, and ssh:// (user@host, optional ?forward=host:port) are supported."
                 : "Only used when Mode is client or dual."
             }
             control={
-              <textarea
-                aria-label="Gateway endpoints"
-                rows={3}
-                value={gatewayEndpointsText}
-                disabled={props.saving || !dialsGateway}
-                onChange={(event) => setGatewayEndpointsText(event.target.value)}
-              />
+              <div className="federation-peer-summary">
+                <textarea
+                  aria-label="Gateway endpoints"
+                  rows={3}
+                  value={gatewayEndpointsText}
+                  disabled={props.saving || !dialsGateway}
+                  onChange={(event) => setGatewayEndpointsText(event.target.value)}
+                />
+                <ActiveGatewayEndpoint health={effectiveHealth} />
+              </div>
             }
           />
           <SettingsField
@@ -991,7 +995,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           />
           <SettingsField
             label="Gateway endpoints"
-            sub="Outbound candidates used by client mode, tried in order. The active endpoint carries the current session."
+            sub="Outbound candidates used by client mode. Reconnects try the last successful endpoint first, then the remaining endpoints in configured order. The active endpoint carries the current session."
             control={
               gatewayEndpointStatuses.length === 0 ? (
                 <span>Not configured</span>

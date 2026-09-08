@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FederationActivityTotals, ReadFederationActivityResponse } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ActiveGatewayEndpoint } from "./ActiveGatewayEndpoint";
 import { FederationStatusControl } from "./FederationStatusControl";
 import { FederationActivityScreen } from "./FederationActivityWindow";
 
@@ -29,6 +30,44 @@ function fixture(): ReadFederationActivityResponse {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("Federation activity surfaces", () => {
+  it("does not present a stopped or lease-denied endpoint as active, and omits gateway-only instances", () => {
+    const health = fixture().health;
+    health.role = "dual";
+    health.gatewayEndpoints = [{ url: "ssh://gateway.example.test", state: "active" }];
+    const { rerender } = render(<ActiveGatewayEndpoint health={health} />);
+    expect(screen.getByText("ssh://gateway.example.test")).toBeInTheDocument();
+    rerender(<ActiveGatewayEndpoint health={{ ...health, enabled: false }} />);
+    expect(screen.getByText("Active gateway: Not connected")).toBeInTheDocument();
+    rerender(<ActiveGatewayEndpoint health={{ ...health, leaseHolder: { instanceId: "other" } }} />);
+    expect(screen.queryByText("ssh://gateway.example.test")).not.toBeInTheDocument();
+    rerender(<ActiveGatewayEndpoint health={{ ...health, role: "gateway" }} />);
+    expect(screen.queryByText(/Active gateway:/)).not.toBeInTheDocument();
+  });
+
+  it.each(["popup", "activity"])("shows the actual gateway and follows reconnects in the %s", async (surface) => {
+    const snapshot = fixture();
+    snapshot.configuredMode = "client";
+    snapshot.health.role = "client";
+    snapshot.health.gatewayEndpoints = [
+      { url: "ws://192.168.1.20:47830", state: "idle" },
+      { url: "ws://gateway.example.ts.net:47830", state: "active" },
+    ];
+    const desktopApi = { readFederationActivity: async () => structuredClone(snapshot) };
+    render(surface === "popup"
+      ? <FederationStatusControl desktopApi={desktopApi} onOpen={vi.fn()} />
+      : <FederationActivityScreen desktopApi={desktopApi} />);
+    if (surface === "popup") fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    await screen.findByText("ws://gateway.example.ts.net:47830");
+    expect(screen.queryByText("ws://192.168.1.20:47830")).not.toBeInTheDocument();
+    snapshot.health.gatewayEndpoints[1].state = "idle";
+    snapshot.health.status = "connecting";
+    await screen.findByText("Active gateway: Not connected", {}, { timeout: 3_000 });
+    expect(screen.queryByText("ws://gateway.example.ts.net:47830")).not.toBeInTheDocument();
+    snapshot.health.gatewayEndpoints[0].state = "active";
+    snapshot.health.status = "connected";
+    await screen.findByText("ws://192.168.1.20:47830", {}, { timeout: 3_000 });
+  });
+
   it("opens on hover without navigating, preserves pointer grace, and clicking still opens Star Map", async () => {
     const onOpen = vi.fn();
     const readFederationActivity = vi.fn(async () => fixture());

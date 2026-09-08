@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { ActiveGatewayEndpoint } from "./ActiveGatewayEndpoint";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatTrafficBytes } from "./format-traffic-bytes";
 import { StarMapIcon } from "../../icons/StarMapIcon";
@@ -71,6 +72,7 @@ export function FederationStatusControl(props: { desktopApi?: DesktopApi; onOpen
             {snapshot ? (
               <div className="federation-status-control__details">
                 <strong>{federationRuntimeLabel(snapshot)}</strong>
+                <ActiveGatewayEndpoint health={snapshot.health} />
                 {snapshot.health.leaseHolder ? <p>Holder: {snapshot.health.leaseHolder.instanceId}
                   {snapshot.health.leaseHolder.processId ? ` · PID ${snapshot.health.leaseHolder.processId}` : ""}
                   {snapshot.health.leaseHolder.cwdHint ? ` · ${snapshot.health.leaseHolder.cwdHint}` : ""}</p> : null}
