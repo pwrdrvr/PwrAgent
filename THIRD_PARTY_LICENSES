@@ -413,7 +413,7 @@ MIT
 - node-abi@3.94.0 | https://github.com/electron/node-abi
 - node-addon-api@7.1.1 | https://github.com/nodejs/node-addon-api
 - node-fetch@2.7.0 | https://github.com/bitinn/node-fetch
-- node-pty@1.2.0-beta.14 | https://github.com/microsoft/node-pty
+- node-pty@1.2.0-beta.15 | https://github.com/microsoft/node-pty
 - object-assign@4.1.1 | sindresorhus/object-assign
 - object-inspect@1.13.4 | https://github.com/inspect-js/object-inspect
 - on-finished@2.4.1 | jshttp/on-finished
@@ -8082,13 +8082,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-node-pty@1.2.0-beta.14 (MIT)
+node-pty@1.2.0-beta.15 (MIT)
 ----------------------------
 
 Applies to:
-- node-pty@1.2.0-beta.14 (MIT)
+- node-pty@1.2.0-beta.15 (MIT)
 
-Representative file: node-pty@1.2.0-beta.14/LICENSE
+Representative file: node-pty@1.2.0-beta.15/LICENSE
 
 Copyright (c) 2012-2015, Christopher Jeffrey (https://github.com/chjj/)
 
