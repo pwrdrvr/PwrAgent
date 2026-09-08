@@ -9,6 +9,7 @@ import {
   formatTokenUsageUsd,
   formatTokenUsageUsdPerMillion,
   isToolManagedWorktreePath,
+  navigationQueryEventRequiresRefresh,
   parseCodexTurnErrorMessage,
   resolveOpenAiPricingServiceTier,
   resolveTokenUsagePriceUnavailableReason,
@@ -7396,6 +7397,7 @@ export class CodexAppServerClient {
       }
     >
   >();
+  private readonly pendingThreadListings = new Map<string, Promise<AppServerThreadSummary[]>>();
   private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
     (
@@ -7448,6 +7450,7 @@ export class CodexAppServerClient {
           })
         : createThreadDirectoryEnricher());
     this.connection.setNotificationHandler(async (method, params) => {
+      if (navigationQueryEventRequiresRefresh(method)) this.pendingThreadListings.clear();
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
       if (!isKnownCodexMethod) {
         logUnhandledCodexMessage({
@@ -7554,6 +7557,7 @@ export class CodexAppServerClient {
     this.initializationPromise = null;
     this.initializeResult = null;
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
+    this.pendingThreadListings.clear();
     this.pendingFirstTurnThreadResults.clear();
     this.recordedThreadNames.clear();
     this.helperThreadIds.clear();
@@ -8091,6 +8095,29 @@ export class CodexAppServerClient {
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
+    // Registry scopes and federation consumers can reach the same provider
+    // through different cache keys. Share the complete listing, including
+    // directory observations, until it settles. Never retain a completed scan.
+    const key = JSON.stringify([
+      params?.archived === true, params?.enrichDirectories ?? true,
+      params?.filter?.trim() || "", params?.limit, params?.maxPages,
+      params?.skipArchivedMetadataRefresh === true, params?.deadlineAt,
+    ]);
+    const existing = this.pendingThreadListings.get(key);
+    if (existing) return await existing;
+    const pending = this.loadThreadListing(params, diagnostics);
+    this.pendingThreadListings.set(key, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.pendingThreadListings.get(key) === pending) this.pendingThreadListings.delete(key);
+    }
+  }
+
+  private async loadThreadListing(
+    params: Parameters<CodexAppServerClient["listThreads"]>[0],
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<AppServerThreadSummary[]> {
     const requestParams = {
       client: this.connection,
       diagnostics,
