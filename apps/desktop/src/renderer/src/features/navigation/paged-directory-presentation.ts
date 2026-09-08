@@ -1,7 +1,7 @@
 import { readNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import type { NavigationThreadSummary } from "@pwragent/shared";
-import { classifyDirectory, comparePinnedThreads, isPinnedThread } from "@pwragent/shared";
+import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import type { NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
@@ -54,8 +54,7 @@ export function buildPagedDirectoryPresentation(params: {
   const selectedThread = selectedEntry && params.threadsByKey.get(navigationThreadSelectionKey(selectedEntry.row.ref));
   const pinResource = params.resources.get(`directory-pins:${params.directory.key}`);
   if (pinResource && selectedThread && isPinnedThread(selectedThread)
-    && (selected?.selectionDirectory?.key === params.directory.key
-      || selectedThread.linkedDirectories.some((directory) => classifyDirectory(directory).key === params.directory.key))
+    && selected?.selectionDirectory?.key === params.directory.key
     && !directoryPinnedThreads.some((thread) => threadSummaryIdentityKey(thread) === threadSummaryIdentityKey(selectedThread))) {
     const before = directoryPinnedThreads.findIndex((thread) => comparePinnedThreads(selectedThread, thread) < 0);
     directoryPinnedThreads.splice(before < 0 ? directoryPinnedThreads.length : before, 0, selectedThread);

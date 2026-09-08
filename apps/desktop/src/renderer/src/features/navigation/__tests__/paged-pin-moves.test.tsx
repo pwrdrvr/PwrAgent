@@ -82,3 +82,30 @@ it("reveals an exact off-page pin without changing the retained page or duplicat
   pins.state.page!.entries.push(exact.state.page!.entries[0]!);
   expect(present()).toEqual(["pin-5", "pin-6", "pin-last"]);
 });
+
+
+it("reveals a selected multi-project pin only in its owner-reported home", () => {
+  const projects = [directory, ...["snap", "git"].map((name) => ({
+    ...directory, key: `directory:/${name}`, path: `/${name}`, label: name,
+  }))];
+  const selected = { ...rows[0]!, linkedDirectories: projects.map((project) => ({
+    id: project.path!, kind: "local" as const, path: project.path!, label: project.label,
+  })) };
+  const exact = resource("selected-context", { kind: "exact", identities: [selected.ref] }, {
+    selectionDirectory: directory,
+    entries: [{ row: selected, placement: { kind: "root" }, orderKey: selected.pinnedRank! }],
+  });
+  const resources = new Map(projects.map((project) => {
+    const id = `directory-pins:${project.key}`;
+    return [id, resource(id, { kind: "directory", directoryKey: project.key, roots: "pinned" }, {})] as const;
+  }));
+  resources.set("selected-context", exact);
+  const threadsByKey = new Map([[`codex:${selected.id}`, selected]]);
+  const visible = () => projects.map((project) => buildPagedDirectoryPresentation({
+    directory: project, resources, threadsByKey,
+  }).directoryPinnedThreads.map((row) => row.id));
+  expect(visible()).toEqual([[selected.id], [], []]);
+  // An exact row without authoritative placement must not infer a home from links.
+  exact.state.page!.selectionDirectory = undefined;
+  expect(visible()).toEqual([[], [], []]);
+});
