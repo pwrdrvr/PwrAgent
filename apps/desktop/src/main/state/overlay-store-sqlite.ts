@@ -864,6 +864,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     });
     const keys = providerRows.map((thread) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.source, thread.id)));
     const overlays: Record<string, ThreadOverlayState | undefined> = {};
+    const handoffSources = new Map<string, { sourceBackend: AppServerBackendKind; sourceThreadId: string }>();
     const rows = this.stateDb.raw.prepare(`
       SELECT thread_id, json_object(
           'backend', json_extract(payload, '$.backend'),
@@ -887,6 +888,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           'parentThreadId', json_extract(payload, '$.parentThreadId'),
           'parentThreadBackend', json_extract(payload, '$.parentThreadBackend'),
           'parentThreadInstanceId', json_extract(payload, '$.parentThreadInstanceId'),
+          'handoffGroupSource', CASE WHEN json_extract(payload, '$.handoffOrigin.groupingMode') = 'subthread' THEN json_object(
+            'sourceBackend', json_extract(payload, '$.handoffOrigin.sourceBackend'),
+            'sourceThreadId', json_extract(payload, '$.handoffOrigin.sourceThreadId')
+          ) END,
           'subthreadOrder', json_extract(payload, '$.subthreadOrder'),
           'subthreadsCollapsed', json(CASE json_type(payload, '$.subthreadsCollapsed') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' END),
           'prs', json_extract(payload, '$.prs'),
@@ -911,9 +916,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       inputBytes += Buffer.byteLength(row.compact, "utf8");
       if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
       const value = JSON.parse(row.compact) as Record<string, unknown>;
-      overlays[normalizeThreadIdentityKey(row.thread_id) ?? row.thread_id] = normalizeThreadOverlayState(
+      const key = normalizeThreadIdentityKey(row.thread_id) ?? row.thread_id;
+      const source = value.handoffGroupSource as { sourceBackend: AppServerBackendKind; sourceThreadId: string } | null;
+      if (source?.sourceBackend && source.sourceThreadId) handoffSources.set(key, source);
+      delete value.handoffGroupSource;
+      overlays[key] = normalizeThreadOverlayState(
         Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as ThreadOverlayState,
       );
+    }
+    // Read-only compatibility for handoffs that dropped the remote root owner.
+    // Carry only provenance IDs through this bounded index, never the task or
+    // workspace payload. Explicit owners and real local parents always win.
+    const localKeys = new Set(providerRows.map((thread) => buildThreadIdentityKey(thread.source, thread.id)));
+    for (const [key, origin] of handoffSources) {
+      const child = overlays[key];
+      if (!child?.parentThreadId || child.parentThreadInstanceId) continue;
+      const parentBackend = child.parentThreadBackend ?? child.backend;
+      if (localKeys.has(buildThreadIdentityKey(parentBackend, child.parentThreadId))) continue;
+      const source = overlays[buildThreadIdentityKey(origin.sourceBackend, origin.sourceThreadId)];
+      if (source?.parentThreadInstanceId && source.parentThreadId === child.parentThreadId
+        && (source.parentThreadBackend ?? source.backend) === parentBackend) {
+        overlays[key] = { ...child, parentThreadInstanceId: source.parentThreadInstanceId };
+      }
     }
     const launchpads: Record<string, DirectoryLaunchpadOverlayState> = {};
     const launchpadPresenceKeys = new Set<string>();

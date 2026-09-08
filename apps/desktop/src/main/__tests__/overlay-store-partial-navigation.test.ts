@@ -187,3 +187,18 @@ describe("SqliteOverlayStore partial navigation snapshots", () => {
     expect(partial.directories).toEqual([]);
   });
 });
+
+it("recovers missing remote handoff ownership in the compact index without changing storage", async () => {
+  const threads = ["launcher", "child"].map((id) => buildThread({ id, path: "/repo", updatedAt: 1 }));
+  await store.setThreadParent({ backend: "codex", threadId: "launcher", parentThreadId: "remote-root", parentThreadBackend: "codex", parentThreadInstanceId: "peer" });
+  await store.setThreadParent({ backend: "codex", threadId: "child", parentThreadId: "remote-root", parentThreadBackend: "codex" });
+  await store.setThreadHandoffOrigin({ backend: "codex", threadId: "child", handoffOrigin: {
+    sourceBackend: "codex", sourceThreadId: "launcher", seedMode: "clean", groupingMode: "subthread", createdAt: 1,
+    workspace: { mode: "none", git: { kind: "none", worktreeCreationAvailable: false, unavailableReason: "Fixture" } },
+  } });
+  const before = stateDb.raw.prepare("SELECT payload FROM threads ORDER BY thread_id").all();
+  const index = store.readNavigationQueryIndex({ backend: "all", threads });
+  expect(index.threads.find((row) => row.id === "child")?.parentThreadInstanceId).toBe("peer");
+  expect(index.threads.find((row) => row.id === "child")?.handoffOrigin).toBeUndefined();
+  expect(stateDb.raw.prepare("SELECT payload FROM threads ORDER BY thread_id").all()).toEqual(before);
+});

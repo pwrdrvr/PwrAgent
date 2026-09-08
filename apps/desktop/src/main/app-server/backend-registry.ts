@@ -31818,12 +31818,13 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     sourceOverlay: ThreadOverlayState;
     sourceThreadId: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string }> {
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; instanceId?: string }> {
     const directParentThreadId = params.sourceOverlay.parentThreadId?.trim();
     if (!directParentThreadId) {
       return { backend: params.backend, threadId: params.sourceThreadId };
     }
 
+    let parentInstanceId = params.sourceOverlay.parentThreadInstanceId;
     let parentThreadId = directParentThreadId;
     let parentBackend =
       params.sourceOverlay.parentThreadBackend ?? params.backend;
@@ -31833,6 +31834,7 @@ export class DesktopBackendRegistry {
     ]);
     let parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
     while (!seen.has(parentKey)) {
+      if (parentInstanceId) return { backend: parentBackend, threadId: parentThreadId, instanceId: parentInstanceId };
       seen.add(parentKey);
       const parentOverlay = await this.overlayStore.getThreadOverlayState({
         backend: parentBackend,
@@ -31842,6 +31844,7 @@ export class DesktopBackendRegistry {
       if (!nextParentThreadId) {
         return { backend: parentBackend, threadId: parentThreadId };
       }
+      parentInstanceId = parentOverlay?.parentThreadInstanceId;
       parentThreadId = nextParentThreadId;
       parentBackend = parentOverlay?.parentThreadBackend ?? parentBackend;
       parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
@@ -33760,6 +33763,7 @@ export class DesktopBackendRegistry {
             ? {
                 parentThreadId: groupedParentThreadId,
                 parentThreadBackend: groupedParentBackend,
+                parentThreadInstanceId: groupedParentThread?.instanceId,
               }
             : {}),
           executionMode,
@@ -33808,6 +33812,7 @@ export class DesktopBackendRegistry {
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
           parentThreadId: groupedParentThreadId,
           parentThreadBackend: groupedParentBackend,
+          parentThreadInstanceId: groupedParentThread?.instanceId,
         });
         threadId = started.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
@@ -33815,7 +33820,7 @@ export class DesktopBackendRegistry {
         codexEnvironmentStartupFailure = started.codexEnvironmentStartupFailure;
         autoPinFailure = started.autoPinFailure;
       }
-      if (groupedParentThreadId && this.overlayStore.updateSubthreadOrder) {
+      if (groupedParentThreadId && !groupedParentThread?.instanceId && this.overlayStore.updateSubthreadOrder) {
         const parentOverlay = await this.overlayStore.getThreadOverlayState({
           backend: groupedParentBackend ?? backend,
           threadId: groupedParentThreadId,

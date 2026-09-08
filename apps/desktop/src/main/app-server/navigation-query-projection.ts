@@ -87,8 +87,22 @@ function parentIdentity(
   if (!thread.parentThreadId) {
     return undefined;
   }
-  const ownerInstanceId = thread.parentThreadInstanceId
+  let ownerInstanceId = thread.parentThreadInstanceId
     ?? (thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined);
+  // Legacy local handoffs copied their launcher's group root but omitted its
+  // remote owner. Recover only from recorded provenance and an identical root,
+  // never from a same-id peer guess or when a local parent really exists.
+  if (!ownerInstanceId && thread.handoffOrigin?.groupingMode === "subthread"
+    && !(candidatesByOwner.get(JSON.stringify([null, thread.parentThreadId])) ?? []).some((candidate) =>
+      candidate.source === (thread.parentThreadBackend ?? thread.source))) {
+    const origin = thread.handoffOrigin;
+    const launcher = (candidatesByOwner.get(JSON.stringify([null, origin.sourceThreadId])) ?? [])
+      .find((candidate) => candidate.source === origin.sourceBackend);
+    if (launcher?.parentThreadId === thread.parentThreadId
+      && (launcher.parentThreadBackend ?? launcher.source) === (thread.parentThreadBackend ?? thread.source)) {
+      ownerInstanceId = launcher.parentThreadInstanceId;
+    }
+  }
   const candidates = candidatesByOwner.get(JSON.stringify([ownerInstanceId ?? null, thread.parentThreadId])) ?? [];
   // Older overlays omitted the backend. Resolve only against complete owner
   // membership; an absent or ambiguous parent remains an unresolved child.
@@ -98,11 +112,7 @@ function parentIdentity(
   return {
     backend: thread.parentThreadBackend ?? parent?.source ?? thread.source,
     threadId: thread.parentThreadId,
-    ...(thread.parentThreadInstanceId
-      ? { ownerInstanceId: thread.parentThreadInstanceId }
-      : thread.federation?.ref.target.scope === "remote"
-        ? { ownerInstanceId: thread.federation.ref.target.instanceId }
-        : {}),
+    ...(ownerInstanceId ? { ownerInstanceId } : {}),
   };
 }
 
@@ -733,7 +743,8 @@ export function projectNavigationQuery(params: {
         ...(params.request.inventory === "viewer" && navigationIdentity(thread).ownerInstanceId
           ? { viewerChildCount: viewerChildCountByParent.get(threadKey(thread)) ?? 0 } : {}),
         needsInput: starMapSignals(thread, params.index).approval,
-        thread,
+        thread: parent?.ownerInstanceId && !thread.parentThreadInstanceId
+          ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
       }),
       orderKey: rowOrderKey(index),
       ...(params.attentionOrder?.members.has(navigationAttentionIdentity(thread))

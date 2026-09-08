@@ -985,11 +985,13 @@ function createOverlayStoreMock(params?: {
       threadId,
       parentThreadId,
       parentThreadBackend,
+      parentThreadInstanceId,
     }: {
       backend: AppServerBackendKind;
       threadId: string;
       parentThreadId?: string;
       parentThreadBackend?: AppServerBackendKind;
+      parentThreadInstanceId?: string;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -1002,6 +1004,7 @@ function createOverlayStoreMock(params?: {
         ...current,
         parentThreadId,
         parentThreadBackend,
+      parentThreadInstanceId,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
