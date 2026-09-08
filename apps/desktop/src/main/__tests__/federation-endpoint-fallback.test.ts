@@ -149,6 +149,40 @@ describe("federation endpoint fallback", () => {
     expect(attempts).toEqual([TAILSCALE, LAN]);
   });
 
+  it("continues to a healthy fallback after a malformed endpoint", async () => {
+    const malformed = "ws://gateway.example.com:bad";
+    const runtime = createHarness([malformed, LAN]);
+    const attempts: string[] = [];
+    runtime.connectClient = async (gatewayUrl) => {
+      attempts.push(gatewayUrl);
+      if (gatewayUrl === malformed) throw new Error("Invalid URL");
+    };
+
+    await runtime.connectToGateway();
+
+    expect(attempts).toEqual([malformed, LAN]);
+    expect(runtime.endpointStatuses.get(malformed)).toMatchObject({
+      state: "failed",
+      lastError: "Invalid URL",
+    });
+  });
+
+  it("safely labels malformed endpoints when every attempt fails", async () => {
+    const runtime = createHarness([
+      "ws://user:password@gateway.example.com:bad/private?token=secret",
+      LAN,
+    ]);
+    runtime.connectClient = async (gatewayUrl) => {
+      throw new Error(gatewayUrl === LAN ? "connect ECONNREFUSED" : "Invalid URL");
+    };
+
+    await expect(runtime.connectToGateway()).rejects.toThrow(
+      "Federation gateway is unreachable on every configured endpoint. "
+      + "Invalid endpoint (attempt 1): Invalid URL; "
+      + "ws://192.168.1.20:47830: connect ECONNREFUSED",
+    );
+  });
+
   it("omits credentials, paths, and query tokens from endpoint labels", async () => {
     const runtime = createHarness([
       "wss://user:password@gateway.example.com/private?token=secret",

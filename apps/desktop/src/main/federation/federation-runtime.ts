@@ -2777,9 +2777,15 @@ export class DesktopFederationRuntime {
         const rawMessage =
           error instanceof Error ? error.message : String(error);
         // Identify the path without exposing URL credentials or query tokens.
-        const endpointUrl = new URL(endpoint);
+        let endpointLabel = `Invalid endpoint (attempt ${failures.length + 1})`;
+        try {
+          const endpointUrl = new URL(endpoint);
+          endpointLabel = `${endpointUrl.protocol}//${endpointUrl.host}`;
+        } catch {
+          // Diagnostic formatting must not interrupt fallback for a bad URL.
+        }
         failures.push(
-          `${endpointUrl.protocol}//${endpointUrl.host}: ${redactFederationDiagnostic(rawMessage)}`,
+          `${endpointLabel}: ${redactFederationDiagnostic(rawMessage)}`,
         );
         this.endpointStatuses.set(endpoint, {
           ...this.endpointStatuses.get(endpoint),
