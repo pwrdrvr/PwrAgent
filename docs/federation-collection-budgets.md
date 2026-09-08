@@ -383,3 +383,16 @@ until the complete authoritative image set arrives. Real Electron decoding tests
 verify both in-view thumbnails before completion and afterward. This does not
 establish that partial echo caused the operator's live missing-PNG observation;
 that live cause remains an acceptance question.
+
+Selected-child reveal uses the exact owner's ancestry, not directory membership
+in partially loaded summaries. Exact selection can supplement the displayed
+child and its pinned ancestor without replacing pin or sibling cursors. A
+supplemented pinned parent has the same bounded child-page demand as a parent
+in the loaded pin range; collapsed or unrelated collections remain excluded.
+
+Canonical collection events update the retained selected-detail collection cache
+before configuration revalidation. This prevents a fresh Token Miser subagent
+from appearing on its turn card and then being erased by the older cache while
+replacement history pages load. The isolated regression reproduces the rollback
+without HMR and verifies retention through authoritative collection completion.
+The existing collection budgets and persistence behavior are unchanged.
