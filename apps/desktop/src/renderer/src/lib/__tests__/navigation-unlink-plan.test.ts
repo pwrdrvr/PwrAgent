@@ -14,6 +14,21 @@ describe("bounded unlink planning", () => {
     const b = { ...thread("b"), parentThreadId: "parent" };
     const releaseNavigationQuery = vi.fn(async () => undefined);
     const api = navigationOwnerApiFixture({ readPopulation: async () => population([parent, a, b]), releaseNavigationQuery });
+    const originalDetail = api.getNavigationSelectedDetail!;
+    api.getNavigationSelectedDetail = async (request) => {
+      const detail = await originalDetail(request);
+      if (request.ref.threadId !== "parent") return detail;
+      const { subthreadOrder: _order, ...stripped } = detail.thread!;
+      const offset = Number(request.collection?.cursor ?? 0);
+      return { ...detail, thread: stripped,
+        collections: [{ name: "subthreadOrder", revision: "order", count: parent.subthreadOrder.length }],
+        ...(request.collection ? { collectionPage: { name: "subthreadOrder", revision: "order",
+          values: { subthreadOrder: parent.subthreadOrder.slice(offset, offset + 50) },
+          complete: offset + 50 >= parent.subthreadOrder.length,
+          ...(offset + 50 < parent.subthreadOrder.length ? { nextCursor: String(offset + 50) } : {}),
+        } } : {}),
+      };
+    };
     const getNavigationQueryPage = vi.fn(api.getNavigationQueryPage!);
     const plan = await readNavigationUnlinkPlan({ api: { ...api, getNavigationQueryPage }, threads: [b, a] });
     expect(plan.map((member) => member.thread.id)).toEqual(["a", "b"]);
@@ -22,7 +37,7 @@ describe("bounded unlink planning", () => {
     expect(getNavigationQueryPage).toHaveBeenCalledTimes(1);
     expect(getNavigationQueryPage.mock.calls[0]?.[0]).toMatchObject({ pageSize: 1, inventory: "viewer",
       federationTarget: { scope: "local" }, query: { kind: "exact", identities: [{ backend: "codex", threadId: "parent" }] } });
-    expect(releaseNavigationQuery).toHaveBeenCalledTimes(1);
+    expect(releaseNavigationQuery).toHaveBeenCalledTimes(2);
   });
 
   it("does not mistake an owner's pin for a viewer-owned pin", async () => {

@@ -86,3 +86,23 @@ it("rejects cyclic owner ancestry without unbounded exact reads", async () => {
     api: { getNavigationSelectedDetail } })).rejects.toThrow("cycle");
   expect(getNavigationSelectedDetail).toHaveBeenCalledTimes(1);
 });
+
+
+it("rejects changed action collections and releases their demand", async () => {
+  const releaseNavigationQuery = vi.fn(async () => undefined);
+  const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+    protocol: 2, ref: request.ref, revision: "owner", readiness: "ready", identity: "present", thread: row,
+    collections: [{ name: "subthreadOrder", revision: "before", count: 1 }],
+    ...(request.collection ? { collectionPage: { name: "subthreadOrder", revision: "after",
+      values: { subthreadOrder: ["child"] }, complete: true } } : {}),
+  }));
+  await expect(readNavigationActionThread({ thread: row,
+    target: { scope: "remote", instanceId: "peer" }, collections: ["subthreadOrder"],
+    api: { getNavigationSelectedDetail, releaseNavigationQuery },
+  })).rejects.toThrow("collection changed");
+  expect(getNavigationSelectedDetail.mock.calls[1]?.[0]).toMatchObject({
+    ref: { ownerInstanceId: "peer" }, federationTarget: { scope: "remote", instanceId: "peer" },
+    collection: { name: "subthreadOrder" },
+  });
+  expect(releaseNavigationQuery).toHaveBeenCalledWith(getNavigationSelectedDetail.mock.calls[1]?.[1]);
+});

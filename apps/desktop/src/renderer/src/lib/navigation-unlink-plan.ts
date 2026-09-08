@@ -59,7 +59,7 @@ export async function readNavigationUnlinkPlan(params: {
       let parent = parents.get(parentKey);
       if (!parent) {
         const parentThread = await readNavigationActionThread({ api: params.api, thread: { id: ref.threadId, source: ref.backend },
-          target: parentTarget, signal: params.signal });
+          target: parentTarget, signal: params.signal, collections: ["subthreadOrder"] });
         retain(parentThread);
         // A peer's own pin rank must never become a viewer pin rank.
         const pinTarget = params.windowTarget ?? { scope: "local" as const };

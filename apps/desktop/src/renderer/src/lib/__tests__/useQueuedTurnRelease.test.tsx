@@ -32,7 +32,17 @@ function useQueuedTurnRelease(params: Parameters<typeof useOwnerQueuedTurnReleas
   const desktopApi = useMemo<DesktopApi>(() => ({
     getNavigationSelectedDetail: async (request) => {
       const row = current.current.threads.find((candidate) => candidate.source === request.ref.backend && candidate.id === request.ref.threadId);
-      return { protocol: 2, ref: request.ref, revision: "detail", readiness: "ready", identity: row ? "present" : "deleted", thread: row };
+      const { retainedBranchDriftPairs = [], ...stripped } = row ?? {};
+      const offset = Number(request.collection?.cursor ?? 0);
+      return { protocol: 2, ref: request.ref, revision: "detail", readiness: "ready", identity: row ? "present" : "deleted",
+        thread: row ? stripped as NavigationThreadSummary : undefined,
+        collections: [{ name: "retainedBranchDriftPairs", revision: "pairs", count: retainedBranchDriftPairs.length }],
+        ...(request.collection ? { collectionPage: { name: "retainedBranchDriftPairs", revision: "pairs",
+          values: { retainedBranchDriftPairs: retainedBranchDriftPairs.slice(offset, offset + 1) },
+          complete: offset + 1 >= retainedBranchDriftPairs.length,
+          ...(offset + 1 < retainedBranchDriftPairs.length ? { nextCursor: String(offset + 1) } : {}),
+        } } : {}),
+      };
     },
     getNavigationQueueProjection: async (request) => ({
       protocol: 2, ref: request.ref, revision: "fifo", readiness: "ready", complete: true, entries: [],

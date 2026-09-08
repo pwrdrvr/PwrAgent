@@ -16,7 +16,7 @@ import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import { resolveComposerScopeOwner } from "../features/composer/useOwnedComposerDraftStore";
 import { readCompleteNavigationQueue } from "./navigation-queue-projection";
-import { applyNavigationSelectedDetail, selectNavigationIdentity } from "./navigation-query-state";
+import { readNavigationActionThread } from "./navigation-action-authority";
 import { federationTargetsEqual } from "./federated-thread-events";
 
 type ModelOption = NonNullable<
@@ -243,22 +243,11 @@ export function useQueuedTurnRelease(params: {
     try {
       const api = current.desktopApi;
       if (!api?.getNavigationSelectedDetail || !api.getNavigationQueueProjection) return;
-      const ref = { backend: owner.backend, threadId: owner.threadId,
-        ...(owner.target.scope === "remote" ? { ownerInstanceId: owner.target.instanceId } : {}),
-      };
-      const selection = selectNavigationIdentity(undefined, ref);
-      const detail = applyNavigationSelectedDetail({
-        state: selection, sequence: selection.pendingSequence,
-        detail: await api.getNavigationSelectedDetail({ protocol: 2, ref, federationTarget: owner.target }),
+      const thread = await readNavigationActionThread({ api,
+        thread: { source: owner.backend, id: owner.threadId }, target: owner.target,
+        collections: ["retainedBranchDriftPairs"],
       });
-      if (detail.readiness !== "ready" || detail.detail?.identity !== "present" || !detail.detail.thread) return;
-      const thread = {
-        ...detail.detail.thread,
-        ...(owner.target.scope === "remote" ? { federation: {
-          ...detail.detail.thread.federation, instanceLabel: detail.detail.thread.federation?.instanceLabel ?? owner.target.instanceId,
-          ref: { backend: owner.backend, threadId: owner.threadId, target: owner.target },
-        } } : {}),
-      };
+      if (!mountedRef.current || lifetime !== lifetimeRef.current) return;
       const fifo = await readCompleteNavigationQueue({ owner, read: api.getNavigationQueueProjection, isCancelled: () => !mountedRef.current || lifetime !== lifetimeRef.current });
       if (fifo.entries.length > 0) return;
       if (owner.target.scope === "remote") {

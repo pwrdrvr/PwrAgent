@@ -1,7 +1,9 @@
 import { buildFederatedThreadRef } from "@pwragent/shared";
-import type { FederationTarget, NavigationSelectedDetailResponse, NavigationThreadSummary } from "@pwragent/shared";
+import type { FederationTarget, NavigationDetailCollections, NavigationDetailCollectionName, NavigationSelectedDetailResponse, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { applyNavigationSelectedDetail, selectNavigationIdentity } from "./navigation-query-state";
+
+let nextCollectionRead = 0;
 
 class NavigationActionIdentityError extends Error {
   constructor(readonly identity: NavigationSelectedDetailResponse["identity"]) {
@@ -11,11 +13,12 @@ class NavigationActionIdentityError extends Error {
 
 /** Read action authority from the explicit owner; collection rows only identify the target. */
 export async function readNavigationActionDetail(params: {
-  api?: Pick<DesktopApi, "getNavigationSelectedDetail">;
+  api?: Pick<DesktopApi, "getNavigationSelectedDetail" | "releaseNavigationQuery">;
   thread: Pick<NavigationThreadSummary, "id" | "source" | "federation">;
   target?: FederationTarget;
   signal?: AbortSignal;
   includeWorkspaceConfiguration?: boolean;
+  collections?: NavigationDetailCollectionName[];
 }): Promise<NavigationSelectedDetailResponse & { thread: NavigationThreadSummary }> {
   params.signal?.throwIfAborted();
   if (!params.api?.getNavigationSelectedDetail) {
@@ -42,11 +45,53 @@ export async function readNavigationActionDetail(params: {
   if (params.includeWorkspaceConfiguration && !detail.workspaceDirectories) {
     throw new Error("Upgrade the owning instance to load exact workspace configuration before performing this action.");
   }
-  const thread = target?.scope === "remote" ? { ...detail.thread, federation: {
+  const values: NavigationDetailCollections = {};
+  const token = `navigation-action-collections:${++nextCollectionRead}`;
+  let retainedBytes = 0;
+  try {
+    for (const name of params.collections ?? []) {
+      const manifest = detail.collections?.find((entry) => entry.name === name);
+      if (!manifest) continue;
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      const items: unknown[] = [];
+      if (manifest.count) do {
+        params.signal?.throwIfAborted();
+        const response = await params.api.getNavigationSelectedDetail({ protocol: 2, ref,
+          federationTarget: target, collection: { name, cursor } }, token);
+        params.signal?.throwIfAborted();
+        const page = response.collectionPage;
+        if (response.ref.backend !== ref.backend || response.ref.threadId !== ref.threadId
+          || response.ref.ownerInstanceId !== ref.ownerInstanceId
+          || response.readiness !== "ready" || response.identity !== "present"
+          || !page || page.name !== name || page.revision !== manifest.revision
+          || page.complete === Boolean(page.nextCursor)
+          || (page.nextCursor && seen.has(page.nextCursor))) {
+          throw new Error("Thread action collection changed while loading. Refresh before retrying.");
+        }
+        const batch = page.values[name] ?? [];
+        retainedBytes += new TextEncoder().encode(JSON.stringify(batch)).byteLength;
+        if (retainedBytes > 1024 * 1024 || items.length + batch.length > manifest.count) {
+          throw new Error("Thread action collection exceeds its retained budget.");
+        }
+        items.push(...batch);
+        cursor = page.nextCursor;
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+      if (items.length !== manifest.count) throw new Error("Thread action collection is incomplete.");
+      Object.assign(values, { [name]: items });
+    }
+  } finally {
+    if (params.collections?.some((name) => detail.collections?.some((entry) => entry.name === name && entry.count))) {
+      await params.api.releaseNavigationQuery?.(token).catch(() => undefined);
+    }
+  }
+  const hydratedThread = { ...detail.thread, ...values };
+  const thread = target?.scope === "remote" ? { ...hydratedThread, federation: {
     ...detail.thread.federation,
     instanceLabel: detail.thread.federation?.instanceLabel ?? params.thread.federation?.instanceLabel ?? target.instanceId,
     ref: buildFederatedThreadRef({ backend: ref.backend, threadId: ref.threadId, instanceId: target.instanceId }),
-  } } : detail.thread;
+  } } : hydratedThread;
   return { ...detail, thread };
 }
 
