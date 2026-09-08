@@ -81,7 +81,9 @@ export function useStarMapInstanceLoad(params: {
       await sample();
       if (!cancelled) timer = setTimeout(() => { void tick(); }, intervalMs);
     };
-    void tick();
+    // Admit network work only after this effect survives synchronous cleanup
+    // (including Strict Mode replay). tick checks this lifetime's cancellation.
+    queueMicrotask(() => { void tick(); });
 
     return () => {
       cancelled = true;

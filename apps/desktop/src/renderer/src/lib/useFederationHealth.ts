@@ -26,9 +26,12 @@ export function useFederationHealth(params: {
   const refresh = useCallback(() => {
     if (!active.current) return;
     const generation = lifetime.current;
-    void desktopApi
-      ?.readFederationHealth?.({})
-      .then((response) => { if (active.current && lifetime.current === generation) setHealth(response.health); })
+    void Promise.resolve().then(async () => {
+      // Cleanup must be able to revoke a mount read before it reaches IPC.
+      if (!active.current || lifetime.current !== generation) return;
+      const response = await desktopApi?.readFederationHealth?.({});
+      if (response && active.current && lifetime.current === generation) setHealth(response.health);
+    })
       .catch(() => {
         // Keep the last known topology; peer events retrigger the read.
       });

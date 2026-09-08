@@ -57,6 +57,10 @@ export function useNavigationQueryResource(params: {
     setLoading(true);
     const promise = (async () => {
       try {
+        // The effect owns admission as well as result application. A replayed
+        // or replaced lifetime must not dispatch a request after cleanup.
+        await Promise.resolve();
+        if (lifetimeRef.current !== lifetime || !activeRef.current) return;
         const page = await api.getNavigationQueryPage!({
           ...started.request,
           cursor,
