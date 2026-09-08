@@ -129,12 +129,13 @@ it("uses viewer directory disclosure for page demand across owner refresh and pr
     result.current.setBrowseMode("directories");
     result.current.directoryDisclosure.setExpandedByKey({ [key]: true });
   });
-  await waitFor(() => expect(f.read.mock.calls.some(([request]) => request.query.kind === "directory" && request.query.roots === "all")).toBe(true));
+  await waitFor(() => expect(f.read.mock.calls.some(([request]) => request.query.kind === "directory" && request.query.roots === "unpinned")).toBe(true));
   await act(() => result.current.setDirectoryThreadsCollapsed(result.current.directories.find((directory) => directory.key === key)!, true));
   await waitFor(() => expect(f.read.mock.calls.some(([request]) => request.query.kind === "directory" && request.query.roots === "pinned")).toBe(true));
   await act(() => result.current.refresh());
   expect(result.current.directories.find((directory) => directory.key === key)?.directoryThreadsCollapsed).toBe(true);
-  expect(result.current.pagedNavigation.resources.get(`directory:${key}`)?.state.request.query).toMatchObject({ roots: "pinned" });
+  expect(result.current.pagedNavigation.resources.get(`directory-pins:${key}`)?.state.request.query).toMatchObject({ roots: "pinned" });
+  expect(result.current.pagedNavigation.resources.has(`directory:${key}`)).toBe(false);
   expect(f.legacy).not.toHaveBeenCalled();
 });
 
