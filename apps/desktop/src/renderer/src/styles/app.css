@@ -33895,9 +33895,13 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-activity__chart svg { display: block; width: 100%; }
 .federation-activity__chart text { fill: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .federation-activity__grid { stroke: var(--border-subtle); }
-.federation-activity__line { fill: none; stroke-width: 1.8; }
-.federation-activity__line--sent { stroke: var(--accent); }
-.federation-activity__line--received { stroke: var(--text-secondary); }
+.federation-activity__chart-scroll { overflow-x: auto; }
+.federation-activity__chart svg:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.federation-activity__bar--sent { fill: var(--accent); }
+.federation-activity__bar--received { fill: var(--text-secondary); }
+.federation-activity__selection { fill: var(--text-secondary); opacity: 0.15; pointer-events: none; }
+.federation-activity__chart-detail { min-height: 54px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+.federation-activity__chart-detail span { display: inline-block; margin-right: 12px; }
 .federation-activity__legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; }
 .federation-activity__legend--sent { color: var(--accent); }
 .federation-activity__legend--received { color: var(--text-secondary); }

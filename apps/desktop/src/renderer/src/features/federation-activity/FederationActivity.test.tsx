@@ -17,7 +17,7 @@ function fixture(): ReadFederationActivityResponse {
       received: { requests: { count: 0 }, responses: { count: 0 } },
     },
     lifetime: totals(), windows: { "1m": totals(), "5m": totals(), "10m": totals(), "1h": totals() },
-    history: Array.from({ length: 360 }, (_, index) => ({ at: index * 10_000, totals: totals() })),
+    history: Array.from({ length: 3600 }, (_, index) => ({ at: index * 1_000, totals: totals() })),
   };
   return {
     activity: { since: 0, at: 3_600_000, bucketMs: 1_000, physical: series,
@@ -87,14 +87,14 @@ describe("Federation activity surfaces", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
   });
 
-  it("labels chart axes with numeric rates and units, exposes periods and per-peer attribution, and confirms topmost", async () => {
+  it("labels chart axes with amounts and units, exposes periods and per-peer attribution, and confirms topmost", async () => {
     const readFederationActivity = vi.fn(async () => fixture());
     const setFederationActivityTopmost = vi.fn(async (enabled: boolean) => enabled);
     const api: DesktopApi = { readFederationActivity, setFederationActivityTopmost };
     render(<FederationActivityScreen desktopApi={api} />);
     await screen.findByText("Running · connected");
-    expect(screen.getByText("0.2")).toBeInTheDocument();
-    expect(screen.getByText("2.4")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("24")).toBeInTheDocument();
     for (const name of ["Sent traffic", "Received traffic"]) {
       const table = within(screen.getByRole("table", { name }));
       for (const column of ["Last 1m", "Last 10m", "Last 1h", "Total"]) {
@@ -112,6 +112,23 @@ describe("Federation activity surfaces", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Always on top" }));
     await waitFor(() => expect(screen.getByRole("checkbox")).toBeChecked());
     expect(setFederationActivityTopmost).toHaveBeenCalledWith(true);
+  });
+
+  it("shows exact one-second amounts on hover and keyboard focus", async () => {
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture() }} />);
+    const chart = await screen.findByRole("img", { name: /Data and wire amounts/ });
+    fireEvent.focus(chart);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Sent wire: 800 bytes");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("In progress");
+    fireEvent.keyDown(chart, { key: "ArrowLeft" });
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("In progress");
+    fireEvent.keyDown(chart, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    vi.spyOn(chart, "getBoundingClientRect").mockReturnValue({ left: 0, width: 640 } as DOMRect);
+    fireEvent.pointerMove(chart, { clientX: 100 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Received data: 4,000 bytes");
+    fireEvent.pointerLeave(chart);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   it("keeps the switch state and reports errors if a configuration change fails", async () => {

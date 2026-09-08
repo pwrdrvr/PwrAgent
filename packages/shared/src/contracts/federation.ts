@@ -874,6 +874,7 @@ export type FederationActivitySeries = {
   sizes: FederationActivitySizes;
   lifetime: FederationActivityTotals;
   windows: Record<"1m" | "5m" | "10m" | "1h", FederationActivityTotals>;
+  /** One-second amounts; at is the inclusive start of each bucket. */
   history: Array<{ at: number; totals: FederationActivityTotals }>;
 };
 export type FederationActivitySnapshot = {
