@@ -653,9 +653,11 @@ export class AcpAgentClient {
     }
     const finishedAt = this.now();
     this.finishTrackedTurn(params.sessionId, finishedAt);
+    const usage = asRecord(asRecord(result)?.usage);
     this.appendHistoryUpdate(params.sessionId, finishedAt, {
       kind: "turn_finished",
       turnId,
+      ...(usage ? { usage } : {}),
     });
     const record = asRecord(result);
     return {
@@ -793,19 +795,23 @@ export class AcpAgentClient {
         this.assertPromptProducedResponse(params.sessionId, result);
         const receivedAt = this.now();
         const finished = this.finishTrackedTurn(params.sessionId, receivedAt);
-        this.appendHistoryUpdate(params.sessionId, receivedAt, {
+        const usage = asRecord(asRecord(result)?.usage);
+        const turnFinishedUpdate = {
           kind: "turn_finished",
           ...(finished.turnId ? { turnId: finished.turnId } : {}),
           outputText: finished.assistantText,
-        });
+          ...(usage ? { usage } : {}),
+        };
+        this.appendHistoryUpdate(
+          params.sessionId,
+          receivedAt,
+          turnFinishedUpdate,
+        );
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
           replay: finished.replay,
           turnId: finished.turnId,
-          update: {
-            kind: "turn_finished",
-            outputText: finished.assistantText,
-          },
+          update: turnFinishedUpdate,
         });
       })
       .catch((error) => {

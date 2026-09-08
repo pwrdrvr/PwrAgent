@@ -322,6 +322,106 @@ describe("AcpAgentsSettings", () => {
     );
   });
 
+  it("hides a stale Claude entry when its Experimental opt-in is off", async () => {
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [claudeEntry(false)],
+    }));
+    const snapshot = {
+      experimental: {
+        claudeAcp: { value: false, source: "default" },
+      },
+    } as DesktopSettingsSnapshot;
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={snapshot}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalled();
+    });
+    expect(screen.queryByText("Claude Agent")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Install Claude adapter" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("installs the pinned Claude runtime and surfaces local auth choices", async () => {
+    const placeholder = claudeEntry(false);
+    const installed = claudeEntry(true);
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [placeholder],
+    }));
+    const installAcpAgent = vi.fn(async () => ({
+      fetchedAt: 2000,
+      entry: installed,
+    }));
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents, installAcpAgent } as DesktopApi}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Install Claude adapter" }),
+    );
+    await waitFor(() => {
+      expect(installAcpAgent).toHaveBeenCalledWith({
+        registryId: "claude-acp",
+        expectedVersion: "0.60.0",
+      });
+    });
+    expect(
+      await screen.findByText(/Subscription use through a third-party product/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/--cli auth login --console/)).toBeInTheDocument();
+    expect(screen.getByText(/--cli auth login --claudeai/)).toBeInTheDocument();
+    expect(screen.getByText("Owning instance only")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check readiness" }));
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        refresh: true,
+        force: true,
+      });
+    });
+  });
+
+  it("surfaces an unexpected managed install failure as a retryable state", async () => {
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [claudeEntry(false)],
+    }));
+    const installAcpAgent = vi.fn(async () => {
+      throw new Error("npm registry unavailable");
+    });
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents, installAcpAgent } as DesktopApi}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Install Claude adapter" }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "Retry install" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("npm registry unavailable")).toHaveAttribute(
+      "role",
+      "alert",
+    );
+    expect(screen.getByText("Install failed")).toBeInTheDocument();
+  });
+
   it("keeps cached ACP agents visible while explicit discovery refreshes", async () => {
     const dispatchEvent = vi.spyOn(window, "dispatchEvent");
     let resolveRefresh:
@@ -1184,3 +1284,39 @@ describe("AcpAgentsSettings", () => {
     expect(headings).toEqual(["Grok", "Gemini CLI"]);
   });
 });
+
+function claudeEntry(installed: boolean): AcpAgentSettingsEntry {
+  return {
+    backendId: "acp:claude-acp",
+    registryId: "claude-acp",
+    name: "Claude Agent",
+    version: "0.60.0",
+    authors: ["Agent Client Protocol contributors"],
+    distributionKind: "npx",
+    distributionSource: "@agentclientprotocol/claude-agent-acp@0.60.0",
+    installable: true,
+    installed,
+    installStatus: installed ? "installed" : "not-installed",
+    authStatus: "required",
+    verificationStatus: "verified",
+    allowlistRuleId: "managed-claude-agent-acp-0.60.0",
+    managedRuntime: {
+      kind: "pwragent-managed",
+      packageName: "@agentclientprotocol/claude-agent-acp",
+      pinnedVersion: "0.60.0",
+      integrity: "sha512-test",
+      credentialScope: "owning-instance",
+      supportLevel: "experimental",
+      authMethod: "local-terminal",
+      subscriptionAuthBlocked: false,
+      ...(installed
+        ? {
+            consoleAuthCommand:
+              "/usr/bin/node /profile/claude-agent-acp/dist/index.js --cli auth login --console",
+            subscriptionAuthCommand:
+              "/usr/bin/node /profile/claude-agent-acp/dist/index.js --cli auth login --claudeai",
+          }
+        : {}),
+    },
+  };
+}

@@ -17,6 +17,7 @@ import {
 } from "./SettingsLayout";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
+import { SettingsSwitch } from "./SettingsSwitch";
 import {
   acpRelativeTime,
   acpStatusLabel,
@@ -101,7 +102,10 @@ export function AcpAgentsSettings(props: {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [installingRegistryId, setInstallingRegistryId] = useState<string>();
   const [error, setError] = useState<string | undefined>();
+  const claudeExperimentalEnabled =
+    props.snapshot?.experimental?.claudeAcp?.value ?? true;
 
   async function refresh(
     refreshRegistry = false,
@@ -143,6 +147,47 @@ export function AcpAgentsSettings(props: {
     }
   }
 
+  async function install(entry: AcpAgentSettingsEntry): Promise<void> {
+    if (!props.desktopApi?.installAcpAgent || !entry.managedRuntime) {
+      setError("Managed ACP installation is unavailable in this build.");
+      return;
+    }
+    setInstallingRegistryId(entry.registryId);
+    setError(undefined);
+    try {
+      const response = await props.desktopApi.installAcpAgent({
+        registryId: entry.registryId,
+        expectedVersion: entry.managedRuntime.pinnedVersion,
+      });
+      setEntries((current) =>
+        current.map((candidate) =>
+          candidate.backendId === response.entry.backendId
+            ? response.entry
+            : candidate,
+        ),
+      );
+      window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+    } catch (installError) {
+      const message = installError instanceof Error
+        ? installError.message
+        : String(installError);
+      setError(message);
+      setEntries((current) =>
+        current.map((candidate) =>
+          candidate.backendId === entry.backendId
+            ? {
+                ...candidate,
+                installStatus: "install-failed",
+                lastError: message,
+              }
+            : candidate,
+        ),
+      );
+    } finally {
+      setInstallingRegistryId(undefined);
+    }
+  }
+
   // Run the initial cache read exactly once. Mounting or focusing a provider
   // must never probe or launch it; the row's Refresh/Save actions own that
   // provider-scoped discovery budget. The ref only collapses StrictMode's
@@ -161,9 +206,12 @@ export function AcpAgentsSettings(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
 
-  const visibleEntries = props.only
+  const visibleEntries = (props.only
     ? entries.filter((entry) => entry.registryId === props.only)
-    : displayOrderedAcpEntries(entries);
+    : displayOrderedAcpEntries(entries)).filter(
+      (entry) =>
+        entry.registryId !== "claude-acp" || claudeExperimentalEnabled,
+    );
 
   return (
     <>
@@ -177,6 +225,7 @@ export function AcpAgentsSettings(props: {
             />
           ) : null}
           <AcpAgentSection
+            desktopApi={props.desktopApi}
             entry={entry}
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
             enabled={acpAgentEnabledInSnapshot(props.snapshot, entry.registryId)}
@@ -186,6 +235,7 @@ export function AcpAgentsSettings(props: {
             }
             saving={props.saving}
             refreshing={refreshing || loading || props.catalogRefreshing}
+            installing={installingRegistryId === entry.registryId}
             onCliPathChange={
               props.onCliPathChange
                 ? async (registryId, cliPath) => {
@@ -214,6 +264,9 @@ export function AcpAgentsSettings(props: {
               props.onManagedGrokBuildChannelChange
             }
             onRefresh={() => refresh(true, true)}
+            onInstall={() => {
+              void install(entry);
+            }}
           />
         </Fragment>
       ))}
@@ -322,6 +375,7 @@ function LegacyKimiCompatibilityCard(props: {
 }
 
 function AcpAgentSection(props: {
+  desktopApi?: DesktopApi;
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
   enabled: boolean;
@@ -330,6 +384,7 @@ function AcpAgentSection(props: {
   managedGrokBuildChannel?: DesktopUpdateChannel;
   saving?: boolean;
   refreshing?: boolean;
+  installing?: boolean;
   onCliPathChange?: (
     registryId: string,
     cliPath: string,
@@ -340,6 +395,7 @@ function AcpAgentSection(props: {
     channel: DesktopUpdateChannel,
   ) => Promise<boolean>;
   onRefresh: () => Promise<boolean>;
+  onInstall: () => void;
 }) {
   const { entry, enabled } = props;
   const managedBuild = entry.managedBuild;
@@ -352,6 +408,9 @@ function AcpAgentSection(props: {
   useEffect(() => {
     setDraft(savedPath);
   }, [savedPath]);
+  if (entry.managedRuntime) {
+    return <ManagedAcpAgentSection {...props} />;
+  }
 
   const detail =
     entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason;
@@ -871,4 +930,172 @@ function rejectedAcpInstanceLabel(
     default:
       return "ACP check failed";
   }
+}
+
+function ManagedAcpAgentSection(props: {
+  desktopApi?: DesktopApi;
+  entry: AcpAgentSettingsEntry;
+  enabled: boolean;
+  saving?: boolean;
+  refreshing?: boolean;
+  installing?: boolean;
+  onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
+  onInstall: () => void;
+  onRefresh: () => void;
+}) {
+  const { entry, enabled } = props;
+  const runtime = entry.managedRuntime;
+  if (!runtime) {
+    return null;
+  }
+  const ready = entry.installed && entry.authStatus === "authenticated";
+  const detail =
+    entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason;
+  let chip = "Not installed";
+  let chipKind: "muted" | "ok" | "warn" | "err" = "muted";
+  if (!enabled) {
+    chip = "Disabled";
+  } else if (ready) {
+    chip = "Ready";
+    chipKind = "ok";
+  } else if (entry.installStatus === "install-failed") {
+    chip = "Install failed";
+    chipKind = "err";
+  } else if (entry.authStatus === "failed") {
+    chip = "Readiness failed";
+    chipKind = "err";
+  } else if (entry.installed) {
+    chip = "Sign-in required";
+    chipKind = "warn";
+  }
+
+  return (
+    <SettingsSection
+      eyebrow="Experimental provider"
+      title={entry.name}
+      sectionId={`acp-${entry.registryId}`}
+      chip={chip}
+      chipKind={chipKind}
+    >
+      <div className="settings-fields">
+        {props.onEnabledChange ? (
+          <SettingsField
+            label="Enabled"
+            sub="Show Claude in the model picker after this instance is ready."
+            control={
+              <SettingsSwitch
+                checked={enabled}
+                disabled={props.saving}
+                label={`Enable ${entry.name}`}
+                onChange={(next) => {
+                  void props.onEnabledChange?.(entry.registryId, next);
+                }}
+              />
+            }
+          />
+        ) : null}
+
+        <SettingsField
+          label="Experimental support"
+          sub="This community-maintained ACP adapter and its authentication paths are not generally supported. Behavior, availability, and policy treatment may change or be removed."
+          source="Experimental"
+          control={
+            <p className="settings-empty">
+              Subscription use through a third-party product may require
+              separate authorization under Anthropic&apos;s terms.
+            </p>
+          }
+        />
+
+        <SettingsField
+          label="Managed runtime"
+          sub="PwrAgent installs this external Apache-2.0 adapter with npm lifecycle scripts disabled, then verifies the exact package version and integrity. Anthropic service terms still apply."
+          source={`Pinned v${runtime.pinnedVersion}`}
+          error={!entry.installed ? detail : undefined}
+          control={
+            <SettingsCopyValue
+              value={`${runtime.packageName}@${runtime.pinnedVersion}`}
+              desktopApi={props.desktopApi}
+              label="Claude ACP package pin"
+            />
+          }
+        />
+
+        {!entry.installed ? (
+          <SettingsField
+            label="Install"
+            sub="Requires Node.js 22 or newer and npm on this instance. Installation is local to the active PwrAgent profile."
+            control={
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--secondary"
+                  disabled={props.installing || props.saving}
+                  type="button"
+                  onClick={props.onInstall}
+                >
+                  {props.installing
+                    ? "Installing…"
+                    : entry.installStatus === "install-failed"
+                      ? "Retry install"
+                      : "Install Claude adapter"}
+                </button>
+              </div>
+            }
+          />
+        ) : (
+          <SettingsField
+            label="Local authentication"
+            sub="Run one of these commands in a terminal on the owning instance, then check readiness. The adapter owns its local sign-in flow; PwrAgent does not collect or proxy the credential."
+            source={
+              ready
+                ? "Ready on this instance"
+                : entry.authStatus === "failed"
+                  ? "Readiness check failed"
+                  : "Local sign-in required"
+            }
+            error={detail}
+            control={
+              <div className="settings-fields">
+                {runtime.subscriptionAuthCommand ? (
+                  <SettingsCopyValue
+                    value={runtime.subscriptionAuthCommand}
+                    desktopApi={props.desktopApi}
+                    label="Claude subscription login command"
+                  />
+                ) : null}
+                {runtime.consoleAuthCommand ? (
+                  <SettingsCopyValue
+                    value={runtime.consoleAuthCommand}
+                    desktopApi={props.desktopApi}
+                    label="Anthropic Console login command"
+                  />
+                ) : null}
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button--secondary"
+                    disabled={props.refreshing}
+                    type="button"
+                    onClick={props.onRefresh}
+                  >
+                    {props.refreshing ? "Checking…" : "Check readiness"}
+                  </button>
+                </div>
+              </div>
+            }
+          />
+        )}
+
+        <SettingsField
+          label="Credential boundary"
+          sub="The adapter process, workspace, and Anthropic credentials stay on the PwrAgent instance that owns the thread. Federation sends backend capability metadata and thread operations, never Claude credentials."
+          source="Owning instance only"
+          control={
+            <p className="settings-empty">
+              No credential material crosses the federation boundary.
+            </p>
+          }
+        />
+      </div>
+    </SettingsSection>
+  );
 }

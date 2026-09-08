@@ -128,6 +128,8 @@ import type {
   StartCodexMcpServerLoginResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  InstallAcpAgentRequest,
+  InstallAcpAgentResponse,
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   ListDesktopPwrAgentProfilesResponse,
@@ -845,6 +847,9 @@ export type DesktopApi = {
   listAcpAgents?: (
     request?: ListAcpAgentSettingsRequest
   ) => Promise<ListAcpAgentSettingsResponse>;
+  installAcpAgent?: (
+    request: InstallAcpAgentRequest,
+  ) => Promise<InstallAcpAgentResponse>;
   acknowledgeAcpAgentUpdate?: (
     request: AcknowledgeAcpAgentUpdateRequest,
   ) => Promise<AcknowledgeAcpAgentUpdateResponse>;

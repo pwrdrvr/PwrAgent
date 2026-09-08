@@ -67,6 +67,18 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
                           <dd>{formatAcpAuthStatus(backend.acp.authStatus)}</dd>
                         </div>
                       ) : null}
+                      {backend.acp?.credentialScope === "owning-instance" ? (
+                        <div>
+                          <dt>Credentials</dt>
+                          <dd>Owning instance only</dd>
+                        </div>
+                      ) : null}
+                      {backend.acp?.supportLevel === "experimental" ? (
+                        <div>
+                          <dt>Support</dt>
+                          <dd>Experimental</dd>
+                        </div>
+                      ) : null}
                       {backend.account ? (
                         <div>
                           <dt>Account</dt>

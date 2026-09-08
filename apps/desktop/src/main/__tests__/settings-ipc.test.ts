@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared";
+import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 
@@ -15,6 +16,7 @@ const listBackendsMock = vi.fn(async () => ({ backends: [], fetchedAt: 1 }));
 const invalidateAcpBackendDiscoveryMock = vi.fn();
 const getDesktopBackendRegistryMock = vi.fn(() => ({
   invalidateAcpBackendDiscovery: invalidateAcpBackendDiscoveryMock,
+  invalidateProviderRuntimeSelections: invalidateAcpBackendDiscoveryMock,
   listBackends: listBackendsMock,
   listThreads: listThreadsMock,
 }));
@@ -48,6 +50,10 @@ const localAcpDiscoveryMock = vi.hoisted(() => ({
 }));
 const acpRuntimeDiscoveryMock = vi.hoisted(() => ({
   discoverAcpRuntimeCapabilities: vi.fn(async () => ({} as unknown)),
+}));
+const claudeAcpRuntimeMock = vi.hoisted(() => ({
+  discoverManagedClaudeAcpRuntime: vi.fn(async () => undefined as unknown),
+  installManagedClaudeAcpRuntime: vi.fn(async () => undefined as unknown),
 }));
 const electronMocks = vi.hoisted(() => ({
   openExternal: vi.fn(async () => undefined),
@@ -169,6 +175,18 @@ vi.mock("child_process", () => ({
 
 vi.mock("../acp/acp-instance-discovery", () => localAcpDiscoveryMock);
 vi.mock("../acp/acp-runtime-discovery", () => acpRuntimeDiscoveryMock);
+vi.mock("../acp/claude-acp-runtime", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../acp/claude-acp-runtime")
+  >();
+  return {
+    ...actual,
+    discoverManagedClaudeAcpRuntime:
+      claudeAcpRuntimeMock.discoverManagedClaudeAcpRuntime,
+    installManagedClaudeAcpRuntime:
+      claudeAcpRuntimeMock.installManagedClaudeAcpRuntime,
+  };
+});
 
 vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: disposeDesktopBackendRegistryMock,
@@ -263,6 +281,11 @@ describe("settings ipc", () => {
     localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
     acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockReset();
     acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue({});
+    claudeAcpRuntimeMock.discoverManagedClaudeAcpRuntime.mockReset();
+    claudeAcpRuntimeMock.discoverManagedClaudeAcpRuntime.mockResolvedValue(
+      undefined,
+    );
+    claudeAcpRuntimeMock.installManagedClaudeAcpRuntime.mockReset();
     electronMocks.openExternal.mockClear();
     childProcessMocks.execFile.mockImplementation(
       (
@@ -528,6 +551,18 @@ describe("settings ipc", () => {
         patch: {
           acpAgents: {
             gemini: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    );
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+      {},
+      {
+        patch: {
+          acpAgents: {
+            "claude-acp": {
               enabled: false,
             },
           },
@@ -1627,6 +1662,134 @@ describe("settings ipc", () => {
       // Following a build published for testing is not being held back by a
       // pin. Nothing here needs a person.
       expect(grok?.managedBuild?.pinnedBehind).toBeUndefined();
+    } finally {
+      disposeAppState();
+    }
+  });
+
+  it("installs only the pinned Claude runtime and preserves cached readiness", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENT_INSTALL_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    vi.spyOn(service, "resolveTerminalSpawnEnvAsync").mockResolvedValue({
+      PATH: "/operator/bin:/usr/bin",
+    });
+    const installedRecord = {
+      backendId: "acp:claude-acp",
+      registryId: "claude-acp",
+      name: "Claude Agent",
+      version: "0.60.0",
+      distributionKind: "npx",
+      distributionSource: "@agentclientprotocol/claude-agent-acp@0.60.0",
+      installStatus: "installed",
+      authStatus: "required",
+      verificationStatus: "verified",
+      allowlistRuleId: "managed-claude-agent-acp-0.60.0",
+      installedAt: 1000,
+      updatedAt: 1000,
+      launchDescriptor: {
+        backendId: "acp:claude-acp",
+        registryId: "claude-acp",
+        distributionKind: "npx",
+        command: "/usr/bin/node",
+        args: ["/profile/runtime/dist/index.js"],
+        env: {},
+      },
+    } satisfies AcpInstalledAgentRecord;
+    claudeAcpRuntimeMock.installManagedClaudeAcpRuntime.mockResolvedValue(
+      installedRecord,
+    );
+
+    initializeAppState();
+    try {
+      new AcpAgentStore(getAppStateDb()).upsertInstalledAgent({
+        ...installedRecord,
+        authStatus: "authenticated",
+        installedAt: 500,
+        runtimeCapabilities: {
+          schemaVersion: 1,
+          status: "discovered",
+          discoveredAt: 900,
+          checkedAt: 900,
+          source: "session-new",
+        },
+      });
+      registerSettingsIpcHandlers(service);
+      await expect(
+        handlers.get(ACP_AGENT_INSTALL_CHANNEL)?.(
+          {},
+          { registryId: "claude-acp", expectedVersion: "0.60.0" },
+        ),
+      ).rejects.toThrow("Enable Experimental");
+      expect(
+        claudeAcpRuntimeMock.installManagedClaudeAcpRuntime,
+      ).not.toHaveBeenCalled();
+      await service.writeConfigPatchTargeted({
+        experimental: { claudeAcp: true },
+      });
+      const response = await handlers.get(ACP_AGENT_INSTALL_CHANNEL)?.(
+        {},
+        { registryId: "claude-acp", expectedVersion: "0.60.0" },
+      );
+
+      expect(
+        claudeAcpRuntimeMock.installManagedClaudeAcpRuntime,
+      ).toHaveBeenCalledWith({
+        env: { PATH: "/operator/bin:/usr/bin" },
+      });
+      expect(response).toMatchObject({
+        entry: {
+          backendId: "acp:claude-acp",
+          installed: true,
+          authStatus: "authenticated",
+          managedRuntime: {
+            pinnedVersion: "0.60.0",
+            credentialScope: "owning-instance",
+            supportLevel: "experimental",
+            subscriptionAuthBlocked: false,
+            consoleAuthCommand: expect.stringContaining(
+              "--cli auth login --console",
+            ),
+            subscriptionAuthCommand: expect.stringContaining(
+              "--cli auth login --claudeai",
+            ),
+          },
+        },
+      });
+      expect(
+        new AcpAgentStore(getAppStateDb()).getInstalledAgent("acp:claude-acp"),
+      ).toMatchObject({
+        installStatus: "installed",
+        authStatus: "authenticated",
+        installedAt: 500,
+        runtimeCapabilities: {
+          status: "discovered",
+          discoveredAt: 900,
+        },
+      });
+
+      await expect(
+        handlers.get(ACP_AGENT_INSTALL_CHANNEL)?.(
+          {},
+          { registryId: "claude-acp", expectedVersion: "0.66.0" },
+        ),
+      ).rejects.toThrow("only installs the allowlisted");
+      expect(
+        claudeAcpRuntimeMock.installManagedClaudeAcpRuntime,
+      ).toHaveBeenCalledTimes(1);
     } finally {
       disposeAppState();
     }

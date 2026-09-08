@@ -810,6 +810,11 @@ function SettingsSectionBody(props: {
             experimental: { managedReview: enabled },
           });
         }}
+        onClaudeAcpChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { claudeAcp: enabled },
+          });
+        }}
       />
     );
   }

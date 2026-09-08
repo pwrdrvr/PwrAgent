@@ -1036,6 +1036,12 @@ export type DesktopSettingsSnapshot = {
      */
     managedReview?: DesktopSettingsValue<boolean>;
     /**
+     * Exposes the experimental, community-maintained Claude ACP provider.
+     * Disabled by default; when off Claude is absent from provider discovery,
+     * installation, launch, and federation capability metadata.
+     */
+    claudeAcp?: DesktopSettingsValue<boolean>;
+    /**
      * Diff condensation (a.k.a. "diff eliding") gates whether the configured
      * backend may classify less-relevant diff hunks. When disabled, every diff
      * renders in full and no structured-generation request fires.
@@ -1231,6 +1237,12 @@ export type DesktopSettingsSnapshot = {
        */
       enabled: boolean;
     };
+    "claude-acp"?: {
+      /** Managed Claude runtimes have no operator-selectable executable path.
+       *  This secondary provider toggle only applies while the default-off
+       *  Experimental Claude gate is also enabled. */
+      enabled: boolean;
+    };
   };
   git: {
     /**
@@ -1302,6 +1314,7 @@ export type DesktopSettingsConfigPatch = {
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;
+    claudeAcp?: boolean;
     diffCondensation?: {
       enabled?: boolean;
     };
@@ -1456,6 +1469,9 @@ export type DesktopSettingsConfigPatch = {
     };
     qwen?: {
       cliPath?: string;
+      enabled?: boolean;
+    };
+    "claude-acp"?: {
       enabled?: boolean;
     };
   };

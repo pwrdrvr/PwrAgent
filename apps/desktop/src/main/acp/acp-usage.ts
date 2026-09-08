@@ -14,6 +14,11 @@ export type AcpUsageEnvelope = {
   tokenUsage: AcpTokenUsage;
 };
 
+export type AcpContextWindowUpdate = {
+  size: number;
+  used: number;
+};
+
 /**
  * ACP running totals are PER TURN, not per session. That is the convention for
  * this transport, deliberately, not an accident of one provider.
@@ -70,7 +75,7 @@ export function readAcpUsageEnvelope(
     return readGrokResponseUsageEnvelope(readRecord(update.usage));
   }
   const usage =
-    kind === "turn_completed"
+    kind === "turn_completed" || kind === "turn_finished"
       ? readRecord(update.usage)
       : kind === "agent_message_chunk"
         ? readRecord(readRecord(update._meta)?.usage)
@@ -79,10 +84,22 @@ export function readAcpUsageEnvelope(
     return undefined;
   }
 
-  const inputTokens = readFiniteNumber(usage.inputTokens);
+  const reportedInputTokens = readFiniteNumber(usage.inputTokens);
   const cachedInputTokens =
     readFiniteNumber(usage.cachedInputTokens) ??
     readFiniteNumber(usage.cachedReadTokens);
+  const cachedWriteTokens = readFiniteNumber(usage.cachedWriteTokens);
+  // ACP's unstable PromptResponse.usage shape reports cache reads and writes
+  // separately from inputTokens. Normalize that split shape to PwrAgent's
+  // inclusive input convention; cache writes remain uncached input for pricing.
+  // Existing agent_message_chunk and turn_completed producers that omit
+  // cachedWriteTokens retain their established input semantics.
+  const inputTokens =
+    cachedWriteTokens !== undefined
+      ? (reportedInputTokens ?? 0)
+        + (cachedInputTokens ?? 0)
+        + cachedWriteTokens
+      : reportedInputTokens;
   const outputTokens = readFiniteNumber(usage.outputTokens);
   const reasoningOutputTokens =
     readFiniteNumber(usage.reasoningOutputTokens) ??
@@ -107,7 +124,10 @@ export function readAcpUsageEnvelope(
     (modelUsage ? Object.keys(modelUsage)[0] : undefined);
   return {
     ...(model ? { model } : {}),
-    scope: kind === "turn_completed" ? "turn" : "model-call",
+    scope:
+      kind === "turn_completed" || kind === "turn_finished"
+        ? "turn"
+        : "model-call",
     tokenUsage: {
       ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
       ...(inputTokens !== undefined ? { inputTokens } : {}),
@@ -118,6 +138,19 @@ export function readAcpUsageEnvelope(
       ...(totalTokens !== undefined ? { totalTokens } : {}),
     },
   };
+}
+
+export function readAcpContextWindowUpdate(
+  update: Record<string, unknown>,
+): AcpContextWindowUpdate | undefined {
+  if (readAcpUpdateKind(update) !== "usage_update") {
+    return undefined;
+  }
+  const used = readFiniteNumber(update.used);
+  const size = readFiniteNumber(update.size);
+  return used !== undefined && used >= 0 && size !== undefined && size > 0
+    ? { size, used }
+    : undefined;
 }
 
 /**
