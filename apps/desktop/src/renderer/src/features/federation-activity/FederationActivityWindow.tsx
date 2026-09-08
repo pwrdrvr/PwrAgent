@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { formatActivityReport } from "./format-activity-report";
@@ -67,11 +67,18 @@ function PayloadSizes({ series }: { series: FederationActivitySeries }) {
   </div>;
 }
 
-export function FederationRateChart({ history, period, bytes }: {
+export function FederationAmountChart({ history, period, bytes }: {
   history: FederationActivitySeries["history"]; period: Period; bytes: boolean;
 }) {
   const id = useId();
-  const length = period === "1m" ? 6 : period === "10m" ? 60 : 360;
+  const length = period === "1m" ? 60 : period === "10m" ? 600 : 3600;
+  const [selectedAt, setSelectedAt] = useState<number>();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (element) element.scrollLeft = element.scrollWidth;
+    setSelectedAt(undefined);
+  }, [period]);
   const points = history.slice(-length);
   const lines = bytes ? [
     { direction: "sent", field: "wireBytes", label: "Sent wire", dashed: false },
@@ -85,34 +92,80 @@ export function FederationRateChart({ history, period, bytes }: {
   const values = lines.map((line) => points.map(({ totals }) => {
     const value = totals[line.direction];
     return (line.field === "events" ? value.requests + value.responses + value.notifications + value.other
-      : value[line.field]) / 10;
+      : value[line.field]);
   }));
   const max = Math.max(0, ...values.flat()) || 1;
   const byteUnit = trafficByteUnit(max);
   const scale = bytes ? byteUnit.scale : 1;
-  const unit = bytes ? `${byteUnit.unit}/s` : "envelopes/s";
+  const unit = bytes ? byteUnit.unit : "envelopes";
   const axisNumber = (value: number) => value.toLocaleString(undefined, { maximumSignificantDigits: 3 });
+  const width = Math.max(545, length * 8 + 10);
+  const step = (width - 10) / length;
+  const selectedIndex = points.findIndex((point) => point.at === selectedAt);
+  const selected = points[selectedIndex];
+  const time = (at: number) => new Date(at).toLocaleTimeString();
   return <figure className="federation-activity__chart">
-    <figcaption>{bytes ? "Data and wire rate" : "Envelope rate"} · {unit}</figcaption>
-    <svg viewBox="0 0 640 165" role="img" aria-labelledby={`${id}-title ${id}-description`}>
-      <title id={`${id}-title`}>{bytes ? "Data and wire" : "Envelope"} rates, {unit}</title>
-      <desc id={`${id}-description`}>Ten-second averages. Peak {axisNumber(max / scale)} {unit}. Sent uses the accent line,
-        received uses the neutral line. Dashed lines show uncompressed data.</desc>
+    <figcaption>{bytes ? "Data and wire" : "Envelopes"} · {unit} per one-second bar</figcaption>
+    <div className="federation-activity__chart-frame">
+    <svg className="federation-activity__chart-axis" viewBox="0 0 95 165" aria-hidden="true">
       <text x="87" y="12" textAnchor="end">{unit}</text>
-      {[0, 0.5, 1].map((fraction) => <g key={fraction}>
-        <line x1="95" x2="630" y1={130 - fraction * 110} y2={130 - fraction * 110} className="federation-activity__grid" />
-        <text x="87" y={134 - fraction * 110} textAnchor="end">{axisNumber(max * fraction / scale)}</text>
-      </g>)}
-      {lines.map((line, index) => <polyline key={line.label}
-        className={`federation-activity__line federation-activity__line--${line.direction}`}
-        strokeDasharray={line.dashed ? "5 4" : undefined}
-        points={values[index].map((value, point) => `${95 + point * 535 / Math.max(1, points.length - 1)},${130 - value / max * 110}`).join(" ")} />)}
-      <text x="95" y="155">{period} ago</text>
-      <text x="630" y="155" textAnchor="end">Now</text>
+      {[0, 0.5, 1].map((fraction) => <text key={fraction} x="87"
+        y={134 - fraction * 110} textAnchor="end">{axisNumber(max * fraction / scale)}</text>)}
     </svg>
+    <div className="federation-activity__chart-scroll" ref={scrollRef}>
+    <svg viewBox={`0 0 ${width} 165`} style={{ minWidth: width }} preserveAspectRatio="none" role="img" tabIndex={0}
+      aria-labelledby={`${id}-title ${id}-description`} aria-describedby={selected ? `${id}-tooltip` : undefined}
+      onPointerMove={(event) => {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const index = Math.floor(((event.clientX - bounds.left) * width / bounds.width) / step);
+        setSelectedAt(points[index]?.at);
+      }}
+      onPointerLeave={() => setSelectedAt(undefined)} onBlur={() => setSelectedAt(undefined)}
+      onFocus={() => setSelectedAt(points.at(-1)?.at)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") { setSelectedAt(undefined); return; }
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const index = Math.max(0, Math.min(points.length - 1,
+          (selectedIndex < 0 ? points.length - 1 : selectedIndex) + (event.key === "ArrowLeft" ? -1 : 1)));
+        setSelectedAt(points[index]?.at);
+        if (scrollRef.current) scrollRef.current.scrollLeft = index * step - 150;
+      }}>
+      <title id={`${id}-title`}>{bytes ? "Data and wire" : "Envelope"} amounts, {unit}</title>
+      <desc id={`${id}-description`}>One-second totals. Peak {axisNumber(max / scale)} {unit}.
+        Sent uses accent bars; received uses neutral bars. Faded bars show uncompressed data.
+        Hover or use left and right arrow keys for exact amounts. The latest second may be incomplete.</desc>
+      {[0, 0.5, 1].map((fraction) => <line key={fraction}
+        x1="0" x2={width - 10} y1={130 - fraction * 110} y2={130 - fraction * 110}
+        className="federation-activity__grid" />)}
+      {lines.map((line, index) => <path key={line.label}
+        className={`federation-activity__bar federation-activity__bar--${line.direction}`}
+        opacity={line.dashed ? 0.4 : 1}
+        d={values[index].map((value, point) => {
+          if (value <= 0) return "";
+          const x = point * step + index * step / lines.length;
+          const height = value / max * 110;
+          return `M${x},130v${-height}h${step / lines.length - 0.5}v${height}Z`;
+        }).join(" ")} />)}
+      {selected ? <rect x={selectedIndex * step} y="20" width={step} height="110"
+        className="federation-activity__selection" /> : null}
+      <text x="0" y="155">{period} ago</text>
+      <text x={width - 10} y="155" textAnchor="end">Now</text>
+    </svg>
+    </div>
+    </div>
     <div className="federation-activity__legend">{lines.map((line) => <span key={line.label}
       className={`federation-activity__legend--${line.direction}`}>
-      {line.dashed ? "┄" : "━"} {line.label}</span>)}</div>
+      <span style={{ opacity: line.dashed ? 0.4 : 1 }}>■</span> {line.label}</span>)}</div>
+    <div className="federation-activity__chart-detail">
+      {selected ? <div role="tooltip" id={`${id}-tooltip`}>
+        <strong>{time(selected.at)} – {time(selected.at + 1000)}</strong>
+        {selectedIndex === points.length - 1 ? " · In progress" : ""}
+        <div>{lines.map((line, index) => <span key={line.label}>
+          {line.label}: {bytes ? `${number(values[index][selectedIndex])} bytes` : number(values[index][selectedIndex])}
+        </span>)}</div>
+      </div> : <span>Hover a bar or focus the chart and use ← → for amounts. Scroll to see earlier seconds.</span>}
+    </div>
   </figure>;
 }
 
@@ -197,14 +250,15 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
     <p className="federation-activity__muted">{view === "physical"
       ? "Each direct or gateway connection counts its own transfers. A relayed envelope crosses two connections at a gateway."
       : "Only traffic sent or received by this instance as an endpoint; transit forwarding is excluded. This is an alternate view, not extra traffic."}</p>
+    <p className="federation-activity__muted">Sent counts bytes accepted by the local socket; it does not confirm delivery.</p>
     {series && (view === "physical" || peerId) ? <>
-      <FederationRateChart history={series.history} period={period} bytes />
-      <FederationRateChart history={series.history} period={period} bytes={false} />
+      <FederationAmountChart history={series.history} period={period} bytes />
+      <FederationAmountChart history={series.history} period={period} bytes={false} />
       <Totals series={series} />
       <PayloadSizes series={series} />
     </> : <p>No endpoint traffic recorded.</p>}
     {snapshot ? <p className="federation-activity__muted">Totals since {new Date(snapshot.activity.since).toLocaleString()}.
-      Rolling totals have one-second resolution; charts show ten-second averages for up to one hour.</p> : null}
+      Charts show amounts recorded in each second for up to one hour. The latest second is still in progress.</p> : null}
     <details className="federation-activity__boundaries"><summary>What is measured</summary>
       <p>Data is the serialized envelope before compression and encryption, including its protocol metadata and binary blob data.
         Wire is the encoded WebSocket application-message payload, including Noise authentication tags when present.

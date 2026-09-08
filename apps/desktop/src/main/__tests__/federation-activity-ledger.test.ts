@@ -86,6 +86,16 @@ describe("Federation activity ledger", () => {
     expect(snapshot.physical.lifetime.sent.requests).toBe(3);
   });
 
+  it("keeps a short burst in its exact second without scaling its bytes", () => {
+    const ledger = new FederationActivityLedger(0);
+    ledger.record({ ...base, at: 1_998, byteCount: 50_000, dataByteCount: 50_000 });
+    ledger.record({ ...base, at: 1_999, byteCount: 50_000, dataByteCount: 50_000 });
+    ledger.record({ ...base, at: 2_000, byteCount: 7, dataByteCount: 7 });
+    const history = ledger.snapshot(3_000).physical.history;
+    expect(history.slice(-3).map((bucket) => [bucket.at, bucket.totals.sent.wireBytes]))
+      .toEqual([[1_000, 100_000], [2_000, 7], [3_000, 0]]);
+  });
+
   it("bounds history and peer cardinality while overflow and lifetime counters retain every event", () => {
     const ledger = new FederationActivityLedger(0);
     for (let index = 1; index <= 8_000; index += 1) {
@@ -95,7 +105,7 @@ describe("Federation activity ledger", () => {
     const snapshot = ledger.snapshot(8_000_000);
     expect(snapshot.physical.lifetime.sent.requests).toBe(8_000);
     expect(snapshot.physical.windows["1h"].sent.requests).toBe(3_600);
-    expect(snapshot.physical.history).toHaveLength(360);
+    expect(snapshot.physical.history).toHaveLength(3600);
     expect(snapshot.peers).toHaveLength(33);
     expect(snapshot.logical).toHaveLength(33);
     expect(snapshot.peers.reduce((sum, peer) => sum + peer.series.lifetime.sent.requests, 0)).toBe(8_000);
@@ -109,7 +119,7 @@ describe("Federation activity ledger", () => {
       expect(series.values).toHaveLength(3_600 * 12);
       expect(series.times.byteLength + series.values.byteLength).toBe(374_400);
     }
-    expect(JSON.stringify(snapshot).length).toBeLessThan(180_000);
+    expect(JSON.stringify(snapshot).length).toBeLessThan(900_000);
   });
 
   it("returns independent copies, retains no payloads, and only returns requested peer history", () => {
@@ -119,7 +129,7 @@ describe("Federation activity ledger", () => {
     const snapshot = ledger.snapshot(1_000, { historyView: "logical", historyPeerId: "remote" });
     expect(snapshot.physical.history).toHaveLength(0);
     expect(snapshot.peers[0].series.history).toHaveLength(0);
-    expect(snapshot.logical[0].series.history).toHaveLength(360);
+    expect(snapshot.logical[0].series.history).toHaveLength(3600);
     expect(inspect(ledger, { depth: 12 })).not.toContain("private payload");
     snapshot.physical.lifetime.sent.requests = 9_999;
     expect(ledger.snapshot(1_000, { includeHistory: false }).physical.lifetime.sent.requests).toBe(1);
@@ -203,7 +213,7 @@ it("caps all numeric storage at 28.73 MB even when every peer and size histogram
   const snapshot = ledger.snapshot(7_199_000);
   expect(snapshot.physical.lifetime.sent.requests).toBe(7_200 * 40);
   expect(snapshot.physical.windows["1h"].sent.requests).toBe(3_600 * 40);
-  expect(snapshot.physical.history.every((bucket) => bucket.totals.sent.requests === 400)).toBe(true);
+  expect(snapshot.physical.history.every((bucket) => bucket.totals.sent.requests === 40)).toBe(true);
   ledger.reset();
   expect(retainedBytes(ledger)).toBe(0);
 });

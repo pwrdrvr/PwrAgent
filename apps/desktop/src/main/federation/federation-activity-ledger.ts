@@ -75,9 +75,9 @@ class Series {
     const windows = { "1m": totals(), "5m": totals(), "10m": totals(), "1h": totals() };
     const history: FederationActivitySeries["history"] = [];
     const first = at - HOUR + 1;
-    // Ten-second chart bins, with rolling totals evaluated at second boundaries.
+    // One-second chart bins use the same counts as the rolling totals.
     if (includeHistory) {
-      for (let start = first; start <= at; start += 10) {
+      for (let start = first; start <= at; start += 1) {
         history.push({ at: start * SECOND, totals: totals() });
       }
     }
@@ -90,7 +90,7 @@ class Series {
         if (time > at - 600) addBucket(windows["10m"], this.values, offset);
         if (time > at - 300) addBucket(windows["5m"], this.values, offset);
         if (time > at - 60) addBucket(windows["1m"], this.values, offset);
-        if (includeHistory) addBucket(history[Math.floor((time - first) / 10)].totals, this.values, offset);
+        if (includeHistory) addBucket(history[time - first].totals, this.values, offset);
       }
     }
     return {
