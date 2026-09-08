@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons";
 import { TranscriptImage } from "./TranscriptImage";
@@ -39,26 +39,40 @@ export function ImageLightbox({
   onNext,
   onPrevious,
 }: ImageLightboxProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    dialogRef.current?.focus();
+    return () => {
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+        previousFocus.focus();
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.stopPropagation();
         onClose();
         return;
       }
       if (event.key === "ArrowLeft" && onPrevious) {
+        event.stopPropagation();
         event.preventDefault();
         onPrevious();
         return;
       }
       if (event.key === "ArrowRight" && onNext) {
+        event.stopPropagation();
         event.preventDefault();
         onNext();
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [onClose, onNext, onPrevious]);
 
@@ -68,7 +82,11 @@ export function ImageLightbox({
 
   return createPortal(
     <div
+      ref={dialogRef}
+      tabIndex={-1}
       className="image-lightbox"
+      onPointerDown={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
       role="dialog"
       aria-modal="true"
       aria-label={dialogLabel}

@@ -322,6 +322,52 @@ describe("StarMapChatCard transcript loading", () => {
     });
   });
 
+  it("opens a window-level image gallery and preserves the native image menu", async () => {
+    const desktopApi = buildApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t",
+        replay: {
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+          entries: [{
+            type: "message",
+            id: "images",
+            role: "assistant",
+            text: "Two images",
+            parts: [
+              { type: "image", url: "https://example.com/one.png", alt: "First image" },
+              { type: "image", url: "https://example.com/two.png", alt: "Second image" },
+            ],
+          }],
+        },
+      })),
+    } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: remoteThread() });
+    const first = await screen.findByRole("button", { name: "Expand transcript image 1" });
+    const preview = within(first).getByRole("img");
+    expect(fireEvent.mouseDown(preview, { button: 2 })).toBe(false);
+    expect(fireEvent.contextMenu(preview)).toBe(true);
+    expect(screen.queryByRole("dialog", { name: "Expanded image" })).toBeNull();
+
+    first.focus();
+    fireEvent.click(first);
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(dialog.parentElement).toBe(document.body);
+    expect(document.activeElement).toBe(dialog);
+    expect(isStarMapTypingTarget(dialog)).toBe(true);
+    expect(within(dialog).getByRole("img").getAttribute("src")).toContain("one.png");
+    expect(within(dialog).getByRole("button", { name: "Previous image" })).toHaveProperty("disabled", true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Next image" }));
+    expect(within(dialog).getByRole("img").getAttribute("src")).toContain("two.png");
+    expect(within(dialog).getByRole("button", { name: "Next image" })).toHaveProperty("disabled", true);
+    fireEvent.keyDown(dialog, { key: "ArrowLeft" });
+    expect(within(dialog).getByRole("img").getAttribute("src")).toContain("one.png");
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Expanded image" })).toBeNull();
+    expect(document.activeElement).toBe(first);
+  });
+
   it("mounts only the newest entries of a long transcript", async () => {
     const entries = Array.from({ length: 200 }, (_, index) => ({
       type: "message" as const,
