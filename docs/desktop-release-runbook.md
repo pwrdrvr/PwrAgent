@@ -193,6 +193,12 @@ seven job definitions (the Linux package job fans out across two architectures):
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
+The macOS no-secret prepare job runs on GitHub's Apple Silicon `macos-26`
+host. Icon Composer's Xcode 26 `AssetCatalogAgent` loads macOS 26 frameworks,
+so selecting Xcode 26 on `macos-15` crashes during the icon compile even when
+`actool --version` passes. The protected macOS signing job uses the same host
+for its electron-builder packaging step.
+
 The macOS no-secret prepare job:
 
 1. Verifies `THIRD_PARTY_LICENSES` matches a fresh deterministic generation.
@@ -431,9 +437,10 @@ pnpm --filter @pwragent/desktop release         # signed + notarized + publish
 pnpm --filter @pwragent/desktop package:linux   # current-arch .deb, no publish
 ```
 
-The macOS modes need an Xcode 26 or newer selected (`xcode-select -p`, or
-export `DEVELOPER_DIR`): electron-builder compiles `build/icon.icon` with
-`actool` and refuses older versions. CI selects one with
+The macOS modes need a macOS 26 host with Xcode 26 or newer selected
+(`xcode-select -p`, or export `DEVELOPER_DIR`): electron-builder compiles
+`build/icon.icon` with `actool`, which requires the matching host runtime and
+refuses older tool versions. CI selects one with
 `.github/actions/select-xcode-for-actool`; see AGENTS.md "macOS app icon".
 
 The release orchestrator runs `pnpm licenses:check` before packaging. If

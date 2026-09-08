@@ -1,12 +1,14 @@
 name: Select an Xcode with actool 26
 description: >-
   electron-builder compiles build/icon.icon (an Icon Composer package) with
-  actool and hard-fails below actool 26, while GitHub's macos-15 image
-  defaults to Xcode 16.4. This finds the newest stable Xcode on the runner
-  whose actool is 26 or newer and returns its Developer directory. Consumers
-  set DEVELOPER_DIR from the output on exactly the steps that run actool
-  (the unit tests, electron-builder), so the icon compile does not move the
-  native helper builds onto a different SDK. See AGENTS.md "macOS app icon".
+  actool and hard-fails below actool 26. Its AssetCatalogAgent also requires a
+  macOS 26 host runtime: selecting Xcode 26 on macos-15 crashes during the
+  compile with missing CoreMedia symbols. This checks the host, finds the
+  newest stable Xcode whose actool is 26 or newer, and returns its Developer
+  directory. Consumers set DEVELOPER_DIR from the output on exactly the steps
+  that run actool (the unit tests, electron-builder), so the icon compile does
+  not move native helper builds onto a different SDK. See AGENTS.md "macOS app
+  icon".
 
 outputs:
   developer-dir:
@@ -21,6 +23,12 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        host_version="$(sw_vers -productVersion)"
+        host_major="${host_version%%.*}"
+        if [ "$host_major" -lt 26 ]; then
+          echo "::error::actool 26 needs a macOS 26 host runtime; found macOS $host_version. Use runs-on: macos-26 for Icon Composer packaging." >&2
+          exit 1
+        fi
         selected=""
         # Newest first. Betas and release candidates never build a release,
         # and `sort -V` would otherwise rank Xcode_26.4_beta above Xcode_26.3.

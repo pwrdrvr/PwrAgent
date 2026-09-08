@@ -14,6 +14,11 @@ const verifyAsarContentsPath = resolve(
   "apps/desktop/scripts/verify-asar-contents.mjs",
 );
 const releaseWorkflowPath = resolve(repoRoot, ".github/workflows/release.yml");
+const previewBuildWorkflowPath = resolve(repoRoot, ".github/workflows/preview-build.yml");
+const selectXcodeForActoolPath = resolve(
+  repoRoot,
+  ".github/actions/select-xcode-for-actool/action.yml",
+);
 const trustedSigningSetupPath = resolve(
   repoRoot,
   "scripts/release/install-trusted-signing.ps1",
@@ -180,6 +185,8 @@ const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const releaseScript = readFileSync(releaseScriptPath, "utf8");
 const verifyAsarContents = readFileSync(verifyAsarContentsPath, "utf8");
 const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
+const previewBuildWorkflow = readFileSync(previewBuildWorkflowPath, "utf8");
+const selectXcodeForActool = readFileSync(selectXcodeForActoolPath, "utf8");
 const trustedSigningSetup = readFileSync(trustedSigningSetupPath, "utf8");
 const windowsArchiveScript = readFileSync(windowsArchiveScriptPath, "utf8");
 const asarVerifier = readFileSync(
@@ -325,6 +332,44 @@ for (const expected of [
 ]) {
   if (!releaseWorkflow.includes(expected)) {
     fail(`.github/workflows/release.yml must contain ${JSON.stringify(expected)}`);
+  }
+}
+assertWorkflowJobRunner(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "prepare",
+  "macos-26",
+);
+assertWorkflowJobRunner(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "sign",
+  "macos-26",
+);
+assertWorkflowJobRunner(
+  previewBuildWorkflow,
+  ".github/workflows/preview-build.yml",
+  "preview",
+  "macos-26",
+);
+for (const expected of [
+  "Select an Xcode with actool 26",
+  "DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}",
+  "PWRAGENT_REQUIRE_ACTOOL: \"1\"",
+]) {
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "prepare",
+    expected,
+  );
+}
+for (const expected of [
+  "host_version=\"$(sw_vers -productVersion)\"",
+  "Use runs-on: macos-26 for Icon Composer packaging.",
+]) {
+  if (!selectXcodeForActool.includes(expected)) {
+    fail(`${selectXcodeForActoolPath} must contain ${JSON.stringify(expected)}`);
   }
 }
 assertWorkflowJobRunner(

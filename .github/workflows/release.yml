@@ -19,7 +19,9 @@ permissions:
 jobs:
   prepare:
     name: Test and prepare signing input
-    runs-on: macos-15 # Apple Silicon GH-hosted runner; matches Phase A signing identity
+    # Xcode 26's AssetCatalogAgent links against macOS 26 frameworks. Selecting
+    # Xcode 26 on macos-15 reaches actool but crashes while compiling .icon.
+    runs-on: macos-26
     timeout-minutes: 45
     permissions:
       contents: read
@@ -49,11 +51,11 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm typecheck
 
-      # electron-builder compiles build/icon.icon with actool, which needs
-      # Xcode 26 (the macos-15 image defaults to 16.4). The action returns the
-      # Developer directory; only the steps that run actool set DEVELOPER_DIR
-      # from it, so build:native keeps the image's toolchain and SDK. See
-      # AGENTS.md "macOS app icon".
+      # electron-builder compiles build/icon.icon with actool 26. The macos-26
+      # host supplies the matching AssetCatalogAgent runtime; this action
+      # verifies the selected Xcode still has actool 26+. Only the steps that
+      # run actool set DEVELOPER_DIR, so build:native keeps the image toolchain
+      # and SDK. See AGENTS.md "macOS app icon".
       - name: Select an Xcode with actool 26
         id: xcode
         uses: ./.github/actions/select-xcode-for-actool
@@ -108,7 +110,9 @@ jobs:
 
   sign:
     name: Sign, notarize, package macOS
-    runs-on: macos-15
+    # Keep packaging on the same macOS 26 host used to validate the Icon
+    # Composer package in prepare; Xcode 26's AssetCatalogAgent needs it.
+    runs-on: macos-26
     needs: prepare
     timeout-minutes: 60
     environment: apple-signing

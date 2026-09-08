@@ -11,7 +11,9 @@ jobs:
   preview:
     name: Build preview DMG
     if: github.event.label.name == 'ci:build-preview'
-    runs-on: macos-15
+    # Xcode 26's AssetCatalogAgent loads macOS 26 frameworks when compiling
+    # build/icon.icon, so macos-15 cannot safely host this packaging lane.
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - name: Checkout PR branch
@@ -42,10 +44,10 @@ jobs:
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      # electron-builder compiles build/icon.icon with actool, which needs
-      # Xcode 26; the image defaults to 16.4. Unlike release.yml this single
-      # step also runs build:native, so a preview's helpers compile with the
-      # selected Xcode as well. See AGENTS.md "macOS app icon".
+      # electron-builder compiles build/icon.icon with actool 26. The macos-26
+      # host provides its matching AssetCatalogAgent runtime. Unlike release.yml
+      # this single step also runs build:native, so a preview's helpers compile
+      # with the selected Xcode as well. See AGENTS.md "macOS app icon".
       - name: Select an Xcode with actool 26
         id: xcode
         uses: ./.github/actions/select-xcode-for-actool
