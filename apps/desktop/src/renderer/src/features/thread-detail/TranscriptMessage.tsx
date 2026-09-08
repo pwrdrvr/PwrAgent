@@ -725,6 +725,10 @@ export function TranscriptImageTile(props: {
       type="button"
       className="transcript-message__image-button"
       aria-label={`Expand transcript image ${props.imageNumber}`}
+      onMouseDown={(event) => {
+        // Preserve the native image menu without selecting the message.
+        if (event.button === 2) event.preventDefault();
+      }}
       onClick={() => {
         props.onOpenImage?.(props.imagePart);
       }}

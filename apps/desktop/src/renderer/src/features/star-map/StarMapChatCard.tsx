@@ -14,6 +14,7 @@ import {
   buildThreadIdentityKey,
   isCelestialIconId,
   isRemoteFederationTarget,
+  type AppServerThreadImagePart,
   type CelestialIconId,
   type NavigationLaunchpadFileAttachment,
   type NavigationLaunchpadImageAttachment,
@@ -34,6 +35,11 @@ import {
 } from "../composer/CompactComposer";
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
+import { ImageLightbox } from "../thread-detail/ImageLightbox";
+import {
+  collectThreadImageGallery,
+  threadGalleryImageMatches,
+} from "../thread-detail/thread-image-gallery";
 import { TranscriptList } from "../thread-detail/TranscriptList";
 import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
@@ -265,6 +271,20 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     // bare id is worse. Same key ThreadView keys its window by.
     threadKey: buildThreadIdentityKey(thread.source, thread.id),
   });
+
+  const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
+  const threadImageGallery = useMemo(
+    () => collectThreadImageGallery([
+      ...session.entries,
+      session.pendingAssistantMessage,
+    ]),
+    [session.entries, session.pendingAssistantMessage],
+  );
+  const expandedImageIndex = expandedImage
+    ? threadImageGallery.findIndex((image) =>
+        threadGalleryImageMatches(image, expandedImage)
+      )
+    : -1;
 
   // Backend capability belongs to the instance the thread lives on. Reduce
   // the target to its stable identity before rebuilding the object: every
@@ -1324,6 +1344,25 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       onPointerDown={() => onRaise(cardKey)}
       style={style}
     >
+      {expandedImage ? (
+        <ImageLightbox
+          src={expandedImage.url}
+          alt={expandedImage.alt ?? "Expanded image"}
+          position={expandedImageIndex >= 0 ? expandedImageIndex + 1 : undefined}
+          total={expandedImageIndex >= 0 ? threadImageGallery.length : undefined}
+          onClose={() => setExpandedImage(undefined)}
+          onNext={
+            expandedImageIndex >= 0 && expandedImageIndex < threadImageGallery.length - 1
+              ? () => setExpandedImage(threadImageGallery[expandedImageIndex + 1])
+              : undefined
+          }
+          onPrevious={
+            expandedImageIndex > 0
+              ? () => setExpandedImage(threadImageGallery[expandedImageIndex - 1])
+              : undefined
+          }
+        />
+      ) : null}
       <header
         className="star-map-chat-card__bar"
         onPointerDown={(event) => beginDrag(event, "move")}
@@ -1489,6 +1528,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             loading={session.loading}
             loadingMore={session.loadingMore}
             onLoadOlder={transcriptWindow.loadOlder}
+            onOpenImage={setExpandedImage}
             pagination={transcriptWindow.visiblePagination}
             parentThreadId={thread.id}
             pendingAssistantMessage={session.pendingAssistantMessage}
