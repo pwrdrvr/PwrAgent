@@ -232,9 +232,13 @@ it("retains live Token Miser subagents while the authoritative collection refres
   act(() => listener!({ backend: "codex", notification: { method: "thread/subAgents/updated",
     params: { threadId: ref.threadId, subAgents: [gate] } } }));
   expect(result.current.state?.detail?.thread?.subAgents).toEqual([gate]);
-  await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
-  expect(result.current.state?.collectionReadiness).toBe("loading");
-  expect(result.current.state?.detail?.thread?.subAgents).toEqual([gate]);
+  // Dispatch precedes React's commit. Observe the pending collection state,
+  // not just the mock call, before checking the retained live subagents.
+  await waitFor(() => {
+    expect(result.current.state?.collectionReadiness).toBe("loading");
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(result.current.state?.detail?.thread?.subAgents).toEqual([gate]);
+  });
   await act(async () => refreshed.resolve({ ...detail("fresh", true), collectionPage: {
     name: "subAgents", revision: "live", complete: true, values: { subAgents: [gate] },
   } }));
