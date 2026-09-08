@@ -325,6 +325,14 @@ test("keeps the star map's top band from overlapping itself", async () => {
   });
 
   try {
+    // This is a layout test, so open the map after navigation and the lazy
+    // thread view have mounted. The loading header has the same toggle but
+    // is replaced during startup, potentially between pointer down and up.
+    await expect(
+      app.window.getByRole("button", { name: new RegExp(THREAD_TITLE, "i") }).first(),
+    ).toBeVisible();
+    await expect(app.window.locator(".app-main--thread-detail-pending")).toHaveCount(0);
+
     const mapWindow = await openStarMapWindow(app);
     const starMap = mapWindow.getByRole("region", {
       name: "Star Map",
