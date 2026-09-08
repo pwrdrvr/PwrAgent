@@ -4,13 +4,11 @@
 // different endpoint can never reach a different gateway identity.
 
 /**
- * Attempt order for one reconnect cycle: the last endpoint that carried a
- * fully authenticated session first (when it is still configured), then the
- * remaining endpoints in configured order.
+ * Attempt order for every startup and reconnect cycle follows Settings.
+ * A successful fallback must never override the configured preference.
  */
 export function orderFederationEndpointAttempts(
   endpoints: readonly string[],
-  lastGoodEndpoint?: string,
 ): string[] {
   const seen = new Set<string>();
   const ordered: string[] = [];
@@ -20,9 +18,5 @@ export function orderFederationEndpointAttempts(
     seen.add(trimmed);
     ordered.push(trimmed);
   }
-  const lastGood = lastGoodEndpoint?.trim();
-  if (!lastGood || !seen.has(lastGood)) {
-    return ordered;
-  }
-  return [lastGood, ...ordered.filter((endpoint) => endpoint !== lastGood)];
+  return ordered;
 }

@@ -6,22 +6,10 @@ const TAILSCALE = "wss://studio.example.ts.net/pwragent-federation";
 const CLOUDFLARE = "wss://federation.example.com";
 
 describe("orderFederationEndpointAttempts", () => {
-  it("keeps configured order without a last-good endpoint", () => {
+  it("keeps configured order", () => {
     expect(orderFederationEndpointAttempts([LAN, TAILSCALE, CLOUDFLARE])).toEqual(
       [LAN, TAILSCALE, CLOUDFLARE],
     );
-  });
-
-  it("moves the last-good endpoint to the front", () => {
-    expect(
-      orderFederationEndpointAttempts([LAN, TAILSCALE, CLOUDFLARE], CLOUDFLARE),
-    ).toEqual([CLOUDFLARE, LAN, TAILSCALE]);
-  });
-
-  it("ignores a last-good endpoint that is no longer configured", () => {
-    expect(
-      orderFederationEndpointAttempts([LAN, TAILSCALE], "wss://removed.example"),
-    ).toEqual([LAN, TAILSCALE]);
   });
 
   it("trims and de-duplicates configured endpoints", () => {
@@ -31,6 +19,6 @@ describe("orderFederationEndpointAttempts", () => {
   });
 
   it("returns an empty list for no endpoints", () => {
-    expect(orderFederationEndpointAttempts([], LAN)).toEqual([]);
+    expect(orderFederationEndpointAttempts([])).toEqual([]);
   });
 });
