@@ -2767,16 +2767,20 @@ export class DesktopFederationRuntime {
     // here because connectClient bumps it per attempt; this epoch changes only
     // when the runtime is torn down.
     const walkEpoch = this.walkEpoch;
-    let lastError: unknown;
+    const failures: string[] = [];
     for (const endpoint of attempts) {
       if (this.stopping || this.walkEpoch !== walkEpoch) return;
       try {
         await this.connectClient(endpoint);
         return;
       } catch (error) {
-        lastError = error;
         const rawMessage =
           error instanceof Error ? error.message : String(error);
+        // Identify the path without exposing URL credentials or query tokens.
+        const endpointUrl = new URL(endpoint);
+        failures.push(
+          `${endpointUrl.protocol}//${endpointUrl.host}: ${redactFederationDiagnostic(rawMessage)}`,
+        );
         this.endpointStatuses.set(endpoint, {
           ...this.endpointStatuses.get(endpoint),
           state: "failed",
@@ -2792,11 +2796,10 @@ export class DesktopFederationRuntime {
         }
       }
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error(
-          "Federation gateway is unreachable on every configured endpoint.",
-        );
+    throw new Error(
+      "Federation gateway is unreachable on every configured endpoint. "
+      + failures.join("; "),
+    );
   }
 
   private async connectClient(gatewayUrl: string): Promise<void> {

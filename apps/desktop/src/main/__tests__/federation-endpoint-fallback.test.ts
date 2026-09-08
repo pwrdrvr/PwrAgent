@@ -118,14 +118,47 @@ describe("federation endpoint fallback", () => {
     expect(attempts).toEqual([LAN, TAILSCALE]);
   });
 
-  it("throws the final endpoint error after a fully failed cycle", async () => {
+  it("reports every endpoint failure instead of hiding LAN behind Tailscale DNS", async () => {
     const runtime = createHarness([LAN, TAILSCALE]);
     runtime.connectClient = async (gatewayUrl) => {
-      throw new Error(`connect ECONNREFUSED ${gatewayUrl}`);
+      throw new Error(gatewayUrl === LAN
+        ? "connect ECONNREFUSED 192.168.1.20:47830"
+        : "getaddrinfo ENOTFOUND studio.example.ts.net");
     };
 
     await expect(runtime.connectToGateway()).rejects.toThrow(
-      `connect ECONNREFUSED ${TAILSCALE}`,
+      "Federation gateway is unreachable on every configured endpoint. "
+      + "ws://192.168.1.20:47830: connect ECONNREFUSED 192.168.1.20:47830; "
+      + "wss://studio.example.ts.net: getaddrinfo ENOTFOUND studio.example.ts.net",
+    );
+  });
+
+  it("falls back to LAN when the last-good Tailscale endpoint cannot resolve", async () => {
+    metaStore.set(LAST_ENDPOINT_KEY, TAILSCALE);
+    const runtime = createHarness([LAN, TAILSCALE]);
+    const attempts: string[] = [];
+    runtime.connectClient = async (gatewayUrl) => {
+      attempts.push(gatewayUrl);
+      if (gatewayUrl === TAILSCALE) {
+        throw new Error("getaddrinfo ENOTFOUND studio.example.ts.net");
+      }
+    };
+
+    await runtime.connectToGateway();
+
+    expect(attempts).toEqual([TAILSCALE, LAN]);
+  });
+
+  it("omits credentials, paths, and query tokens from endpoint labels", async () => {
+    const runtime = createHarness([
+      "wss://user:password@gateway.example.com/private?token=secret",
+    ]);
+    runtime.connectClient = async () => {
+      throw new Error("connect ECONNREFUSED");
+    };
+
+    await expect(runtime.connectToGateway()).rejects.toThrow(
+      /^Federation gateway is unreachable on every configured endpoint\. wss:\/\/gateway\.example\.com: connect ECONNREFUSED$/,
     );
   });
 
