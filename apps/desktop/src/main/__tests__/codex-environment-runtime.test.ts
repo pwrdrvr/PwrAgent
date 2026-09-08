@@ -388,11 +388,16 @@ describe("codex environment runtime", () => {
   it("strips parent Electron runtime variables from detached actions", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-electron-"));
     const outputPath = path.join(root, "env.txt");
+    let resolveDetachedExit!: (event: { exitCode: number | null }) => void;
+    const detachedExit = new Promise<{ exitCode: number | null }>((resolve) => {
+      resolveDetachedExit = resolve;
+    });
 
     try {
       const result = await startLocalCodexEnvironmentAction({
         actionId: "start-dev",
         runId: "test-run-3",
+        onDetachedExit: resolveDetachedExit,
         env: {
           ...process.env,
           ELECTRON_RENDERER_URL: "http://127.0.0.1:5173",
@@ -438,15 +443,11 @@ describe("codex environment runtime", () => {
         "hydrated=hydrated-override",
         "",
       ].join("\n");
-      await expect(
-        expectEventually(async () => {
-          const output = await readFile(outputPath, "utf8");
-          if (output !== expectedOutput) {
-            throw new Error(`Output is not complete yet: ${JSON.stringify(output)}`);
-          }
-          return output;
-        }),
-      ).resolves.toBe(expectedOutput);
+      // Complete output does not mean the detached shell and its Windows Job
+      // launcher have released the cwd. Observe the owner's close callback
+      // before reading the result and removing that directory.
+      await expect(detachedExit).resolves.toMatchObject({ exitCode: 0 });
+      await expect(readFile(outputPath, "utf8")).resolves.toBe(expectedOutput);
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

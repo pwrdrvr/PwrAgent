@@ -107,6 +107,7 @@ import {
 import {
   createThreadDirectoryEnricher,
   type ThreadDirectoryEnrichment,
+  type DirectoryEnrichmentCaller,
 } from "../app-server/thread-directory-enricher";
 import {
   normalizeReviewDisplayText,
@@ -264,7 +265,8 @@ type CodexClientOptions = {
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
   threadDirectoryEnricher?: (
-    projectKey?: string
+    projectKey?: string,
+    caller?: DirectoryEnrichmentCaller,
   ) => Promise<ThreadDirectoryEnrichment>;
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
@@ -7366,7 +7368,8 @@ async function ensureCodexThreadTitleWorkspace(): Promise<string> {
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
   private readonly threadDirectoryEnricher: (
-    projectKey?: string
+    projectKey?: string,
+    caller?: DirectoryEnrichmentCaller,
   ) => Promise<ThreadDirectoryEnrichment>;
   private readonly archivedThreadMetadataByFilter = new Map<
     string,
@@ -8290,22 +8293,25 @@ export class CodexAppServerClient {
       });
     }
 
-    const enrichedThreads = await this.enrichRawThreadDirectories(threads);
+    const enrichedThreads = await this.enrichRawThreadDirectories(threads, "thread-list");
 
     return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
   }
 
   async enrichThreadDirectories(
     threads: AppServerThreadSummary[],
+    caller: DirectoryEnrichmentCaller = "explicit-enrichment",
   ): Promise<AppServerThreadSummary[]> {
     const enrichedThreads = await this.enrichRawThreadDirectories(
       threads as RawCodexThreadSummary[],
+      caller,
     );
     return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
   }
 
   private async enrichRawThreadDirectories(
     threads: RawCodexThreadSummary[],
+    caller: DirectoryEnrichmentCaller,
   ): Promise<EnrichedCodexThread[]> {
     const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
     // A listing can span many mapper batches and contain hundreds of threads
@@ -8326,7 +8332,7 @@ export class CodexAppServerClient {
           const directoryKey = projectKey ? path.resolve(projectKey) : "";
           let pending = directories.get(directoryKey);
           if (!pending) {
-            pending = this.threadDirectoryEnricher(projectKey);
+            pending = this.threadDirectoryEnricher(projectKey, caller);
             directories.set(directoryKey, pending);
           }
           enrichment = await pending;

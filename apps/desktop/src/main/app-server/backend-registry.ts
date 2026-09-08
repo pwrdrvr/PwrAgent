@@ -515,7 +515,10 @@ import {
   ProviderThreadSnapshotStore,
   type ProviderThreadSnapshotStoreLike,
 } from "./provider-thread-snapshot-store";
-import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
+import {
+  resolveWorktreeRepositoryDirectory,
+  type DirectoryEnrichmentCaller,
+} from "./thread-directory-enricher";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
@@ -760,6 +763,7 @@ type BackendClient = {
   ): Promise<AppServerThreadSummary[]>;
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
+    caller?: DirectoryEnrichmentCaller,
   ): Promise<AppServerThreadSummary[]>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
@@ -23499,7 +23503,7 @@ export class DesktopBackendRegistry {
 
       const [enrichedThread] = await this.codexClient.enrichThreadDirectories([
         cheapThread,
-      ]);
+      ], "selected-thread");
       if (!enrichedThread) {
         return;
       }
@@ -24526,7 +24530,9 @@ export class DesktopBackendRegistry {
     }
 
     try {
-      const enrichedThreads = await this.codexClient.enrichThreadDirectories(candidates);
+      const enrichedThreads = await this.codexClient.enrichThreadDirectories(
+        candidates, "missing-worktree-backfill",
+      );
       const updatedOverlaysByThreadId: Record<
         string,
         ThreadOverlayState | undefined

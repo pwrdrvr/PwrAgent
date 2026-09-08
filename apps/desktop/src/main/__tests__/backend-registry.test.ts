@@ -14428,6 +14428,7 @@ script = "echo setup"
     });
 
     expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
+    expect(enrichThreadDirectories).toHaveBeenCalledWith(expect.any(Array), "missing-worktree-backfill");
     expect(
       overlaysByThreadId["project-a-worktree-2"]?.extraLinkedDirectories[0],
     ).toMatchObject({
@@ -15176,7 +15177,7 @@ script = "echo setup"
     });
 
     expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
-    expect(enrichThreadDirectories).toHaveBeenCalledWith([cheapThread]);
+    expect(enrichThreadDirectories).toHaveBeenCalledWith([cheapThread], "selected-thread");
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({

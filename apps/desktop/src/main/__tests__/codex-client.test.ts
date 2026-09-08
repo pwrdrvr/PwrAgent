@@ -2026,6 +2026,7 @@ describe("CodexAppServerClient", () => {
     expect(threadDirectoryEnricher).toHaveBeenCalledTimes(1);
     expect(threadDirectoryEnricher).toHaveBeenCalledWith(
       "/Users/fixture-user/.pwragent/profiles/default/projects/2026-05-30-ab12cd",
+      "thread-list",
     );
 
     await client.close();
@@ -2133,8 +2134,8 @@ describe("CodexAppServerClient", () => {
       "thread-pwragent",
     ]);
     expect(threadDirectoryEnricher).toHaveBeenCalledTimes(2);
-    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/fixture-user/github/PwrSnap");
-    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/fixture-user/github/PwrAgnt");
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/fixture-user/github/PwrSnap", "thread-list");
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/fixture-user/github/PwrAgnt", "thread-list");
 
     await client.close();
   });
