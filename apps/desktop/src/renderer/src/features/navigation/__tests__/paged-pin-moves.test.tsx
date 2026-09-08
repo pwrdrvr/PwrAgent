@@ -163,3 +163,26 @@ it("breadcrumb reveal uses exact owner ancestry even when loaded summaries lack 
   expect(rebaseline).toHaveBeenCalledWith(rootId, { kind: "thread", ref: parent.ref });
   view.unmount();
 });
+
+
+it("keeps expected disconnected child-page failures out of the thread list", () => {
+  const parent = { ...rows[0]!, ordinaryChildCount: 1 };
+  const childId = 'children:[null,"codex","pin-5"]';
+  const children = resource(childId, { kind: "children", parent: parent.ref }, {});
+  children.state.page = undefined;
+  children.state.error = "Federation peer pwr_offline is not connected.";
+  const pinsId = `directory-pins:${directory.key}`;
+  const resources = new Map([[childId, children], [pinsId, resource(pinsId,
+    { kind: "directory", directoryKey: directory.key, roots: "pinned" },
+    { entries: [{ row: parent, placement: { kind: "root" }, orderKey: "0" }] })]]);
+  const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
+    invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+    rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
+  const view = render(<Sidebar backends={[]} browseMode="directories" directories={[directory]} threads={[parent]}
+    loading={false} selectedItemKey={`codex:${parent.id}`} selectedThreadDirectoryKeys={[directory.key]}
+    pagedNavigation={navigation} onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+    onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
+  expect(screen.queryByText(/Federation peer.*not connected/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Pin 5/ })).toBeInTheDocument();
+  view.unmount();
+});
