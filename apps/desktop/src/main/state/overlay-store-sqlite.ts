@@ -1296,6 +1296,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const lines = [...latestLinesById.values()].map((line) =>
       repriceTokenUsageLine(normalizeThreadUsageLine(line, now)),
     );
+    // Finalized rows and summaries are immutable to this path. A fully stale
+    // batch is read-only and must not open even an empty SQLite transaction.
+    const finalizedBatch = lines.map((line) => this.readProtectedThreadUsageSync(line));
+    if (
+      finalizedBatch.every((entry) => entry !== undefined)
+      && finalizedBatch.every((entry, index) =>
+        !enrichProtectedThreadUsage(entry.line, lines[index]!),
+      )
+    ) {
+      const summaries = new Map<string, ThreadPricingSummary>();
+      for (const entry of finalizedBatch) {
+        const summary = entry.summary;
+        summaries.set(JSON.stringify([
+          summary.provider, summary.backend, summary.threadId, summary.currency,
+        ]), summary);
+      }
+      return {
+        lines: finalizedBatch.map((entry) => entry.line),
+        summaries: [...summaries.values()],
+      };
+    }
     const summaryTargets = new Map<
       string,
       {
@@ -1323,12 +1344,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         target,
       );
     };
+    const unchangedSummaries = new Map<string, ThreadPricingSummary>();
     const upsertLine = (
       inputLine: ThreadUsageLineRecord,
     ): ThreadUsageLineRecord => {
       let line = inputLine;
+      const finalized = this.readProtectedThreadUsageSync(line);
+      if (finalized) {
+        const enriched = enrichProtectedThreadUsage(finalized.line, inputLine);
+        if (!enriched) {
+          const summary = finalized.summary;
+          unchangedSummaries.set(JSON.stringify([
+            summary.provider, summary.backend, summary.threadId, summary.currency,
+          ]), summary);
+          return finalized.line;
+        }
+        // Only allowlisted metadata was copied. All identity, token, replay,
+        // and finalized price fields still come from the authoritative row.
+        line = enriched;
+      }
+      this.boundPrecedingThreadUsageSync(line);
       const existing = this.readThreadUsageLineSync(line.usageLineId);
-      if (existing) {
+      if (existing && !finalized) {
         line = mergeThreadUsageLineForUpsert(line, existing);
       }
       // Codex hydration records expose either the last request or the
@@ -1679,6 +1716,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         )
         .run(toThreadUsageLineRowParams(line));
 
+      if (existing?.totalTokens === 0 && line.totalTokens > 0) {
+        this.boundPrecedingThreadUsageSync(line);
+      }
       if (existing) {
         const existingRollupThreadId = existing.parentThreadId ?? existing.threadId;
         const nextRollupThreadId = line.parentThreadId ?? line.threadId;
@@ -1748,13 +1788,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     };
 
     const upsert = this.stateDb.raw.transaction(() => {
+      // Establish boundaries against the durable snapshots before a coalesced
+      // stale update can overwrite its predecessor earlier in the same batch.
+      if (lines.length > 1) {
+        for (const line of lines) {
+          this.boundPrecedingThreadUsageSync(line);
+        }
+      }
       for (let index = 0; index < lines.length; index += 1) {
         lines[index] = upsertLine(lines[index]!);
       }
 
-      return [...summaryTargets.values()].map((target) =>
-        this.recomputeThreadPricingSummarySync(target),
-      );
+      return [
+        ...[...unchangedSummaries.entries()]
+          .filter(([key]) => !summaryTargets.has(key))
+          .map(([, summary]) => summary),
+        ...[...summaryTargets.values()].map((target) =>
+          this.recomputeThreadPricingSummarySync(target),
+        ),
+      ];
     });
 
     return { lines, summaries: upsert() };
@@ -6697,6 +6749,99 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     );
   }
 
+  private boundPrecedingThreadUsageSync(input: ThreadUsageLineRecord): void {
+    if (this.readProtectedThreadUsageSync(input)) {
+      return;
+    }
+    const line = this.readThreadUsageLineSync(input.usageLineId) ?? input;
+    if (
+      line.backend === "codex" && line.scope === "turn" && line.turnId
+      && line.status !== "superseded" && line.turnUsageAttributed !== false
+      && line.cumulativeTotalTokens !== undefined
+      && line.cumulativeTotalTokens >= line.totalTokens
+    ) {
+      // The successor's per-turn delta excludes this durable cumulative
+      // prefix. Finalize only non-overlapping, attributed turn aggregates;
+      // elapsed time, turn ids, and replay order are not ordering evidence.
+      const predecessor = this.stateDb.raw.prepare(
+        `SELECT 1 FROM thread_usage_lines l
+         WHERE provider = ? AND backend = ? AND thread_id = ? AND turn_id != ?
+           AND scope = 'turn' AND status != 'superseded'
+           AND COALESCE(turn_usage_attributed, 1) = 1 AND total_tokens >= 0
+           AND (total_tokens > 0 OR cumulative_total_tokens < ?)
+           AND cumulative_total_tokens >= total_tokens
+           AND cumulative_total_tokens <= ?
+           AND NOT EXISTS (
+             SELECT 1 FROM thread_usage_boundaries f
+             WHERE f.provider = l.provider AND f.backend = l.backend
+               AND f.thread_id = l.thread_id AND f.turn_id = l.turn_id
+           )
+         LIMIT 1`,
+      ).get(
+        line.provider, line.backend, line.threadId, line.turnId,
+        line.cumulativeTotalTokens, line.cumulativeTotalTokens - line.totalTokens,
+      );
+      if (!predecessor) {
+        return;
+      }
+      this.stateDb.raw.prepare(
+        `INSERT OR IGNORE INTO thread_usage_boundaries
+           (provider, backend, thread_id, turn_id, usage_line_id, successor_usage_line_id, cumulative_total_tokens)
+         SELECT provider, backend, thread_id, turn_id, usage_line_id, ?, ?
+         FROM thread_usage_lines
+         WHERE provider = ? AND backend = ? AND thread_id = ? AND turn_id != ?
+           AND scope = 'turn' AND status != 'superseded'
+           AND COALESCE(turn_usage_attributed, 1) = 1 AND total_tokens >= 0
+           AND (total_tokens > 0 OR cumulative_total_tokens < ?)
+           AND cumulative_total_tokens >= total_tokens
+           AND cumulative_total_tokens <= ?`,
+      ).run(
+        line.usageLineId, line.cumulativeTotalTokens - line.totalTokens,
+        line.provider, line.backend, line.threadId, line.turnId,
+        line.cumulativeTotalTokens, line.cumulativeTotalTokens - line.totalTokens,
+      );
+    }
+  }
+
+  private readProtectedThreadUsageSync(
+    line: ThreadUsageLineRecord,
+  ): { line: ThreadUsageLineRecord; summary: ThreadPricingSummary } | undefined {
+    if (line.backend !== "codex" || !line.turnId) {
+      return undefined;
+    }
+    const row = this.stateDb.raw.prepare(
+      `SELECT l.*, f.cumulative_total_tokens AS usage_ceiling FROM thread_usage_boundaries f
+       JOIN thread_usage_lines l ON l.usage_line_id = f.usage_line_id
+       WHERE f.provider = ? AND f.backend = ? AND f.thread_id = ? AND f.turn_id = ?`,
+    ).get(line.provider, line.backend, line.threadId, line.turnId) as (ThreadUsageLineRow & { usage_ceiling: number }) | undefined;
+    if (!row) {
+      return undefined;
+    }
+    // A successor can expose a still-missing final request. Accept that tail
+    // only within the durable boundary and with the same per-turn baseline.
+    // Once the cumulative endpoint reaches the boundary, usage is finalized.
+    if (
+      row.cumulative_total_tokens !== row.usage_ceiling
+      && line.usageLineId === row.usage_line_id
+      && line.cumulativeTotalTokens !== undefined
+      && line.cumulativeTotalTokens <= row.usage_ceiling
+      && line.cumulativeTotalTokens >= (row.cumulative_total_tokens ?? 0)
+      && line.cumulativeTotalTokens - line.totalTokens
+        === (row.cumulative_total_tokens ?? 0) - row.total_tokens
+    ) {
+      return undefined;
+    }
+    const preserved = threadUsageLineFromRow(row);
+    this.attachUsageTurnMetadataSync(preserved.backend, preserved.threadId, [preserved]);
+    const summaryRow = this.stateDb.raw.prepare(
+      `SELECT * FROM thread_pricing_summaries
+       WHERE provider = ? AND backend = ? AND thread_id = ? AND currency = ?`,
+    ).get(
+      preserved.provider, preserved.backend, preserved.parentThreadId ?? preserved.threadId, preserved.currency,
+    ) as ThreadPricingSummaryRow | undefined;
+    return summaryRow ? { line: preserved, summary: threadPricingSummaryFromRow(summaryRow) } : undefined;
+  }
+
   private readThreadUsageLineSync(
     usageLineId: string,
   ): ThreadUsageLineRecord | undefined {
@@ -7372,6 +7517,38 @@ function mergeUsageSettingValue<T extends string>(
     return existing;
   }
   return next;
+}
+
+function enrichProtectedThreadUsage(
+  preserved: ThreadUsageLineRecord,
+  incoming: ThreadUsageLineRecord,
+): ThreadUsageLineRecord | undefined {
+  let enriched = { ...preserved };
+  let changed = false;
+  for (const key of [
+    "model", "reasoningEffort", "serviceTier", "fastMode", "completedAt",
+    "finalContextTokens", "peakContextTokens", "modelContextWindow",
+  ] as const) {
+    if (preserved[key] === undefined && incoming[key] !== undefined) {
+      enriched = { ...enriched, [key]: incoming[key] };
+      changed = true;
+    }
+  }
+  // Live usage can precede hydration of the actual start time; the turn table
+  // initially uses the observation time. Replace that fallback once, without
+  // overwriting an already-enriched start time on subsequent replays.
+  if (incoming.startedAt !== undefined
+    && (preserved.startedAt === undefined
+      || (preserved.startedAt === preserved.createdAt && incoming.startedAt < preserved.startedAt))) {
+    enriched.startedAt = incoming.startedAt;
+    changed = true;
+  }
+  if (!changed) {
+    return undefined;
+  }
+  // Never copy the incoming cost or reprice a finalized priced row. A missing
+  // model/context ceiling can price an unpriced row using its frozen tokens.
+  return preserved.priceStatus === "priced" ? enriched : repriceTokenUsageLine(enriched);
 }
 
 function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {

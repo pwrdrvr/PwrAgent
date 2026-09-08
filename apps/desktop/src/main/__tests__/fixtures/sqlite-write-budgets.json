@@ -258,6 +258,34 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "thread-usage-finalization": {
+    "commits": 1,
+    "note": "one successor pricing flush finalizes its predecessor in the same transaction",
+    "observedWalBytes": 74160,
+    "rowsChanged": 4,
+    "statements": 4
+  },
+  "thread-usage-finalized-replays": {
+    "commits": 0,
+    "note": "100 stale finalized-turn updates return durable rows without any SQLite commit",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "thread-usage-protected-enrichment": {
+    "commits": 1,
+    "note": "one hydration fills missing protected-turn metadata while retaining its usage and price",
+    "observedWalBytes": 53560,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "thread-usage-protected-enrichment-replays": {
+    "commits": 0,
+    "note": "100 repeated hydrations of already-filled metadata make no SQLite commit",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "token-miser-retrieval-ledger": {
     "commits": 1,
     "note": "one previously gated output retrieved in a later parent turn, updating its savings equation at the turn boundary",

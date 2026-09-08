@@ -23,6 +23,216 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore thread usage pricing ledger", () => {
+  it.each(["live", "hydration", "backfill"] as const)(
+    "preserves finalized turn accounting across restart and %s replacement",
+    async (source) => {
+      const first = buildUsageLine({
+        source: "live", status: "pending", turnUsageAttributed: true,
+        cumulativeTotalTokens: 1_300,
+      });
+      await store.upsertThreadUsageLine({ line: first });
+      // Completion alone must still allow a legitimate final usage update.
+      const final = buildUsageLine({
+        ...first, inputTokens: 1_100, uncachedInputTokens: 900,
+        totalTokens: 1_400, cumulativeTotalTokens: 1_400,
+      });
+      await store.upsertThreadUsageLine({ line: final });
+      const second = buildUsageLine({
+        source: "live", status: "pending", turnUsageAttributed: true,
+        usageLineId: "line-2", turnId: "turn-2", sourceItemId: "item-2",
+        createdAt: first.createdAt + 1,
+        cumulativeTotalTokens: 2_700,
+      });
+      await store.upsertThreadUsageLine({ line: second });
+      const before = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+      // Exercise the upgrade too: existing non-overlapping rows must acquire
+      // durable boundaries without needing another live notification.
+      stateDb.raw.exec(`
+        DROP TRIGGER protect_finalized_thread_usage_insert;
+        DROP TRIGGER protect_finalized_thread_usage_update;
+        DROP TRIGGER protect_thread_usage_boundary_update;
+        DROP TABLE thread_usage_boundaries;
+        PRAGMA user_version = 59;
+      `);
+      stateDb.close();
+      stateDb = StateDb.open(path.join(tempDir, "state.db"));
+      store = new SqliteOverlayStore(stateDb);
+      await store.upsertThreadUsageLine({
+        line: buildUsageLine({
+          ...first, source, usageLineId: source === "live" ? "line-1" : "replacement",
+          inputTokens: 100_000, uncachedInputTokens: 99_800,
+          totalTokens: 100_300, cumulativeTotalTokens: 100_300,
+        }),
+      });
+      expect(stateDb.raw.prepare(
+        "UPDATE thread_usage_lines SET total_tokens = 999999 WHERE usage_line_id = ?",
+      ).run("line-1").changes).toBe(0);
+      expect(stateDb.raw.prepare(
+        "UPDATE thread_usage_lines SET total_cost_micros = 999999 WHERE usage_line_id = ?",
+      ).run("line-1").changes).toBe(0);
+      // An older writer that does not know about finalization cannot insert a
+      // second billable row for the same finalized turn either.
+      stateDb.raw.exec("CREATE TEMP TABLE usage_copy AS SELECT * FROM thread_usage_lines WHERE usage_line_id = 'line-1'");
+      stateDb.raw.exec("UPDATE usage_copy SET usage_line_id = 'raw-replacement'");
+      stateDb.raw.exec("INSERT INTO thread_usage_lines SELECT * FROM usage_copy");
+      const after = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+      expect(after).toEqual(before);
+      // The new turn remains writable after reopening the database.
+      await store.upsertThreadUsageLine({
+        line: { ...second, inputTokens: 1_100, uncachedInputTokens: 900,
+          totalTokens: 1_400, cumulativeTotalTokens: 2_800 },
+      });
+      const advanced = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+      expect(advanced.lines.find((line) => line.turnId === "turn-2")?.totalTokens).toBe(1_400);
+      expect(advanced.lines.find((line) => line.turnId === "turn-1")).toEqual(
+        before.lines.find((line) => line.turnId === "turn-1"),
+      );
+    },
+  );
+
+  it.each([false, true])("finalizes before a coalesced stale write (reversed=%s)", async (reversed) => {
+    const first = buildUsageLine({ source: "live", cumulativeTotalTokens: 1_300 });
+    await store.upsertThreadUsageLine({ line: first });
+    const successor = buildUsageLine({
+      source: "live", usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: 2_600,
+    });
+    const stale = { ...first, inputTokens: 100_000, uncachedInputTokens: 99_800,
+      totalTokens: 100_300, cumulativeTotalTokens: 100_300 };
+    await store.upsertThreadUsageLines({ lines: reversed ? [successor, stale] : [stale, successor] });
+    const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.lines.find((line) => line.turnId === "turn-1")?.totalTokens).toBe(1_300);
+    expect(pricing.summaries[0]?.totalTokens).toBe(2_600);
+  });
+
+  it.each([0, 1_300])("keeps equal-total replays from finalizing the active turn (prefix=%s)", async (prefix) => {
+    const empty = buildUsageLine({
+      source: "live", inputTokens: 0, cachedInputTokens: 0, uncachedInputTokens: 0,
+      outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, cumulativeTotalTokens: 0,
+    });
+    const first = prefix === 0 ? empty : buildUsageLine({ source: "live", cumulativeTotalTokens: prefix });
+    await store.upsertThreadUsageLine({ line: first });
+    const second = { ...empty, usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: prefix };
+    await store.upsertThreadUsageLine({ line: second });
+    await store.upsertThreadUsageLine({ line: first });
+    const advanced = buildUsageLine({
+      source: "live", usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: prefix + 1_300,
+    });
+    await store.upsertThreadUsageLine({ line: advanced });
+    await store.upsertThreadUsageLine({ line: { ...first, totalTokens: 999_999, cumulativeTotalTokens: 999_999 } });
+    const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.lines.find((line) => line.turnId === "turn-1")?.totalTokens).toBe(prefix);
+    expect(pricing.lines.find((line) => line.turnId === "turn-2")?.totalTokens).toBe(1_300);
+  });
+
+  it("accepts a missing final request within a durable successor boundary", async () => {
+    const first = buildUsageLine({ source: "live", cumulativeTotalTokens: 1_300 });
+    await store.upsertThreadUsageLine({ line: first });
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: 3_300,
+    }) });
+    stateDb.close();
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    store = new SqliteOverlayStore(stateDb);
+    // Even while the final request is missing, the persisted ceiling and
+    // baseline reject a later turn's total or a freshly reset accumulator.
+    await store.upsertThreadUsageLine({ line: {
+      ...first, inputTokens: 3_000, uncachedInputTokens: 2_800,
+      totalTokens: 3_300, cumulativeTotalTokens: 3_300,
+    } });
+    await store.upsertThreadUsageLine({ line: {
+      ...first, totalTokens: 100, cumulativeTotalTokens: 1_900,
+    } });
+    expect(stateDb.raw.prepare(
+      "UPDATE thread_usage_lines SET total_tokens = 3300, cumulative_total_tokens = 3300 WHERE usage_line_id = ?",
+    ).run("line-1").changes).toBe(0);
+    const bounded = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(bounded.lines.find((line) => line.turnId === "turn-1")?.totalTokens).toBe(1_300);
+    const final = { ...first, inputTokens: 1_700, uncachedInputTokens: 1_500,
+      totalTokens: 2_000, cumulativeTotalTokens: 2_000 };
+    await store.upsertThreadUsageLine({ line: final });
+    let pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.lines.find((line) => line.turnId === "turn-1")?.totalTokens).toBe(2_000);
+    expect(pricing.summaries[0]?.totalTokens).toBe(3_300);
+    await store.upsertThreadUsageLine({ line: { ...final, totalTokens: 3_300, cumulativeTotalTokens: 3_300 } });
+    pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.summaries[0]?.totalTokens).toBe(3_300);
+  });
+
+  it.each([false, true])("enriches protected metadata without accepting stale usage (priced=%s)", async (priced) => {
+    const first = buildUsageLine({
+      source: "live", model: priced ? "gpt-5.5" : undefined,
+      serviceTier: undefined, reasoningEffort: undefined,
+      cumulativeTotalTokens: 1_300,
+    });
+    await store.upsertThreadUsageLine({ line: first });
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: 2_600,
+    }) });
+    const before = (await store.readThreadPricing({ backend: "codex", threadId: "thread-1" }))
+      .lines.find((line) => line.turnId === "turn-1")!;
+    // Simulate v60's restriction on filling a missing pricing field. Reopening
+    // must replace that trigger while retaining the separate token guards.
+    stateDb.raw.exec(`
+      DROP TRIGGER protect_finalized_thread_usage_update;
+      CREATE TRIGGER protect_finalized_thread_usage_update
+      BEFORE UPDATE ON thread_usage_lines
+      WHEN OLD.service_tier IS NOT NEW.service_tier
+      BEGIN SELECT RAISE(IGNORE); END;
+      PRAGMA user_version = 60;
+    `);
+    stateDb.close();
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    store = new SqliteOverlayStore(stateDb);
+    const hydration = buildUsageLine({
+      source: "hydration", usageLineId: "hydrated-replacement", model: "gpt-5.5",
+      startedAt: first.createdAt - 100, completedAt: first.createdAt + 1_000,
+      finalContextTokens: 600, peakContextTokens: 900, modelContextWindow: 258_400,
+      inputTokens: 100_000, uncachedInputTokens: 99_800,
+      totalTokens: 100_300, cumulativeTotalTokens: 100_300,
+      totalCostMicros: 900_000_000,
+    });
+    await store.upsertThreadUsageLine({ line: hydration });
+    const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(pricing.lines).toHaveLength(2);
+    const enriched = pricing.lines.find((line) => line.turnId === "turn-1")!;
+    expect(enriched).toMatchObject({
+      usageLineId: "line-1", source: "live", model: "gpt-5.5", serviceTier: "standard",
+      startedAt: first.createdAt - 100, completedAt: first.createdAt + 1_000,
+      finalContextTokens: 600, peakContextTokens: 900, modelContextWindow: 258_400,
+      inputTokens: before.inputTokens, totalTokens: before.totalTokens,
+      cumulativeTotalTokens: before.cumulativeTotalTokens, priceStatus: "priced",
+    });
+    expect(enriched.totalCostMicros).toBe(priced ? before.totalCostMicros : 16_100);
+    await store.upsertThreadUsageLine({ line: {
+      ...hydration, model: "gpt-6-astra", completedAt: first.createdAt + 9_000,
+      modelContextWindow: 999_999,
+    } });
+    expect(await store.readThreadPricing({ backend: "codex", threadId: "thread-1" })).toEqual(pricing);
+  });
+
+  it("prices a protected Astra aggregate when hydration supplies its missing context ceiling", async () => {
+    const first = buildUsageLine(buildAstraAggregateOverrides({
+      source: "live", cumulativeTotalTokens: 1_658_805,
+    }));
+    await store.upsertThreadUsageLine({ line: first });
+    await store.upsertThreadUsageLine({ line: {
+      ...first, usageLineId: "line-2", turnId: "turn-2", cumulativeTotalTokens: 3_317_610,
+    } });
+    const before = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(before.lines.find((line) => line.turnId === "turn-1")?.priceStatus).toBe("unpriced");
+    await store.upsertThreadUsageLine({ line: {
+      ...first, source: "hydration", usageLineId: "hydrated-astra",
+      modelContextWindow: 258_400, totalTokens: 9_999_999, cumulativeTotalTokens: 9_999_999,
+    } });
+    const after = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(after.lines).toHaveLength(2);
+    expect(after.lines.find((line) => line.turnId === "turn-1")).toMatchObject({
+      priceStatus: "priced", modelContextWindow: 258_400,
+      totalTokens: 1_658_805, cumulativeTotalTokens: 1_658_805,
+      totalCostMicros: 3_269_538,
+    });
+  });
+
   it("upserts a priced usage line and cached summary idempotently", async () => {
     const line = buildUsageLine();
 

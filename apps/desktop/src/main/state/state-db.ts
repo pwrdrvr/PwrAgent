@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 59;
+export const CURRENT_STATE_DB_USER_VERSION = 61;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -742,6 +742,112 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_status_watches_active_target
   WHERE status IN ('watching', 'dispatching');
 CREATE INDEX IF NOT EXISTS idx_pr_status_watches_active_pr
   ON pr_status_watches(pr_key, status, lease_expires_at);
+`;
+
+// Finalization is keyed by turn identity, so a replacement usage-line id cannot
+// bypass it. Token intervals establish ordering; wall clocks and replay arrival
+// order do not. The original row owns the marker's lifetime.
+const THREAD_USAGE_FINALIZATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_usage_boundaries (
+  provider TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  usage_line_id TEXT NOT NULL UNIQUE REFERENCES thread_usage_lines(usage_line_id) ON DELETE CASCADE,
+  successor_usage_line_id TEXT NOT NULL,
+  cumulative_total_tokens INTEGER NOT NULL,
+  PRIMARY KEY (provider, backend, thread_id, turn_id)
+);
+INSERT OR IGNORE INTO thread_usage_boundaries
+  (provider, backend, thread_id, turn_id, usage_line_id, successor_usage_line_id, cumulative_total_tokens)
+SELECT older.provider, older.backend, older.thread_id, older.turn_id,
+       older.usage_line_id, newer.usage_line_id, MIN(newer.cumulative_total_tokens - newer.total_tokens)
+FROM thread_usage_lines older
+JOIN thread_usage_lines newer
+  ON newer.provider = older.provider AND newer.backend = older.backend
+ AND newer.thread_id = older.thread_id AND newer.turn_id != older.turn_id
+WHERE older.backend = 'codex'
+  AND older.scope = 'turn' AND newer.scope = 'turn'
+  AND older.status != 'superseded' AND newer.status != 'superseded'
+  AND older.total_tokens >= 0 AND newer.total_tokens >= 0
+  AND (older.total_tokens > 0 OR newer.cumulative_total_tokens > older.cumulative_total_tokens)
+  AND COALESCE(older.turn_usage_attributed, 1) = 1
+  AND COALESCE(newer.turn_usage_attributed, 1) = 1
+  AND older.cumulative_total_tokens >= older.total_tokens
+  AND older.cumulative_total_tokens <= newer.cumulative_total_tokens - newer.total_tokens
+GROUP BY older.provider, older.backend, older.thread_id, older.turn_id;
+
+CREATE TRIGGER IF NOT EXISTS protect_finalized_thread_usage_insert
+BEFORE INSERT ON thread_usage_lines
+WHEN EXISTS (
+  SELECT 1 FROM thread_usage_boundaries f
+  WHERE f.provider = NEW.provider AND f.backend = NEW.backend
+    AND f.thread_id = NEW.thread_id AND f.turn_id = NEW.turn_id
+    AND f.usage_line_id != NEW.usage_line_id
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+
+CREATE TRIGGER IF NOT EXISTS protect_thread_usage_boundary_update
+BEFORE UPDATE ON thread_usage_lines
+WHEN EXISTS (
+  SELECT 1 FROM thread_usage_boundaries f WHERE f.usage_line_id = OLD.usage_line_id
+    AND (
+      NEW.cumulative_total_tokens IS NULL
+      OR NEW.cumulative_total_tokens > f.cumulative_total_tokens
+      OR NEW.cumulative_total_tokens < OLD.cumulative_total_tokens
+      OR (NEW.cumulative_total_tokens - NEW.total_tokens)
+         IS NOT (OLD.cumulative_total_tokens - OLD.total_tokens)
+      OR OLD.usage_line_id IS NOT NEW.usage_line_id OR OLD.turn_id IS NOT NEW.turn_id
+      OR OLD.provider IS NOT NEW.provider OR OLD.backend IS NOT NEW.backend
+      OR OLD.thread_id IS NOT NEW.thread_id OR OLD.parent_thread_id IS NOT NEW.parent_thread_id
+    )
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
+
+CREATE TRIGGER IF NOT EXISTS protect_finalized_thread_usage_update
+BEFORE UPDATE ON thread_usage_lines
+WHEN EXISTS (
+  SELECT 1 FROM thread_usage_boundaries f WHERE f.usage_line_id = OLD.usage_line_id
+    AND OLD.cumulative_total_tokens = f.cumulative_total_tokens
+) AND (
+  OLD.usage_line_id IS NOT NEW.usage_line_id OR OLD.turn_id IS NOT NEW.turn_id
+  OR OLD.provider IS NOT NEW.provider OR OLD.backend IS NOT NEW.backend
+  OR OLD.thread_id IS NOT NEW.thread_id OR OLD.parent_thread_id IS NOT NEW.parent_thread_id
+  OR OLD.status IS NOT NEW.status OR OLD.scope IS NOT NEW.scope
+  OR OLD.input_tokens IS NOT NEW.input_tokens
+  OR OLD.cached_input_tokens IS NOT NEW.cached_input_tokens
+  OR OLD.cache_write_input_tokens IS NOT NEW.cache_write_input_tokens
+  OR OLD.uncached_input_tokens IS NOT NEW.uncached_input_tokens
+  OR OLD.output_tokens IS NOT NEW.output_tokens
+  OR OLD.reasoning_output_tokens IS NOT NEW.reasoning_output_tokens
+  OR OLD.total_tokens IS NOT NEW.total_tokens
+  OR OLD.cumulative_input_tokens IS NOT NEW.cumulative_input_tokens
+  OR OLD.cumulative_cached_input_tokens IS NOT NEW.cumulative_cached_input_tokens
+  OR OLD.cumulative_cache_write_input_tokens IS NOT NEW.cumulative_cache_write_input_tokens
+  OR OLD.cumulative_uncached_input_tokens IS NOT NEW.cumulative_uncached_input_tokens
+  OR OLD.cumulative_output_tokens IS NOT NEW.cumulative_output_tokens
+  OR OLD.cumulative_reasoning_output_tokens IS NOT NEW.cumulative_reasoning_output_tokens
+  OR OLD.cumulative_total_tokens IS NOT NEW.cumulative_total_tokens
+  OR (OLD.price_status = 'priced' AND (
+    OLD.total_cost_micros IS NOT NEW.total_cost_micros
+    OR OLD.uncached_input_cost_micros IS NOT NEW.uncached_input_cost_micros
+    OR OLD.cached_input_cost_micros IS NOT NEW.cached_input_cost_micros
+    OR OLD.cache_write_input_cost_micros IS NOT NEW.cache_write_input_cost_micros
+    OR OLD.output_cost_micros IS NOT NEW.output_cost_micros
+    OR OLD.price_status IS NOT NEW.price_status
+    OR OLD.currency IS NOT NEW.currency
+    OR (OLD.model IS NOT NULL AND OLD.model IS NOT NEW.model)
+    OR (OLD.service_tier IS NOT NULL AND OLD.service_tier IS NOT NEW.service_tier)
+    OR (OLD.fast_mode IS NOT NULL AND OLD.fast_mode IS NOT NEW.fast_mode)
+  ))
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
 `;
 
 const THREAD_USAGE_PRICING_SCHEMA = `
@@ -1660,6 +1766,21 @@ export class StateDb {
           // price from the turn's context-window ceiling. Reprice rows that
           // were persisted as "insufficient-token-breakdown" before that rule.
           repairTokenUsagePricing(db);
+          db.pragma("user_version = 59");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 60) {
+        db.transaction(() => {
+          db.exec(THREAD_USAGE_FINALIZATION_SCHEMA);
+          db.pragma("user_version = 60");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 61) {
+        db.transaction(() => {
+          // Missing pricing metadata may be filled without changing a priced
+          // row's existing cost. Token and boundary guards remain unchanged.
+          db.exec("DROP TRIGGER IF EXISTS protect_finalized_thread_usage_update");
+          db.exec(THREAD_USAGE_FINALIZATION_SCHEMA);
           db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
         })();
       }
