@@ -1,4 +1,4 @@
-export const TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS = 5_000;
+export const TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS = 2_000;
 // Keep this aligned with codex_utils_string::APPROX_BYTES_PER_TOKEN. Codex
 // budgets model-visible tool output in UTF-8 bytes, not JavaScript UTF-16 code
 // units, so non-ASCII output must use the same accounting basis.
