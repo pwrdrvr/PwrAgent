@@ -624,6 +624,12 @@ for (const theme of AUDIT_THEMES) {
           await app.window.mouse.move(0, 0);
         };
 
+        // Establish an explicit user disclosure before paging and selection.
+        await directory.click();
+        await expect(directory).toHaveAttribute("aria-expanded", "false");
+        await directory.click();
+        await expect(directory).toHaveAttribute("aria-expanded", "true");
+
         await test.step("expanded directory thread list", async () => {
           // This row arrives open rather than being clicked open: the launch
           // selection falls back to `response.threads[0]`
@@ -687,6 +693,20 @@ for (const theme of AUDIT_THEMES) {
           await expect(directoryRow.getByRole("button", { name: "Load more threads", exact: true })).toHaveCount(0);
           await settle();
           await runAxe(app.window, "directories lens, unpinned overflow");
+        });
+
+        await test.step("bulk context menu preserves the accumulated directory range", async () => {
+          const unpinned = threads.locator('[data-thread-pin-state="unpinned"]');
+          await unpinned.first().locator(".thread-row__open").click();
+          await unpinned.last().locator(".thread-row__open").click({ modifiers: ["Shift"] });
+          await unpinned.last().click({ button: "right" });
+          const menu = app.window.getByRole("menu", { name: "Actions for 12 threads selected" });
+          await expect(menu).toBeVisible();
+          await menu.hover();
+          await expect(unpinned).toHaveCount(12);
+          await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
+          await expect(listItems(threads)).toHaveCount(16);
+          await app.window.keyboard.press("Escape");
         });
 
         await test.step("collapsed directory rows", async () => {

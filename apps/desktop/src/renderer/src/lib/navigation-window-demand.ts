@@ -51,7 +51,11 @@ export function buildNavigationWindowDemand(params: {
       const expanded = params.expandedByKey[directory.key] ?? params.selectedDirectoryKeys?.includes(directory.key) ?? false;
       if (!expanded) continue;
       const selectedDirectory = params.selectedDirectoryKeys?.includes(directory.key);
-      if (selectedDirectory && params.selectedRef && params.selectedContextReady === false) continue;
+      // An explicit disclosure owns its pages independently of selection.
+      // Withdrawing them while the next exact selection loads loses every
+      // accumulated continuation, including a multi-selection's rows.
+      if (selectedDirectory && params.selectedRef && params.selectedContextReady === false
+        && params.expandedByKey[directory.key] !== true) continue;
       const showUnpinned = params.unpinnedExpandedByKey[directory.key] ?? !directory.directoryThreadsCollapsed;
       demand.set(`directory-pins:${directory.key}`, request({ kind: "directory", directoryKey: directory.key, roots: "pinned" }));
       if (showUnpinned) demand.set(`directory:${directory.key}`, request({ kind: "directory", directoryKey: directory.key, roots: "unpinned" }));

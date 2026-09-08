@@ -65,6 +65,46 @@ it.each([5, 35])("restores selected root %s without discarding the first page wh
   unmount();
 });
 
+it("retains twelve loaded pages while a new selection in an explicitly expanded folder resolves", async () => {
+  const fixture = api();
+  const row = (position: number): NavigationRow => ({ id: `thread-${position}`, source: "codex", title: `Thread ${position}`,
+    titleSource: "fallback", ref: { backend: "codex", threadId: `thread-${position}` }, rowRevision: "r", linkedDirectories: [],
+    inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" });
+  let finishSelection!: () => void;
+  const pendingSelection = new Promise<void>((resolve) => { finishSelection = resolve; });
+  fixture.read.mockImplementation(async (request) => {
+    if (request.query.kind === "directory-index") return page({ directories: [directory] });
+    if (request.query.kind === "exact") {
+      const position = Number(request.query.identities[0]!.threadId.slice(7));
+      if (position === 119) await pendingSelection;
+      return page({ entries: [{ row: row(position), placement: { kind: "root" }, orderKey: "selected" }] });
+    }
+    if (request.query.kind === "directory" && request.query.roots === "pinned") return page();
+    const offset = Number(request.cursor ?? 0);
+    return page({ complete: false, nextCursor: String(offset + 10), entries: Array.from({ length: 10 }, (_, i) => ({
+      row: row(offset + i), placement: { kind: "root" as const }, orderKey: String(offset + i),
+    })) });
+  });
+  const { result, rerender, unmount } = renderHook(({ selected }) => useBoundedNavigationWindow({ ...base,
+    desktopApi: fixture.desktopApi, expandedByKey: { [directory.key]: true }, selectedDirectoryKeys: [directory.key],
+    selectedRef: { backend: "codex", threadId: `thread-${selected}` },
+  }), { initialProps: { selected: 0 } });
+  const id = `directory:${directory.key}`;
+  await waitFor(() => expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(10));
+  for (let i = 0; i < 11; i++) await act(() => result.current.loadMore(id));
+  const retained = result.current.resources.get(id)?.state.page;
+  expect(retained?.entries).toHaveLength(120);
+  fixture.release.mockClear();
+  rerender({ selected: 119 });
+  expect(result.current.resources.get(id)?.state.page).toBe(retained);
+  await act(async () => finishSelection());
+  await waitFor(() => expect(result.current.resources.get("selected-context")?.loading).toBe(false));
+  expect(result.current.resources.get(id)?.state.page).toBe(retained);
+  // Only selected-context is replaced, never either directory section.
+  expect(fixture.release).toHaveBeenCalledTimes(1);
+  unmount();
+});
+
 it("resolves selected off-page descriptors exactly without repeatedly dropping their demand", async () => {
   const fixture = api();
   const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base, desktopApi: fixture.desktopApi,
