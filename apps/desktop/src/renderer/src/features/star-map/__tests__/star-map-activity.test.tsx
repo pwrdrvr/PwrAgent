@@ -174,3 +174,29 @@ it("ignores late remote geometry after releasing and restoring the owner", async
   expect(release).toHaveBeenCalled();
   view.unmount();
 });
+
+
+it("restores the full remote Lanes range after focus changes", async () => {
+  const entries = Array.from({ length: 25 }, (_, i) => ({ ...page({ protocol: 2, consumer: "star-map", query: { kind: "star-map", projectKey: "directory:/a", filters: {} } }).entries[0]!,
+    row: { ...page({ protocol: 2, consumer: "star-map", query: { kind: "star-map", projectKey: "directory:/a", filters: {} } }).entries[0]!.row, id: `card-${i}`, ref: { backend: "codex" as const, threadId: `card-${i}` } } }));
+  const read = vi.fn(async (request: NavigationQueryRequest) => {
+    if (request.query.kind !== "lens") return page(request);
+    const start = request.cursor ? Number(request.cursor) : request.retainedRange?.start ?? 0;
+    const count = request.retainedRange?.count ?? 10;
+    return { ...page(request), entries: entries.slice(start, start + count), rangeStart: start,
+      complete: start + count >= entries.length, nextCursor: start + count < entries.length ? String(start + count) : undefined };
+  });
+  const api = { getNavigationQueryPage: read, releaseNavigationQuery: vi.fn(async () => undefined) };
+  const view = renderHook(({ active }) => useStarMapThreads({ desktopApi: api, enabled: active, peers: peers.slice(0, 1) }),
+    { initialProps: { active: true } });
+  await act(async () => undefined);
+  await act(async () => { await view.result.current.loadMoreInstance("peer"); });
+  expect(view.result.current.threadsByInstance.get("peer")).toHaveLength(20);
+  view.rerender({ active: false });
+  view.rerender({ active: true });
+  await act(async () => undefined);
+  expect(view.result.current.threadsByInstance.get("peer")).toHaveLength(20);
+  await act(async () => { await view.result.current.loadMoreInstance("peer"); });
+  expect(view.result.current.threadsByInstance.get("peer")).toHaveLength(25);
+  view.unmount();
+});
