@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import type {
+  FederationActiveConnection,
   FederationCapability,
   FederationHostInfo,
   FederationInstanceId,
@@ -282,6 +283,8 @@ type FederationSocketMessage =
   | FederationSocketEnvelopeMessage;
 
 export type FederationGatewayConnection = {
+  remoteAddress?: string;
+  localAddress?: string;
   peerDirectoryPaging?: boolean;
   navigationQueryProtocol?: 2;
   peerId: FederationInstanceId;
@@ -381,7 +384,7 @@ export class FederationGatewayWebSocketServer {
       server: this.httpServer,
       maxPayload: this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
     });
-    this.wsServer.on("connection", (socket) => void this.handleSocket(socket));
+    this.wsServer.on("connection", (socket, request) => void this.handleSocket(socket, request));
     // Belt-and-suspenders behind the per-socket keepalive: sweep sessions
     // whose heartbeat (envelopes or pongs) stopped without the socket's
     // close event ever firing, so the registry can never wedge "active".
@@ -460,7 +463,16 @@ export class FederationGatewayWebSocketServer {
     return true;
   }
 
-  private async handleSocket(socket: WebSocket): Promise<void> {
+  activeConnections(): FederationActiveConnection[] {
+    return [...this.connections.values()].map((connection) => ({
+      peerId: connection.peerId,
+      direction: "incoming",
+      remoteAddress: connection.remoteAddress,
+      localAddress: connection.localAddress,
+    }));
+  }
+
+  private async handleSocket(socket: WebSocket, request: http.IncomingMessage): Promise<void> {
     const reader = new FederationFrameReader(socket);
 
     // Armed for the socket's whole life, pre-auth included: a link that dies
@@ -624,7 +636,11 @@ export class FederationGatewayWebSocketServer {
       peerId: decision.peer.id,
       instanceLabel: this.options.instanceLabel,
     };
+    const socketAddress = (address: string | undefined, port: number | undefined) =>
+      address && port !== undefined ? `${address.includes(":") ? `[${address}]` : address}:${port}` : undefined;
     const connection: FederationGatewayConnection = {
+      remoteAddress: socketAddress(request.socket.remoteAddress, request.socket.remotePort),
+      localAddress: socketAddress(request.socket.localAddress, request.socket.localPort),
       peerDirectoryPaging: message.peerDirectoryPaging === true,
       navigationQueryProtocol:
         message.navigationQueryProtocol === 2 ? 2 : undefined,

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { FederationConnections } from "./FederationConnections";
 import { CheckIcon, CopyIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { formatActivityReport } from "./format-activity-report";
@@ -230,6 +231,7 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
       </button>
       <span role="status" className="federation-activity__muted">{copied ? "Federation activity copied" : ""}</span>
     </div>
+    {snapshot ? <FederationConnections health={snapshot.health} /> : null}
     {snapshot?.health.leaseHolder ? <p>Lease holder: {snapshot.health.leaseHolder.instanceId}
       {snapshot.health.leaseHolder.processId ? ` · PID ${snapshot.health.leaseHolder.processId}` : ""}
       {snapshot.health.leaseHolder.cwdHint ? ` · ${snapshot.health.leaseHolder.cwdHint}` : ""}</p> : null}
