@@ -28,12 +28,17 @@ test("pauses map load demand when its renderer is blurred or its window is hidde
     // can render and focus web contents without an active native application;
     // this fixture does not claim to validate OS foreground activation.
     const focusMapRenderer = async (focused: boolean) => {
-      await app.electronApp.evaluate(({ BrowserWindow }, focus) => {
+      await app.electronApp.evaluate(({ app: electron, BrowserWindow }, focus) => {
         const window = BrowserWindow.getAllWindows().find((win) =>
           win.webContents.getURL().includes("#star-map"))!;
         window.show();
-        if (focus) window.webContents.focus();
-        else window.blurWebView();
+        if (focus) {
+          // Restore application/window activation as well as view focus after
+          // hide/show; webContents.focus() alone failed this step on macOS CI.
+          if (process.platform === "darwin") electron.focus({ steal: true });
+          window.focus();
+          window.webContents.focus();
+        } else window.blurWebView();
       }, focused);
     };
     await focusMapRenderer(true);
