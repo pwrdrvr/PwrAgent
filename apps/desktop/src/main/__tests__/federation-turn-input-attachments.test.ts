@@ -161,6 +161,10 @@ describe("federation turn input attachments", () => {
     const firstReleased = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
+    let enteredFirst!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve;
+    });
     let sendCount = 0;
     const preparing = prepareOutgoingFederationTurnInput({
       input: [{ type: "localFile", name: "slow-source.bin", path: sourcePath }],
@@ -169,16 +173,22 @@ describe("federation turn input attachments", () => {
       sendEnvelope: async () => {
         sendCount += 1;
         if (sendCount === 1) {
+          enteredFirst();
           await firstReleased;
         }
       },
     });
 
-    await vi.waitFor(() => expect(sendCount).toBe(1));
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    expect(sendCount).toBe(1);
-    releaseFirst();
-    await preparing;
+    try {
+      // File staging owns readiness; a polling deadline must not measure disk speed.
+      // Also surface preparation failures instead of waiting for a writer never entered.
+      await Promise.race([firstEntered, preparing]);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      expect(sendCount).toBe(1);
+    } finally {
+      releaseFirst();
+      await preparing;
+    }
     expect(sendCount).toBe(2);
   });
 
