@@ -1089,16 +1089,13 @@ export function TranscriptList(props: TranscriptListProps) {
   const syncScrollState = useCallback((options?: SyncScrollStateOptions) => {
     let snapshot = captureSnapshot();
     const previousSnapshot = snapshotRef.current;
-    const wasGluedToBottom =
-      isGluedToBottomRef.current ||
-      Boolean(previousSnapshot && previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX);
+    const wasGluedToBottom = isGluedToBottomRef.current;
     const resizedWhileBottomPinned = Boolean(
       options?.preserveGlueOnResize &&
         snapshot &&
         previousSnapshot &&
         wasGluedToBottom &&
-        snapshot.distanceFromBottom > BOTTOM_THRESHOLD_PX &&
-        snapshot.scrollTop === previousSnapshot.scrollTop &&
+        snapshot.distanceFromBottom > 0 &&
         (snapshot.clientHeight !== previousSnapshot.clientHeight ||
           snapshot.scrollHeight !== previousSnapshot.scrollHeight)
     );
@@ -1162,7 +1159,7 @@ export function TranscriptList(props: TranscriptListProps) {
         liveContainer.scrollHeight - liveContainer.clientHeight,
         0
       );
-      if (liveContainer.scrollTop < maxScrollTop - BOTTOM_THRESHOLD_PX) {
+      if (liveContainer.scrollTop < maxScrollTop) {
         liveContainer.scrollTop = liveContainer.scrollHeight;
         syncScrollState();
       }
@@ -1292,34 +1289,12 @@ export function TranscriptList(props: TranscriptListProps) {
         previousSnapshot.lastMessageId === lastMessageId &&
         previousSnapshot.firstMessageId !== firstMessageId
     );
-    // hasAppendedMessages and hasGrownWhileFollowingBottom both intentionally
-    // skip the firstMessageId equality check that earlier versions of this
-    // file enforced. That check broke the common navigation-preview →
-    // full-transcript transition: the preview entries (lastUserMessage /
-    // lastAssistantMessage from the navigation snapshot) have synthetic ids
-    // that don't match any entries in the eventual readThread response, so
-    // when the real transcript replaced them BOTH firstMessageId and
-    // lastMessageId changed and neither branch fired — leaving the user
-    // staring at the top of a thread they expected to open at the bottom.
-    // hasPrependedMessages already covers the only case the equality check
-    // was protecting against (older messages paginated in at the top).
-    const hasAppendedMessages = Boolean(
-      previousSnapshot &&
-        previousSnapshot.threadId === props.threadId &&
-        !hasPrependedMessages &&
-        (previousSnapshot.lastMessageId !== lastMessageId ||
-          previousSnapshot.pendingStatusText !== props.pendingStatusText ||
-          previousSnapshot.runningTurnUsageText !== props.runningTurnUsageText ||
-          previousSnapshot.itemCount < visibleItemCount)
-    );
-    const hasGrownWhileFollowingBottom = Boolean(
-      previousSnapshot &&
-        previousSnapshot.threadId === props.threadId &&
-        !hasPrependedMessages &&
-        isGluedToBottomRef.current &&
-        container.scrollHeight > previousSnapshot.scrollHeight
-    );
-
+    if (previousSnapshot?.threadId === props.threadId && isGluedToBottomRef.current) {
+      // Hydration can replace/reorder rows without appending an entry. Bottom
+      // follow is an intent; preserve it through both growth and shrinkage.
+      scrollToBottom();
+      return;
+    }
     if (hasPrependedMessages && previousSnapshot) {
       const heightDelta = container.scrollHeight - previousSnapshot.scrollHeight;
       container.scrollTop = previousSnapshot.scrollTop + heightDelta;
@@ -1352,12 +1327,6 @@ export function TranscriptList(props: TranscriptListProps) {
     ) {
       scrollToBottom();
       shouldScrollToBottomRef.current = false;
-      return;
-    } else if (
-      isGluedToBottomRef.current &&
-      (hasAppendedMessages || hasGrownWhileFollowingBottom)
-    ) {
-      scrollToBottom();
       return;
     }
 
@@ -1463,6 +1432,16 @@ export function TranscriptList(props: TranscriptListProps) {
         className="transcript-list__items"
         role="list"
         tabIndex={0}
+        onPointerDown={(event) => {
+          const container = event.currentTarget;
+          const rect = container.getBoundingClientRect();
+          if (event.clientX >= rect.left + container.clientWidth) disableBottomGlue();
+        }}
+        onKeyDown={(event) => {
+          if (event.target === event.currentTarget
+            && ["ArrowUp", "PageUp", "Home"].includes(event.key)) disableBottomGlue();
+        }}
+        onTouchMove={disableBottomGlue}
         onWheel={(event) => {
           if (event.deltaY < 0) {
             disableBottomGlue();
