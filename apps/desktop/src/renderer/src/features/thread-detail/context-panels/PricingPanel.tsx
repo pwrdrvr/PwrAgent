@@ -13,7 +13,7 @@ import {
   estimateHistoricalThreadUsageGapLines,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
-import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChipContextMenu,
   type ChipContextMenuItem,
@@ -92,6 +92,16 @@ const DEFAULT_PRICING_DISPLAY_OPTIONS: PricingDisplayOptions = {
 const PRICING_USAGE_PAGE_SIZE = 20;
 
 export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps) {
+  // ThreadView's scroll handler follows transcript updates. Keep card actions
+  // stable while dispatching to the latest committed handler, including after
+  // a thread switch. Absence still disables the action in the card.
+  const scrollToTurnRef = useRef(props.onScrollToTurn);
+  useLayoutEffect(() => {
+    scrollToTurnRef.current = props.onScrollToTurn;
+  }, [props.onScrollToTurn]);
+  const scrollToTurn = useCallback((turnId: string, turnTimeMs?: number) => {
+    scrollToTurnRef.current?.(turnId, turnTimeMs);
+  }, []);
   // These derivations cover the entire history, including folded gate rows.
   // Reuse them for presentation updates when their source data is unchanged.
   const summaries = useMemo(
@@ -235,198 +245,39 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
     () => groupCompactionsByRow(props.pricing?.compactions ?? []),
     [props.pricing?.compactions],
   );
-  // Rebuilt per render alongside the row map: rows are laid out newest-first in
-  // one pass, so the first row of a turn claims that turn's pending markers.
+  // Compaction ownership must be assigned in list order, before memoized
+  // cards decide whether to render. A skipped card still claims its markers.
   const claimedCompactionTurns = new Set<string>();
-
-  // One usage row, whether it sits in the flat list or nested under a turn.
-  // Nested gates render the same full card as before — title, model, helper
-  // usage, timing, list price, the savings equation, running total — the
-  // heading above them is a fold, not a replacement.
-  const renderUsageRow = (
-    line: PricingUsageLine,
-    options: { nested?: boolean } = {},
-  ) => {
-    const orphanGroup = options.nested
-      ? undefined
-      : orphanGroupsByAnchor.get(line.usageLineId);
-    if (orphanGroup) {
-      // A gate with no turn to nest under is either the compact group
-      // or nothing. Full cards for gates that cannot be priced were
-      // pure noise — the summarizer's cost is still in the totals, and
-      // the Explorer still lists every gate.
-      const anyPriced = orphanGroup.some((gate) =>
-        gate.sourceItemId
-        && subAgentsById.get(gate.sourceItemId)?.tokenMiserAccounting,
-      );
-      return anyPriced ? (
-        <li
-          key={line.usageLineId}
-          className="rail-card pricing-usage-row pricing-usage-row--orphan-gates"
-        >
-          <TokenMiserTurnGroup
-            decisions={tokenMiserDecisionsForGateLines({
-              accounting: props.tokenMiserAccounting,
-              gates: orphanGroup,
-              subAgentsById,
-            })}
-            gates={orphanGroup}
-            renderGate={(gate) => renderUsageRow(gate, { nested: true })}
-            subAgentsById={subAgentsById}
-          />
-        </li>
-      ) : null;
-    }
-    const lineTotals = pricingTotals.byLineId.get(line.usageLineId);
-    const usageLineEstimate = formatUsageLineEstimates({
-      displayOptions,
-      line,
-      lineTotals,
-    });
-    const runningTotal = formatUsageLineRunningTotal({
-      displayOptions,
-      line,
-      lineTotals,
-    });
-    const contextReplayLines = formatContextReplayEstimate({
-      displayOptions,
-      line,
-    });
-    const rowCompactions = selectRowCompactions(
-      compactionsByRow,
-      line,
-      claimedCompactionTurns,
-    );
-    const runningTokens = formatUsageLineRunningTokens(line);
-    const subAgent =
-      line.scope === "monitor" && line.sourceItemId
-        ? subAgentsById.get(line.sourceItemId)
-        : undefined;
-    const nestedGates = line.scope !== "monitor" && line.turnId
-      ? (gateLinesByTurn.get(line.turnId) ?? [])
-      : [];
+  const buildUsageRow = (line: PricingUsageLine, nested = false): PricingUsageRowData => {
+    const orphanGroup = nested ? undefined : orphanGroupsByAnchor.get(line.usageLineId);
+    const gates = orphanGroup ?? (line.scope !== "monitor" && line.turnId
+      ? gateLinesByTurn.get(line.turnId) ?? []
+      : []);
     const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
-    const turnFailure = !isActive && line.scope === "turn"
-      ? props.turnFailures?.find((failure) => failure.turnId === line.turnId)
-      : undefined;
-    const usageTitle = formatUsageLineTitle(line, subAgent);
-    const showUsageTitle = usageTitle !== "Turn usage";
-    const reasoningEffort =
-      line.reasoningEffort
-      ?? subAgent?.preferredReasoningEffort
-      ?? (isActive && line.scope !== "monitor"
+    return {
+      line,
+      nested,
+      orphan: Boolean(orphanGroup),
+      isActive,
+      lineTotals: pricingTotals.byLineId.get(line.usageLineId),
+      rowCompactions: selectRowCompactions(compactionsByRow, line, claimedCompactionTurns),
+      subAgent: line.scope === "monitor" && line.sourceItemId
+        ? subAgentsById.get(line.sourceItemId)
+        : undefined,
+      turnFailure: !isActive && line.scope === "turn"
+        ? props.turnFailures?.find((failure) => failure.turnId === line.turnId)
+        : undefined,
+      threadReasoningEffort: isActive && line.scope !== "monitor"
         ? props.threadReasoningEffort
-        : undefined);
-    const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
-    const runtimeModel = resolveUsageLineModel(line, subAgent);
-
-    return (
-      <li
-        key={line.usageLineId}
-        className={`rail-card pricing-usage-row${
-          isActive ? " pricing-usage-row--active" : ""
-        }`}
-      >
-        <div className="pricing-usage-row__header">
-          <div className="pricing-usage-row__identity">
-            {showUsageTitle ? (
-              <p className="rail-card__title">{usageTitle}</p>
-            ) : null}
-            <p className="rail-card__runtime">
-              <span className="rail-card__provider-chip">
-                {runtimeLabel}
-              </span>
-              <span className="rail-card__model">
-                {runtimeModel ?? "Unknown model"}
-                {reasoningEffort ? ` · ${reasoningEffort}` : ""}
-                {formatServiceTierLabel(line)}
-              </span>
-            </p>
-          </div>
-          <div className="pricing-usage-row__controls">
-            {isActive ? (
-              <RailStatusChip tone="active">Running</RailStatusChip>
-            ) : turnFailure ? (
-              <RailStatusChip tone="error" alert>Failed</RailStatusChip>
-            ) : null}
-            <PricingUsageActions
-              line={line}
-              onScrollToTurn={props.onScrollToTurn}
-              startedAt={
-                subAgent?.createdAt ?? line.startedAt ?? line.createdAt
-              }
-              subAgent={subAgent}
-            />
-          </div>
-        </div>
-        {/* Under the Token Miser fold the heading already names the agent,
-            and the card keeps its own title — a second "Token Miser" line on
-            every nested card was one title too many. */}
-        {subAgent?.agentName && !options.nested ? (
-          <p className="rail-card__agent-name" title={subAgent.agentName}>
-            {subAgent.agentName}
-          </p>
-        ) : null}
-        {/* Cost first: it is the answer the card exists to give. Tokens,
-            timing and replay estimates are the working shown under it. */}
-        {usageLineEstimate ? (
-          <p className="pricing-usage-row__cost">{usageLineEstimate}</p>
-        ) : null}
-        {turnFailure ? <p className="rail-card__error">{turnFailure.error}</p> : null}
-        <p className="rail-card__usage">
-          {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
-          {formatTokenCount(line.cachedInputTokens)} cached ·{" "}
-          {formatTokenCount(line.outputTokens)} out
-          {line.reasoningOutputTokens > 0
-            ? ` (${formatTokenCount(line.reasoningOutputTokens)} reasoning)`
-            : ""}
-        </p>
-        <PricingUsageTimestamp
-          isActive={isActive}
-          line={line}
-          onScrollToTurn={props.onScrollToTurn}
-          subAgent={subAgent}
-        />
-        {contextReplayLines.map((replayLine) => (
-          <p key={replayLine} className="rail-card__usage">
-            {replayLine}
-          </p>
-        ))}
-        {subAgent?.tokenMiserAccounting ? (
-          <TokenMiserSavingsBreakdown
-            accounting={subAgent.tokenMiserAccounting}
-          />
-        ) : null}
-        {nestedGates.length > 0 ? (
-          <TokenMiserTurnGroup
-            decisions={tokenMiserDecisionsForTurn(
-              props.tokenMiserAccounting,
-              line.turnId,
-            )}
-            gates={nestedGates}
-            renderGate={(gate) => renderUsageRow(gate, { nested: true })}
-            subAgentsById={subAgentsById}
-          />
-        ) : null}
-        {rowCompactions.length > 0 ? (
-          <CompactionBreakdown compactions={rowCompactions} />
-        ) : null}
-        {runningTokens ? (
-          <details className="pricing-running-total">
-            <summary className="pricing-running-total__summary">
-              {runningTotal ?? "Running total"}
-            </summary>
-            <p className="rail-card__usage pricing-running-total__tokens">
-              {runningTokens}
-            </p>
-          </details>
-        ) : runningTotal ? (
-          <p className="rail-card__usage">{runningTotal}</p>
-        ) : null}
-      </li>
-    );
+        : undefined,
+      decisions: orphanGroup
+        ? tokenMiserDecisionsForGateLines({
+            accounting: props.tokenMiserAccounting, gates, subAgentsById,
+          })
+        : tokenMiserDecisionsForTurn(props.tokenMiserAccounting, line.turnId),
+      gates: gates.map((gate) => buildUsageRow(gate, true)),
     };
-
+  };
 
   return (
     <section className="context-panel__section">
@@ -531,7 +382,14 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
 
       {displayLines.length > 0 ? (
         <ul className="context-list context-list--cards pricing-usage-list">
-          {visibleDisplayLines.map((line) => renderUsageRow(line))}
+          {visibleDisplayLines.map((line) => (
+            <PricingUsageRow
+              key={`${line.backend}:${line.threadId}:${line.usageLineId}`}
+              row={buildUsageRow(line)}
+              displayOptions={displayOptions}
+              onScrollToTurn={props.onScrollToTurn ? scrollToTurn : undefined}
+            />
+          ))}
         </ul>
       ) : null}
       {hiddenUsageRowCount > 0 ? (
@@ -564,7 +422,187 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
       ) : null}
     </section>
   );
-});
+}, equalPricingData);
+
+type PricingUsageRowData = {
+  line: PricingUsageLine;
+  nested: boolean;
+  orphan: boolean;
+  isActive: boolean;
+  lineTotals: PricingRunningLineTotals | undefined;
+  rowCompactions: ThreadCompactionRecord[];
+  subAgent: ThreadSubAgentSummary | undefined;
+  turnFailure: ThreadTurnFailure | undefined;
+  threadReasoningEffort: string | undefined;
+  decisions: ThreadTokenMiserInterceptionAccounting[] | undefined;
+  gates: PricingUsageRowData[];
+};
+
+// Federation/IPC delivers fresh JSON objects, even for finalized history.
+// The panel skips identical snapshots; each card compares only its own data
+// when a snapshot changes. Include every field (including nested replay
+// evidence) so late corrections cannot leave stale cards. These props contain
+// JSON data and callbacks only; callbacks must retain identity to compare equal.
+function equalPricingData(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length
+    && keys.every((key) => Object.prototype.hasOwnProperty.call(b, key)
+      && equalPricingData(a[key], b[key]));
+}
+
+const PricingUsageRow = memo(function PricingUsageRowCard(props: {
+  row: PricingUsageRowData;
+  displayOptions: PricingDisplayOptions;
+  onScrollToTurn: PricingPanelProps["onScrollToTurn"];
+}) {
+  const { line, lineTotals, rowCompactions, subAgent, isActive, turnFailure } = props.row;
+  const { displayOptions } = props;
+  const renderGroup = () => {
+    const rowsById = new Map(props.row.gates.map((row) => [row.line.usageLineId, row]));
+    const subAgentsById = new Map<string, ThreadSubAgentSummary>();
+    for (const row of props.row.gates) {
+      if (row.subAgent) subAgentsById.set(row.subAgent.monitorId, row.subAgent);
+    }
+    return (
+      <TokenMiserTurnGroup
+        decisions={props.row.decisions}
+        gates={props.row.gates.map((row) => row.line)}
+        subAgentsById={subAgentsById}
+        renderGate={(gate) => (
+          <PricingUsageRow
+            key={`${gate.backend}:${gate.threadId}:${gate.usageLineId}`}
+            row={rowsById.get(gate.usageLineId)!}
+            displayOptions={displayOptions}
+            onScrollToTurn={props.onScrollToTurn}
+          />
+        )}
+      />
+    );
+  };
+  if (props.row.orphan) {
+    return props.row.gates.some((gate) => gate.subAgent?.tokenMiserAccounting) ? (
+      <li className="rail-card pricing-usage-row pricing-usage-row--orphan-gates">
+        {renderGroup()}
+      </li>
+    ) : null;
+  }
+  const usageLineEstimate = formatUsageLineEstimates({ displayOptions, line, lineTotals });
+  const runningTotal = formatUsageLineRunningTotal({ displayOptions, line, lineTotals });
+  const contextReplayLines = formatContextReplayEstimate({ displayOptions, line });
+  const runningTokens = formatUsageLineRunningTokens(line);
+  const usageTitle = formatUsageLineTitle(line, subAgent);
+  const showUsageTitle = usageTitle !== "Turn usage";
+  const reasoningEffort = line.reasoningEffort
+    ?? subAgent?.preferredReasoningEffort
+    ?? props.row.threadReasoningEffort;
+  const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
+  const runtimeModel = resolveUsageLineModel(line, subAgent);
+
+  return (
+    <li
+      key={line.usageLineId}
+      className={`rail-card pricing-usage-row${
+        isActive ? " pricing-usage-row--active" : ""
+      }`}
+    >
+      <div className="pricing-usage-row__header">
+        <div className="pricing-usage-row__identity">
+          {showUsageTitle ? (
+            <p className="rail-card__title">{usageTitle}</p>
+          ) : null}
+          <p className="rail-card__runtime">
+            <span className="rail-card__provider-chip">
+              {runtimeLabel}
+            </span>
+            <span className="rail-card__model">
+              {runtimeModel ?? "Unknown model"}
+              {reasoningEffort ? ` · ${reasoningEffort}` : ""}
+              {formatServiceTierLabel(line)}
+            </span>
+          </p>
+        </div>
+        <div className="pricing-usage-row__controls">
+          {isActive ? (
+            <RailStatusChip tone="active">Running</RailStatusChip>
+          ) : turnFailure ? (
+            <RailStatusChip tone="error" alert>Failed</RailStatusChip>
+          ) : null}
+          <PricingUsageActions
+            line={line}
+            onScrollToTurn={props.onScrollToTurn}
+            startedAt={
+              subAgent?.createdAt ?? line.startedAt ?? line.createdAt
+            }
+            subAgent={subAgent}
+          />
+        </div>
+      </div>
+      {/* Under the Token Miser fold the heading already names the agent,
+          and the card keeps its own title — a second "Token Miser" line on
+          every nested card was one title too many. */}
+      {subAgent?.agentName && !props.row.nested ? (
+        <p className="rail-card__agent-name" title={subAgent.agentName}>
+          {subAgent.agentName}
+        </p>
+      ) : null}
+      {/* Cost first: it is the answer the card exists to give. Tokens,
+          timing and replay estimates are the working shown under it. */}
+      {usageLineEstimate ? (
+        <p className="pricing-usage-row__cost">{usageLineEstimate}</p>
+      ) : null}
+      {turnFailure ? <p className="rail-card__error">{turnFailure.error}</p> : null}
+      <p className="rail-card__usage">
+        {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
+        {formatTokenCount(line.cachedInputTokens)} cached ·{" "}
+        {formatTokenCount(line.outputTokens)} out
+        {line.reasoningOutputTokens > 0
+          ? ` (${formatTokenCount(line.reasoningOutputTokens)} reasoning)`
+          : ""}
+      </p>
+      <PricingUsageTimestamp
+        isActive={isActive}
+        line={line}
+        onScrollToTurn={props.onScrollToTurn}
+        subAgent={subAgent}
+      />
+      {contextReplayLines.map((replayLine) => (
+        <p key={replayLine} className="rail-card__usage">
+          {replayLine}
+        </p>
+      ))}
+      {subAgent?.tokenMiserAccounting ? (
+        <TokenMiserSavingsBreakdown
+          accounting={subAgent.tokenMiserAccounting}
+        />
+      ) : null}
+      {props.row.gates.length > 0 ? renderGroup() : null}
+      {rowCompactions.length > 0 ? (
+        <CompactionBreakdown compactions={rowCompactions} />
+      ) : null}
+      {runningTokens ? (
+        <details className="pricing-running-total">
+          <summary className="pricing-running-total__summary">
+            {runningTotal ?? "Running total"}
+          </summary>
+          <p className="rail-card__usage pricing-running-total__tokens">
+            {runningTokens}
+          </p>
+        </details>
+      ) : runningTotal ? (
+        <p className="rail-card__usage">{runningTotal}</p>
+      ) : null}
+    </li>
+  );
+
+}, (previous, next) =>
+  previous.onScrollToTurn === next.onScrollToTurn
+  && equalPricingData(previous.displayOptions, next.displayOptions)
+  && equalPricingData(previous.row, next.row));
 
 /**
  * One model's share of the bill, closed by default, opening onto the token
