@@ -1691,6 +1691,8 @@ export type NavigationQuery =
     }
   | {
       kind: "star-map";
+      /** Primary project geometry key; scopes card continuation to this project. */
+      projectKey?: string;
       filters: NavigationStarMapFilterSelection;
     }
   | {

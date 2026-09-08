@@ -24,6 +24,7 @@ import {
   type NavigationThreadSummary,
   type StarMapWorkspaceAnchor,
 } from "@pwragent/shared";
+import { useStarMapProjectPages, starMapProjectResource } from "./useStarMapProjectPages";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { SearchIcon } from "../../icons";
@@ -89,6 +90,7 @@ import {
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
+  threadProjectKey,
   projectThreadOwner,
 } from "./star-map-projects";
 import {
@@ -1113,6 +1115,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
     filters: filterSelection,
     refreshNonce: remoteRefreshNonce,
   });
+  const projectDescriptorsByInstance = useMemo(() => {
+    const descriptors = new Map(remote.directoriesByInstance);
+    if (localRowsAreOwnerMatched) descriptors.set(localInstanceId, localFeed.directories);
+    return descriptors;
+  }, [remote.directoriesByInstance, localFeed.directories, localInstanceId, localRowsAreOwnerMatched]);
+  const projectPages = useStarMapProjectPages({
+    desktopApi: props.desktopApi, enabled: orbitMode || projectsMode,
+    localInstanceId, descriptors: projectDescriptorsByInstance, filters: filterSelection,
+  });
+  useEffect(() => {
+    const error = projectPages.state.admissionError
+      ?? [...projectPages.state.resources.values()].find((resource) => resource.state.error)?.state.error;
+    if (error) setCardError(error);
+  }, [projectPages.state]);
+  const projectThreadsByInstance = useMemo(() => {
+    const result = new Map<string, NavigationThreadSummary[]>();
+    for (const resource of projectPages.state.resources.values()) {
+      const target = resource.state.request.federationTarget;
+      const owner = target?.scope === "remote" ? target.instanceId : localInstanceId;
+      const threads = result.get(owner) ?? [];
+      threads.push(...(resource.state.page?.entries ?? []).map((entry) => entry.row));
+      result.set(owner, threads);
+    }
+    return result;
+  }, [projectPages.state, localInstanceId]);
   const draftIndicatorThreads = useMemo(() => [
     ...localThreads, ...[...remote.threadsByInstance.values()].flat(),
   ], [localThreads, remote.threadsByInstance]);
@@ -1259,7 +1286,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       withLocalEdits(
         selectFilteredThreads({
           ownerMatched: localRowsAreOwnerMatched,
-          threads: localThreads.filter(
+          threads: [...new Map([...localThreads, ...(projectThreadsByInstance.get(localInstanceId) ?? [])]
+            .map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread])).values()].filter(
             (thread) =>
               !thread.federation
               || !isRemoteFederationTarget(thread.federation.ref.target),
@@ -1275,7 +1303,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
         instanceId,
         withLocalEdits(
           selectFilteredThreads({
-            threads,
+            threads: [...new Map([...threads, ...(projectThreadsByInstance.get(instanceId) ?? [])]
+              .map((thread) => [buildThreadIdentityKey(thread.source, thread.id), thread])).values()],
             ownerMatched: true,
             selection: filterSelection,
             // Peers get the session keys too. Withholding them dropped
@@ -1322,6 +1351,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [
     archivedThreadKeys,
     filterSelection,
+    projectThreadsByInstance,
     localInstanceId,
     localThreads,
     localRowsAreOwnerMatched,
@@ -1415,7 +1445,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         }
       }
       const cloud = computeClusterCloud({
-        clusters: buildInstanceClusters({ threads, expandedKeys }),
+        clusters: buildInstanceClusters({ threads, expandedKeys, descriptors: projectDescriptorsByInstance.get(instanceId) }),
         cardWidth: ORBIT_CARD_WIDTH,
         heightForThread: (threadKey) =>
           cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
@@ -1430,7 +1460,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       clouds.set(instanceId, cloud);
     }
     return clouds;
-  }, [attentionByInstance, cardHeights, expandedClusters, orbitMode]);
+  }, [attentionByInstance, cardHeights, expandedClusters, orbitMode, projectDescriptorsByInstance]);
 
   /**
    * The anchor a hand-placed card's stored offset is measured from in the
@@ -1517,24 +1547,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [toggleClusterExpandedIn],
   );
 
-  const projectDescriptorsByInstance = useMemo(() => {
-    const descriptors = new Map(remote.directoriesByInstance);
-    if (localRowsAreOwnerMatched) descriptors.set(localInstanceId, localFeed.directories);
-    return descriptors;
-  }, [remote.directoriesByInstance, localFeed.directories, localInstanceId, localRowsAreOwnerMatched]);
   const projectPageOwners = useMemo(() => {
     const owners = new Map<string, string[]>();
     for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
-      const hasMore = instanceId === localInstanceId ? localFeed.hasMore : remote.hasMoreInstanceIds.has(instanceId);
-      if (!hasMore || remote.unreachableInstanceIds.has(instanceId)) continue;
+      if (remote.unreachableInstanceIds.has(instanceId)) continue;
       for (const descriptor of descriptors) {
+        if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.page?.nextCursor) continue;
         const instances = owners.get(descriptor.key) ?? [];
         if (!instances.includes(instanceId)) instances.push(instanceId);
         owners.set(descriptor.key, instances);
       }
     }
     return owners;
-  }, [projectDescriptorsByInstance, localInstanceId, localFeed.hasMore, remote.hasMoreInstanceIds, remote.unreachableInstanceIds]);
+  }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
   const [projectGeometryTime] = useState(Date.now);
   const projects = useMemo(
     () => groupThreadsByProject(attentionByInstance, { summonedKeys, now: projectGeometryTime,
@@ -4607,34 +4632,41 @@ export function StarMapScreen(props: StarMapScreenProps) {
               ) : null}
               <span className="star-map__cluster-name">{cluster.label}</span>
               <span className="star-map__cluster-count">
-                {cluster.threads.length}
+                {cluster.totalCount ?? cluster.threads.length}
               </span>
             </button>
           );
         })}
-        {position.clusters?.map((cluster) =>
-          cluster.overflowSlot ? (
+        {position.clusters?.map((cluster) => {
+          const projectKey = cluster.isParentGroup && cluster.threads[0]
+            ? threadProjectKey(cluster.threads[0]) : cluster.key;
+          const resourceId = starMapProjectResource(position.instanceId, projectKey);
+          const resource = projectPages.state.resources.get(resourceId);
+          const hasMore = Boolean(resource?.state.page?.nextCursor);
+          if (!cluster.overflowSlot || (!hasMore && cluster.overflow === 0 && !cluster.expandable)) return null;
+          return (
             <button
               key={`cluster-overflow:${cluster.key}`}
               type="button"
               className="star-map__cluster-overflow"
-              style={{
-                left: cluster.overflowSlot.dx,
-                top: cluster.overflowSlot.dy,
+              style={{ left: cluster.overflowSlot.dx, top: cluster.overflowSlot.dy }}
+              disabled={resource?.loading}
+              aria-label={hasMore ? `Load more ${cluster.label} threads`
+                : cluster.overflow > 0 ? `Show ${cluster.overflow} more ${cluster.label} threads` : `Show fewer ${cluster.label} threads`}
+              onClick={() => {
+                if (hasMore) {
+                  setExpandedClusters((current) => new Set([...current, `${position.instanceId}::${cluster.key}`]));
+                  const last = resource?.state.page?.entries.at(-1)?.row.ref;
+                  if (last) projectPages.controller.setVisibleAnchor(resourceId, { kind: "thread", ref: last });
+                  void projectPages.controller.loadMore(resourceId);
+                } else toggleClusterExpanded(position.instanceId, cluster.key);
               }}
-              aria-label={
-                cluster.overflow > 0
-                  ? `Show ${cluster.overflow} more ${cluster.label} threads`
-                  : `Show fewer ${cluster.label} threads`
-              }
-              onClick={() =>
-                toggleClusterExpanded(position.instanceId, cluster.key)
-              }
             >
-              {cluster.overflow > 0 ? `+${cluster.overflow} more` : "Show fewer"}
+              {resource?.loading ? "Loading…" : hasMore ? "Load more"
+                : cluster.overflow > 0 ? `+${cluster.overflow} more` : "Show fewer"}
             </button>
-          ) : null,
-        )}
+          );
+        })}
       </div>
     );
   };
@@ -4929,7 +4961,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     projectKey={project.key}
                     threadCount={project.totalThreadCount ?? project.threads.length}
                     onLoadMoreThreads={projectPageOwners.has(project.key)
-                      ? () => { for (const owner of projectPageOwners.get(project.key)!) loadMoreOwnerThreads(owner); }
+                      ? () => { for (const owner of projectPageOwners.get(project.key)!) {
+                        const id = starMapProjectResource(owner, project.key);
+                        const last = projectPages.state.resources.get(id)?.state.page?.entries.at(-1)?.row.ref;
+                        if (last) projectPages.controller.setVisibleAnchor(id, { kind: "thread", ref: last });
+                        void projectPages.controller.loadMore(id);
+                      } }
                       : undefined}
                     loadingThreads={projectPageOwners.get(project.key)?.some((owner) => loadingThreadInstances.has(owner))}
                     // In overview the body is the only thing naming the

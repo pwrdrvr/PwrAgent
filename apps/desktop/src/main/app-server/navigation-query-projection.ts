@@ -399,7 +399,7 @@ function normalizeQuery(query: NavigationQuery): NavigationQuery {
   }
 
   if (query.kind === "star-map") {
-    return { kind: "star-map", filters: Object.fromEntries(Object.entries(query.filters)
+    return { kind: "star-map", ...(query.projectKey !== undefined ? { projectKey: query.projectKey } : {}), filters: Object.fromEntries(Object.entries(query.filters)
       .filter(([, value]) => value !== "neutral").sort(([left], [right]) => left.localeCompare(right))) };
   }
   if (query.kind === "lens" || query.kind === "directory-index") {
@@ -476,6 +476,11 @@ function isStarMapOwnerThread(thread: NavigationThreadSummary): boolean {
     && thread.federation?.ref.target.scope !== "remote";
 }
 
+function starMapProjectKey(thread: NavigationThreadSummary): string {
+  const primary = thread.linkedDirectories[0];
+  return primary ? classifyDirectory(primary).key : "__no-project__";
+}
+
 function starMapSignals(thread: NavigationThreadSummary, index: NavigationQueryIndex): NavigationStarMapSignals {
   const active = isActive(thread);
   const unread = thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen";
@@ -523,6 +528,7 @@ function selectQueryThreads(params: {
   }
   if (query.kind === "star-map") {
     return ordinaryThreads.filter(isStarMapOwnerThread)
+      .filter((thread) => query.projectKey === undefined || starMapProjectKey(thread) === query.projectKey)
       .filter((thread) => (thread.pinnedRank !== undefined && query.filters.pinned !== "exclude")
         || passesNavigationStarMapFilters(starMapSignals(thread, params.index), query.filters))
       .sort((left, right) => {
@@ -748,7 +754,7 @@ export function projectNavigationQuery(params: {
         .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
       ?? []
     : query.kind === "star-map"
-      ? params.index.threads.filter(isStarMapOwnerThread)
+      ? (query.projectKey === undefined ? params.index.threads.filter(isStarMapOwnerThread) : selectedThreads)
       : query.kind === "exact"
       || query.kind === "search"
       || query.kind === "messaging-threads"

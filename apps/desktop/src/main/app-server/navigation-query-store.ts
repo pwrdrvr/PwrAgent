@@ -149,6 +149,10 @@ function validateRequest(request: NavigationQueryRequest): void {
     throw new NavigationQueryError("navigation_invalid_request", "Navigation rebaseline requires one explicit anchor without a cursor or unchanged baseline.");
   }
   if (request.query.kind === "star-map") {
+    if (request.query.projectKey !== undefined
+      && (typeof request.query.projectKey !== "string" || !request.query.projectKey || request.query.projectKey.length > 4096)) {
+      throw new NavigationQueryError("navigation_invalid_request", "Invalid Star Map project key.");
+    }
     const keys = new Set(["attention", "approval", "pr", "unpushed", "pinned", "agent"]);
     if (!request.query.filters || Object.entries(request.query.filters).some(([key, value]) =>
       !keys.has(key) || !["neutral", "include", "exclude"].includes(value))) {
