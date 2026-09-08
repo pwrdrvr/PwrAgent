@@ -382,6 +382,14 @@ async function materializeTranscriptEntryImageUrls(
   >,
   resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
 ): Promise<AppServerThreadEntry> {
+  if (entry.type === "activity") {
+    return { ...entry, details: await Promise.all(entry.details.map(async (detail) => ({
+      ...detail,
+      ...(detail.images ? { images: await Promise.all(detail.images.map(async (image) =>
+        await materializeTranscriptMessagePartImageUrl(image, response, deps,
+          materializedFileWrites, fetchedLoopbackImages) as AppServerThreadImagePart)) } : {}),
+    }))) };
+  }
   if (entry.type !== "message") {
     return entry;
   }
@@ -1039,6 +1047,14 @@ function rewriteTranscriptEntryImageUrls(
   entry: AppServerThreadEntry,
   rewriteUrl: TranscriptImageUrlRewriter,
 ): AppServerThreadEntry {
+  if (entry.type === "activity") {
+    return { ...entry, details: entry.details.map((detail) => ({
+      ...detail,
+      ...(detail.images ? { images: detail.images.map((image) => ({
+        ...image, url: rewriteUrl(image.url) ?? image.url,
+      })) } : {}),
+    })) };
+  }
   if (entry.type !== "message") {
     return entry;
   }

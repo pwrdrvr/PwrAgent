@@ -203,7 +203,7 @@ import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
 import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
-  rewriteTranscriptImageUrlsForRenderer,
+  materializeTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
@@ -5378,7 +5378,12 @@ function localBackendOperations(): FederationBackendOperations {
           ? { viewOnly: request.viewOnly }
           : {}),
       });
-      return rewriteTranscriptImageUrlsForRenderer(response);
+      return await materializeTranscriptImageUrlsForRenderer(response, {}, {
+        includeTemporaryImageRoots: true,
+        resolveApprovedLocalImageRoots: () => getDesktopBackendRegistry().getThreadTranscriptImageRoots({
+          backend, threadId: request.threadId,
+        }),
+      });
     },
     async analyzeThreadToolHistory(
       request: AnalyzeThreadToolHistoryRequest,
