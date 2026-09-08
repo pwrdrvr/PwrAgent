@@ -499,7 +499,7 @@ MIT
 - tuf-js@6.0.0 | https://github.com/theupdateframework/tuf-js
 - type-is@2.1.0 | jshttp/type-is
 - undici@6.28.0 | https://github.com/nodejs/undici
-- undici@7.29.0 | https://github.com/nodejs/undici
+- undici@8.10.0 | https://github.com/nodejs/undici
 - undici-types@7.18.2 | https://github.com/nodejs/undici
 - unified@11.0.5 | unifiedjs/unified
 - unist-util-find-after@5.0.0 | syntax-tree/unist-util-find-after
@@ -9983,7 +9983,7 @@ undici@6.28.0 (MIT)
 
 Applies to:
 - undici@6.28.0 (MIT)
-- undici@7.29.0 (MIT)
+- undici@8.10.0 (MIT)
 - undici-types@7.18.2 (MIT)
 
 Representative file: undici@6.28.0/LICENSE
