@@ -246,7 +246,8 @@ it("retains an exact selected identity when a refreshed page no longer contains 
   const originalRead = f.read.getMockImplementation()!;
   f.read.mockImplementation(async (request) => {
     const page = await originalRead(request);
-    return request.query.kind === "lens" ? { ...page, entries: [{ row: row("replacement"), placement: { kind: "root" }, orderKey: "replacement" }] } : page;
+    return request.query.kind === "lens" ? { ...page, complete: true, nextCursor: undefined,
+      entries: [{ row: row("replacement"), placement: { kind: "root" }, orderKey: "replacement" }] } : page;
   });
   await act(async () => { await result.current.refresh(); });
   expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries[0]?.row.id).toBe("replacement");

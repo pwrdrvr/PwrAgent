@@ -215,3 +215,21 @@ it("preserves loaded rows through refresh and transparently rebuilds an evicted 
   expect(read).toHaveBeenCalledTimes(8);
   queries.dispose();
 });
+
+it("honors Load more when a refresh starts before the click is handled", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page()).mockReturnValueOnce(pending.promise)
+    .mockResolvedValue(page({ generation: "fresh", countsRevision: "fresh", complete: true, nextCursor: undefined }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["lens", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+  const refreshing = queries.refresh();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  const loadingMore = queries.loadMore("lens");
+  pending.resolve(page({ generation: "fresh", countsRevision: "fresh", nextCursor: "fresh-next" }));
+  await Promise.all([refreshing, loadingMore]);
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(read.mock.calls[2]?.[0].cursor).toBe("fresh-next");
+  expect(queries.getSnapshot().resources.get("lens")?.state.page?.complete).toBe(true);
+  queries.dispose();
+});

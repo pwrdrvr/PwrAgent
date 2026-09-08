@@ -79,7 +79,7 @@ function mergeEntries(
 export function navigationRetainedRange(state: NavigationPageState): NavigationQueryRequest["retainedRange"] {
   const page = state.page;
   if (!page || state.stale) return undefined;
-  const count = (page.modelGroups ?? page.directories ?? page.entries).length;
+  const count = page.modelGroups?.length || page.directories?.length || page.entries.length;
   return count ? { revision: page.countsRevision, ownerEpoch: page.ownerEpoch,
     start: page.rangeStart ?? 0, count } : undefined;
 }

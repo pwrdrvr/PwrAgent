@@ -118,9 +118,12 @@ export class NavigationWindowQueries {
   refresh(id?: string): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
-    return Promise.all(resources.map((resource) => {
+    return Promise.all(resources.map(async (resource) => {
       if (resource.pending) resource.refreshAfterPending = true;
-      return this.read(resource, false);
+      await this.read(resource, false);
+      // A caller awaiting refresh owns the coalesced replacement too, not
+      // merely the stale read that happened to occupy this resource first.
+      while (this.isCurrent(resource) && resource.pending) await resource.pending;
     })).then(() => undefined);
   }
 
@@ -158,9 +161,13 @@ export class NavigationWindowQueries {
     return this.read(resource, false);
   }
 
-  loadMore(id: string): Promise<void> {
+  async loadMore(id: string): Promise<void> {
     const resource = this.resources.get(id);
-    return resource ? this.read(resource, true) : Promise.resolve();
+    if (!resource) return;
+    // A refresh can begin between the button's render and its click. Preserve
+    // that explicit continuation demand instead of treating the refresh as it.
+    while (this.isCurrent(resource) && resource.pending) await resource.pending;
+    await this.read(resource, true);
   }
 
   private isCurrent(resource: Resource): boolean {
@@ -202,7 +209,8 @@ export class NavigationWindowQueries {
         acquired = await this.acquireReadSlot(resource);
         if (!acquired) return;
         if (!this.api.getNavigationQueryPage) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
-        const size = (page?: NavigationQueryPage) => (page?.modelGroups ?? page?.directories ?? page?.entries ?? []).length;
+        const size = (page?: NavigationQueryPage) => page?.modelGroups?.length
+          || page?.directories?.length || page?.entries.length || 0;
         const assertRetained = (next: NavigationPageState) => {
           const retainedBytes = [...this.resources.values()].reduce((bytes, candidate) => {
             const candidatePage = candidate === resource ? next.page : candidate.value.state.page;
