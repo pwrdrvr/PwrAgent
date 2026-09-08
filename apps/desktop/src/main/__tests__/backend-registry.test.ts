@@ -20684,6 +20684,24 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("invalidates a warm idle list when a local turn starts before provider notification", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/list"] },
+      threads: [{ id: "thread-1", source: "codex", title: "Starting", titleSource: "explicit",
+        linkedDirectories: [], updatedAt: 1, threadStatus: "idle" }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      expect(await registry.listThreads({ backend: "codex" })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "idle" }),
+      ]);
+      await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Start" }] });
+      expect(await registry.listThreads({ backend: "codex" })).toEqual([
+        expect.objectContaining({ id: "thread-1", threadStatus: "active" }),
+      ]);
+    } finally { await registry.close(); }
+  });
+
   it("reports accepted Codex turns as active before a provider start notification", async () => {
     const threads: AppServerThreadSummary[] = [{ id: "thread-1", source: "codex", title: "Starting", titleSource: "explicit", linkedDirectories: [], updatedAt: 1, threadStatus: "active" }];
     const codexClient = new MockBackendClient({

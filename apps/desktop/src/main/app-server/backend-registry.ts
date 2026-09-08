@@ -23712,6 +23712,7 @@ export class DesktopBackendRegistry {
       method === "thread/subthreadOrder/updated" ||
       method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
+      method === "turn/started" ||
       method === "turn/cancelled" ||
       method === "turn/completed" ||
       method === "turn/failed"
