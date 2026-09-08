@@ -19,6 +19,7 @@ import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
   registerAuxiliaryWindowTitle,
+  setAuxiliaryWindowAlwaysOnTop,
   showAndFocusAuxiliaryWindow,
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
@@ -122,6 +123,6 @@ export function setFederationActivityTopmost(senderId: number, enabled: boolean)
     || activityWindow.webContents.id !== senderId) {
     throw new Error("Federation Activity window is not the caller.");
   }
-  activityWindow.setAlwaysOnTop(enabled);
+  setAuxiliaryWindowAlwaysOnTop(activityWindow, enabled);
   return activityWindow.isAlwaysOnTop();
 }

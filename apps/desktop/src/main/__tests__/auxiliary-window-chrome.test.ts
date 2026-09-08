@@ -230,3 +230,18 @@ describe("auxiliary window chrome", () => {
     expect(window.focus).toHaveBeenCalledTimes(1);
   });
 });
+
+it("keeps an explicit topmost choice after a pending Linux raise pulse", async () => {
+  vi.useFakeTimers();
+  setPlatform("linux");
+  const { showAndFocusAuxiliaryWindow, setAuxiliaryWindowAlwaysOnTop } = await import("../auxiliary-window-chrome");
+  const window = createWindow();
+  showAndFocusAuxiliaryWindow(window);
+  vi.advanceTimersByTime(100);
+  setAuxiliaryWindowAlwaysOnTop(window, true);
+  vi.mocked(window.setAlwaysOnTop).mockClear();
+  vi.advanceTimersByTime(1_000);
+  expect(window.setAlwaysOnTop).not.toHaveBeenCalledWith(false);
+  setAuxiliaryWindowAlwaysOnTop(window, false);
+  expect(window.setAlwaysOnTop).toHaveBeenLastCalledWith(false);
+});
