@@ -157,6 +157,8 @@ export function useStarMapThreads(params: {
   refreshNonce?: number;
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
+  const enabledRef = useRef(params.enabled);
+  enabledRef.current = params.enabled;
   const viewId = useId();
   const nextQueryConsumer = useRef(0);
   const queryConsumers = useRef(new Map<string, string>());
@@ -326,6 +328,7 @@ export function useStarMapThreads(params: {
 
   const refreshInstance = useCallback(
     async (instanceId: string): Promise<void> => {
+      if (!enabledRef.current) return;
       const generation = generationRef.current;
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       const deadlineAt = Date.now() + 10_000;
@@ -349,6 +352,7 @@ export function useStarMapThreads(params: {
     async (instanceId: string): Promise<void> => {
       const retained = stateRef.current.queriesByInstance.get(instanceId);
       if (!desktopApi?.getNavigationQueryPage || !retained?.nextCursor) return;
+      if (!enabledRef.current) return;
       const generation = generationRef.current;
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       if (ownerGeneration === undefined) return;
@@ -624,7 +628,7 @@ export function useStarMapThreads(params: {
       }
       owners.clear();
     };
-  }, [desktopApi, viewId]);
+  }, [desktopApi, viewId, params.enabled]);
 
   const result = useMemo(() => {
     const countsByInstance = new Map<string, NavigationCounts>();

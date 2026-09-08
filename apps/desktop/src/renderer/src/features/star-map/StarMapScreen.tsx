@@ -1,3 +1,4 @@
+import { useStarMapForeground } from "./useStarMapForeground";
 import {
   memo,
   useCallback,
@@ -459,6 +460,7 @@ type StarMapScreenProps = {
  * see what needs review.
  */
 export function StarMapScreen(props: StarMapScreenProps) {
+  const active = useStarMapForeground();
   const layerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -466,7 +468,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // The two always-on readouts the edge arrows have to route around.
   const keyHintRef = useRef<HTMLDivElement>(null);
   const selectionBarRef = useRef<HTMLDivElement>(null);
-  const { health } = useFederationHealth({ desktopApi: props.desktopApi });
+  const { health } = useFederationHealth({ desktopApi: props.desktopApi, enabled: active });
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   const [filterSelection, setFilterSelection] =
     useState<StarMapFilterSelection>(() => readStoredFilterSelection());
@@ -1102,6 +1104,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const localFeed = useLocalStarMapThreads({
     desktopApi: props.desktopApi,
     enabled: localRowsAreOwnerMatched,
+    active,
     filters: filterSelection,
     demandedIdentities: demandedLocalIdentities,
   });
@@ -1110,7 +1113,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const remote = useStarMapThreads({
     desktopApi: props.desktopApi,
     peers,
-    enabled: true,
+    enabled: active,
     demandedIdentitiesByInstance,
     filters: filterSelection,
     refreshNonce: remoteRefreshNonce,
@@ -1121,7 +1124,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return descriptors;
   }, [remote.directoriesByInstance, localFeed.directories, localInstanceId, localRowsAreOwnerMatched]);
   const projectPages = useStarMapProjectPages({
-    desktopApi: props.desktopApi, enabled: orbitMode || projectsMode,
+    desktopApi: props.desktopApi, enabled: orbitMode || projectsMode, active,
     localInstanceId, descriptors: projectDescriptorsByInstance, filters: filterSelection,
   });
   useEffect(() => {
@@ -1208,6 +1211,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const instanceLoads = useStarMapInstanceLoad({
     desktopApi: props.desktopApi,
     instanceIds: loadCardInstanceIds,
+    active,
   });
   const toggleLoadCard = useCallback(
     (instanceId: string) => {
@@ -5153,6 +5157,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           const cardZ = STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key);
           return (
             <StarMapChatCard
+              active={active}
               key={card.key}
               cardKey={card.key}
               composerDraftStore={props.composerDraftStore}

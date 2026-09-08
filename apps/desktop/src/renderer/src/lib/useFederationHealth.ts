@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FederationHealthStatus } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
@@ -16,18 +16,24 @@ export function useFederationHealth(params: {
 }): { health?: FederationHealthStatus; refresh: () => void } {
   const desktopApi = params.desktopApi;
   const enabled = params.enabled ?? true;
+  const lifetime = useRef(0);
+  const active = useRef(enabled);
+  active.current = enabled;
   const [health, setHealth] = useState<FederationHealthStatus>();
 
   const refresh = useCallback(() => {
+    if (!active.current) return;
+    const generation = lifetime.current;
     void desktopApi
       ?.readFederationHealth?.({})
-      .then((response) => setHealth(response.health))
+      .then((response) => { if (active.current && lifetime.current === generation) setHealth(response.health); })
       .catch(() => {
         // Keep the last known topology; peer events retrigger the read.
       });
   }, [desktopApi]);
 
   useEffect(() => {
+    lifetime.current += 1;
     if (!enabled) return;
     refresh();
     const unsubscribe = desktopApi?.onAgentEvent?.((event) => {
@@ -39,6 +45,7 @@ export function useFederationHealth(params: {
       }
     });
     return () => {
+      lifetime.current += 1;
       unsubscribe?.();
     };
   }, [desktopApi, enabled, refresh]);

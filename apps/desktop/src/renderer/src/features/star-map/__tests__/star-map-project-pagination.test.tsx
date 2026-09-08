@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import "./foreground-fixture";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { classifyDirectory, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -38,14 +39,14 @@ it.each(["local", "remote"])("renders 15 complete project clouds and three indep
   const view = render(<StarMapScreen desktopApi={api} sessionKeys={{}} localInstanceLabel="Local"
     onOpenLocalThread={() => undefined} onFocusLocalInstance={() => undefined} />);
   await waitFor(() => expect(view.container.querySelectorAll(".star-map__cluster-label")).toHaveLength(15));
-  await waitFor(() => expect(screen.getAllByRole("button", { name: /^Load more project-\d+ threads$/ })).toHaveLength(15));
+  await waitFor(() => expect(view.container.querySelectorAll('button[aria-label^="Load more project-"]')).toHaveLength(15));
   expect(read.mock.calls.filter(([request]) => request.query.kind === "star-map" && request.query.projectKey).length).toBe(15);
   const before = read.mock.calls.length;
-  fireEvent.click(screen.getByRole("button", { name: "Load more project-0 threads" }));
+  fireEvent.click(view.container.querySelector('button[aria-label="Load more project-0 threads"]')!);
   await waitFor(() => expect(view.container.querySelectorAll('[data-thread-key$="p0-c19"]')).toHaveLength(1));
-  fireEvent.click(screen.getByRole("button", { name: "Load more project-0 threads" }));
+  fireEvent.click(view.container.querySelector('button[aria-label="Load more project-0 threads"]')!);
   await waitFor(() => expect(view.container.querySelectorAll('[data-thread-key$="p0-c22"]')).toHaveLength(1));
-  expect(screen.queryByRole("button", { name: "Load more project-0 threads" })).toBeNull();
+  expect(view.container.querySelector('button[aria-label="Load more project-0 threads"]')).toBeNull();
   expect(view.container.querySelectorAll('[data-thread-key$="p0-c0"]')).toHaveLength(1);
   expect(expired).toBe(true);
   expect(read.mock.calls.slice(before).every(([request]) => request.query.kind === "star-map"

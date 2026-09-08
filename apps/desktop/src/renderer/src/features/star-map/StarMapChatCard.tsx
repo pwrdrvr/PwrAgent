@@ -80,6 +80,7 @@ import {
 
 export type StarMapChatCardProps = {
   cardKey: string;
+  active?: boolean;
   composerDraftStore?: ComposerDraftStore;
   desktopApi?: DesktopApi;
   /** Owning instance's celestial mark, watermarked behind the header. */
@@ -248,6 +249,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     desktopApi,
     initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
     readReason: "star-map-card",
+    suspended: props.active === false,
     thread,
   });
   // The session is a fresh object literal on every render of a hook that
@@ -319,11 +321,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const queueReadiness = useIndependentQueueProjection({
     composerDraftStore: ownedComposerDraftStore,
     desktopApi,
-    selectedThread: thread,
+    selectedThread: props.active === false ? undefined : thread,
     federationTarget,
   });
   const selectedDetail = useNavigationSelectedDetail({
     desktopApi,
+    enabled: props.active !== false,
     ref: { backend: thread.source, threadId: thread.id, ownerInstanceId: remoteInstanceId },
     federationTarget,
   });
@@ -433,6 +436,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       : "Open in a window connected to that instance";
   const isAcpThread = thread.source.startsWith("acp:");
   const backendSummaries = useBackendSummaries(desktopApi, {
+    suspended: props.active === false,
     // The composer needs model/runtime image capability before its first
     // paste or drop. Keep this target-scoped so a remote card reads the
     // owning peer's provider summary rather than the viewer's.
@@ -507,8 +511,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * jump uses. That matters more here than anywhere: a card on a star map
    * is usually open *because* of another instance.
    */
-  const threadSkills = useThreadSkills({ desktopApi, thread });
-  const navigationSources = useComposerMentionSources({ desktopApi });
+  const threadSkills = useThreadSkills({ desktopApi: props.active === false ? undefined : desktopApi, thread });
+  const navigationSources = useComposerMentionSources({ desktopApi: props.active === false ? undefined : desktopApi });
   const ensureSkillsLoaded = threadSkills.ensureLoaded;
   const ensureNavigationLoaded = navigationSources.ensureLoaded;
   const mentionSources = useMemo<ComposerMentionSources>(
