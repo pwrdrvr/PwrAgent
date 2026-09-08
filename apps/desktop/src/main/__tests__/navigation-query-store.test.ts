@@ -234,15 +234,20 @@ describe("NavigationQueryStore", () => {
       linkedDirectories: [{ id: `dir-${project}`, kind: "local" as const, path: `/repos/project-${project}`, label: `project-${project}` }],
     }))).flat();
     const loadIndex = async () => snapshot(threads);
-    const geometry = await store.readPage({ scopeKey: owner, loadIndex,
-      request: request({ query: { kind: "star-map-geometry" }, pageSize: 100 }) });
+    const target = { scope: "remote" as const, instanceId: "map-owner" };
+    const read = async (query: NavigationQueryRequest) => {
+      const page = await store.readPage({ scopeKey: owner, loadIndex,
+        request: owner === "remote" ? navigationRequestForOwner({ ...query, federationTarget: target }, target) : query });
+      return owner === "remote" ? stampRemoteNavigationQueryPage({ page, target, instanceLabel: "Map owner" }) : page;
+    };
+    const geometry = await read(request({ query: { kind: "star-map-geometry" }, pageSize: 100 }));
     expect(geometry.directories).toHaveLength(15);
     for (const project of geometry.directories!) {
       const ids: string[] = [];
       let cursor: string | undefined;
       do {
-        const page = await store.readPage({ scopeKey: owner, loadIndex,
-          request: request({ query: { kind: "star-map", filters: {}, projectKey: project.key }, pageSize: 10, cursor }) });
+        const page = await read(request({ query: { kind: "star-map", filters: {}, projectKey: project.key }, pageSize: 10, cursor }));
+        expect(page.entries.every(({ row }) => row.ref.ownerInstanceId === (owner === "remote" ? target.instanceId : undefined))).toBe(true);
         expect(page.entries.length).toBeLessThanOrEqual(10);
         expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
         expect(page.counts.total).toBe(23);

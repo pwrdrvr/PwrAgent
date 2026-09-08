@@ -4656,8 +4656,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
               onClick={() => {
                 if (hasMore) {
                   setExpandedClusters((current) => new Set([...current, `${position.instanceId}::${cluster.key}`]));
-                  const last = resource?.state.page?.entries.at(-1)?.row.ref;
-                  if (last) projectPages.controller.setVisibleAnchor(resourceId, { kind: "thread", ref: last });
+                  const first = resource?.state.page?.entries[0]?.row.ref;
+                  if (first) projectPages.controller.setVisibleAnchor(resourceId, { kind: "thread", ref: first });
                   void projectPages.controller.loadMore(resourceId);
                 } else toggleClusterExpanded(position.instanceId, cluster.key);
               }}
@@ -4963,8 +4963,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     onLoadMoreThreads={projectPageOwners.has(project.key)
                       ? () => { for (const owner of projectPageOwners.get(project.key)!) {
                         const id = starMapProjectResource(owner, project.key);
-                        const last = projectPages.state.resources.get(id)?.state.page?.entries.at(-1)?.row.ref;
-                        if (last) projectPages.controller.setVisibleAnchor(id, { kind: "thread", ref: last });
+                        const first = projectPages.state.resources.get(id)?.state.page?.entries[0]?.row.ref;
+                        if (first) projectPages.controller.setVisibleAnchor(id, { kind: "thread", ref: first });
                         void projectPages.controller.loadMore(id);
                       } }
                       : undefined}

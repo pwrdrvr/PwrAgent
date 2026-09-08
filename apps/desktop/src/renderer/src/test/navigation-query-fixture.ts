@@ -56,6 +56,10 @@ export function navigationQueryFixture(
       || (target?.scope === "remote" && !hasMountedRows && directory.threadKeys?.includes(buildThreadIdentityKey(thread.source, thread.id)))
       || thread.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key));
   let threads = all;
+  if (query.kind === "star-map" && query.projectKey !== undefined) {
+    threads = all.filter((thread) => (thread.linkedDirectories[0]
+      ? classifyDirectory(thread.linkedDirectories[0]).key : "__no-project__") === query.projectKey);
+  }
   if (query.kind === "group-members") {
     threads = [];
     const visited = new Set<string>();
@@ -119,14 +123,14 @@ export function navigationQueryFixture(
     : threads.findIndex((thread) => key(thread) === navigationThreadSelectionKey(anchor.ref))
     : Number(request.cursor ?? 0);
   if (offset < 0) throw new Error("Navigation anchor is no longer in this query.");
-  const total = query.kind === "directory-index" ? descriptors.length : threads.length;
+  const total = (query.kind === "directory-index" || query.kind === "star-map-geometry") ? descriptors.length : threads.length;
   const next = offset + size < total ? String(offset + size) : undefined;
   return {
     ...(offset ? { rangeStart: offset } : {}),
     protocol: 2, queryKey: JSON.stringify(query), generation: "fixture", ownerEpoch: "fixture", countsRevision: "fixture",
     coverage: { state: "complete" }, counts: counts(query.kind === "directory-index" ? all : threads), complete: !next, nextCursor: next,
-    directories: query.kind === "directory-index" ? descriptors.slice(offset, offset + size) : [],
-    entries: query.kind === "directory-index" ? [] : threads.slice(offset, offset + size).map((thread, index) => {
+    directories: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? descriptors.slice(offset, offset + size) : [],
+    entries: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? [] : threads.slice(offset, offset + size).map((thread, index) => {
       const owner = thread.federation?.ref.target;
       const row: NavigationRow = {
         ref: { backend: thread.source, threadId: thread.id, ownerInstanceId: owner?.scope === "remote" ? owner.instanceId : undefined },
