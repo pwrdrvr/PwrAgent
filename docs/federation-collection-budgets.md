@@ -353,3 +353,33 @@ serialization, sampled a 37,321,528-byte heap increase and reached 133,776 KiB R
 These measurements are distinct from enforced serialized-backing admission
 budgets. Sampling does not establish a bound on all V8 allocations or all
 simultaneously mounted application resources.
+
+### Star Map project continuation and transcript hydration regressions
+
+The orbit renderer now seeds every project cloud from the owner's complete compact
+geometry, including projects with no card rows loaded yet. Card discovery uses
+`star-map` queries scoped by primary `projectKey`: ten rows per project initially,
+then explicit continuation for that project. The window query controller schedules
+four reads at a time and admits 8 MiB of retained project-page backing and 1 MiB
+of request metadata across owners. It uses the existing shared main-process pool;
+each response still fits 100 records / 252 KiB. No transcript or image is fetched
+for a closed card. These are serialized backing limits, not a heap measurement.
+
+The first displayed card anchors recovery after owner cursor eviction, so loading
+another page does not discard earlier cards or prematurely exhaust continuation.
+A remote owner that returns rows outside the requested project produces an upgrade
+error instead of an incorrectly populated project. Participating owners must run
+the project-selector implementation for acceptance.
+
+The 15-project, 23-card-per-project regressions cover local and remote renderer
+paging and owner projection/stamping. The Electron regression exercises the real
+eight-generation cursor pool, three pages, and retention of all project clouds.
+These query and renderer changes introduce no SQLite writes: 0 MB/day added WAL.
+
+Transcript regressions cover exact bottom-follow through asynchronous layout and
+intentional scrolled-up restoration. A contrived partial GIF-only echo exposed a
+separate reconciliation defect: a submitted GIF+PNG presentation now survives
+until the complete authoritative image set arrives. Real Electron decoding tests
+verify both in-view thumbnails before completion and afterward. This does not
+establish that partial echo caused the operator's live missing-PNG observation;
+that live cause remains an acceptance question.
