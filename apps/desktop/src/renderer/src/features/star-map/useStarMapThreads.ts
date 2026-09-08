@@ -229,6 +229,10 @@ export function useStarMapThreads(params: {
       const ownerGeneration = ownerGenerations.current.get(instanceId);
       if (ownerGeneration === undefined) throw new Error("This owner is not connected with navigation query protocol 2.");
       const isCurrent = () => generationRef.current === generation && ownerGenerations.current.get(instanceId) === ownerGeneration;
+      // Let synchronous effect cleanup revoke admission before sending either
+      // the row or geometry query. Pending reads remain scoped to this owner.
+      await Promise.resolve();
+      if (!isCurrent()) return;
       attentionOwnersRef.current.add(instanceId);
       const request = attentionRequest({ instanceId, filters, attentionView });
       const selectionKey = JSON.stringify(request.query);

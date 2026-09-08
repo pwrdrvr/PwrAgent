@@ -19,6 +19,8 @@ export async function readNavigationQueryRange(params: {
   let restarted = false;
   let retainedBytes = 0;
   const encoder = new TextEncoder();
+  // Range owners can be replaced during mount replay before any IPC starts.
+  await Promise.resolve();
   while (true) {
     if (params.isCancelled()) throw new Error("Navigation metadata read cancelled.");
     if (Date.now() >= deadlineAt) throw new Error("Navigation metadata read deadline expired.");

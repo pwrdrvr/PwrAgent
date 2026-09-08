@@ -1,7 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { NavigationDirectoryRow, NavigationQueryRequest, NavigationStarMapFilterSelection } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { NavigationWindowQueries } from "../../lib/navigation-window-queries";
+import { NavigationWindowQueries, type NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
 import { threadProjectKey } from "./star-map-projects";
 import { navigationQueryEventRequiresRefresh } from "../../lib/navigation-query-events";
 
@@ -25,7 +25,17 @@ export function useStarMapProjectPages(params: {
   const active = params.active ?? true;
   const viewId = useId();
   const owners = useRef(new Set<string>());
-  const controller = useMemo(() => {
+  const controllerRef = useRef<NavigationWindowQueries | undefined>(undefined);
+  const [state, setState] = useState<NavigationWindowQueriesState>({ resources: new Map() });
+  // Public operations always address the currently mounted controller. A
+  // disposed controller must never survive an effect cleanup/setup cycle.
+  const controller = useMemo(() => ({
+    refresh: (...args: Parameters<NavigationWindowQueries["refresh"]>) => controllerRef.current?.refresh(...args) ?? Promise.resolve(),
+    restart: (...args: Parameters<NavigationWindowQueries["restart"]>) => controllerRef.current?.restart(...args) ?? Promise.resolve(),
+    loadMore: (...args: Parameters<NavigationWindowQueries["loadMore"]>) => controllerRef.current?.loadMore(...args) ?? Promise.resolve(),
+    setVisibleAnchor: (...args: Parameters<NavigationWindowQueries["setVisibleAnchor"]>) => controllerRef.current?.setVisibleAnchor(...args),
+  }), []);
+  useEffect(() => {
     const result = new NavigationWindowQueries({
       releaseNavigationQuery: api?.releaseNavigationQuery,
       getNavigationQueryPage: async (request, consumer) => {
@@ -40,13 +50,21 @@ export function useStarMapProjectPages(params: {
       },
     });
     result.setVisible(false);
-    return result;
+    controllerRef.current = result;
+    const unsubscribe = result.subscribe(() => setState(result.getSnapshot()));
+    setState(result.getSnapshot());
+    return () => {
+      unsubscribe();
+      result.dispose();
+      if (controllerRef.current === result) controllerRef.current = undefined;
+    };
   }, [api]);
-  const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const demandKey = JSON.stringify(params.enabled ? [...params.descriptors].flatMap(([owner, projects]) =>
     projects.map((project) => [owner, project.key])) : []);
   const filterKey = JSON.stringify(params.filters);
   useEffect(() => {
+    const controller = controllerRef.current;
+    if (!controller) return;
     const demand = new Map<string, NavigationQueryRequest>();
     for (const [owner, projectKey] of JSON.parse(demandKey) as [string, string][]) {
       owners.current.add(owner === params.localInstanceId ? "" : owner);
@@ -60,10 +78,10 @@ export function useStarMapProjectPages(params: {
     if (!active) controller.setVisible(false);
     controller.setDemand(demand);
     controller.setVisible(active);
-  }, [active, controller, demandKey, filterKey, params.localInstanceId, viewId]);
-  useEffect(() => () => controller.dispose(), [controller]);
+  }, [active, api, demandKey, filterKey, params.localInstanceId, viewId]);
   useEffect(() => {
-    if (!active) return;
+    const controller = controllerRef.current;
+    if (!active || !controller) return;
     let pending: ReturnType<typeof setTimeout> | undefined;
     const dirty = new Set<string>();
     const unsubscribe = api?.onAgentEvent?.((event) => {
@@ -98,7 +116,7 @@ export function useStarMapProjectPages(params: {
       clearInterval(timer);
       if (pending) clearTimeout(pending);
     };
-  }, [active, api, controller, params.localInstanceId]);
+  }, [active, api, params.localInstanceId]);
   useEffect(() => {
     const admittedOwners = owners.current;
     return () => {
