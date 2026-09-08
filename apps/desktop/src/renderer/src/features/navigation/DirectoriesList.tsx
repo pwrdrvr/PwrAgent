@@ -1844,10 +1844,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     ) : null}
 
                     {pinResource && (pinResource.state.error || (pinResource.loading && !pinResource.state.page)
-                      || pinResource.state.rebaselineRequired || pinResource.state.page?.nextCursor) ? (
+                      || pinResource.state.rebaselineRequired || pinResource.state.page?.nextCursor
+                      || (pinResource.state.page?.rangeStart ?? 0) > 0) ? (
                       <div role="listitem">
                         {pinResource.state.error ? <p className="sidebar-error">{pinResource.state.error}</p> : null}
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
+                        {(pinResource.state.page?.rangeStart ?? 0) > 0 && !pinResource.state.rebaselineRequired ? (
+                          <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" disabled={pinResource.loading} onClick={() => void props.pagedNavigation?.restart(pinResourceId)}>Show pinned threads from beginning</button>
+                        ) : null}
                         {pinResource.state.rebaselineRequired ? (
                           <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" onClick={() => void props.pagedNavigation?.restart(pinResourceId)}>Reload pinned threads</button>
                         ) : pinResource.state.page?.nextCursor ? (

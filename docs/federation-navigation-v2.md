@@ -112,6 +112,12 @@ removed anchor requires an explicit restart; consumers must supply their visible
 anchor when wiring the controller. Routine refresh rebuilds the displayed range
 atomically rather than replacing a multi-page list with only its first page.
 
+Selecting an off-page pin does not rebaseline the displayed pin range. Its
+independent exact root may supplement presentation without changing page
+membership, counts or continuation. Explicit anchored pin tails offer a return
+to the beginning even without a next cursor. Restart waits for pending refreshes
+and drops the prior anchor and retained-range acknowledgment.
+
 Count retained serialized backing explicitly; document and measure transient
 decoding/projection allocations separately rather than describing a JSON byte
 limit as a JavaScript heap limit. These are navigation budgets, not permission

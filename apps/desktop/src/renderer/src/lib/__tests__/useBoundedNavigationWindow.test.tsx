@@ -177,3 +177,47 @@ it("coalesces canonical owner row changes and ignores stream events and another 
   expect(fixture.read.mock.calls[1]?.[0].completeBaselineRevision).toBeUndefined();
   unmount();
 });
+
+it.each([false, true])("preserves thirty loaded pins when selecting a new last pin during refresh=%s", async (race) => {
+  const fixture = api();
+  const row = (position: number): NavigationRow => ({ id: `pin-${position}`, source: "codex", title: `Pin ${position}`,
+    titleSource: "explicit", ref: { backend: "codex", threadId: `pin-${position}` }, rowRevision: "r",
+    pinnedRank: String((position + 1) * 1024), linkedDirectories: [], inbox: { inInbox: false },
+    ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" });
+  let finishRefresh!: () => void;
+  const gate = new Promise<void>((resolve) => { finishRefresh = resolve; });
+  let hold = false;
+  fixture.read.mockImplementation(async (request) => {
+    if (request.query.kind === "directory-index") return page({ directories: [directory] });
+    if (request.query.kind === "exact") {
+      const position = Number(request.query.identities[0]!.threadId.slice(4));
+      return page({ selectionDirectory: directory, entries: [{ row: row(position), placement: { kind: "root" }, orderKey: String(position) }] });
+    }
+    if (request.query.kind !== "directory" || request.query.roots !== "pinned") return page();
+    if (hold && !request.cursor) { hold = false; await gate; }
+    const start = request.anchor?.kind === "thread" ? Number(request.anchor.ref.threadId.slice(4)) : Number(request.cursor ?? 0);
+    const end = Math.min(start + 10, 31);
+    return page({ rangeStart: start, complete: end === 31, nextCursor: end < 31 ? String(end) : undefined,
+      entries: Array.from({ length: end - start }, (_, i) => ({ row: row(start + i), placement: { kind: "root" as const }, orderKey: String(start + i) })) });
+  });
+  const { result, rerender, unmount } = renderHook(({ selected }) => useBoundedNavigationWindow({ ...base,
+    desktopApi: fixture.desktopApi, expandedByKey: { [directory.key]: true }, selectedDirectoryKeys: [directory.key],
+    selectedRef: { backend: "codex", threadId: `pin-${selected}` },
+  }), { initialProps: { selected: 0 } });
+  const id = `directory-pins:${directory.key}`;
+  await waitFor(() => expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(10));
+  await act(() => result.current.loadMore(id));
+  await act(() => result.current.loadMore(id));
+  let refreshing: Promise<void> | undefined;
+  if (race) { hold = true; act(() => { refreshing = result.current.refresh(); }); }
+  rerender({ selected: 30 });
+  await waitFor(() => expect(result.current.resources.get("selected-context")?.state.page?.entries[0]?.row.id).toBe("pin-30"));
+  if (race) await act(async () => { finishRefresh(); await refreshing; });
+  await waitFor(() => expect(result.current.resources.get(id)?.loading).toBe(false));
+  expect(result.current.resources.get(id)?.state.page?.entries.map((entry) => entry.row.id)).toEqual(Array.from({ length: 30 }, (_, i) => `pin-${i}`));
+  expect(result.current.resources.get(id)?.state.page?.nextCursor).toBe("30");
+  expect(fixture.read.mock.calls.some(([request]) => request.query.kind === "directory" && request.anchor)).toBe(false);
+  await act(() => result.current.loadMore(id));
+  expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(31);
+  unmount();
+});

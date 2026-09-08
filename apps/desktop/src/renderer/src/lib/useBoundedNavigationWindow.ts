@@ -94,6 +94,9 @@ export function useBoundedNavigationWindow(params: Demand & {
       if (!state.resources.has(id)) selectedRangeCheckedRef.current.delete(id);
     }
     if (params.browseMode !== "directories" || !params.selectedRef || !selectedRoot) return;
+    // Exact selection supplies an off-page pin for presentation independently.
+    // Seeking its append rank would replace the visible pins with a tail page.
+    if (selectedRoot.row.pinnedRank) return;
     const selection = navigationIdentityKey(params.selectedRef);
     const rootKey = navigationIdentityKey(selectedRoot.row.ref);
     for (const directoryKey of selectedDirectoryKeys ?? []) {

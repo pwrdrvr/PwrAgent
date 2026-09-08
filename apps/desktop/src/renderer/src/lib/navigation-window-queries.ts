@@ -153,12 +153,14 @@ export class NavigationWindowQueries {
   }
 
   /** Returning to the start after a removed anchor is an explicit viewer action. */
-  restart(id: string): Promise<void> {
+  async restart(id: string): Promise<void> {
     const resource = this.resources.get(id);
-    if (!resource) return Promise.resolve();
+    if (!resource) return;
+    while (this.isCurrent(resource) && resource.pending) await resource.pending;
+    if (!this.isCurrent(resource)) return;
     resource.anchor = undefined;
     resource.value = { ...resource.value, state: { ...resource.value.state, rebaselineRequired: false, stale: true } };
-    return this.read(resource, false);
+    return this.read(resource, false, undefined, true);
   }
 
   async loadMore(id: string): Promise<void> {
@@ -189,14 +191,14 @@ export class NavigationWindowQueries {
     return true;
   }
 
-  private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor): Promise<void> {
+  private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor, fromStart = false): Promise<void> {
     if (!this.isCurrent(resource)) return Promise.resolve();
     if (resource.pending) {
       if (anchor) resource.refreshAfterPending = true;
       return resource.pending;
     }
     const explicitAnchor = anchor;
-    anchor = continuation ? undefined : anchor ?? resource.anchor;
+    anchor = continuation || fromStart ? undefined : anchor ?? resource.anchor;
     if (resource.value.state.rebaselineRequired && !anchor) return Promise.resolve();
     const cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
@@ -227,11 +229,11 @@ export class NavigationWindowQueries {
         };
         let page: NavigationQueryPage;
         let pageCursor = cursor;
-        let wanted = explicitAnchor ? 0 : size(started.page);
+        let wanted = explicitAnchor || fromStart ? 0 : size(started.page);
         try {
           page = await readPage({ ...started.request, cursor, anchor,
-            completeBaselineRevision: !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
-            retainedRange: !explicitAnchor && !cursor
+            completeBaselineRevision: !fromStart && !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
+            retainedRange: !fromStart && !explicitAnchor && !cursor
               && (anchor || !started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
               ? navigationRetainedRange(started) : undefined,
           });

@@ -233,3 +233,23 @@ it("honors Load more when a refresh starts before the click is handled", async (
   expect(queries.getSnapshot().resources.get("lens")?.state.page?.complete).toBe(true);
   queries.dispose();
 });
+
+it("explicit restart drops tail acknowledgments even when requested during a refresh", async () => {
+  const pending = deferred<NavigationQueryPage>();
+  const read = vi.fn().mockResolvedValueOnce(page({ rangeStart: 30, complete: true, nextCursor: undefined }))
+    .mockReturnValueOnce(pending.promise).mockResolvedValue(page({ rangeStart: 0 }));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["pins", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("pins")?.loading).toBe(false));
+  queries.setVisibleAnchor("pins", { kind: "thread", ref: { backend: "codex", threadId: "last" } });
+  const refreshing = queries.refresh("pins");
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  const restarting = queries.restart("pins");
+  pending.resolve(page({ rangeStart: 30, complete: true, nextCursor: undefined }));
+  await Promise.all([refreshing, restarting]);
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(read.mock.calls[2]?.[0]).toMatchObject({ anchor: undefined, cursor: undefined,
+    retainedRange: undefined, completeBaselineRevision: undefined });
+  expect(queries.getSnapshot().resources.get("pins")?.state.page?.rangeStart).toBe(0);
+  queries.dispose();
+});
