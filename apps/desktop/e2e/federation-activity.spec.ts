@@ -70,7 +70,7 @@ for (const theme of ["dark", "light"] as const) {
       await activity.emulateMedia({ reducedMotion: "reduce" });
       await expect(activity.getByText("Running · connected")).toBeVisible();
       await expect(activity.getByRole("switch", { name: "Federation enabled" })).toHaveClass(/settings-switch/);
-      await expect(activity.getByRole("img", { name: /Data and wire rates/ })).toBeVisible();
+      await expect(activity.getByRole("img", { name: /Data and wire amounts/ })).toBeVisible();
       const topmost = activity.getByRole("checkbox", { name: "Always on top", exact: true });
       await topmost.click();
       await expect(topmost).toBeChecked();
