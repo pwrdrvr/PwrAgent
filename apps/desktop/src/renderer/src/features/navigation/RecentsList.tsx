@@ -273,7 +273,7 @@ export function RecentsList(props: RecentsListProps) {
         {childResources.map((childResource) => (
           <Fragment key={childResource.id}>
             {childResource.state.error ? <p role="alert">{childResource.state.error}</p> : null}
-            {childResource.loading ? <p>Loading sub-threads…</p> : null}
+            {childResource.loading && !childResource.state.page ? <p>Loading sub-threads…</p> : null}
             {childResource.state.rebaselineRequired ? (
               <button type="button" onClick={() => void props.pagedNavigation?.restart(childResource.id)}>Reload sub-threads</button>
             ) : childResource.state.page?.nextCursor ? (

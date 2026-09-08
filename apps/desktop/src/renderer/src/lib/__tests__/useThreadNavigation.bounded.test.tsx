@@ -176,6 +176,53 @@ it("selected_action_waits_for_authoritative_detail: preserves an off-page select
 });
 
 
+it("keeps loaded sub-threads in place without inserting loading text on refresh", async () => {
+  const f = fixture();
+  f.detail.mockImplementation(async (request) => ({ protocol: 2, ref: request.ref,
+    revision: "detail", readiness: "ready", identity: "present",
+    thread: { ...row(request.ref.threadId), ordinaryChildCount: request.ref.threadId === "thread-0" ? 1 : 0 } }));
+  const original = f.read.getMockImplementation()!;
+  let holdChildren = false;
+  let finish!: () => void;
+  let childPending = false;
+  f.read.mockImplementation(async (request) => {
+    const page = await original(request);
+    if (request.query.kind === "lens" || request.query.kind === "exact") {
+      return { ...page, entries: page.entries.map((entry) => ({ ...entry,
+        row: { ...entry.row, ordinaryChildCount: entry.row.id === "thread-0" ? 1 : 0 } })) };
+    }
+    if (request.query.kind === "children") {
+      if (holdChildren) {
+        childPending = true;
+        await new Promise<void>((resolve) => { finish = resolve; });
+      }
+      return { ...page, entries: [{ row: { ...row("child"), parentThreadId: "thread-0" },
+        placement: { kind: "child", parent: row("thread-0").ref }, orderKey: "child" }] };
+    }
+    return page;
+  });
+  let navigation!: ReturnType<typeof useThreadNavigation>;
+  function Window() {
+    navigation = useThreadNavigation(f.api);
+    return <Sidebar backends={[]} browseMode={navigation.browseMode} directories={navigation.directories}
+      threads={navigation.threads} inboxThreads={navigation.inboxThreads} pagedNavigation={navigation.pagedNavigation}
+      loading={navigation.loading} selectedItemKey={navigation.selectedItemKey}
+      onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
+  }
+  const mounted = render(<Window />);
+  await screen.findByRole("button", { name: "child" });
+  holdChildren = true;
+  let refresh!: Promise<void>;
+  act(() => { refresh = navigation.pagedNavigation.refresh(); });
+  await waitFor(() => expect(childPending).toBe(true));
+  expect(screen.getByRole("button", { name: "child" })).toBeTruthy();
+  expect(screen.queryByText("Loading sub-threads…")).toBeNull();
+  await act(async () => { holdChildren = false; finish(); await refresh; });
+  expect(screen.getByRole("button", { name: "child" })).toBeTruthy();
+  mounted.unmount();
+});
+
 it("renders admitted owner rows in the real Sidebar and requests more only after a click", async () => {
   const f = fixture();
   function Window() {

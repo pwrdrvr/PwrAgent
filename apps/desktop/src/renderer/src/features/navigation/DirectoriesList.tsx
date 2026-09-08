@@ -1280,7 +1280,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             {childResources.map((childResource) => (
               <Fragment key={childResource.id}>
                 {childResource.state.error ? <p role="alert">{childResource.state.error}</p> : null}
-                {childResource.loading ? <p>Loading sub-threads…</p> : null}
+                {childResource.loading && !childResource.state.page ? <p>Loading sub-threads…</p> : null}
                 {childResource.state.rebaselineRequired ? (
                   <button type="button" onClick={() => void props.pagedNavigation?.restart(childResource.id)}>Reload sub-threads</button>
                 ) : childResource.state.page?.nextCursor ? (
@@ -1891,7 +1891,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
                 )}
                 {rootResource?.state.error ? <p className="sidebar-error">{rootResource.state.error}</p> : null}
-                {rootResource?.loading ? <p className="sidebar-empty">Loading threads…</p> : null}
+                {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty">Loading threads…</p> : null}
                 {rootResource?.state.rebaselineRequired ? (
                   <button type="button" className="directory-row__show-more" onClick={() => void props.pagedNavigation?.restart(rootResourceId)}>Reload this directory</button>
                 ) : rootResource?.state.page?.nextCursor ? (
