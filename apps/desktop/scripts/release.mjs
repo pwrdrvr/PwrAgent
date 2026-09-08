@@ -54,6 +54,7 @@ import {
   requireUpdateChannelFile,
   WINDOWS_UPDATE_CHANNEL_FILE,
 } from "./update-channel-files.mjs";
+import { handoffPreloadedCodesignIdentity } from "./release-signing-environment.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -817,10 +818,10 @@ function maybePrepareCodesignKeychain() {
     );
   }
 
-  process.env.CSC_KEYCHAIN = keychainPath;
   process.env.PWRAGENT_DOCK_PLUGIN_SIGN_IDENTITY ??= identity;
   process.env.CSC_NAME ??= stripDeveloperIdApplicationPrefix(identity);
   console.log(`  imported CSC_LINK into temporary keychain for ${identity}`);
+  return true;
 }
 
 if (!signStageOnly) {
@@ -954,8 +955,13 @@ if (win) {
 } else {
   step(`electron-builder --mac --universal (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
   maybeDecodeAppleApiKey();
-  maybeDecodeCscLink();
-  maybePrepareCodesignKeychain();
+  if (!dryrun) {
+    maybeDecodeCscLink();
+    if (maybePrepareCodesignKeychain()) {
+      handoffPreloadedCodesignIdentity(process.env);
+      console.log("  using preloaded Developer ID keychain for electron-builder signing");
+    }
+  }
   builderArgs.push("--mac", "--universal");
   if (dryrun) {
     // Use ad-hoc signing (identity=-) instead of no signing (identity=null).

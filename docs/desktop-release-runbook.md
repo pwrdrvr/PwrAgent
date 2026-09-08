@@ -214,19 +214,26 @@ The macOS environment-gated signing job:
 
 1. Verifies the prepared artifact SHA-256 from the build job output.
 2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
-3. Patches the staged electron-builder GitHub `releaseType` from the desktop
+3. Imports `CSC_LINK` into a generated temporary keychain, verifies its
+   Developer ID identity, and makes that keychain first in the user search
+   list. It then clears `CSC_KEYCHAIN`, `CSC_LINK`, and `CSC_KEY_PASSWORD`
+   before invoking electron-builder. This avoids electron-builder 26.15.x
+   passing the `.p12` password to its temporary keychain's
+   `set-key-partition-list` command; signing still uses the preloaded identity
+   selected through `CSC_NAME`.
+4. Patches the staged electron-builder GitHub `releaseType` from the desktop
    package version. This rewrites the staged config only; the job packages with
    `--publish never` and never creates a GitHub Release. The `Pre-release` flag
    on the published release comes from `Publish release assets`, which always
    passes `--prerelease`.
-4. Runs `electron-builder --mac --universal --publish never` from the
+5. Runs `electron-builder --mac --universal --publish never` from the
    downloaded artifact, without invoking `pnpm install`, `npx`, or dependency
    lifecycle scripts. `electron-builder` signs every
    helper bundle individually, signs the main `.app`, submits to Apple's
    notarization service via `notarytool`, staples the ticket, builds the DMG
    and universal updater ZIP, and generates `latest-mac.yml` without creating
    a GitHub Release.
-5. Prepares the stable-name `PwrAgent.dmg` alias and transfers the signed
+6. Prepares the stable-name `PwrAgent.dmg` alias and transfers the signed
    macOS assets to the all-platform publishing job.
 
 The all-platform publishing job creates the GitHub Release only after the

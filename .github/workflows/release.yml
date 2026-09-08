@@ -90,6 +90,7 @@ jobs:
             apps/desktop/release-stage \
             .github/actions/select-xcode-for-actool \
             apps/desktop/scripts/release.mjs \
+            apps/desktop/scripts/release-signing-environment.mjs \
             apps/desktop/scripts/update-channel-files.mjs \
             apps/desktop/scripts/verify-asar-contents.mjs \
             apps/desktop/scripts/asar-entry-paths.mjs \
