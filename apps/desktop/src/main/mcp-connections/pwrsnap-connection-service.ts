@@ -20,6 +20,7 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
+  PWRSNAP_SESSION_REVOKED_DETAIL,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
   type PwrSnapConnectionStatus,
@@ -44,6 +45,9 @@ const PWRSNAP_SCOPES = [
   "sizzle.full.read",
 ].join(" ");
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
+/** Returned to agents through the bridge, where no Connect button is visible. */
+export const PWRSNAP_SESSION_REVOKED_ERROR =
+  "PwrSnap revoked this connection. PwrSnap tools stay unavailable until the operator chooses Connect to PwrSnap on New thread in PwrAgent.";
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 const MAX_RPC_CONNECTIONS = 32;
 
@@ -399,6 +403,7 @@ export class PwrSnapConnectionService {
   private upstreamClient?: Client;
   private upstreamTransport?: StreamableHTTPClientTransport;
   private connectPromise?: Promise<ConnectPwrSnapResponse>;
+  private sessionRevoked = false;
 
   constructor(options: PwrSnapConnectionServiceOptions = {}) {
     this.bridgeEntryPath =
@@ -419,6 +424,15 @@ export class PwrSnapConnectionService {
       this.isEndpointAvailable(),
     ]);
     const installed = endpointAvailable || Boolean(this.findInstalledPath());
+    const configured = Boolean(credential.tokens?.access_token);
+    const details: string[] = [];
+    if (!configured && this.sessionRevoked) {
+      details.push(PWRSNAP_SESSION_REVOKED_DETAIL);
+    }
+    if (!endpointAvailable && installed) {
+      details.push("Open PwrSnap and enable Local Agent Access to connect agents.");
+    }
+    const detail = details.join(" ");
     return {
       connectionId: PWRSNAP_MCP_CONNECTION_ID,
       displayName: "PwrSnap",
@@ -427,13 +441,8 @@ export class PwrSnapConnectionService {
         : installed
           ? "installed"
           : "not_installed",
-      configured: Boolean(credential.tokens?.access_token),
-      ...(!endpointAvailable && installed
-        ? {
-            detail:
-              "Open PwrSnap and enable Local Agent Access to connect agents.",
-          }
-        : {}),
+      configured,
+      ...(detail ? { detail } : {}),
     };
   }
 
@@ -474,10 +483,9 @@ export class PwrSnapConnectionService {
     if (connectionId !== PWRSNAP_MCP_CONNECTION_ID) {
       throw new Error(`Unknown MCP connection: ${connectionId}`);
     }
-    const credential = await this.readCredential();
-    if (!credential.tokens?.access_token) {
-      throw new Error("PwrSnap is not connected to PwrAgent.");
-    }
+    // No credential check here: a thread that enabled PwrSnap must keep
+    // starting turns after PwrSnap revokes the session. Each proxied call
+    // reports the revoke to the agent instead, through ensureUpstreamClient.
     const registrationKey = threadId
       ? `${connectionId}:${threadId}`
       : undefined;
@@ -770,23 +778,55 @@ export class PwrSnapConnectionService {
       await this.settings.clearPwrSnapMcpCredential();
       return;
     }
+    this.sessionRevoked = false;
     await this.settings.savePwrSnapMcpCredential(JSON.stringify(credential));
+  }
+
+  /**
+   * PwrSnap rejected `rejectedAccessToken`, so drop it: readStatus() then
+   * reports configured: false and New thread offers Connect to PwrSnap again.
+   * A concurrent Connect may already have stored a fresh token, and a
+   * concurrent proxied call may already have cleared this one; neither
+   * case writes.
+   */
+  private async revokeStoredSession(rejectedAccessToken: string): Promise<void> {
+    const storedAccessToken = (await this.readCredential()).tokens?.access_token;
+    if (storedAccessToken && storedAccessToken !== rejectedAccessToken) return;
+    this.sessionRevoked = true;
+    if (!storedAccessToken) return;
+    connectionLog.warn("PwrSnap rejected the stored session; clearing credential");
+    await this.settings.clearPwrSnapMcpCredential();
   }
 
   private async ensureUpstreamClient(): Promise<Client> {
     if (this.upstreamClient) return this.upstreamClient;
     const credential = await this.readCredential();
-    if (!credential.tokens?.access_token) {
-      throw new Error("PwrSnap is not connected to PwrAgent.");
+    const accessToken = credential.tokens?.access_token;
+    if (!accessToken) {
+      throw new Error(
+        this.sessionRevoked
+          ? PWRSNAP_SESSION_REVOKED_ERROR
+          : "PwrSnap is not connected to PwrAgent.",
+      );
     }
     const provider = new StoredOAuthProvider(
       new URL("http://127.0.0.1/oauth/callback"),
       credential,
       randomBytes(24).toString("base64url"),
       async () => {
-        throw new Error("PwrSnap needs to be reconnected from New Thread.");
+        // The SDK only starts a new authorization after PwrSnap answered 401
+        // and no refresh token could rescue the session. The proxy cannot
+        // open a consent window, so treat this as a revoked session.
+        await this.revokeStoredSession(accessToken);
+        throw new Error(PWRSNAP_SESSION_REVOKED_ERROR);
       },
-      async (next) => await this.persistCredential(next),
+      async (next) => {
+        // The SDK saves a code verifier for the authorization it is about to
+        // start, while the snapshot still carries the rejected token. Do not
+        // write that back: only a token change is worth persisting here.
+        if (next.tokens?.access_token === accessToken) return;
+        await this.persistCredential(next);
+      },
     );
     const transport = new StreamableHTTPClientTransport(PWRSNAP_MCP_URL, {
       authProvider: provider,

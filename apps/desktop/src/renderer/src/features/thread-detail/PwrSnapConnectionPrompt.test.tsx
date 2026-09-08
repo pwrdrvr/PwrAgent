@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { PWRSNAP_SESSION_REVOKED_DETAIL } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { PwrSnapConnectionPrompt } from "./PwrSnapConnectionPrompt";
 
@@ -119,4 +120,30 @@ describe("PwrSnapConnectionPrompt", () => {
     });
     fireEvent.click(toggle);
     await waitFor(() => expect(onEnabledChange).toHaveBeenCalledWith(true));
-  });});
+  });
+
+  it("offers to reconnect and explains why after PwrSnap revoked the session", async () => {
+    const detail = PWRSNAP_SESSION_REVOKED_DETAIL;
+    render(
+      <PwrSnapConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrSnapConnectionStatus: async () => ({
+            connectionId: "pwrsnap",
+            displayName: "PwrSnap",
+            availability: "running",
+            configured: false,
+            detail,
+          }),
+        }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Connect to PwrSnap" }))
+      .toBeTruthy();
+    expect(screen.getByText(detail)).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
+});
