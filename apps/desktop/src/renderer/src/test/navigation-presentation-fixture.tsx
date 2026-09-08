@@ -53,6 +53,10 @@ function usePresentationOwner(props: FixtureProps) {
     return page;
   };
   const index = add("directory-index", { kind: "directory-index" });
+  if (selectedThread) add("selected-context", { kind: "exact", includeAncestry: true, identities: [{
+    backend: selectedThread.source, threadId: selectedThread.id,
+    ownerInstanceId: selectedThread.federation?.ref.target.scope === "remote" ? selectedThread.federation.ref.target.instanceId : undefined,
+  }] });
   const mode = props.browseMode ?? "directories";
   if (mode === "drafts") add('drafts:"":0', { kind: "exact", identities: ownerThreads
     .filter((thread) => props.draftThreadKeys?.[threadSummaryIdentityKey(thread)])

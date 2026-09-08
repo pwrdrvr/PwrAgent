@@ -42,7 +42,8 @@ export function applyNavigationThreadEvent(thread: NavigationThreadSummary, even
     case "thread/reactions/updated":
       return { ...thread, reactions: notification.params.reactions };
     case "thread/subAgents/updated":
-      return { ...thread, subAgents: notification.params.subAgents };
+      return notification.params.subAgents
+        ? { ...thread, subAgents: notification.params.subAgents } : thread;
     case "thread/parent/set":
       return { ...thread, parentThreadId: notification.params.parentThreadId,
         parentThreadBackend: notification.params.parentThreadBackend, parentThreadInstanceId: notification.params.parentThreadInstanceId };
