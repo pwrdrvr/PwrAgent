@@ -36,7 +36,6 @@ import {
   resolveThreadHref,
   resolveThreadIdText,
   useThreadLinks,
-  type ThreadLinkContextValue,
   type ThreadLinkSource,
 } from "../../lib/thread-links";
 import {
@@ -147,8 +146,8 @@ function TranscriptCode(props: {
   onOpenSkillInEditor?: (skill: SkillActionTarget) => void;
   onViewSkillMarkdown?: (skill: SkillActionTarget) => void;
   skill?: AppServerSkillSummary;
-  threadLinks: ThreadLinkContextValue | undefined;
 }) {
+  const threadLinks = useThreadLinks();
   const insideCodeBlock = useContext(CodeBlockContext);
   const insideLink = useContext(MarkdownLinkContext);
   const isBlockCode = insideCodeBlock || (props.className?.includes("language-") ?? false);
@@ -156,7 +155,7 @@ function TranscriptCode(props: {
   // Only inline code on a navigation-capable surface can become a chip; skip
   // the text extraction entirely on block code and on the Activity/Changelog/
   // file-viewer surfaces (no `threadLinks` context there).
-  if (!isBlockCode && !insideLink && props.threadLinks) {
+  if (!isBlockCode && !insideLink && threadLinks) {
     // Transcripts written before the link protocol existed — and any model
     // that ignores the `threadLink` convention — put the bare thread id in a
     // code span. Recognizing it makes those threads reachable without asking
@@ -164,10 +163,10 @@ function TranscriptCode(props: {
     // so an unrelated uuid stays plain code.
     const threadLink = resolveThreadIdText(
       extractTextContent(props.children),
-      props.threadLinks,
+      threadLinks,
     );
     if (threadLink) {
-      return <ThreadChip link={threadLink} onOpen={props.threadLinks.show} />;
+      return <ThreadChip link={threadLink} onOpen={threadLinks.show} />;
     }
   }
 
@@ -235,8 +234,6 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
-  const threadLinks = useThreadLinks();
-  const pullRequestLinks = usePullRequestLinks();
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -343,7 +340,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
 
   const components = useMemo<Components>(
     () => ({
-      a(anchorProps) {
+      a: function MarkdownAnchor(anchorProps) {
+        // Navigation membership affects these links, not the parsed document.
+        // Subscribe in the leaf so unchanged Markdown is not parsed again.
+        const threadLinks = useThreadLinks();
+        const pullRequestLinks = usePullRequestLinks();
         const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
         const localTarget = localFileTargetFromHref(href);
         const isLocalMarkdownFile = Boolean(
@@ -556,7 +557,6 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
               ? viewSkillMarkdown
               : undefined}
             skill={skill}
-            threadLinks={threadLinks}
           >
             {codeProps.children}
           </TranscriptCode>
@@ -684,11 +684,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       props.imageParts,
       props.onOpenImage,
       props.threadLinkSource,
-      pullRequestLinks,
       sourceMarkdownText,
       skillsByPath,
       skillsByToken,
-      threadLinks,
       viewSkillMarkdown,
     ]
   );
