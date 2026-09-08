@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { PWRSNAP_SESSION_REVOKED_DETAIL } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  PWRSNAP_SESSION_REVOKED_DETAIL,
+  PWRSNAP_SESSION_REVOKED_ERROR,
   PwrSnapConnectionService,
 } from "../mcp-connections/pwrsnap-connection-service";
 
@@ -23,7 +23,7 @@ function createSettings(initial?: string) {
 // cached discovery state lets the SDK skip metadata fetches, so a 401 on the
 // MCP endpoint goes straight to the token check and then to a new
 // authorization, exactly as it does against a real PwrSnap.
-function createAuthorizedCredential(): string {
+function createAuthorizedCredential(accessToken = "revoked-by-pwrsnap"): string {
   return JSON.stringify({
     clientInformation: { client_id: "pwragent-client" },
     discoveryState: {
@@ -40,7 +40,7 @@ function createAuthorizedCredential(): string {
         code_challenge_methods_supported: ["S256"],
       },
     },
-    tokens: { access_token: "revoked-by-pwrsnap", token_type: "bearer" },
+    tokens: { access_token: accessToken, token_type: "bearer" },
   });
 }
 
@@ -49,8 +49,6 @@ type BridgeInternals = {
     operation: unknown,
     params: unknown,
   ) => Promise<unknown>;
-  grants: Map<string, { connectionId: "pwrsnap" }>;
-  handleBridgeLine: (socket: unknown, line: string) => Promise<void>;
 };
 
 const services: PwrSnapConnectionService[] = [];
@@ -147,12 +145,7 @@ describe("PwrSnapConnectionService", () => {
       upstreamClient: { callTool, close: vi.fn(async () => undefined) },
     });
 
-    const bridge = service as unknown as {
-      dispatchBridgeOperation: (
-        operation: unknown,
-        params: unknown,
-      ) => Promise<unknown>;
-    };
+    const bridge = service as unknown as BridgeInternals;
     await bridge.dispatchBridgeOperation("tools/call", {
       name: "pwrsnap_image_edit_send",
       arguments: { captureId: "cap-1", instruction: "Add an arrow" },
@@ -186,62 +179,73 @@ describe("PwrSnapConnectionService", () => {
 
     const bridge = service as unknown as BridgeInternals;
     await expect(bridge.dispatchBridgeOperation("tools/list", {}))
-      .rejects.toThrow(PWRSNAP_SESSION_REVOKED_DETAIL);
+      .rejects.toThrow(PWRSNAP_SESSION_REVOKED_ERROR);
 
-    // The proxy must never try to open a consent window of its own.
+    // The proxy must never try to open a consent window of its own, and the
+    // code verifier the SDK saves for that window must not be written back.
     expect(openExternal).not.toHaveBeenCalled();
+    expect(settings.savePwrSnapMcpCredential).not.toHaveBeenCalled();
     expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
     await expect(service.readStatus()).resolves.toMatchObject({
       availability: "running",
       configured: false,
       detail: PWRSNAP_SESSION_REVOKED_DETAIL,
     });
-    await expect(service.registerBridge("pwrsnap", "thread-1"))
-      .rejects.toThrow(PWRSNAP_SESSION_REVOKED_DETAIL);
+
+    // A thread that enabled PwrSnap keeps starting turns; only its PwrSnap
+    // calls report the revoke, and a repeat does not clear the store again.
+    await expect(service.registerBridge("pwrsnap", "thread-1")).resolves.toBeTruthy();
+    await expect(bridge.dispatchBridgeOperation("tools/list", {}))
+      .rejects.toThrow(PWRSNAP_SESSION_REVOKED_ERROR);
+    expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
 
     // A fresh approval stored by the connect flow hides the revoke notice.
-    await settings.savePwrSnapMcpCredential(createAuthorizedCredential());
-    await expect(service.readStatus()).resolves.toMatchObject({
-      configured: true,
-    });
-    await expect(service.readStatus()).resolves.not.toHaveProperty("detail");
+    await settings.savePwrSnapMcpCredential(createAuthorizedCredential("fresh"));
+    await expect(service.readStatus()).resolves.toEqual(
+      expect.not.objectContaining({ detail: expect.anything() }),
+    );
   });
 
-  it("clears the stored credential when a proxied call gets 401 after connecting", async () => {
-    const settings = createSettings(createAuthorizedCredential());
+  it("keeps a credential that a concurrent Connect stored while the 401 was in flight", async () => {
+    const settings = createSettings(createAuthorizedCredential("stale"));
     const service = new PwrSnapConnectionService({
-      fetchFn: vi.fn(async () => new Response("ok", { status: 200 })),
+      fetchFn: vi.fn(async () => {
+        // PwrSnap rejects the stale token; meanwhile the operator's Connect
+        // flow lands a fresh approval before the SDK reaches the redirect.
+        await settings.savePwrSnapMcpCredential(createAuthorizedCredential("fresh"));
+        return new Response("unauthorized", { status: 401 });
+      }),
       resolveInstallPaths: () => [],
       settings,
     });
     services.push(service);
-    Object.assign(service, {
-      upstreamClient: {
-        listTools: vi.fn(async () => {
-          throw new StreamableHTTPError(
-            401,
-            "Server returned 401 after successful authentication",
-          );
-        }),
-        close: vi.fn(async () => undefined),
-      },
-    });
+
     const bridge = service as unknown as BridgeInternals;
-    bridge.grants.set("grant-token", { connectionId: "pwrsnap" });
-    const socket = { destroyed: false, end: vi.fn() };
+    await expect(bridge.dispatchBridgeOperation("tools/list", {}))
+      .rejects.toThrow(PWRSNAP_SESSION_REVOKED_ERROR);
 
-    await bridge.handleBridgeLine(
-      socket,
-      JSON.stringify({ token: "grant-token", op: "tools/list" }),
-    );
-
-    expect(socket.end).toHaveBeenCalledWith(
-      expect.stringContaining("Server returned 401 after successful authentication"),
-    );
-    expect(settings.clearPwrSnapMcpCredential).toHaveBeenCalledOnce();
+    expect(settings.clearPwrSnapMcpCredential).not.toHaveBeenCalled();
     await expect(service.readStatus()).resolves.toMatchObject({
-      configured: false,
-      detail: PWRSNAP_SESSION_REVOKED_DETAIL,
+      configured: true,
+    });
+  });
+
+  it("keeps the stored credential when PwrSnap fails for a reason other than the token", async () => {
+    const settings = createSettings(createAuthorizedCredential());
+    const service = new PwrSnapConnectionService({
+      fetchFn: vi.fn(async () => new Response("busy", { status: 503 })),
+      resolveInstallPaths: () => [],
+      settings,
+    });
+    services.push(service);
+
+    const bridge = service as unknown as BridgeInternals;
+    await expect(bridge.dispatchBridgeOperation("tools/list", {})).rejects.toThrow();
+
+    expect(settings.clearPwrSnapMcpCredential).not.toHaveBeenCalled();
+    await expect(service.readStatus()).resolves.toMatchObject({
+      availability: "running",
+      configured: true,
     });
   });
 });

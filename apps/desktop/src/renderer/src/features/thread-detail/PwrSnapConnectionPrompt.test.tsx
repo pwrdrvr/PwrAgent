@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { PWRSNAP_SESSION_REVOKED_DETAIL } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { PwrSnapConnectionPrompt } from "./PwrSnapConnectionPrompt";
 
@@ -122,8 +123,7 @@ describe("PwrSnapConnectionPrompt", () => {
   });
 
   it("offers to reconnect and explains why after PwrSnap revoked the session", async () => {
-    const detail =
-      "PwrSnap revoked this connection. Choose Connect to PwrSnap on the New thread card to connect again.";
+    const detail = PWRSNAP_SESSION_REVOKED_DETAIL;
     render(
       <PwrSnapConnectionPrompt
         backend="codex"
