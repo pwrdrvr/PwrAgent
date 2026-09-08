@@ -32,6 +32,10 @@ export function useBoundedNavigationWindow(params: Demand & {
     for (const id of ["directory-index", "selected-directories"]) {
       for (const directory of state.resources.get(id)?.state.page?.directories ?? []) descriptors.set(directory.key, directory);
     }
+    for (const id of ["selected-context", "selected-viewer-mount"]) {
+      const directory = state.resources.get(id)?.state.page?.selectionDirectory;
+      if (directory) descriptors.set(directory.key, directory);
+    }
     return [...descriptors.values()];
   }, [state.resources]);
   const selectedResource = state.resources.get("selected-context");
@@ -41,7 +45,9 @@ export function useBoundedNavigationWindow(params: Demand & {
     && navigationIdentityKey(selectedQuery.identities[0]!) === navigationIdentityKey(params.selectedRef)
     ? selectedResource?.state.page : undefined;
   const selectedRoot = selectedContext?.entries.find((entry) => entry.placement.kind === "root");
-  const selectedDirectoryKeys = selectedRoot?.row.linkedDirectories.length
+  const selectedHome = state.resources.get("selected-viewer-mount")?.state.page?.selectionDirectory
+    ?? selectedContext?.selectionDirectory;
+  const selectedDirectoryKeys = selectedHome ? [selectedHome.key] : selectedRoot?.row.linkedDirectories.length
     ? selectedRoot.row.linkedDirectories.map((directory) => classifyDirectory(directory).key) : params.selectedDirectoryKeys;
   const demandParams = { ...params, directories, selectedDirectoryKeys,
     selectedRootRef: selectedRoot?.row.ref, selectedContextReady: Boolean(selectedContext),

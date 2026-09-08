@@ -32,7 +32,8 @@ export function buildNavigationWindowDemand(params: {
   // Descriptors provide authoritative counts for collapsed directories and all lenses.
   demand.set("directory-index", request({ kind: "directory-index" }, 100));
   if (params.selectedRef) {
-    demand.set("selected-context", { ...request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100), inventory: "owner",
+    demand.set("selected-context", { ...request({ kind: "exact", identities: [params.selectedRef], includeAncestry: true }, 100),
+      inventory: params.selectedRef.ownerInstanceId || params.target?.scope === "remote" ? "owner" : "viewer",
       federationTarget: params.selectedRef.ownerInstanceId ? { scope: "remote", instanceId: params.selectedRef.ownerInstanceId } : params.target });
   }
   if (params.selectedRef?.ownerInstanceId && params.target?.scope !== "remote") {

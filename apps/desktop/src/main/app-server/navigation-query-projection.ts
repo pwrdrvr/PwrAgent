@@ -759,6 +759,13 @@ export function projectNavigationQuery(params: {
   return {
     coverage: params.index.coverage ?? { state: "complete" },
     counts: countsForThreads(countsThreads),
+    ...(query.kind === "exact" && selectedThreads.length ? {
+      // Resolve the canonical home from the complete compact index. A linked
+      // worktree path is not necessarily the directory key shown by the viewer.
+      selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index,
+        directories: params.index.directories.filter((directory) => directory.threadKeys.some((key) =>
+          selectedThreads[0] === threadsByLegacyKey.get(key))) }, threadsByLegacyKey })[0],
+    } : {}),
     ...(query.kind === "messaging-threads" ? { collectionSize: entries.length,
       ...(query.directoryKey ? { selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index, directories: params.index.directories.filter((directory) =>
           directory.key === query.directoryKey || directory.path === query.directoryKey) }, threadsByLegacyKey })
