@@ -4745,6 +4745,10 @@ export function useThreadSessionState(params: {
     Record<string, Map<string, AppServerThreadEntry>>
   >({});
   const requestVersionsRef = useRef<Record<string, number>>({});
+  // React can replay the hydration effect before its loading state commits.
+  // Track the owning read synchronously so automatic hydration cannot send
+  // the same initial request twice. Explicit reloads may still supersede it.
+  const inFlightHydrationsRef = useRef(new Map<string, number>());
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
@@ -4914,6 +4918,7 @@ export function useThreadSessionState(params: {
 
       const requestVersion = (requestVersionsRef.current[targetThreadKey] ?? 0) + 1;
       requestVersionsRef.current[targetThreadKey] = requestVersion;
+      inFlightHydrationsRef.current.set(targetThreadKey, requestVersion);
 
       updateSession(targetThreadKey, (current) => ({
         ...current,
@@ -5227,6 +5232,10 @@ export function useThreadSessionState(params: {
           lastTouchedAt: Date.now(),
           loading: false,
         }));
+      } finally {
+        if (inFlightHydrationsRef.current.get(targetThreadKey) === requestVersion) {
+          inFlightHydrationsRef.current.delete(targetThreadKey);
+        }
       }
     },
     [
@@ -5437,6 +5446,9 @@ export function useThreadSessionState(params: {
 
     const session = sessions[threadKey];
     const hydrationVersion = getThreadHydrationVersion(thread);
+    if (inFlightHydrationsRef.current.has(threadKey)) {
+      return;
+    }
     if (!session?.response) {
       if (
         !session?.loading &&

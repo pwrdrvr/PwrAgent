@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { buildThreadComposerScopeKey } from "../../composer/useComposerDraftStore";
 import {
   act,
@@ -11,6 +12,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  AppServerReadThreadResponse,
   BackendCapabilities,
   CelestialIconId,
   DesktopSettingsSnapshot,
@@ -335,6 +337,36 @@ describe("StarMapChatCard gesture persistence", () => {
 });
 
 describe("StarMapChatCard transcript loading", () => {
+  it("reads a restored remote card once during Strict Mode mount replay", async () => {
+    const pending = deferred<AppServerReadThreadResponse>();
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "t-remote",
+      replay: {
+        entries: [], messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    };
+    const desktopApi = buildApi({
+      readThread: vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(response),
+    });
+    const view = render(<StrictMode>{card({ desktopApi, thread: remoteThread() })}</StrictMode>);
+    await act(async () => {});
+    expect(desktopApi.readThread).toHaveBeenCalledTimes(1);
+    await act(async () => pending.resolve(response));
+    expect(desktopApi.readThread).toHaveBeenCalledTimes(1);
+
+    // A later owner update still hydrates, and reopening owns a fresh read.
+    view.rerender(<StrictMode>{card({ desktopApi, thread: remoteThread({ updatedAt: 2 }) })}</StrictMode>);
+    await act(async () => {});
+    expect(desktopApi.readThread).toHaveBeenCalledTimes(2);
+    view.unmount();
+    render(<StrictMode>{card({ desktopApi, thread: remoteThread({ updatedAt: 2 }) })}</StrictMode>);
+    await act(async () => {});
+    expect(desktopApi.readThread).toHaveBeenCalledTimes(3);
+  });
+
   it("asks for the last few turns rather than the whole thread", async () => {
     const desktopApi = buildApi();
     renderCard({ desktopApi, thread: remoteThread() });
