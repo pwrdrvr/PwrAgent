@@ -46,8 +46,8 @@ import {
   collectFederationHostInfo,
   collectFederationLoadStatus,
 } from "./federation-host-info";
+import { defaultInstanceLabel } from "./federation-instance-label";
 import {
-  defaultInstanceLabel,
   getDesktopFederationRuntime,
   type DesktopFederationRuntime,
 } from "./federation-runtime";
