@@ -424,3 +424,37 @@ owners produce zero. Pending project and remote geometry responses cannot restor
 old continuations after blur/resume. These are application read counts, not live
 wire-byte measurements, and do not attribute the operator's aggregate traffic.
 No persistence was added: 0 SQLite commits and 0 MB/day additional WAL.
+
+### Physical owner scan reuse
+
+Managed-child discovery uses a connection-local `threads` change counter installed
+with TEMP triggers and a JavaScript SQLite function. The triggers write no rows;
+the counter survives rollback conservatively. `data_version` still invalidates
+for commits from other connections, including older processes. Transaction reads
+are never cached, and initial trigger installation is deferred outside a
+transaction so rollback cannot remove the tracking while leaving a cached counter.
+Unrelated local-table writes no longer rescan every thread payload. External
+unrelated commits can still cause conservative invalidation.
+
+Owner index reads retain completed backing for at most one second, keyed by
+registry, overlay store, backend, and the SQLite source version. Canonical events
+invalidate both pending joinability and retained backing. The event listener lives
+only as long as its source/cache lifetime. Expiry, invalidation, or eviction
+releases it. The cache admits at most eight entries / 8 MiB serialized backing;
+oversize indexes are served without retention. Physical/read admission limits are
+unchanged. Transaction-specific source stamps cannot be reused after rollback.
+Viewer-pin projection independently reuses its existing at-most-8-MiB result for
+one second, with database-version and transaction guards; peer status is still
+stamped by the viewer for each response. These caches add no recurring writes.
+
+`navigation-project-scan-budget.test.ts` exercises 1, 5, and 15 sequential project
+queries over 1,200 threads and 50 viewer pins, using real SQLite projections.
+The 15-project uncached control makes 15 physical index builds and 15 pin scans;
+reuse makes one of each. The relationship regression similarly drops 15 rescans
+after unrelated local writes to zero. Existing read write-budgets remain zero.
+Set `PWRAGENT_NAVIGATION_CPU_PROFILE=.local/navigation-projects` when running the
+project test to capture both control and reuse with V8. One local short capture
+measured 75.1 ms versus 7.3 ms inclusive in `readNavigationQueryIndex`, and 5.2 ms
+versus 1.5 ms in pin projection. These sub-second fixture captures establish no
+production CPU percentage or causal relationship to PR #2035. A live capture of
+the upgraded main process remains necessary for production acceptance.

@@ -9,7 +9,7 @@ import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { NavigationIndexReadPool } from "./navigation-index-read-pool";
 
-const indexReads = new NavigationIndexReadPool();
+const indexReads = new NavigationIndexReadPool(1_000);
 const sourceIds = new WeakMap<object, number>();
 let nextSourceId = 0;
 function sourceId(value: object): number {
@@ -42,8 +42,10 @@ export async function loadLocalNavigationQueryIndex(params: {
     const unsubscribe = registry.onEvent?.((event) => {
       if (navigationQueryEventRequiresRefresh(event.notification.method)) indexReads.invalidate(key);
     });
-    try { return await buildLocalNavigationQueryIndex({ ...params, registry, signal }); }
-    finally { unsubscribe?.(); }
+    // The pool owns this listener through its bounded completed reuse window.
+    // Eviction/expiry/cancellation aborts the lifetime and releases it.
+    signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
+    return await buildLocalNavigationQueryIndex({ ...params, registry, signal });
   }, params.signal);
 }
 

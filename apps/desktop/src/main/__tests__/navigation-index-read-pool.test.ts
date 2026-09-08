@@ -62,3 +62,40 @@ describe("shared owner index reads", () => {
     await expect(pool.read("ninth", async () => index)).resolves.toBe(index);
   });
 });
+
+it("shares successive project batches only within a versioned bounded reuse window", async () => {
+  vi.useFakeTimers();
+  try {
+    const pool = new NavigationIndexReadPool(1_000);
+    const load = vi.fn(async () => index);
+    for (let project = 0; project < 15; project++) await pool.read("owner:v1", load);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(pool.retainedUsage().entries).toBe(1);
+    await pool.read("other:v1", load);
+    await pool.read("owner:v2", load);
+    expect(load).toHaveBeenCalledTimes(3);
+    pool.invalidate("owner:v2");
+    await pool.read("owner:v2", load);
+    expect(load).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
+    await pool.read("owner:v2", load);
+    expect(load).toHaveBeenCalledTimes(5);
+  } finally { vi.useRealTimers(); }
+});
+
+it("never retains invalidated in-flight work and caps completed backing", async () => {
+  const pool = new NavigationIndexReadPool(1_000);
+  const old = deferred();
+  const first = pool.read("owner", () => old.promise);
+  await Promise.resolve();
+  pool.invalidate("owner");
+  old.resolve(index); await first;
+  expect(pool.retainedUsage().entries).toBe(0);
+  for (let i = 0; i < 12; i++) await pool.read(String(i), async () => index);
+  expect(pool.retainedUsage().entries).toBe(8);
+  const huge: NavigationQueryIndex = { ...index, threads: [{ id: "huge", source: "codex", title: "x".repeat(9 * 1024 * 1024),
+    titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } }] };
+  await pool.read("huge", async () => huge);
+  expect(pool.retainedUsage().bytes).toBeLessThan(8 * 1024 * 1024);
+});

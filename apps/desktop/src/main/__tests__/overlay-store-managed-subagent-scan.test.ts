@@ -95,6 +95,17 @@ describe("managed subagent navigation reads", () => {
     expect(keys()).toEqual([]);
   });
 
+  it("does not rescan relationships after unrelated local writes", () => {
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    expect(keys()).toEqual(["codex:child"]);
+    const prepare = vi.spyOn(stateDb.raw, "prepare");
+    for (let i = 0; i < 15; i++) {
+      stateDb.raw.prepare("INSERT OR REPLACE INTO backends(scope, payload) VALUES (?, ?)").run("all", String(i));
+      expect(keys()).toEqual(["codex:child"]);
+    }
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes("AS projection FROM threads"))).toHaveLength(0);
+  });
+
   it("sees shared-profile parent and child changes from another connection", () => {
     const other = new Database(dbPath);
     try {
@@ -124,6 +135,16 @@ describe("managed subagent navigation reads", () => {
       db.close();
     `, require.resolve("better-sqlite3"), dbPath]);
     expect(keys()).toEqual(["codex:other-process-child"]);
+  });
+
+  it("installs local tracking outside a first-read transaction that rolls back", () => {
+    stateDb.raw.exec("BEGIN");
+    seed("parent", { subAgents: [{ monitorThreadId: "rolled-back" }] });
+    expect(keys()).toEqual(["codex:rolled-back"]);
+    stateDb.raw.exec("ROLLBACK");
+    expect(keys()).toEqual([]);
+    seed("parent", { subAgents: [{ monitorThreadId: "committed" }] });
+    expect(keys()).toEqual(["codex:committed"]);
   });
 
   it("does not publish transaction or savepoint results after rollback", () => {

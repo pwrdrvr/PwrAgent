@@ -591,6 +591,27 @@ CREATE TABLE remote_thread_pins (
 });
 
 describe("compact viewer navigation pins", () => {
+  it("invalidates reused pin projection for cross-connection commits and rolls back safely", async () => {
+    const { dbPath, tempDir } = createTempStateDb("pin-projection-cache-");
+    const first = StateDb.open(dbPath);
+    const second = StateDb.open(dbPath);
+    const reader = new SqliteOverlayStore(first);
+    const writer = new SqliteOverlayStore(second);
+    try {
+      await writer.addRemoteThreadPin({ ref: ref(), instanceLabel: "Peer", summary: summary({ title: "Before" }) });
+      expect((await reader.readRemoteThreadPinNavigationRows())[0]?.title).toBe("Before");
+      await writer.updateRemoteThreadPinSnapshots([{ ref: ref(), instanceLabel: "Peer", summary: summary({ title: "After" }) }]);
+      expect((await reader.readRemoteThreadPinNavigationRows())[0]?.title).toBe("After");
+      first.raw.exec("BEGIN");
+      first.raw.prepare("UPDATE remote_thread_pins SET revoked_at = 1").run();
+      expect(await reader.readRemoteThreadPinNavigationRows()).toEqual([]);
+      first.raw.exec("ROLLBACK");
+      expect((await reader.readRemoteThreadPinNavigationRows())[0]?.title).toBe("After");
+      await writer.tombstoneRemoteThreadPinsForInstance({ instanceId: "peer-laptop", revokedAt: 2 });
+      expect(await reader.readRemoteThreadPinNavigationRows()).toEqual([]);
+    } finally { first.close(); second.close(); removeTempStateDbDir(tempDir); }
+  });
+
   it("reads only bounded cached row fields and excludes revoked memberships", async () => {
     await store.addRemoteThreadPin({ ref: ref("visible"), instanceLabel: "Laptop", summary: summary({ id: "visible",
       title: "Visible", titleSource: "explicit", inbox: { inInbox: true }, pinnedRank: "owner-rank",

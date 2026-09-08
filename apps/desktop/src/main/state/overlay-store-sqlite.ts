@@ -1,3 +1,4 @@
+import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
@@ -634,22 +635,24 @@ type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownTh
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private managedSubAgentCache?: {
     dataVersion: number;
-    totalChanges: number;
+    threadChanges: number;
     threadKeys: Set<string>;
   };
+  private remotePinNavigationCache?: { version: string; expires: number; rows: NavigationThreadSummary[] };
   private backendReadCache?: {
     payload: string;
     state: { knownThreadKeys: string[]; lastSnapshotHash?: string };
   };
 
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
+  private transactionNavigationRead = 0;
   constructor(private readonly stateDb: StateDb) {}
 
   /** Read-only stamp prevents a post-mutation query joining pre-mutation work. */
   readNavigationSourceVersion(): string {
     const external = this.stateDb.raw.pragma("data_version", { simple: true });
     const local = this.stateDb.raw.prepare("SELECT total_changes() AS changes").get() as { changes: number };
-    return `${external}:${local.changes}`;
+    return `${external}:${local.changes}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
   }
 
   /**
@@ -3653,6 +3656,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   /** Viewer membership only: never materialize cached detail, FIFO, bindings or draft payloads. */
   async readRemoteThreadPinNavigationRows(): Promise<NavigationThreadSummary[]> {
+    const version = this.stateDb.raw.inTransaction ? undefined : this.readNavigationSourceVersion();
+    if (version && this.remotePinNavigationCache?.version === version
+      && this.remotePinNavigationCache.expires > Date.now()) return this.remotePinNavigationCache.rows;
     const rows = this.stateDb.raw.prepare(`
       WITH pins AS (
         SELECT instance_id, backend, thread_id, added_at,
@@ -3717,6 +3723,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
       result.push(projected);
     }
+    if (version) this.remotePinNavigationCache = { version, expires: Date.now() + 1_000, rows: result };
     return result;
   }
 
@@ -7001,21 +7008,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private listManagedSubAgentThreadKeys(): Set<string> {
-    // data_version detects commits from other connections (including older
-    // shared-profile processes); total_changes detects this connection's writes.
-    // Capture BEFORE the queries: a concurrent commit must invalidate the next
-    // read, never certify an older result with a newer generation. Do not cache
-    // inside transactions, where a later rollback could otherwise leak a result.
-    const generation = this.stateDb.raw.inTransaction
-      ? undefined
-      : this.stateDb.raw.prepare(
-        `SELECT data_version AS dataVersion, total_changes() AS totalChanges
-         FROM pragma_data_version`,
-      ).get() as { dataVersion: number; totalChanges: number } | undefined;
+    // External connections remain conservatively invalidated by data_version.
+    // Local unrelated-table writes do not require scanning every thread payload.
+    // Capture before reading; never cache a transaction/savepoint result.
+    const threadChanges = sqliteThreadChangeVersion(this.stateDb.raw);
+    const generation = this.stateDb.raw.inTransaction ? undefined : {
+      dataVersion: this.stateDb.raw.pragma("data_version", { simple: true }) as number,
+      threadChanges,
+    };
     if (
       generation
       && this.managedSubAgentCache?.dataVersion === generation.dataVersion
-      && this.managedSubAgentCache.totalChanges === generation.totalChanges
+      && this.managedSubAgentCache.threadChanges === generation.threadChanges
     ) {
       return this.managedSubAgentCache.threadKeys;
     }
