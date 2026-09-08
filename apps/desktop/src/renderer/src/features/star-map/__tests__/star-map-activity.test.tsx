@@ -59,6 +59,9 @@ it("attributes zero inactive map reads, coalesces restoration, and scopes projec
   act(() => { focused = false; window.dispatchEvent(new Event("blur")); });
   await settle();
   expect(release).toHaveBeenCalled();
+  // Query consumers are released on blur; Attention IDs are terminal once
+  // closed, so keep their bounded ordering state until the map unmounts.
+  expect(api.releaseNavigationAttentionView).not.toHaveBeenCalled();
   act(() => { for (let i = 0; i < 30; i++) emit("peer"); });
   await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
   expect(read).not.toHaveBeenCalled(); expect(load).not.toHaveBeenCalled();
@@ -80,6 +83,7 @@ it("attributes zero inactive map reads, coalesces restoration, and scopes projec
   expect(projectReads[0]!.query).toMatchObject({ projectKey: "directory:/a" });
   expect(read).toHaveBeenCalledTimes(3); // One project, plus that owner's rows/geometry.
   view.unmount();
+  expect(api.releaseNavigationAttentionView).toHaveBeenCalled();
 });
 
 it("does not resurrect a released project read or its continuation after blur", async () => {

@@ -107,6 +107,6 @@ export function useStarMapProjectPages(params: {
           ...(owner ? { federationTarget: { scope: "remote", instanceId: owner } } : {}) }).catch(() => undefined);
       }
     };
-  }, [active, api, viewId]);
+  }, [api, viewId]);
   return { state, controller };
 }

@@ -628,7 +628,7 @@ export function useStarMapThreads(params: {
       }
       owners.clear();
     };
-  }, [desktopApi, viewId, params.enabled]);
+  }, [desktopApi, viewId]);
 
   const result = useMemo(() => {
     const countsByInstance = new Map<string, NavigationCounts>();

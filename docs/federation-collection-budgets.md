@@ -404,7 +404,8 @@ Blur pauses local/remote navigation, per-project pages, geometry/exact reads,
 open-chat detail/queue demand, federation health refreshes, and load-card polling.
 Cached cards and geometry remain mounted. Returning to the foreground refreshes
 retained demand once; duplicate focus/visibility events do not start extra reads.
-Query consumer tokens change across suspended lifetimes so a delayed response or
+Attention ordering view IDs remain open until unmount (closing is terminal);
+query consumers still release on blur. Query consumer tokens change across suspended lifetimes so a delayed response or
 release cannot resurrect or cancel a successor query. Load polling schedules its
 next eight-second sample after completion and ignores samples from old lifetimes.
 
