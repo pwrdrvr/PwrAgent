@@ -2140,6 +2140,78 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("shares provider scans and enrichment across concurrent listing consumers", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadListResultBySearchTerm.set("shared-list", Array.from(
+      { length: 500 }, (_, index) => ({
+        id: `shared-${index}`, name: `Thread ${index}`, source: "vscode",
+        cwd: `/repo/shared-${index % 25}`,
+      }),
+    ));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const enrich = vi.fn(async () => { await gate; return { linkedDirectories: [] }; });
+    const client = new CodexAppServerClient({ command: "codex", threadDirectoryEnricher: enrich });
+    const params = { filter: "shared-list", skipArchivedMetadataRefresh: true };
+    const countLists = () => MockTransport.instances.at(-1)!.sentMessages
+      .map((message) => JSON.parse(message)).filter((message) => message.method === "thread/list").length;
+    try {
+      const reads = Array.from({ length: 8 }, (_, index) => client.listThreads(params, {
+        callerReason: `consumer-${index}`,
+      }));
+      await vi.waitFor(() => expect(enrich).toHaveBeenCalled());
+      expect(countLists()).toBe(1);
+      release();
+      const results = await Promise.all(reads);
+      expect(results.every((rows) => rows.length === 500)).toBe(true);
+      expect(enrich).toHaveBeenCalledTimes(25);
+      await client.listThreads(params);
+      expect(countLists()).toBe(2);
+      expect(enrich).toHaveBeenCalledTimes(50);
+    } finally {
+      release();
+      await client.close();
+    }
+  });
+
+  it("starts a new listing after a row event without losing the newer pending owner", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadListResultBySearchTerm.set("changed-list", [{
+      id: "changed-thread", name: "Thread", source: "vscode", cwd: "/repo/changed",
+    }]);
+    const releases: Array<() => void> = [];
+    const enrich = vi.fn(async () => {
+      await new Promise<void>((resolve) => { releases.push(resolve); });
+      return { linkedDirectories: [] };
+    });
+    const client = new CodexAppServerClient({ command: "codex", threadDirectoryEnricher: enrich });
+    const params = { filter: "changed-list", skipArchivedMetadataRefresh: true };
+    try {
+      const first = client.listThreads(params);
+      await vi.waitFor(() => expect(releases).toHaveLength(1));
+      const transport = MockTransport.instances.at(-1)!;
+      transport.emitInbound({ jsonrpc: "2.0", method: "thread/status/changed",
+        params: { threadId: "changed-thread", status: { type: "active" } } });
+      const second = client.listThreads(params);
+      await vi.waitFor(() => expect(releases).toHaveLength(2));
+      releases[0]();
+      await first;
+      const third = client.listThreads(params);
+      // Streamed deltas do not invalidate membership or multiply scans.
+      transport.emitInbound({ jsonrpc: "2.0", method: "item/agentMessage/delta",
+        params: { threadId: "changed-thread", delta: "text" } });
+      const fourth = client.listThreads(params);
+      releases[1]();
+      await Promise.all([second, third, fourth]);
+      expect(enrich).toHaveBeenCalledTimes(2);
+      expect(transport.sentMessages.map((message) => JSON.parse(message))
+        .filter((message) => message.method === "thread/list")).toHaveLength(2);
+    } finally {
+      for (const release of releases) release();
+      await client.close();
+    }
+  });
+
   it("validates each directory once per listing even across mapper batches", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const threadDirectoryEnricher = vi.fn(async () => ({ linkedDirectories: [] }));
