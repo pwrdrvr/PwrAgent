@@ -1,5 +1,5 @@
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
-import { navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -1261,7 +1261,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               ) : null,
               ];
             })}
-            {childResources.map((childResource) => (
+            {childResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((childResource) => (
               <Fragment key={childResource.id}>
                 {childResource.state.error ? <p role="alert">{childResource.state.error}</p> : null}
                 {childResource.loading && !childResource.state.page ? <p>Loading sub-threads…</p> : null}

@@ -165,7 +165,7 @@ it("breadcrumb reveal uses exact owner ancestry even when loaded summaries lack 
 });
 
 
-it("keeps expected disconnected child-page failures out of the thread list", () => {
+it.each(["directories", "inbox"] as const)("keeps expected disconnected child-page failures out of the %s thread list", (browseMode) => {
   const parent = { ...rows[0]!, ordinaryChildCount: 1 };
   const childId = 'children:[null,"codex","pin-5"]';
   const children = resource(childId, { kind: "children", parent: parent.ref }, {});
@@ -175,10 +175,13 @@ it("keeps expected disconnected child-page failures out of the thread list", () 
   const resources = new Map([[childId, children], [pinsId, resource(pinsId,
     { kind: "directory", directoryKey: directory.key, roots: "pinned" },
     { entries: [{ row: parent, placement: { kind: "root" }, orderKey: "0" }] })]]);
+  resources.set("lens", resource("lens", { kind: "lens", lens: "inbox" }, {
+    entries: [{ row: parent, placement: { kind: "root" }, orderKey: "0" }],
+  }));
   const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
     invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
     rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
-  const view = render(<Sidebar backends={[]} browseMode="directories" directories={[directory]} threads={[parent]}
+  const view = render(<Sidebar backends={[]} browseMode={browseMode} directories={[directory]} threads={[parent]}
     loading={false} selectedItemKey={`codex:${parent.id}`} selectedThreadDirectoryKeys={[directory.key]}
     pagedNavigation={navigation} onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
     onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);

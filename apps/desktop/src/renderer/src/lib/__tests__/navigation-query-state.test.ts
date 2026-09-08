@@ -135,3 +135,19 @@ it("retains only the acknowledged partial range and adopts its renewed generatio
       page: { ...acknowledgment, ...patch } })).toThrow("matching retained range");
   }
 });
+
+
+it("retains disconnected child state through retries until a successful page arrives", () => {
+  const previous = firstPage();
+  const failed = failNavigationPageRead(previous, previous.pendingSequence,
+    new Error("Error invoking remote method: Federation peer pwr_fixture is not connected."));
+  const retry = beginNavigationPageRead(failed);
+  expect(retry.error).toBe(failed.error);
+  expect(retry.page).toBe(previous.page);
+  const recovered = applyNavigationPage({ state: retry, sequence: retry.pendingSequence, page: page() });
+  expect(recovered.error).toBeUndefined();
+  expect(recovered.stale).toBe(false);
+  const other = failNavigationPageRead(previous, previous.pendingSequence, new Error("Invalid query"));
+  expect(other.error).toBe("Invalid query");
+  expect(beginNavigationPageRead(other).error).toBeUndefined();
+});
