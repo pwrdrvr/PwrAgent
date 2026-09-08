@@ -9,6 +9,12 @@ host evidence below was collected at `e71397043`. GitHub CI completion and
 explicit operator merge approval are separate gates. The PR
 remains a draft and must not be merged automatically.
 
+The live-failure repairs through `fcbcb2c71` pass the full unit suite (755 files,
+10,853 tests, 7 skipped), desktop typecheck, targeted ESLint, and 15 affected
+Electron E2E cases. The E2E cases include opening a thread and enabling Send with
+738 historical sub-agent records exceeding 1 MiB. These are contrived-data
+checks; comparison with the operator's existing M4/M5 Federation remains open.
+
 ## Upgrade requirement
 
 Run the cutover build on every viewer, owner and gateway participating in the
