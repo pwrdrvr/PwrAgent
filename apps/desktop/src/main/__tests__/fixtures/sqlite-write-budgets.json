@@ -258,6 +258,20 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "thread-usage-finalization": {
+    "commits": 1,
+    "note": "one successor pricing flush finalizes its predecessor in the same transaction",
+    "observedWalBytes": 74160,
+    "rowsChanged": 4,
+    "statements": 4
+  },
+  "thread-usage-finalized-replays": {
+    "commits": 0,
+    "note": "100 stale finalized-turn updates return durable rows without any SQLite commit",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "token-miser-retrieval-ledger": {
     "commits": 1,
     "note": "one previously gated output retrieved in a later parent turn, updating its savings equation at the turn boundary",

@@ -63,6 +63,45 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("finalizes usage in the successor transaction and ignores stale writes", async () => {
+    const first: ThreadUsageLineRecord = {
+      backend: "codex", provider: "openai", threadId: "sealed-thread",
+      turnId: "turn-1", usageLineId: "sealed-line-1", source: "live",
+      scope: "turn", status: "pending", turnUsageAttributed: true,
+      createdAt: 1_800_000_000_000, currency: "USD", model: "gpt-5.5",
+      inputTokens: 1_000, uncachedInputTokens: 1_000, cachedInputTokens: 0,
+      outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1_000,
+      cumulativeTotalTokens: 1_000, priceStatus: "priced",
+      totalCostMicros: 5_000, uncachedInputCostMicros: 5_000,
+      cachedInputCostMicros: 0, outputCostMicros: 0,
+    };
+    await store.upsertThreadUsageLine({ line: first });
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.upsertThreadUsageLine({ line: {
+        ...first, turnId: "turn-2", usageLineId: "sealed-line-2",
+        cumulativeTotalTokens: 2_000,
+      } });
+    });
+    expectSqliteWriteBudget({
+      scenario: "thread-usage-finalization",
+      note: "one successor pricing flush finalizes its predecessor in the same transaction",
+      writes,
+    });
+    const { writes: rejectedWrites } = await measureSqliteWrites(async () => {
+      for (let index = 0; index < 100; index += 1) {
+        await store.upsertThreadUsageLine({ line: {
+          ...first, inputTokens: 100_000, uncachedInputTokens: 100_000,
+          totalTokens: 100_000, cumulativeTotalTokens: 100_000,
+        } });
+      }
+    });
+    expectSqliteWriteBudget({
+      scenario: "thread-usage-finalized-replays",
+      note: "100 stale finalized-turn updates return durable rows without any SQLite commit",
+      writes: rejectedWrites,
+    });
+  });
+
   it("keeps partial navigation search reconciliation read-only", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-search",
