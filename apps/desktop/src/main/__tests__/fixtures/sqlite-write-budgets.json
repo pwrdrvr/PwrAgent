@@ -139,6 +139,13 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "managed-subagent-navigation-reads": {
+    "commits": 0,
+    "note": "10 cold and 10 warm managed-child/backend reads, with large parent and child overlays",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "messaging-agent-conversation-rename": {
     "commits": 5,
     "note": "one agent-driven conversation rename persists the binding title and re-renders the status card inline (no bus event exists for binding-local mutations); bounded by explicit tool calls, not per turn or per item",

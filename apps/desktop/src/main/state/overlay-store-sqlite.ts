@@ -618,6 +618,16 @@ function stripFederationStamp(
 }
 
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
+  private managedSubAgentCache?: {
+    dataVersion: number;
+    totalChanges: number;
+    threadKeys: Set<string>;
+  };
+  private backendReadCache?: {
+    payload: string;
+    state: { knownThreadKeys: string[]; lastSnapshotHash?: string };
+  };
+
   constructor(private readonly stateDb: StateDb) {}
 
   /**
@@ -6452,24 +6462,53 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private listManagedSubAgentThreadKeys(): Set<string> {
+    // data_version detects commits from other connections (including older
+    // shared-profile processes); total_changes detects this connection's writes.
+    // Capture BEFORE the queries: a concurrent commit must invalidate the next
+    // read, never certify an older result with a newer generation. Do not cache
+    // inside transactions, where a later rollback could otherwise leak a result.
+    const generation = this.stateDb.raw.inTransaction
+      ? undefined
+      : this.stateDb.raw.prepare(
+        `SELECT data_version AS dataVersion, total_changes() AS totalChanges
+         FROM pragma_data_version`,
+      ).get() as { dataVersion: number; totalChanges: number } | undefined;
+    if (
+      generation
+      && this.managedSubAgentCache?.dataVersion === generation.dataVersion
+      && this.managedSubAgentCache.totalChanges === generation.totalChanges
+    ) {
+      return this.managedSubAgentCache.threadKeys;
+    }
+
     const rows = this.stateDb.raw
       .prepare(
-        `SELECT payload FROM threads
+        `SELECT CASE WHEN json_valid(payload) THEN
+           json_extract(payload, '$.backend', '$.threadId', '$.subAgents')
+         END AS projection FROM threads
          WHERE payload LIKE '%"monitorThreadId"%'`,
       )
-      .all() as Array<{ payload: string }>;
+      .all() as Array<{ projection: string | null }>;
     const threadKeys = new Set<string>();
     for (const row of rows) {
       try {
-        const overlay = normalizeThreadOverlayState(
-          JSON.parse(row.payload) as ThreadOverlayState,
-        );
-        for (const subAgent of overlay.subAgents ?? []) {
+        if (!row.projection) continue;
+        // Overlay normalization only removes a legacy agent persona; it does
+        // not change these relationship fields. Avoid materializing histories,
+        // usage, PRs, and agent instructions just to discover child identities.
+        const [parentBackend, parentThreadId, subAgents] = JSON.parse(
+          row.projection,
+        ) as [
+          ThreadOverlayState["backend"],
+          string,
+          ThreadOverlayState["subAgents"],
+        ];
+        for (const subAgent of subAgents ?? []) {
           const threadId = subAgent.monitorThreadId?.trim();
-          const backend = subAgent.backend ?? overlay.backend;
+          const backend = subAgent.backend ?? parentBackend;
           if (
             !threadId
-            || (backend === overlay.backend && threadId === overlay.threadId)
+            || (backend === parentBackend && threadId === parentThreadId)
           ) {
             continue;
           }
@@ -6495,30 +6534,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (storageKeys.length > 0) {
       const candidateRows = this.stateDb.raw
         .prepare(
-          `SELECT thread_id, payload FROM threads
+          `SELECT thread_id, CASE WHEN json_valid(payload) THEN
+             json_extract(payload, '$.handoffOrigin.groupingMode')
+           END AS grouping_mode FROM threads
            WHERE thread_id IN (SELECT value FROM json_each(?))`,
         )
         .all(JSON.stringify(storageKeys)) as Array<{
-          payload: string;
+          grouping_mode: unknown;
           thread_id: string;
         }>;
       for (const candidate of candidateRows) {
-        try {
-          const overlay = normalizeThreadOverlayState(
-            JSON.parse(candidate.payload) as ThreadOverlayState,
+        if (candidate.grouping_mode === "subthread") {
+          const canonicalKey = canonicalKeyByStorageKey.get(
+            candidate.thread_id,
           );
-          if (overlay.handoffOrigin?.groupingMode === "subthread") {
-            const canonicalKey = canonicalKeyByStorageKey.get(
-              candidate.thread_id,
-            );
-            if (canonicalKey) {
-              threadKeys.delete(canonicalKey);
-            }
+          if (canonicalKey) {
+            threadKeys.delete(canonicalKey);
           }
-        } catch {
-          // A malformed unrelated child overlay must not block navigation.
         }
       }
+    }
+    if (generation) {
+      this.managedSubAgentCache = { ...generation, threadKeys };
     }
     return threadKeys;
   }
@@ -6584,16 +6621,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .prepare("SELECT payload FROM backends WHERE scope = ?")
       .get(scope) as { payload: string } | undefined;
     if (!row) return undefined;
+    // Still read the authoritative row on every call. Equality avoids parsing
+    // and normalizing thousands of identities again, without hiding a write
+    // from another process or retaining an unbounded cache of scopes.
+    if (this.backendReadCache?.payload === row.payload) {
+      return this.backendReadCache.state;
+    }
     const state = JSON.parse(row.payload) as {
       knownThreadKeys: string[];
       lastSnapshotHash?: string;
     };
-    return {
+    const normalized = {
       ...state,
       knownThreadKeys: state.knownThreadKeys.map((threadKey) =>
         normalizeThreadIdentityKey(threadKey) ?? threadKey
       ),
     };
+    this.backendReadCache = { payload: row.payload, state: normalized };
+    return normalized;
   }
 
   private putBackend(
