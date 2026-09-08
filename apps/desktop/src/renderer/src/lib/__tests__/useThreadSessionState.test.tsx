@@ -4518,6 +4518,32 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("does not copy attachments between historical messages with identical captions", async () => {
+    const earlier = { type: "message" as const, id: "earlier", role: "user" as const, text: "same caption", createdAt: 1000,
+      parts: [{ type: "image" as const, url: "file:///old-a.png" }, { type: "image" as const, url: "file:///old-b.png" }] };
+    const later = { ...earlier, id: "later", createdAt: 2000, parts: [{ type: "image" as const, url: "file:///new.png" }] };
+    let entries = [earlier];
+    const desktopApi: DesktopApi = { readThread: vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", fetchedAt: Date.now(),
+      replay: { entries, messages: entries, pagination: { supportsPagination: false, hasPreviousPage: false } } })) };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 3000 }) }));
+    await waitForThreadHydration(result);
+    entries = [earlier, later];
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.entries.find((entry) => entry.id === "later")).toMatchObject({ parts: later.parts });
+  });
+
+  it("does not guess which repeated-caption message belongs to an optimistic image send", async () => {
+    const messages = ["first", "second"].map((id) => ({ type: "message" as const, id, role: "user" as const,
+      text: "same caption", createdAt: 2000, parts: [{ type: "image" as const, url: `file:///${id}.png` }] }));
+    const desktopApi: DesktopApi = { readThread: vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", fetchedAt: Date.now(),
+      replay: { entries: messages, messages, pagination: { supportsPagination: false, hasPreviousPage: false } } })) };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread: { ...buildThread({ id: "thread-1", updatedAt: 3000 }),
+      optimisticUserMessage: { text: "same caption", createdAt: 1000,
+        imageParts: [{ type: "image", url: "file:///send-a.png" }, { type: "image", url: "file:///send-b.png" }] } } }));
+    await waitForThreadHydration(result);
+    for (const message of messages) expect(result.current.entries.find((entry) => entry.id === message.id)).toMatchObject({ parts: message.parts });
+  });
+
   it("preserves both GIF and PNG while an active-turn refresh echoes only the GIF", async () => {
     const readThread = vi.fn(
       async ({

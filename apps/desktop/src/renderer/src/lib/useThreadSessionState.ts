@@ -1409,15 +1409,24 @@ function mergeImagePartsFromSources<
   T extends AppServerThreadMessage | AppServerThreadMessageEntry,
 >(
   message: T,
-  sources: AppServerThreadMessageEntry[]
+  sources: AppServerThreadMessageEntry[],
+  targets: AppServerThreadMessage[],
 ): T {
   if (message.role !== "user") {
     return message;
   }
 
-  const source = sources.find((candidate) =>
-    messageTextMatchesOptimisticEntry(message, candidate)
-  );
+  const exact = sources.find((candidate) => candidate.id === message.id);
+  const optimistic = sources.filter((candidate) => candidate.id.startsWith("optimistic-launchpad-")
+    && messageTextMatchesOptimisticEntry(message, candidate)
+    && candidate.createdAt !== undefined && message.createdAt !== undefined
+    && message.createdAt >= candidate.createdAt);
+  // Text alone is not identity: repeated captions (including empty captions)
+  // can belong to entirely different attachments. Only an unambiguous send
+  // echo may bridge the optimistic and provider message IDs.
+  const source = exact ?? (optimistic.length === 1
+    && targets.filter((target) => messageTextMatchesOptimisticEntry(target, optimistic[0])).length === 1
+    ? optimistic[0] : undefined);
   if (!source?.parts || source.parts.filter((part) => part.type === "image").length
     <= (message.parts ?? []).filter((part) => part.type === "image").length) {
     return message;
@@ -1444,18 +1453,22 @@ function mergeImagePartsIntoResponse(
     return response;
   }
 
+  const targets = [...new Map([
+    ...response.replay.messages,
+    ...response.replay.entries.filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message"),
+  ].map((message) => [message.id, message])).values()];
   let changed = false;
   const entries = response.replay.entries.map((entry) => {
     if (entry.type !== "message") {
       return entry;
     }
 
-    const nextEntry = mergeImagePartsFromSources(entry, imageSources);
+    const nextEntry = mergeImagePartsFromSources(entry, imageSources, targets);
     changed = changed || nextEntry !== entry;
     return nextEntry;
   });
   const messages = response.replay.messages.map((message) => {
-    const nextMessage = mergeImagePartsFromSources(message, imageSources);
+    const nextMessage = mergeImagePartsFromSources(message, imageSources, targets);
     changed = changed || nextMessage !== message;
     return nextMessage;
   });
