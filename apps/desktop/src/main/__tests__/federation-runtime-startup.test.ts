@@ -241,3 +241,73 @@ describe("DesktopFederationRuntime session toggle", () => {
     expect(start).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe("Federation activity during connection attempts", () => {
+  type DialHarness = StartupHarness & {
+    stopping: boolean;
+    configuredEndpoints: string[];
+    connectClient(endpoint: string): Promise<void>;
+    connectToGateway(): Promise<void>;
+    scheduleReconnect(): void;
+  };
+
+  function dialingRuntime() {
+    const runtime = new DesktopFederationRuntime();
+    const dial = runtime as unknown as DialHarness;
+    dial.stopping = false;
+    dial.configuredEndpoints = ["wss://fixture.invalid"];
+    vi.spyOn(runtime, "health").mockResolvedValue({ enabled: true, role: "client", status: "connecting", peers: [] });
+    return { runtime, dial };
+  }
+
+  it("stays running after the reconnect timer fires and can stop before the handshake finishes", async () => {
+    vi.useFakeTimers();
+    const { runtime, dial } = dialingRuntime();
+    const handshake = deferred<void>();
+    const connect = vi.spyOn(dial, "connectClient").mockReturnValue(handshake.promise);
+    try {
+      dial.scheduleReconnect();
+      expect((await runtime.activity({ includeHistory: false })).running).toBe(true);
+      await vi.advanceTimersToNextTimerAsync();
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect((await runtime.activity({ includeHistory: false })).running).toBe(true);
+      await runtime.setEnabledForSession(false);
+      expect((await runtime.activity({ includeHistory: false })).running).toBe(false);
+      handshake.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      handshake.resolve();
+      await runtime.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an old handshake clear a newer attempt's running state", async () => {
+    const { runtime, dial } = dialingRuntime();
+    const oldHandshake = deferred<void>();
+    const newHandshake = deferred<void>();
+    vi.spyOn(dial, "connectClient")
+      .mockReturnValueOnce(oldHandshake.promise).mockReturnValueOnce(newHandshake.promise);
+    const oldAttempt = dial.connectToGateway();
+    await runtime.stop();
+    dial.stopping = false;
+    dial.configuredEndpoints = ["wss://fixture.invalid"];
+    const newAttempt = dial.connectToGateway();
+    oldHandshake.resolve();
+    await oldAttempt;
+    expect((await runtime.activity({ includeHistory: false })).running).toBe(true);
+    newHandshake.resolve();
+    await newAttempt;
+    expect((await runtime.activity({ includeHistory: false })).running).toBe(false);
+  });
+
+  it("clears running state when the endpoint walk rejects", async () => {
+    const { runtime, dial } = dialingRuntime();
+    vi.spyOn(dial, "connectClient").mockRejectedValue(new Error("ECONNREFUSED"));
+    await expect(dial.connectToGateway()).rejects.toThrow("ECONNREFUSED");
+    expect((await runtime.activity({ includeHistory: false })).running).toBe(false);
+  });
+});

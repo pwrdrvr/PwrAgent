@@ -865,6 +865,7 @@ export class DesktopFederationRuntime {
   private restartPromise: Promise<void> | undefined;
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
   private connectionGeneration = 0;
   /** Bumped only by stop(), so an in-flight endpoint walk can detect teardown. */
@@ -1095,6 +1096,7 @@ export class DesktopFederationRuntime {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.connectionAttempt = undefined;
     this.connectionGeneration += 1;
     this.walkEpoch += 1;
     if (isAppStateInitialized()) {
@@ -1156,7 +1158,7 @@ export class DesktopFederationRuntime {
       configuredMode: resolveFederationRuntimeConfig(
         getDesktopSettingsService().readFederationConfig(),
       ).mode,
-      running: Boolean(this.listenUrl || this.client || this.reconnectTimer),
+      running: Boolean(this.listenUrl || this.client || this.reconnectTimer || this.connectionAttempt),
     };
   }
 
@@ -1191,7 +1193,7 @@ export class DesktopFederationRuntime {
           // the panel surfaces the duplicate-identity explanation.
           : this.lastConnectionFailureKind === "replaced"
             ? "degraded"
-            : this.reconnectTimer
+            : this.reconnectTimer || this.connectionAttempt
               ? "connecting"
               : "disconnected";
       health.unavailableReason = this.lastConnectionError;
@@ -2773,6 +2775,18 @@ export class DesktopFederationRuntime {
   // identical pinned-identity + Noise handshake, so fallback can only change
   // reachability, never which gateway the client will trust.
   private async connectToGateway(): Promise<void> {
+    if (this.stopping || this.configuredEndpoints.length === 0) return;
+    const attempt = Symbol("federation connection attempt");
+    this.connectionAttempt = attempt;
+    try {
+      await this.walkGatewayEndpoints();
+    } finally {
+      // A stopped or superseded attempt must not clear a newer dial's state.
+      if (this.connectionAttempt === attempt) this.connectionAttempt = undefined;
+    }
+  }
+
+  private async walkGatewayEndpoints(): Promise<void> {
     const endpoints = this.configuredEndpoints;
     if (endpoints.length === 0) return;
     const lastGoodEndpoint =

@@ -102,6 +102,17 @@ describe("Federation activity surfaces", () => {
     expect(screen.getByText("Configured on · gateway")).toBeInTheDocument();
   });
 
+  it("sends a stop while a client connection attempt is running", async () => {
+    const connecting = fixture();
+    connecting.health.status = "connecting";
+    const setFederationEnabled = vi.fn(async () => ({ ...connecting, running: false }));
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => connecting, setFederationEnabled }} />);
+    await screen.findByText("Running · connecting");
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("switch"));
+    await waitFor(() => expect(setFederationEnabled).toHaveBeenCalledWith(false));
+  });
+
   it("labels chart axes with amounts and units, exposes periods and per-peer attribution, and confirms topmost", async () => {
     const readFederationActivity = vi.fn(async () => fixture());
     const setFederationActivityTopmost = vi.fn(async (enabled: boolean) => enabled);
