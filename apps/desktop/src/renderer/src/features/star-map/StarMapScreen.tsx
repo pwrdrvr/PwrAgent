@@ -1564,6 +1564,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return owners;
   }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
+  const projectRecoveryOwners = useMemo(() => {
+    const owners = new Map<string, string[]>();
+    for (const [instanceId, descriptors] of projectDescriptorsByInstance) {
+      if (remote.unreachableInstanceIds.has(instanceId)) continue;
+      for (const descriptor of descriptors) {
+        if (!projectPages.state.resources.get(starMapProjectResource(instanceId, descriptor.key))?.state.rebaselineRequired) continue;
+        owners.set(descriptor.key, [...owners.get(descriptor.key) ?? [], instanceId]);
+      }
+    }
+    return owners;
+  }, [projectDescriptorsByInstance, projectPages.state, remote.unreachableInstanceIds]);
   const [projectGeometryTime] = useState(Date.now);
   const projects = useMemo(
     () => groupThreadsByProject(attentionByInstance, { summonedKeys, now: projectGeometryTime,
@@ -4647,18 +4658,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
           const resourceId = starMapProjectResource(position.instanceId, projectKey);
           const resource = projectPages.state.resources.get(resourceId);
           const hasMore = Boolean(resource?.state.page?.nextCursor);
-          if (!cluster.overflowSlot || (!hasMore && cluster.overflow === 0 && !cluster.expandable)) return null;
+          const needsRestart = resource?.state.rebaselineRequired === true;
+          const actionSlot = cluster.overflowSlot ?? (needsRestart
+            ? { dx: cluster.labelSlot.dx, dy: cluster.labelSlot.dy + 28 } : undefined);
+          if (!actionSlot || (!needsRestart && !hasMore && cluster.overflow === 0 && !cluster.expandable)) return null;
           return (
             <button
               key={`cluster-overflow:${cluster.key}`}
               type="button"
               className="star-map__cluster-overflow"
-              style={{ left: cluster.overflowSlot.dx, top: cluster.overflowSlot.dy }}
+              style={{ left: actionSlot.dx, top: actionSlot.dy }}
               disabled={resource?.loading}
-              aria-label={hasMore ? `Load more ${cluster.label} threads`
+              aria-label={needsRestart ? `Restart ${cluster.label} threads` : hasMore ? `Load more ${cluster.label} threads`
                 : cluster.overflow > 0 ? `Show ${cluster.overflow} more ${cluster.label} threads` : `Show fewer ${cluster.label} threads`}
               onClick={() => {
-                if (hasMore) {
+                if (needsRestart) {
+                  void projectPages.controller.restart(resourceId);
+                } else if (hasMore) {
                   setExpandedClusters((current) => new Set([...current, `${position.instanceId}::${cluster.key}`]));
                   const first = resource?.state.page?.entries[0]?.row.ref;
                   if (first) projectPages.controller.setVisibleAnchor(resourceId, { kind: "thread", ref: first });
@@ -4666,7 +4682,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 } else toggleClusterExpanded(position.instanceId, cluster.key);
               }}
             >
-              {resource?.loading ? "Loading…" : hasMore ? "Load more"
+              {resource?.loading ? "Loading…" : needsRestart ? "Restart threads" : hasMore ? "Load more"
                 : cluster.overflow > 0 ? `+${cluster.overflow} more` : "Show fewer"}
             </button>
           );
@@ -4964,6 +4980,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     label={project.label}
                     projectKey={project.key}
                     threadCount={project.totalThreadCount ?? project.threads.length}
+                    onRestartThreads={projectRecoveryOwners.has(project.key)
+                      ? () => { for (const owner of projectRecoveryOwners.get(project.key)!) {
+                        void projectPages.controller.restart(starMapProjectResource(owner, project.key));
+                      } } : undefined}
                     onLoadMoreThreads={projectPageOwners.has(project.key)
                       ? () => { for (const owner of projectPageOwners.get(project.key)!) {
                         const id = starMapProjectResource(owner, project.key);
@@ -4972,7 +4992,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         void projectPages.controller.loadMore(id);
                       } }
                       : undefined}
-                    loadingThreads={projectPageOwners.get(project.key)?.some((owner) => loadingThreadInstances.has(owner))}
+                    loadingThreads={(projectRecoveryOwners.get(project.key) ?? projectPageOwners.get(project.key))?.some((owner) =>
+                      projectPages.state.resources.get(starMapProjectResource(owner, project.key))?.loading)}
                     // In overview the body is the only thing naming the
                     // project, so it counter-scales to stay readable —
                     // the same treatment instance bodies get.

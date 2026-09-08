@@ -13,6 +13,7 @@ export function StarMapProjectBody(props: {
   projectKey: string;
   threadCount: number;
   onLoadMoreThreads?: () => void;
+  onRestartThreads?: () => void;
   loadingThreads?: boolean;
   /**
    * Counter-scale for the overview zoom, where the canvas shrinks under
@@ -24,6 +25,8 @@ export function StarMapProjectBody(props: {
 }) {
   const labelTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const scale = props.scale ?? 1;
+  const actionLabel = props.onRestartThreads ? `Restart ${props.label} threads`
+    : `Load more threads from instances in ${props.label}`;
   return (
     <div
       className="star-map-project"
@@ -34,17 +37,17 @@ export function StarMapProjectBody(props: {
           : { transform: `translate(-50%, -50%) scale(${scale})` }
       }
     >
-      {props.onLoadMoreThreads ? (
+      {props.onRestartThreads || props.onLoadMoreThreads ? (
         <span className="star-map-instance__actions">
           <button type="button" className="star-map-instance__action"
-            aria-label={`Load more threads from instances in ${props.label}`}
+            aria-label={actionLabel}
             disabled={props.loadingThreads}
-            onClick={props.onLoadMoreThreads}
-            onMouseEnter={(event) => labelTooltip.show(event.currentTarget, `Load more threads from instances in ${props.label}`)}
+            onClick={props.onRestartThreads ?? props.onLoadMoreThreads}
+            onMouseEnter={(event) => labelTooltip.show(event.currentTarget, actionLabel)}
             onMouseLeave={labelTooltip.hide}
-            onFocus={(event) => labelTooltip.show(event.currentTarget, `Load more threads from instances in ${props.label}`)}
+            onFocus={(event) => labelTooltip.show(event.currentTarget, actionLabel)}
             onBlur={labelTooltip.hide}
-          >↓</button>
+          >{props.onRestartThreads ? "↻" : "↓"}</button>
         </span>
       ) : null}
       <span className="star-map-project__glow" aria-hidden="true" />
