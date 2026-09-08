@@ -1,12 +1,13 @@
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
-import type { NavigationQueryAnchor, NavigationQueryRequest } from "@pwragent/shared";
+import type { NavigationQueryAnchor, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
-  failNavigationPageRead, navigationRetainedRange, type NavigationPageState,
+  failNavigationPageRead, isNavigationCursorExpired, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
-const MAX_RESOURCES = 8;
+const MAX_CONCURRENT_READS = 4;
+const MAX_DEMAND_BYTES = 1024 * 1024;
 const MAX_RETAINED_BYTES = 8 * 1024 * 1024;
 let nextWindow = 0;
 
@@ -37,6 +38,8 @@ export class NavigationWindowQueries {
   private readonly listeners = new Set<() => void>();
   private visible = true;
   private disposed = false;
+  private activeReads = 0;
+  private readonly readWaiters = new Set<() => void>();
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
   constructor(private readonly api: Pick<DesktopApi, "getNavigationQueryPage" | "releaseNavigationQuery">) {}
@@ -57,13 +60,20 @@ export class NavigationWindowQueries {
     resource.released = true;
     // Every lifetime has its own token: a delayed release cannot cancel its successor.
     void this.api.releaseNavigationQuery?.(resource.token).catch(() => undefined);
+    this.wakeReaders();
   }
 
   setDemand(demand: ReadonlyMap<string, NavigationQueryRequest>): void {
     if (this.disposed) return;
-    const admitted = new Map([...demand].slice(0, MAX_RESOURCES));
-    const admissionError = demand.size > MAX_RESOURCES
-      ? "Navigation can keep eight queries active. Collapse a directory before opening more." : undefined;
+    const admitted = new Map<string, NavigationQueryRequest>();
+    let demandBytes = 0;
+    for (const [id, request] of demand) {
+      demandBytes += new TextEncoder().encode(JSON.stringify([id, request])).byteLength;
+      if (demandBytes > MAX_DEMAND_BYTES) break;
+      admitted.set(id, request);
+    }
+    const admissionError = admitted.size !== demand.size
+      ? "Navigation request metadata exceeds its memory budget." : undefined;
     for (const [id, resource] of this.resources) {
       const request = admitted.get(id);
       if (!request || JSON.stringify(request) !== resource.requestKey) {
@@ -158,6 +168,20 @@ export class NavigationWindowQueries {
       && this.resources.get(resource.value.id) === resource;
   }
 
+  private wakeReaders(): void {
+    for (const wake of this.readWaiters) wake();
+    this.readWaiters.clear();
+  }
+
+  private async acquireReadSlot(resource: Resource): Promise<boolean> {
+    while (this.isCurrent(resource) && this.activeReads >= MAX_CONCURRENT_READS) {
+      await new Promise<void>((resolve) => this.readWaiters.add(resolve));
+    }
+    if (!this.isCurrent(resource)) return false;
+    this.activeReads += 1;
+    return true;
+  }
+
   private read(resource: Resource, continuation: boolean, anchor?: NavigationQueryAnchor): Promise<void> {
     if (!this.isCurrent(resource)) return Promise.resolve();
     if (resource.pending) {
@@ -173,30 +197,71 @@ export class NavigationWindowQueries {
     resource.value = { ...resource.value, state: started, loading: true };
     this.publish();
     const promise = Promise.resolve().then(async () => {
+      let acquired = false;
       try {
-        if (!this.isCurrent(resource)) return;
+        acquired = await this.acquireReadSlot(resource);
+        if (!acquired) return;
         if (!this.api.getNavigationQueryPage) throw new Error("Navigation query protocol 2 is required. Upgrade this instance.");
-        const page = await this.api.getNavigationQueryPage({ ...started.request, cursor, anchor,
-          completeBaselineRevision: !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
-          retainedRange: !explicitAnchor && !cursor
-            && (anchor || !started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
-            ? navigationRetainedRange(started) : undefined,
-        }, resource.token);
-        if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
-        if (new TextEncoder().encode(JSON.stringify(page)).byteLength > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
-          throw new Error("Navigation page exceeds the bounded response size.");
+        const size = (page?: NavigationQueryPage) => (page?.modelGroups ?? page?.directories ?? page?.entries ?? []).length;
+        const assertRetained = (next: NavigationPageState) => {
+          const retainedBytes = [...this.resources.values()].reduce((bytes, candidate) => {
+            const candidatePage = candidate === resource ? next.page : candidate.value.state.page;
+            return bytes + (candidatePage ? new TextEncoder().encode(JSON.stringify(candidatePage)).byteLength : 0);
+          }, 0);
+          if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
+        };
+        const readPage = async (request: NavigationQueryRequest) => {
+          const page = await this.api.getNavigationQueryPage!(request, resource.token);
+          if (new TextEncoder().encode(JSON.stringify(page)).byteLength > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+            throw new Error("Navigation page exceeds the bounded response size.");
+          }
+          return page;
+        };
+        let page: NavigationQueryPage;
+        let pageCursor = cursor;
+        let wanted = explicitAnchor ? 0 : size(started.page);
+        try {
+          page = await readPage({ ...started.request, cursor, anchor,
+            completeBaselineRevision: !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
+            retainedRange: !explicitAnchor && !cursor
+              && (anchor || !started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
+              ? navigationRetainedRange(started) : undefined,
+          });
+        } catch (error) {
+          if (!cursor || !isNavigationCursorExpired(error)) throw error;
+          // Cursor cache eviction is ordinary pressure, not a broken folder.
+          // Rebuild only the already displayed range plus this explicit page.
+          pageCursor = undefined;
+          wanted += started.request.pageSize ?? 10;
+          const previous = started.page;
+          const firstDirectory = previous?.directories?.[0];
+          const firstThread = previous?.entries[0]?.row.ref;
+          const recoveryAnchor = resource.anchor ?? ((previous?.rangeStart ?? 0) > 0
+            ? firstDirectory ? { kind: "directory" as const, key: firstDirectory.key }
+              : firstThread ? { kind: "thread" as const, ref: firstThread } : undefined : undefined);
+          page = await readPage({ ...started.request, anchor: recoveryAnchor });
         }
-        const next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor });
-        const retainedBytes = [...this.resources.values()].reduce((bytes, candidate) => {
-          const candidatePage = candidate === resource ? next.page : candidate.value.state.page;
-          return bytes + (candidatePage ? new TextEncoder().encode(JSON.stringify(candidatePage)).byteLength : 0);
-        }, 0);
-        if (retainedBytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
+        if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
+        let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });
+        assertRetained(next);
+        while (!pageCursor && next.page?.nextCursor && size(next.page) < wanted) {
+          const nextCursor = next.page.nextCursor;
+          const continuationPage = await readPage({ ...started.request, cursor: nextCursor });
+          if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
+          const before = size(next.page);
+          next = applyNavigationPage({ state: next, sequence: started.pendingSequence, page: continuationPage, cursor: nextCursor });
+          if (size(next.page) <= before) throw new Error("Navigation range refresh did not advance.");
+          assertRetained(next);
+        }
         resource.value = { ...resource.value, state: next };
       } catch (error) {
         if (this.isCurrent(resource)) resource.value = { ...resource.value,
           state: failNavigationPageRead(resource.value.state, started.pendingSequence, error) };
       } finally {
+        if (acquired) {
+          this.activeReads -= 1;
+          this.wakeReaders();
+        }
         if (resource.pending === promise) resource.pending = undefined;
         if (this.isCurrent(resource)) {
           resource.value = { ...resource.value, loading: false };

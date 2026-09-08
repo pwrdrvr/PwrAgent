@@ -82,16 +82,18 @@ it("coalesces invalidations during a pending read into one following refresh", a
   queries.dispose();
 });
 
-it("reports admission overflow without silently fetching extra directories", async () => {
-  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => page());
+it("schedules every expanded resource with four physical reads instead of dropping demand after eight", async () => {
+  const gates: ReturnType<typeof deferred<NavigationQueryPage>>[] = [];
+  const read = vi.fn(() => { const gate = deferred<NavigationQueryPage>(); gates.push(gate); return gate.promise; });
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
-  const demand = new Map(Array.from({ length: 9 }, (_, index) => [`directory-${index}`, request(String(index))]));
+  const demand = new Map(Array.from({ length: 20 }, (_, index) => [`directory-${index}`, request(String(index))]));
   queries.setDemand(demand);
-  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(8));
-  expect(queries.getSnapshot().admissionError).toContain("eight queries");
-  demand.delete("directory-0");
-  queries.setDemand(demand);
-  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(9));
+  for (let end = 4; end <= 20; end += 4) {
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(end));
+    for (const gate of gates.slice(end - 4, end)) gate.resolve(page());
+  }
+  await vi.waitFor(() => expect([...queries.getSnapshot().resources.values()].every((resource) => resource.state.page && !resource.loading)).toBe(true));
+  expect(queries.getSnapshot().resources.size).toBe(20);
   expect(queries.getSnapshot().admissionError).toBeUndefined();
   queries.dispose();
 });
@@ -159,8 +161,8 @@ it("replaces an invalidated initial page once without polling settled pages", as
   queries.dispose();
 });
 
-it("retains an expired range until explicit anchor recovery and does not certify a tail as a full baseline", async () => {
-  const read = vi.fn().mockResolvedValueOnce(page()).mockRejectedValueOnce(new Error("Navigation cursor expired; rebaseline around the visible anchor."))
+it("retains a range with a removed anchor until explicit recovery and does not certify a tail as a full baseline", async () => {
+  const read = vi.fn().mockResolvedValueOnce(page()).mockRejectedValueOnce(new Error("[navigation_anchor_missing] The visible anchor was removed."))
     .mockResolvedValue(page({ rangeStart: 80, complete: true, nextCursor: undefined }));
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
   queries.setDemand(new Map([["lens", request()]]));
@@ -176,5 +178,40 @@ it("retains an expired range until explicit anchor recovery and does not certify
   expect(queries.getSnapshot().resources.get("lens")?.state.rebaselineRequired).toBe(false);
   await queries.refresh();
   expect(read.mock.calls[3]?.[0]).toMatchObject({ anchor, completeBaselineRevision: undefined });
+  queries.dispose();
+});
+
+
+it("preserves loaded rows through refresh and transparently rebuilds an evicted continuation", async () => {
+  const directories = (start: number, end: number, revision: string, nextCursor?: string) => page({
+    generation: revision, countsRevision: revision, complete: !nextCursor, nextCursor,
+    directories: Array.from({ length: end - start }, (_, i) => ({ key: String(start + i), label: String(start + i),
+      kind: "directory" as const, counts: { total: 0, active: 0, unread: 0, review: 0 },
+      pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false })),
+  });
+  const read = vi.fn()
+    .mockResolvedValueOnce(directories(0, 10, "old", "old-10"))
+    .mockResolvedValueOnce(directories(10, 20, "old", "old-20"))
+    .mockResolvedValueOnce(directories(0, 10, "fresh", "fresh-10"))
+    .mockResolvedValueOnce(directories(10, 20, "fresh", "fresh-20"))
+    .mockRejectedValueOnce(new Error("[navigation_cursor_expired] Navigation cursor expired"))
+    .mockResolvedValueOnce(directories(0, 10, "rebuilt", "rebuilt-10"))
+    .mockResolvedValueOnce(directories(10, 20, "rebuilt", "rebuilt-20"))
+    .mockResolvedValueOnce(directories(20, 30, "rebuilt"));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["directory-index", request()]]));
+  await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-index")?.loading).toBe(false));
+  await queries.loadMore("directory-index");
+  const sizes: number[] = [];
+  queries.subscribe(() => sizes.push(queries.getSnapshot().resources.get("directory-index")?.state.page?.directories?.length ?? 0));
+  queries.invalidate();
+  await queries.refresh();
+  expect(queries.getSnapshot().resources.get("directory-index")?.state.page?.directories).toHaveLength(20);
+  await queries.loadMore("directory-index");
+  const state = queries.getSnapshot().resources.get("directory-index")!.state;
+  expect(state.page?.directories?.map((directory) => directory.key)).toEqual(Array.from({ length: 30 }, (_, i) => String(i)));
+  expect(state.error).toBeUndefined();
+  expect(Math.min(...sizes)).toBe(20);
+  expect(read).toHaveBeenCalledTimes(8);
   queries.dispose();
 });

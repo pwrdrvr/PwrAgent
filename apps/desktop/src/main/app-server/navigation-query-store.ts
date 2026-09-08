@@ -597,16 +597,26 @@ export class NavigationQueryStore {
         "Navigation query exceeds the process retained-memory budget.",
       );
     }
-    const retainedBytes = [...this.generations.values()]
+    let retainedBytes = [...this.generations.values()]
       .reduce((total, item) => total + item.retainedBytes, 0);
-    if (
+    // A cursor is a bounded cache lease, not an admission reservation. Normal
+    // refreshes and additional disclosed folders must be able to make progress.
+    // Prefer superseded generations, then the least recently used cursor.
+    const currentIds = new Set(this.currentGenerationByScopeAndQuery.values());
+    const evictable = [...this.generations.values()].sort((left, right) =>
+      Number(currentIds.has(left.generation)) - Number(currentIds.has(right.generation))
+      || left.lastAccessedAt - right.lastAccessedAt);
+    while (
       this.generations.size >= NAVIGATION_QUERY_MAX_GENERATIONS
       || retainedBytes + generation.retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES
     ) {
-      throw new NavigationQueryError(
-        "navigation_busy",
-        "Navigation query pool is busy; retry after an inactive reader releases.",
-      );
+      const oldest = evictable.shift();
+      if (!oldest) break;
+      this.generations.delete(oldest.generation);
+      retainedBytes -= oldest.retainedBytes;
+      for (const [key, id] of this.currentGenerationByScopeAndQuery) {
+        if (id === oldest.generation) this.currentGenerationByScopeAndQuery.delete(key);
+      }
     }
     this.generations.set(generation.generation, generation);
     return generation;

@@ -727,3 +727,20 @@ it("never serializes a whole retained collection while fingerprinting its genera
   } finally { stringify.mockRestore(); }
   expect(serializedCollection).toBe(false);
 });
+
+
+it("admits fresh queries and refresh generations under cursor pressure", async () => {
+  const store = new NavigationQueryStore();
+  const owner = snapshot(Array.from({ length: 20 }, (_, i) => thread(String(i))));
+  const loadIndex = async () => owner;
+  let first: Awaited<ReturnType<typeof store.readPage>> | undefined;
+  for (let i = 0; i < 40; i += 1) {
+    owner.threads[0]!.title = `Revision ${i}`;
+    const result = await store.readPage({ scopeKey: `window-${i % 12}`, request: request({ pageSize: 10 }), loadIndex });
+    expect(result.entries).toHaveLength(10);
+    first ??= result;
+  }
+  await expect(store.readPage({ scopeKey: "window-0", request: request({ pageSize: 10, cursor: first!.nextCursor }), loadIndex }))
+    .rejects.toMatchObject({ code: "navigation_cursor_expired" });
+  await expect(store.readPage({ scopeKey: "window-0", request: request({ pageSize: 10 }), loadIndex })).resolves.toMatchObject({ protocol: 2 });
+});

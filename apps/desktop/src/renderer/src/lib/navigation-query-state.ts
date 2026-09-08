@@ -158,7 +158,7 @@ export function failNavigationPageRead(
 ): NavigationPageState {
   if (sequence !== state.pendingSequence) return state;
   const message = error instanceof Error ? error.message : String(error);
-  const expired = isNavigationCursorExpired(error);
+  const expired = isNavigationCursorExpired(error) || message.includes("navigation_anchor_missing");
   return { ...state, stale: Boolean(state.page), error: message, rebaselineRequired: state.rebaselineRequired || expired };
 }
 
