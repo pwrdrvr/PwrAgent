@@ -22,6 +22,19 @@ afterEach(() => {
 });
 
 describe("McpConnectionRegistry", () => {
+  it("reserves PwrGit's routing ID when creating a custom connection", () => {
+    const registry = new McpConnectionRegistry({
+      configPath: configPath(),
+      randomId: () => "custom",
+    });
+    const created = registry.create({
+      displayName: "PwrGit",
+      serverUrl: "https://mcp.example.com/mcp",
+    });
+    expect(created.id).toBe("pwrgit-custom");
+    expect(registry.get(created.id)?.serverUrl).toBe("https://mcp.example.com/mcp");
+  });
+
   it("preserves unrelated TOML while adding and removing a connection", () => {
     const target = configPath();
     fs.writeFileSync(target, [

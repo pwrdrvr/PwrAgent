@@ -245,7 +245,7 @@ describe("MCP connection IPC", () => {
       MCP_CONNECTION_LIST_CHANNEL,
       MCP_CONNECTION_REMOVE_CHANNEL,
     } = await import("../../shared/ipc");
-    registerMcpConnectionIpcHandlers(service as never);
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
     const localEvent = { sender: { id: 18 } };
 
     await expect(

@@ -3341,7 +3341,13 @@ export function ThreadView(props: ThreadViewProps) {
           }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         >
           <div className="thread-view__primary">
-            {!launchpadMaterializing ? (
+            <div
+              aria-label="PwrSuite connections"
+              className="thread-view__connections"
+              role="group"
+              tabIndex={0}
+            >
+              {!launchpadMaterializing ? (
                 <PwrGitConnectionPrompt
                   backend={selectedLaunchpad.backend}
                   desktopApi={props.desktopApi}
@@ -3367,39 +3373,39 @@ export function ThreadView(props: ThreadViewProps) {
                     );
                   }}
                 />
-
-            ) : null}
-            {/* Local MCP selection lives in the composer's MCP access
-                panel, beside the other per-thread execution settings, so it
-                is reachable from an existing thread too. Only the remote
-                case keeps a card: it is a rare, thread-specific offer from
-                the machine that owns the thread, and the local panel
-                refuses to edit a remote thread's selection. */}
-            {!launchpadMaterializing && props.activeFederationTarget ? (
-              <PwrSnapConnectionPrompt
-                backend={selectedLaunchpad.backend}
-                desktopApi={props.desktopApi}
-                enabled={
-                  selectedLaunchpad.mcpConnectionIds?.includes(
-                    PWRSNAP_MCP_CONNECTION_ID,
-                  ) === true
-                }
-                remoteOwnerLabel={
-                  props.activeFederationOwnerLabel ?? "the remote machine"
-                }
-                onEnabledChange={async (enabled) => {
-                  await props.onUpdateLaunchpad?.(
-                    selectedLaunchpad.directoryKey,
-                    {
-                      mcpConnectionIds: pwrSnapConnectionIds(
-                        enabled,
-                        selectedLaunchpad.mcpConnectionIds,
-                      ),
-                    },
-                  );
-                }}
-              />
-            ) : null}
+              ) : null}
+              {/* Managed MCP selection lives in the composer's MCP access
+                  panel, beside the other per-thread execution settings, so it
+                  is reachable from an existing thread too. PwrGit retains its
+                  separate pairing card above. The remote PwrSnap card offers access from
+                  the machine that owns the thread, and the local panel
+                  refuses to edit a remote thread's selection. */}
+              {!launchpadMaterializing && props.activeFederationTarget ? (
+                <PwrSnapConnectionPrompt
+                  backend={selectedLaunchpad.backend}
+                  desktopApi={props.desktopApi}
+                  enabled={
+                    selectedLaunchpad.mcpConnectionIds?.includes(
+                      PWRSNAP_MCP_CONNECTION_ID,
+                    ) === true
+                  }
+                  remoteOwnerLabel={
+                    props.activeFederationOwnerLabel ?? "the remote machine"
+                  }
+                  onEnabledChange={async (enabled) => {
+                    await props.onUpdateLaunchpad?.(
+                      selectedLaunchpad.directoryKey,
+                      {
+                        mcpConnectionIds: pwrSnapConnectionIds(
+                          selectedLaunchpad.mcpConnectionIds,
+                          enabled,
+                        ),
+                      },
+                    );
+                  }}
+                />
+              ) : null}
+            </div>
             {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
               <McpAccessPanel
                 backend={selectedLaunchpad.backend}
@@ -3422,7 +3428,6 @@ export function ThreadView(props: ThreadViewProps) {
                   );
                 }}
               />
-              </div>
             ) : null}
             <div className={`thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`}>
               {launchpadMaterializing ? (

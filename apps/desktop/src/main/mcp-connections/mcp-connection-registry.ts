@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
+  MCP_CONNECTION_IDS,
   PWRSNAP_MCP_CONNECTION_ID,
   type McpConnectionRecord,
 } from "@pwragent/shared";
@@ -152,7 +153,7 @@ export class McpConnectionRegistry {
 
   private readStoredConnections(): McpConnectionRecord[] {
     const connections: McpConnectionRecord[] = [];
-    const ids = new Set<string>([PWRSNAP_MCP_CONNECTION_ID]);
+    const ids = new Set<string>(MCP_CONNECTION_IDS);
     for (const row of this.readStoredRows()) {
       const connection = connectionFromRow(row);
       if (!connection || ids.has(connection.id)) continue;
@@ -225,8 +226,11 @@ export class McpConnectionRegistry {
     connections: readonly McpConnectionRecord[],
   ): string {
     const base = slugifyConnectionId(displayName);
-    const ids = new Set(connections.map((connection) => connection.id));
-    if (!ids.has(base) && base !== PWRSNAP_MCP_CONNECTION_ID) return base;
+    const ids = new Set<string>([
+      ...MCP_CONNECTION_IDS,
+      ...connections.map((connection) => connection.id),
+    ]);
+    if (!ids.has(base)) return base;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const candidate = `${base.slice(0, 54)}-${this.randomId()}`;
       if (CONNECTION_ID_PATTERN.test(candidate) && !ids.has(candidate)) {
@@ -310,6 +314,7 @@ function connectionFromRow(
   row: StoredConnectionRow,
 ): McpConnectionRecord | undefined {
   const id = typeof row.id === "string" ? row.id.trim() : "";
+  if (MCP_CONNECTION_IDS.some((builtInId) => builtInId === id)) return undefined;
   const displayName =
     typeof row.display_name === "string" ? row.display_name.trim() : "";
   const serverUrl =
