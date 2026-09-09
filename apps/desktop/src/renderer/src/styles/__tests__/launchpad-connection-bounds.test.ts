@@ -59,8 +59,24 @@ describe("launchpad connection card bounds", () => {
   it("pays the list's outer air once, on the list, not once per card", () => {
     // Each card used to carry `margin: clamp(28px, 7vh, 72px) 16px 0`, so
     // two cards bought two lots of it — up to 144px of air stacked into a
-    // column that had none to give.
-    expect(firstCssRuleBody(".mcp-connection")).not.toMatch(/\n\s*margin:/);
+    // column that had none to give. Longhands too: matching only the
+    // shorthand would wave through a `margin-top` that reintroduces exactly
+    // that.
+    expect(firstCssRuleBody(".mcp-connection")).not.toMatch(
+      /\n\s*margin(?:-top|-block|-block-start)?:/,
+    );
+  });
+
+  it("keeps the scrolling list's centred column aligned with the composer's", () => {
+    // `align-items: center` and the cards' `calc(100% - 32px)` resolve
+    // against the content box, which a space-taking scrollbar narrows — the
+    // Windows and Linux default. Without a symmetric gutter the card column
+    // sits half a scrollbar left of the composer column below it, and the
+    // headless shell cannot catch it because it only ever draws overlay
+    // scrollbars.
+    expect(ruleBody(".thread-view__connections")).toMatch(
+      /scrollbar-gutter:\s*stable\s+both-edges;/,
+    );
   });
 
   it("bounds the composer's attachment strip so pasted images cannot grow it without limit", () => {
@@ -69,5 +85,23 @@ describe("launchpad connection card bounds", () => {
     // full height to a composer that is `flex: 0 0 auto`.
     expect(body).toMatch(/max-height:/);
     expect(body).toMatch(/overflow-y:\s*auto;/);
+    // Window-relative, or the cap stops shrinking with the pane it has to
+    // fit inside and the strip reclaims the send row at short windows.
+    expect(body).toMatch(/max-height:[^;]*\d+vh/);
+  });
+
+  it("keeps the attachment scroller from clipping each thumbnail's remove control", () => {
+    // `.composer__attachment-remove` is positioned at `top: -6px;
+    // right: -6px` — outside its own thumbnail's box — so the scroller the
+    // cap above introduced would cut the top row's remove buttons and the
+    // last column's off. The padding buys the two edges it overhangs and the
+    // negative margin puts the strip back where it was, which is why the
+    // pair only ever makes sense together.
+    const body = ruleBody(".composer__attachments");
+    expect(body).toMatch(/padding:\s*8px\s+8px\s+0\s+0;/);
+    expect(body).toMatch(/margin-top:\s*-8px;/);
+    expect(firstCssRuleBody(".composer__attachment-remove")).toMatch(
+      /top:\s*-6px;/,
+    );
   });
 });

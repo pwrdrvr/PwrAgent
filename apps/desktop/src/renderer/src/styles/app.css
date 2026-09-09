@@ -16071,13 +16071,23 @@ a.button {
   min-height: 0;
   /* A shrink with no scroller just moves the clip one level down. */
   overflow-y: auto;
-  /* The list's outer air, paid once here rather than once per card. */
-  padding: clamp(16px, 5vh, 56px) 0 0;
+  /* `align-items: center` and the cards' `calc(100% - 32px)` both resolve
+     against the content box, which a space-taking scrollbar narrows — so
+     without a symmetric gutter the card column would sit half a scrollbar
+     left of the composer column directly below it, on Windows and Linux
+     and on macOS set to "Show scroll bars: Always". `both-edges` keeps the
+     centring honest; it costs nothing where scrollbars are overlays. */
+  scrollbar-gutter: stable both-edges;
+  /* The list's outer air, paid once here rather than once per card. The
+     bottom pays too: scrolled to its end, the last card's border would
+     otherwise land straight on the composer's top edge. */
+  padding: clamp(16px, 5vh, 56px) 0 14px;
 }
 
-/* Both cards return null against a remote launchpad the owner has not
-   configured. An empty list would still paint its first card's border as a
-   stray hairline above the composer. */
+/* Both cards return `null` against a remote launchpad whose owner has not
+   configured PwrSnap or PwrGit, and the wrapper still renders. There is no
+   card and so no border to paint — what an empty list leaves behind is its
+   own `padding`, up to 56px of dead air directly above the composer. */
 .thread-view__connections:not(:has(.mcp-connection)) {
   display: none;
 }
@@ -27893,11 +27903,23 @@ button.pricing-token-miser__folded:focus-visible {
   /* Pasted images wrap onto new rows, and the composer is `flex: 0 0 auto`
      inside a pane that clips with no scrollbar — before this cap every
      extra row pushed the send controls down by its full height until they
-     left the window. Roughly two rows are visible; the rest scroll here,
-     which is the one place in the composer where hidden content is
-     obviously recoverable (the thumbnails are their own affordance).
-     Window-relative so the cap shrinks with the pane it has to fit in. */
-  max-height: min(232px, 24vh);
+     left the window. The rest scroll here, which is the one place in the
+     composer where hidden content is obviously recoverable (the thumbnails
+     are their own affordance).
+
+     240px is two rows measured through the border box, which is what
+     `max-height` bounds: a row is the 88px thumbnail + the 6px
+     `.composer__attachment` gap + an 18px chip line (the size chip always
+     renders), so 112 + 8 + 112 of content, plus the 8px top padding below.
+     Derived at 232px first, which silently clipped the second row by
+     exactly that padding.
+
+     The `vh` half is the one that usually binds — it wins below a 1000px
+     window, so at the app's own 640px minimum the strip is 154px and shows
+     one row and part of the next. That is the point: the cap has to shrink
+     with the pane it must fit inside, and the fixed half is only there to
+     stop the strip eating a tall display. */
+  max-height: min(240px, 24vh);
   overflow-y: auto;
   /* Each thumbnail's remove cookie is pinned at `top: -6px; right: -6px`,
      outside its own box, so a scroller would clip it. Pad the two edges it
