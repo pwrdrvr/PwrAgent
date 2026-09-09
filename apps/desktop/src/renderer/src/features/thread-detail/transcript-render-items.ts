@@ -418,7 +418,13 @@ function workGroupLabel(
       ? `Worked for ${formatElapsedMs(turn.completedAt - turn.startedAt)}`
       : "Previous work";
   const toolEntries = entries.filter(
-    (entry): entry is AppServerThreadActivityEntry => entry.type === "activity",
+    (entry): entry is AppServerThreadActivityEntry =>
+      entry.type === "activity"
+      // Keep the startup notice available when expanded without counting it
+      // as tool work or copying its configuration instructions into the heading.
+      && !(entry.tone === "warning"
+        && entry.status !== "failed"
+        && entry.summary.startsWith("Warning: Under-development features enabled:")),
   );
   if (toolEntries.length < 2) {
     return base;
