@@ -11,13 +11,13 @@ import type {
 } from "@pwragent/shared";
 import {
   resolveThreadParentKey,
-  sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
   useDropIndicatorController,
 } from "./drag-drop";
+import { createSubthreadTrays } from "./subthread-trays";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
   threadSummaryIdentityKey,
@@ -132,9 +132,20 @@ export function RecentsList(props: RecentsListProps) {
     if (row && !children.some((child) => threadSummaryIdentityKey(child) === key)) children.push(row);
     childrenByParentKey.set(parentKey, children);
   }
+  // One tray per top-level row, holding its whole descendant subtree in
+  // depth-first order. The owner keys each child under its *true* parent,
+  // so a grandchild is filed under a row that is itself a child; rendering
+  // only direct children would silently drop it from this lens.
+  const trays = createSubthreadTrays(childrenByParentKey);
+  for (const thread of topLevelThreads) trays.addTrayOwner(thread);
   const renderSubthreads = (parent: NavigationPresentedThread) => {
     const parentKey = threadSummaryIdentityKey(parent);
-    const children = sortSubthreadSummaries(parent, childrenByParentKey.get(parentKey) ?? []);
+    // Already depth-first ordered by the tray. Re-sorting here by this
+    // row's `subthreadOrder` would rank its grandchildren as unlisted and
+    // scatter them away from the sub-threads that own them.
+    const children = trays.subtree(parentKey);
+    const directChildKeys = trays.directChildKeys(parentKey);
+    const directChildKeySet = new Set(directChildKeys);
     const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
     const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
       ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
@@ -179,11 +190,13 @@ export function RecentsList(props: RecentsListProps) {
               composerSourceThreadKey={props.composerSourceThreadKey}
               draggable={
                 canManageSubthreads
-                && children.length > 1
+                && directChildKeys.length > 1
+                && directChildKeySet.has(childKey)
                 && Boolean(props.onUpdateSubthreadOrder)
               }
               includeLinkedDirectories
               nested
+              nestedDepth={trays.depth(childKey)}
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedThreadKey}
               selectedThreadKeys={props.selectedThreadKeys}
@@ -196,6 +209,7 @@ export function RecentsList(props: RecentsListProps) {
                 if (
                   !draggedThread
                   || draggedKey === childKey
+                  || !directChildKeySet.has(childKey)
                   || resolveThreadParentKey(draggedThread, threadByKey) !== parentKey
                 ) {
                   event.dataTransfer.dropEffect = "none";
@@ -233,10 +247,14 @@ export function RecentsList(props: RecentsListProps) {
                 const draggedThread = threadByKey.get(draggedKey);
                 if (
                   !draggedThread
+                  || !directChildKeySet.has(childKey)
                   || resolveThreadParentKey(draggedThread, threadByKey) !== parentKey
                 ) {
                   return;
                 }
+                // `subthreadOrder` names this row's own children, so the
+                // move stays inside that list — never the flattened tray,
+                // which also carries rows owned by those children.
                 void props.onUpdateSubthreadOrder?.(parent, {
                   threadId: draggedThread.id,
                   anchorThreadId: child.id,
@@ -293,15 +311,11 @@ export function RecentsList(props: RecentsListProps) {
   // disclosure.
   const selectionOrder = topLevelThreads.flatMap((thread) => {
     const threadKey = threadSummaryIdentityKey(thread);
-    const children = sortSubthreadSummaries(
-      thread,
-      childrenByParentKey.get(threadKey) ?? [],
-    );
     return [
       threadKey,
       ...(isSubthreadSectionCollapsed(thread)
         ? []
-        : children.map((child) =>
+        : trays.subtree(threadKey).map((child) =>
             threadSummaryIdentityKey(child),
           )),
     ];
@@ -309,7 +323,7 @@ export function RecentsList(props: RecentsListProps) {
 
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = threadSummaryIdentityKey(thread);
-    const children = sortSubthreadSummaries(thread, childrenByParentKey.get(key) ?? []);
+    const children = trays.subtree(key);
     const subthreadCount = getSubthreadDisclosureCount(thread, children.length);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
     return (

@@ -1059,6 +1059,60 @@ describe("Sidebar", () => {
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
   });
 
+  it("indents a grandchild deeper than the child it renders beside", () => {
+    const childThread = {
+      ...sharedThread,
+      id: "thread-review",
+      title: "Adversarial review",
+      parentThreadId: sharedThread.id,
+      updatedAt: sharedThread.updatedAt + 1,
+    };
+    const grandchildThread = {
+      ...sharedThread,
+      id: "thread-followup",
+      title: "Follow-up",
+      parentThreadId: childThread.id,
+      updatedAt: sharedThread.updatedAt + 2,
+    };
+    const threads = [grandchildThread, childThread, sharedThread];
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={threads}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={threads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const rowShell = (title: string): HTMLElement => {
+      const shell = screen
+        .getByRole("button", { name: title })
+        .closest(".thread-row-shell");
+      expect(shell).not.toBeNull();
+      return shell as HTMLElement;
+    };
+
+    // Both rows sit in the same flat tray, so the indent is the only thing
+    // that says the follow-up hangs off the review rather than beside it.
+    expect(container.querySelectorAll(".subthread-list")).toHaveLength(1);
+    expect(
+      rowShell("Adversarial review").style.getPropertyValue(
+        "--thread-row-nested-depth",
+      ),
+    ).toBe("");
+    expect(
+      rowShell("Follow-up").style.getPropertyValue("--thread-row-nested-depth"),
+    ).toBe("2");
+  });
+
   it("groups same-owner remote sub-threads and submits their drag order", () => {
     const target = { scope: "remote" as const, instanceId: "remote-owner" };
     const remoteParent: NavigationThreadSummary = {
@@ -1288,6 +1342,78 @@ describe("Sidebar", () => {
     expect(container.querySelector(".subthread-list")).toContainElement(
       threadCard(childButton),
     );
+  });
+
+  it("renders a grandchild in its top-level ancestor's tray in Directories", () => {
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "top-parent",
+      title: "Directory parent",
+      pinnedRank: "1024",
+    };
+    const childThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "mid-child",
+      title: "Directory child",
+      parentThreadId: parentThread.id,
+      parentThreadBackend: "codex",
+    };
+    const grandchildThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "leaf-grandchild",
+      title: "Directory grandchild",
+      parentThreadId: childThread.id,
+      parentThreadBackend: "codex",
+    };
+    const directory: NavigationDirectorySummary = {
+      ...directories[0]!,
+      threadKeys: ["codex:top-parent", "codex:mid-child", "codex:leaf-grandchild"],
+    };
+    const threads = [grandchildThread, childThread, parentThread];
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[directory]}
+        inboxThreads={threads}
+        loading={false}
+        selectedItemKey="codex:top-parent"
+        threads={threads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // The sidebar renders one nesting level, so the grandchild has to live in
+    // its top-level ancestor's tray — directly after the child that owns it,
+    // and indented one step deeper. Dropping it instead is the bug this
+    // flattening exists to prevent.
+    const trays = container.querySelectorAll(".subthread-list");
+    expect(trays).toHaveLength(1);
+    const tray = trays[0] as HTMLElement;
+    expect(tray.querySelectorAll(".thread-row-shell")).toHaveLength(2);
+    expect(within(tray).getByRole("button", { name: "Directory child" }))
+      .toBeInTheDocument();
+    const grandchildButton = within(tray).getByRole("button", {
+      name: "Directory grandchild",
+    });
+    // Depth-first: the grandchild follows the child that owns it.
+    expect(
+      within(tray).getByRole("button", { name: "Directory child" })
+        .compareDocumentPosition(grandchildButton)
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The depth custom property lives on the shell, which is what the
+    // `.thread-row-shell--nested` padding rule reads.
+    const grandchildShell = grandchildButton.closest(".thread-row-shell");
+    expect(
+      (grandchildShell as HTMLElement).style.getPropertyValue(
+        "--thread-row-nested-depth",
+      ),
+    ).toBe("2");
   });
 
   it("keeps native Codex workers in an on-demand sub-agent disclosure", () => {
