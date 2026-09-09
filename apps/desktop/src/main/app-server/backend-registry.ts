@@ -5652,6 +5652,10 @@ export class DesktopBackendRegistry {
   >();
   private readonly pendingCodexInvalidIdRecoveries:
     PendingCodexInvalidIdRecovery[] = [];
+  private readonly codexInvalidIdQueueReservations = new Map<
+    string,
+    CodexRetryableTurnStart
+  >();
   private readonly codexInvalidIdRecoveryAttemptedAt = new Map<string, number>();
   private codexInvalidIdRecoveryDrain?: Promise<void>;
   private codexInvalidIdRecoveryBarrier?: Promise<void>;
@@ -6169,8 +6173,9 @@ export class DesktopBackendRegistry {
       startTurn: async (entry) => await this.startTurnNow(entry),
       isThreadActive: ({ backend, threadId }) =>
         backend === "codex"
-          ? this.threadHasActiveTurn(threadId) ||
-            this.threadHasBlockingWorkspaceMove({ backend, threadId })
+          ? this.threadHasActiveTurn(threadId)
+            || this.codexInvalidIdQueueReservations.has(threadId)
+            || this.threadHasBlockingWorkspaceMove({ backend, threadId })
           : false,
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
@@ -13909,15 +13914,63 @@ export class DesktopBackendRegistry {
     return buildLaunchpadOptions(backend, models);
   }
 
+  private reserveCodexInvalidIdQueue(notification: AppServerNotification):
+    CodexRetryableTurnStart | undefined {
+    if (
+      notification.method !== "turn/failed"
+      || !this.codexClient.recoverInvalidPersistedResponseMessageIds
+      || !isCodexInvalidResponseMessageIdError(
+        errorMessageFromTerminalNotification(notification),
+      )
+    ) {
+      return undefined;
+    }
+    const threadId = notification.params.threadId;
+    const candidate = this.codexRetryableTurnStarts.get(threadId);
+    const turnId = turnIdFromTerminalNotification(notification);
+    if (
+      !candidate
+      || this.codexInvalidIdQueueReservations.has(threadId)
+      || (candidate.turnId
+        && !candidate.turnId.startsWith("pending:")
+        && turnId
+        && candidate.turnId !== turnId)
+    ) {
+      return undefined;
+    }
+    // Reserve before any terminal-event await: emit releases the queue, and
+    // Codex may concurrently send an idle status while failure storage waits.
+    this.codexInvalidIdQueueReservations.set(threadId, candidate);
+    return candidate;
+  }
+
+  private async releaseCodexInvalidIdQueue(
+    candidate: CodexRetryableTurnStart,
+  ): Promise<void> {
+    await this.codexInvalidIdRecoveryBarrier;
+    const threadId = candidate.params.threadId;
+    if (this.codexInvalidIdQueueReservations.get(threadId) !== candidate) {
+      return;
+    }
+    this.codexInvalidIdQueueReservations.delete(threadId);
+    if (!this.closed) {
+      // A successful retry is active now, so the queue waits for its terminal
+      // event. A rejected recovery must not leave an orphaned reservation.
+      await this.threadTurnQueue.releaseThread({ backend: "codex", threadId });
+    }
+  }
+
   private async handleCodexTurnTerminalForInvalidIdRecovery(
     notification: Extract<
       AppServerNotification,
       { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
     >,
+    reservedCandidate?: CodexRetryableTurnStart,
   ): Promise<void> {
     const threadId = notification.params.threadId;
     const turnId = turnIdFromTerminalNotification(notification);
-    const candidate = this.codexRetryableTurnStarts.get(threadId);
+    const candidate = reservedCandidate ?? this.codexRetryableTurnStarts.get(threadId);
+    let recoveryCompletion: Promise<unknown> | undefined;
     if (
       candidate
       && (
@@ -13944,6 +13997,7 @@ export class DesktopBackendRegistry {
               candidate,
               errorMessageFromTerminalNotification(notification)!,
             );
+            recoveryCompletion = recovery.completion;
             void recovery.completion.catch(() => undefined);
           } catch (error) {
             await this.emitCodexInvalidIdRecoveryUpdate({
@@ -13971,6 +14025,14 @@ export class DesktopBackendRegistry {
       }
     }
     this.maybeDrainCodexInvalidIdRecoveries();
+    if (reservedCandidate) {
+      void (recoveryCompletion ?? Promise.resolve())
+        .catch(() => undefined)
+        .then(() => this.releaseCodexInvalidIdQueue(reservedCandidate))
+        .catch((error) => {
+          backendRegistryLog.warn("Codex recovery queue release failed", { error, threadId });
+        });
+    }
   }
 
   private async queueCodexInvalidIdRecovery(
@@ -14384,6 +14446,9 @@ export class DesktopBackendRegistry {
   private subscribeClient(backend: AppServerBackendKind, client: BackendClient): void {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
+        const reservedRecovery = backend === "codex"
+          ? this.reserveCodexInvalidIdQueue(notification)
+          : undefined;
         logBackendLifecycleNotification(backend, notification);
         if (
           backend === "codex" &&
@@ -14407,8 +14472,15 @@ export class DesktopBackendRegistry {
             threadId: notification.params.threadId,
           });
         }
-        await this.emitHeadlessAutomationLifecycle(backend, notification);
-        await this.emit({ backend, notification });
+        try {
+          await this.emitHeadlessAutomationLifecycle(backend, notification);
+          await this.emit({ backend, notification });
+        } catch (error) {
+          if (reservedRecovery) {
+            await this.releaseCodexInvalidIdQueue(reservedRecovery);
+          }
+          throw error;
+        }
         if (
           backend === "codex"
           && (
@@ -14422,6 +14494,7 @@ export class DesktopBackendRegistry {
               AppServerNotification,
               { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
             >,
+            reservedRecovery,
           );
         }
       }),

@@ -6973,6 +6973,154 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("keeps queued input behind the failed request's repair and retry", async () => {
+    const threadId = "thread-recovery-queue";
+    const repair = createDeferred<void>();
+    const persistence = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      invalidIdRecoveryDelay: repair.promise,
+      startTurnResults: [
+        { threadId, turnId: "failed-turn" },
+        { threadId, turnId: "retry-turn" },
+        { threadId, turnId: "queued-turn" },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    const submit = (text: string) => registry.submitTurn({
+      backend: "codex",
+      threadId,
+      origin: "manual",
+      input: [{ type: "text", text }],
+    });
+    expect((await submit("original")).status).toBe("started");
+    expect((await submit("queued")).status).toBe("queued");
+    const appendFailure = overlayStore.appendTurnFailure.bind(overlayStore);
+    const persist = vi.spyOn(overlayStore, "appendTurnFailure")
+      .mockImplementation(async (params) => {
+        await persistence.promise;
+        return await appendFailure(params);
+      });
+    const failed = codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "failed-turn",
+        turn: {
+          id: "failed-turn",
+          status: "failed",
+          error: {
+            message: "[invalid_id_prefix] Invalid 'input[383].id': 'review_rollout_user'. Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+    try {
+      await waitForCondition(() => persist.mock.calls.length === 1);
+      await codexClient.emit({
+        method: "thread/status/changed",
+        params: { threadId, status: { type: "idle" } },
+      });
+      await flushAsync();
+      expect(codexClient.startTurnCalls.map((call) => call.input)).toEqual([
+        [{ type: "text", text: "original" }],
+      ]);
+      persistence.resolve();
+      await failed;
+      await waitForCondition(() => codexClient.invalidIdRecoveryCalls.length === 1);
+      expect(codexClient.startTurnCallCount).toBe(1);
+      repair.resolve();
+      await waitForCondition(() => codexClient.startTurnCallCount === 2);
+      await flushAsync();
+      expect(codexClient.startTurnCalls.map((call) => call.input)).toEqual([
+        [{ type: "text", text: "original" }],
+        [{ type: "text", text: "original" }],
+      ]);
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId,
+          turnId: "retry-turn",
+          turn: { id: "retry-turn", status: "completed", output: [] },
+        },
+      });
+      await waitForCondition(() => codexClient.startTurnCallCount === 3);
+      expect(codexClient.startTurnCalls[2].input).toEqual([
+        { type: "text", text: "queued" },
+      ]);
+    } finally {
+      persistence.resolve();
+      repair.resolve();
+      await failed;
+      await registry.close();
+    }
+  });
+
+  it.each(["reservation", "repair"])(
+    "releases the recovery queue reservation after %s failure",
+    async (failureStage) => {
+      const threadId = "thread-recovery-failure-queue";
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+        invalidIdRecoveryError: new Error("repair refused"),
+        startTurnResults: [
+          { threadId, turnId: "failed-turn" },
+          { threadId, turnId: "queued-turn" },
+        ],
+      });
+      const overlayStore = createOverlayStoreMock();
+      if (failureStage === "reservation") {
+        vi.spyOn(overlayStore, "setTurnFailureCodexInvalidIdRecovery")
+          .mockRejectedValue(new Error("audit unavailable"));
+      }
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore,
+        threadTitleGenerationService: null,
+      });
+      try {
+        for (const text of ["original", "queued"]) {
+          await registry.submitTurn({
+            backend: "codex",
+            threadId,
+            origin: "manual",
+            input: [{ type: "text", text }],
+          });
+        }
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId,
+            turnId: "failed-turn",
+            turn: {
+              id: "failed-turn",
+              status: "failed",
+              error: {
+                message: "[invalid_id_prefix] Invalid 'input[383].id': 'review_rollout_user'. Expected an ID that begins with 'msg'.",
+              },
+            },
+          },
+        });
+        await waitForCondition(() => codexClient.startTurnCallCount === 2);
+        expect(codexClient.startTurnCalls[1].input).toEqual([
+          { type: "text", text: "queued" },
+        ]);
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(
+          failureStage === "repair" ? 1 : 0,
+        );
+      } finally {
+        await registry.close();
+      }
+    },
+  );
+
   it("repairs when the terminal failure arrives before turn/start responds", async () => {
     const threadId = "thread-terminal-before-start-response";
     const startTurnDelay = createDeferred<void>();
