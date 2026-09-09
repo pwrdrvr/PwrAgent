@@ -1793,23 +1793,48 @@ describe("MessagingController", () => {
       key: "remote:project", path: "/remote/project", label: "Remote project", threadKeys: [],
     };
     const complete = { ...local, directories: [...local.directories, remoteDirectory] };
-    const harness = await createHarness(boundedPeerBrowseFixture(local, complete, peer.promise));
-    const pending = harness.controller.handleInboundEvent(buildCommandEvent(`${command} --cwd ${selector}`));
-    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
-    const browseSessionId = (harness.delivered[0] as { browseSessionId: string }).browseSessionId;
-    peer.resolve();
-    await pending;
-    expect(harness.delivered[1]).toMatchObject({
-      browseSessionId, delivery: { mode: "update" },
-    });
-    await expect(harness.store.getBrowseSession(browseSessionId, { now: 1000 })).resolves.toMatchObject({
-      mode,
-      selectedProject: {
-        directoryKey: remoteDirectory.key, path: remoteDirectory.path, label: remoteDirectory.label,
+    const firstDelivery = createDeferred<void>();
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      ...boundedPeerBrowseFixture(local, complete, peer.promise),
+      deliver: async (intent) => {
+        delivered.push(intent);
+        firstDelivery.resolve();
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: { channel: "telegram", id: `surface:${intent.id}` },
+        };
       },
     });
-    expect(JSON.stringify(harness.delivered[1])).not.toContain("Thread one");
-    harness.controller.dispose();
+    const pending = harness.controller.handleInboundEvent(buildCommandEvent(`${command} --cwd ${selector}`));
+    try {
+      // Wait for the owned delivery event, not a polling deadline racing disk IO.
+      await Promise.race([
+        firstDelivery.promise,
+        pending.then(() => { throw new Error("Browse completed before publishing its initial picker"); }),
+      ]);
+      expect(delivered).toHaveLength(1);
+      const browseSessionId = (delivered[0] as { browseSessionId: string }).browseSessionId;
+      peer.resolve();
+      await pending;
+      expect(delivered[1]).toMatchObject({
+        browseSessionId, delivery: { mode: "update" },
+      });
+      await expect(harness.store.getBrowseSession(browseSessionId, { now: 1000 })).resolves.toMatchObject({
+        mode,
+        selectedProject: {
+          directoryKey: remoteDirectory.key, path: remoteDirectory.path, label: remoteDirectory.label,
+        },
+      });
+      expect(JSON.stringify(delivered[1])).not.toContain("Thread one");
+    } finally {
+      // Even a failed assertion must release and drain the command before
+      // afterEach removes its store directory.
+      peer.resolve();
+      await pending.finally(() => harness.controller.dispose());
+    }
   });
 
   it.each(["", " --cwd /remote/project"])("does not overwrite the actor's next action with late peer results%s", async (args) => {
