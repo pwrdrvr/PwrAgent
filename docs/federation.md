@@ -167,6 +167,8 @@ up after acknowledgement, including when an idle owner has a pending prompt,
 and resubscribes on a sequence gap. Normal active-thread navigation timestamp
 changes do not trigger transcript reads. A recovery that arrives during an
 older read remains pending until a read started after recovery completes.
+Reselecting a cached remote thread also triggers window-local catch-up: another
+window can keep the aggregate subscription alive while this window misses events.
 
 Within a negotiated stream, pricing and tool-accounting notifications send a
 full baseline followed by smaller patches. The receiver reconstructs the

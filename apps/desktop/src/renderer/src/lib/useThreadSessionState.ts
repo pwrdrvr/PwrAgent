@@ -4751,6 +4751,7 @@ export function useThreadSessionState(params: {
   // the same initial request twice. Explicit reloads may still supersede it.
   const inFlightHydrationsRef = useRef(new Map<string, number>());
   const streamRecoveryVersionsRef = useRef(new Map<string, number>());
+  const remoteDetailInterestRef = useRef<string | undefined>(undefined);
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
@@ -5279,6 +5280,19 @@ export function useThreadSessionState(params: {
   }, [threadKey, updateSession]);
 
   useEffect(() => {
+    const remoteDetailInterest = !suspended
+      && (thread?.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote"
+      ? threadKey : undefined;
+    if (remoteDetailInterestRef.current !== remoteDetailInterest) {
+      remoteDetailInterestRef.current = remoteDetailInterest;
+      if (remoteDetailInterest) {
+        // Another window can preserve the process-wide subscription while
+        // this window misses events. Renewed local interest must catch up
+        // independently of owner acknowledgements or navigation timestamps.
+        streamRecoveryVersionsRef.current.set(remoteDetailInterest,
+          (streamRecoveryVersionsRef.current.get(remoteDetailInterest) ?? 0) + 1);
+      }
+    }
     if (!thread || !threadKey) {
       return;
     }
@@ -5489,8 +5503,9 @@ export function useThreadSessionState(params: {
     }
 
     // Live events own active-turn updates, including for mounted remote
-    // threads. Only an acknowledged subscription/gap requests catch-up;
-    // ordinary navigation timestamps do not imply missing transcript data.
+    // threads. Renewed local interest or an acknowledged subscription/gap
+    // requests catch-up; ordinary navigation timestamps do not imply missing
+    // transcript data.
     if (session.activeTurnId
       || (session.backendReportedActive
         && (thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote")) return;
@@ -5546,6 +5561,7 @@ export function useThreadSessionState(params: {
     launchpadMessageCandidate,
     loadLatest,
     sessions,
+    suspended,
     thread,
     threadKey,
     updateSession,

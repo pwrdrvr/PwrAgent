@@ -14,6 +14,7 @@ import type {
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
+import { useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getContextWindowMoonPhase,
@@ -14960,6 +14961,90 @@ describe("useThreadSessionState", () => {
       },
       threadId: "thread-1",
     }));
+  });
+
+  it.each([1_000, 2_000])("catches up renewed window-local interest while another window preserves the subscription (updatedAt=%s)", async (updatedAt) => {
+    const remoteThread: NavigationThreadSummary = {
+      ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      threadStatus: "active",
+      federation: {
+        ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "owner-m5" } },
+        instanceLabel: "Remote M5", capabilities: ["event_subscriptions", "thread_detail", "pending_request_control"],
+      },
+    };
+    const activeTurn = { id: "turn-1", status: "in_progress" as const, startedAt: 5_000 };
+    const initialEntry: AppServerThreadMessageEntry = {
+      type: "message", id: "user-1", role: "user", text: "Continue remotely.", turn: activeTurn,
+    };
+    let ownerResponse = readThreadResponse({ entries: [initialEntry], hasPreviousPage: false, threadStatus: "active" });
+    const demands = new Map<number, string[]>();
+    const listeners = new Map<number, (event: AgentEvent) => void>();
+    let aggregate = "[]";
+    let ownerSubscriptionChanges = 0;
+    const createWindow = (id: number) => {
+      const readThread = vi.fn(async (request: { threadId: string }) => request.threadId === "thread-1" ? ownerResponse
+        : readThreadResponse({ threadId: request.threadId, entries: [], hasPreviousPage: false }));
+      const api: DesktopApi = {
+        readThread,
+        onAgentEvent: (listener) => { listeners.set(id, listener); return () => { listeners.delete(id); }; },
+        setFederationEventSubscriptions: async ({ subscriptions }) => {
+          const selected = subscriptions.flatMap((subscription) => subscription.threadSelection?.kind === "threads"
+            ? subscription.threadSelection.threads.map((thread) => thread.threadId) : []);
+          demands.set(id, selected);
+          const next = JSON.stringify([...new Set([...demands.values()].flat())].sort());
+          if (next !== aggregate) { aggregate = next; ownerSubscriptionChanges += 1; }
+          return { subscriptions };
+        },
+      };
+      return { api, readThread };
+    };
+    const first = createWindow(1);
+    const second = createWindow(2);
+    const useWindow = (api: DesktopApi, thread: NavigationThreadSummary) => {
+      useFederationThreadEventSubscriptions({ desktopApi: api, enabled: true, selectedThread: thread, threads: [remoteThread] });
+      return useThreadSessionState({ desktopApi: api, thread, liveTranscriptEventFiltering: true });
+    };
+    const retained = renderHook(() => useWindow(second.api, remoteThread));
+    const switched = renderHook(({ thread }) => useWindow(first.api, thread), { initialProps: { thread: remoteThread } });
+    await waitForThreadHydration(retained.result);
+    await waitForThreadHydration(switched.result);
+    expect(ownerSubscriptionChanges).toBe(1);
+    switched.rerender({ thread: buildThread({ id: "thread-2", updatedAt: 1_000 }) });
+    await waitFor(() => expect(switched.result.current.response?.threadId).toBe("thread-2"));
+
+    const pendingRequest: AppServerToolRequestUserInputNotification = {
+      method: "item/tool/requestUserInput",
+      params: { threadId: "thread-1", turnId: "turn-1", requestId: "prompt-1", questions: [{
+        id: "scope", header: "Scope", question: "Continue?", isOther: false, isSecret: false,
+        options: [{ label: "Yes", description: "Continue the work." }],
+      }] },
+    };
+    const commentary: AppServerThreadMessageEntry = {
+      type: "message", id: "commentary-1", role: "assistant", phase: "commentary", text: "Need your decision.", turn: activeTurn,
+    };
+    ownerResponse = {
+      ...readThreadResponse({ entries: [initialEntry, commentary], hasPreviousPage: false, threadStatus: "active" }),
+      pendingRequest,
+    };
+    act(() => {
+      for (const [id, demand] of demands) {
+        if (demand.includes("thread-1")) listeners.get(id)?.({
+          backend: "codex", federationTarget: { scope: "remote", instanceId: "owner-m5" }, notification: pendingRequest,
+        });
+      }
+    });
+    expect(retained.result.current.pendingUserInput?.requestId).toBe("prompt-1");
+    expect(switched.result.current.pendingUserInput).toBeUndefined();
+    switched.rerender({ thread: { ...remoteThread, updatedAt } });
+    await waitFor(() => expect(switched.result.current.pendingUserInput?.requestId).toBe("prompt-1"));
+    expect(switched.result.current.entries).toEqual(expect.arrayContaining([expect.objectContaining({ text: "Need your decision." })]));
+    expect(first.readThread.mock.calls.filter(([request]) => request.threadId === "thread-1")).toHaveLength(2);
+    expect(second.readThread).toHaveBeenCalledTimes(1);
+    // No new process-wide subscription and no acknowledgement was emitted.
+    expect(ownerSubscriptionChanges).toBe(1);
+    switched.rerender({ thread: { ...remoteThread, updatedAt: 3_000 } });
+    await act(async () => undefined);
+    expect(first.readThread.mock.calls.filter(([request]) => request.threadId === "thread-1")).toHaveLength(2);
   });
 
   it("catches up when stream acknowledgement arrives during an older in-flight read", async () => {
