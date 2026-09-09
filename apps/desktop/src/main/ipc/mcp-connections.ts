@@ -1,12 +1,19 @@
 import { ipcMain } from "electron";
 import {
   isRemoteFederationTarget,
+  type ConnectPwrGitResponse,
   type ConnectPwrSnapResponse,
+  type OpenPwrGitResponse,
   type OpenPwrSnapResponse,
+  type PwrGitConnectionStatus,
   type PwrSnapConnectionStatus,
   type ReadPwrSnapConnectionStatusRequest,
 } from "@pwragent/shared";
 import {
+  MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
+  MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
+  MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
+  MCP_CONNECTION_PWRGIT_STATUS_CHANNEL,
   MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL,
   MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL,
   MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
@@ -16,12 +23,18 @@ import {
   getPwrSnapConnectionService,
   type PwrSnapConnectionService,
 } from "../mcp-connections/pwrsnap-connection-service";
+import {
+  getPwrGitConnectionService,
+  type PwrGitConnectionService,
+} from "../mcp-connections/pwrgit-connection-service";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { federationWindowTargetForWebContents } from "../window";
 
 export function registerMcpConnectionIpcHandlers(
   service: PwrSnapConnectionService = getPwrSnapConnectionService(),
+  pwrGit: PwrGitConnectionService = getPwrGitConnectionService(),
 ): void {
+  registerPwrGitHandlers(pwrGit);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
@@ -80,9 +93,75 @@ export function registerMcpConnectionIpcHandlers(
   );
 }
 
+/**
+ * PwrGit pairing runs on the machine that owns the window, the same rule
+ * PwrSnap uses: a remote viewer must not be able to mint a credential against
+ * the owner's repositories, and an install check on the viewer's machine says
+ * nothing about the owner's.
+ */
+function registerPwrGitHandlers(service: PwrGitConnectionService): void {
+  ipcMain.removeHandler(MCP_CONNECTION_PWRGIT_STATUS_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_PWRGIT_STATUS_CHANNEL,
+    async (event): Promise<PwrGitConnectionStatus> => {
+      if (federationWindowTargetForWebContents(event.sender)) {
+        return {
+          connectionId: "pwrgit",
+          displayName: "PwrGit",
+          availability: "not_installed",
+          configured: false,
+        };
+      }
+      return await service.readStatus();
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
+    async (event): Promise<ConnectPwrGitResponse> => {
+      if (federationWindowTargetForWebContents(event.sender)) {
+        throw new Error(
+          "PwrGit pairing is only available on the machine that owns this window.",
+        );
+      }
+      return await service.connect();
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_PWRGIT_OPEN_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
+    async (event): Promise<OpenPwrGitResponse> => {
+      if (federationWindowTargetForWebContents(event.sender)) {
+        return {
+          opened: false,
+          error: "This thread uses PwrGit on its remote owner.",
+        };
+      }
+      return await service.openApplication();
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
+    async (event): Promise<OpenPwrGitResponse> => {
+      if (federationWindowTargetForWebContents(event.sender)) {
+        return {
+          opened: false,
+          error: "Install PwrGit on the machine that owns this thread.",
+        };
+      }
+      return await service.openDownload();
+    },
+  );
+}
+
 export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_PWRGIT_STATUS_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_PWRGIT_OPEN_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL);
 }

@@ -134,6 +134,7 @@ function secretSnapshotPath(
     case "federationCloudflareAccessClientSecret":
       return ["federation", "cloudflareAccessClientSecret"];
     case "pwrsnapMcpCredential":
+    case "pwrgitMcpCredential":
       return undefined;
   }
 }

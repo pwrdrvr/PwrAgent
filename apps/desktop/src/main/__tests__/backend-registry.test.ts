@@ -26,6 +26,7 @@ import {
   MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
+  PWRGIT_MCP_CONNECTION_ID,
 } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -13126,6 +13127,97 @@ script = "echo setup"
       "PwrSnap was not contacted: Codex rejected PwrAgent's temporary MCP configuration. Update PwrAgent and retry the thread.",
     );
 
+    await registry.close();
+  });
+
+  it("names PwrGit, not PwrSnap, when Codex rejects a PwrGit-only MCP transport", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    vi.spyOn(codexClient, "startThread").mockRejectedValueOnce(
+      new Error(
+        "json-rpc error (-32600): failed to load configuration: invalid transport\nin `mcp_servers.pwragent_pwrgit`",
+      ),
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pwrGitConnectionService: {
+        registerBridge: async () => ({
+          server: {
+            name: "pwrgit",
+            command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+            args: ["/Applications/PwrGit.app/Contents/Resources/pwrgit-mcp.mjs", "serve"],
+            env: {
+              ELECTRON_RUN_AS_NODE: "1",
+              PWRGIT_MCP_SESSION_TOKEN: "pgmcp_token",
+            },
+          },
+          bindThread: vi.fn(),
+          revoke: vi.fn(),
+        }),
+      },
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await expect(
+      registry.startThread({
+        backend: "codex",
+        mcpConnectionIds: [PWRGIT_MCP_CONNECTION_ID],
+      }),
+    ).rejects.toThrow(
+      "PwrGit was not contacted: Codex rejected PwrAgent's temporary MCP configuration.",
+    );
+
+    await registry.close();
+  });
+
+  it("refuses to start a thread that enabled a connection this runtime cannot serve", async () => {
+    // A known id with no service behind it must not be dropped as "unknown":
+    // that starts the thread without the app the operator switched on.
+    const codexClient = new MockBackendClient({ threads: [] });
+    const startThread = vi.spyOn(codexClient, "startThread");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      mcpConnectionService: {
+        registerBridge: vi.fn(),
+      },
+      pwrGitConnectionService: null,
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await expect(
+      registry.startThread({
+        backend: "codex",
+        mcpConnectionIds: [PWRGIT_MCP_CONNECTION_ID],
+      }),
+    ).rejects.toThrow("MCP connections are unavailable in this PwrAgent runtime.");
+
+    expect(startThread).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
+  it("starts a thread that enabled PwrGit before it was connected", async () => {
+    // PwrGit registers nothing without a credential, the way PwrSnap keeps
+    // starting turns after a revoked session; the thread must not fail.
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registerBridge = vi.fn(async () => undefined);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pwrGitConnectionService: { registerBridge },
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      mcpConnectionIds: [PWRGIT_MCP_CONNECTION_ID],
+    });
+
+    expect(registerBridge).toHaveBeenCalledWith("pwrgit", undefined);
+    expect(
+      (codexClient.lastStartThreadParams?.config as { mcp_servers?: unknown })
+        ?.mcp_servers,
+    ).toBeUndefined();
     await registry.close();
   });
 

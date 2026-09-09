@@ -1,31 +1,32 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  PWRSNAP_MCP_CONNECTION_ID,
+  PWRGIT_MCP_CONNECTION_ID,
   isAcpBackendId,
   withMcpConnection,
   type AppServerBackendKind,
-  type PwrSnapConnectionStatus,
+  type PwrGitConnectionStatus,
 } from "@pwragent/shared";
-import pwrSnapIcon from "../../assets/pwrsnap/pwrsnap-app-icon.png";
+import pwrGitIcon from "../../assets/pwrgit/pwrgit-app-icon.png";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
 
-export function PwrSnapConnectionPrompt(props: {
+export function PwrGitConnectionPrompt(props: {
   backend: AppServerBackendKind;
   desktopApi?: DesktopApi;
   enabled: boolean;
   remoteOwnerLabel?: string;
   onEnabledChange: (enabled: boolean) => Promise<void>;
 }) {
-  const [status, setStatus] = useState<PwrSnapConnectionStatus>();
+  const [status, setStatus] = useState<PwrGitConnectionStatus>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const backendSupported = props.backend === "codex" || isAcpBackendId(props.backend);
+  const backendSupported =
+    props.backend === "codex" || isAcpBackendId(props.backend);
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!props.desktopApi?.readPwrSnapConnectionStatus) return;
+    if (!props.desktopApi?.readPwrGitConnectionStatus) return;
     try {
-      setStatus(await props.desktopApi.readPwrSnapConnectionStatus());
+      setStatus(await props.desktopApi.readPwrGitConnectionStatus());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -33,6 +34,8 @@ export function PwrSnapConnectionPrompt(props: {
 
   useEffect(() => {
     void refresh();
+    // Pairing happens in the PwrGit window, so the answer usually arrives
+    // while this window is in the background. Re-read on focus.
     const onFocus = (): void => {
       void refresh();
     };
@@ -53,29 +56,30 @@ export function PwrSnapConnectionPrompt(props: {
   };
 
   const connect = async (): Promise<void> => {
-    if (!props.desktopApi?.connectPwrSnap) {
-      throw new Error("PwrSnap connections require the desktop app.");
+    if (!props.desktopApi?.connectPwrGit) {
+      throw new Error("PwrGit connections require the desktop app.");
     }
-    const response = await props.desktopApi.connectPwrSnap();
+    const response = await props.desktopApi.connectPwrGit();
     setStatus(response.status);
-    if (response.outcome === "needs_local_agent_access") {
-      setError(
-        "Enable Local Agent Access in PwrSnap, then choose Connect to PwrSnap again.",
-      );
+    // A response without detail is one whose `status.detail` already says
+    // what to do (the switch to turn on); repeating it here would stack the
+    // same sentence twice on the card.
+    if (response.outcome !== "connected" && response.detail) {
+      setError(response.detail);
     }
   };
 
-  const getPwrSnap = async (): Promise<void> => {
-    const response = await props.desktopApi?.openPwrSnapDownload?.();
+  const getPwrGit = async (): Promise<void> => {
+    const response = await props.desktopApi?.openPwrGitDownload?.();
     if (response && !response.opened) {
-      throw new Error(response.error ?? "Could not open the PwrSnap download.");
+      throw new Error(response.error ?? "Could not open the PwrGit download.");
     }
   };
 
-  const openPwrSnap = async (): Promise<void> => {
-    const response = await props.desktopApi?.openPwrSnap?.();
+  const openPwrGit = async (): Promise<void> => {
+    const response = await props.desktopApi?.openPwrGit?.();
     if (response && !response.opened) {
-      throw new Error(response.error ?? "Could not open PwrSnap.");
+      throw new Error(response.error ?? "Could not open PwrGit.");
     }
   };
 
@@ -84,30 +88,32 @@ export function PwrSnapConnectionPrompt(props: {
   const installed = status?.availability === "installed" || running;
   const remoteOwnerLabel = props.remoteOwnerLabel?.trim();
 
-  // A remote launchpad may only expose PwrSnap after its owner explicitly
-  // reports a configured, running connection. Never turn the viewer's local
-  // install state into a remote pairing or download affordance.
-  if (remoteOwnerLabel && (!configured || !running)) {
+  // A remote launchpad may only expose PwrGit after its owner reports a
+  // configured connection. The viewer's own install state says nothing about
+  // the machine the thread runs on, which is why the federation-scoped API
+  // leaves this card without a status reader until PwrGit has a federation
+  // surface of its own.
+  if (remoteOwnerLabel && !configured) {
     return null;
   }
 
   if (remoteOwnerLabel) {
-    const switchLabel = `Enable PwrSnap on ${remoteOwnerLabel} in this thread`;
-    const description =
-      `Enable it to let this thread use PwrSnap on ${remoteOwnerLabel}, `
-      + "where the thread runs. This does not connect to PwrSnap on this device.";
+    const switchLabel = `Enable PwrGit on ${remoteOwnerLabel} in this thread`;
     return (
-      <aside className="mcp-connection" aria-label="Remote PwrSnap connection">
+      <aside className="mcp-connection" aria-label="Remote PwrGit connection">
         <img
           alt=""
           aria-hidden="true"
           className="mcp-connection__icon"
-          src={pwrSnapIcon}
+          src={pwrGitIcon}
         />
         <div className="mcp-connection__copy">
           <p className="eyebrow">Remote PwrSuite connection</p>
-          <h2>{`PwrSnap is available on ${remoteOwnerLabel}`}</h2>
-          <p>{description}</p>
+          <h2>{`PwrGit is available on ${remoteOwnerLabel}`}</h2>
+          <p>
+            {`Enable it to let this thread read repository and pull-request status on ${remoteOwnerLabel}, `
+              + "where the thread runs. This does not connect to PwrGit on this device."}
+          </p>
           {!backendSupported ? (
             <p className="mcp-connection__detail">
               Choose Codex or an ACP agent to use MCP connections in this thread.
@@ -119,7 +125,7 @@ export function PwrSnapConnectionPrompt(props: {
         </div>
         <div className="mcp-connection__action">
           <div className="mcp-connection__toggle">
-            <span>Enable PwrSnap in this thread</span>
+            <span>Enable PwrGit in this thread</span>
             <SettingsSwitch
               checked={props.enabled}
               disabled={busy || !backendSupported}
@@ -135,19 +141,20 @@ export function PwrSnapConnectionPrompt(props: {
   }
 
   return (
-    <aside className="mcp-connection" aria-label="PwrSnap connection">
+    <aside className="mcp-connection" aria-label="PwrGit connection">
       <img
         alt=""
         aria-hidden="true"
         className="mcp-connection__icon"
-        src={pwrSnapIcon}
+        src={pwrGitIcon}
       />
       <div className="mcp-connection__copy">
         <p className="eyebrow">PwrSuite connection</p>
-        <h2>Screenshots your agents can actually use</h2>
+        <h2>Your repositories, without the guessing</h2>
         <p>
-          PwrSnap captures and organizes screenshots, then lets your agents find,
-          edit, and export the right image without digging through folders.
+          PwrGit lets your agents find the right checkout, read branch and
+          worktree state, and follow pull-request and CI status — without
+          being told where anything lives.
         </p>
         {status?.detail ? (
           <p className="mcp-connection__detail">{status.detail}</p>
@@ -164,47 +171,49 @@ export function PwrSnapConnectionPrompt(props: {
       <div className="mcp-connection__action">
         {!status ? (
           <span className="mcp-connection__checking">Checking…</span>
+        ) : configured ? (
+          // Once paired, the server launches under PwrAgent's own runtime
+          // without the PwrGit window, so the switch does not wait for it.
+          <div className="mcp-connection__toggle">
+            <span>Use in this thread</span>
+            <SettingsSwitch
+              checked={props.enabled}
+              disabled={busy || !backendSupported}
+              label="Use PwrGit in this thread"
+              onChange={(enabled) => {
+                void runAction(async () => await props.onEnabledChange(enabled));
+              }}
+            />
+          </div>
         ) : !installed ? (
           <button
             className="button button--primary"
             disabled={busy}
             type="button"
-            onClick={() => void runAction(getPwrSnap)}
+            onClick={() => void runAction(getPwrGit)}
           >
-            Get PwrSnap
+            Get PwrGit
           </button>
-        ) : !configured ? (
+        ) : !running ? (
+          <button
+            className="button button--secondary"
+            disabled={busy}
+            type="button"
+            onClick={() => void runAction(async () => {
+              await openPwrGit();
+              await refresh();
+            })}
+          >
+            Open PwrGit
+          </button>
+        ) : (
           <button
             className="button button--primary"
             disabled={busy}
             type="button"
             onClick={() => void runAction(connect)}
           >
-            {busy ? "Connecting…" : "Connect to PwrSnap"}
-          </button>
-        ) : running ? (
-          <div className="mcp-connection__toggle">
-            <span>Use in this thread</span>
-            <SettingsSwitch
-              checked={props.enabled}
-              disabled={busy || !backendSupported}
-              label="Use PwrSnap in this thread"
-              onChange={(enabled) => {
-                void runAction(async () => await props.onEnabledChange(enabled));
-              }}
-            />
-          </div>
-        ) : (
-          <button
-            className="button button--secondary"
-            disabled={busy}
-            type="button"
-            onClick={() => void runAction(async () => {
-              await openPwrSnap();
-              await refresh();
-            })}
-          >
-            Open PwrSnap
+            {busy ? "Waiting for approval…" : "Connect to PwrGit"}
           </button>
         )}
       </div>
@@ -217,9 +226,9 @@ export function PwrSnapConnectionPrompt(props: {
  * and PwrGit share one `mcpConnectionIds` array, so a replacing toggle would
  * silently disable the other card.
  */
-export function pwrSnapConnectionIds(
+export function pwrGitConnectionIds(
   current: readonly string[] | undefined,
   enabled: boolean,
 ): string[] {
-  return withMcpConnection(current, PWRSNAP_MCP_CONNECTION_ID, enabled);
+  return withMcpConnection(current, PWRGIT_MCP_CONNECTION_ID, enabled);
 }

@@ -2047,6 +2047,18 @@ export class DesktopSettingsService {
     await this.options.secretStore.deleteSecret("pwrsnapMcpCredential");
   }
 
+  async resolvePwrGitMcpCredential(): Promise<string | undefined> {
+    return await this.options.secretStore.getSecret("pwrgitMcpCredential");
+  }
+
+  async savePwrGitMcpCredential(value: string): Promise<void> {
+    await this.options.secretStore.setSecret("pwrgitMcpCredential", value);
+  }
+
+  async clearPwrGitMcpCredential(): Promise<void> {
+    await this.options.secretStore.deleteSecret("pwrgitMcpCredential");
+  }
+
   resolveTelegramBotTokenSync(): string | undefined {
     return this.resolveSecretSync("telegramBotToken", TELEGRAM_BOT_TOKEN_ENV);
   }
@@ -3678,6 +3690,7 @@ function secretEnvironmentKey(
     case "federationCloudflareAccessClientId":
     case "federationCloudflareAccessClientSecret":
     case "pwrsnapMcpCredential":
+    case "pwrgitMcpCredential":
       return undefined;
   }
 }
