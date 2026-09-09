@@ -10,7 +10,7 @@ import { federationRuntimeLabel, useFederationActivity } from "./useFederationAc
 
 type Period = "1m" | "10m" | "1h";
 const PERIODS: Period[] = ["1m", "10m", "1h"];
-const number = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+const number = (value: number) => Math.trunc(value).toLocaleString();
 const fields = [
   ["requests", "Requests"], ["responses", "Responses (including errors)"],
   ["notifications", "Notifications"], ["other", "Other envelopes (including blobs)"],

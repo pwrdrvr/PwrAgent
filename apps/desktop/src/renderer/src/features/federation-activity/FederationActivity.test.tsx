@@ -292,18 +292,27 @@ describe("Activity report controls", () => {
     const data = fixture();
     data.activity.peers[0].series = structuredClone(data.activity.physical);
     data.activity.peers[0].series.lifetime.sent.requests = 987;
+    data.activity.peers[0].series.sizes.sent.requests = {
+      count: 33, averageBytes: 543.6363636363636, p50Bytes: 540.4903313206053,
+      minBytes: 403, maxBytes: 655,
+    };
     const copyText = vi.fn(async (_text: string) => {});
     render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => data, copyText }} />);
     await screen.findByText("Running · connected");
     expect(screen.getByRole("switch")).toHaveClass("settings-switch", "is-on");
     expect(screen.getByRole("switch").querySelector(".settings-switch__thumb")).not.toBeNull();
     fireEvent.change(screen.getByRole("combobox", { name: "Peer" }), { target: { value: "gateway" } });
+    const sizes = within(screen.getByRole("table", { name: "Lifetime request/response sizes · uncompressed" }));
+    const requestCells = within(sizes.getByRole("row", { name: /Sent requests/ })).getAllByRole("cell");
+    expect(requestCells[1]).toHaveAttribute("title", "543 bytes");
+    expect(requestCells[2]).toHaveAttribute("title", "540 bytes");
     fireEvent.click(screen.getByRole("button", { name: "Copy Federation activity" }));
     await waitFor(() => expect(copyText).toHaveBeenCalledTimes(1));
     const text = copyText.mock.calls[0][0];
     expect(text).toContain("Physical connections: gateway");
     expect(text).toContain("Requests\t12\t12\t12\t987");
     expect(text).toContain("2 KB (2000 bytes)");
+    expect(text).toContain("sent requests\t33\t0.54 KB (543 bytes)\t0.54 KB (540 bytes)\t0.4 KB (403 bytes)\t0.66 KB (655 bytes)");
     expect(text).toContain("Samples\tAvg\tp50 (approx.)\tMin\tMax");
     expect(text).toContain("Since: 1970-01-01T00:00:00.000Z");
     expect(text).toContain("excludes WebSocket framing");
