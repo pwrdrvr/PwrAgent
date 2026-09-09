@@ -147,6 +147,7 @@ export function addVisibleMountedOwnerDemand(params: {
       || !(id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("children:"))) continue;
     for (const { row } of params.pages.get(id)?.entries ?? []) {
       const owner = row.ref.ownerInstanceId;
+      // Selected context already reads this identity from its owner.
       if (!owner || (params.selectedRef && navigationIdentityKey(params.selectedRef) === navigationIdentityKey(row.ref))) continue;
       const refs = owners.get(owner) ?? new Map<string, NavigationIdentity>();
       refs.set(navigationIdentityKey(row.ref), row.ref);

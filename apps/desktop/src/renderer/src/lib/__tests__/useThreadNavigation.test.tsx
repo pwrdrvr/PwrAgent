@@ -12763,6 +12763,52 @@ describe("useThreadNavigation", () => {
   });
 });
 
+describe("mounted PR selection continuity", () => {
+  beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  });
+  afterEach(() => vi.restoreAllMocks());
+  it("retains owner PRs while selected owner context loads and accepts later removals", async () => {
+    const target = { scope: "remote" as const, instanceId: "peer" };
+    const mount: NavigationThreadSummary = {
+      id: "mounted", source: "codex", title: "Mounted release", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false }, pinnedRank: "1",
+      federation: { ref: { backend: "codex", threadId: "mounted", target }, instanceLabel: "Peer", peerStatus: "connected" },
+    };
+    let prs: PrSummary[] = [884, 874, 1722].map((number) => ({
+      number, provider: "github", org: "fixture", repo: "project", title: `PR ${number}`,
+      url: `https://github.com/fixture/project/pull/${number}`, state: "merged",
+    }));
+    let resolveContext!: () => void;
+    const pendingContext = new Promise<void>((resolve) => { resolveContext = resolve; });
+    const readPage = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+      if (request.federationTarget?.scope === "remote" && request.query.kind === "exact" && request.query.includeAncestry) {
+        await pendingContext;
+      }
+      return navigationQueryFixture(request, {
+        threads: [{ ...mount, id: "local", federation: undefined, updatedAt: 2 },
+          { ...mount, ...(request.federationTarget?.scope === "remote" ? { prs } : {}) }],
+      });
+    });
+    const api = { getNavigationQueryPage: readPage, ...actionDetailApi(mount) };
+    const hook = renderHook(() => useRealThreadNavigation(api));
+    act(() => hook.result.current.setBrowseMode("inbox"));
+    await waitFor(() => expect(hook.result.current.threads.find((thread) => thread.id === "mounted")?.prs).toHaveLength(3));
+    act(() => hook.result.current.selectThread(hook.result.current.threads.find((thread) => thread.id === "mounted")!));
+    await waitFor(() => expect(readPage.mock.calls.some(([request]) =>
+      request.federationTarget?.scope === "remote" && request.query.kind === "exact" && request.query.includeAncestry)).toBe(true));
+    // Let the viewer mount response land while the owner context is still pending.
+    await act(async () => {});
+    expect(hook.result.current.threads.find((thread) => thread.id === "mounted")?.prs).toHaveLength(3);
+    await act(async () => resolveContext());
+    expect(hook.result.current.threads.find((thread) => thread.id === "mounted")?.prs).toHaveLength(3);
+    prs = [];
+    await act(() => hook.result.current.refresh());
+    expect(hook.result.current.threads.find((thread) => thread.id === "mounted")?.prs).toEqual([]);
+  });
+});
+
 describe("main selected detail authority", () => {
   beforeEach(() => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
