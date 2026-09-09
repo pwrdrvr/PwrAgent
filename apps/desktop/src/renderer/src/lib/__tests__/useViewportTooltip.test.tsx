@@ -19,6 +19,9 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  // jsdom has no Web Animations API; only a test that stubbed one leaves this
+  // behind, and it must not reach the next one.
+  delete (document as Partial<Document>).getAnimations;
 });
 
 function TooltipFixture() {
@@ -151,6 +154,53 @@ function rectangle(rect: Partial<DOMRect>): DOMRect {
   };
 }
 
+/** Anchor rectangles driven by the fixture's `data-anchor-top`. */
+function mockAnchorRectangleFromLayout(): void {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function getBoundingClientRect(this: HTMLElement) {
+      if (this.getAttribute("role") === "tooltip") {
+        return rectangle({ width: 240, height: 40 });
+      }
+      if (this.tagName === "BUTTON") {
+        const top = Number(
+          this.closest("[data-anchor-top]")?.getAttribute("data-anchor-top"),
+        );
+        return rectangle({ left: 20, top, width: 160, height: 26 });
+      }
+      return rectangle({});
+    },
+  );
+  vi.stubGlobal("innerWidth", 1200);
+  vi.stubGlobal("innerHeight", 800);
+}
+
+/**
+ * A running animation on the anchor's ancestor, the shape
+ * `document.getAnimations` returns for a CSS animation. jsdom implements no
+ * Web Animations API, so the hook sees nothing there unless a test says so.
+ */
+function stubAncestorAnimation(): { finish: () => void } {
+  let settle = (): void => undefined;
+  const finished = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  let playState = "running";
+  document.getAnimations = () =>
+    [
+      {
+        effect: { target: document.querySelector("[data-anchor-top]") },
+        finished,
+        playState,
+      },
+    ].filter(() => playState === "running") as unknown as Animation[];
+  return {
+    finish: () => {
+      playState = "finished";
+      settle();
+    },
+  };
+}
+
 describe("useViewportTooltip", () => {
   it("keeps a tooltip open when an unrelated pane scrolls", () => {
     render(<TooltipFixture />);
@@ -263,26 +313,73 @@ describe("useViewportTooltip", () => {
   });
 
   it("closes a tooltip when its connected anchor moves", async () => {
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function getBoundingClientRect(this: HTMLElement) {
-        if (this.getAttribute("role") === "tooltip") {
-          return rectangle({ width: 240, height: 40 });
-        }
-        if (this.tagName === "BUTTON") {
-          const top = Number(
-            this.closest("[data-anchor-top]")?.getAttribute("data-anchor-top"),
-          );
-          return rectangle({ left: 20, top, width: 160, height: 26 });
-        }
-        return rectangle({});
-      },
-    );
-    vi.stubGlobal("innerWidth", 1200);
-    vi.stubGlobal("innerHeight", 800);
+    mockAnchorRectangleFromLayout();
     const { rerender } = render(<AnchorLifecycleFixture anchorTop={80} />);
 
     fireEvent.mouseEnter(screen.getByRole("button"));
     rerender(<AnchorLifecycleFixture anchorTop={180} />);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps a tooltip open while an animation moves its anchor", async () => {
+    // The context rail's panel plays a 220ms `translateX(12px) -> 0` on mount,
+    // so a tooltip opened during it measured coordinates the anchor was about
+    // to leave. Every later mutation read that as a move and tore the portal
+    // down mid-assertion — the `context-rail-linked-directory-tooltips` flake.
+    mockAnchorRectangleFromLayout();
+    stubAncestorAnimation();
+    const { rerender } = render(<AnchorLifecycleFixture anchorTop={80} />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    rerender(<AnchorLifecycleFixture anchorTop={180} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  it("re-anchors a tooltip when the animation that moved it finishes", async () => {
+    mockAnchorRectangleFromLayout();
+    const animation = stubAncestorAnimation();
+    const { rerender } = render(<AnchorLifecycleFixture anchorTop={80} />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    // Placed against the anchor's position at the moment it opened.
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip")).toHaveStyle({ top: "30px" });
+    });
+
+    rerender(<AnchorLifecycleFixture anchorTop={180} />);
+    await act(async () => {
+      animation.finish();
+      await Promise.resolve();
+    });
+
+    // Settled geometry, not the position it was opened at.
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip")).toHaveStyle({ top: "130px" });
+    });
+  });
+
+  it("closes a tooltip that moves once its animation has finished", async () => {
+    // Re-baselining must not leave an anchor permanently undismissable: after
+    // the motion stops, an ordinary relocation closes the tooltip as before.
+    mockAnchorRectangleFromLayout();
+    const animation = stubAncestorAnimation();
+    const { rerender } = render(<AnchorLifecycleFixture anchorTop={80} />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    await act(async () => {
+      animation.finish();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    rerender(<AnchorLifecycleFixture anchorTop={280} />);
 
     await waitFor(() => {
       expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();

@@ -116,6 +116,32 @@ type TooltipTargetRect = {
 type DelayedTooltipContent = ReactNode | (() => ReactNode);
 
 /**
+ * The running animations and transitions that are moving `target` — its own,
+ * or any ancestor's, since a transformed ancestor drags every rectangle
+ * beneath it.
+ *
+ * An animated anchor is in motion, not relocated, and the two have to be told
+ * apart: `getBoundingClientRect` reports the transformed position, so an
+ * anchor halfway through a slide-in measures somewhere it is about to leave.
+ *
+ * jsdom implements no Web Animations API, so this reports nothing there and
+ * the movement rules below behave exactly as they did before.
+ */
+function animationsMovingAnchor(target: HTMLElement): Animation[] {
+  if (typeof document.getAnimations !== "function") {
+    return [];
+  }
+  return document.getAnimations().filter((animation) => {
+    if (animation.playState !== "running") {
+      return false;
+    }
+    const effect = animation.effect;
+    const animated = effect && "target" in effect ? effect.target : undefined;
+    return animated instanceof Element && animated.contains(target);
+  });
+}
+
+/**
  * Hook for portal-rendered tooltips that escape any clipping ancestor
  * (sidebar scroll regions, overflow:hidden chips, etc.) and clamp
  * themselves to viewport bounds. Use when CSS-pseudo-element tooltips
@@ -185,6 +211,8 @@ export function useViewportTooltip(options: {
   const targetRef = useRef<HTMLElement | null>(null);
   const targetRectRef = useRef<TooltipTargetRect | null>(null);
   const hoverDelayTimerRef = useRef<number | null>(null);
+  /** True while the anchor is animating and its settled baseline is pending. */
+  const anchorSettlingRef = useRef(false);
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
   const [delayPending, setDelayPending] = useState(false);
@@ -202,6 +230,7 @@ export function useViewportTooltip(options: {
     setDelayPending(false);
     targetRef.current = null;
     targetRectRef.current = null;
+    anchorSettlingRef.current = false;
     setState(undefined);
   }, [clearHoverDelay]);
 
@@ -219,6 +248,43 @@ export function useViewportTooltip(options: {
       right: rect.right,
       top: rect.top,
     };
+    // A rectangle measured mid-animation is a position the anchor is leaving,
+    // and it would stay the baseline for the rest of the tooltip's life: the
+    // context rail's panel plays a 220ms `translateX(12px) -> 0` on mount, so
+    // a tooltip opened during it recorded coordinates the anchor never returns
+    // to, and the next mutation anywhere in the document read that as a move
+    // and tore the portal down. Re-baseline once the motion stops, and give
+    // the tooltip the settled geometry so it is not left the animation's
+    // remaining offset away from its anchor.
+    const animations = animationsMovingAnchor(target);
+    anchorSettlingRef.current = animations.length > 0;
+    if (animations.length > 0) {
+      void Promise.allSettled(
+        animations.map((animation) => animation.finished),
+      ).then(() => {
+        if (targetRef.current !== target || !target.isConnected) {
+          return;
+        }
+        anchorSettlingRef.current = false;
+        const settled = target.getBoundingClientRect();
+        targetRectRef.current = {
+          bottom: settled.bottom,
+          left: settled.left,
+          right: settled.right,
+          top: settled.top,
+        };
+        setState((current) =>
+          current
+            ? {
+                ...current,
+                targetTop: settled.top,
+                targetBottom: settled.bottom,
+                targetCenter: settled.left + settled.width / 2,
+              }
+            : current,
+        );
+      });
+    }
     return rect;
   }, []);
 
@@ -337,10 +403,11 @@ export function useViewportTooltip(options: {
   // anchor changed. React does not fire `mouseleave` when a refresh removes or
   // replaces the hovered element, and moving a keyed row can leave the same
   // DOM element connected at a new position. Watch the document only while a
-  // tooltip is armed or visible, and dismiss when its anchor disappears,
-  // is replaced, or moves from its recorded viewport rectangle. Attribute and
-  // content updates alone are not replacement: live cards update both their
-  // trigger state and tooltip content while they remain open.
+  // tooltip is armed or visible, and dismiss when its anchor disappears, is
+  // replaced, or is laid out somewhere new. Motion under a running animation
+  // is none of those (see `targetChanged`), and attribute and content updates
+  // alone are not replacement: live cards update both their trigger state and
+  // tooltip content while they remain open.
   // Unrelated mutations are intentionally ignored when the anchor stays put;
   // transcript streaming must not close a sidebar tooltip.
   const visible = state !== undefined;
@@ -370,10 +437,39 @@ export function useViewportTooltip(options: {
         return true;
       }
       const currentRect = target.getBoundingClientRect();
-      return currentRect.top !== rememberedRect.top
-        || currentRect.right !== rememberedRect.right
-        || currentRect.bottom !== rememberedRect.bottom
-        || currentRect.left !== rememberedRect.left;
+      if (
+        currentRect.top === rememberedRect.top
+        && currentRect.right === rememberedRect.right
+        && currentRect.bottom === rememberedRect.bottom
+        && currentRect.left === rememberedRect.left
+      ) {
+        return false;
+      }
+      // Moved — but an anchor still being animated has not gone anywhere the
+      // operator can follow it to, so re-baseline rather than dismiss. Without
+      // this every mutation that lands during a 220ms panel slide-in closes a
+      // tooltip that just opened, which is what made
+      // `context-rail-linked-directory-tooltips` flaky on the Linux E2E lane.
+      // Only a ref write: repositioning here would mutate the portal's own
+      // style attribute, and this observer watches document.body, so a moving
+      // anchor would feed itself renders. `rememberTarget` owns the one
+      // reposition, when the motion stops — and `anchorSettlingRef` keeps this
+      // rule in force until that runs, so a mutation delivered in the gap
+      // between the animation ending and the settled baseline landing does not
+      // read the last in-flight rectangle as a relocation.
+      if (
+        !anchorSettlingRef.current
+        && animationsMovingAnchor(target).length === 0
+      ) {
+        return true;
+      }
+      targetRectRef.current = {
+        bottom: currentRect.bottom,
+        left: currentRect.left,
+        right: currentRect.right,
+        top: currentRect.top,
+      };
+      return false;
     };
     const mutationObserver = new MutationObserver(() => {
       if (targetChanged()) {
