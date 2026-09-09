@@ -20019,6 +20019,53 @@ describe("Composer", () => {
     }
   });
 
+  it("shows a pasted MP4 path outside the composer clipping boundary", async () => {
+    const path = "C:\\Users\\fixture-user\\AppData\\Roaming\\PwrSnap\\clipboard\\recording.mp4";
+    const video = new File(["video"], "recording.mp4", { type: "video/mp4" });
+    const { container } = render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          getPathForFile: () => path,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Attachment tooltip fixture",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [video],
+        items: [{ kind: "file", type: "video/mp4", getAsFile: () => video }],
+        getData: () => "",
+      },
+    });
+
+    const label = await screen.findByText("recording.mp4");
+    const chip = label.closest(".composer__file-attachment")!;
+    fireEvent.mouseEnter(chip);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent(path);
+    expect(tooltip.parentElement).toBe(document.body);
+    expect(container).not.toContainElement(tooltip);
+    expect(chip).toHaveAttribute("aria-describedby", tooltip.id);
+
+    fireEvent.mouseLeave(chip);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.focus(chip);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(path);
+    fireEvent.blur(chip);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("removes a file attachment via its pill remove button", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/fixture-user";

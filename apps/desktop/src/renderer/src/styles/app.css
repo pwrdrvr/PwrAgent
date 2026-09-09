@@ -28969,6 +28969,10 @@ button.pricing-token-miser__folded:focus-visible {
    28px silhouette as the directory-reference pill, but a solid border:
    the file is an explicit attachment with its own remove control, not
    an informational echo of the draft text. */
+.composer__attachment-tooltip {
+  overflow-wrap: anywhere;
+}
+
 .composer__file-attachment {
   display: inline-flex;
   align-items: center;
