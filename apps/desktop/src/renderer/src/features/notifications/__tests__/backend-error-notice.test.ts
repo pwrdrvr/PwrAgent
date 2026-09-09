@@ -3,6 +3,89 @@ import type { AppNoticeToastNotice } from "../AppNoticeToast";
 import { resolveBackendErrorNotice } from "../backend-error-notice";
 
 describe("resolveBackendErrorNotice", () => {
+  const invalidIdFailure =
+    "[ApiIdParam] [input[169].id] [invalid_id_prefix] "
+    + "Invalid 'input[169].id': 'review_rollout_user'. "
+    + "Expected an ID that begins with 'msg'.";
+
+  it("tracks a known Codex repair from progress through auto-dismissing success", () => {
+    const repairing = resolveBackendErrorNotice(
+      {
+        kind: "codex-invalid-id-recovery",
+        failureMessage: invalidIdFailure,
+        status: "repairing",
+        threadId: "thread-1",
+        threadLabel: "Fix the flaky test",
+        turnId: "turn-9",
+      },
+      undefined,
+    );
+    expect(repairing).toEqual({
+      autoDismiss: false,
+      copyText: invalidIdFailure,
+      detail: "Fix the flaky test",
+      id: "codex-invalid-id-recovery:codex:thread-1:turn-9",
+      message: invalidIdFailure,
+      status: {
+        label:
+          "PwrAgent is repairing the saved thread history and will retry your message.",
+        state: "progress",
+      },
+      title: "Known Codex issue",
+      tone: "warning",
+    });
+
+    const succeeded = resolveBackendErrorNotice(
+      {
+        kind: "codex-invalid-id-recovery",
+        failureMessage: invalidIdFailure,
+        status: "succeeded",
+        threadId: "thread-1",
+        threadLabel: "Fix the flaky test",
+        turnId: "turn-9",
+      },
+      repairing,
+    );
+    expect(succeeded).toMatchObject({
+      autoDismiss: true,
+      copyText: invalidIdFailure,
+      id: repairing?.id,
+      status: {
+        label: "Saved history repaired. Your message was retried.",
+        state: "success",
+      },
+      title: "Codex thread repaired",
+      tone: "success",
+    });
+  });
+
+  it("keeps a failed Codex repair sticky with both errors visible or copyable", () => {
+    const notice = resolveBackendErrorNotice(
+      {
+        kind: "codex-invalid-id-recovery",
+        failureMessage: invalidIdFailure,
+        recoveryError: "rollout path did not belong to the requested thread",
+        status: "failed",
+        threadId: "thread-1",
+        threadLabel: "Fix the flaky test",
+        turnId: "turn-9",
+      },
+      undefined,
+    );
+    expect(notice).toMatchObject({
+      autoDismiss: false,
+      copyText: invalidIdFailure,
+      message: invalidIdFailure,
+      status: {
+        label:
+          "Automatic repair failed: rollout path did not belong to the requested thread",
+        state: "error",
+      },
+      title: "Codex repair failed",
+      tone: "error",
+    });
+  });
+
   it("builds a sticky, thread-scoped, copyable notice for a failed turn", () => {
     const notice = resolveBackendErrorNotice(
       {
@@ -50,6 +133,30 @@ describe("resolveBackendErrorNotice", () => {
       title: "Turn failed",
       message: "the real error",
     };
+    const next = resolveBackendErrorNotice(
+      {
+        kind: "system-error",
+        backend: "codex",
+        threadId: "thread-1",
+        threadLabel: "Codex thread",
+      },
+      current,
+    );
+    expect(next).toBe(current);
+  });
+
+  it("does NOT downgrade a same-thread Codex recovery with a generic system error", () => {
+    const current = resolveBackendErrorNotice(
+      {
+        kind: "codex-invalid-id-recovery",
+        failureMessage: invalidIdFailure,
+        status: "repairing",
+        threadId: "thread-1",
+        threadLabel: "Codex thread",
+        turnId: "turn-9",
+      },
+      undefined,
+    );
     const next = resolveBackendErrorNotice(
       {
         kind: "system-error",
