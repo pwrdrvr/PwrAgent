@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { openInMemoryStateDb, createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { StateDb } from "../state/state-db";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -53,4 +54,55 @@ it("rejects an oversized stored alert before transferring its payload out of SQL
     } });
     await expect(store.listPendingThreadSpendAlerts({})).rejects.toThrow("bounded payload budget");
   } finally { db.close(); }
+});
+
+
+it("uses the pending-only index for the actual alert query amid unrelated history", async () => {
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  try {
+    const insert = db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
+    db.raw.transaction(() => {
+      for (let index = 0; index < 2000; index += 1) {
+        insert.run(`history-${index}`, JSON.stringify({ backend: "codex", history: "x".repeat(4096) }));
+      }
+    })();
+    await store.setThreadSpendAlertPending({ backend: "codex", threadId: "pending", alert: {
+      alertId: "pending-alert", kind: "thread-spend", threadId: "pending", createdAt: 1,
+      currency: "USD", spendMicros: 2, thresholdMicros: 1,
+    } });
+    const prepare = vi.spyOn(db.raw, "prepare");
+    expect((await store.listPendingThreadSpendAlerts({})).alerts).toHaveLength(1);
+    const sql = prepare.mock.calls.find(([query]) => query.includes("FROM threads WHERE"))![0];
+    prepare.mockRestore();
+    const plan = db.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(11) as Array<{ detail: string }>;
+    expect(plan.map((row) => row.detail).join("\n")).toContain("idx_threads_pending_spend_alert");
+    expect(plan.some((row) => row.detail.includes("TEMP B-TREE"))).toBe(false);
+    await store.acknowledgeThreadSpendAlert({ backend: "codex", threadId: "pending", alertId: "pending-alert" });
+    expect(await store.listPendingThreadSpendAlerts({})).toEqual({ alerts: [], hasMore: false });
+  } finally { db.close(); }
+});
+
+
+it("indexes existing pending alerts when reopening a current-version profile", async () => {
+  const { dbPath, tempDir } = createTempStateDb("pending-alert-index-");
+  let db = StateDb.open(dbPath);
+  try {
+    await new SqliteOverlayStore(db).setThreadSpendAlertPending({ backend: "codex", threadId: "existing", alert: {
+      alertId: "existing-alert", kind: "thread-spend", threadId: "existing", createdAt: 1,
+      currency: "USD", spendMicros: 2, thresholdMicros: 1,
+    } });
+    db.raw.exec("DROP INDEX idx_threads_pending_spend_alert");
+    const version = db.raw.pragma("user_version", { simple: true });
+    db.close();
+    db = StateDb.open(dbPath);
+    expect(db.raw.pragma("user_version", { simple: true })).toBe(version);
+    const indexed = db.raw.prepare(`SELECT thread_id FROM threads INDEXED BY idx_threads_pending_spend_alert
+      WHERE json_type(payload, '$.threadSpendAlertPending') = 'object'`).all();
+    expect(indexed).toEqual([{ thread_id: "codex:existing" }]);
+    expect((await new SqliteOverlayStore(db).listPendingThreadSpendAlerts({})).alerts[0]?.alert.alertId).toBe("existing-alert");
+    db.close();
+    db = StateDb.open(dbPath);
+    expect((await new SqliteOverlayStore(db).listPendingThreadSpendAlerts({})).alerts).toHaveLength(1);
+  } finally { db.close(); removeTempStateDbDir(tempDir); }
 });
