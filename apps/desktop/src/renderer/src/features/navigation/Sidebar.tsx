@@ -50,6 +50,7 @@ import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
 import { FederationTargetMenuSection } from "../chrome/FederationTargetMenuSection";
 import { NewThreadButton } from "../chrome/NewThreadButton";
+import { SidebarShowMore } from "./SidebarShowMore";
 import type {
   ArchiveThreadOptions,
   BrowseMode,
@@ -562,6 +563,7 @@ export function Sidebar(props: SidebarProps) {
     : undefined;
   const lensResources = [...props.pagedNavigation?.resources.values() ?? []]
     .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
+  const directoryIndexResource = props.pagedNavigation?.resources.get("directory-index");
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
   const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
     .map((entry) => [navigationThreadSelectionKey(entry.row.ref), rowsByKey.get(navigationThreadSelectionKey(entry.row.ref))])).values()].filter((thread): thread is NavigationThreadSummary => Boolean(thread));
@@ -2089,14 +2091,19 @@ export function Sidebar(props: SidebarProps) {
             <div key={resource.id}>
               {resource.state.error ? <p className="sidebar-error">{resource.state.error}</p> : null}
               {resource.state.rebaselineRequired ? (
-                <button type="button" onClick={() => void props.pagedNavigation?.restart(resource.id)}>Reload this lens</button>
+                <SidebarShowMore label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
               ) : resource.state.page?.nextCursor ? (
-                <button type="button" disabled={resource.loading} onClick={() => void props.pagedNavigation?.loadMore(resource.id)}>Load more threads</button>
+                <SidebarShowMore busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
               ) : null}
             </div>
           )) : null}
-          {props.browseMode === "directories" && props.pagedNavigation?.resources.get("directory-index")?.state.page?.nextCursor ? (
-            <button type="button" onClick={() => void props.pagedNavigation?.loadMore("directory-index")}>Load more directories</button>
+          {props.browseMode === "directories" && directoryIndexResource?.state.page?.nextCursor ? (
+            // `loadMore` has no reentrancy guard of its own — it awaits any
+            // pending read and then unconditionally starts another — so the
+            // in-flight guard is the only thing standing between a double
+            // click and two page advances. This was the one load-more control
+            // without it.
+            <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
           ) : null}
         </div>
       </section>

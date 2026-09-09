@@ -4049,6 +4049,18 @@ a.button {
   margin-left: 14px;
 }
 
+/* The tray's status text. `.sidebar-empty` and `.sidebar-error` are
+   sidebar-level and set 14px, which inside a sub-list lands above both the
+   13px `--sidebar-title-size` of the rows around it and the 12px paging
+   control below it — so a transient "Loading…" became the loudest thing in
+   the tray, the same way the unstyled paging button did. Scope the tray's
+   copies to the tray's own scale. */
+.subthread-list .sidebar-empty,
+.subthread-list .sidebar-error {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
 .native-subagents {
   min-width: 0;
 }
@@ -6560,14 +6572,29 @@ a.button {
   padding-left: 8px;
 }
 
-/* "Show N more / Show less" toggle for a directory's unpinned threads
-   past the cap (DirectoriesList caps unpinned rows so a project with
-   dozens of threads doesn't push the next directory off-screen). Reads
-   as a quiet index control, not a card; left padding aligns its label
-   with the thread-row titles above it. */
-.directory-row__show-more {
+/* The rail's one paging affordance: directory, pinned, lens and sub-thread
+   all reach it through `SidebarShowMore`. Reads as a quiet index control,
+   not a card; left padding aligns its label with the thread-row titles
+   above it.
+
+   It was `directory-row__show-more`, a name that reads as private to one
+   parent — and the seven call sites that did not sit beside the rule (five
+   outside DirectoriesList, two inside it) styled nothing at all rather than
+   reach for it, so they shipped as native Chromium buttons. (The old comment here described a "Show N more / Show
+   less" thread-cap toggle; that control moved to
+   `.directory-row__thread-divider` and left this text behind.) */
+.sidebar-show-more {
   overflow-anchor: none;
   align-self: flex-start;
+  /* Defensive, not load-bearing today. `.subthread-list` is a grid, where
+     `align-self` answers the block axis and leaves the inline one on the
+     default `stretch` — which is how the unstyled sub-thread button came out
+     full-bleed. `SubthreadPagination` now wraps the control in the
+     `role="listitem"` its list requires, and that wrapper is the grid item,
+     so the inline-block button shrink-wraps on its own. This keeps a control
+     narrow if one is ever a direct grid child again; it is not a substitute
+     for the wrapper, which the list's validity depends on. */
+  justify-self: start;
   margin-top: 2px;
   /* WCAG 2.5.8, same as the divider above. Without it this lands at
      ~24.4px — 8px padding + 2px border + a 12px font's `normal` line box —
@@ -6588,14 +6615,25 @@ a.button {
     color 120ms ease;
 }
 
-.directory-row__show-more:hover {
+/* `:hover` matches a disabled button, so the unqualified rule lit this up
+   while the page it asks for was already in flight and the click went
+   nowhere. */
+.sidebar-show-more:hover:not(:disabled) {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
 }
 
-.directory-row__show-more:focus-visible {
+.sidebar-show-more:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* A page in flight. `disabled` has been set on every one of these since they
+   shipped and styled on none of them, so the rail looked the same whether a
+   click would do something or nothing. */
+.sidebar-show-more:disabled {
+  color: var(--text-muted);
+  cursor: default;
 }
 
 .directory-group {
