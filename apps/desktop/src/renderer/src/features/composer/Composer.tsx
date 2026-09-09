@@ -10811,19 +10811,19 @@ export function Composer(props: ComposerProps) {
                     <span className="composer__attachment-chip">PDF</span>
                   )}
                 </div>
-                <span
-                  className="composer__pdf-preview-label tooltip-target"
-                  data-tooltip={buildFileReferenceTooltip(reference.path)}
+                <AttachmentTooltip
+                  className="composer__pdf-preview-label"
+                  path={reference.path}
                 >
                   {reference.label}
-                </span>
+                </AttachmentTooltip>
               </div>
             );
           })}
           {visibleFileAttachments.map((attachment) => (
-            <span
-              className="composer__file-attachment tooltip-target"
-              data-tooltip={buildFileReferenceTooltip(attachment.path)}
+            <AttachmentTooltip
+              className="composer__file-attachment"
+              path={attachment.path}
               key={attachment.id}
             >
               <FileCodeIcon size={13} aria-hidden="true" />
@@ -10840,7 +10840,7 @@ export function Composer(props: ComposerProps) {
               >
                 <CloseIcon size={12} aria-hidden="true" />
               </button>
-            </span>
+            </AttachmentTooltip>
           ))}
         </div>
       ) : null}
@@ -12517,6 +12517,37 @@ export function Composer(props: ComposerProps) {
       {imageLightbox}
       {pdfPreviewLightboxNode}
     </>
+  );
+}
+
+function AttachmentTooltip({
+  children,
+  className,
+  path,
+}: {
+  children: ReactNode;
+  className: string;
+  path: string;
+}) {
+  const { show, showAfterDelay, hide, visible, tooltipId, tooltipNode } =
+    useViewportTooltip({
+      className: "viewport-tooltip composer__attachment-tooltip",
+    });
+  const content = buildFileReferenceTooltip(path);
+
+  return (
+    <span
+      className={className}
+      tabIndex={0}
+      aria-describedby={visible ? tooltipId : undefined}
+      onMouseEnter={(event) => showAfterDelay(event.currentTarget, content)}
+      onMouseLeave={hide}
+      onFocus={(event) => show(event.currentTarget, content)}
+      onBlur={hide}
+    >
+      {children}
+      {tooltipNode}
+    </span>
   );
 }
 
