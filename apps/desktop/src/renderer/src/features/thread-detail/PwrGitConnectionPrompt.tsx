@@ -61,11 +61,11 @@ export function PwrGitConnectionPrompt(props: {
     }
     const response = await props.desktopApi.connectPwrGit();
     setStatus(response.status);
-    if (response.outcome !== "connected") {
-      setError(
-        response.detail
-          ?? "PwrGit did not approve the connection. Try again from New Thread.",
-      );
+    // A response without detail is one whose `status.detail` already says
+    // what to do (the switch to turn on); repeating it here would stack the
+    // same sentence twice on the card.
+    if (response.outcome !== "connected" && response.detail) {
+      setError(response.detail);
     }
   };
 
@@ -89,9 +89,11 @@ export function PwrGitConnectionPrompt(props: {
   const remoteOwnerLabel = props.remoteOwnerLabel?.trim();
 
   // A remote launchpad may only expose PwrGit after its owner reports a
-  // configured, running connection. The viewer's own install state says
-  // nothing about the machine the thread runs on.
-  if (remoteOwnerLabel && (!configured || !running)) {
+  // configured connection. The viewer's own install state says nothing about
+  // the machine the thread runs on, which is why the federation-scoped API
+  // leaves this card without a status reader until PwrGit has a federation
+  // surface of its own.
+  if (remoteOwnerLabel && !configured) {
     return null;
   }
 
@@ -169,6 +171,20 @@ export function PwrGitConnectionPrompt(props: {
       <div className="mcp-connection__action">
         {!status ? (
           <span className="mcp-connection__checking">Checking…</span>
+        ) : configured ? (
+          // Once paired, the server launches under PwrAgent's own runtime
+          // without the PwrGit window, so the switch does not wait for it.
+          <div className="mcp-connection__toggle">
+            <span>Use in this thread</span>
+            <SettingsSwitch
+              checked={props.enabled}
+              disabled={busy || !backendSupported}
+              label="Use PwrGit in this thread"
+              onChange={(enabled) => {
+                void runAction(async () => await props.onEnabledChange(enabled));
+              }}
+            />
+          </div>
         ) : !installed ? (
           <button
             className="button button--primary"
@@ -190,7 +206,7 @@ export function PwrGitConnectionPrompt(props: {
           >
             Open PwrGit
           </button>
-        ) : !configured ? (
+        ) : (
           <button
             className="button button--primary"
             disabled={busy}
@@ -199,18 +215,6 @@ export function PwrGitConnectionPrompt(props: {
           >
             {busy ? "Waiting for approval…" : "Connect to PwrGit"}
           </button>
-        ) : (
-          <div className="mcp-connection__toggle">
-            <span>Use in this thread</span>
-            <SettingsSwitch
-              checked={props.enabled}
-              disabled={busy || !backendSupported}
-              label="Use PwrGit in this thread"
-              onChange={(enabled) => {
-                void runAction(async () => await props.onEnabledChange(enabled));
-              }}
-            />
-          </div>
         )}
       </div>
     </aside>

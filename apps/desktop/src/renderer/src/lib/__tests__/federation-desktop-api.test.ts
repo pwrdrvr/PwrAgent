@@ -31,6 +31,10 @@ describe("scopeDesktopApiToFederationTarget", () => {
       connectPwrSnap: vi.fn(),
       openPwrSnap: vi.fn(),
       openPwrSnapDownload: vi.fn(),
+      readPwrGitConnectionStatus: vi.fn(),
+      connectPwrGit: vi.fn(),
+      openPwrGit: vi.fn(),
+      openPwrGitDownload: vi.fn(),
       openPath: vi.fn(),
       revealPath: vi.fn(),
       readMarkdownFile: vi.fn(),
@@ -101,6 +105,11 @@ describe("scopeDesktopApiToFederationTarget", () => {
     expect(scopedApi?.connectPwrSnap).toBeUndefined();
     expect(scopedApi?.openPwrSnap).toBeUndefined();
     expect(scopedApi?.openPwrSnapDownload).toBeUndefined();
+    // A viewer's own PwrGit says nothing about the owner's machine.
+    expect(scopedApi?.readPwrGitConnectionStatus).toBeUndefined();
+    expect(scopedApi?.connectPwrGit).toBeUndefined();
+    expect(scopedApi?.openPwrGit).toBeUndefined();
+    expect(scopedApi?.openPwrGitDownload).toBeUndefined();
     expect(scopedApi?.openPath).toBeUndefined();
     expect(scopedApi?.revealPath).toBeUndefined();
     expect(scopedApi?.readMarkdownFile).toBeUndefined();

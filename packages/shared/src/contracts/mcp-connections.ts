@@ -21,6 +21,12 @@ export function isMcpConnectionId(value: string): value is McpConnectionId {
   return (MCP_CONNECTION_IDS as readonly string[]).includes(value);
 }
 
+/** Product names for copy that has to name the app behind a connection id. */
+export const MCP_CONNECTION_DISPLAY_NAMES: Record<McpConnectionId, string> = {
+  [PWRSNAP_MCP_CONNECTION_ID]: "PwrSnap",
+  [PWRGIT_MCP_CONNECTION_ID]: "PwrGit",
+};
+
 /**
  * A thread's enabled connections are stored as one list, so a toggle for one
  * app must not clobber another's entry. Every surface that flips a single
@@ -35,13 +41,13 @@ export function withMcpConnection(
   return enabled ? [...others, connectionId] : others;
 }
 
-export type PwrSnapConnectionAvailability =
+/** Shared by every PwrSuite MCP connection card. */
+export type McpConnectionAvailability =
   | "not_installed"
   | "installed"
   | "running";
 
-/** Shared by every PwrSuite MCP connection card. */
-export type McpConnectionAvailability = PwrSnapConnectionAvailability;
+export type PwrSnapConnectionAvailability = McpConnectionAvailability;
 
 export type PwrSnapConnectionStatus = {
   connectionId: typeof PWRSNAP_MCP_CONNECTION_ID;
@@ -57,20 +63,11 @@ export type PwrGitConnectionStatus = {
   availability: McpConnectionAvailability;
   configured: boolean;
   detail?: string;
-  /**
-   * True when PwrGit answers on its loopback port but the operator has not
-   * turned Local agent access on. The card can then say what to switch on
-   * rather than offering a pairing that will time out.
-   */
-  agentAccessDisabled?: boolean;
 };
 
 export type ReadPwrSnapConnectionStatusRequest = {
   federationTarget?: FederationRemoteTarget;
 };
-
-export type ReadPwrGitConnectionStatusRequest =
-  ReadPwrSnapConnectionStatusRequest;
 
 export type ConnectPwrSnapResponse = {
   status: PwrSnapConnectionStatus;
@@ -82,9 +79,19 @@ export type ConnectPwrGitResponse = {
   outcome:
     | "connected"
     | "needs_local_agent_access"
+    /**
+     * PwrGit answered but pairing could not finish: its MCP server was not
+     * found beside the app, it stopped answering, or the approved credential
+     * could not be stored.
+     */
+    | "unavailable"
     | "declined"
     | "timed_out";
-  /** Set when the operator never answered or said no, for the card to show. */
+  /**
+   * What to show for a non-connected outcome. Absent when `status.detail`
+   * already says everything there is to say, so the card does not stack the
+   * same sentence twice.
+   */
   detail?: string;
 };
 

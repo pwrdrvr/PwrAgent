@@ -107,7 +107,6 @@ describe("PwrGitConnectionPrompt", () => {
         desktopApi={{
           readPwrGitConnectionStatus: async () =>
             status({
-              agentAccessDisabled: true,
               detail:
                 "Turn on Settings → Agents → Local agent access in PwrGit, then connect.",
             }),
@@ -158,6 +157,53 @@ describe("PwrGitConnectionPrompt", () => {
 
     fireEvent.click(await screen.findByRole("switch", { name: /Use PwrGit in this thread/i }));
     await waitFor(() => expect(onEnabledChange).toHaveBeenCalledWith(true));
+  });
+
+  it("offers the per-thread switch once connected even while PwrGit is closed", async () => {
+    // The server runs under PwrAgent's runtime from a policy file; the PwrGit
+    // window is only needed to pair, so "installed" is enough once paired.
+    render(
+      <PwrGitConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrGitConnectionStatus: async () =>
+            status({ availability: "installed", configured: true }),
+        }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("switch", { name: /Use PwrGit in this thread/i }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open PwrGit" })).toBeNull();
+  });
+
+  it("does not repeat the status instruction as an error after a failed connect", async () => {
+    const detail =
+      "Turn on Settings → Agents → Local agent access in PwrGit, then connect.";
+    render(
+      <PwrGitConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrGitConnectionStatus: async () => status({ detail }),
+          connectPwrGit: async () => ({
+            status: status({ detail }),
+            outcome: "needs_local_agent_access" as const,
+          }),
+        }}
+        enabled={false}
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Connect to PwrGit" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Connect to PwrGit" })).toBeTruthy(),
+    );
+    expect(screen.getAllByText(detail)).toHaveLength(1);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("renders nothing when a remote owner does not report PwrGit available", async () => {

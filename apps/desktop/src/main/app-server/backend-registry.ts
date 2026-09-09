@@ -327,6 +327,8 @@ import {
   normalizeFileChangeApprovalDiff,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
+  MCP_CONNECTION_DISPLAY_NAMES,
+  isMcpConnectionId,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
@@ -7435,19 +7437,31 @@ function buildCodexConnectionMcpConfig(
   } as CodexThreadStartParams["config"];
 }
 
-function userActionablePwrSnapMcpConfigError(
+/**
+ * Codex rejects the whole thread config when an inherited MCP alias cannot be
+ * disabled cleanly. That is PwrAgent's configuration failing, not the app
+ * behind the connection, and the message says so for whichever connections
+ * the thread enabled rather than blaming PwrSnap for a PwrGit entry.
+ */
+function userActionableMcpConnectionConfigError(
   error: unknown,
   registrations: McpConnectionBridgeRegistration[],
 ): unknown {
+  const names = registrations.map(({ server }) =>
+    isMcpConnectionId(server.name)
+      ? MCP_CONNECTION_DISPLAY_NAMES[server.name]
+      : server.name,
+  );
   if (
-    !registrations.some(({ server }) => server.name === PWRSNAP_MCP_CONNECTION_ID)
+    names.length === 0
     || !(error instanceof Error)
     || !/invalid transport\s+in\s+`?mcp_servers\./.test(error.message)
   ) {
     return error;
   }
+  const subject = `${names.join(" and ")} ${names.length === 1 ? "was" : "were"}`;
   return new Error(
-    "PwrSnap was not contacted: Codex rejected PwrAgent's temporary MCP configuration. Update PwrAgent and retry the thread. If this still happens after updating, repair or remove the named MCP server in Codex configuration. Details: "
+    `${subject} not contacted: Codex rejected PwrAgent's temporary MCP configuration. Update PwrAgent and retry the thread. If this still happens after updating, repair or remove the named MCP server in Codex configuration. Details: `
       + error.message,
     { cause: error },
   );
@@ -14814,7 +14828,7 @@ export class DesktopBackendRegistry {
               : String(rollbackError),
         });
       });
-      throw userActionablePwrSnapMcpConfigError(
+      throw userActionableMcpConnectionConfigError(
         error,
         mcpConnectionRegistrations,
       );
@@ -15909,9 +15923,6 @@ export class DesktopBackendRegistry {
       ),
     ].filter(Boolean);
     if (selected.length === 0) return [];
-    if (!this.mcpConnectionService && !this.pwrGitConnectionService) {
-      throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
-    }
     const registrations: McpConnectionBridgeRegistration[] = [];
     for (const connectionId of selected) {
       const service =
@@ -15921,15 +15932,23 @@ export class DesktopBackendRegistry {
             ? this.pwrGitConnectionService
             : undefined;
       if (!service) {
+        // A known connection with no service behind it is a runtime that
+        // cannot honor the thread's setting. That fails loudly rather than
+        // starting the thread without the app the operator enabled; only a
+        // genuinely unknown id is dropped.
+        if (isMcpConnectionId(connectionId)) {
+          throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
+        }
         backendRegistryLog.warn("ignoring unknown MCP connection", {
           connectionId,
           threadId: threadId ?? null,
         });
         continue;
       }
-      registrations.push(
-        await service.registerBridge(connectionId, threadId),
-      );
+      // PwrGit registers nothing while it is not connected or not installed,
+      // so a thread that enabled it keeps starting; PwrSnap always registers.
+      const registration = await service.registerBridge(connectionId, threadId);
+      if (registration) registrations.push(registration);
     }
     return registrations;
   }

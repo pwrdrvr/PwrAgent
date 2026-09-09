@@ -33,6 +33,11 @@ describe("isMessagingRuntimeSecret", () => {
     { name: "federationCloudflareClientPrivateKey", expected: false },
     { name: "federationCloudflareAccessClientId", expected: false },
     { name: "federationCloudflareAccessClientSecret", expected: false },
+    { name: "federationNoiseStaticPrivateKey", expected: false },
+    // MCP connection credentials belong to the coding agent, not messaging;
+    // pairing PwrSnap or PwrGit must not restart the messaging runtime.
+    { name: "pwrsnapMcpCredential", expected: false },
+    { name: "pwrgitMcpCredential", expected: false },
   ];
 
   for (const { name, expected } of cases) {

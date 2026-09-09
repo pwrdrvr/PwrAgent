@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  PwrGitConnectionStatus,
   PwrSnapConnectionStatus,
   ReadPwrSnapConnectionStatusRequest,
 } from "@pwragent/shared";
@@ -65,15 +66,31 @@ describe("MCP connection IPC", () => {
     openApplication: vi.fn(),
     openDownload: vi.fn(),
   };
+  const pwrGitLocalStatus: PwrGitConnectionStatus = {
+    connectionId: "pwrgit",
+    displayName: "PwrGit",
+    availability: "running",
+    configured: true,
+  };
+  // Always injected: the default parameter constructs the real service, whose
+  // settings lookup needs initialized app state this suite does not have.
+  const pwrGit = {
+    readStatus: vi.fn(async () => pwrGitLocalStatus),
+    connect: vi.fn(),
+    openApplication: vi.fn(),
+    openDownload: vi.fn(),
+  };
 
   beforeEach(() => {
     mocks.handlers.clear();
     mocks.readRemoteStatus.mockClear();
     mocks.remoteBackend.mockClear();
-    service.readStatus.mockClear();
-    service.connect.mockClear();
-    service.openApplication.mockClear();
-    service.openDownload.mockClear();
+    for (const stub of [service, pwrGit]) {
+      stub.readStatus.mockClear();
+      stub.connect.mockClear();
+      stub.openApplication.mockClear();
+      stub.openDownload.mockClear();
+    }
   });
 
   it("reads status from the remote owner without consulting local PwrSnap", async () => {
@@ -83,7 +100,7 @@ describe("MCP connection IPC", () => {
     const { MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL } = await import(
       "../../shared/ipc"
     );
-    registerMcpConnectionIpcHandlers(service as never);
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
 
     const response = await mocks.handlers.get(
       MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
@@ -110,7 +127,7 @@ describe("MCP connection IPC", () => {
       outcome: "connected",
       status: { ...localStatus, availability: "running", configured: true },
     });
-    registerMcpConnectionIpcHandlers(service as never);
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
 
     await expect(mocks.handlers.get(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL)?.(
       { sender: { id: 18 } },
@@ -134,7 +151,7 @@ describe("MCP connection IPC", () => {
       MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL,
       MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
     } = await import("../../shared/ipc");
-    registerMcpConnectionIpcHandlers(service as never);
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
     const event = { sender: remoteSender };
 
     await expect(
@@ -150,5 +167,43 @@ describe("MCP connection IPC", () => {
     expect(service.connect).not.toHaveBeenCalled();
     expect(service.openApplication).not.toHaveBeenCalled();
     expect(service.openDownload).not.toHaveBeenCalled();
+  });
+
+  it("serves local PwrGit status and blocks every PwrGit action in a remote window", async () => {
+    const { registerMcpConnectionIpcHandlers } = await import(
+      "../ipc/mcp-connections"
+    );
+    const {
+      MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
+      MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
+      MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
+      MCP_CONNECTION_PWRGIT_STATUS_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never);
+    const remote = { sender: remoteSender };
+
+    await expect(
+      mocks.handlers.get(MCP_CONNECTION_PWRGIT_STATUS_CHANNEL)?.({ sender: { id: 18 } }),
+    ).resolves.toEqual(pwrGitLocalStatus);
+    // PwrGit has no federation surface, so a remote window learns nothing
+    // about the viewer's local install and cannot pair or launch it.
+    await expect(
+      mocks.handlers.get(MCP_CONNECTION_PWRGIT_STATUS_CHANNEL)?.(remote),
+    ).resolves.toMatchObject({ availability: "not_installed", configured: false });
+    await expect(
+      mocks.handlers.get(MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL)?.(remote),
+    ).rejects.toThrow(/only available on the machine that owns/i);
+    await expect(
+      mocks.handlers.get(MCP_CONNECTION_PWRGIT_OPEN_CHANNEL)?.(remote),
+    ).resolves.toMatchObject({ opened: false });
+    await expect(
+      mocks.handlers.get(MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL)?.(remote),
+    ).resolves.toMatchObject({ opened: false });
+
+    expect(pwrGit.readStatus).toHaveBeenCalledOnce();
+    expect(pwrGit.connect).not.toHaveBeenCalled();
+    expect(pwrGit.openApplication).not.toHaveBeenCalled();
+    expect(pwrGit.openDownload).not.toHaveBeenCalled();
+    expect(service.readStatus).not.toHaveBeenCalled();
   });
 });

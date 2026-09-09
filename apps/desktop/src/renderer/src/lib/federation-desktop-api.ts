@@ -48,6 +48,13 @@ export function scopeDesktopApiToFederationTarget(
     connectPwrSnap: undefined,
     openPwrSnap: undefined,
     openPwrSnapDownload: undefined,
+    // PwrGit has no federation surface yet: a remote thread must not read the
+    // viewer's local PwrGit as if it were the owner's, and must not be able to
+    // pair or launch anything on the viewer's machine for it.
+    readPwrGitConnectionStatus: undefined,
+    connectPwrGit: undefined,
+    openPwrGit: undefined,
+    openPwrGitDownload: undefined,
     openPath: undefined,
     revealPath: undefined,
     readMarkdownFile: undefined,
