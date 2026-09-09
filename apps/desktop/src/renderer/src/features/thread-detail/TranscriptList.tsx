@@ -1355,6 +1355,23 @@ export function TranscriptList(props: TranscriptListProps) {
     transcriptEntries,
   ]);
 
+  // Content updates change these callbacks. Keep the native subscription tied
+  // to the DOM lifetime: reconnecting ResizeObserver requests another initial
+  // notification even when the observed elements have not changed size.
+  const resizeActionsRef = useRef({
+    requestOlderPageIfUnderflowing,
+    scrollToBottom,
+    syncScrollState,
+  });
+  useLayoutEffect(() => {
+    resizeActionsRef.current = {
+      requestOlderPageIfUnderflowing,
+      scrollToBottom,
+      syncScrollState,
+    };
+  }, [requestOlderPageIfUnderflowing, scrollToBottom, syncScrollState]);
+  const hasScrollContainer = hasTranscriptContent || hasPendingContent;
+
   useEffect(() => {
     const content = scrollContentRef.current;
     const container = scrollContainerRef.current;
@@ -1370,6 +1387,7 @@ export function TranscriptList(props: TranscriptListProps) {
       if (isSidebarResizing()) {
         return;
       }
+      const { scrollToBottom, syncScrollState, requestOlderPageIfUnderflowing } = resizeActionsRef.current;
       if (isGluedToBottomRef.current) {
         scrollToBottom();
       } else {
@@ -1382,7 +1400,7 @@ export function TranscriptList(props: TranscriptListProps) {
     return () => {
       observer.disconnect();
     };
-  }, [requestOlderPageIfUnderflowing, scrollToBottom, syncScrollState]);
+  }, [hasScrollContainer]);
 
   // When a sidebar drag ends, the pane has settled at its final width but the
   // ResizeObserver/onScroll handlers were paused throughout — re-sync the

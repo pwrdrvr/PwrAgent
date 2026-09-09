@@ -4215,6 +4215,75 @@ Implementation notes remain in a readable bubble.`;
     expect(list.scrollTop).toBe(120);
   });
 
+  it("retains the resize subscription across streamed updates and uses current callbacks", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const original = globalThis.ResizeObserver;
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe = observe;
+      disconnect = disconnect;
+      unobserve = vi.fn();
+    }
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      value: ResizeObserverMock,
+    });
+    try {
+      const onLoadOlder = vi.fn(async () => undefined);
+      const entries = [{ type: "message" as const, id: "prompt", role: "user" as const, text: "Hello" }];
+      const view = render(
+        <TranscriptList entries={[]} loading={false} loadingMore={false}
+          threadId="stream" onLoadOlder={onLoadOlder} />,
+      );
+      expect(callbacks).toHaveLength(0);
+      view.rerender(
+        <TranscriptList entries={entries} loading={false} loadingMore={false}
+          threadId="stream" onLoadOlder={onLoadOlder} />,
+      );
+      for (let index = 0; index < 50; index += 1) {
+        view.rerender(
+          <TranscriptList entries={entries} loading={false} loadingMore={false}
+            threadId="stream" onLoadOlder={onLoadOlder}
+            pendingAssistantMessage={{ type: "message", id: "reply", role: "assistant", text: `Reply ${index}` }} />,
+        );
+      }
+      expect(callbacks).toHaveLength(1);
+      expect(observe).toHaveBeenCalledTimes(2);
+      expect(disconnect).not.toHaveBeenCalled();
+
+      // The retained subscription must use the latest pagination and thread,
+      // not the props captured when it was first installed.
+      view.rerender(
+        <TranscriptList entries={entries} loading={false} loadingMore={false}
+          threadId="next" onLoadOlder={onLoadOlder}
+          pagination={{ supportsPagination: true, hasPreviousPage: true }} />,
+      );
+      scrollHeight = 100;
+      act(() => callbacks[0]([], {} as ResizeObserver));
+      expect(onLoadOlder).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("list").scrollTop).toBe(100);
+      view.rerender(
+        <TranscriptList entries={[]} loading={false} loadingMore={false}
+          threadId="empty" onLoadOlder={onLoadOlder} />,
+      );
+      expect(disconnect).toHaveBeenCalledTimes(1);
+      view.rerender(
+        <TranscriptList entries={[]} loading={false} loadingMore={false}
+          pendingStatusText="Thinking" threadId="empty" onLoadOlder={onLoadOlder} />,
+      );
+      expect(callbacks).toHaveLength(2);
+      expect(observe).toHaveBeenCalledTimes(4);
+      view.unmount();
+      expect(disconnect).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: original });
+    }
+  });
+
   it("keeps the bottom pinned when rendered content grows after layout", () => {
     let resizeCallback: ResizeObserverCallback | undefined;
     const OriginalResizeObserver = globalThis.ResizeObserver;
