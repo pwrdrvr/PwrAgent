@@ -3150,7 +3150,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       COALESCE(json_extract(payload, '$.backend'), 'codex') AS backend,
       CASE WHEN length(CAST(json_extract(payload, '$.threadSpendAlertPending') AS BLOB)) <= 16384
         THEN json_extract(payload, '$.threadSpendAlertPending') END AS alert
-      FROM threads WHERE json_type(payload, '$.threadSpendAlertPending') = 'object'
+      FROM threads WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.threadSpendAlertPending') END = 'object'
       ORDER BY thread_id LIMIT ?`).all(limit + 1) as Array<{ backend: AppServerBackendKind; alert: string | null }>;
     const alerts = rows.slice(0, limit).map((row) => {
       if (row.alert === null) throw new Error("Pending spend alert exceeds its bounded payload budget.");
