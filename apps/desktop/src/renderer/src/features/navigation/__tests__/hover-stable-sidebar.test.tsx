@@ -579,7 +579,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
-  it("removes a user-unpinned row from collapsed Directory threads immediately", () => {
+  it("shows an unpinned selected row with a pin action in collapsed Directory threads", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
     const pinnedBravo = { ...bravo, pinnedRank: "2048" };
@@ -609,7 +609,11 @@ describe("Sidebar hover-stable thread ordering", () => {
       onSetThreadPin,
     }));
 
-    expect(threadTitles()).toEqual(["Bravo thread"]);
+    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+    const retained = threadRow("Alpha thread");
+    expect(within(retained).queryByRole("button", { name: "Unpin thread" })).toBeNull();
+    fireEvent.click(within(retained).getByRole("button", { name: "Pin thread" }));
+    expect(onSetThreadPin).toHaveBeenLastCalledWith({ ...alpha, pinnedRank: undefined }, true);
   });
 
   it("applies a pointer drag pin reorder immediately while hovered", async () => {

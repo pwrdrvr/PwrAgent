@@ -49,6 +49,9 @@ function usePresentationOwner(props: FixtureProps) {
         ownerInstanceId: selectedThread.federation?.ref.target.scope === "remote" ? selectedThread.federation.ref.target.instanceId : undefined } };
       page = navigationQueryFixture(request, { directories: props.directories, threads });
     }
+    if (id === "selected-context") {
+      page.selectionDirectory = (index.directories ?? []).find((directory) => selectedThreadDirectoryKeys.includes(directory.key));
+    }
     resources.set(id, { id, loading: false, state: { ...createNavigationPageState(request), page, stale: false } });
     return page;
   };
