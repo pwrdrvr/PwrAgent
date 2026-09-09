@@ -4652,9 +4652,10 @@ export function useThreadNavigation(
       return undefined;
     }
 
-    const directory = directories.find((directory) =>
-      directoryKeysForThread(selectedDetail.state?.detail?.thread).includes(directory.key)
-    );
+    // Match the primary workspace, as project grouping does. Directory-list
+    // ordering must not let a secondary link become the selected project.
+    const primaryDirectoryKey = directoryKeysForThread(selectedDetail.state?.detail?.thread)[0];
+    const directory = directories.find((directory) => directory.key === primaryDirectoryKey);
     const workspace = selectedDetail.state?.detail?.workspaceDirectories?.find((candidate) =>
       candidate.path === directory?.path,
     );
