@@ -99,6 +99,53 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it.each([1, 2])("omits the startup feature warning from a heading with %i tool updates but retains its entry", (toolCount) => {
+    const turn = completedTurn("turn-1", 82_000);
+    const warning: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-warning-thread-1",
+      tone: "warning",
+      summary: "Warning: Under-development features enabled: default_mode_request_user_input. "
+        + "Under-development features are incomplete and may behave unpredictably. "
+        + "To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/dev/.codex/config.toml.",
+      details: [],
+      turn,
+    };
+    const activities: AppServerThreadActivityEntry[] = Array.from({ length: toolCount }, (_, index) => ({
+      type: "activity",
+      id: `tool-${index}`,
+      summary: "Read config.toml",
+      details: [],
+      turn,
+    }));
+    const entries = [warning, ...activities];
+
+    expect(buildTranscriptRenderItems({ entries })).toEqual([
+      expect.objectContaining({
+        type: "workPhaseGroup",
+        entries,
+        label: toolCount === 1
+          ? "Worked for 1m 22s"
+          : "Worked for 1m 22s · 2 tool updates: 2 × Read config.toml",
+      }),
+    ]);
+  });
+
+  it("keeps other warnings and failed activities in the work heading", () => {
+    const turn = completedTurn("turn-1", 82_000);
+    const entries: AppServerThreadActivityEntry[] = [
+      { type: "activity", id: "live-warning-thread-1", summary: "Warning: connection interrupted", details: [], turn },
+      { type: "activity", id: "tool-1", summary: "Command failed", status: "failed", details: [], turn },
+    ];
+
+    expect(buildTranscriptRenderItems({ entries })).toEqual([
+      expect.objectContaining({
+        entries,
+        label: "Worked for 1m 22s · 2 tool updates: Warning: connection interrupted, Command failed",
+      }),
+    ]);
+  });
+
   it("relativizes absolute paths in a collapsed work phase label", () => {
     const turn = completedTurn("turn-1", 70_000);
     const root = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt";
