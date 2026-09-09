@@ -171,6 +171,38 @@ describe("useThreadNavigation", () => {
     expect(removeItem).not.toHaveBeenCalled();
   });
 
+  it.each(["inbox", "directories"] as const)("loads navigation before a visible window gains focus (%s)", async (browseMode) => {
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    (window as unknown as { __pwragentNavigationPreferences: { browseMode: string } })
+      .__pwragentNavigationPreferences = { browseMode };
+    const snapshot = acpTitleSnapshot("Background startup", "explicit", 1);
+    snapshot.directories = [{
+      key: "directory:/fixture/project", kind: "directory", label: "Fixture project",
+      path: "/fixture/project", threadKeys: [], needsAttentionCount: 0,
+    }];
+    const getNavigationLaunchpadConfig = vi.fn<NonNullable<DesktopApi["getNavigationLaunchpadConfig"]>>(async () => ({
+      protocol: 2, revision: "startup-config", defaults: snapshot.launchpadDefaults,
+    }));
+    const desktopApi: DesktopApi = {
+      readPopulation: vi.fn(async () => snapshot),
+      getNavigationLaunchpadConfig,
+      ...actionDetailApi({ ...snapshot.threads[0]!, model: "owner-model" }),
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+      expect(result.current.directories[0]?.label).toBe("Fixture project");
+      if (browseMode === "inbox") {
+        expect(result.current.threads[0]?.title).toBe("Background startup");
+        expect(result.current.selectedThreadConfigurationReady).toBe(true);
+        expect(result.current.selectedThread?.model).toBe("owner-model");
+      }
+    });
+    expect(getNavigationLaunchpadConfig).toHaveBeenCalled();
+    expect(document.hasFocus()).toBe(false);
+  });
+
   function createDeferred<T>(): {
     promise: Promise<T>;
     resolve: (value: T) => void;
@@ -1616,7 +1648,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("retains stale rows without marking unseen activity read while the window is backgrounded", async () => {
+  it.each(["visible", "hidden"] as const)("refreshes only visible rows without marking unseen activity read while unfocused (%s)", async (visibility) => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const markThreadSeen = vi.fn(
       async (
@@ -1704,8 +1736,10 @@ describe("useThreadNavigation", () => {
     });
 
     vi.mocked(document.hasFocus).mockReturnValue(false);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue(visibility);
     act(() => {
       window.dispatchEvent(new Event("blur"));
+      document.dispatchEvent(new Event("visibilitychange"));
     });
 
     const readsBeforeBackgroundEvent = readPopulation.mock.calls.length;
@@ -1731,8 +1765,13 @@ describe("useThreadNavigation", () => {
     });
 
     await act(() => result.current.refresh());
-    expect(readPopulation).toHaveBeenCalledTimes(readsBeforeBackgroundEvent);
-    expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
+    if (visibility === "visible") {
+      expect(readPopulation.mock.calls.length).toBeGreaterThan(readsBeforeBackgroundEvent);
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
+    } else {
+      expect(readPopulation).toHaveBeenCalledTimes(readsBeforeBackgroundEvent);
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
+    }
     expect(markThreadSeen).not.toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-read",
