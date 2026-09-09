@@ -5285,10 +5285,14 @@ export function useThreadSessionState(params: {
       ? threadKey : undefined;
     if (remoteDetailInterestRef.current !== remoteDetailInterest) {
       remoteDetailInterestRef.current = remoteDetailInterest;
-      if (remoteDetailInterest) {
+      if (remoteDetailInterest
+        && (sessions[remoteDetailInterest] || inFlightHydrationsRef.current.has(remoteDetailInterest))) {
         // Another window can preserve the process-wide subscription while
         // this window misses events. Renewed local interest must catch up
         // independently of owner acknowledgements or navigation timestamps.
+        // Initial interest already gets an initial read. Giving it a recovery
+        // version before its session exists lets Strict Mode's mount replay
+        // prune that version and incorrectly invalidate the in-flight read.
         streamRecoveryVersionsRef.current.set(remoteDetailInterest,
           (streamRecoveryVersionsRef.current.get(remoteDetailInterest) ?? 0) + 1);
       }
