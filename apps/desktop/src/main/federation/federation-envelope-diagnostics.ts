@@ -3,6 +3,26 @@ import { createHash } from "node:crypto";
 
 export type FederationEnvelopeLogFields = Record<string, string | undefined>;
 
+/** Account for large live notifications without recording any payload text. */
+export function describeLargeBackendEvent(envelope: FederationProtocolEnvelope): Record<string, number> {
+  if (envelope.kind !== "notification" || envelope.method !== "backend.event"
+    || !envelope.params || typeof envelope.params !== "object") return {};
+  const event = envelope.params as Record<string, unknown>;
+  const notification = event.notification as { params?: Record<string, unknown> } | undefined;
+  if (!notification?.params || typeof notification.params !== "object") return {};
+  const { pricing, toolAccounting, ...other } = notification.params;
+  const measure = (value: unknown): number => value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value), "utf8");
+  const stream = event.stream as { sequence?: unknown } | undefined;
+  return {
+    notificationParamsBytes: measure(notification.params),
+    pricingBytes: measure(pricing),
+    toolAccountingBytes: measure(toolAccounting),
+    otherNotificationParamsBytes: measure(other),
+    accountingPatchBytes: measure(event.accountingPatch),
+    ...(typeof stream?.sequence === "number" ? { streamSequence: stream.sequence } : {}),
+  };
+}
+
 /** Size-only diagnostics for the existing large-frame log, never payload text.
  * Parts are measured one at a time; no serialized replay is retained.
  * Inline image counters are a subset of the part bytes and count wire copies.
@@ -90,6 +110,8 @@ export class FederationEnvelopeDiagnostics {
     const params = envelope.kind === "notification" ? envelope.params : undefined;
     const notification = params && typeof params === "object" && "notification" in params
       ? params.notification : undefined;
+    const notificationParams = notification && typeof notification === "object" && "params" in notification
+      && notification.params && typeof notification.params === "object" ? notification.params : undefined;
     return {
       envelopeKind: envelope.kind,
       envelopeId: envelope.id,
@@ -101,6 +123,9 @@ export class FederationEnvelopeDiagnostics {
         : request && request.expiresAt > this.now()
           ? { threadId: request.threadId, readReason: request.readReason }
           : {}),
+      ...(notificationParams && "threadId" in notificationParams
+        && typeof notificationParams.threadId === "string" && notificationParams.threadId.length <= 256
+        ? { threadId: notificationParams.threadId } : {}),
       errorCode: envelope.kind === "error" ? envelope.error.code : undefined,
       notificationMethod: notification && typeof notification === "object"
         && "method" in notification && typeof notification.method === "string"

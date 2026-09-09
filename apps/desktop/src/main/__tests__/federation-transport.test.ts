@@ -211,6 +211,39 @@ describe("federation transport", () => {
     expect(server?.closePeer("client_one")).toBe(false);
   });
 
+  it("does not deliver replayed subscriptions before the caller installs the connection", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store, token: "invite-subscription-ready", gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000, expiresAt: Date.now() + 60_000,
+    });
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one", gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem, host: "127.0.0.1", port: 0, store,
+      onConnection: (connection) => connection.sendEnvelope({
+        id: "replayed-subscription", kind: "notification", method: "federation.eventSubscription",
+        params: { eventClasses: ["transcript"], eventStream: { protocol: 1, subscriptionId: "viewer-subscription" } },
+        protocolVersion: 1, sourceInstanceId: "gateway_one", targetInstanceId: connection.peerId, createdAt: 0,
+      }),
+    });
+    const { url } = await server.start();
+    let installed = false;
+    let resolveDelivery!: (ready: boolean) => void;
+    const delivered = new Promise<boolean>((resolve) => { resolveDelivery = resolve; });
+    const client = await connectFederationClient({
+      url, mode: "enroll", gatewayInstanceId: "gateway_one", gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one", privateKeyPem: clientKeyPair.privateKeyPem, publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["event_subscriptions", "thread_detail"], inviteToken: invite.token, label: "Client", role: "client",
+      deferReceiving: true,
+      onEnvelope: () => resolveDelivery(installed),
+    });
+    installed = true;
+    client.startReceiving();
+    client.startReceiving();
+    await expect(delivered).resolves.toBe(true);
+    client.close();
+  });
+
   it("carries attachment bytes in the binary blob frame instead of JSON", async () => {
     const transfers: Array<{ direction: "sent" | "received"; dataByteCount: number; byteCount: number }> = [];
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -324,7 +357,8 @@ describe("federation transport", () => {
           sourceInstanceId: "gateway_one",
           targetInstanceId: connection.peerId,
           createdAt: 2_000,
-          result: { privatePayload: "x".repeat(600_000) },
+          // This was invisible to the former 512 KiB threshold.
+          result: { privatePayload: "x".repeat(250_000) },
         });
       },
       onEnvelopeTransfer: (info) => gatewayTransfers.push(info),

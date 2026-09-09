@@ -170,6 +170,13 @@ older read remains pending until a read started after recovery completes.
 Reselecting a cached remote thread also triggers window-local catch-up: another
 window can keep the aggregate subscription alive while this window misses events.
 
+On reconnect, authentication refreshes connection capabilities and the gateway
+broadcasts a fresh peer directory and replays retained viewer subscriptions.
+Stream negotiation lives in those subscriptions, not cached discovery metadata.
+The client keeps post-authentication frames queued until its runtime installs
+the authenticated connection and restores subscription state, so an immediate
+gateway replay cannot be discarded as coming from an unknown connection.
+
 Within a negotiated stream, pricing and tool-accounting notifications send a
 full baseline followed by smaller patches. The receiver reconstructs the
 existing backend notification before publishing it to the renderer. Baselines

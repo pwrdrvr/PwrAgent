@@ -40,7 +40,7 @@ import {
 } from "./federation-redaction";
 import { FederationSessionRegistry } from "./federation-session-state";
 import type { FederationStore } from "./federation-store";
-import { describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "./federation-envelope-diagnostics";
+import { describeLargeBackendEvent, describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "./federation-envelope-diagnostics";
 
 type EnvelopeDiagnosticsContext = {
   diagnostics: FederationEnvelopeDiagnostics;
@@ -58,11 +58,12 @@ function envelopeLogFields(envelope: FederationProtocolEnvelope, context?: Envel
 
 function observeReceivedEnvelope(envelope: FederationProtocolEnvelope, byteCount: number, context: EnvelopeDiagnosticsContext) {
   context.diagnostics.observe(envelope);
-  if (byteCount >= FEDERATION_LARGE_FRAME_LOG_BYTES && envelope.kind !== "blob_chunk") {
+  if (byteCount >= FEDERATION_LARGE_FRAME_LOG_BYTES) {
     log.info("large federation frame received", {
       byteCount,
       ...envelopeLogFields(envelope, context),
       ...describeLargeThreadReadResult(envelope),
+      ...describeLargeBackendEvent(envelope),
     });
   }
 }
@@ -101,7 +102,8 @@ export const FEDERATION_KEEPALIVE_INTERVAL_MS = 15_000;
  * peer can force that allocation per frame.
  */
 export const FEDERATION_MAX_FRAME_BYTES = 16 * 1024 * 1024;
-const FEDERATION_LARGE_FRAME_LOG_BYTES = 512 * 1024;
+// Match the decimal KB units shown by Federation Activity.
+const FEDERATION_LARGE_FRAME_LOG_BYTES = 200_000;
 
 export class FederationFrameTooLargeError extends Error {
   readonly code = "frame_too_large";
@@ -882,6 +884,8 @@ export class FederationGatewayWebSocketServer {
 }
 
 export type FederationClientWebSocketClient = {
+  /** Start delivery after the caller installs its authenticated connection. Idempotent. */
+  startReceiving: () => void;
   peerDirectoryPaging?: boolean;
   navigationQueryProtocol?: 2;
   sessionId: FederationSessionId;
@@ -894,6 +898,8 @@ export type FederationClientWebSocketClient = {
 };
 
 export async function connectFederationClient(params: {
+  /** Keep post-auth frames queued until startReceiving is called. */
+  deferReceiving?: boolean;
   instanceLabel?: (id: string) => string | undefined;
   url: string;
   mode: "enroll" | "reconnect";
@@ -1200,8 +1206,15 @@ async function establishFederationClient(
     },
   });
 
-  // Phase 3: stream envelopes.
-  void (async () => {
+  // Phase 3 starts only after the runtime can authorize incoming envelopes.
+  // The frame reader already owns and queues frames received during auth.
+  let receiving = false;
+  const startReceiving = () => {
+    if (receiving || transportEnded) return;
+    receiving = true;
+    void receiveEnvelopes();
+  };
+  async function receiveEnvelopes(): Promise<void> {
     for (;;) {
       let frame: Buffer;
       try {
@@ -1227,9 +1240,11 @@ async function establishFederationClient(
         params.onEnvelope?.(message.envelope);
       }
     }
-  })();
+  }
+  if (!params.deferReceiving) startReceiving();
 
   return {
+    startReceiving,
     sessionId: accepted.sessionId,
     peerDirectoryPaging: accepted.peerDirectoryPaging === true,
     navigationQueryProtocol:
@@ -1392,15 +1407,13 @@ function sendFrame(
     throw new FederationFrameTooLargeError(wireByteLength, maxFrameBytes);
   }
   const envelope = message.kind === "envelope" ? message.envelope : undefined;
-  if (
-    wireByteLength >= FEDERATION_LARGE_FRAME_LOG_BYTES
-    && envelope?.kind !== "blob_chunk"
-  ) {
+  if (wireByteLength >= FEDERATION_LARGE_FRAME_LOG_BYTES) {
     log.info("large federation frame queued for send", {
       byteCount: wireByteLength,
       messageKind: message.kind,
       ...(envelope ? envelopeLogFields(envelope, context) : {}),
       ...(envelope ? describeLargeThreadReadResult(envelope) : {}),
+      ...(envelope ? describeLargeBackendEvent(envelope) : {}),
     });
   }
   const wire = transport ? transport.encrypt(payload) : payload;

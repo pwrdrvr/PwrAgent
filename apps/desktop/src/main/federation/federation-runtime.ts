@@ -3008,6 +3008,7 @@ export class DesktopFederationRuntime {
     // real cause (auth, host key, timeout) and report that instead.
     const sshFailure: { error?: Error } = {};
     const client = await connectFederationClient({
+      deferReceiving: true,
       url: sshEndpoint
         ? `ws://${sshEndpoint.forwardHost}:${sshEndpoint.forwardPort}`
         : gatewayUrl,
@@ -3198,6 +3199,9 @@ export class DesktopFederationRuntime {
     this.lastConnectedAt = Date.now();
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
+    // Replayed subscriptions require the authenticated router connection and
+    // restored local subscription state before any queued envelope is handled.
+    client.startReceiving();
     log.info("federation client connected", { gatewayUrl });
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FederationProtocolEnvelope } from "@pwragent/shared";
-import { describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "../federation/federation-envelope-diagnostics";
+import { describeLargeBackendEvent, describeLargeThreadReadResult, FederationEnvelopeDiagnostics } from "../federation/federation-envelope-diagnostics";
 
 const request = {
   kind: "request", id: "req", sourceInstanceId: "viewer", targetInstanceId: "owner",
@@ -14,6 +14,28 @@ const response = {
 } satisfies FederationProtocolEnvelope;
 
 describe("federation envelope diagnostics", () => {
+  it("distinguishes full accounting notifications from stream patches using sizes only", () => {
+    const toolAccounting = { invocations: [{ command: "private command", output: "private output" }] };
+    const envelope = { ...request, kind: "notification", method: "backend.event", params: {
+      backend: "codex", stream: { epoch: "epoch", sequence: 3 },
+      notification: { method: "thread/toolAccounting/updated", params: { threadId: "thread-1", toolAccounting } },
+    } } satisfies FederationProtocolEnvelope;
+    const fields = describeLargeBackendEvent(envelope);
+    expect(fields).toMatchObject({
+      toolAccountingBytes: Buffer.byteLength(JSON.stringify(toolAccounting)), pricingBytes: 0, accountingPatchBytes: 0, streamSequence: 3,
+    });
+    expect(new FederationEnvelopeDiagnostics().describe(envelope)).toMatchObject({
+      threadId: "thread-1", notificationMethod: "thread/toolAccounting/updated",
+    });
+    const accountingPatch = { baseSequence: 3, changes: [{ value: "private replacement" }] };
+    const patched = describeLargeBackendEvent({ ...envelope, params: {
+      ...envelope.params, accountingPatch,
+      notification: { method: "thread/toolAccounting/updated", params: { threadId: "thread-1" } },
+    } });
+    expect(patched).toMatchObject({ toolAccountingBytes: 0, accountingPatchBytes: Buffer.byteLength(JSON.stringify(accountingPatch)) });
+    expect(JSON.stringify([fields, patched])).not.toContain("private");
+    expect(describeLargeBackendEvent(response)).toEqual({});
+  });
   it("accounts for replay duplication and inline images without logging content", () => {
     const image = "data:image/png;base64," + "eA==".repeat(100);
     const message = { id: "message", text: "private transcript 🦀", parts: [{ type: "image", url: image }] };
