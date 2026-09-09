@@ -12,8 +12,10 @@ import { cssRuleBody as ruleBody, firstCssRuleBody } from "./css-rule-body";
  * clips with `overflow: hidden` and shows no scrollbar, so once the cards
  * plus a composer holding pasted images exceeded the pane, the composer
  * walked off the bottom edge and "Start thread" could not be reached by
- * any means. Measured in headless Chromium against this stylesheet: 56px
- * past the clip at a 800px-tall window, 142px at 700px.
+ * any means. Measured on the macOS CI lane against the shipped layout:
+ * 125px past the clip at a 600px-tall window, the button's centre
+ * hit-testing to nothing. (56px past at 800px and 142px at 700px in a
+ * headless-Chromium harness over this stylesheet.)
  *
  * jsdom performs no layout, so the invariant is pinned here as the
  * declarations that produce it. `launchpad-composer-bounds.spec.ts`

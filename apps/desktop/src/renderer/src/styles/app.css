@@ -16050,10 +16050,10 @@ a.button {
    `clamp(28px, 7vh, 72px)` top margin — two cards bought two lots of that
    air — and the composer was pinned under them at `flex: 0 0 auto`.
    Nothing could give, so a composer holding pasted images simply walked
-   off the clipped bottom edge with "Start thread" on it: measured in
-   headless Chromium at 56px past the clip in an 800px-tall window and
-   142px at 700px, with `elementFromPoint` at the button's centre
-   returning null.
+   off the clipped bottom edge with "Start thread" on it: 125px past the
+   clip in a 600px-tall window on the macOS CI lane, with the button's
+   centre hit-testing to nothing (56px past at 800px and 142px at 700px in
+   a headless-Chromium harness over this stylesheet).
 
    This list is now the one box in the column allowed to absorb a deficit,
    and it scrolls what it cannot show. See

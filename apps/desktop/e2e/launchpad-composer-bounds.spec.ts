@@ -16,10 +16,16 @@ import { launchElectronApp } from "./fixtures/electron-app";
  * could shrink, and `.thread-view` clips with `overflow: hidden`, so once
  * the cards plus a composer holding pasted images exceeded the pane the
  * whole composer simply walked off the bottom edge — no scrollbar, no way
- * to reach "Start thread". Measured in headless Chromium against the
- * shipped stylesheet: at a 800px-tall window the send row landed 56px past
- * the clip and `document.elementFromPoint` at its centre returned null; at
- * 700px it was 142px past.
+ * to reach "Start thread".
+ *
+ * Negative-controlled on the macOS CI lane against the shipped layout (a
+ * `TEMP:` commit reverting only the fix, since a geometry assertion written
+ * after a fix agrees with the fix by construction): both cards render at
+ * 253px and 316px, the composer at 401px, and the send row's bottom lands
+ * at 725px in a 600px pane — 125px past the clip, with `startHitsItself`
+ * false, on the run and on the retry. The same failure measured 56px past
+ * at 800px and 142px at 700px in a headless-Chromium harness over the
+ * shipped stylesheet.
  *
  * The invariant this pins is deliberately framed against the clipping
  * ancestor, not against any box the broken layout produces — an assertion
