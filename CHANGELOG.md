@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.4 - 2026-09-09
+
+- Codex Thread Recovery - PwrAgent now recovers saved Codex thread histories containing message IDs that previously made a resumed thread fail. It backs up and repairs the affected history, restarts Codex, and retries the message once, including for forked histories.
+- Codex Astra - Added GPT-6 Astra to Codex model selection and usage accounting, including Standard and Fast pricing, cache-write costs, and exact totals for turns spanning multiple requests.
+
 ## v1.0.3 - 2026-08-19
 
 - Update Checks - Fixed update checks failing with a 403 and the Settings channel rows stuck on "Unavailable". PwrAgent now shares one cached GitHub release list across the whole app instead of refetching on every Settings visit and every check, revalidates it without spending a request, and when GitHub's hourly limit is reached it says when checks resume rather than showing a status code.
