@@ -164,7 +164,9 @@ export class NavigationDetailService {
       const name = request.collection.name;
       if (!NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
       const overlay = await getDesktopOverlayStore().getThreadOverlayState({ backend: summary.source, threadId: summary.id });
-      const values = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
+      const values = name === "subAgents" && summary.source === "codex"
+        ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, overlay?.subAgents)
+        : name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
         : overlay?.[name] ?? (name === "worktreeSnapshots" ? summary.worktreeSnapshots : undefined) ?? [];
       const manifest = { name, revision: revision({ ref: request.ref, name, values }) };
       const cursor = request.collection.cursor ? decodeQueueCursor(request.collection.cursor) : undefined;
@@ -208,6 +210,13 @@ export class NavigationDetailService {
     const projected = snapshot.threads.find(
       (thread) => buildThreadIdentityKey(thread.source, thread.id) === threadKey,
     );
+    // Live gate events and selected-detail refreshes must expose the same
+    // helpers, including their parent-turn links, before persistence at turn end.
+    if (projected?.source === "codex") {
+      projected.subAgents = this.registry.mergeLiveTokenMiserSubAgents(
+        projected.id, projected.subAgents,
+      );
+    }
     const canonical = projected
       ? await this.registry.canonicalizeNavigationThreadPullRequests([projected]) : [];
     const hydrated = (await this.registry.hydrateThreadGitWorkingStates(canonical, {

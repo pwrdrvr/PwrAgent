@@ -14152,7 +14152,7 @@ export class DesktopBackendRegistry {
     return changed ? { ...snapshot, threads, unchanged: false } : snapshot;
   }
 
-  private mergeLiveTokenMiserSubAgents(
+  mergeLiveTokenMiserSubAgents(
     threadId: string,
     persisted: readonly ThreadSubAgentSummary[] | undefined,
   ): ThreadSubAgentSummary[] {

@@ -5,7 +5,7 @@ import type {
   NavigationThreadSummary,
   ThreadQueuedTurnSummary,
 } from "@pwragent/shared";
-import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
 const mocks = vi.hoisted(() => ({
   reconcileNavigationSnapshot: vi.fn(),
@@ -158,6 +158,7 @@ describe("NavigationDetailService", () => {
       getQueuedTurnsSnapshot: vi.fn(() => { throw new Error("FIFO must remain independent"); }),
       hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
       canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
+      mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted ?? [],
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
     const first = await service.readSelectedDetail({
@@ -207,6 +208,48 @@ describe("NavigationDetailService", () => {
     expect(workspace.workspaceDirectories).toEqual([{ key: "selected-repo", label: "Selected", path: "/repo/selected",
       gitStatus: { currentBranch: "feature", handoffBranches: ["main"] } }]);
     expect(registry.readSelectedWorkspaceGitStatus).toHaveBeenCalledExactlyOnceWith("/repo/selected");
+  });
+
+  it("keeps live Token Miser parent links through selected-detail refresh and paging", async () => {
+    const selected = thread("selected");
+    const persisted = Array.from({ length: 101 }, (_, index) => ({
+      monitorId: `historical-${index}`, task: "Historical helper", status: "success" as const,
+      createdAt: index, updatedAt: index,
+    }));
+    selected.subAgents = persisted;
+    const live = {
+      monitorId: "system:token-miser:live", task: "Evaluate output", status: "success" as const,
+      createdAt: 200, updatedAt: 200, parentTurnId: "running-turn",
+    };
+    const liveAgents = new Map([[live.monitorId, live]]);
+    mocks.getThreadOverlayState.mockResolvedValue({ subAgents: persisted });
+    mocks.reconcileNavigationSnapshot.mockResolvedValue({ threads: [selected] });
+    const registry = {
+      getCachedThreadSummary: () => selected,
+      getQueuedExecutionModeForThread: () => undefined,
+      canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+      hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
+      liveTokenMiserSubAgents: new Map([[selected.id, liveAgents]]),
+      mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype["mergeLiveTokenMiserSubAgents"],
+    } as unknown as DesktopBackendRegistry;
+    const service = new NavigationDetailService(registry);
+    const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
+    const first = await service.readSelectedDetail(request);
+    expect(first.collections).toContainEqual(expect.objectContaining({ name: "subAgents", count: 102 }));
+    const page = await service.readSelectedDetail({ ...request, collection: { name: "subAgents" } });
+    expect(page.collectionPage?.revision).toBe(first.collections?.find((entry) => entry.name === "subAgents")?.revision);
+    expect(page.collectionPage?.values.subAgents).toContainEqual(live);
+    const next = await service.readSelectedDetail({ ...request, collection: { name: "subAgents", cursor: page.collectionPage?.nextCursor } });
+    expect(next.collectionPage?.complete).toBe(true);
+    expect(next.collectionPage?.values.subAgents).toHaveLength(2);
+
+    liveAgents.set(live.monitorId, { ...live, updatedAt: 201 });
+    const refreshed = await service.readSelectedDetail({ ...request, knownRevision: first.revision });
+    expect(refreshed.unchanged).toBe(true);
+    expect(refreshed.collections?.find((entry) => entry.name === "subAgents")?.revision)
+      .not.toBe(page.collectionPage?.revision);
+    await expect(service.readSelectedDetail({ ...request, collection: { name: "subAgents", cursor: page.collectionPage?.nextCursor } }))
+      .rejects.toMatchObject({ code: "navigation_cursor_expired" });
   });
 
   it("pages a complete FIFO projection with its own revision", () => {
