@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.0-alpha.5 - 2026-09-08
+
+- PwrGit - Added PwrGit as a connection option when starting a new MCP-backed thread.
+- Federation Connectivity - Show active peer connections and endpoints, preserve configured endpoint priority, and use stable Mac names throughout federation views.
+- Remote Thread Browsing - Restored bounded navigation and transcript hydration, with progressive federation browsing that avoids unbounded background loads.
+- Star Map - Prevented duplicate hydration and made loading safe under React Strict Mode.
+- Token Miser - Kept live evaluation data visible in the selected detail view and evaluate smaller substantive output at the 2,000-character threshold.
+- Navigation Performance - Coalesced navigation invalidation, provider listings, and directory enrichment to reduce unnecessary refresh churn.
+
 ## v1.1.0-alpha.4 - 2026-09-08
 
 This pre-protocol-rewrite alpha captures the current federation behavior as a rollback baseline before the upcoming federation rewrite.
