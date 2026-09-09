@@ -13,7 +13,7 @@ export function formatActivityReport(series: FederationActivitySeries, view: str
     ] as const) {
       lines.push([label, ...[series.windows["1m"], series.windows["10m"], series.windows["1h"], series.lifetime]
         .map((totals) => key === "dataBytes" || key === "wireBytes"
-          ? `${formatTrafficBytes(totals[direction][key])} (${totals[direction][key]} bytes)`
+          ? `${formatTrafficBytes(totals[direction][key])} (${Math.trunc(totals[direction][key])} bytes)`
           : String(totals[direction][key]))].join("\t"));
     }
     lines.push("");
@@ -24,7 +24,7 @@ export function formatActivityReport(series: FederationActivitySeries, view: str
       const stats = series.sizes[direction][kind];
       lines.push([`${direction} ${kind}`, stats.count,
         ...[stats.averageBytes, stats.p50Bytes, stats.minBytes, stats.maxBytes]
-          .map((value) => value === undefined ? "—" : `${formatTrafficBytes(value)} (${value} bytes)`)].join("\t"));
+          .map((value) => value === undefined ? "—" : `${formatTrafficBytes(value)} (${Math.trunc(value)} bytes)`)].join("\t"));
     }
   }
   lines.push("", "p50 is estimated within about 1.1%. Responses include errors.",
