@@ -184,7 +184,7 @@ async function pastePng(input: Locator, name: string, color: string): Promise<vo
   }, { color, name });
 }
 
-test("launchpad send controls stay on screen under both connection cards and pasted images", async () => {
+test("launchpad send controls stay on screen under two connection cards and pasted images", async () => {
   const fixture = await createLaunchpadBoundsFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -200,10 +200,14 @@ test("launchpad send controls stay on screen under both connection cards and pas
     const composerInput = app.window.getByRole("textbox", { name: "New thread" });
     await expect(composerInput).toBeVisible();
 
-    // Precondition: both PwrSuite cards render. If a product change drops
-    // one, the crowding this spec exists to survive is gone and the gate
-    // below would pass for the wrong reason.
+    // Local PwrSnap now lives in MCP access, so only PwrGit renders here.
+    // Duplicate the rendered card in this layout fixture to retain the
+    // original two-card crowding and overflow assertions.
     const cards = app.window.locator(".mcp-connection");
+    await expect(cards).toHaveCount(1);
+    await cards.first().evaluate((card) => {
+      card.after(card.cloneNode(true));
+    });
     await expect(cards).toHaveCount(2);
 
     await pastePng(composerInput, "bounds-one.png", "#3478f6");
