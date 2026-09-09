@@ -159,6 +159,23 @@ enrolling a peer does not opt it into transcript, approval, scheduler, PR, or
 error event traffic. Environment setup output remains a targeted response to
 the operation that started it rather than a broadcast stream.
 
+Transcript subscriptions can request `eventStream: { protocol: 1,
+subscriptionId }`. The owner acknowledges with `backend.eventStream` and a
+new epoch before sending numbered `backend.event` notifications. Gateways
+preserve the negotiation, acknowledgement, and sequence. The viewer catches
+up after acknowledgement, including when an idle owner has a pending prompt,
+and resubscribes on a sequence gap. Normal active-thread navigation timestamp
+changes do not trigger transcript reads. A recovery that arrives during an
+older read remains pending until a read started after recovery completes.
+
+Within a negotiated stream, pricing and tool-accounting notifications send a
+full baseline followed by smaller patches. The receiver reconstructs the
+existing backend notification before publishing it to the renderer. Baselines
+are volatile, limited to 32 records and 4 MiB per stream, and never persisted.
+A missing baseline triggers resubscription. Peers and gateways that do not
+forward the negotiation retain the original full-notification format;
+connection status changes still trigger viewer catch-up.
+
 Global thread search fans out metadata queries to connected peers. Remote
 results carry their instance label and open directly in a window scoped to that
 instance.

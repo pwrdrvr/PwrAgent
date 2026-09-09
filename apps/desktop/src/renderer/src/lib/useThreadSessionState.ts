@@ -168,6 +168,7 @@ type ThreadSessionEntry = {
   hydratedEnvironmentSetupVersion?: string;
   hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
+  hydratedStreamRecoveryVersion?: number;
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
@@ -4749,6 +4750,7 @@ export function useThreadSessionState(params: {
   // Track the owning read synchronously so automatic hydration cannot send
   // the same initial request twice. Explicit reloads may still supersede it.
   const inFlightHydrationsRef = useRef(new Map<string, number>());
+  const streamRecoveryVersionsRef = useRef(new Map<string, number>());
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
@@ -4781,6 +4783,9 @@ export function useThreadSessionState(params: {
 
   useEffect(() => {
     const retainedThreadKeys = new Set(Object.keys(sessions));
+    for (const key of streamRecoveryVersionsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) streamRecoveryVersionsRef.current.delete(key);
+    }
     for (const indexedThreadKey of Object.keys(loadedHistoryIndexesRef.current)) {
       if (!retainedThreadKeys.has(indexedThreadKey)) {
         delete loadedHistoryIndexesRef.current[indexedThreadKey];
@@ -4902,7 +4907,8 @@ export function useThreadSessionState(params: {
       }
       const readThread = desktopApi?.readThread;
       const targetThreadKey = threadSummaryIdentityKey(targetThread);
-      const hydrationVersion = getThreadHydrationVersion(targetThread);
+      const streamRecoveryVersion = streamRecoveryVersionsRef.current.get(targetThreadKey) ?? 0;
+      const hydrationVersion = `${getThreadHydrationVersion(targetThread)}:${streamRecoveryVersion}`;
 
       if (!readThread) {
         updateSession(targetThreadKey, (current) => ({
@@ -5157,6 +5163,7 @@ export function useThreadSessionState(params: {
             hydratedEnvironmentSetupVersion:
               getEnvironmentSetupHydrationVersion(targetThread),
             hydratedInitialHistoryLimit: initialHistoryLimit,
+            hydratedStreamRecoveryVersion: streamRecoveryVersion,
             hydratedUpdatedAt:
               needsHydrationAfterCompletion && completionHydrationRetries < 2
                 ? undefined
@@ -5445,7 +5452,8 @@ export function useThreadSessionState(params: {
     }
 
     const session = sessions[threadKey];
-    const hydrationVersion = getThreadHydrationVersion(thread);
+    const streamRecoveryVersion = streamRecoveryVersionsRef.current.get(threadKey) ?? 0;
+    const hydrationVersion = `${getThreadHydrationVersion(thread)}:${streamRecoveryVersion}`;
     if (inFlightHydrationsRef.current.has(threadKey)) {
       return;
     }
@@ -5473,23 +5481,19 @@ export function useThreadSessionState(params: {
       return;
     }
 
-    if (session.activeTurnId) {
-      const remoteSummaryAdvanced =
-        thread.federation?.ref.target.scope === "remote"
-        && thread.updatedAt != null
-        && session.hydratedUpdatedAt !== thread.updatedAt
-        && session.failedHydrationVersion !== hydrationVersion;
-      if (remoteSummaryAdvanced) {
-        // Federation events are live-only. A selected mounted thread can miss
-        // commentary or a request-user-input notification during a transport
-        // gap, then remain active indefinitely because the missing prompt is
-        // the only way to finish its turn. The owner's navigation snapshot is
-        // the durable catch-up signal: when its updatedAt advances beyond the
-        // detail snapshot we hydrated, re-read even while the turn is active.
+    if ((session.hydratedStreamRecoveryVersion ?? 0) !== streamRecoveryVersion) {
+      if (session.failedHydrationVersion !== hydrationVersion) {
         void loadLatest(thread);
       }
       return;
     }
+
+    // Live events own active-turn updates, including for mounted remote
+    // threads. Only an acknowledged subscription/gap requests catch-up;
+    // ordinary navigation timestamps do not imply missing transcript data.
+    if (session.activeTurnId
+      || (session.backendReportedActive
+        && (thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote")) return;
 
     if (
       session.needsHydrationAfterCompletion &&
@@ -5632,6 +5636,18 @@ export function useThreadSessionState(params: {
     }
 
     return desktopApi.onAgentEvent((event) => {
+      if (event.notification.method === "federation/eventStream/changed"
+        || (event.notification.method === "federation/peerStatus/changed"
+          && event.notification.params.status === "connected")) {
+        const target = thread?.federation?.ref.target ?? readRendererFederationTarget();
+        if (threadKey && target?.scope === "remote" && target.instanceId === event.notification.params.instanceId) {
+          // Record synchronously: an acknowledgement arriving during a read
+          // must cause another catch-up after that older read settles.
+          streamRecoveryVersionsRef.current.set(threadKey, (streamRecoveryVersionsRef.current.get(threadKey) ?? 0) + 1);
+          updateSession(threadKey, (current) => ({ ...current, lastTouchedAt: Date.now() }));
+        }
+        return;
+      }
       const notificationThreadId =
         "threadId" in event.notification.params &&
         typeof event.notification.params.threadId === "string"

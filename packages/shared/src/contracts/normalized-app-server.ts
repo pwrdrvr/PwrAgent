@@ -1441,6 +1441,11 @@ export type FederationPeerStatusChangedNotification = {
   };
 };
 
+export type FederationEventStreamChangedNotification = {
+  method: "federation/eventStream/changed";
+  params: { instanceId: string; epoch: string };
+};
+
 export type FederationCelestialIconsChangedNotification = {
   method: "federation/celestialIcons/changed";
   params: {
@@ -2247,6 +2252,7 @@ export type AppServerNotification =
       };
     }
   | FederationPeerStatusChangedNotification
+  | FederationEventStreamChangedNotification
   | FederationCelestialIconsChangedNotification
   | StarMapArrangementChangedNotification
   | StarMapIntakeStatusNotification

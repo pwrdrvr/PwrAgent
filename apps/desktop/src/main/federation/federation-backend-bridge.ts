@@ -487,7 +487,7 @@ export const FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD =
 
 export type FederationBackendEventNotification = {
   method: typeof FEDERATION_BACKEND_EVENT_METHOD;
-  params: AgentEvent;
+  params: import("./federation-event-stream").FederationStreamPayload;
 };
 
 export type FederationEnvironmentSetupProgressNotification = {
