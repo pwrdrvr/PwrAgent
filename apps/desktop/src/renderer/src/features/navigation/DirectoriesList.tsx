@@ -207,6 +207,7 @@ const POINTER_DRAG_ACTIVATION_PX = 4;
 
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   unpinnedThreads: [],
+  selectedUnpinnedThreads: [],
   childThreadsByParentKey: new Map(),
   directoryPinnedThreads: [],
   directoryThreadsCollapsed: false,
@@ -1115,6 +1116,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // direct children would silently drop it from the lens.
     const trays = createSubthreadTrays(childThreadsByParentKey);
     for (const thread of expandedThreadModel.directoryPinnedThreads) trays.addTrayOwner(thread);
+    for (const thread of expandedThreadModel.selectedUnpinnedThreads) trays.addTrayOwner(thread);
     for (const thread of expandedThreadModel.unpinnedThreads) trays.addTrayOwner(thread);
     const renderStaticSubthreads = (parent: NavigationPresentedThread): ReactElement | null => {
       const parentKey = threadSummaryIdentityKey(parent);
@@ -1294,6 +1296,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     };
     const {
       unpinnedThreads,
+      selectedUnpinnedThreads,
       directoryPinnedThreads,
       directoryThreadsCollapsed,
       directoryUnpinnedThreadCount,
@@ -1335,6 +1338,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             thinkingThreadKeys={props.thinkingThreadKeys}
             thread={thread}
             threadPinState="unpinned"
+            retainedForSelection={selectedUnpinnedThreads.includes(thread)}
             onToggleSubthreads={
               subthreadCount > 0
                 && threadSupportsFederationCapability(thread, "thread_grouping")
@@ -1852,6 +1856,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
+                    {selectedUnpinnedThreads.map(renderUnpinnedRow)}
                     {(directory.pinnedRootCount ?? 0) > 0 &&
                     directoryUnpinnedThreadCount > 0 ? (
                       <div className="directory-row__threads-slot" role="listitem">

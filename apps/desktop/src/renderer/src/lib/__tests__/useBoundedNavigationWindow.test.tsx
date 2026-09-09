@@ -251,3 +251,49 @@ it("bounds React renders for separately delivered navigation events before the r
     vi.useRealTimers();
   }
 });
+
+
+it("loads and releases child pages for an unpinned selection retained above collapsed directory threads", async () => {
+  const fixture = api();
+  const home = { ...directory, directoryThreadsCollapsed: true };
+  const root: NavigationRow = { id: "retained", source: "codex", title: "Retained root", titleSource: "explicit",
+    ref: { backend: "codex", threadId: "retained" }, rowRevision: "r", linkedDirectories: [],
+    inbox: { inInbox: false }, ordinaryChildCount: 2, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
+  fixture.read.mockImplementation(async (request) => {
+    if (request.query.kind === "directory-index") return page({ directories: [home] });
+    if (request.query.kind === "exact") return page({ selectionDirectory: home,
+      entries: [{ row: root, placement: { kind: "root" }, orderKey: "root" }] });
+    if (request.query.kind === "children") {
+      const id = request.cursor ? "child-2" : "child-1";
+      return page({ complete: Boolean(request.cursor), nextCursor: request.cursor ? undefined : "next-child",
+        entries: [{ row: { ...root, id, ref: { backend: "codex", threadId: id }, ordinaryChildCount: 0 },
+          placement: { kind: "child", parent: root.ref }, orderKey: id }] });
+    }
+    // Neither directory collection contains the selected root.
+    return page();
+  });
+  const { result, rerender, unmount } = renderHook(({ disclosed, expanded, selected }) => useBoundedNavigationWindow({
+    ...base, desktopApi: fixture.desktopApi, expandedByKey: { [home.key]: expanded },
+    selectedRef: selected ? root.ref : undefined, disclosedParents: disclosed ? [root.ref] : [],
+  }), { initialProps: { disclosed: false, expanded: true, selected: true } });
+  const childId = 'children:[null,"codex","retained"]';
+  await waitFor(() => expect(result.current.resources.get(`directory-pins:${home.key}`)?.state.page).toBeDefined());
+  expect(result.current.resources.has(childId)).toBe(false);
+  rerender({ disclosed: true, expanded: true, selected: true });
+  await waitFor(() => expect(result.current.resources.get(childId)?.state.page?.entries[0]?.row.id).toBe("child-1"));
+  await act(() => result.current.loadMore(childId));
+  expect(result.current.resources.get(childId)?.state.page?.entries.map((entry) => entry.row.id)).toEqual(["child-1", "child-2"]);
+  expect(fixture.read.mock.calls.filter(([request]) => request.query.kind === "directory" && request.query.roots === "unpinned")).toHaveLength(0);
+
+  rerender({ disclosed: false, expanded: true, selected: true });
+  await waitFor(() => expect(result.current.resources.has(childId)).toBe(false));
+  rerender({ disclosed: true, expanded: true, selected: true });
+  await waitFor(() => expect(result.current.resources.get(childId)?.state.page).toBeDefined());
+  rerender({ disclosed: true, expanded: false, selected: true });
+  await waitFor(() => expect(result.current.resources.has(childId)).toBe(false));
+  rerender({ disclosed: true, expanded: true, selected: true });
+  await waitFor(() => expect(result.current.resources.get(childId)?.state.page).toBeDefined());
+  rerender({ disclosed: true, expanded: true, selected: false });
+  await waitFor(() => expect(result.current.resources.has(childId)).toBe(false));
+  unmount();
+});

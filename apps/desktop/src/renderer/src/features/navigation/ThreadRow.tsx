@@ -83,6 +83,7 @@ type ThreadRowProps = {
   subthreadsCollapsed?: boolean;
   thinkingThreadKeys?: Record<string, boolean>;
   threadPinState?: "pinned" | "unpinned";
+  retainedForSelection?: boolean;
   thread: NavigationThreadSummary;
   onOpenContextMenu: (
     thread: NavigationThreadSummary,
@@ -163,15 +164,17 @@ export function ThreadRow(props: ThreadRowProps) {
     && props.thread.federation.peerStatus !== "connected",
   );
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
-  // One expression for "this row carries the in-title pin": the row's
-  // `--pinned` modifier class, the ", pinned" accessible-name suffix,
-  // and the in-title pin render all derive from it, so the CSS class
-  // can never disagree with the control it stands for. The modifier
-  // exists so the hover-reserve rule in app.css matches a plain class
-  // instead of a per-hover `:has()` subtree scan (same optimization the
-  // DirectoriesList header modifiers document).
+  // Saved pins and selection-retained rows share the heading control's
+  // space, but only a saved pin offers Unpin or reports itself as pinned.
   const isPinnedRow =
     Boolean(props.thread.pinnedRank) && !props.nested;
+  const isRetainedRow = Boolean(props.retainedForSelection) && !isPinnedRow && !props.nested;
+  const hasHeadingPin = isPinnedRow || isRetainedRow;
+  const pinAction = isPinnedRow ? "Unpin thread" : "Pin thread";
+  const pinTooltip = isRetainedRow
+    ? "Shown for the open transcript. Pin thread to keep it here."
+    : pinAction;
+  const pinTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
@@ -321,7 +324,7 @@ export function ThreadRow(props: ThreadRowProps) {
       <div
         ref={rowRef}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
-          isPinnedRow ? " thread-row--pinned" : ""
+          isPinnedRow ? " thread-row--pinned" : isRetainedRow ? " thread-row--retained" : ""
         }${selected ? " is-selected" : ""}${
           isComposerSource ? " is-composer-source" : ""
         }${isLinkTarget ? " is-link-target" : ""}${
@@ -364,7 +367,8 @@ export function ThreadRow(props: ThreadRowProps) {
           // (same pattern as the chip flow) so the in-title pin can be a
           // real unpin button without nesting a control inside this one.
           aria-label={
-            isPinnedRow ? `${props.thread.title}, pinned` : props.thread.title
+            isPinnedRow ? `${props.thread.title}, pinned`
+              : isRetainedRow ? `${props.thread.title}, shown while open` : props.thread.title
           }
           aria-pressed={selected}
           className="thread-row__open"
@@ -410,12 +414,16 @@ export function ThreadRow(props: ThreadRowProps) {
               status={status}
             />
             <span className="thread-row__title">{props.thread.title}</span>
-            {isPinnedRow ? (
+            {hasHeadingPin ? (
               onSetThreadPin ? (
                 <button
-                  aria-label="Unpin thread"
+                  aria-label={pinAction}
+                  aria-describedby={pinTooltipController.visible ? pinTooltipController.tooltipId : undefined}
                   className="thread-row__heading-pin"
-                  title="Unpin thread"
+                  onMouseEnter={(event) => pinTooltipController.show(event.currentTarget, pinTooltip)}
+                  onMouseLeave={pinTooltipController.hide}
+                  onFocus={(event) => pinTooltipController.show(event.currentTarget, pinTooltip)}
+                  onBlur={pinTooltipController.hide}
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -428,20 +436,22 @@ export function ThreadRow(props: ThreadRowProps) {
                     if (event.detail === 0) {
                       openButtonRef.current?.focus();
                     }
-                    void onSetThreadPin(props.thread, false);
+                    pinTooltipController.hide();
+                    void onSetThreadPin(props.thread, !isPinnedRow);
                   }}
                 >
-                  <PinIcon size={11} aria-hidden="true" />
+                  <PinIcon size={11} strokeDasharray={isRetainedRow ? "3 3" : undefined} aria-hidden="true" />
                 </button>
               ) : (
                 <span
                   aria-hidden="true"
                   className="thread-row__heading-pin thread-row__heading-pin--static"
                 >
-                  <PinIcon size={11} />
+                  <PinIcon size={11} strokeDasharray={isRetainedRow ? "3 3" : undefined} />
                 </span>
               )
             ) : null}
+            {pinTooltipController.tooltipNode}
           </span>
           <span className="thread-row__time">
             {formatRelativeTime(props.thread.updatedAt)}
@@ -537,15 +547,15 @@ export function ThreadRow(props: ThreadRowProps) {
       </div>
 
       <div className="thread-row__actions">
-        {/* Hover-revealed pin affordance for UNPINNED rows only — a
-            pinned row's always-visible in-title pin IS the unpin
-            control, so a second pin here would be a double affordance.
+        {/* Rows with an in-title pin already have a pin/unpin control,
+            including the dashed pin on a selection-retained row.
+            Other unpinned rows reveal this control on hover.
             Visibly nested sub-threads cannot be pinned. A remote child
             whose parent is absent from a full remote-viewer snapshot is
             rendered as a top-level row and remains pinnable. */}
         {onSetThreadPin
           && !props.nested
-          && !props.thread.pinnedRank ? (
+          && !hasHeadingPin ? (
           <button
             aria-label="Pin thread"
             className="thread-row__pin-button"

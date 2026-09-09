@@ -8,6 +8,7 @@ import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 export type PagedDirectoryPresentation = {
   directoryPinnedThreads: NavigationThreadSummary[];
   unpinnedThreads: NavigationThreadSummary[];
+  selectedUnpinnedThreads: NavigationThreadSummary[];
   childThreadsByParentKey: Map<string, NavigationThreadSummary[]>;
   directoryThreadsCollapsed: boolean;
   directoryUnpinnedThreadCount: number;
@@ -61,11 +62,17 @@ export function buildPagedDirectoryPresentation(params: {
   }
   const directoryThreadsCollapsed = params.directory.directoryThreadsCollapsed === true;
   const unpinnedThreads = directoryThreadsCollapsed ? [] : roots.filter((thread) => !isPinnedThread(thread));
+  // Keep the open transcript (or its root ancestor) above the collapsed
+  // disclosure without claiming that it has a saved pin.
+  const selectedUnpinnedThreads = directoryThreadsCollapsed
+    && selected?.selectionDirectory?.key === params.directory.key
+    && selectedThread && !isPinnedThread(selectedThread)
+    ? [selectedThread] : [];
   // Exact ancestry also admits the selected child while its independently
   // paged siblings are loading (or the child lies beyond their loaded range).
   // Do not change that range's membership or continuation cursor.
   if (selected?.selectionDirectory?.key === params.directory.key) {
-    const visibleParents = new Set([...directoryPinnedThreads, ...unpinnedThreads].map(threadSummaryIdentityKey));
+    const visibleParents = new Set([...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads].map(threadSummaryIdentityKey));
     for (const entry of selected.entries) {
       if (entry.placement.kind !== "child") continue;
       const parentKey = navigationThreadSelectionKey(entry.placement.parent);
@@ -79,9 +86,9 @@ export function buildPagedDirectoryPresentation(params: {
     }
   }
   return {
-    directoryPinnedThreads, unpinnedThreads, childThreadsByParentKey, directoryThreadsCollapsed,
+    directoryPinnedThreads, unpinnedThreads, selectedUnpinnedThreads, childThreadsByParentKey, directoryThreadsCollapsed,
     directoryUnpinnedThreadCount: params.directory.unpinnedRootCount ?? 0,
-    selectionOrder: [...directoryPinnedThreads, ...unpinnedThreads].flatMap((thread) => {
+    selectionOrder: [...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads].flatMap((thread) => {
       const key = threadSummaryIdentityKey(thread);
       return [key, ...(thread.subthreadsCollapsed ? [] : (childThreadsByParentKey.get(key) ?? []).map((child) =>
         threadSummaryIdentityKey(child)))];

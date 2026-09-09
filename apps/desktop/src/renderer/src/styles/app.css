@@ -4632,8 +4632,8 @@ a.button {
    are pinned by theme-contract next to this rule's own pin, so a
    cluster resize fails a test instead of silently re-covering the pin.
 
-   Scoped by the row's `--pinned` modifier (set by ThreadRow from the
-   same expression that renders the pin — a plain class match instead
+   Scoped by the row's `--pinned` or `--retained` modifier (set by
+   ThreadRow when it renders an in-title pin — a plain class match instead
    of a per-hover `:has()` subtree scan, same optimization as the
    directory-row header modifiers). The selector list mirrors the
    cluster's reveal states in the fade/reveal rules above (the cluster
@@ -4643,6 +4643,10 @@ a.button {
    already clears it, so the reserve protects nothing there — accepted,
    since every production surface wires reactions and a narrower
    conditional would re-add the `:has()` scan this class avoids. */
+.thread-row-shell:hover .thread-row--retained .thread-row__heading,
+.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--retained .thread-row__heading,
+.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--retained .thread-row__heading,
+.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--retained .thread-row__heading,
 .thread-row-shell:hover .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,
