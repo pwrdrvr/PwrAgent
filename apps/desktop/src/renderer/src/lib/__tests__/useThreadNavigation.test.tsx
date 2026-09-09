@@ -12815,6 +12815,45 @@ describe("main selected detail authority", () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   });
   afterEach(() => vi.restoreAllMocks());
+  it.each(["secondary-first", "primary-first", "primary-missing"])(
+    "selects the primary project for a multi-directory thread (%s)",
+    async (order) => {
+      const primary = {
+        id: "primary", label: "PwrGit", path: "/repo/PwrGit",
+        worktreePath: "/Users/test/.codex/worktrees/example/PwrGit",
+        kind: "worktree" as const,
+      };
+      const secondary = {
+        id: "secondary", label: "PwrAgnt", path: "/repo/PwrAgnt", kind: "local" as const,
+      };
+      const thread: NavigationThreadSummary = {
+        id: "multi-project", source: "codex", title: "Multi-project thread",
+        titleSource: "explicit", linkedDirectories: [primary, secondary],
+        inbox: { inInbox: true }, updatedAt: 1,
+      };
+      const links = order === "primary-missing" ? [secondary]
+        : order === "primary-first" ? [primary, secondary] : [secondary, primary];
+      const api: DesktopApi = {
+        ...actionDetailApi(thread),
+        readPopulation: vi.fn(async () => ({
+          backend: "all" as const, fetchedAt: 1, unchanged: false,
+          inboxThreadKeys: ["codex:multi-project"], threads: [thread],
+          launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const },
+          directories: links.map((directory) => ({
+            key: `directory:${directory.path}`, kind: "directory" as const,
+            label: directory.label, path: directory.path,
+            threadKeys: ["codex:multi-project"], needsAttentionCount: 0,
+          })),
+        })),
+      };
+      const { result } = renderHook(() => useThreadNavigation(api));
+      await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+      expect(result.current.selectedDirectory?.label).toBe(
+        order === "primary-missing" ? undefined : "PwrGit",
+      );
+    },
+  );
+
   it("keeps an off-page peer selection and hydrates configuration independently of row refresh", async () => {
     const snapshot = acpTitleSnapshot("Loaded row", "explicit", 1);
     const thread = { ...snapshot.threads[0]!, id: "off-page", model: "owner-model" };
