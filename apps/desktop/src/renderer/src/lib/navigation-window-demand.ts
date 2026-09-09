@@ -138,6 +138,7 @@ export function addVisibleMountedOwnerDemand(params: {
   demand: Map<string, NavigationQueryRequest>;
   pages: ReadonlyMap<string, import("@pwragent/shared").NavigationQueryPage>;
   target?: FederationTarget;
+  selectedRef?: NavigationIdentity;
 }): void {
   if (params.target?.scope === "remote") return;
   const owners = new Map<string, Map<string, NavigationIdentity>>();
@@ -146,9 +147,8 @@ export function addVisibleMountedOwnerDemand(params: {
       || !(id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("children:"))) continue;
     for (const { row } of params.pages.get(id)?.entries ?? []) {
       const owner = row.ref.ownerInstanceId;
-      // Selection has its own ancestry read. Keep visible owner membership
-      // stable while that read loads so viewer mount rows cannot erase PRs.
-      if (!owner) continue;
+      // Selected context already reads this identity from its owner.
+      if (!owner || (params.selectedRef && navigationIdentityKey(params.selectedRef) === navigationIdentityKey(row.ref))) continue;
       const refs = owners.get(owner) ?? new Map<string, NavigationIdentity>();
       refs.set(navigationIdentityKey(row.ref), row.ref);
       owners.set(owner, refs);

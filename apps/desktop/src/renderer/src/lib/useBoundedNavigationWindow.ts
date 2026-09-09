@@ -59,7 +59,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     disclosedParents: params.disclosedParents ?? [],
   });
   const demand = buildNavigationWindowDemand({ ...demandParams, disclosedParents });
-  addVisibleMountedOwnerDemand({ demand, pages, target: params.target });
+  addVisibleMountedOwnerDemand({ demand, pages, target: params.target, selectedRef: params.selectedRef });
   const demandKey = JSON.stringify([...demand]);
   const demandRef = useRef(demand);
   demandRef.current = demand;

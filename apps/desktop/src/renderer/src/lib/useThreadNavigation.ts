@@ -58,7 +58,7 @@ import {
 import type { DesktopApi } from "./desktop-api";
 import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "./useNavigationDirectoryDisclosure";
 import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";
-import { navigationIdentityFromThreadKey } from "./navigation-query-state";
+import { navigationIdentityFromThreadKey, navigationThreadSelectionKey } from "./navigation-query-state";
 import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
 import { fileLabelFromPath } from "./directory-references";
 import {
@@ -3159,7 +3159,14 @@ export function useThreadNavigation(
           - Number(boundedNavigation.resources.get(right)?.state.request.federationTarget?.scope !== "remote"));
         const remoteContextKeys = new Set([...boundedNavigation.resources.values()]
           .filter((resource) => resource.state.request.federationTarget?.scope === "remote")
-          .flatMap((resource) => resource.state.page?.entries.map(({ row }) => threadSummaryIdentityKey(row)) ?? []));
+          .flatMap((resource) => [
+            ...(resource.state.page?.entries.map(({ row }) => threadSummaryIdentityKey(row)) ?? []),
+            // The owner read may still be loading after a selection changes
+            // its query membership. A viewer mount is not authoritative for
+            // owner metadata during that gap; retain the last owner row.
+            ...(resource.state.request.query.kind === "exact"
+              ? resource.state.request.query.identities.map((ref) => navigationThreadSelectionKey(ref)) : []),
+          ]));
         for (const [id, page] of orderedPages) for (const { row } of page.entries) {
           const key = threadSummaryIdentityKey(row);
           const ownerPage = boundedNavigation.resources.get(id)?.state.request.federationTarget?.scope === "remote";
