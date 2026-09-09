@@ -16093,24 +16093,85 @@ a.button {
   border-top: 0;
 }
 
+/* The launchpad's PwrSuite connection cards, as ONE list.
+   `.thread-view__primary` is a flex column and `.thread-view` clips with
+   `overflow: hidden`, so every box in that column that cannot shrink is
+   height the composer below it does not get. The cards used to be direct
+   children sized to their own content, each carrying its own
+   `clamp(28px, 7vh, 72px)` top margin — two cards bought two lots of that
+   air — and the composer was pinned under them at `flex: 0 0 auto`.
+   Nothing could give, so a composer holding pasted images simply walked
+   off the clipped bottom edge with "Start thread" on it: 125px past the
+   clip in a 600px-tall window on the macOS CI lane, with the button's
+   centre hit-testing to nothing (56px past at 800px and 142px at 700px in
+   a headless-Chromium harness over this stylesheet).
+
+   This list is now the one box in the column allowed to absorb a deficit,
+   and it scrolls what it cannot show. See
+   `styles/__tests__/launchpad-connection-bounds.test.ts` and
+   `e2e/launchpad-composer-bounds.spec.ts`. */
+.thread-view__connections {
+  display: flex;
+  /* Never grows into space the composer wants; always shrinks before the
+     composer has to. */
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-items: center;
+  /* Without this the flex item's `auto` min-height floor holds the list at
+     its content height and the shrink above never happens. */
+  min-height: 0;
+  /* A shrink with no scroller just moves the clip one level down. */
+  overflow-y: auto;
+  /* `align-items: center` and the cards' `calc(100% - 32px)` both resolve
+     against the content box, which a space-taking scrollbar narrows — so
+     without a symmetric gutter the card column would sit half a scrollbar
+     left of the composer column directly below it, on Windows and Linux
+     and on macOS set to "Show scroll bars: Always". `both-edges` keeps the
+     centring honest; it costs nothing where scrollbars are overlays. */
+  scrollbar-gutter: stable both-edges;
+  /* The list's outer air, paid once here rather than once per card. The
+     bottom pays too: scrolled to its end, the last card's border would
+     otherwise land straight on the composer's top edge. */
+  padding: clamp(16px, 5vh, 56px) 0 14px;
+}
+
+/* Both cards return `null` against a remote launchpad whose owner has not
+   configured PwrSnap or PwrGit, and the wrapper still renders. There is no
+   card and so no border to paint — what an empty list leaves behind is its
+   own `padding`, up to 56px of dead air directly above the composer. */
+.thread-view__connections:not(:has(.mcp-connection)) {
+  display: none;
+}
+
 .mcp-connection {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) auto;
-  gap: 18px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  gap: 14px;
   align-items: center;
-  align-self: center;
   width: calc(100% - 32px);
   max-width: var(--chat-column-max);
-  margin: clamp(28px, 7vh, 72px) 16px 0;
-  padding: 20px 0;
+  padding: 14px 0;
+  /* One rule per card plus the closing rule below reads as a single list:
+     between two cards the pair collapses to the one hairline that
+     separates them, rather than the doubled border two self-contained
+     cards used to stack. */
   border-top: 1px solid var(--border-subtle);
+}
+
+/* Shrinkable cards inside the scroller would squeeze instead of scroll —
+   the same unreachable-content trap one level down. */
+.thread-view__connections > .mcp-connection {
+  flex: 0 0 auto;
+}
+
+.thread-view__connections > .mcp-connection:last-child {
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .mcp-connection__icon {
   display: block;
-  width: 72px;
-  height: 72px;
+  width: 44px;
+  height: 44px;
   border-radius: 8px;
 }
 
@@ -16125,19 +16186,19 @@ a.button {
 }
 
 .mcp-connection__copy h2 {
-  margin-top: 4px;
+  margin-top: 2px;
   color: var(--text-primary);
-  font-size: 20px;
-  line-height: 1.2;
-  letter-spacing: -0.025em;
+  font-size: 16px;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
 }
 
 .mcp-connection__copy > p:not(.eyebrow) {
   max-width: 620px;
-  margin-top: 7px;
+  margin-top: 4px;
   color: var(--text-secondary);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .mcp-connection__copy .mcp-connection__detail {
@@ -16171,15 +16232,50 @@ a.button {
   font-size: 12px;
 }
 
-@media (max-width: 760px) {
+/* Short windows: the list already scrolls, but a two-card list you have to
+   scroll to read is worse than two cards that fit. Buy the fit back out of
+   air and type scale rather than out of the copy — truncating the
+   description would hide the only thing that explains what the connection
+   is for. The app's own minimum window is 640px tall, so this is the size
+   the cards actually have to work at, not an edge case. */
+@media (max-height: 780px) {
+  .thread-view__connections {
+    padding-top: 12px;
+  }
+
   .mcp-connection {
-    grid-template-columns: 56px minmax(0, 1fr);
-    gap: 14px;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 10px 0;
   }
 
   .mcp-connection__icon {
-    width: 56px;
-    height: 56px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .mcp-connection__copy h2 {
+    font-size: 14px;
+  }
+
+  .mcp-connection__copy > p:not(.eyebrow) {
+    font-size: 12px;
+  }
+}
+
+/* Placed after the short-window block on purpose: both rules touch
+   `grid-template-columns` and the icon size, and at a viewport that is both
+   narrow and short the stacked two-column layout is the one that has to
+   win — the short-window rule only wants the row smaller, not wider. */
+@media (max-width: 760px) {
+  .mcp-connection {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .mcp-connection__icon {
+    width: 36px;
+    height: 36px;
   }
 
   .mcp-connection__action {
@@ -27008,7 +27104,13 @@ button.pricing-token-miser__folded:focus-visible {
      floor lands entirely below the caret line and reads as lopsided
      padding (56px produced 12px above the text and ~19.6px below). */
   min-height: 48px;
-  max-height: 280px;
+  /* 280px is the design cap, but it is 44% of the pane at the app's own
+     640px minimum window height — tall enough that a full draft could
+     still push the send controls past the clipped bottom edge even with
+     everything above the composer collapsed. The `vh` half only ever binds
+     below ~825px of window, where the fixed cap is the thing that does not
+     fit; the editor scrolls inside the wrapper either way. */
+  max-height: min(280px, 34vh);
   overflow-y: auto;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -27849,6 +27951,34 @@ button.pricing-token-miser__folded:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  /* Pasted images wrap onto new rows, and the composer is `flex: 0 0 auto`
+     inside a pane that clips with no scrollbar — before this cap every
+     extra row pushed the send controls down by its full height until they
+     left the window. The rest scroll here, which is the one place in the
+     composer where hidden content is obviously recoverable (the thumbnails
+     are their own affordance).
+
+     240px is two rows measured through the border box, which is what
+     `max-height` bounds: a row is the 88px thumbnail + the 6px
+     `.composer__attachment` gap + an 18px chip line (the size chip always
+     renders), so 112 + 8 + 112 of content, plus the 8px top padding below.
+     Derived at 232px first, which silently clipped the second row by
+     exactly that padding.
+
+     The `vh` half is the one that usually binds — it wins below a 1000px
+     window, so at the app's own 640px minimum the strip is 154px and shows
+     one row and part of the next. That is the point: the cap has to shrink
+     with the pane it must fit inside, and the fixed half is only there to
+     stop the strip eating a tall display. */
+  max-height: min(240px, 24vh);
+  overflow-y: auto;
+  /* Each thumbnail's remove cookie is pinned at `top: -6px; right: -6px`,
+     outside its own box, so a scroller would clip it. Pad the two edges it
+     overhangs; the negative top margin puts the strip back where it was,
+     and the right pad sits inside the row's own wrapping slack so the left
+     edge stays aligned with the rest of the composer column. */
+  padding: 8px 8px 0 0;
+  margin-top: -8px;
 }
 
 .composer__attachment {

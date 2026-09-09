@@ -2101,6 +2101,22 @@ describe("ThreadView", () => {
     const launchpadRail = screen.getByLabelText("New thread context");
     expect(launchpadRail.parentElement).toHaveClass("thread-view__layout");
     expect(launchpadRail.parentElement?.parentElement).toHaveClass("thread-view");
+    // Both PwrSuite connection cards render into ONE list, and that list is
+    // a sibling of the composer inside `.thread-view__primary`. The list is
+    // the only box in that column allowed to shrink and scroll; while the
+    // cards were direct siblings of the composer, nothing in the column
+    // could absorb a deficit and the composer walked off the clipped bottom
+    // edge with "Start thread" on it. Structure is the half of that fix a
+    // refactor breaks — the geometry half is pinned in
+    // `styles/__tests__/launchpad-connection-bounds.test.ts` and asserted
+    // against a real render in `e2e/launchpad-composer-bounds.spec.ts`.
+    const connectionList = document.querySelector(".thread-view__connections");
+    expect(connectionList).not.toBeNull();
+    expect(connectionList?.querySelectorAll(".mcp-connection")).toHaveLength(2);
+    expect(connectionList?.parentElement).toHaveClass("thread-view__primary");
+    expect(connectionList?.nextElementSibling).toHaveClass(
+      "thread-view__launchpad-composer",
+    );
     expect(screen.getByRole("tab", { name: "AI provider info" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Edits" })).not.toBeInTheDocument();
     await waitFor(() => {

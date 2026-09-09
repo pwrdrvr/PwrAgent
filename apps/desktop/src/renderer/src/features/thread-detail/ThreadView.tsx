@@ -3313,7 +3313,24 @@ export function ThreadView(props: ThreadViewProps) {
         >
           <div className="thread-view__primary">
             {!launchpadMaterializing ? (
-              <>
+              /* One list, and the only box in this column that may shrink.
+                 The composer below is `flex: 0 0 auto`, so while these
+                 cards were direct siblings of it nothing could absorb a
+                 deficit and the composer left the pane's clipped bottom
+                 edge with its send controls. See `.thread-view__connections`
+                 in app.css. */
+              <div
+                aria-label="PwrSuite connections"
+                className="thread-view__connections"
+                role="group"
+                /* The list scrolls, and until both status IPCs resolve every
+                   card renders only "Checking…" — no button, no switch — so
+                   there is nothing inside for a keyboard user to Tab to and
+                   scroll it by. Own the tab stop rather than depending on
+                   whichever control a card happens to be showing (axe
+                   `scrollable-region-focusable`, wcag2a/wcag21a). */
+                tabIndex={0}
+              >
                 <PwrSnapConnectionPrompt
                   backend={selectedLaunchpad.backend}
                   desktopApi={props.desktopApi}
@@ -3364,7 +3381,7 @@ export function ThreadView(props: ThreadViewProps) {
                     );
                   }}
                 />
-              </>
+              </div>
             ) : null}
             <div className={`thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`}>
               {launchpadMaterializing ? (

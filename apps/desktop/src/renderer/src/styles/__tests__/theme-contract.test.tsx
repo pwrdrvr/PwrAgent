@@ -1439,7 +1439,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(directoryMetaRule).toContain("white-space: nowrap;");
   });
 
-  it("locks composer height contract — compact when empty, grows, capped at 280px", () => {
+  it("locks composer height contract — compact when empty, grows, capped at min(280px, 34vh)", () => {
     // Issue #240 follow-up: the composer's min-height is the
     // empty-state floor; max-height is the clamp the editor scrolls
     // inside once the user has typed enough to fill it. Both values
@@ -1456,9 +1456,17 @@ describe("Tangerine Terminal theme contract", () => {
     // BELOW the caret line, so the empty composer read as 12px above
     // the text and ~19.6px below. The floor must never exceed the
     // natural one-line height or the asymmetry comes back.
+    //
+    // The cap gained a window-relative half. 280px is 44% of the pane at
+    // the app's own 640px minimum window height, tall enough that a full
+    // draft could still put the send controls past `.thread-view`'s
+    // `overflow: hidden` edge with everything above the composer already
+    // collapsed. Both halves are locked: dropping the fixed one lets the
+    // editor grow past the design cap on a tall display, and dropping the
+    // `vh` one brings the short-window overflow back.
     const tiptapRule = extractRuleBody(css, ".composer-tiptap-input");
     expect(tiptapRule).toMatch(/min-height:\s*48px;/);
-    expect(tiptapRule).toMatch(/max-height:\s*280px;/);
+    expect(tiptapRule).toMatch(/max-height:\s*min\(280px,\s*34vh\);/);
     expect(tiptapRule).toMatch(/overflow-y:\s*auto;/);
 
     // The inner editor's min-height tracks the outer container's
