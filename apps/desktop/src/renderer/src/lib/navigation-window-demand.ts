@@ -103,13 +103,16 @@ export function visibleDisclosedNavigationParents(params: {
   const candidates = new Map(params.disclosedParents.map((ref) => [navigationIdentityKey(ref), ref]));
   const visible = new Map<string, NavigationIdentity>();
   const pending = [...params.collectionIds].filter((id) => id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("drafts:"));
-  // Directory presentation admits the exact selected pin independently of
-  // its retained pin range. Its disclosed children need the same demand as
-  // a parent which happened to arrive in the first page.
+  // Directory presentation admits an exact selected pin outside its page,
+  // and retains an unpinned selected root while Directory threads is closed.
+  // Both roots need child demand even though no collection page contains them.
+  // An open unpinned collection still owns its visible membership.
   const selected = params.pages.get("selected-viewer-mount") ?? params.pages.get("selected-context");
   const selectedRoot = selected?.entries.find((entry) => entry.placement.kind === "root");
-  if (selectedRoot?.row.pinnedRank !== undefined && selected?.selectionDirectory
-    && pending.includes(`directory-pins:${selected.selectionDirectory.key}`)) {
+  if (selectedRoot && selected?.selectionDirectory
+    && pending.includes(`directory-pins:${selected.selectionDirectory.key}`)
+    && (selectedRoot.row.pinnedRank !== undefined
+      || !pending.includes(`directory:${selected.selectionDirectory.key}`))) {
     const key = navigationIdentityKey(selectedRoot.row.ref);
     const parent = candidates.get(key);
     if (parent) {

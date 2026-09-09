@@ -85,6 +85,16 @@ it("does not demand children of off-page selections, collapsed ancestors, or ina
   expect(visibleDisclosedNavigationParents({ collectionIds: ["lens"], pages,
     disclosedParents: disclosedParents.filter((item) => item.threadId !== "child") })).toEqual([ref("visible")]);
   expect(visibleDisclosedNavigationParents({ collectionIds: ["directory:other", "selected-context"], pages, disclosedParents })).toEqual([]);
+  // Exact selection alone does not expose an off-page unpinned root while
+  // the ordinary directory collection is open. Only the collapsed-list
+  // presentation retains it outside that collection.
+  pages.get("selected-context")!.selectionDirectory = directories[42]!;
+  expect(visibleDisclosedNavigationParents({
+    collectionIds: ["directory-pins:directory:42", "directory:directory:42"], pages, disclosedParents,
+  })).toEqual([]);
+  expect(visibleDisclosedNavigationParents({
+    collectionIds: ["directory-pins:directory:42"], pages, disclosedParents,
+  })).toEqual([ref("off-page")]);
 });
 
 
