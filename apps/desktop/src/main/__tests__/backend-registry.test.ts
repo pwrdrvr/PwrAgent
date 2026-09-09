@@ -23,6 +23,7 @@ import {
   buildNavigationSnapshot,
   buildThreadIdentityKey,
   CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
+  federatedThreadIdentityKey,
   MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
@@ -60,6 +61,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationLaunchpadDraft,
+  NavigationThreadSummary,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
   PrSummary,
@@ -1030,6 +1032,29 @@ function createOverlayStoreMock(params?: {
         ...current,
         pinnedRank: pinnedRank?.trim() || undefined,
       } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setSubthreadsCollapsed: async ({
+      backend,
+      parentThreadId,
+      collapsed,
+    }: {
+      backend: AppServerBackendKind;
+      parentThreadId: string;
+      collapsed: boolean;
+    }) => {
+      const key = `${backend}:${parentThreadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId: parentThreadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next: ThreadOverlayState = {
+        ...current,
+        subthreadsCollapsed: collapsed,
+      };
       overlays.set(key, next);
       return next;
     },
@@ -10946,6 +10971,612 @@ describe("DesktopBackendRegistry", () => {
       notification: expect.objectContaining({
         method: "thread/pin/added",
       }),
+    });
+
+    await registry.close();
+  });
+
+  it("pins the parent of a new child, not the child, when the collapse hides it", async () => {
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-hidden-parent-project"),
+    );
+    const directoryKey = `directory:${directoryPath}`;
+    const linkedDirectory = {
+      id: directoryKey,
+      kind: "local" as const,
+      label: "project",
+      path: directoryPath,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+        "codex:thread-unpinned-parent": {
+          backend: "codex",
+          threadId: "thread-unpinned-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        threads: [
+          {
+            id: "thread-pinned",
+            title: "Pinned thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [linkedDirectory],
+            updatedAt: 1_000,
+          },
+          {
+            id: "thread-unpinned-parent",
+            title: "Unpinned parent",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [linkedDirectory],
+            updatedAt: 1_000,
+          },
+        ],
+      }),
+      overlayStore,
+    });
+    registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 1_000,
+      firstSnapshot: false,
+      directoryOverlayByKey: {
+        [directoryKey]: {
+          directoryKey,
+          directoryThreadsCollapsed: true,
+        },
+      },
+      overlayByThreadKey: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+        "codex:thread-unpinned-parent": {
+          backend: "codex",
+          threadId: "thread-unpinned-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+      previousKnownThreadKeys: [
+        "codex:thread-pinned",
+        "codex:thread-unpinned-parent",
+      ],
+      threads: [
+        {
+          id: "thread-pinned",
+          title: "Pinned thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1_000,
+        },
+        {
+          id: "thread-unpinned-parent",
+          title: "Unpinned parent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1_000,
+        },
+      ],
+      unchanged: false,
+    }));
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const response = await registry.startThread({
+      backend: "codex",
+      cwd: directoryPath,
+      parentThreadId: "thread-unpinned-parent",
+      parentThreadBackend: "codex",
+    });
+
+    // The child renders inside its parent's tray, so what has to be visible is
+    // the parent. Pinning the child instead would write a `pinnedRank` onto a
+    // row the sidebar shows no pin control for, leaving an unremovable pin.
+    expect(response).not.toHaveProperty("pinnedRank");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "thread-unpinned-parent",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.not.toHaveProperty("pinnedRank");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-unpinned-parent",
+      }),
+    ).resolves.toMatchObject({ pinnedRank: "2048" });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/pin/added",
+        params: {
+          threadId: "thread-unpinned-parent",
+          pinnedRank: "2048",
+        },
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("opens a pinned parent's collapsed tray instead of pinning its new child", async () => {
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-collapsed-tray-project"),
+    );
+    const directoryKey = `directory:${directoryPath}`;
+    const linkedDirectory = {
+      id: directoryKey,
+      kind: "local" as const,
+      label: "project",
+      path: directoryPath,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+          subthreadsCollapsed: true,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        threads: [
+          {
+            id: "thread-pinned",
+            title: "Pinned parent",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [linkedDirectory],
+            updatedAt: 1_000,
+          },
+        ],
+      }),
+      overlayStore,
+    });
+    registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 1_000,
+      firstSnapshot: false,
+      directoryOverlayByKey: {
+        [directoryKey]: {
+          directoryKey,
+          directoryThreadsCollapsed: true,
+        },
+      },
+      overlayByThreadKey: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+          subthreadsCollapsed: true,
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-pinned"],
+      threads: [
+        {
+          id: "thread-pinned",
+          title: "Pinned parent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1_000,
+        },
+      ],
+      unchanged: false,
+    }));
+
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    // The parent is pinned, but its own sub-thread tray is collapsed, so it
+    // renders none of its children. Opening the tray is what reveals the new
+    // child — the same thing the renderer does when it inserts one itself.
+    const response = await registry.startThread({
+      backend: "codex",
+      cwd: directoryPath,
+      parentThreadId: "thread-pinned",
+      parentThreadBackend: "codex",
+    });
+
+    expect(response).not.toHaveProperty("pinnedRank");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-pinned",
+      }),
+    ).resolves.toMatchObject({
+      pinnedRank: "1024",
+      subthreadsCollapsed: false,
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/subthreadsCollapsed/updated",
+        params: {
+          parentThreadId: "thread-pinned",
+          collapsed: false,
+        },
+      },
+    });
+    expect(events).not.toContainEqual({
+      backend: "codex",
+      notification: expect.objectContaining({
+        method: "thread/pin/added",
+      }),
+    });
+
+    await registry.close();
+  });
+
+  it("walks past a nested parent to the row this directory renders top-level", async () => {
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-grandchild-project"),
+    );
+    const directoryKey = `directory:${directoryPath}`;
+    const linkedDirectory = {
+      id: directoryKey,
+      kind: "local" as const,
+      label: "project",
+      path: directoryPath,
+    };
+    const topLevel = {
+      id: "thread-top",
+      title: "Top-level thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [linkedDirectory],
+      updatedAt: 1_000,
+    };
+    const nestedParent = {
+      ...topLevel,
+      id: "thread-nested-parent",
+      title: "Nested parent",
+      parentThreadId: "thread-top",
+      parentThreadBackend: "codex" as const,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        threads: [
+          {
+            id: "thread-pinned",
+            title: "Pinned thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [linkedDirectory],
+            updatedAt: 1_000,
+          },
+          topLevel,
+          nestedParent,
+        ],
+      }),
+      overlayStore,
+    });
+    registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 1_000,
+      firstSnapshot: false,
+      directoryOverlayByKey: {
+        [directoryKey]: {
+          directoryKey,
+          directoryThreadsCollapsed: true,
+        },
+      },
+      overlayByThreadKey: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+      },
+      previousKnownThreadKeys: [
+        "codex:thread-pinned",
+        "codex:thread-top",
+        "codex:thread-nested-parent",
+      ],
+      threads: [
+        {
+          id: "thread-pinned",
+          title: "Pinned thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1_000,
+        },
+        topLevel,
+        nestedParent,
+      ],
+      unchanged: false,
+    }));
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    // The clicked card is itself nested, so pinning it would be pinning a row
+    // that already renders inside another tray. Only the group's top-level row
+    // can carry the pin.
+    const response = await registry.startThread({
+      backend: "codex",
+      cwd: directoryPath,
+      parentThreadId: "thread-nested-parent",
+      parentThreadBackend: "codex",
+    });
+
+    expect(response).not.toHaveProperty("pinnedRank");
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/pin/added",
+        params: {
+          threadId: "thread-top",
+          pinnedRank: "2048",
+        },
+      },
+    });
+    expect(
+      events
+        .filter((event) => event.notification.method === "thread/pin/added")
+        .map((event) => (event.notification.params as { threadId: string }).threadId),
+    ).toEqual(["thread-top"]);
+
+    await registry.close();
+  });
+
+  it("leaves a peer-owned ancestor alone instead of writing a local overlay", async () => {
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-remote-ancestor-project"),
+    );
+    const directoryKey = `directory:${directoryPath}`;
+    const linkedDirectory = {
+      id: directoryKey,
+      kind: "local" as const,
+      label: "project",
+      path: directoryPath,
+    };
+    const remoteRef = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "thread-remote-parent",
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        threads: [
+          {
+            id: "thread-pinned",
+            title: "Pinned thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [linkedDirectory],
+            updatedAt: 1_000,
+          },
+        ],
+      }),
+      overlayStore,
+    });
+    const snapshot = buildNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 1_000,
+      firstSnapshot: false,
+      directoryOverlayByKey: {
+        [directoryKey]: {
+          directoryKey,
+          directoryThreadsCollapsed: true,
+        },
+      },
+      overlayByThreadKey: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-pinned"],
+      threads: [
+        {
+          id: "thread-pinned",
+          title: "Pinned thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1_000,
+        },
+      ],
+      unchanged: false,
+    });
+    const localRow = snapshot.threads[0]!;
+    const remoteRow: NavigationThreadSummary = {
+      ...localRow,
+      federation: { instanceLabel: "Laptop", ref: remoteRef },
+      id: "thread-remote-parent",
+      pinnedRank: undefined,
+      subthreadsCollapsed: true,
+      title: "Peer's thread",
+    };
+    // A peer's row joins a local directory after the snapshot is built and is
+    // listed there under its FEDERATED key — that is what
+    // `attachRemoteThreadsToLocalDirectories` does in the real path.
+    registry.rememberNavigationVisibilityIndex({
+      directories: snapshot.directories.map((directory) =>
+        directory.key === directoryKey
+          ? {
+              ...directory,
+              threadKeys: [
+                ...directory.threadKeys,
+                federatedThreadIdentityKey(remoteRef),
+              ],
+            }
+          : directory),
+      threads: [...snapshot.threads, remoteRow],
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    // The parent is named by backend and id, so finding it at all requires
+    // translating to its federated key. Once found, it is the peer's row: its
+    // pin lives in `remote_thread_pins` and its collapse is the owner's state,
+    // so there is nothing here to write — and the child must not be pinned as
+    // a consolation, since it renders nested either way.
+    const response = await registry.startThread({
+      backend: "codex",
+      cwd: directoryPath,
+      parentThreadId: "thread-remote-parent",
+      parentThreadBackend: "codex",
+    });
+
+    expect(response).not.toHaveProperty("pinnedRank");
+    expect(response).not.toHaveProperty("autoPinFailure");
+    expect(
+      events.filter((event) =>
+        event.notification.method === "thread/pin/added"
+        || event.notification.method === "thread/subthreadsCollapsed/updated"),
+    ).toEqual([]);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-remote-parent",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.not.toHaveProperty("pinnedRank");
+
+    await registry.close();
+  });
+
+  it("auto-pins a new child whose parent this directory does not render", async () => {
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-foreign-parent-project"),
+    );
+    const directoryKey = `directory:${directoryPath}`;
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        threads: [
+          {
+            id: "thread-pinned",
+            title: "Pinned thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [
+              {
+                id: directoryKey,
+                kind: "local" as const,
+                label: "project",
+                path: directoryPath,
+              },
+            ],
+            updatedAt: 1_000,
+          },
+        ],
+      }),
+      overlayStore,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({
+      directoryKey,
+      directoryPath,
+      registry,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    // A parent that aged out of the navigation window renders nowhere, so this
+    // directory shows its new child as a top-level row — and that row is the
+    // one that needs the pin.
+    const response = await registry.startThread({
+      backend: "codex",
+      cwd: directoryPath,
+      parentThreadId: "thread-outside-the-window",
+      parentThreadBackend: "codex",
+    });
+
+    expect(response).toMatchObject({ pinnedRank: "2048" });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/pin/added",
+        params: {
+          threadId: "thread-1",
+          pinnedRank: "2048",
+        },
+      },
     });
 
     await registry.close();
@@ -32226,7 +32857,10 @@ script = "printf setup"
     await rm(root, { recursive: true, force: true });
   });
 
-  it.each([undefined, "remote-owner"])("groups handoffs from a persisted grandchild under the root owner %s", async (parentThreadInstanceId) => {
+  // The intermediate row's `parentThreadInstanceId` used to decide how far the
+  // root walk climbed. Now that a child parents to its own source, it changes
+  // nothing — so both shapes must produce the same answer.
+  it.each([undefined, "remote-owner"])("groups a handoff from a persisted grandchild under its own source, intermediate owner %s", async (parentThreadInstanceId) => {
     const rootDirectory = {
       id: expectedDir("/repo/app"),
       kind: "local" as const,
@@ -32333,7 +32967,7 @@ script = "printf setup"
     );
     expect(payload).toMatchObject({
       threadId: "thread-1",
-      groupedUnderThreadId: "root-thread",
+      groupedUnderThreadId: "source-grandchild",
       origin: {
         sourceThreadId: "source-grandchild",
       },
@@ -32344,8 +32978,17 @@ script = "printf setup"
         threadId: "thread-1",
       }),
     ).resolves.toMatchObject({
-      parentThreadId: "root-thread",
-      ...(parentThreadInstanceId ? { parentThreadInstanceId } : {}),
+      parentThreadId: "source-grandchild",
+    });
+    // The source owns its own tray, so the new child lands there — and the
+    // root's order is left exactly as the operator arranged it.
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "source-grandchild",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["thread-1"],
     });
     await expect(
       overlayStore.getThreadOverlayState({
@@ -32353,12 +32996,7 @@ script = "printf setup"
         threadId: "root-thread",
       }),
     ).resolves.toMatchObject({
-      subthreadOrder: parentThreadInstanceId ? ["older-child", "intermediate-child"] : [
-        "older-child",
-        "intermediate-child",
-        "source-grandchild",
-        "thread-1",
-      ],
+      subthreadOrder: ["older-child", "intermediate-child"],
     });
 
     await registry.close();

@@ -32,7 +32,6 @@ import {
   moveDirectoryKey,
   moveThreadKey,
   resolveThreadParentKey,
-  sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
   ChevronDownIcon,
@@ -78,6 +77,7 @@ import {
   useNavigationDirectoryDisclosure,
   type NavigationDirectoryDisclosure,
 } from "../../lib/useNavigationDirectoryDisclosure";
+import { createSubthreadTrays } from "./subthread-trays";
 
 type DirectoriesListProps = {
   presentationOrder?: NavigationPresentationOrder;
@@ -1107,9 +1107,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const expandedThreadModel =
       expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
     const { childThreadsByParentKey } = expandedThreadModel;
+    // One tray per top-level row, holding its whole descendant subtree in
+    // depth-first order. The owner keys each child under its *true* parent, so
+    // a grandchild is filed under a row that is itself a child; rendering only
+    // direct children would silently drop it from the lens.
+    const trays = createSubthreadTrays(childThreadsByParentKey);
+    for (const thread of expandedThreadModel.directoryPinnedThreads) trays.addTrayOwner(thread);
+    for (const thread of expandedThreadModel.unpinnedThreads) trays.addTrayOwner(thread);
     const renderStaticSubthreads = (parent: NavigationPresentedThread): ReactElement | null => {
       const parentKey = threadSummaryIdentityKey(parent);
-      const children = sortSubthreadSummaries(parent, childThreadsByParentKey.get(parentKey) ?? []);
+      // Already depth-first ordered by the tray. Re-sorting here by this row's
+      // `subthreadOrder` would rank its grandchildren as unlisted and scatter
+      // them away from the sub-threads that own them.
+      const children = trays.subtree(parentKey);
+      const directChildKeys = trays.directChildKeys(parentKey);
       const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
       const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
         ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
@@ -1129,9 +1140,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // Wire drag-to-reorder, mirroring RecentsList — see the dedicated
       // `draggedSubthreadKey` state for why it stays isolated from the
       // directory / pinned-thread drag.
+      const directChildKeySet = new Set(directChildKeys);
       const reorderable =
         threadSupportsFederationCapability(parent, "thread_grouping")
-        && children.length > 1
+        && directChildKeys.length > 1
         && Boolean(props.onUpdateSubthreadOrder);
       return (
         // `listitem` box because this list is a SIBLING of its parent row
@@ -1163,10 +1175,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 compact
-                draggable={reorderable}
+                draggable={reorderable && directChildKeySet.has(childKey)}
                 includeLinkedDirectories
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
+                nestedDepth={trays.depth(childKey)}
                 revealSelectedThreadRequest={props.revealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={props.selectedThreadKeys}
@@ -1190,6 +1203,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   if (
                     !draggedThread
                     || draggedSubthreadKey === childKey
+                    || !directChildKeySet.has(childKey)
                     || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
                   ) {
                     event.dataTransfer.dropEffect = "none";
@@ -1223,10 +1237,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     : undefined;
                   if (
                     !draggedThread
+                    || !directChildKeySet.has(childKey)
                     || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
                   ) {
                     return;
                   }
+                  // `subthreadOrder` names this row's own children, so the
+                  // move stays inside that list — never the flattened tray,
+                  // which also carries rows owned by those children.
                   void props.onUpdateSubthreadOrder?.(parent, {
                     threadId: draggedThread.id,
                     anchorThreadId: child.id,
@@ -1293,8 +1311,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       thread: NavigationThreadSummary,
     ): ReactElement => {
       const threadKey = threadSummaryIdentityKey(thread);
-      const ordinarySubthreadCount =
-        childThreadsByParentKey.get(threadKey)?.length ?? 0;
+      const ordinarySubthreadCount = trays.subtree(threadKey).length;
       const subthreadCount = getSubthreadDisclosureCount(
         thread,
         ordinarySubthreadCount,
@@ -1720,7 +1737,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     {directoryPinnedThreads.map((thread) => {
 	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
-                            childThreadsByParentKey.get(threadKey)?.length ?? 0;
+                            trays.subtree(threadKey).length;
                           const subthreadCount = getSubthreadDisclosureCount(
                             thread,
                             ordinarySubthreadCount,

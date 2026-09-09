@@ -4209,8 +4209,21 @@ a.button {
   margin-left: 14px;
 }
 
+/* Tray rows are flat in the DOM but not in the data: a grandchild renders in
+   its grandparent's tray, immediately after the child that created it. One
+   extra step of indent per level of real depth is what separates it from the
+   sibling above — and it is the same distinction that decides whether the row
+   drags, since `subthreadOrder` ranks direct children only. `ThreadRow` sets
+   `--thread-row-nested-depth` only past depth 1, so an ordinary child pays no
+   calc.
+
+   The step stops paying out after four levels. Real depth has no bound — a
+   sub-thread can create a sub-thread forever — and the sidebar's width does,
+   so an uncapped step eventually indents a row's title off the end of the
+   card. Past the cap the rows read as "deeper than the one above", which is
+   all a flat tray can say anyway. */
 .thread-row-shell--nested .thread-row {
-  padding-left: 12px;
+  padding-left: min(48px, calc(12px * var(--thread-row-nested-depth, 1)));
 }
 
 /* A parent card (has sub-threads) stays flush with its sibling rows —

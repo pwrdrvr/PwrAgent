@@ -3679,7 +3679,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("forks a child below its source and re-parents it to the group root", async () => {
+  it("forks a child as a child of the card it was spawned from", async () => {
     const worktree = {
       id: "wt",
       label: "Repo",
@@ -3763,23 +3763,24 @@ describe("useThreadNavigation", () => {
       await result.current.forkThread(sourceChild, "same-worktree");
     });
 
-    // Forks the clicked child's content but links the new thread to the root,
-    // so it renders one level deep rather than as an unrenderable grandchild.
+    // The fork's parent is the card it was spawned from. This used to record
+    // the group *root* instead, which made the fork a sibling of its own
+    // source — and left it parentless whenever that root was a peer's thread.
     expect(forkThread).toHaveBeenCalledTimes(1);
     expect(forkThread.mock.calls[0]![0]).toMatchObject({
-      parentThreadId: "thread-root",
+      parentThreadId: "thread-a",
       sourceThreadId: "thread-a",
     });
 
-    // The new thread lands directly below its source child in the root's tray.
+    // The new thread opens its source's own tray, directly below that card.
     expect(updateSubthreadOrder).toHaveBeenCalledTimes(1);
     expect(updateSubthreadOrder.mock.calls[0]![0]).toMatchObject({
-      parentThreadId: "thread-root",
+      parentThreadId: "thread-a",
       insertAfter: { threadId: "thread-fork", sourceThreadId: "thread-a" },
     });
   });
 
-  it("records remote-root ownership for locally created children and forks", async () => {
+  it("parents a locally created child to its local card, not the remote root", async () => {
     const rootTarget = {
       scope: "remote" as const,
       instanceId: "root-owner",
@@ -3832,7 +3833,13 @@ describe("useThreadNavigation", () => {
       createdAt: 1,
       updatedAt: 1,
     };
-    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+    // Both mocks name the fields the assertions read, so an absent
+    // `parentThreadInstanceId` is checkable rather than an `any`.
+    type ParentLinkRequest = {
+      parentThreadId?: string;
+      parentThreadInstanceId?: string;
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async (_request: ParentLinkRequest) => ({
       launchpad,
       defaults: {
         backend: "codex" as const,
@@ -3846,7 +3853,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const forkThread = vi.fn(async () => ({
+    const forkThread = vi.fn(async (_request: ParentLinkRequest) => ({
       backend: "codex" as const,
       sourceThreadId: "thread-local-child",
       threadId: "thread-fork",
@@ -3884,19 +3891,25 @@ describe("useThreadNavigation", () => {
     await act(async () => {
       await result.current.createSubthread(localChild, "same-worktree");
     });
+    // `localChild` lives on this instance, so the new thread's parent link is
+    // instance-local. Walking to the remote root instead used to record the
+    // grandparent's owner as the parent's instance, which made the child a
+    // sibling of its own source and stranded it when that root was a peer's.
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
         federationTarget: undefined,
-        parentThreadId: "thread-root",
-        parentThreadInstanceId: "root-owner",
+        parentThreadId: "thread-local-child",
       }),
     );
+    expect(
+      ensureDirectoryLaunchpad.mock.calls[0]![0],
+    ).not.toHaveProperty("parentThreadInstanceId");
     expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
         patch: expect.objectContaining({
           federationTarget: undefined,
-          parentThreadId: "thread-root",
-          parentThreadInstanceId: "root-owner",
+          parentThreadId: "thread-local-child",
+          parentThreadInstanceId: undefined,
         }),
       }),
     );
@@ -3907,14 +3920,18 @@ describe("useThreadNavigation", () => {
     expect(forkThread).toHaveBeenCalledWith(
       expect.objectContaining({
         federationTarget: undefined,
-        parentThreadId: "thread-root",
-        parentThreadInstanceId: "root-owner",
+        parentThreadId: "thread-local-child",
       }),
     );
+    expect(forkThread.mock.calls[0]![0]).not.toHaveProperty(
+      "parentThreadInstanceId",
+    );
+    // The order write follows the parent, so it stays local too. It used to be
+    // sent to `rootTarget` — the peer that owns the grandparent.
     expect(updateSubthreadOrder).toHaveBeenCalledWith(
       expect.objectContaining({
-        federationTarget: rootTarget,
-        parentThreadId: "thread-root",
+        federationTarget: undefined,
+        parentThreadId: "thread-local-child",
       }),
     );
   });

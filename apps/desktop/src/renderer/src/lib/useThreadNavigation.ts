@@ -6,7 +6,7 @@ import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import { loadedThreadRows, loadedDirectoryRows, indexLoadedThreadRows, indexLoadedDirectoryRows, type NavigationLoadedRows, type NavigationPresentedThread, type NavigationDirectoryView as NavigationDirectorySummary } from "./navigation-loaded-rows";
 import { readNavigationUnlinkPlan } from "./navigation-unlink-plan";
-import { readNavigationActionDetail, readNavigationActionThread, resolveNavigationActionGroupRoot } from "./navigation-action-authority";
+import { readNavigationActionDetail, readNavigationActionThread } from "./navigation-action-authority";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "./launchpad-setup-progress";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
@@ -5176,35 +5176,27 @@ export function useThreadNavigation(
   );
 
   /**
-   * The "group root" for a source card. Sub-threads and forks never nest deeper
-   * than one level: spawning from a child re-parents the new thread to that
-   * child's root so it renders as a sibling, not an (unrenderable) grandchild.
-   * Falls back to the source itself when its root is gone (archived/unlinked),
-   * since the source has then become effectively top-level.
-   */
-  const resolveGroupRoot = useCallback(
-    (source: NavigationThreadSummary) => resolveNavigationActionGroupRoot({ api: desktopApi, thread: source,
-      target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal }),
-    [desktopApi],
-  );
-
-  /**
    * Place a freshly created child directly below the card it was spawned from.
    * The owner inserts into its complete current order, preserving unloaded
    * siblings, then expands the group so the new child is visible.
+   *
+   * `parentThreadId` is the thread the child is actually a child of, which is
+   * also the card the operator clicked. It used to be that group's *root*
+   * instead, which recorded a grandparent as the parent whenever the clicked
+   * card was itself a child.
    */
   const insertSubthreadBelowSource = useCallback(
     async (
       parentBackend: AppServerBackendKind,
-      rootThreadId: string,
+      parentThreadId: string,
       sourceThreadId: string,
       newThreadId: string,
       federationTarget?: FederationTarget,
     ): Promise<void> => {
-      let root: NavigationThreadSummary;
+      let parentThread: NavigationThreadSummary;
       try {
-        root = await readNavigationActionThread({ api: desktopApi,
-          thread: { source: parentBackend, id: rootThreadId }, target: federationTarget,
+        parentThread = await readNavigationActionThread({ api: desktopApi,
+          thread: { source: parentBackend, id: parentThreadId }, target: federationTarget,
           signal: actionAbortControllerRef.current.signal });
       } catch (error) {
         // Creation has already succeeded. Preserve its selection even if the
@@ -5212,8 +5204,8 @@ export function useThreadNavigation(
         console.warn("Could not load the group order for the created child:", error);
         return;
       }
-      const rootKey = threadSummaryIdentityKey(root);
-      if (federationTarget && !threadSupportsFederationCapability(root, "thread_grouping")) return;
+      const parentKey = threadSummaryIdentityKey(parentThread);
+      if (federationTarget && !threadSupportsFederationCapability(parentThread, "thread_grouping")) return;
       // Await the persist so callers can sequence the authoritative refresh
       // after it commits — otherwise a refresh racing ahead of this write can
       // momentarily resurrect the pre-insert order.
@@ -5223,7 +5215,7 @@ export function useThreadNavigation(
           const result = await persistOrder({
             backend: parentBackend,
             federationTarget,
-            parentThreadId: rootThreadId,
+            parentThreadId,
             insertAfter: { threadId: newThreadId, sourceThreadId },
           });
           const threadIds = result.threadIds;
@@ -5237,24 +5229,24 @@ export function useThreadNavigation(
             }),
           }));
         } catch {
-          await refresh(rootKey);
+          await refresh(parentKey);
         }
       }
 
-      if (root?.subthreadsCollapsed) {
+      if (parentThread?.subthreadsCollapsed) {
         setState((current) => ({
           ...current,
           rows: updateSubthreadsCollapsedInLoadedRows(current.rows, {
             backend: parentBackend,
             federationTarget,
-            parentThreadId: rootThreadId,
+            parentThreadId,
             collapsed: false,
           }),
         }));
         void desktopApi?.setSubthreadsCollapsed?.({
           backend: parentBackend,
           federationTarget,
-          parentThreadId: rootThreadId,
+          parentThreadId,
           collapsed: false,
         }).catch(() => {});
       }
@@ -5273,13 +5265,11 @@ export function useThreadNavigation(
       }
 
       let workspaceDirectories: Awaited<ReturnType<typeof readNavigationActionDetail>>["workspaceDirectories"];
-      let groupRoot: NavigationThreadSummary;
       try {
         const detail = await readNavigationActionDetail({ api: desktopApi, thread: parent, target: readRendererFederationTarget(),
           signal: actionAbortControllerRef.current.signal, includeWorkspaceConfiguration: true });
         parent = detail.thread;
         workspaceDirectories = detail.workspaceDirectories;
-        groupRoot = await resolveGroupRoot(parent);
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
         return;
@@ -5291,25 +5281,17 @@ export function useThreadNavigation(
           ? directory.gitStatusSourcePath ?? directory.directoryPath
           : directory.directoryPath;
       // Key the launchpad on the clicked card so each source gets its own
-      // composer (two children of one root must not collide), but link the new
-      // thread to the group root and remember the source for in-place insertion.
+      // composer (two children of one parent must not collide), and link the
+      // new thread to that same card — the thread it is a child of.
       const directoryKey = buildSubthreadLaunchpadKey(parent, mode);
 
       const federationTarget =
         parent.federation?.ref.target ?? rendererFederationTarget;
-      const groupRootInstanceId = groupRoot.federation?.ref.target
-        && isRemoteFederationTarget(groupRoot.federation.ref.target)
-        ? groupRoot.federation.ref.target.instanceId
-        : parent.parentThreadInstanceId;
-      const childOwnerInstanceId = federationTarget
-        && isRemoteFederationTarget(federationTarget)
-        ? federationTarget.instanceId
-        : undefined;
-      const parentThreadInstanceId =
-        groupRootInstanceId
-        && groupRootInstanceId !== childOwnerInstanceId
-          ? groupRootInstanceId
-          : undefined;
+      // The new thread is created on whichever instance owns `parent`, so a
+      // parent link to `parent` is always instance-local. This used to carry
+      // the *grandparent's* instance id, because the parent recorded here used
+      // to be the group root rather than the card the operator clicked.
+      const parentThreadInstanceId = undefined;
       setCreatingThread({
         backend: parent.source,
         executionMode: parent.executionMode ?? "default",
@@ -5337,19 +5319,18 @@ export function useThreadNavigation(
               }
             : {}),
           currentBranch: directory.branchName,
-          parentThreadId: groupRoot.id,
-          parentThreadBackend: groupRoot.source,
-          ...(parentThreadInstanceId ? { parentThreadInstanceId } : {}),
-          parentThreadTitle: groupRoot.title,
+          parentThreadId: parent.id,
+          parentThreadBackend: parent.source,
+          parentThreadTitle: parent.title,
           preferredBackend: parent.source,
         });
         let launchpad: NavigationLaunchpadDraft = {
           ...response.launchpad,
           federationTarget,
-          parentThreadId: groupRoot.id,
-          parentThreadBackend: groupRoot.source,
+          parentThreadId: parent.id,
+          parentThreadBackend: parent.source,
           parentThreadInstanceId,
-          parentThreadTitle: groupRoot.title,
+          parentThreadTitle: parent.title,
           sourceThreadId: parent.id,
         };
         let defaults: NavigationLaunchpadDefaults = response.defaults;
@@ -5361,10 +5342,10 @@ export function useThreadNavigation(
           directoryPath: launchpadDirectoryPath,
           federationTarget,
           ...(directory.branchName ? { branchName: directory.branchName } : {}),
-          parentThreadId: groupRoot.id,
-          parentThreadBackend: groupRoot.source,
+          parentThreadId: parent.id,
+          parentThreadBackend: parent.source,
           parentThreadInstanceId,
-          parentThreadTitle: groupRoot.title,
+          parentThreadTitle: parent.title,
         };
         if (desktopApi.updateDirectoryLaunchpad) {
           const updated = await desktopApi.updateDirectoryLaunchpad({
@@ -5376,10 +5357,10 @@ export function useThreadNavigation(
               launchpad,
               patch,
             ),
-            parentThreadId: groupRoot.id,
-            parentThreadBackend: groupRoot.source,
+            parentThreadId: parent.id,
+            parentThreadBackend: parent.source,
             parentThreadInstanceId,
-            parentThreadTitle: groupRoot.title,
+            parentThreadTitle: parent.title,
             sourceThreadId: parent.id,
           };
           launchpad = {
@@ -5393,10 +5374,10 @@ export function useThreadNavigation(
                 ),
               },
             ),
-            parentThreadId: groupRoot.id,
-            parentThreadBackend: groupRoot.source,
+            parentThreadId: parent.id,
+            parentThreadBackend: parent.source,
             parentThreadInstanceId,
-            parentThreadTitle: groupRoot.title,
+            parentThreadTitle: parent.title,
             sourceThreadId: parent.id,
           };
           defaults = updated.defaults;
@@ -5430,7 +5411,6 @@ export function useThreadNavigation(
     [
       desktopApi,
       rendererFederationTarget,
-      resolveGroupRoot,
       takePendingDirectoryGitStatus,
     ],
   );
@@ -5445,10 +5425,8 @@ export function useThreadNavigation(
         return;
       }
 
-      let groupRoot: NavigationThreadSummary;
       try {
         parent = await readNavigationActionThread({ api: desktopApi, thread: parent, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
-        groupRoot = await resolveGroupRoot(parent);
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
         return;
@@ -5458,19 +5436,9 @@ export function useThreadNavigation(
 
       const federationTarget = parent.federation?.ref.target ??
         readRendererFederationTarget();
-      const groupRootInstanceId = groupRoot.federation?.ref.target
-        && isRemoteFederationTarget(groupRoot.federation.ref.target)
-        ? groupRoot.federation.ref.target.instanceId
-        : parent.parentThreadInstanceId;
-      const childOwnerInstanceId = federationTarget
-        && isRemoteFederationTarget(federationTarget)
-        ? federationTarget.instanceId
-        : undefined;
-      const parentThreadInstanceId =
-        groupRootInstanceId
-        && groupRootInstanceId !== childOwnerInstanceId
-          ? groupRootInstanceId
-          : undefined;
+      // See `createSubthread`: a fork is created on the instance that owns
+      // `parent`, so its parent link never needs an instance id.
+      const parentThreadInstanceId = undefined;
       const executionMode = parent.executionMode ?? "default";
       const pendingForkEnvironmentSetup = buildPendingForkEnvironmentSetup({
         directoryLabel: directory.directoryLabel,
@@ -5494,9 +5462,8 @@ export function useThreadNavigation(
           backend: parent.source,
           federationTarget,
           sourceThreadId: parent.id,
-          parentThreadId: groupRoot.id,
-          parentThreadBackend: groupRoot.source,
-          ...(parentThreadInstanceId ? { parentThreadInstanceId } : {}),
+          parentThreadId: parent.id,
+          parentThreadBackend: parent.source,
           executionMode,
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
@@ -5547,8 +5514,8 @@ export function useThreadNavigation(
             (response.workMode === "worktree" ? "HEAD" : parent.observedGitBranch),
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           linkedDirectories,
-          parentThreadId: groupRoot.id,
-          parentThreadBackend: groupRoot.source,
+          parentThreadId: parent.id,
+          parentThreadBackend: parent.source,
           parentThreadInstanceId,
           federation: federationTarget
             && isRemoteFederationTarget(federationTarget)
@@ -5567,11 +5534,15 @@ export function useThreadNavigation(
         // Drop the fork directly below the card it was spawned from, and let
         // the order write land before the refresh below reads it back.
         await insertSubthreadBelowSource(
-          groupRoot.source,
-          groupRoot.id,
+          parent.source,
+          parent.id,
           parent.id,
           response.threadId,
-          groupRoot.federation?.ref.target,
+          // The same target the fork was created with. Reading only
+          // `parent.federation` would drop the renderer's own target, so a
+          // federation window whose rows carry no explicit ref would create
+          // the fork on the peer and write its order locally.
+          federationTarget,
         );
         if (
           federationTarget
@@ -5610,7 +5581,6 @@ export function useThreadNavigation(
       forkThreadRequest,
       insertSubthreadBelowSource,
       refresh,
-      resolveGroupRoot,
     ],
   );
 
@@ -6491,9 +6461,9 @@ export function useThreadNavigation(
 
       setLaunchpadError(undefined);
 
-      // The draft carries the group root (sub-threading a child re-parents to
-      // the root); prefer it over the key-parsed source so the new thread links
-      // to the root and renders one level deep.
+      // The draft carries the parent the launchpad was opened from; prefer it
+      // over the key-parsed source so the new thread links to the card the
+      // operator actually clicked.
       const launchpadSelectionKey = federatedSelection
         ? buildFederatedLaunchpadSelectionKey(federatedSelection.target)
         : buildLaunchpadSelectionKey(directoryKey);

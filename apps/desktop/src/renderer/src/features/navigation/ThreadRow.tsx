@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type DragEvent,
@@ -63,6 +64,13 @@ type ThreadRowProps = {
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   nested?: boolean;
+  /**
+   * How deep this row sits inside its tray: 1 for a direct child, 2 for a
+   * grandchild. The tray is flat, so the indent is the only thing separating
+   * a grandchild from the sibling above it — and it is the same distinction
+   * that decides whether the row drags. Ignored unless `nested`.
+   */
+  nestedDepth?: number;
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
   /**
@@ -265,6 +273,13 @@ export function ThreadRow(props: ThreadRowProps) {
         props.subthreadCount ? " has-subthreads" : ""
       }`}
       draggable={props.draggable}
+      style={
+        props.nested && (props.nestedDepth ?? 1) > 1
+          ? ({
+              "--thread-row-nested-depth": props.nestedDepth,
+            } as CSSProperties)
+          : undefined
+      }
       data-hover-stable-row="thread"
       data-thread-pin-key={props.threadPinState ? threadKey : undefined}
       data-thread-pin-state={props.threadPinState}
