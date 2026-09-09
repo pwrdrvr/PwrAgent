@@ -83,7 +83,12 @@ async function expectVisibleTooltip(page: Page, text: string) {
   await expect(tooltip).toHaveText(text);
   await expect
     .poll(async () =>
-      await tooltip.evaluate((element) => {
+      // Resolve and measure in the same browser task. Locator.evaluate first
+      // resolves a handle; a portal replacement between those calls can leave
+      // the geometry check reading a detached element.
+      await tooltip.evaluateAll((elements) => {
+        const element = elements[0];
+        if (!element || elements.length !== 1) return null;
         const rect = element.getBoundingClientRect();
         return {
           inBody: element.parentElement === document.body,
