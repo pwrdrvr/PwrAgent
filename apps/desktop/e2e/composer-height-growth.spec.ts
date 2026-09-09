@@ -114,6 +114,9 @@ async function createComposerHeightFixture(): Promise<{
 // can never contribute surplus of its own (see the symmetry
 // assertion below for why that matters).
 const COMPOSER_MIN_HEIGHT = 48;
+// The fixed half of `max-height: min(280px, 34vh)`. The `vh` half binds
+// only below ~825px of window height, which is why this spec pins its
+// window above that — see `launchElectronApp` below.
 const COMPOSER_MAX_HEIGHT = 280;
 
 // `box-sizing: border-box` is the renderer-wide default, so the
@@ -152,6 +155,12 @@ test("composer is compact when empty, grows with content, clamps at max-height",
   try {
     const app = await launchElectronApp({
       fixturePath: fixture.fixturePath,
+      // Pin the window: the 280px cap is now `min(280px, 34vh)`, so the
+      // fixed half only governs above ~825px of window height. Without a
+      // pinned size this spec's expectations would depend on whatever
+      // display the runner happens to have — the cap the constants below
+      // describe would silently become the `vh` half on a small screen.
+      windowSize: { width: 1280, height: 900 },
     });
 
     try {

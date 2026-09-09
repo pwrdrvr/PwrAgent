@@ -3313,7 +3313,13 @@ export function ThreadView(props: ThreadViewProps) {
         >
           <div className="thread-view__primary">
             {!launchpadMaterializing ? (
-              <>
+              /* One list, and the only box in this column that may shrink.
+                 The composer below is `flex: 0 0 auto`, so while these
+                 cards were direct siblings of it nothing could absorb a
+                 deficit and the composer left the pane's clipped bottom
+                 edge with its send controls. See `.thread-view__connections`
+                 in app.css. */
+              <div className="thread-view__connections">
                 <PwrSnapConnectionPrompt
                   backend={selectedLaunchpad.backend}
                   desktopApi={props.desktopApi}
@@ -3364,7 +3370,7 @@ export function ThreadView(props: ThreadViewProps) {
                     );
                   }}
                 />
-              </>
+              </div>
             ) : null}
             <div className={`thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`}>
               {launchpadMaterializing ? (
