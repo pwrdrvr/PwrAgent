@@ -169,6 +169,7 @@ describe("desktop settings contracts", () => {
         instanceNotes: { value: "", source: "default" },
         listenHost: { value: "127.0.0.1", source: "default" },
         listenPort: { value: 8765, source: "default" },
+        compressionEnabled: { value: true, source: "default" },
         publicUrl: { value: "", source: "default" },
         gatewayUrl: { value: "", source: "default" },
         gatewayEndpoints: { value: [], source: "default" },

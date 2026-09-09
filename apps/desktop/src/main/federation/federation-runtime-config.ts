@@ -14,6 +14,7 @@ export type FederationRuntimeConfig = Readonly<{
   instanceNotes: string;
   listenHost: string;
   listenPort: number;
+  compressionEnabled: boolean;
   mode: DesktopFederationMode;
   publicUrl: string;
 }>;
@@ -37,6 +38,7 @@ export function resolveFederationRuntimeConfig(
     instanceNotes: config.instanceNotes?.trim() ?? "",
     listenHost: config.listenHost ?? "127.0.0.1",
     listenPort: config.listenPort ?? 47_830,
+    compressionEnabled: config.compressionEnabled ?? true,
     mode: config.mode ?? DESKTOP_FEDERATION_MODE_DEFAULT,
     publicUrl: config.publicUrl?.trim() ?? "",
   });

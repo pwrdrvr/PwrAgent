@@ -43,6 +43,19 @@ function existsOrEmpty(filePath: string): boolean {
 }
 
 describe("DesktopSettingsService", () => {
+  it("persists an explicit federation compression opt-out in the settings snapshot", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    await service.writeConfigPatchTargeted({ federation: { compressionEnabled: false } });
+    expect((await service.readSettingsProjection()).federation.compressionEnabled)
+      .toEqual({ value: false, source: "config" });
+    await service.writeConfigPatchTargeted({ federation: { compressionEnabled: true } });
+    expect((await service.readSettingsProjection()).federation.compressionEnabled)
+      .toEqual({ value: true, source: "config" });
+  });
   it("resolves routine runtime settings from narrow store domains", () => {
     const root = createTempRoot();
     const configPath = path.join(root, "missing-config.toml");
@@ -297,6 +310,7 @@ describe("DesktopSettingsService", () => {
       mode: { value: "gateway", source: "config" },
       listenHost: { value: "127.0.0.1", source: "config" },
       listenPort: { value: 47830, source: "config" },
+      compressionEnabled: { value: true, source: "default" },
       publicUrl: {
         value: "https://pwragent.example.com",
         source: "config",
@@ -755,6 +769,7 @@ describe("DesktopSettingsService", () => {
       mode: { value: "disabled", source: "default" },
       listenHost: { value: "127.0.0.1", source: "default" },
       listenPort: { value: 47830, source: "default" },
+      compressionEnabled: { value: true, source: "default" },
       publicUrl: { value: "", source: "default" },
       gatewayUrl: { value: "", source: "default" },
       cloudflareMtlsEnabled: { value: false, source: "default" },

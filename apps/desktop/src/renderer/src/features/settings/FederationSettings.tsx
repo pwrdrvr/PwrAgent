@@ -97,6 +97,9 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [instanceLabel, setInstanceLabel] = useState(
     props.snapshot.federation.instanceLabel.value,
   );
+  const [compressionEnabled, setCompressionEnabled] = useState(
+    props.snapshot.federation.compressionEnabled.value,
+  );
   const [instanceNotes, setInstanceNotes] = useState(
     props.snapshot.federation.instanceNotes.value,
   );
@@ -137,6 +140,7 @@ export function FederationSettings(props: FederationSettingsProps) {
 
   useEffect(() => {
     setMode(props.snapshot.federation.mode.value);
+    setCompressionEnabled(props.snapshot.federation.compressionEnabled.value);
     setInstanceLabel(props.snapshot.federation.instanceLabel.value);
     setInstanceNotes(props.snapshot.federation.instanceNotes.value);
     setListenHost(props.snapshot.federation.listenHost.value);
@@ -637,6 +641,19 @@ export function FederationSettings(props: FederationSettingsProps) {
               />
             }
           />
+          <SettingsField
+            label="Protocol compression"
+            sub="Use Brotli for larger messages when both peers allow it. Small messages stay uncompressed. Saving reconnects federation sessions."
+            control={
+              <input
+                type="checkbox"
+                aria-label="Protocol compression"
+                checked={compressionEnabled}
+                disabled={props.saving}
+                onChange={(event) => setCompressionEnabled(event.target.checked)}
+              />
+            }
+          />
           <div className="settings-button-row">
             <button
               className="button button--primary"
@@ -663,6 +680,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                 void props.onWriteConfig({
                   federation: {
                     mode,
+                    compressionEnabled,
                     instanceLabel,
                     instanceNotes,
                     listenHost,

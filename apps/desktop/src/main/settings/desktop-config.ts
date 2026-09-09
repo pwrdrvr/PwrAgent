@@ -165,6 +165,7 @@ export type DesktopSettingsConfig = {
     instanceNotes?: string;
     listenHost?: string;
     listenPort?: number;
+    compressionEnabled?: boolean;
     publicUrl?: string;
     gatewayUrl?: string;
     gatewayEndpoints?: string[];
@@ -1000,6 +1001,9 @@ export function desktopSettingsPatchToEdits(
       set(["federation", "listen_host"], patch.federation.listenHost);
     }
   }
+  if (patch.federation?.compressionEnabled !== undefined) {
+    set(["federation", "compression_enabled"], patch.federation.compressionEnabled);
+  }
   if (patch.federation?.listenPort !== undefined) {
     if (patch.federation.listenPort === 0) {
       edits.push({ op: "delete", path: ["federation", "listen_port"] });
@@ -1818,6 +1822,7 @@ function normalizeDesktopConfig(
       instanceNotes: readString(federation?.instance_notes),
       listenHost: readString(federation?.listen_host),
       listenPort: readNumber(federation?.listen_port),
+      compressionEnabled: readBoolean(federation?.compression_enabled),
       publicUrl: readString(federation?.public_url),
       gatewayUrl: readString(federation?.gateway_url),
       gatewayEndpoints: readEndpointList(federation?.gateway_endpoints),

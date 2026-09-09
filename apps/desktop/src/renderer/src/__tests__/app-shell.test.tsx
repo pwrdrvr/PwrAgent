@@ -1692,6 +1692,7 @@ describe("App", () => {
         instanceNotes: { value: "", source: "default" },
         listenHost: { value: "127.0.0.1", source: "default" },
         listenPort: { value: 47830, source: "default" },
+        compressionEnabled: { value: true, source: "default" },
         publicUrl: { value: "", source: "default" },
         gatewayUrl: { value: "", source: "default" },
         gatewayEndpoints: { value: [], source: "default" },

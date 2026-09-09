@@ -704,10 +704,15 @@ describe("federation transport", () => {
     });
   });
 
-  it("carries a compressed logical envelope larger than ws maxPayload through Noise", async () => {
-    const maxFrameBytes = 16 * 1024;
+  it.each([
+    { gatewayCompression: true, clientCompression: true },
+    { gatewayCompression: false, clientCompression: true },
+    { gatewayCompression: true, clientCompression: false },
+  ])("negotiates compression through Noise: %j", async ({ gatewayCompression, clientCompression }) => {
+    const compressionEnabled = gatewayCompression && clientCompression;
+    const maxFrameBytes = compressionEnabled ? 16 * 1024 : 1024 * 1024;
     const transcript = "repetitive tool output line\n".repeat(12_000);
-    expect(Buffer.byteLength(transcript)).toBeGreaterThan(maxFrameBytes);
+    expect(Buffer.byteLength(transcript)).toBeGreaterThan(16 * 1024);
     const gatewayTransfers: Array<{
       peerId: string;
       direction: "sent" | "received";
@@ -741,6 +746,7 @@ describe("federation transport", () => {
       store,
       noiseStatic: gatewayNoise,
       maxFrameBytes,
+      compressionEnabled: gatewayCompression,
       onEnvelopeTransfer: (info) => gatewayTransfers.push(info),
       onEnvelope: (envelope, connection) => {
         resolveReceived?.(envelope);
@@ -767,7 +773,9 @@ describe("federation transport", () => {
         peerInstanceId: "client_one",
         privateKeyPem: clientKeyPair.privateKeyPem,
         publicKeyPem: clientKeyPair.publicKeyPem,
-        capabilities: ["remote_window", "transport_brotli"],
+        capabilities: clientCompression
+          ? ["remote_window", "transport_brotli"]
+          : ["remote_window"],
         inviteToken: invite.token,
         label: "Client",
         role: "client",
@@ -777,6 +785,7 @@ describe("federation transport", () => {
         onEnvelope: resolve,
         onEnvelopeTransfer: (info) => clientTransfers.push(info),
       }).then((client) => {
+        expect(client.capabilities.includes("transport_brotli")).toBe(compressionEnabled);
         client.sendEnvelope({
           id: "large-request",
           kind: "request",
@@ -805,6 +814,10 @@ describe("federation transport", () => {
     expect(clientReceived.byteCount).toBe(gatewaySent.byteCount);
     expect(clientSent.byteCount).toBeLessThan(maxFrameBytes);
     expect(gatewaySent.byteCount).toBeLessThan(maxFrameBytes);
+    if (!compressionEnabled) {
+      expect(clientSent.byteCount).toBeGreaterThan(Buffer.byteLength(transcript));
+      expect(gatewaySent.byteCount).toBeGreaterThan(Buffer.byteLength(transcript));
+    }
   });
 
   it("carries the encrypted channel over an externally created outer socket", async () => {

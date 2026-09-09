@@ -6,6 +6,23 @@ import {
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 
 describe("desktop config [federation] section", () => {
+  it.each([true, false])("round-trips compression %s without changing unrelated TOML", (compressionEnabled) => {
+    const original = '# Keep this comment\n[federation]\nmode = "client"\n';
+    const written = applyTomlEdits(original, desktopSettingsPatchToEdits({
+      federation: { compressionEnabled },
+    }));
+    expect(written).toContain("# Keep this comment");
+    expect(written).toContain('mode = "client"');
+    expect(parseDesktopSettingsToml(written, "test.toml").federation?.compressionEnabled)
+      .toBe(compressionEnabled);
+  });
+
+  it("leaves missing or malformed compression settings unspecified", () => {
+    for (const src of ["[federation]", '[federation]\ncompression_enabled = "false"']) {
+      expect(parseDesktopSettingsToml(src, "test.toml").federation?.compressionEnabled)
+        .toBeUndefined();
+    }
+  });
   it("reads federation settings from TOML", () => {
     const src = [
       "[federation]",

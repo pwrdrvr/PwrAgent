@@ -323,6 +323,8 @@ export type FederationGatewayWebSocketServerOptions = {
   port: number;
   store: FederationStore;
   sessions?: FederationSessionRegistry;
+  /** Allow negotiated compression. Changing this requires a new session. */
+  compressionEnabled?: boolean;
   /**
    * Gateway's Noise static keypair. When set, every connection runs a Noise_IK
    * handshake (responder role) before auth, and all frames are encrypted. When
@@ -648,6 +650,13 @@ export class FederationGatewayWebSocketServer {
       return;
     }
 
+    // Verify the signed request unchanged, then narrow the granted session
+    // capabilities before signing the acceptance. Either endpoint can opt out.
+    if (this.options.compressionEnabled === false) {
+      decision.capabilities = decision.capabilities.filter(
+        (capability) => capability !== FEDERATION_BROTLI_CAPABILITY,
+      );
+    }
     const sessionId = `federation-session:${randomUUID()}`;
     this.sessions.openSession({
       sessionId,
