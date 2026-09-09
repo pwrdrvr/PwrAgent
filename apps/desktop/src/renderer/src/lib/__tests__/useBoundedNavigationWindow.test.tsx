@@ -221,3 +221,33 @@ it.each([false, true])("preserves thirty loaded pins when selecting a new last p
   expect(result.current.resources.get(id)?.state.page?.entries).toHaveLength(31);
   unmount();
 });
+
+
+it("bounds React renders for separately delivered navigation events before the refresh timer", async () => {
+  const fixture = api();
+  const render = vi.fn();
+  const { result, unmount } = renderHook(() => {
+    render();
+    return useBoundedNavigationWindow({ ...base, desktopApi: fixture.desktopApi });
+  });
+  try {
+    await waitFor(() => expect(result.current.resources.get("directory-index")?.loading).toBe(false));
+    vi.useFakeTimers();
+    render.mockClear();
+    fixture.read.mockClear();
+    for (let index = 0; index < 100; index += 1) {
+      // Separate act boundaries model separately delivered IPC events, not
+      // one React batch that would conceal redundant snapshot notifications.
+      fixture.emit({ backend: "codex", notification: { method: "thread/status/changed",
+        params: { threadId: `thread-${index}`, status: { type: "active" } } } });
+    }
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(fixture.read).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(fixture.read).toHaveBeenCalledTimes(1);
+    expect(result.current.resources.get("directory-index")?.state.stale).toBe(false);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});
