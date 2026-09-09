@@ -16171,23 +16171,6 @@ a.button {
   font-size: 12px;
 }
 
-@media (max-width: 760px) {
-  .mcp-connection {
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 12px;
-  }
-
-  .mcp-connection__icon {
-    width: 36px;
-    height: 36px;
-  }
-
-  .mcp-connection__action {
-    grid-column: 2;
-    justify-content: flex-start;
-  }
-}
-
 /* Short windows: the list already scrolls, but a two-card list you have to
    scroll to read is worse than two cards that fit. Buy the fit back out of
    air and type scale rather than out of the copy — truncating the
@@ -16216,6 +16199,27 @@ a.button {
 
   .mcp-connection__copy > p:not(.eyebrow) {
     font-size: 12px;
+  }
+}
+
+/* Placed after the short-window block on purpose: both rules touch
+   `grid-template-columns` and the icon size, and at a viewport that is both
+   narrow and short the stacked two-column layout is the one that has to
+   win — the short-window rule only wants the row smaller, not wider. */
+@media (max-width: 760px) {
+  .mcp-connection {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .mcp-connection__icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .mcp-connection__action {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 }
 
