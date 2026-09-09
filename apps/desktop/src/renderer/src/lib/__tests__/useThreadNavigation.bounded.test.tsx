@@ -259,6 +259,11 @@ it("reconciles visible pages every five minutes without a sixty-second poll, and
     expect(lensReads()).toBe(2);
     vi.mocked(document.hasFocus).mockReturnValue(false);
     act(() => { window.dispatchEvent(new Event("blur")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300_000); });
+    expect(lensReads()).toBe(3);
+    expect(result.current.selectedThreadConfigurationReady).toBe(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     const hiddenReads = f.read.mock.calls.length;
     const hiddenDetails = f.detail.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(15 * 60_000); });

@@ -136,6 +136,10 @@ function readBridgedBrowseMode(): BrowseMode {
   return normalizeBrowseMode(bridged?.browseMode);
 }
 
+function isRendererViewVisible(): boolean {
+  return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
 function isRendererViewForeground(): boolean {
   if (typeof document === "undefined") {
     return true;
@@ -2982,6 +2986,9 @@ export function useThreadNavigation(
     refreshing: false,
   });
   const [viewForeground, setViewForeground] = useState(isRendererViewForeground);
+  // A visible sidebar must load and refresh even when another app has focus.
+  // Keep foreground state separate: background updates must not mark rows read.
+  const [viewVisible, setViewVisible] = useState(isRendererViewVisible);
   const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
@@ -3086,13 +3093,13 @@ export function useThreadNavigation(
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined;
   const selectedDetail = useNavigationSelectedDetail({
-    desktopApi, enabled: enabled && viewForeground,
+    desktopApi, enabled: enabled && viewVisible,
     ref: selectedIdentity,
     federationTarget: selectedIdentity?.ownerInstanceId
       ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
       : undefined,
   });
-  const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled: enabled && viewForeground,
+  const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled: enabled && viewVisible,
     directoryKey: getDirectoryKeyFromLaunchpadSelection(selectedItemKey), federationTarget: rendererFederationTarget,
   });
   const draftStore = options.composerDraftStore;
@@ -3109,7 +3116,7 @@ export function useThreadNavigation(
   const selectedConfiguration = selectedDetail.state?.detail?.thread;
   const selectedDirectoryKeys = selectedConfiguration ? directoryKeysForThread(selectedConfiguration)
     : (getDirectoryKeyFromLaunchpadSelection(selectedItemKey) ? [getDirectoryKeyFromLaunchpadSelection(selectedItemKey)!] : []);
-  const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewForeground, observeEvents: false,
+  const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
     browseMode, target: rendererFederationTarget, attentionView: { id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true },
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
     selectedRef: selectedIdentity, selectedDirectoryKeys, removedDirectoryKeys: [...removedDirectoryKeysRef.current],
@@ -3386,7 +3393,7 @@ export function useThreadNavigation(
       if (
         !enabled ||
         !desktopApi?.getNavigationQueryPage ||
-        !isRendererViewForeground()
+        !isRendererViewVisible()
       ) {
         return;
       }
@@ -3422,6 +3429,7 @@ export function useThreadNavigation(
 
     const updateForegroundState = () => {
       setViewForeground(isRendererViewForeground());
+      setViewVisible(isRendererViewVisible());
     };
 
     updateForegroundState();
@@ -3462,7 +3470,7 @@ export function useThreadNavigation(
     if (
       !enabled ||
       !desktopApi?.getNavigationQueryPage ||
-      !viewForeground
+      !viewVisible
     ) {
       return;
     }
@@ -3488,7 +3496,7 @@ export function useThreadNavigation(
     enabled,
     lightweightNavigationRefresh,
     scheduleRefresh,
-    viewForeground,
+    viewVisible,
   ]);
 
   useEffect(() => {
