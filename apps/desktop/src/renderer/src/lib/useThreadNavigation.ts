@@ -5321,7 +5321,6 @@ export function useThreadNavigation(
           currentBranch: directory.branchName,
           parentThreadId: parent.id,
           parentThreadBackend: parent.source,
-          ...(parentThreadInstanceId ? { parentThreadInstanceId } : {}),
           parentThreadTitle: parent.title,
           preferredBackend: parent.source,
         });
@@ -5465,7 +5464,6 @@ export function useThreadNavigation(
           sourceThreadId: parent.id,
           parentThreadId: parent.id,
           parentThreadBackend: parent.source,
-          ...(parentThreadInstanceId ? { parentThreadInstanceId } : {}),
           executionMode,
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
@@ -5540,7 +5538,11 @@ export function useThreadNavigation(
           parent.id,
           parent.id,
           response.threadId,
-          parent.federation?.ref.target,
+          // The same target the fork was created with. Reading only
+          // `parent.federation` would drop the renderer's own target, so a
+          // federation window whose rows carry no explicit ref would create
+          // the fork on the peer and write its order locally.
+          federationTarget,
         );
         if (
           federationTarget

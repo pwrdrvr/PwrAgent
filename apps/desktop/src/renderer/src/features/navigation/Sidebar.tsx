@@ -129,6 +129,7 @@ function hydrateHoverStableSidebarSnapshot(
       threadSummaryIdentityKey(thread),
     ),
   );
+
   return {
     order: retainNavigationPresentationOrder(frozen.order, latest.order),
     visibleKeys: [...frozen.visibleKeys.filter((key) => !options?.removeMissingThreads || latest.visibleKeys.includes(key)),

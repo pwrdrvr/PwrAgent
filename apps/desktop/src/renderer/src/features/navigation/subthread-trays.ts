@@ -10,10 +10,10 @@ export type SubthreadTrays = {
    */
   addTrayOwner: (owner: NavigationThreadSummary) => void;
   /**
-   * Ordered keys of `trayKey`'s *direct* children — the only rows a tray
-   * reorder may move, because `subthreadOrder` is stored per parent. Writing a
-   * whole flattened tray back would list grandchildren as children of the row
-   * they merely render under.
+   * Ordered keys of the *direct* children this tray actually renders — the
+   * only rows a tray reorder may move, because `subthreadOrder` is stored per
+   * parent. Writing a whole flattened tray back would list grandchildren as
+   * children of the row they merely render under.
    */
   directChildKeys: (trayKey: string) => string[];
   /**
@@ -25,8 +25,6 @@ export type SubthreadTrays = {
    * rendered tray row can be.
    */
   depth: (threadKey: string) => number;
-  /** Whether some tray has already claimed this row. */
-  isPlaced: (threadKey: string) => boolean;
   /**
    * `trayKey`'s whole descendant subtree, depth-first and already ordered.
    * Render it as-is: re-sorting by the tray owner's `subthreadOrder` would
@@ -71,19 +69,27 @@ export function createSubthreadTrays(
     const bucket = childrenByParentKey.get(parentKey);
     if (!bucket?.length) return;
     const children = sortSubthreadSummaries(parent, bucket);
-    if (parentKey === trayKey) {
-      directChildKeysByTrayKey.set(
-        trayKey,
-        children.map((child) => threadSummaryIdentityKey(child)),
-      );
+    // Resolved once per tray rather than per child: this runs for every
+    // rendered sub-thread of every directory on each navigation update.
+    let tray = subtreeByTrayKey.get(trayKey);
+    if (!tray) {
+      tray = [];
+      subtreeByTrayKey.set(trayKey, tray);
+    }
+    // Only the rows this tray actually takes. A key an earlier tray already
+    // claimed renders there, not here, so counting it would turn on this
+    // tray's reorder affordance for a child that has no sibling to move past.
+    const directChildKeys =
+      parentKey === trayKey ? directChildKeysByTrayKey.get(trayKey) ?? [] : undefined;
+    if (directChildKeys) {
+      directChildKeysByTrayKey.set(trayKey, directChildKeys);
     }
     for (const child of children) {
       const childKey = threadSummaryIdentityKey(child);
       if (placedThreadKeys.has(childKey)) continue;
       placedThreadKeys.add(childKey);
-      const tray = subtreeByTrayKey.get(trayKey) ?? [];
+      directChildKeys?.push(childKey);
       tray.push(child);
-      subtreeByTrayKey.set(trayKey, tray);
       depthByThreadKey.set(childKey, depth);
       collectSubtree(trayKey, child, childKey, depth + 1);
     }
@@ -97,7 +103,6 @@ export function createSubthreadTrays(
     },
     depth: (threadKey) => depthByThreadKey.get(threadKey) ?? 1,
     directChildKeys: (trayKey) => directChildKeysByTrayKey.get(trayKey) ?? [],
-    isPlaced: (threadKey) => placedThreadKeys.has(threadKey),
     subtree: (trayKey) => subtreeByTrayKey.get(trayKey) ?? [],
   };
 }

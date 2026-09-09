@@ -5967,6 +5967,12 @@ type CreatedThreadVisibilityRow = {
   /** Absent once the walk reaches a row this directory renders top-level. */
   parentKey?: string;
   pinned: boolean;
+  /**
+   * True when this directory renders the row as a peer's thread. Its pin lives
+   * in `remote_thread_pins`, not the local thread overlay, so the local
+   * mutators must not be aimed at it.
+   */
+  remote: boolean;
   subthreadsCollapsed: boolean;
   threadId: string;
 };
@@ -5979,6 +5985,13 @@ type CreatedThreadDirectoryVisibility = Pick<
   hasPinnedTopLevelThread: boolean;
   /** Keyed exactly as `directory.threadKeys` names each row. */
   rowsByThreadKey: ReadonlyMap<string, CreatedThreadVisibilityRow>;
+  /**
+   * `<backend>:<threadId>` for every row above, including the peer-owned ones
+   * that `rowsByThreadKey` files under a federated key. A creation request
+   * names its parent by backend and id alone, so this is the only way to find
+   * a remote parent's row from one.
+   */
+  rowKeysByLocalKey: ReadonlyMap<string, string>;
 };
 
 let threadListCacheSequence = 0;
@@ -9964,6 +9977,7 @@ export class DesktopBackendRegistry {
         const directoryThreadKeys = new Set(directory.threadKeys);
         let hasPinnedTopLevelThread = false;
         const rowsByThreadKey = new Map<string, CreatedThreadVisibilityRow>();
+        const rowKeysByLocalKey = new Map<string, string>();
         for (const threadKey of directory.threadKeys) {
           const thread = threadsByKey.get(threadKey);
           if (!thread) continue;
@@ -9978,9 +9992,14 @@ export class DesktopBackendRegistry {
             backend: thread.source,
             ...(nestedHere ? { parentKey } : {}),
             pinned: Boolean(thread.pinnedRank),
+            remote: Boolean(thread.federation?.ref),
             subthreadsCollapsed: thread.subthreadsCollapsed === true,
             threadId: thread.id,
           });
+          rowKeysByLocalKey.set(
+            buildThreadIdentityKey(thread.source, thread.id),
+            threadKey,
+          );
           if (thread.pinnedRank && !nestedHere) {
             hasPinnedTopLevelThread = true;
           }
@@ -9995,6 +10014,7 @@ export class DesktopBackendRegistry {
               directory.directoryThreadsCollapsed === true,
             hasPinnedTopLevelThread,
             rowsByThreadKey,
+            rowKeysByLocalKey,
           },
         ];
       }),
@@ -14463,7 +14483,12 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): CreatedThreadVisibilityRow | undefined {
     const rows = params.directory.rowsByThreadKey;
-    let key = buildThreadIdentityKey(params.backend, params.threadId);
+    // A creation request names its parent by backend and id, but a peer-owned
+    // row is filed under its federated key. Translate before the lookup, or
+    // every remote parent reads as "not rendered here" and its child takes a
+    // pin it cannot show a control for.
+    const localKey = buildThreadIdentityKey(params.backend, params.threadId);
+    let key = params.directory.rowKeysByLocalKey.get(localKey) ?? localKey;
     let row = rows.get(key);
     const seen = new Set<string>();
     while (row?.parentKey && !seen.has(key)) {
@@ -14491,6 +14516,18 @@ export class DesktopBackendRegistry {
   }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
     const { ancestor } = params;
     if (ancestor.pinned && !ancestor.subthreadsCollapsed) {
+      return {};
+    }
+    if (ancestor.remote) {
+      // This row belongs to a peer: its pin lives in `remote_thread_pins` and
+      // its collapse is the owner's state, so both mutators below would write
+      // a local overlay nothing renders. Leave the group alone rather than
+      // fabricate one — and never fall through to pinning the child, which is
+      // a nested row either way.
+      logDebug("createdThreadVisibility:remoteGroupSkipped", {
+        directoryKey: params.directory.key,
+        threadId: ancestor.threadId,
+      });
       return {};
     }
     try {

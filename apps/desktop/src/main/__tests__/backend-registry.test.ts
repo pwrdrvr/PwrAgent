@@ -23,6 +23,7 @@ import {
   buildNavigationSnapshot,
   buildThreadIdentityKey,
   CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
+  federatedThreadIdentityKey,
   MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
@@ -59,6 +60,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationLaunchpadDraft,
+  NavigationThreadSummary,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
   PrSummary,
@@ -11363,6 +11365,145 @@ describe("DesktopBackendRegistry", () => {
         .filter((event) => event.notification.method === "thread/pin/added")
         .map((event) => (event.notification.params as { threadId: string }).threadId),
     ).toEqual(["thread-top"]);
+
+    await registry.close();
+  });
+
+  it("leaves a peer-owned ancestor alone instead of writing a local overlay", async () => {
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-remote-ancestor-project"),
+    );
+    const directoryKey = `directory:${directoryPath}`;
+    const linkedDirectory = {
+      id: directoryKey,
+      kind: "local" as const,
+      label: "project",
+      path: directoryPath,
+    };
+    const remoteRef = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "thread-remote-parent",
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        threads: [
+          {
+            id: "thread-pinned",
+            title: "Pinned thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [linkedDirectory],
+            updatedAt: 1_000,
+          },
+        ],
+      }),
+      overlayStore,
+    });
+    const snapshot = buildNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 1_000,
+      firstSnapshot: false,
+      directoryOverlayByKey: {
+        [directoryKey]: {
+          directoryKey,
+          directoryThreadsCollapsed: true,
+        },
+      },
+      overlayByThreadKey: {
+        "codex:thread-pinned": {
+          backend: "codex",
+          threadId: "thread-pinned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          pinnedRank: "1024",
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-pinned"],
+      threads: [
+        {
+          id: "thread-pinned",
+          title: "Pinned thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1_000,
+        },
+      ],
+      unchanged: false,
+    });
+    const localRow = snapshot.threads[0]!;
+    const remoteRow: NavigationThreadSummary = {
+      ...localRow,
+      federation: { instanceLabel: "Laptop", ref: remoteRef },
+      id: "thread-remote-parent",
+      pinnedRank: undefined,
+      subthreadsCollapsed: true,
+      title: "Peer's thread",
+    };
+    // A peer's row joins a local directory after the snapshot is built and is
+    // listed there under its FEDERATED key — that is what
+    // `attachRemoteThreadsToLocalDirectories` does in the real path.
+    registry.rememberNavigationVisibilityIndex({
+      directories: snapshot.directories.map((directory) =>
+        directory.key === directoryKey
+          ? {
+              ...directory,
+              threadKeys: [
+                ...directory.threadKeys,
+                federatedThreadIdentityKey(remoteRef),
+              ],
+            }
+          : directory),
+      threads: [...snapshot.threads, remoteRow],
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    // The parent is named by backend and id, so finding it at all requires
+    // translating to its federated key. Once found, it is the peer's row: its
+    // pin lives in `remote_thread_pins` and its collapse is the owner's state,
+    // so there is nothing here to write — and the child must not be pinned as
+    // a consolation, since it renders nested either way.
+    const response = await registry.startThread({
+      backend: "codex",
+      cwd: directoryPath,
+      parentThreadId: "thread-remote-parent",
+      parentThreadBackend: "codex",
+    });
+
+    expect(response).not.toHaveProperty("pinnedRank");
+    expect(response).not.toHaveProperty("autoPinFailure");
+    expect(
+      events.filter((event) =>
+        event.notification.method === "thread/pin/added"
+        || event.notification.method === "thread/subthreadsCollapsed/updated"),
+    ).toEqual([]);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-remote-parent",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.not.toHaveProperty("pinnedRank");
 
     await registry.close();
   });

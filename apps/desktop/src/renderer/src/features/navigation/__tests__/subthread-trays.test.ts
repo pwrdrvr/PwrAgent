@@ -112,9 +112,10 @@ describe("createSubthreadTrays", () => {
 
     trays.addTrayOwner(left);
 
+    // Terminating at all is the assertion; the owner is already claimed, so
+    // the child's link back to it places nothing and the walk stops.
     expect(trays.subtree("codex:left").map((row) => row.id)).toEqual(["right"]);
-    expect(trays.isPlaced("codex:left")).toBe(true);
-    expect(trays.isPlaced("codex:right")).toBe(true);
+    expect(trays.directChildKeys("codex:left")).toEqual(["codex:right"]);
   });
 
   it("returns empty views for a row that owns no tray", () => {
@@ -122,6 +123,6 @@ describe("createSubthreadTrays", () => {
 
     expect(trays.subtree("codex:absent")).toEqual([]);
     expect(trays.directChildKeys("codex:absent")).toEqual([]);
-    expect(trays.isPlaced("codex:absent")).toBe(false);
+    expect(trays.depth("codex:absent")).toBe(1);
   });
 });
