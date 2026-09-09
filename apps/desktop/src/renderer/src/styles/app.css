@@ -9025,6 +9025,37 @@ a.button {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.cloudflare-setup {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  font-size: 13px;
+}
+
+.cloudflare-setup p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
+.cloudflare-setup__intro { max-width: 76ch; font-size: 14px; }
+.cloudflare-setup__steps { display: flex; flex-wrap: wrap; gap: 16px; margin: 0; padding: 12px 0; list-style: none; counter-reset: cloudflare-step; border-block: 1px solid var(--border-subtle); color: var(--text-muted); }
+.cloudflare-setup__steps li { display: flex; gap: 8px; align-items: center; counter-increment: cloudflare-step; }
+.cloudflare-setup__steps li::before { content: counter(cloudflare-step, decimal-leading-zero); font: 11px var(--font-mono); }
+.cloudflare-setup__steps .is-current { color: var(--accent-bright); font-weight: 600; }
+.cloudflare-setup__steps .is-complete { color: var(--text-primary); }
+.cloudflare-setup__help { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.cloudflare-setup__help summary { cursor: pointer; color: var(--text-primary); }
+.cloudflare-setup__account,
+.cloudflare-setup__endpoint,
+.cloudflare-setup__client { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--border-subtle); }
+.cloudflare-setup__endpoint code { overflow-wrap: anywhere; }
+.cloudflare-setup__hint,
+.cloudflare-setup small { font-size: 12px; color: var(--text-muted); }
+.cloudflare-setup__client small { display: block; margin-top: 4px; }
+.cloudflare-setup__checks { display: grid; gap: 12px; }
+.cloudflare-setup__checks > div { display: grid; grid-template-columns: 48px 1fr; gap: 12px; }
+.cloudflare-setup__checks > div > span { font: 11px var(--font-mono); padding-top: 3px; }
+.cloudflare-setup__checks .is-pass > span { color: var(--success-text); }
+.cloudflare-setup__checks .is-fail > span,
+.cloudflare-setup .cloudflare-setup__error { color: var(--danger-text); }
+.cloudflare-setup__checks p { font-size: 12px; }
+
 .settings-section-controls {
   display: inline-flex;
   align-items: center;
