@@ -84,6 +84,41 @@ describe("StateDb", () => {
       "thread_usage_lines",
       "thread_usage_turns",
     ]);
+    const usageLineColumns = stateDb.raw
+      .prepare("PRAGMA table_info(thread_usage_lines)")
+      .all() as Array<{ name: string }>;
+    expect(usageLineColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "cache_write_input_cost_micros",
+        "cache_write_input_tokens",
+        "cumulative_cache_write_input_tokens",
+        "pricing_basis",
+      ]),
+    );
+  });
+
+  it("upgrades the release v32 ledger with request-pricing columns", () => {
+    stateDb.raw.exec("ALTER TABLE thread_usage_lines DROP COLUMN cache_write_input_cost_micros");
+    stateDb.raw.exec("ALTER TABLE thread_usage_lines DROP COLUMN cache_write_input_tokens");
+    stateDb.raw.exec("ALTER TABLE thread_usage_lines DROP COLUMN cumulative_cache_write_input_tokens");
+    stateDb.raw.exec("ALTER TABLE thread_usage_lines DROP COLUMN pricing_basis");
+    stateDb.raw.pragma("user_version = 32");
+    stateDb.close();
+
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+
+    const columns = stateDb.raw
+      .prepare("PRAGMA table_info(thread_usage_lines)")
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "cache_write_input_cost_micros",
+        "cache_write_input_tokens",
+        "cumulative_cache_write_input_tokens",
+        "pricing_basis",
+      ]),
+    );
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(33);
   });
 
   it("creates thread tool accounting tables", () => {

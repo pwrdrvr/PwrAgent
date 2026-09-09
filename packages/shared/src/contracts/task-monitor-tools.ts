@@ -59,6 +59,7 @@ export type TaskMonitorUsageSnapshot = {
   serviceTier?: string;
   summary: string;
   tokenUsage: {
+    cacheWriteInputTokens?: number;
     cachedInputTokens?: number;
     inputTokens?: number;
     outputTokens?: number;
