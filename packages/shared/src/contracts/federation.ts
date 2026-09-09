@@ -905,6 +905,8 @@ export type FederationActivitySnapshot = {
   logical: Array<{ peerId: string; series: FederationActivitySeries }>;
 };
 export type ReadFederationActivityResponse = {
+  /** Local info-level frame capture deadline, absent when inactive. */
+  detailedLoggingUntil?: number;
   activity: FederationActivitySnapshot;
   health: FederationHealthStatus;
   configuredMode: "disabled" | "client" | "gateway" | "dual";

@@ -1,3 +1,4 @@
+import { federationTrafficCaptureUntil } from "./federation-traffic-capture";
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import type { Duplex } from "node:stream";
@@ -58,9 +59,11 @@ function envelopeLogFields(envelope: FederationProtocolEnvelope, context?: Envel
 
 function observeReceivedEnvelope(envelope: FederationProtocolEnvelope, byteCount: number, context: EnvelopeDiagnosticsContext) {
   context.diagnostics.observe(envelope);
-  if (byteCount >= FEDERATION_LARGE_FRAME_LOG_BYTES) {
-    log.info("large federation frame received", {
+  const captureUntil = federationTrafficCaptureUntil();
+  if (captureUntil || byteCount >= FEDERATION_LARGE_FRAME_LOG_BYTES) {
+    log.info(captureUntil ? "federation captured frame received" : "large federation frame received", {
       byteCount,
+      dataByteCount: envelopeDataBytes.get(envelope),
       ...envelopeLogFields(envelope, context),
       ...describeLargeThreadReadResult(envelope),
       ...describeLargeBackendEvent(envelope),
@@ -1407,9 +1410,11 @@ function sendFrame(
     throw new FederationFrameTooLargeError(wireByteLength, maxFrameBytes);
   }
   const envelope = message.kind === "envelope" ? message.envelope : undefined;
-  if (wireByteLength >= FEDERATION_LARGE_FRAME_LOG_BYTES) {
-    log.info("large federation frame queued for send", {
+  const captureUntil = federationTrafficCaptureUntil();
+  if (captureUntil || wireByteLength >= FEDERATION_LARGE_FRAME_LOG_BYTES) {
+    log.info(captureUntil ? "federation captured frame queued for send" : "large federation frame queued for send", {
       byteCount: wireByteLength,
+      dataByteCount: envelope ? envelopeDataBytes.get(envelope) : undefined,
       messageKind: message.kind,
       ...(envelope ? envelopeLogFields(envelope, context) : {}),
       ...(envelope ? describeLargeThreadReadResult(envelope) : {}),

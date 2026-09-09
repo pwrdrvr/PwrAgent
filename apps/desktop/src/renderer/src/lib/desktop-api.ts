@@ -619,6 +619,7 @@ export type DesktopApi = {
     request: OpenFederationWindowRequest,
   ) => Promise<OpenFederationWindowResponse>;
   readFederationActivity?: (request?: ReadFederationActivityRequest) => Promise<ReadFederationActivityResponse>;
+  setFederationTrafficCapture?: (enabled: boolean) => Promise<ReadFederationActivityResponse>;
   resetFederationActivity?: () => Promise<ReadFederationActivityResponse>;
   setFederationEnabled?: (enabled: boolean) => Promise<ReadFederationActivityResponse>;
   openFederationActivity?: () => Promise<void>;

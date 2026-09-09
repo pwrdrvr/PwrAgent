@@ -1,3 +1,4 @@
+import { FederationTrafficCapture } from "./FederationTrafficCapture";
 import { useEffect, useId, useRef, useState } from "react";
 import { FederationConnections } from "./FederationConnections";
 import { CheckIcon, CopyIcon } from "../../icons";
@@ -184,7 +185,7 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
     return () => clearTimeout(timer);
   }, [copied]);
   const [actionError, setActionError] = useState<string>();
-  const { snapshot, error, pending, toggle, reset } = useFederationActivity(desktopApi, true, {
+  const { snapshot, error, pending, toggle, reset, capture } = useFederationActivity(desktopApi, true, {
     historyPeerId: peerId || undefined, historyView: view,
   });
   const peers = snapshot ? view === "physical" ? snapshot.activity.peers : snapshot.activity.logical : [];
@@ -211,6 +212,9 @@ export function FederationActivityScreen({ desktopApi }: { desktopApi?: DesktopA
             setActionError(cause instanceof Error ? cause.message : String(cause));
           }).finally(() => setTopmostPending(false));
         }} /> Always on top</label>
+      <FederationTrafficCapture until={snapshot?.detailedLoggingUntil}
+        disabled={!snapshot || pending || !desktopApi?.setFederationTrafficCapture}
+        onChange={(enabled) => { void capture(enabled); }} />
       <button type="button" disabled={pending || !desktopApi?.resetFederationActivity}
         title="Clear all Federation activity totals, size statistics and history for every peer"
         onClick={() => { setCopied(false); void reset(); }}>Reset</button>

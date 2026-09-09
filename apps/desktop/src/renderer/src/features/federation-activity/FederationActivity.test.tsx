@@ -1,3 +1,4 @@
+import { FederationTrafficCapture } from "./FederationTrafficCapture";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +31,40 @@ function fixture(): ReadFederationActivityResponse {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("Federation activity surfaces", () => {
+  it.each(["popup", "activity"])("starts and stops detailed capture in the %s", async (surface) => {
+    const snapshot = fixture();
+    const setFederationTrafficCapture = vi.fn(async (enabled: boolean) => {
+      snapshot.detailedLoggingUntil = enabled ? Date.now() + 60_000 : undefined;
+      return structuredClone(snapshot);
+    });
+    const desktopApi = { readFederationActivity: async () => structuredClone(snapshot), setFederationTrafficCapture };
+    render(surface === "popup"
+      ? <FederationStatusControl desktopApi={desktopApi} onOpen={vi.fn()} />
+      : <FederationActivityScreen desktopApi={desktopApi} />);
+    if (surface === "popup") fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
+    const checkbox = await screen.findByRole("checkbox", { name: "Capture detailed Federation traffic" });
+    await waitFor(() => expect(checkbox).toBeEnabled());
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(checkbox).toBeChecked());
+    expect(setFederationTrafficCapture).toHaveBeenLastCalledWith(true);
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(checkbox).not.toBeChecked());
+    expect(setFederationTrafficCapture).toHaveBeenLastCalledWith(false);
+  });
+
+  it("shows remaining time and unchecks when a capture expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const onChange = vi.fn();
+    render(<FederationTrafficCapture until={61_000} disabled={false} onChange={onChange} />);
+    const checkbox = screen.getByRole("checkbox", { name: "Capture detailed Federation traffic" });
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText("Detailed logs · 60s left")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(checkbox).not.toBeChecked();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("does not present stopped or lease-denied connections as active", () => {
     const health = fixture().health;
     health.role = "dual";
@@ -202,7 +237,7 @@ describe("Federation activity surfaces", () => {
       historyPeerId: "remote", historyView: "logical", includeHistory: undefined,
     }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Always on top" }));
-    await waitFor(() => expect(screen.getByRole("checkbox")).toBeChecked());
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Always on top" })).toBeChecked());
     expect(setFederationActivityTopmost).toHaveBeenCalledWith(true);
   });
 

@@ -1,3 +1,4 @@
+import { federationTrafficCaptureUntil, setFederationTrafficCapture } from "./federation-traffic-capture";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -1236,6 +1237,11 @@ export class DesktopFederationRuntime {
     this.gatewayListenerError = undefined;
   }
 
+  async setDetailedTrafficCapture(enabled: boolean): Promise<ReadFederationActivityResponse> {
+    setFederationTrafficCapture(enabled);
+    return this.activity();
+  }
+
   async resetActivity(): Promise<ReadFederationActivityResponse> {
     this.activityLedger.reset();
     return this.activity();
@@ -1244,6 +1250,7 @@ export class DesktopFederationRuntime {
   async activity(request?: ReadFederationActivityRequest): Promise<ReadFederationActivityResponse> {
     return {
       activity: this.activityLedger.snapshot(Date.now(), request),
+      detailedLoggingUntil: federationTrafficCaptureUntil(),
       health: await this.health(),
       configuredMode: resolveFederationRuntimeConfig(
         getDesktopSettingsService().readFederationConfig(),

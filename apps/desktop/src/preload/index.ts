@@ -613,6 +613,7 @@ import {
   BACKEND_LIST_CHANNEL,
   FEDERATION_READ_ACTIVITY_CHANNEL,
   FEDERATION_RESET_ACTIVITY_CHANNEL,
+  FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL,
   FEDERATION_SET_ENABLED_CHANNEL,
   FEDERATION_OPEN_ACTIVITY_CHANNEL,
   FEDERATION_ACTIVITY_TOPMOST_CHANNEL,
@@ -1122,6 +1123,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(FEDERATION_OPEN_WINDOW_CHANNEL, request),
   readFederationActivity: async (request?: ReadFederationActivityRequest): Promise<ReadFederationActivityResponse> =>
     await ipcRenderer.invoke(FEDERATION_READ_ACTIVITY_CHANNEL, request),
+  setFederationTrafficCapture: async (enabled: boolean): Promise<ReadFederationActivityResponse> =>
+    await ipcRenderer.invoke(FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL, enabled),
   resetFederationActivity: async (): Promise<ReadFederationActivityResponse> =>
     await ipcRenderer.invoke(FEDERATION_RESET_ACTIVITY_CHANNEL),
   setFederationEnabled: async (enabled: boolean): Promise<ReadFederationActivityResponse> =>

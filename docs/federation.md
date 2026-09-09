@@ -164,8 +164,10 @@ subscriptionId }`. The owner acknowledges with `backend.eventStream` and a
 new epoch before sending numbered `backend.event` notifications. Gateways
 preserve the negotiation, acknowledgement, and sequence. The viewer catches
 up after acknowledgement, including when an idle owner has a pending prompt,
-and resubscribes on a sequence gap. Normal active-thread navigation timestamp
-changes do not trigger transcript reads. A recovery that arrives during an
+and resubscribes on a sequence gap. Normal navigation timestamp
+changes do not trigger transcript reads for mounted remote threads, whether
+idle or active. A final item already delivered before an empty turn-completed
+event satisfies completion without another snapshot. A recovery that arrives during an
 older read remains pending until a read started after recovery completes.
 Reselecting a cached remote thread also triggers window-local catch-up: another
 window can keep the aggregate subscription alive while this window misses events.
@@ -300,3 +302,15 @@ Once a messaging surface is attached to a remote thread, its status card and
 subsequent backend-driven refreshes read navigation state from that owning
 instance. The gateway must not render a remote binding from its local thread
 snapshot or silently fall back to a same-shaped local thread.
+
+### Temporary frame diagnostics
+
+Federation Activity and the Federation status popup expose a 60-second detailed
+traffic capture. The deadline belongs to the local main process, so closing
+the surface does not cancel it and an inactive renderer cannot prolong it.
+Capture logs every envelope at info level with physical peer, logical endpoints,
+method, request/thread identifiers, and encoded/uncompressed byte counts.
+Response methods are correlated with their requests. Thread-read and accounting
+sizes are included without payload contents. The setting is not persisted or
+relayed to peers. Outside the capture window, the 200,000-byte large-frame
+threshold remains in effect.

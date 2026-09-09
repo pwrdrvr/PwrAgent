@@ -1,3 +1,4 @@
+import { setFederationTrafficCapture } from "../federation/federation-traffic-capture";
 import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -56,6 +57,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setFederationTrafficCapture(false);
   await server?.stop();
   server = undefined;
   for (const client of rawServer?.clients ?? []) {
@@ -315,7 +317,9 @@ describe("federation transport", () => {
     client.close();
   });
 
-  it.each([false, true])("reports exact bytes and correlated large responses at both ends (Noise: %s)", async (encrypted) => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])("reports correlated frames at both ends (Noise: %s, capture: %s)", async (encrypted, capture) => {
+    setFederationTrafficCapture(capture);
+    const prefix = capture ? "federation captured frame" : "large federation frame";
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -358,7 +362,7 @@ describe("federation transport", () => {
           targetInstanceId: connection.peerId,
           createdAt: 2_000,
           // This was invisible to the former 512 KiB threshold.
-          result: { privatePayload: "x".repeat(250_000) },
+          result: { privatePayload: "x".repeat(capture ? 250 : 250_000) },
         });
       },
       onEnvelopeTransfer: (info) => gatewayTransfers.push(info),
@@ -407,7 +411,7 @@ describe("federation transport", () => {
     expect(clientTransfers).toHaveLength(2);
     const [gatewayReceived, gatewaySent] = gatewayTransfers;
     const [clientSent, clientReceived] = clientTransfers;
-    for (const message of ["large federation frame queued for send", "large federation frame received"]) {
+    for (const message of [`${prefix} queued for send`, `${prefix} received`]) {
       expect(transportLog.info).toHaveBeenCalledWith(message, expect.objectContaining({
         envelopeKind: "response",
         requestId: "request-transfer",
@@ -418,7 +422,15 @@ describe("federation transport", () => {
         targetInstanceLabel: "Client",
       }));
     }
-    const largeLogs = transportLog.info.mock.calls.filter(([message]) => message.startsWith("large federation frame"));
+    const largeLogs = transportLog.info.mock.calls.filter(([message, fields]) =>
+      message.startsWith(prefix) && fields?.envelopeKind === "response");
+    if (capture) {
+      const requestLogs = transportLog.info.mock.calls.filter(([message, fields]) =>
+        message.startsWith(prefix) && fields?.envelopeKind === "request");
+      expect(requestLogs).toHaveLength(2);
+      expect(clientReceived!.byteCount).toBeLessThan(200_000);
+      expect(JSON.stringify(transportLog.info.mock.calls)).not.toContain("privatePayload");
+    }
     expect(largeLogs).toHaveLength(2);
     expect(largeLogs[0][1]).toMatchObject({ peerId: "client_one", peerLabel: "Client" });
     expect(largeLogs[1][1]).toMatchObject({ peerId: "gateway_one", peerLabel: "Gateway" });
