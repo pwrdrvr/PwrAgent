@@ -563,6 +563,7 @@ export function Sidebar(props: SidebarProps) {
     : undefined;
   const lensResources = [...props.pagedNavigation?.resources.values() ?? []]
     .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
+  const directoryIndexResource = props.pagedNavigation?.resources.get("directory-index");
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
   const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
     .map((entry) => [navigationThreadSelectionKey(entry.row.ref), rowsByKey.get(navigationThreadSelectionKey(entry.row.ref))])).values()].filter((thread): thread is NavigationThreadSummary => Boolean(thread));
@@ -2096,8 +2097,13 @@ export function Sidebar(props: SidebarProps) {
               ) : null}
             </div>
           )) : null}
-          {props.browseMode === "directories" && props.pagedNavigation?.resources.get("directory-index")?.state.page?.nextCursor ? (
-            <SidebarShowMore label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
+          {props.browseMode === "directories" && directoryIndexResource?.state.page?.nextCursor ? (
+            // `loadMore` has no reentrancy guard of its own — it awaits any
+            // pending read and then unconditionally starts another — so the
+            // in-flight guard is the only thing standing between a double
+            // click and two page advances. This was the one load-more control
+            // without it.
+            <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
           ) : null}
         </div>
       </section>

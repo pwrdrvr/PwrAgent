@@ -4049,6 +4049,18 @@ a.button {
   margin-left: 14px;
 }
 
+/* The tray's status text. `.sidebar-empty` and `.sidebar-error` are
+   sidebar-level and set 14px, which inside a sub-list lands above both the
+   13px `--sidebar-title-size` of the rows around it and the 12px paging
+   control below it — so a transient "Loading…" became the loudest thing in
+   the tray, the same way the unstyled paging button did. Scope the tray's
+   copies to the tray's own scale. */
+.subthread-list .sidebar-empty,
+.subthread-list .sidebar-error {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
 .native-subagents {
   min-width: 0;
 }
@@ -6561,9 +6573,14 @@ a.button {
 .sidebar-show-more {
   overflow-anchor: none;
   align-self: flex-start;
-  /* `.subthread-list` is a grid, where `align-self` answers the block axis
-     and leaves the inline one on the default `stretch`. That is precisely
-     how the unstyled sub-thread button came out full-bleed. */
+  /* Defensive, not load-bearing today. `.subthread-list` is a grid, where
+     `align-self` answers the block axis and leaves the inline one on the
+     default `stretch` — which is how the unstyled sub-thread button came out
+     full-bleed. `SubthreadPagination` now wraps the control in the
+     `role="listitem"` its list requires, and that wrapper is the grid item,
+     so the inline-block button shrink-wraps on its own. This keeps a control
+     narrow if one is ever a direct grid child again; it is not a substitute
+     for the wrapper, which the list's validity depends on. */
   justify-self: start;
   margin-top: 2px;
   /* WCAG 2.5.8, same as the divider above. Without it this lands at

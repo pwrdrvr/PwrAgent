@@ -189,3 +189,47 @@ it.each(["directories", "inbox"] as const)("keeps expected disconnected child-pa
   expect(screen.getByRole("button", { name: /^Pin 5/ })).toBeInTheDocument();
   view.unmount();
 });
+
+
+// `.subthread-list` is a `role="list"`, which owns `listitem` children and
+// nothing else. Its paging controls used to render as a bare <button> and two
+// bare <p>s directly in that list — a critical axe `aria-required-children`
+// violation on every tray with a second page — so `SubthreadPagination` wraps
+// them the way the pinned block beside it always did. Nothing else pins that
+// wrapper: the e2e a11y spec seeds directory-level pagination only, so no
+// fixture there ever gives a sub-thread resource a cursor.
+it("keeps a paged sub-thread tray a valid list", () => {
+  const parent = { ...rows[0]!, ordinaryChildCount: 1 };
+  const child = { ...rows[1]!, id: "child-1", title: "Child 1", pinnedRank: undefined,
+    parentThreadId: parent.id, ref: { backend: "codex" as const, threadId: "child-1" } };
+  const childId = 'children:[null,"codex","pin-5"]';
+  const children = resource(childId, { kind: "children", parent: parent.ref }, {
+    complete: false, nextCursor: "more",
+    entries: [{ row: child, placement: { kind: "child", parent: parent.ref }, orderKey: "0" }],
+  });
+  const pinsId = `directory-pins:${directory.key}`;
+  const resources = new Map([[childId, children], [pinsId, resource(pinsId,
+    { kind: "directory", directoryKey: directory.key, roots: "pinned" },
+    { entries: [{ row: parent, placement: { kind: "root" }, orderKey: "0" }] })]]);
+  const navigation = { resources, directories: [directory], selectedDirectoryKeys: [directory.key], connected: true,
+    invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+    rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
+  const view = render(<Sidebar backends={[]} browseMode="directories" directories={[directory]} threads={[parent, child]}
+    loading={false} selectedItemKey={`codex:${parent.id}`} selectedThreadDirectoryKeys={[directory.key]}
+    pagedNavigation={navigation} onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+    onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
+
+  const more = screen.getByRole("button", { name: "Load more sub-threads" });
+  expect(more).toHaveClass("sidebar-show-more");
+
+  const tray = view.container.querySelector(".subthread-list");
+  expect(tray).not.toBeNull();
+  expect(tray).toContainElement(more);
+  // The contract itself, asserted over the tray's DIRECT children: a list may
+  // own listitems only, so an unwrapped control is a violation no matter how
+  // it is styled.
+  expect([...tray!.children].map((item) => item.getAttribute("role"))).toEqual(
+    Array.from({ length: tray!.children.length }, () => "listitem"),
+  );
+  view.unmount();
+});
