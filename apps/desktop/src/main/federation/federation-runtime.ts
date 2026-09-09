@@ -1,6 +1,8 @@
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture } from "./federation-traffic-capture";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
+import { cloudflareConnector } from "./cloudflare-connector";
+import { loadCloudflareSetup } from "./cloudflare-setup-storage";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
@@ -1189,6 +1191,7 @@ export class DesktopFederationRuntime {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    await cloudflareConnector.stop();
     this.connectionAttempt = undefined;
     this.connectionGeneration += 1;
     this.walkEpoch += 1;
@@ -1261,6 +1264,14 @@ export class DesktopFederationRuntime {
       ).mode,
       running: Boolean(this.listenUrl || this.client || this.reconnectTimer || this.connectionAttempt),
     };
+  }
+
+  cloudflareSecurityProbes(listenPort: number) {
+    if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535
+      || this.stopping || !this.server || this.listenUrl !== `ws://127.0.0.1:${listenPort}`) {
+      throw new Error("Enable the gateway on the selected loopback port before Cloudflare setup or validation.");
+    }
+    return this.server.securityProbes;
   }
 
   async health(): Promise<FederationHealthStatus> {
@@ -2823,6 +2834,16 @@ export class DesktopFederationRuntime {
         }
         this.listenUrl = started.url;
         log.info("federation gateway listening", { url: started.url });
+        try {
+          const cloudflare = await loadCloudflareSetup();
+          if (cloudflare?.dnsId && cloudflare.tunnelToken
+            && started.url === `ws://127.0.0.1:${cloudflare.listenPort}`
+            && !startupAborted()) {
+            await cloudflareConnector.start(cloudflare.tunnelToken);
+          }
+        } catch {
+          log.warn("Cloudflare connector was not started. Check Federation settings.");
+        }
       } catch (error) {
         this.gatewayListenerError = redactFederationDiagnostic(
           error instanceof Error ? error.message : String(error),

@@ -1,6 +1,7 @@
 import { setFederationTrafficCapture } from "../federation/federation-traffic-capture";
 import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import WebSocket, { WebSocketServer } from "ws";
@@ -70,6 +71,41 @@ afterEach(async () => {
 });
 
 describe("federation transport", () => {
+  it("observes armed HTTP and upgrade probes before federation admission", async () => {
+    const onEnvelope = vi.fn();
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      onEnvelope,
+    });
+    const { port } = await server.start();
+    for (const upgrade of [false, true]) {
+      const probe = server.securityProbes.arm();
+      try {
+        const response = await new Promise<{ status?: number; proof?: string | string[] }>((resolve, reject) => {
+          const request = http.get({ host: "127.0.0.1", port, headers: {
+            "X-PwrAgent-Security-Probe": probe.id,
+            ...(upgrade ? { Connection: "Upgrade", Upgrade: "websocket" } : {}),
+          } }, (incoming) => {
+            resolve({ status: incoming.statusCode, proof: incoming.headers["x-pwragent-probe-proof"] });
+            incoming.resume();
+          });
+          request.on("error", reject);
+        });
+        expect(response).toEqual({ status: 204, proof: probe.proof });
+        expect(probe.observed()).toBe(true);
+        expect(onEnvelope).not.toHaveBeenCalled();
+      } finally { probe.close(); }
+    }
+    const ordinary = await fetch(`http://127.0.0.1:${port}/`, { headers: { "X-PwrAgent-Security-Probe": "unarmed" } });
+    expect(ordinary.status).toBe(404);
+    expect(ordinary.headers.has("x-pwragent-probe-proof")).toBe(false);
+  });
+
   it("encodes blob bytes as a binary tail and rejects blob JSON envelopes", () => {
     const data = Buffer.from([0, 1, 2, 0xff]);
     const envelope = {

@@ -18,6 +18,7 @@ export * from "./contracts/star-map";
 export * from "./contracts/composer-drafts";
 export * from "./contracts/diff-focus";
 export * from "./contracts/federation";
+export * from "./contracts/federation-cloudflare";
 export * from "./contracts/federation-tools";
 export * from "./contracts/messaging";
 export * from "./contracts/messaging-tools";
