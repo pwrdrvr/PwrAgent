@@ -26,6 +26,7 @@ type Resource = {
   value: NavigationWindowResource;
   pending?: Promise<void>;
   refreshAfterPending: boolean;
+  invalidated: boolean;
   released: boolean;
   anchor?: NavigationQueryAnchor;
 };
@@ -72,6 +73,7 @@ export class NavigationWindowQueries {
       if (demandBytes > MAX_DEMAND_BYTES) break;
       admitted.set(id, request);
     }
+    let changed = false;
     const admissionError = admitted.size !== demand.size
       ? "Navigation request metadata exceeds its memory budget." : undefined;
     for (const [id, resource] of this.resources) {
@@ -79,6 +81,7 @@ export class NavigationWindowQueries {
       if (!request || JSON.stringify(request) !== resource.requestKey) {
         this.release(resource);
         this.resources.delete(id);
+        changed = true;
       }
     }
     const added: Resource[] = [];
@@ -87,13 +90,16 @@ export class NavigationWindowQueries {
       const resource: Resource = {
         requestKey: JSON.stringify(request), token: `${this.prefix}:${++this.nextResource}`,
         value: { id, state: createNavigationPageState(request), loading: false },
-        refreshAfterPending: false, released: !this.visible, anchor: request.anchor,
+        refreshAfterPending: false, invalidated: false, released: !this.visible, anchor: request.anchor,
       };
       this.resources.set(id, resource);
       added.push(resource);
+      changed = true;
     }
-    this.snapshot = { ...this.snapshot, admissionError };
-    this.publish();
+    if (changed || admissionError !== this.snapshot.admissionError) {
+      this.snapshot = { ...this.snapshot, admissionError };
+      this.publish();
+    }
     if (this.visible) for (const resource of added) void this.read(resource, false);
   }
 
@@ -107,7 +113,7 @@ export class NavigationWindowQueries {
       } else {
         // Replace the lifetime rather than revive a released token or pending read.
         const next: Resource = { ...resource, token: `${this.prefix}:${++this.nextResource}`,
-          released: false, pending: undefined, refreshAfterPending: false };
+          released: false, pending: undefined, refreshAfterPending: false, invalidated: false };
         this.resources.set(resource.value.id, next);
         void this.read(next, false);
       }
@@ -129,8 +135,14 @@ export class NavigationWindowQueries {
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */
   invalidate(id?: string): void {
+    let changed = false;
     for (const resource of this.resources.values()) {
       if (id && resource.value.id !== id) continue;
+      // Fence each physical read once. Further events before its replacement
+      // carry no new presentation state and must not rerender every row.
+      if (resource.invalidated) continue;
+      resource.invalidated = true;
+      changed = true;
       // Some canonical events patch settled rows without scheduling a read.
       // If they fence a pending page, replace that discarded read so initial
       // readiness and refreshed counts cannot remain stranded indefinitely.
@@ -138,7 +150,7 @@ export class NavigationWindowQueries {
       resource.value = { ...resource.value, state: { ...resource.value.state,
         pendingSequence: resource.value.state.pendingSequence + 1, stale: true } };
     }
-    this.publish();
+    if (changed) this.publish();
   }
 
   setVisibleAnchor(id: string, anchor: NavigationQueryAnchor | undefined): void {
@@ -203,6 +215,7 @@ export class NavigationWindowQueries {
     const cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
     const started = beginNavigationPageRead(resource.value.state);
+    resource.invalidated = false;
     resource.value = { ...resource.value, state: started, loading: true };
     this.publish();
     const promise = Promise.resolve().then(async () => {

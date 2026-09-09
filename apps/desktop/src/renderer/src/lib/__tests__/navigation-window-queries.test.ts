@@ -253,3 +253,63 @@ it("explicit restart drops tail acknowledgments even when requested during a ref
   expect(queries.getSnapshot().resources.get("pins")?.state.page?.rangeStart).toBe(0);
   queries.dispose();
 });
+
+
+it("publishes one invalidation per read generation across a hundred-event burst", async () => {
+  const gates: ReturnType<typeof deferred<NavigationQueryPage>>[] = [];
+  const read = vi.fn(() => { const gate = deferred<NavigationQueryPage>(); gates.push(gate); return gate.promise; });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const notify = vi.fn();
+  queries.subscribe(notify);
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    notify.mockClear();
+    queries.invalidate();
+    const invalidated = queries.getSnapshot();
+    for (let index = 0; index < 99; index += 1) queries.invalidate();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot()).toBe(invalidated);
+    gates[0]!.resolve(page({ countsRevision: "late-first" }));
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    // A new event must fence the replacement even though its baseline is stale.
+    notify.mockClear();
+    for (let index = 0; index < 100; index += 1) queries.invalidate();
+    expect(notify).toHaveBeenCalledTimes(1);
+    gates[1]!.resolve(page({ countsRevision: "late-second" }));
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    expect(queries.getSnapshot().resources.get("lens")?.state.page).toBeUndefined();
+    gates[2]!.resolve(page({ countsRevision: "fresh" }));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.countsRevision).toBe("fresh");
+    notify.mockClear();
+    for (let index = 0; index < 100; index += 1) queries.invalidate();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(3);
+  } finally {
+    queries.dispose();
+    for (const gate of gates) gate.resolve(page());
+  }
+});
+
+it("does not publish or refetch for identical demand or absent-resource invalidations", async () => {
+  const read = vi.fn(async () => page());
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
+    const snapshot = queries.getSnapshot();
+    const notify = vi.fn();
+    queries.subscribe(notify);
+    for (let index = 0; index < 100; index += 1) {
+      queries.setDemand(new Map([["lens", request()]]));
+      queries.invalidate("removed-directory");
+    }
+    expect(queries.getSnapshot()).toBe(snapshot);
+    expect(notify).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledTimes(1);
+    queries.setDemand(new Map());
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(queries.getSnapshot().resources.size).toBe(0);
+  } finally { queries.dispose(); }
+});
