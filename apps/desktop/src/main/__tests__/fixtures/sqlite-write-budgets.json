@@ -1,4 +1,11 @@
 {
+  "codex-invalid-id-recovery-audit": {
+    "commits": 4,
+    "note": "One successful recovery: reservation, repair, retry submission, retry ID; no periodic writes",
+    "observedWalBytes": 65920,
+    "rowsChanged": 4,
+    "statements": 4
+  },
   "composer-draft-typing": {
     "commits": 70,
     "note": "70 direct store saves (a stress case for prefix collapse, NOT the app's typing cadence — the renderer coalesces to one save per 5s): exactly one journal row survives, and commits track save calls because each save is its own transaction",

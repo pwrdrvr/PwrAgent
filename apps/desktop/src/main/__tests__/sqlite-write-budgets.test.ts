@@ -33,6 +33,46 @@ afterEach(() => {
 });
 
 describe("sqlite write budgets", () => {
+  it("bounds the four audit writes for one successful Codex history repair", async () => {
+    await store.appendTurnFailure({
+      backend: "codex",
+      threadId: "repair-thread",
+      failure: {
+        id: "failure-1",
+        turnId: "failed-turn",
+        error: "invalid persisted message ID",
+        occurredAt: 1000,
+      },
+    });
+    const reserved = { attemptId: "attempt-1", attemptedAt: 1001 };
+    const repaired = {
+      ...reserved,
+      repairedAt: 1002,
+      removedMessageIdCount: 2,
+      backupPath: "/fixture/backup.jsonl.bak",
+    };
+    const submitted = { ...repaired, retrySubmittedAt: 1003 };
+    const { writes } = await meter.measure(async () => {
+      for (const recovery of [
+        reserved,
+        repaired,
+        submitted,
+        { ...submitted, retryTurnId: "retry-turn" },
+      ]) {
+        await store.setTurnFailureCodexInvalidIdRecovery({
+          threadId: "repair-thread",
+          turnId: "failed-turn",
+          recovery,
+        });
+      }
+    });
+    expectSqliteWriteBudget({
+      scenario: "codex-invalid-id-recovery-audit",
+      note: "One successful recovery: reservation, repair, retry submission, retry ID; no periodic writes",
+      writes,
+    });
+  });
+
   it("keeps transaction variants callable and counts one commit per batch", async () => {
     const insert = stateDb.raw.prepare(
       "INSERT INTO thread_tool_invocations (invocation_id, backend, thread_id, "
