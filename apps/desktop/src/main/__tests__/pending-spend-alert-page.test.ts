@@ -62,6 +62,7 @@ it("uses the pending-only index for the actual alert query amid unrelated histor
   const store = new SqliteOverlayStore(db);
   try {
     const insert = db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
+    insert.run("malformed", "not-json");
     db.raw.transaction(() => {
       for (let index = 0; index < 2000; index += 1) {
         insert.run(`history-${index}`, JSON.stringify({ backend: "codex", history: "x".repeat(4096) }));
@@ -93,12 +94,13 @@ it("indexes existing pending alerts when reopening a current-version profile", a
       currency: "USD", spendMicros: 2, thresholdMicros: 1,
     } });
     db.raw.exec("DROP INDEX idx_threads_pending_spend_alert");
+    db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run("malformed-legacy", "not-json");
     const version = db.raw.pragma("user_version", { simple: true });
     db.close();
     db = StateDb.open(dbPath);
     expect(db.raw.pragma("user_version", { simple: true })).toBe(version);
     const indexed = db.raw.prepare(`SELECT thread_id FROM threads INDEXED BY idx_threads_pending_spend_alert
-      WHERE json_type(payload, '$.threadSpendAlertPending') = 'object'`).all();
+      WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.threadSpendAlertPending') END = 'object'`).all();
     expect(indexed).toEqual([{ thread_id: "codex:existing" }]);
     expect((await new SqliteOverlayStore(db).listPendingThreadSpendAlerts({})).alerts[0]?.alert.alertId).toBe("existing-alert");
     db.close();

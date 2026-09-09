@@ -1792,7 +1792,7 @@ export class StateDb {
       if (tableExists(db, "threads")) {
         db.exec(`CREATE INDEX IF NOT EXISTS idx_threads_pending_spend_alert
           ON threads(thread_id)
-          WHERE json_type(payload, '$.threadSpendAlertPending') = 'object'`);
+          WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.threadSpendAlertPending') END = 'object'`);
       }
 
     };
