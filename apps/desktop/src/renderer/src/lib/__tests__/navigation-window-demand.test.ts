@@ -102,8 +102,8 @@ it("resolves only visible mounted rows from each explicit owner and keeps select
     query: { kind: "exact", identities: [remote] } });
   expect(demand.get("lens")?.inventory).toBe("viewer");
   const selected = buildNavigationWindowDemand({ ...base, browseMode: "inbox", selectedRef: remote });
-  addVisibleMountedOwnerDemand({ demand: selected, pages, selectedRef: remote });
-  expect(selected.has('visible-owner:"peer":0')).toBe(false);
+  addVisibleMountedOwnerDemand({ demand: selected, pages });
+  expect(selected.get('visible-owner:"peer":0')).toEqual(demand.get('visible-owner:"peer":0'));
   expect(selected.get("selected-context")?.inventory).toBe("owner");
   expect(selected.get("selected-viewer-mount")?.inventory).toBe("viewer");
 });
