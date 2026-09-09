@@ -501,6 +501,43 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("keeps the feature warning out of completed work between review cards", () => {
+    const turn = completedTurn("turn-review", 82_000);
+    const startedReview = review("review-start", "Review changes against origin/main", turn);
+    const completedReview = review("review-complete", "Code review", turn);
+    const warning: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-warning-thread-1",
+      tone: "warning",
+      summary: "Warning: Under-development features enabled: default_mode_request_user_input. "
+        + "Under-development features are incomplete and may behave unpredictably. "
+        + "To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/dev/.codex/config.toml.",
+      details: [],
+      turn,
+    };
+    const activity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "review-tools",
+      summary: "Explored 7 items · Used 5 tools",
+      details: [],
+      turn,
+    };
+
+    expect(buildTranscriptRenderItems({
+      entries: [startedReview, warning, activity, completedReview],
+    })).toEqual([
+      { type: "entry", entry: startedReview },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-review:live-warning-thread-1:complete",
+        collapsible: true,
+        entries: [warning, activity],
+        label: "Worked for 1m 22s",
+      },
+      { type: "entry", entry: completedReview },
+    ]);
+  });
+
   it("does not repeat elapsed labels for review-bounded work in one turn", () => {
     const turn = completedTurn("turn-review", 74_000);
     const startedReview = review(
