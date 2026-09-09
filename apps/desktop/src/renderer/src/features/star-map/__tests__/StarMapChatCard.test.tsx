@@ -357,14 +357,14 @@ describe("StarMapChatCard transcript loading", () => {
     await act(async () => pending.resolve(response));
     expect(desktopApi.readThread).toHaveBeenCalledTimes(1);
 
-    // A later owner update still hydrates, and reopening owns a fresh read.
+    // Navigation timestamps do not invalidate a live remote card; reopening owns a fresh read.
     view.rerender(<StrictMode>{card({ desktopApi, thread: remoteThread({ updatedAt: 2 }) })}</StrictMode>);
     await act(async () => {});
-    expect(desktopApi.readThread).toHaveBeenCalledTimes(2);
+    expect(desktopApi.readThread).toHaveBeenCalledTimes(1);
     view.unmount();
     render(<StrictMode>{card({ desktopApi, thread: remoteThread({ updatedAt: 2 }) })}</StrictMode>);
     await act(async () => {});
-    expect(desktopApi.readThread).toHaveBeenCalledTimes(3);
+    expect(desktopApi.readThread).toHaveBeenCalledTimes(2);
   });
 
   it("asks for the last few turns rather than the whole thread", async () => {

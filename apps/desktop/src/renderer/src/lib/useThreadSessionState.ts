@@ -5522,6 +5522,17 @@ export function useThreadSessionState(params: {
       return;
     }
 
+    // Mounted remote transcripts already receive idle metadata and terminal
+    // items through their subscription. Only explicit recovery above or a
+    // requested history-size change needs another snapshot.
+    if ((thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote"
+      && !session.needsHydrationAfterCompletion) {
+      if (session.hydratedInitialHistoryLimit !== initialHistoryLimit) {
+        void loadLatest(thread);
+      }
+      return;
+    }
+
     if (thread.updatedAt == null || session.hydratedUpdatedAt === thread.updatedAt) {
       if (session.hydratedInitialHistoryLimit !== initialHistoryLimit) {
         void loadLatest(thread);
@@ -6373,10 +6384,18 @@ export function useThreadSessionState(params: {
             completedTurn?.id
           );
           const completedTurnText = readCompletedTurnText(event.notification.params);
+          // item/completed stores the final message and clears its pending
+          // delta before turn/completed, whose items can legitimately be empty.
+          const storedFinalText = current.response?.replay.entries.findLast(
+            (entry): entry is AppServerThreadMessageEntry =>
+              entry.type === "message" && entry.role === "assistant"
+              && entry.phase === "final"
+              && Boolean(completedTurn?.id) && entry.turn?.id === completedTurn?.id,
+          )?.text;
           const completedText =
             completedTurnHasReview
               ? undefined
-              : completedTurnText ?? current.pendingAssistantMessage?.text;
+              : completedTurnText ?? storedFinalText ?? current.pendingAssistantMessage?.text;
           const shouldAppendFinalMessage = Boolean(
             completedText &&
               current.pendingAssistantMessage?.text !== completedText &&

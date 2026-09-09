@@ -14814,6 +14814,71 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps remote idle, start and completed updates on the live stream without snapshot reads", async () => {
+    const readThread = vi.fn().mockResolvedValue(readThreadResponse({
+      entries: [], hasPreviousPage: false, threadStatus: "idle",
+    }));
+    let emit: (event: AgentEvent) => void = () => undefined;
+    const desktopApi: DesktopApi = {
+      readThread,
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+    };
+    const target = { scope: "remote" as const, instanceId: "owner-m5" };
+    const { result, rerender } = renderHook(
+      ({ updatedAt, status }: { updatedAt: number; status: "active" | "idle" }) => useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt }),
+          threadStatus: status,
+          federation: {
+            ref: { backend: "codex", target, threadId: "thread-1" },
+            instanceLabel: "Remote M5",
+            capabilities: ["thread_detail", "event_subscriptions"],
+          },
+        },
+      }),
+      { initialProps: { updatedAt: 1_000, status: "idle" as "active" | "idle" } },
+    );
+    await waitForThreadHydration(result);
+    expect(readThread).toHaveBeenCalledTimes(1);
+    // Admission can update navigation before the turn/started event arrives.
+    rerender({ updatedAt: 2_000, status: "idle" });
+    await act(async () => undefined);
+    expect(readThread).toHaveBeenCalledTimes(1);
+    act(() => emit({
+      backend: "codex", federationTarget: target,
+      notification: { method: "turn/started", params: {
+        threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" },
+      } },
+    }));
+    rerender({ updatedAt: 3_000, status: "active" });
+    act(() => emit({
+      backend: "codex", federationTarget: target,
+      notification: { method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "final-1", type: "agentMessage", phase: "final_answer", text: "Finished through the live stream." },
+      } },
+    }));
+    // Codex can send an empty terminal turn after delivering its final item.
+    act(() => emit({
+      backend: "codex", federationTarget: target,
+      notification: { method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } },
+    }));
+    rerender({ updatedAt: 4_000, status: "idle" });
+    await act(async () => undefined);
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "message", id: "final-1", text: "Finished through the live stream." }),
+    ]));
+    expect(readThread).toHaveBeenCalledTimes(1);
+    // Pricing/metadata changes after completion are not transcript invalidations.
+    rerender({ updatedAt: 5_000, status: "idle" });
+    await act(async () => undefined);
+    expect(readThread).toHaveBeenCalledTimes(1);
+  });
+
   it("streams an active remote thread without rereading on timestamps, then recovers after stream acknowledgement", async () => {
     const activeTurn = {
       id: "turn-1",
