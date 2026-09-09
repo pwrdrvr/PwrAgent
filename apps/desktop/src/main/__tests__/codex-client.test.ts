@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
@@ -83,6 +83,7 @@ function createModelListResponse(models: Model[]): ModelListResponse {
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
   static serverVersion = "1.0.0";
+  static requireLoadedThreads = false;
   static codexHome = "/Users/fixture-user/.codex";
   static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
   static readThreadTransientErrorsByThreadId = new Map<
@@ -202,6 +203,7 @@ class MockTransport implements JsonRpcTransport {
   readonly sentMessages: string[] = [];
   readonly options?: unknown;
   closeCount = 0;
+  readonly loadedThreads = new Set<string>();
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
 
@@ -216,6 +218,7 @@ class MockTransport implements JsonRpcTransport {
 
   async close(): Promise<void> {
     this.closeCount += 1;
+    this.loadedThreads.clear();
     this.closeHandler();
   }
 
@@ -227,6 +230,18 @@ class MockTransport implements JsonRpcTransport {
       method?: string;
       params?: Record<string, unknown>;
     };
+
+    if (MockTransport.requireLoadedThreads
+      && ["review/start", "turn/start", "turn/steer", "turn/interrupt", "thread/compact/start", "thread/settings/update"]
+        .includes(payload.method ?? "")
+      && !this.loadedThreads.has(String(payload.params?.threadId))) {
+      this.messageHandler(JSON.stringify({
+        jsonrpc: "2.0",
+        id: payload.id,
+        error: { code: -32000, message: "thread not loaded" },
+      }));
+      return;
+    }
 
     if (payload.method === "initialize") {
       const result: InitializeResponse = {
@@ -1078,6 +1093,7 @@ class MockTransport implements JsonRpcTransport {
         );
         return;
       }
+      this.loadedThreads.add(String(payload.params?.threadId));
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1171,6 +1187,15 @@ class MockTransport implements JsonRpcTransport {
           result: MockTransport.turnStartResult
         })
       );
+      return;
+    }
+
+    if (payload.method === "turn/steer" || payload.method === "thread/compact/start") {
+      this.messageHandler(JSON.stringify({
+        jsonrpc: "2.0",
+        id: payload.id,
+        result: { turnId: "turn-1" },
+      }));
       return;
     }
 
@@ -1287,6 +1312,7 @@ describe("CodexAppServerClient", () => {
     codexClientLogWarn.mockClear();
     MockTransport.instances.length = 0;
     MockTransport.serverVersion = "1.0.0";
+    MockTransport.requireLoadedThreads = false;
     MockTransport.codexHome = "/Users/fixture-user/.codex";
     MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.readThreadTransientErrorsByThreadId.clear();
@@ -3022,6 +3048,406 @@ describe("CodexAppServerClient", () => {
       await client.close();
       await fs.rm(tempRoot, { force: true, recursive: true });
     }
+  });
+
+  describe("persisted-message-ID recovery concurrency", () => {
+    const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const failureMessage = "[invalid_id_prefix] Invalid 'input[1].id': 'bad'. "
+      + "Expected an ID that begins with 'msg'.";
+    const recoveryParams = { threadId, failureMessage };
+    const repaired = {
+      threadId,
+      rolloutPath: "/fixture/rollout.jsonl",
+      backupPath: "/fixture/rollout.jsonl.bak",
+      removedMessageIdCount: 1,
+    };
+
+    function deferred() {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => { resolve = done; });
+      return { promise, resolve };
+    }
+
+    // Drain runnable continuations, without using elapsed time as readiness.
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+    async function fixture(options: ConstructorParameters<
+      typeof import("../codex-app-server/client").CodexAppServerClient
+    >[0] = {}) {
+      MockTransport.requireLoadedThreads = true;
+      const recovery = await import("../codex-app-server/invalid-response-message-id-recovery");
+      const repair = vi.spyOn(recovery, "repairCodexInvalidResponseMessageIds")
+        .mockResolvedValue(repaired);
+      MockTransport.unfilteredThreadListResult = [{
+        id: threadId,
+        path: repaired.rolloutPath,
+        updatedAt: 1_775_000_000,
+      }];
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        ...options,
+      });
+      const transport = MockTransport.instances.at(-1)!;
+      const methods = () => transport.sentMessages.map((message) =>
+        (JSON.parse(message) as { method: string }).method,
+      );
+      return { client, transport, repair, methods };
+    }
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it("blocks reads and reviews through shutdown, repair, and resume", async () => {
+      const stopped = deferred();
+      const finishClose = deferred();
+      const repairing = deferred();
+      const finishRepair = deferred();
+      const resuming = deferred();
+      const finishResume = deferred();
+      const { client, transport, repair, methods } = await fixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "thread/resume") {
+              resuming.resolve();
+              await finishResume.promise;
+            }
+          },
+        },
+      });
+      const close = transport.close.bind(transport);
+      vi.spyOn(transport, "close").mockImplementationOnce(async () => {
+        await close();
+        stopped.resolve();
+        await finishClose.promise;
+      });
+      repair.mockImplementationOnce(async () => {
+        repairing.resolve();
+        await finishRepair.promise;
+        return repaired;
+      });
+      const recovery = client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+      await stopped.promise;
+      const read = client.readThread({ threadId: "thread-2", includeTurns: false });
+      const review = client.startReview({ threadId: "thread-2", target: { type: "uncommittedChanges" } });
+      await flush();
+      expect(repair).not.toHaveBeenCalled();
+      expect(methods().filter((method) => method === "initialize")).toHaveLength(1);
+      finishClose.resolve();
+      await repairing.promise;
+      await flush();
+      expect(methods()).not.toContain("thread/read");
+      expect(methods()).not.toContain("review/start");
+      expect(methods().filter((method) => method === "initialize")).toHaveLength(1);
+      finishRepair.resolve();
+      await resuming.promise;
+      await flush();
+      expect(methods()).not.toContain("thread/read");
+      expect(methods()).not.toContain("review/start");
+      finishResume.resolve();
+      await Promise.all([recovery, read, review]);
+      expect(methods().filter((method) => method === "initialize")).toHaveLength(2);
+      expect(methods().indexOf("thread/read")).toBeGreaterThan(methods().indexOf("thread/resume"));
+      await client.close();
+    });
+
+    it.each(["review", "turn", "steer", "compact", "interrupt"] as const)(
+      "restores loaded thread state for an in-flight %s after recovery",
+      async (action) => {
+        const resumeSent = deferred();
+        const finishResume = deferred();
+        const repairing = deferred();
+        const finishRepair = deferred();
+        let firstResume = true;
+        const { client, transport, repair, methods } = await fixture({
+          connectionObserver: {
+            onMessage: async (event) => {
+              if (firstResume && event.direction === "outbound" && event.envelope.method === "thread/resume") {
+                firstResume = false;
+                resumeSent.resolve();
+                await finishResume.promise;
+              }
+            },
+          },
+        });
+        repair.mockImplementationOnce(async () => {
+          repairing.resolve();
+          await finishRepair.promise;
+          return repaired;
+        });
+        const operation = action === "review"
+          ? client.startReview({ threadId: "thread-2", target: { type: "uncommittedChanges" } })
+          : action === "turn"
+            ? client.startTurn({ threadId: "thread-2", input: [] })
+            : action === "steer"
+              ? client.steerTurn({ threadId: "thread-2", input: [], expectedTurnId: "turn-1" })
+              : action === "compact"
+                ? client.compactThread({ threadId: "thread-2" })
+                : client.interruptTurn({ threadId: "thread-2", turnId: "turn-1" });
+        await resumeSent.promise;
+        const recovery = client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+        await flush();
+        expect(transport.closeCount).toBe(0);
+        expect(repair).not.toHaveBeenCalled();
+        finishResume.resolve();
+        await repairing.promise;
+        await flush();
+        expect(methods()).not.toContain("review/start");
+        finishRepair.resolve();
+        await Promise.all([operation, recovery]);
+        const resumes = transport.sentMessages.map((message) => JSON.parse(message))
+          .filter((message) => message.method === "thread/resume" && message.params.threadId === "thread-2");
+        expect(resumes).toHaveLength(2);
+        expect(resumes[1].params).toEqual(resumes[0].params);
+        const actionMethod = {
+          review: "review/start", turn: "turn/start", steer: "turn/steer",
+          compact: "thread/compact/start", interrupt: "turn/interrupt",
+        }[action];
+        expect(methods().filter((method) => method === actionMethod)).toHaveLength(1);
+        await client.close();
+      },
+    );
+
+    it("replays review settings as well as resume after a restart", async () => {
+      const updating = deferred();
+      const finishUpdate = deferred();
+      let firstUpdate = true;
+      const { client, transport } = await fixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (firstUpdate && event.direction === "outbound" && event.envelope.method === "thread/settings/update") {
+              firstUpdate = false;
+              updating.resolve();
+              await finishUpdate.promise;
+            }
+          },
+        },
+      });
+      const review = client.startReview({
+        threadId: "thread-2",
+        target: { type: "uncommittedChanges" },
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+      });
+      await updating.promise;
+      const recovery = client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+      finishUpdate.resolve();
+      await Promise.all([review, recovery]);
+      const requests = transport.sentMessages.map((message) => JSON.parse(message));
+      const settings = requests.filter((message) => message.method === "thread/settings/update");
+      expect(settings).toHaveLength(2);
+      expect(settings[1].params).toEqual(settings[0].params);
+      expect(requests.slice(-3).map((message) => message.method))
+        .toEqual(["thread/resume", "thread/settings/update", "review/start"]);
+      await client.close();
+    });
+
+    it.each(["read", "initialize", "recovery"])("close cancels an unanswered RPC promptly (%s)", async (scenario) => {
+      const { client, transport, repair } = await fixture();
+      if (scenario !== "initialize") await client.getInitializeResult();
+      const blockedMethod = scenario === "initialize" ? "initialize" : "thread/read";
+      const sent = deferred();
+      let unanswered = "";
+      const send = transport.send.bind(transport);
+      vi.spyOn(transport, "send").mockImplementation((message) => {
+        if (JSON.parse(message).method === blockedMethod) {
+          unanswered = message;
+          sent.resolve();
+        } else {
+          send(message);
+        }
+      });
+      const read = client.readThread({ threadId: "thread-2", includeTurns: false })
+        .catch((error: unknown) => error);
+      await sent.promise;
+      const recovery = scenario === "recovery"
+        ? client.recoverInvalidPersistedResponseMessageIds(recoveryParams).catch((error: unknown) => error)
+        : Promise.resolve();
+      let closed = false;
+      const close = client.close().then(() => { closed = true; });
+      try {
+        await flush();
+        // No clock advancement or server response is necessary for shutdown.
+        expect(closed).toBe(true);
+        expect(await read).toBeInstanceOf(Error);
+        expect(repair).not.toHaveBeenCalled();
+      } finally {
+        send(unanswered);
+        await Promise.all([read, recovery, close]);
+      }
+    });
+
+    it("clears client state even when external transport shutdown fails", async () => {
+      const { client, transport } = await fixture();
+      await client.getInitializeResult();
+      vi.spyOn(transport, "close").mockRejectedValueOnce(new Error("stop failed"));
+      await expect(client.close()).rejects.toThrow("stop failed");
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      await client.close();
+    });
+
+    it("drains initialization without making its public waiter deadlock on recovery", async () => {
+      const initializing = deferred();
+      const finishInitialize = deferred();
+      let firstInitialize = true;
+      const { client, repair } = await fixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (firstInitialize && event.direction === "outbound" && event.envelope.method === "initialize") {
+              firstInitialize = false;
+              initializing.resolve();
+              await finishInitialize.promise;
+            }
+          },
+        },
+      });
+      const read = client.readThread({ threadId: "thread-2", includeTurns: false });
+      await initializing.promise;
+      const recovery = client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+      await flush();
+      expect(repair).not.toHaveBeenCalled();
+      finishInitialize.resolve();
+      await Promise.all([read, recovery]);
+      expect(repair).toHaveBeenCalledOnce();
+      await client.close();
+    });
+
+    it("serializes two recoveries before releasing ordinary operations", async () => {
+      const repairing = deferred();
+      const finishRepair = deferred();
+      const { client, repair, methods } = await fixture();
+      repair.mockImplementationOnce(async () => {
+        repairing.resolve();
+        await finishRepair.promise;
+        return repaired;
+      });
+      const first = client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+      await repairing.promise;
+      const second = client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+      const read = client.readThread({ threadId: "thread-2", includeTurns: false });
+      await flush();
+      expect(repair).toHaveBeenCalledOnce();
+      finishRepair.resolve();
+      await Promise.all([first, second, read]);
+      expect(repair).toHaveBeenCalledTimes(2);
+      expect(methods().filter((method) => method === "initialize")).toHaveLength(3);
+      expect(methods().indexOf("thread/read")).toBeGreaterThan(methods().lastIndexOf("thread/resume"));
+      await client.close();
+    });
+
+    it.each(["repair", "restart", "both", "resume", "lookup", "shutdown"])(
+      "releases admission after %s failure and permits a later operation",
+      async (failure) => {
+        let initializeCount = 0;
+        const { client, transport, repair } = await fixture();
+        if (failure === "repair" || failure === "both") repair.mockRejectedValueOnce(new Error("repair failed"));
+        if (failure === "restart" || failure === "both") {
+          vi.spyOn(transport, "connect").mockImplementation(async () => {
+            if (++initializeCount === 2) throw new Error("restart failed");
+          });
+        }
+        if (failure === "resume") MockTransport.threadResumeError = { message: "resume failed" };
+        if (failure === "lookup") MockTransport.unfilteredThreadListResult = [];
+        if (failure === "shutdown") vi.spyOn(transport, "close").mockRejectedValueOnce(new Error("shutdown failed"));
+        const recovery = client.recoverInvalidPersistedResponseMessageIds(recoveryParams);
+        const queuedRead = client.readThread({ threadId: "thread-2", includeTurns: false });
+        const error = await recovery.catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(Error);
+        if (failure === "both") {
+          expect(error).toBeInstanceOf(AggregateError);
+          expect((error as AggregateError).errors.map((entry: Error) => entry.message))
+            .toEqual(["repair failed", "restart failed"]);
+        }
+        MockTransport.threadResumeError = undefined;
+        await queuedRead;
+        await client.readThread({ threadId: "thread-2", includeTurns: false });
+        await client.close();
+      },
+    );
+
+    it("external close during restart waits for initialization and prevents resume", async () => {
+      const restarting = deferred();
+      const finishRestart = deferred();
+      let initializeCount = 0;
+      const { client, methods } = await fixture({
+        connectionObserver: {
+          onMessage: async (event) => {
+            if (event.direction === "outbound" && event.envelope.method === "initialize"
+              && ++initializeCount === 2) {
+              restarting.resolve();
+              await finishRestart.promise;
+            }
+          },
+        },
+      });
+      const recovery = client.recoverInvalidPersistedResponseMessageIds(recoveryParams)
+        .catch((error: unknown) => error);
+      await restarting.promise;
+      const close = client.close();
+      finishRestart.resolve();
+      expect(await recovery).toBeInstanceOf(Error);
+      await close;
+      expect(methods()).not.toContain("thread/resume");
+      expect(methods().filter((method) => method === "initialize")).toHaveLength(2);
+    });
+
+    it("external close during shutdown cancels repair before it starts", async () => {
+      const stopping = deferred();
+      const finishStop = deferred();
+      const { client, transport, repair, methods } = await fixture();
+      const stop = transport.close.bind(transport);
+      vi.spyOn(transport, "close").mockImplementationOnce(async () => {
+        await stop();
+        stopping.resolve();
+        await finishStop.promise;
+      });
+      const recovery = client.recoverInvalidPersistedResponseMessageIds(recoveryParams)
+        .catch((error: unknown) => error);
+      await stopping.promise;
+      const close = client.close();
+      finishStop.resolve();
+      expect(await recovery).toBeInstanceOf(Error);
+      await close;
+      expect(repair).not.toHaveBeenCalled();
+      expect(methods().filter((method) => method === "initialize")).toHaveLength(1);
+    });
+
+    it("external close waits for atomic repair and cancels restart plus queued callers", async () => {
+      const repairing = deferred();
+      const finishRepair = deferred();
+      const { client, repair, methods } = await fixture();
+      repair.mockImplementationOnce(async () => {
+        repairing.resolve();
+        await finishRepair.promise;
+        return repaired;
+      });
+      const recovery = client.recoverInvalidPersistedResponseMessageIds(recoveryParams)
+        .catch((error: unknown) => error);
+      await repairing.promise;
+      const read = client.readThread({ threadId: "thread-2", includeTurns: false })
+        .catch((error: unknown) => error);
+      const second = client.recoverInvalidPersistedResponseMessageIds(recoveryParams)
+        .catch((error: unknown) => error);
+      let closed = false;
+      const close = client.close().then(() => { closed = true; });
+      await flush();
+      expect(closed).toBe(false);
+      await expect(client.readThread({ threadId: "thread-2", includeTurns: false }))
+        .rejects.toThrow("client closed");
+      await expect(client.recoverInvalidPersistedResponseMessageIds(recoveryParams))
+        .rejects.toThrow("client closed");
+      finishRepair.resolve();
+      const [recoveryError, readError, secondError] = await Promise.all([recovery, read, second, close]);
+      expect(recoveryError).toBeInstanceOf(Error);
+      expect(readError).toBeInstanceOf(Error);
+      expect(secondError).toBeInstanceOf(Error);
+      expect(repair).toHaveBeenCalledOnce();
+      expect(methods().filter((method) => method === "initialize")).toHaveLength(1);
+      expect(methods()).not.toContain("thread/resume");
+      // close remains reusable, but only a new call can initialize it again.
+      await client.readThread({ threadId: "thread-2", includeTurns: false });
+      await client.close();
+    });
   });
 
   it("stops owner search pagination at its absolute deadline", async () => {

@@ -7069,7 +7069,7 @@ function threadReadResultIncludesTurns(value: unknown): boolean {
 }
 
 async function requestCodexThreadItemsPage(params: {
-  client: JsonRpcConnection;
+  client: Pick<JsonRpcConnection, "request">;
   payload: CodexThreadItemsListParams;
   timeoutMs: number;
 }): Promise<CodexThreadItemsListResponse> {
@@ -7099,7 +7099,7 @@ async function requestCodexThreadItemsPage(params: {
 }
 
 async function listCodexThreadItems(params: {
-  client: JsonRpcConnection;
+  client: Pick<JsonRpcConnection, "request">;
   threadId: string;
   timeoutMs: number;
   turnId: string;
@@ -7135,7 +7135,7 @@ async function listCodexThreadItems(params: {
 
 async function hydrateCodexThreadHistory(params: {
   before?: string;
-  client: JsonRpcConnection;
+  client: Pick<JsonRpcConnection, "request">;
   limit?: number;
   readResult: unknown;
   threadId: string;
@@ -7225,7 +7225,7 @@ async function hydrateCodexThreadHistory(params: {
 }
 
 async function requestWithFallbacks(params: {
-  client: JsonRpcConnection;
+  client: Pick<JsonRpcConnection, "request">;
   diagnostics?: JsonRpcObserverDiagnostics;
   methods: Array<CodexClientRequestMethod | (string & {})>;
   payloads: unknown[];
@@ -7261,7 +7261,7 @@ async function requestWithFallbacks(params: {
 
 async function requestThreadListPages(params: {
   archived?: boolean;
-  client: JsonRpcConnection;
+  client: Pick<JsonRpcConnection, "request">;
   diagnostics?: JsonRpcObserverDiagnostics;
   filter?: string;
   limit?: number;
@@ -7367,7 +7367,16 @@ async function ensureCodexThreadTitleWorkspace(): Promise<string> {
 }
 
 export class CodexAppServerClient {
-  private readonly connection: JsonRpcConnection;
+  private readonly rawConnection: JsonRpcConnection;
+  // All ordinary RPCs, including continuations of multi-request operations,
+  // pass through admission. Only lifecycle work uses the raw connection.
+  private readonly connection: Pick<JsonRpcConnection, "request">;
+  private lifecycleBarrier: Promise<void> | null = null;
+  private readonly activeRequests = new Set<Promise<unknown>>();
+  private closeGeneration = 0;
+  private pendingCloses = 0;
+  private serverGeneration = 0;
+  private transportClosePromise: Promise<void> | null = null;
   private readonly threadDirectoryEnricher: (
     projectKey?: string,
     caller?: DirectoryEnrichmentCaller,
@@ -7427,7 +7436,7 @@ export class CodexAppServerClient {
   private readonly reportedUnknownNotificationMethods = new Set<string>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
-    this.connection = new JsonRpcConnection(
+    this.rawConnection = new JsonRpcConnection(
       new StdioJsonRpcTransport({
         command: options.command?.trim() || "codex",
         args: options.args ?? [],
@@ -7441,6 +7450,9 @@ export class CodexAppServerClient {
       createCodexObserverWithConfigReadRedaction(options.connectionObserver),
       { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
     );
+    this.connection = {
+      request: (...args) => this.requestWhenAvailable(...args),
+    };
     const directoryResolver = options.directoryResolver;
     this.threadDirectoryEnricher =
       options.threadDirectoryEnricher ??
@@ -7449,7 +7461,7 @@ export class CodexAppServerClient {
             linkedDirectories: await directoryResolver(projectKey),
           })
         : createThreadDirectoryEnricher());
-    this.connection.setNotificationHandler(async (method, params) => {
+    this.rawConnection.setNotificationHandler(async (method, params) => {
       if (navigationQueryEventRequiresRefresh(method)) this.pendingThreadListings.clear();
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
       if (!isKnownCodexMethod) {
@@ -7510,7 +7522,7 @@ export class CodexAppServerClient {
         await listener(normalized);
       }
     });
-    this.connection.setRequestHandler(async (method, params, rpcId) => {
+    this.rawConnection.setRequestHandler(async (method, params, rpcId) => {
       const wireRequest = isKnownCodexServerRequestMethod(method)
         ? ({
             method,
@@ -7553,6 +7565,28 @@ export class CodexAppServerClient {
   }
 
   async close(): Promise<void> {
+    // Invalidate a recovery immediately, even when its disk repair cannot be
+    // interrupted. It must finish the atomic write, but must not restart Codex.
+    this.closeGeneration += 1;
+    this.pendingCloses += 1;
+    // Stop the transport now: pending RPC responses must not hold shutdown
+    // (or a recovery waiting to drain those RPCs) until their timeouts expire.
+    const stopped = this.stopTransport();
+    void stopped.catch(() => undefined);
+    try {
+      await this.runLifecycle(async () => {
+        try {
+          await stopped;
+        } finally {
+          await this.closeConnection();
+        }
+      });
+    } finally {
+      this.pendingCloses -= 1;
+    }
+  }
+
+  private async closeConnection(): Promise<void> {
     this.initialized = false;
     this.initializationPromise = null;
     this.initializeResult = null;
@@ -7566,7 +7600,17 @@ export class CodexAppServerClient {
     this.helperTurnTitleObjects.clear();
     this.helperTurnTokenUsage.clear();
     this.helperThreadPredicates.clear();
-    await this.connection.close();
+    await this.stopTransport();
+  }
+
+  private stopTransport(): Promise<void> {
+    if (this.transportClosePromise) return this.transportClosePromise;
+    const stopped = this.rawConnection.close();
+    this.transportClosePromise = stopped;
+    void stopped.finally(() => {
+      if (this.transportClosePromise === stopped) this.transportClosePromise = null;
+    }).catch(() => undefined);
+    return stopped;
   }
 
   async recoverInvalidPersistedResponseMessageIds(params: {
@@ -7579,80 +7623,94 @@ export class CodexAppServerClient {
         "Codex persisted-message-ID recovery requires the exact invalid ID prefix failure",
       );
     }
-    await this.ensureInitialized();
-    // Codex thread/list searchTerm is title/content search, not an ID lookup.
-    // Walk this profile-scoped app-server's protocol listing and select the
-    // exact ID locally so legacy threads in alternate CODEX_HOME profiles are
-    // resolved without guessing at Codex-owned storage paths.
-    const matchingThreads = (
-      await requestThreadListPages({
-        archived: false,
-        client: this.connection,
-        requestTimeoutMs:
-          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      })
-    ).filter((thread) => thread.id === params.threadId);
-    if (matchingThreads.length !== 1) {
-      throw new Error(
-        `Codex recovery expected one protocol path for thread ${params.threadId}; found ${matchingThreads.length}`,
-      );
-    }
-    const rolloutPath = matchingThreads[0]!.path?.trim();
-    if (!rolloutPath) {
-      throw new Error(
-        `Codex App Server did not provide a persisted session path for thread ${params.threadId}`,
-      );
-    }
-
-    const env = this.options.resolveEnv
-      ? await this.options.resolveEnv()
-      : this.options.env ?? process.env;
-    const codexHome = path.resolve(
-      extractStringProperty(this.initializeResult, "codexHome", "codex_home")
-      || env.CODEX_HOME?.trim()
-      || path.join(homedir(), ".codex"),
-    );
-
-    // The Codex app-server process is the only writer for this profile. Stop
-    // it and wait for process exit before the narrowly authorized repair so
-    // no in-memory writer can race the atomic replacement.
-    await this.close();
-    let recoveryResult: CodexInvalidResponseMessageIdRecoveryResult | undefined;
-    let recoveryError: unknown;
-    try {
-      recoveryResult = await repairCodexInvalidResponseMessageIds({
-        codexHome,
-        forkLineageThreadIds: params.forkLineageThreadIds,
-        rolloutPath,
-        threadId: params.threadId,
-      });
-    } catch (error) {
-      recoveryError = error;
-    }
-
-    try {
-      await this.ensureInitialized();
-    } catch (restartError) {
-      if (recoveryError) {
-        throw new AggregateError(
-          [recoveryError, restartError],
-          `Codex history recovery and app-server restart both failed for thread ${params.threadId}`,
-          { cause: restartError },
+    if (this.pendingCloses > 0) throw new Error("codex app server client closed");
+    const generation = this.closeGeneration;
+    const assertNotClosed = () => {
+      if (generation !== this.closeGeneration) {
+        throw new Error("Codex history recovery cancelled because the client was closed");
+      }
+    };
+    return await this.runLifecycle(async () => {
+      assertNotClosed();
+      await this.initializeConnection();
+      // Codex thread/list searchTerm is title/content search, not an ID lookup.
+      // Walk this profile-scoped app-server's protocol listing and select the
+      // exact ID locally so legacy threads in alternate CODEX_HOME profiles are
+      // resolved without guessing at Codex-owned storage paths.
+      const matchingThreads = (
+        await requestThreadListPages({
+          archived: false,
+          client: this.rawConnection,
+          requestTimeoutMs:
+            this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        })
+      ).filter((thread) => thread.id === params.threadId);
+      if (matchingThreads.length !== 1) {
+        throw new Error(
+          `Codex recovery expected one protocol path for thread ${params.threadId}; found ${matchingThreads.length}`,
         );
       }
-      throw restartError;
-    }
-    if (recoveryError) {
-      throw recoveryError;
-    }
+      const rolloutPath = matchingThreads[0]!.path?.trim();
+      if (!rolloutPath) {
+        throw new Error(
+          `Codex App Server did not provide a persisted session path for thread ${params.threadId}`,
+        );
+      }
 
-    await requestWithFallbacks({
-      client: this.connection,
-      methods: ["thread/resume"],
-      payloads: [{ threadId: params.threadId }],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      const env = this.options.resolveEnv
+        ? await this.options.resolveEnv()
+        : this.options.env ?? process.env;
+      const codexHome = path.resolve(
+        extractStringProperty(this.initializeResult, "codexHome", "codex_home")
+        || env.CODEX_HOME?.trim()
+        || path.join(homedir(), ".codex"),
+      );
+
+      // The Codex app-server process is the only writer for this profile. Stop
+      // it and wait for process exit before the narrowly authorized repair so
+      // no in-memory writer can race the atomic replacement.
+      assertNotClosed();
+      await this.closeConnection();
+      assertNotClosed();
+      let recoveryResult: CodexInvalidResponseMessageIdRecoveryResult | undefined;
+      let recoveryError: unknown;
+      try {
+        recoveryResult = await repairCodexInvalidResponseMessageIds({
+          codexHome,
+          forkLineageThreadIds: params.forkLineageThreadIds,
+          rolloutPath,
+          threadId: params.threadId,
+        });
+      } catch (error) {
+        recoveryError = error;
+      }
+
+      assertNotClosed();
+      try {
+        await this.initializeConnection();
+      } catch (restartError) {
+        if (recoveryError) {
+          throw new AggregateError(
+            [recoveryError, restartError],
+            `Codex history recovery and app-server restart both failed for thread ${params.threadId}`,
+            { cause: restartError },
+          );
+        }
+        throw restartError;
+      }
+      if (recoveryError) {
+        throw recoveryError;
+      }
+
+      assertNotClosed();
+      await requestWithFallbacks({
+        client: this.rawConnection,
+        methods: ["thread/resume"],
+        payloads: [{ threadId: params.threadId }],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+      return recoveryResult!;
     });
-    return recoveryResult!;
   }
 
   onNotification(
@@ -8817,6 +8875,7 @@ export class CodexAppServerClient {
     turnId: string;
   }> {
     await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
 
     const pendingFirstTurnResult = this.pendingFirstTurnThreadResults.get(params.threadId);
     // thread/resume primes the per-thread permission profile in codex
@@ -8831,7 +8890,7 @@ export class CodexAppServerClient {
     let resumeResult = pendingFirstTurnResult;
     if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
       const resume = requestWithFallbacks({
-        client: this.connection,
+        client: connection,
         methods: ["thread/resume"],
         payloads: buildThreadResumePayloads(
           {
@@ -8878,7 +8937,7 @@ export class CodexAppServerClient {
       input: params.input,
     });
     const result = await requestWithFallbacks({
-      client: this.connection,
+      client: connection,
       methods: ["turn/start"],
       payloads: [
         buildTurnStartPayload(
@@ -9238,13 +9297,14 @@ export class CodexAppServerClient {
     dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
 
     const pendingFirstTurn = this.pendingFirstTurnThreadResults.has(
       params.threadId,
     );
     if (!pendingFirstTurn || params.dynamicTools !== undefined) {
       const resume = requestWithFallbacks({
-        client: this.connection,
+        client: connection,
         methods: ["thread/resume"],
         payloads: buildThreadResumePayloads(
           {
@@ -9279,7 +9339,7 @@ export class CodexAppServerClient {
     });
     if (settingsPayload) {
       await requestWithFallbacks({
-        client: this.connection,
+        client: connection,
         methods: ["thread/settings/update"],
         payloads: [settingsPayload],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -9287,7 +9347,7 @@ export class CodexAppServerClient {
     }
 
     const result = await requestWithFallbacks({
-      client: this.connection,
+      client: connection,
       methods: ["review/start"],
       payloads: [buildReviewStartPayload(params)],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -9436,9 +9496,10 @@ export class CodexAppServerClient {
     turnId: string;
   }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
 
     await requestWithFallbacks({
-      client: this.connection,
+      client: connection,
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads(
         {
@@ -9455,7 +9516,7 @@ export class CodexAppServerClient {
         turnId: params.turnId,
       };
       await requestWithFallbacks({
-        client: this.connection,
+        client: connection,
         methods: ["turn/interrupt"],
         payloads: [payload],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -9489,9 +9550,10 @@ export class CodexAppServerClient {
     threadId: string;
   }): Promise<{ threadId: string; turnId: string; itemId?: string }> {
     await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
 
     await requestWithFallbacks({
-      client: this.connection,
+      client: connection,
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads(
         {
@@ -9503,7 +9565,7 @@ export class CodexAppServerClient {
     }).catch(() => undefined);
 
     await requestWithFallbacks({
-      client: this.connection,
+      client: connection,
       methods: ["thread/compact/start"],
       payloads: [
         {
@@ -9525,9 +9587,10 @@ export class CodexAppServerClient {
     expectedTurnId: string;
   }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
+    const connection = this.createThreadOperationConnection();
 
     await requestWithFallbacks({
-      client: this.connection,
+      client: connection,
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads(
         {
@@ -9547,7 +9610,7 @@ export class CodexAppServerClient {
       expectedTurnId: params.expectedTurnId,
     };
     const result = await requestWithFallbacks({
-      client: this.connection,
+      client: connection,
       methods: ["turn/steer"],
       payloads: [payload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -9559,7 +9622,98 @@ export class CodexAppServerClient {
     };
   }
 
+  private requestWhenAvailable(
+    ...args: Parameters<JsonRpcConnection["request"]>
+  ): Promise<unknown> {
+    return this.runAdmittedRequest(() => this.rawConnection.request(...args));
+  }
+
+  private createThreadOperationConnection(): Pick<JsonRpcConnection, "request"> {
+    let generation = this.serverGeneration;
+    const setup: Array<Parameters<JsonRpcConnection["request"]>> = [];
+    return {
+      request: (...args) => this.runAdmittedRequest(async () => {
+        const closeGeneration = this.closeGeneration;
+        const request = (...requestArgs: Parameters<JsonRpcConnection["request"]>) => {
+          if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) {
+            throw new Error("codex app server client closed");
+          }
+          return this.rawConnection.request(...requestArgs);
+        };
+        // Resume and settings belong to a process. Reapply successful setup
+        // after recovery, with setup plus the next RPC admitted as one unit.
+        // Never replay the action itself (turn/start, review/start, etc.).
+        if (generation !== this.serverGeneration) {
+          for (const previous of setup) await request(...previous);
+          generation = this.serverGeneration;
+        }
+        const result = await request(...args);
+        if (args[0] === "thread/resume" || args[0] === "thread/settings/update") {
+          setup.push(args);
+        }
+        return result;
+      }),
+    };
+  }
+
+  private async runAdmittedRequest(work: () => Promise<unknown>): Promise<unknown> {
+    if (this.pendingCloses > 0) throw new Error("codex app server client closed");
+    const generation = this.closeGeneration;
+    while (this.lifecycleBarrier) {
+      await this.lifecycleBarrier;
+    }
+    // No await between the final admission check and registering the RPC.
+    // A close must not let a previously admitted continuation revive a writer.
+    if (generation !== this.closeGeneration || !this.initialized) {
+      throw new Error("codex app server client closed");
+    }
+    const request = work();
+    this.activeRequests.add(request);
+    try {
+      return await request;
+    } finally {
+      this.activeRequests.delete(request);
+    }
+  }
+
+  private async runLifecycle<T>(work: () => Promise<T>): Promise<T> {
+    const previous = this.lifecycleBarrier;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    // Reserve synchronously, before awaiting initialization or in-flight RPCs.
+    this.lifecycleBarrier = barrier;
+    try {
+      await previous;
+      // Drain RPCs, not whole public operations: helper turns can wait for
+      // notifications until close rejects their waiters. Their later RPCs
+      // must return through admission instead of holding this lifecycle open.
+      await Promise.allSettled([
+        ...this.activeRequests,
+        ...(this.initializationPromise ? [this.initializationPromise] : []),
+      ]);
+      return await work();
+    } finally {
+      if (this.lifecycleBarrier === barrier) this.lifecycleBarrier = null;
+      release();
+    }
+  }
+
   private async ensureInitialized(): Promise<void> {
+    if (this.pendingCloses > 0) throw new Error("codex app server client closed");
+    const generation = this.closeGeneration;
+    do {
+      while (this.lifecycleBarrier) {
+        await this.lifecycleBarrier;
+      }
+      if (generation !== this.closeGeneration) {
+        throw new Error("codex app server client closed");
+      }
+      await this.initializeConnection();
+      // A reservation may have arrived while initialization was in flight.
+    } while (this.lifecycleBarrier);
+  }
+
+  private async initializeConnection(): Promise<void> {
     if (this.initialized) {
       return;
     }
@@ -9580,8 +9734,16 @@ export class CodexAppServerClient {
       return;
     }
 
+    const closeGeneration = this.closeGeneration;
+    const assertNotClosed = () => {
+      if (closeGeneration !== this.closeGeneration || this.pendingCloses > 0) {
+        throw new Error("codex app server client closed");
+      }
+    };
+    this.serverGeneration += 1;
     this.initializationPromise = (async () => {
-      await this.connection.connect();
+      await this.rawConnection.connect();
+      assertNotClosed();
 
       try {
         const activationNonce =
@@ -9612,7 +9774,7 @@ export class CodexAppServerClient {
               : {}),
           },
         };
-        const result = await this.connection.request("initialize", initializeParams);
+        const result = await this.rawConnection.request("initialize", initializeParams);
         this.initializeResult = parseInitializeResponse(result);
       } catch (error) {
         if (!isAlreadyInitializedError(error)) {
@@ -9620,7 +9782,9 @@ export class CodexAppServerClient {
         }
       }
 
-      await this.connection.notify("initialized", {});
+      assertNotClosed();
+      await this.rawConnection.notify("initialized", {});
+      assertNotClosed();
       this.initialized = true;
     })();
 
