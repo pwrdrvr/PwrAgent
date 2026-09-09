@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.5 - 2026-09-09
+
+- GPT-5.6 Sol Usage - Corrected Sol usage prices for activity from August 21 onward to the current lower Standard and Fast rates. Earlier activity retains the historical prices that applied at the time.
+
 ## v1.0.4 - 2026-09-09
 
 - Codex Thread Recovery - PwrAgent now recovers saved Codex thread histories containing message IDs that previously made a resumed thread fail. It backs up and repairs the affected history, restarts Codex, and retries the message once, including for forked histories.
