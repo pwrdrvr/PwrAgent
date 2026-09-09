@@ -2,7 +2,7 @@ import { readNavigationPresentationOrder, type NavigationPresentationOrder } fro
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { Fragment, useState, type MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
@@ -28,6 +28,7 @@ import {
   isSubthreadSectionCollapsed,
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
+import { SubthreadPagination } from "./SubthreadPagination";
 import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
@@ -271,17 +272,11 @@ export function RecentsList(props: RecentsListProps) {
           ];
         })}
         {childResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((childResource) => (
-          <Fragment key={childResource.id}>
-            {childResource.state.error ? <p role="alert">{childResource.state.error}</p> : null}
-            {childResource.loading && !childResource.state.page ? <p>Loading sub-threads…</p> : null}
-            {childResource.state.rebaselineRequired ? (
-              <button type="button" onClick={() => void props.pagedNavigation?.restart(childResource.id)}>Reload sub-threads</button>
-            ) : childResource.state.page?.nextCursor ? (
-              <button type="button" disabled={childResource.loading} onClick={() => void props.pagedNavigation?.loadMore(childResource.id)}>
-                {childResource.id.endsWith(":viewer") ? "Load more sub-threads on this machine" : "Load more sub-threads"}
-              </button>
-            ) : null}
-          </Fragment>
+          <SubthreadPagination
+            key={childResource.id}
+            resource={childResource}
+            pagedNavigation={props.pagedNavigation}
+          />
         ))}
       </div>
     );

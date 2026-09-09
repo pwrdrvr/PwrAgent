@@ -50,6 +50,7 @@ import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
 import { FederationTargetMenuSection } from "../chrome/FederationTargetMenuSection";
 import { NewThreadButton } from "../chrome/NewThreadButton";
+import { SidebarShowMore } from "./SidebarShowMore";
 import type {
   ArchiveThreadOptions,
   BrowseMode,
@@ -2089,14 +2090,14 @@ export function Sidebar(props: SidebarProps) {
             <div key={resource.id}>
               {resource.state.error ? <p className="sidebar-error">{resource.state.error}</p> : null}
               {resource.state.rebaselineRequired ? (
-                <button type="button" onClick={() => void props.pagedNavigation?.restart(resource.id)}>Reload this lens</button>
+                <SidebarShowMore label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
               ) : resource.state.page?.nextCursor ? (
-                <button type="button" disabled={resource.loading} onClick={() => void props.pagedNavigation?.loadMore(resource.id)}>Load more threads</button>
+                <SidebarShowMore busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
               ) : null}
             </div>
           )) : null}
           {props.browseMode === "directories" && props.pagedNavigation?.resources.get("directory-index")?.state.page?.nextCursor ? (
-            <button type="button" onClick={() => void props.pagedNavigation?.loadMore("directory-index")}>Load more directories</button>
+            <SidebarShowMore label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
           ) : null}
         </div>
       </section>

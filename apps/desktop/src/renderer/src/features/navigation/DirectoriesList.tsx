@@ -54,6 +54,8 @@ import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
 } from "../../lib/native-drag-interaction";
+import { SidebarShowMore } from "./SidebarShowMore";
+import { SubthreadPagination } from "./SubthreadPagination";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
   SignalCount,
@@ -1262,17 +1264,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
               ];
             })}
             {childResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((childResource) => (
-              <Fragment key={childResource.id}>
-                {childResource.state.error ? <p role="alert">{childResource.state.error}</p> : null}
-                {childResource.loading && !childResource.state.page ? <p>Loading sub-threads…</p> : null}
-                {childResource.state.rebaselineRequired ? (
-                  <button type="button" data-hover-stable-release="pagination" onClick={() => void props.pagedNavigation?.restart(childResource.id)}>Reload sub-threads</button>
-                ) : childResource.state.page?.nextCursor ? (
-                  <button type="button" data-hover-stable-release="pagination" disabled={childResource.loading} onClick={() => void props.pagedNavigation?.loadMore(childResource.id)}>
-                    {childResource.id.endsWith(":viewer") ? "Load more sub-threads on this machine" : "Load more sub-threads"}
-                  </button>
-                ) : null}
-              </Fragment>
+              <SubthreadPagination
+                key={childResource.id}
+                resource={childResource}
+                pagedNavigation={props.pagedNavigation}
+              />
             ))}
           </div>
         </div>
@@ -1829,12 +1825,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         {pinResource.state.error ? <p className="sidebar-error">{pinResource.state.error}</p> : null}
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
                         {(pinResource.state.page?.rangeStart ?? 0) > 0 && !pinResource.state.rebaselineRequired ? (
-                          <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" disabled={pinResource.loading} onClick={() => void props.pagedNavigation?.restart(pinResourceId)}>Show pinned threads from beginning</button>
+                          <SidebarShowMore busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
                         ) : null}
                         {pinResource.state.rebaselineRequired ? (
-                          <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" onClick={() => void props.pagedNavigation?.restart(pinResourceId)}>Reload pinned threads</button>
+                          <SidebarShowMore label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
                         ) : pinResource.state.page?.nextCursor ? (
-                          <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" disabled={pinResource.loading} onClick={() => void props.pagedNavigation?.loadMore(pinResourceId)}>Load more pinned threads</button>
+                          <SidebarShowMore busy={pinResource.loading} label="Load more pinned threads" onClick={() => void props.pagedNavigation?.loadMore(pinResourceId)} />
                         ) : null}
                       </div>
                     ) : null}
@@ -1895,9 +1891,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 {rootResource?.state.error ? <p className="sidebar-error">{rootResource.state.error}</p> : null}
                 {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty">Loading threads…</p> : null}
                 {rootResource?.state.rebaselineRequired ? (
-                  <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" onClick={() => void props.pagedNavigation?.restart(rootResourceId)}>Reload this directory</button>
+                  <SidebarShowMore label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
                 ) : rootResource?.state.page?.nextCursor ? (
-                  <button type="button" className="directory-row__show-more" data-hover-stable-release="pagination" disabled={rootResource.loading} onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)}>Load more threads</button>
+                  <SidebarShowMore busy={rootResource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)} />
                 ) : null}
               </div>
             ) : null}

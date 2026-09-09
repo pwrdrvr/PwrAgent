@@ -242,8 +242,25 @@ describe("Tangerine Terminal theme contract", () => {
     expect(extractRuleBody(css, ".directory-row__thread-divider")).toMatch(
       /min-height:\s*24px;/,
     );
-    expect(extractRuleBody(css, ".directory-row__show-more")).toMatch(
+    expect(extractRuleBody(css, ".sidebar-show-more")).toMatch(
       /min-height:\s*24px;/,
+    );
+
+    // The rail's paging control is transparent, left-aligned and 12px — the
+    // shape every one of these must have. Seven of the twelve call sites used
+    // to render a classless <button>, which Chromium draws as an opaque grey
+    // slab stretched across the `display: grid` sub-thread list. Pinned here
+    // because a missing class has no other visible symptom in a unit test.
+    const showMore = extractRuleBody(css, ".sidebar-show-more");
+    expect(showMore).toMatch(/background:\s*transparent;/);
+    expect(showMore).toMatch(/justify-self:\s*start;/);
+    expect(showMore).toMatch(/align-self:\s*flex-start;/);
+    // `:hover` matches a disabled button, so the hover rule has to exclude
+    // one or a control with a page already in flight lights up on a click
+    // that goes nowhere.
+    expect(css).toContain(".sidebar-show-more:hover:not(:disabled)");
+    expect(extractRuleBody(css, ".sidebar-show-more:disabled")).toMatch(
+      /color:\s*var\(--text-muted\);/,
     );
 
     // Same floor for the thread-row hover cluster: the transcript-gaps
