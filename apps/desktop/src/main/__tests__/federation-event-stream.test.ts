@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentEvent, ThreadToolInvocationRecord } from "@pwragent/shared";
+import type { AgentEvent, ThreadToolAccounting, ThreadToolInvocationRecord } from "@pwragent/shared";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 
 function invocation(index: number): ThreadToolInvocationRecord {
@@ -42,6 +42,59 @@ describe("federation accounting stream", () => {
     // sixty updates, and at least a 95% reduction versus full notifications.
     expect(wireBytes).toBeLessThan(1_000_000);
     expect(wireBytes / fullBytes).toBeLessThan(0.05);
+  });
+
+  it("keeps sorted history rotations and fixed-size replacements below 4 KB", () => {
+    const sender = new FederationAccountingStream();
+    const receiver = new FederationAccountingStream();
+    let values = Array.from({ length: 500 }, (_, index) => invocation(index));
+    receiver.decode(sender.encode(accounting(values), { epoch: "s", sequence: 1 }));
+    for (let sequence = 2; sequence < 22; sequence += 1) {
+      const moved = values.pop()!;
+      values = [{ ...moved, updatedAt: sequence, outputChars: sequence * 100 }, ...values];
+      if (sequence % 2 === 0) values = [...values.slice(1), invocation(500 + sequence)];
+      const event = accounting(values);
+      const encoded = sender.encode(event, { epoch: "s", sequence });
+      expect(Buffer.byteLength(JSON.stringify(encoded))).toBeLessThan(4_000);
+      expect(receiver.decode(JSON.parse(JSON.stringify(encoded)))).toEqual(event);
+    }
+  });
+
+  it("does not resend large Token Miser summaries when interceptions change order", () => {
+    const sender = new FederationAccountingStream();
+    const receiver = new FederationAccountingStream();
+    const interceptions = Array.from({ length: 100 }, (_, index) => ({
+      objectId: `output-${index}`, turnId: "turn", toolUseId: `tool-${index}`, toolName: "exec_command", createdAt: index,
+      originalCharacters: 10000, baselineParentTokens: 2500, replacementTokens: 500, retrievedTokens: 0, estimatedParentTokensSaved: 2000,
+      summary: { summary: "Retained output summary ".repeat(100), usefulDetails: [] },
+    }));
+    const event = accounting([]);
+    if (event.notification.method !== "thread/toolAccounting/updated") throw new Error("Expected accounting fixture");
+    (event.notification.params as { toolAccounting: ThreadToolAccounting }).toolAccounting.tokenMiser = {
+      interceptionCount: 100, originalCharacters: 1000000, baselineParentTokens: 250000, replacementTokens: 50000,
+      retrievedTokens: 0, estimatedParentTokensSaved: 200000, interceptions,
+    };
+    receiver.decode(sender.encode(event, { epoch: "s", sequence: 1 }));
+    const moved = interceptions.pop()!;
+    interceptions.unshift({ ...moved, retrievedTokens: 10 });
+    const encoded = sender.encode(event, { epoch: "s", sequence: 2 });
+    expect(Buffer.byteLength(JSON.stringify(encoded))).toBeLessThan(4_000);
+    expect(receiver.decode(encoded)).toEqual(event);
+  });
+
+  it("patches repeated subagent metadata", () => {
+    const sender = new FederationAccountingStream();
+    const receiver = new FederationAccountingStream();
+    const event: AgentEvent = { backend: "codex", notification: { method: "thread/subAgents/updated", params: {
+      threadId: "thread-1", subAgents: Array.from({ length: 100 }, (_, index) => ({
+        monitorId: `monitor-${index}`, task: "Large historical task ".repeat(100), status: "success", createdAt: index, updatedAt: index,
+      })),
+    } } };
+    for (let sequence = 1; sequence < 4; sequence += 1) {
+      const encoded = sender.encode(event, { epoch: "s", sequence });
+      expect(receiver.decode(encoded)).toEqual(event);
+      if (sequence > 1) expect(Buffer.byteLength(JSON.stringify(encoded))).toBeLessThan(500);
+    }
   });
 
   it("round trips prepends, truncation, nested edits and optional field removal", () => {

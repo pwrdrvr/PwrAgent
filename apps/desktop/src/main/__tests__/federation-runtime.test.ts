@@ -381,6 +381,13 @@ describe("DesktopFederationRuntime", () => {
     owner.forwardLocalBackendEvent(pricing);
     expect(frames.at(-1)).toMatchObject({ params: { accountingPatch: { changes: [] } } });
     expect(published.at(-1)?.notification).toEqual(pricing.notification);
+    const subAgents: AgentEvent = { backend: "codex", notification: { method: "thread/subAgents/updated", params: {
+      threadId: "thread-1", subAgents: [{ monitorId: "monitor", task: "History ".repeat(1000), status: "success", createdAt: 1, updatedAt: 1 }],
+    } } };
+    owner.forwardLocalBackendEvent(subAgents);
+    owner.forwardLocalBackendEvent(subAgents);
+    expect(frames.at(-1)).toMatchObject({ params: { accountingPatch: { changes: [] } } });
+    expect(published.at(-1)?.notification).toEqual(subAgents.notification);
     // A reconnect needs catch-up even when no later event arrives to reveal
     // a missed request-user-input. Replaying the subscription supplies it.
     if (viaGateway) gateway.replayRelayedEventSubscriptions("owner_one");

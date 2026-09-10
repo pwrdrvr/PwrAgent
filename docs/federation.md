@@ -179,13 +179,19 @@ The client keeps post-authentication frames queued until its runtime installs
 the authenticated connection and restores subscription state, so an immediate
 gateway replay cannot be discarded as coming from an unknown connection.
 
-Within a negotiated stream, pricing and tool-accounting notifications send a
-full baseline followed by smaller patches. The receiver reconstructs the
+Within a negotiated stream, pricing, tool-accounting, and subagent notifications
+send a full baseline followed by smaller patches. Stable record identities keep
+array reordering from resending the intervening history. The receiver reconstructs the
 existing backend notification before publishing it to the renderer. Baselines
 are volatile, limited to 32 records and 4 MiB per stream, and never persisted.
 A missing baseline triggers resubscription. Peers and gateways that do not
 forward the negotiation retain the original full-notification format;
 connection status changes still trigger viewer catch-up.
+
+Selected configuration reads revalidate a separate canonical baseline; streamed
+presentation changes cannot authorize actions. History pages survive configuration
+invalidations when their collection revision is unchanged. A streamed collection
+that matches the owner’s content hash does not need to be downloaded again.
 
 Global thread search fans out metadata queries to connected peers. Remote
 results carry their instance label and open directly in a window scoped to that

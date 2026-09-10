@@ -18,12 +18,55 @@ function equal(left: Json, right: Json): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+// Preserve stable records when an updated invocation moves in a sorted history.
+// Positional comparison turns a one-record rotation into a whole-array patch.
+function keyedArrayChanges(previous: Json[], next: Json[], path: string[]): Change[] | undefined {
+  const field = ["invocationId", "monitorId", "observationId", "objectId", "usageLineId", "compactionId", "alertId", "id", "itemId", "key"].find((key) =>
+    [previous, next].every((values) => {
+      const keys = values.map((value) => value && typeof value === "object" && !Array.isArray(value) ? value[key] : undefined);
+      return keys.every((value) => typeof value === "string") && new Set(keys).size === keys.length;
+    }));
+  if (!field) return undefined;
+  const key = (value: Json) => (value as Record<string, Json>)[field] as string;
+  const positions = new Map(previous.map((value, index) => [key(value), index]));
+  // Longest increasing subsequence identifies records that can stay in place.
+  const tails: number[] = [];
+  const links = new Map<number, number>();
+  next.forEach((value, index) => {
+    const position = positions.get(key(value));
+    if (position === undefined) return;
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (positions.get(key(next[tails[middle]!]!))! < position) low = middle + 1;
+      else high = middle;
+    }
+    if (low) links.set(index, tails[low - 1]!);
+    tails[low] = index;
+  });
+  const anchors: number[] = [];
+  for (let index = tails.at(-1); index !== undefined; index = links.get(index)) anchors.push(index);
+  anchors.reverse();
+  anchors.push(next.length);
+  const changes: Change[] = [];
+  let previousStart = 0;
+  let nextStart = 0;
+  for (const nextIndex of anchors) {
+    const previousIndex = nextIndex === next.length ? previous.length : positions.get(key(next[nextIndex]!))!;
+    if (previousIndex !== previousStart || nextIndex !== nextStart) {
+      changes.push({ path, start: nextStart, deleteCount: previousIndex - previousStart, items: next.slice(nextStart, nextIndex) });
+    }
+    if (nextIndex < next.length) changes.push(...changesBetween(previous[previousIndex]!, next[nextIndex]!, [...path, String(nextIndex)]));
+    previousStart = previousIndex + 1;
+    nextStart = nextIndex + 1;
+  }
+  return changes;
+}
+
 function changesBetween(previous: Json, next: Json, path: string[] = []): Change[] {
   if (equal(previous, next)) return [];
   if (Array.isArray(previous) && Array.isArray(next)) {
-    if (previous.length === next.length) {
-      return next.flatMap((value, index) => changesBetween(previous[index]!, value, [...path, String(index)]));
-    }
     let start = 0;
     while (start < Math.min(previous.length, next.length) && equal(previous[start]!, next[start]!)) start += 1;
     let tail = 0;
@@ -37,7 +80,9 @@ function changesBetween(previous: Json, next: Json, path: string[] = []): Change
       ...next.slice(0, overlap).flatMap((value, index) => changesBetween(previous[index]!, value, [...path, String(index)])),
       { path, start: overlap, deleteCount: previous.length - overlap, items: next.slice(overlap) },
     ];
-    return JSON.stringify(indexed).length < JSON.stringify(splice).length ? indexed : splice;
+    const keyed = keyedArrayChanges(previous, next, path);
+    return [indexed, splice, ...(keyed ? [keyed] : [])].reduce((best, candidate) =>
+      JSON.stringify(candidate).length < JSON.stringify(best).length ? candidate : best);
   }
   if (previous !== null && next !== null && typeof previous === "object" && typeof next === "object"
     && !Array.isArray(previous) && !Array.isArray(next)) {
@@ -92,6 +137,7 @@ export class FederationAccountingStream {
 
   private key(event: AgentEvent): string | undefined {
     return event.notification.method === "thread/pricing/updated" || event.notification.method === "thread/toolAccounting/updated"
+      || event.notification.method === "thread/subAgents/updated"
       ? JSON.stringify([event.backend, event.notification.params.threadId, event.notification.method]) : undefined;
   }
 
