@@ -336,7 +336,7 @@ export type FederationGatewayWebSocketServerOptions = {
   keepaliveIntervalMs?: number;
   /** Per-WebSocket-message send and receive ceiling. */
   maxFrameBytes?: number;
-  /** Logical receive ceiling after application-layer decompression. */
+  /** Logical send/receive ceiling, independent of compressed wire size. */
   maxDecodedFrameBytes?: number;
   /** Deadline for a connected socket to finish Noise + identity auth. */
   authTimeoutMs?: number;
@@ -687,6 +687,7 @@ export class FederationGatewayWebSocketServer {
           transport,
           {
             maxFrameBytes: this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
+            maxDecodedFrameBytes: this.options.maxDecodedFrameBytes,
             compressionEnabled: decision.capabilities.includes(
               FEDERATION_BROTLI_CAPABILITY,
             ),
@@ -710,6 +711,7 @@ export class FederationGatewayWebSocketServer {
           transport,
           {
             maxFrameBytes: this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
+            maxDecodedFrameBytes: this.options.maxDecodedFrameBytes,
             compressionEnabled: decision.capabilities.includes(
               FEDERATION_BROTLI_CAPABILITY,
             ),
@@ -986,7 +988,7 @@ export async function connectFederationClient(params: {
   keepaliveIntervalMs?: number;
   /** Per-WebSocket-message send and receive ceiling. */
   maxFrameBytes?: number;
-  /** Logical receive ceiling after application-layer decompression. */
+  /** Logical send/receive ceiling, independent of compressed wire size. */
   maxDecodedFrameBytes?: number;
   /** Client's Noise static keypair. Enables encryption (initiator role). */
   noiseStatic?: NoiseKeyPair;
@@ -1324,7 +1326,7 @@ async function establishFederationClient(
         socket,
         { kind: "envelope", envelope },
         transport,
-        { compressionEnabled, maxFrameBytes },
+        { compressionEnabled, maxFrameBytes, maxDecodedFrameBytes: params.maxDecodedFrameBytes },
         diagnosticsContext,
       );
       if (byteCount > 0) {
@@ -1339,7 +1341,7 @@ async function establishFederationClient(
         socket,
         { kind: "envelope", envelope },
         transport,
-        { compressionEnabled, maxFrameBytes },
+        { compressionEnabled, maxFrameBytes, maxDecodedFrameBytes: params.maxDecodedFrameBytes },
         diagnosticsContext,
       );
       if (byteCount > 0) {
@@ -1448,7 +1450,7 @@ function sendFrame(
   socket: WebSocket,
   message: FederationSocketMessage,
   transport?: NoiseTransport,
-  options?: { compressionEnabled?: boolean; maxFrameBytes?: number },
+  options?: { compressionEnabled?: boolean; maxFrameBytes?: number; maxDecodedFrameBytes?: number },
   context?: EnvelopeDiagnosticsContext,
 ): number {
   if (socket.readyState !== WebSocket.OPEN) return 0;
@@ -1459,6 +1461,13 @@ function sendFrame(
     log.info("federation search request queued for send", envelopeLogFields(message.envelope, context));
   }
   const socketPayload = encodeFederationSocketPayload(message);
+  const maxDecodedFrameBytes =
+    options?.maxDecodedFrameBytes ?? FEDERATION_MAX_DECODED_FRAME_BYTES;
+  // Reject locally before compression or advancing the Noise nonce. A small
+  // wire frame can still exceed the receiver's logical-message ceiling.
+  if (socketPayload.byteLength > maxDecodedFrameBytes) {
+    throw new FederationFrameTooLargeError(socketPayload.byteLength, maxDecodedFrameBytes);
+  }
   const payload = encodeFederationFramePayload({
     json: socketPayload,
     compressionEnabled: options?.compressionEnabled ?? false,
@@ -1500,7 +1509,7 @@ async function sendFrameWithBackpressure(
   socket: WebSocket,
   message: FederationSocketMessage,
   transport?: NoiseTransport,
-  options?: { compressionEnabled?: boolean; maxFrameBytes?: number },
+  options?: { compressionEnabled?: boolean; maxFrameBytes?: number; maxDecodedFrameBytes?: number },
   context?: EnvelopeDiagnosticsContext,
 ): Promise<number> {
   await waitForFederationSendCapacity(socket);

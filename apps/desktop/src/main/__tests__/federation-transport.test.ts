@@ -1533,7 +1533,7 @@ describe("federation transport liveness", () => {
     expect(received).toHaveLength(1);
   });
 
-  it("rejects an oversized client envelope before sending it", async () => {
+  it.each([false, true])("rejects oversized client envelopes locally (compression: %s)", async (compressionEnabled) => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -1564,11 +1564,12 @@ describe("federation transport liveness", () => {
       peerInstanceId: "client_one",
       privateKeyPem: clientKeyPair.privateKeyPem,
       publicKeyPem: clientKeyPair.publicKeyPem,
-      capabilities: ["remote_window"],
+      capabilities: compressionEnabled ? ["remote_window", "transport_brotli"] : ["remote_window"],
       inviteToken: invite.token,
       label: "Client",
       role: "client",
       maxFrameBytes: 64 * 1024,
+      maxDecodedFrameBytes: compressionEnabled ? 64 * 1024 : undefined,
       noiseStatic: clientNoise,
       gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
     });
@@ -1586,12 +1587,15 @@ describe("federation transport liveness", () => {
     expect(() => client.sendEnvelope(
       envelope("request-too-large", { blob: "x".repeat(128 * 1024) }),
     )).toThrow(/exceeds.*frame.*limit/i);
+    await expect(client.sendEnvelopeWithBackpressure!(
+      envelope("request-too-large-async", { blob: "x".repeat(128 * 1024) }),
+    )).rejects.toThrow(/exceeds.*frame.*limit/i);
     client.sendEnvelope(envelope("request-small", { note: "small" }));
     await expect.poll(() => received.length, { timeout: 5_000 }).toBe(1);
     expect(received[0]?.id).toBe("request-small");
   });
 
-  it("rejects an oversized gateway envelope before sending it", async () => {
+  it.each([false, true])("rejects oversized gateway envelopes locally (compression: %s)", async (compressionEnabled) => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const clientNoise = generateNoiseStaticKeyPair();
     const clientKeyPair = generateFederationIdentityKeyPair();
@@ -1612,6 +1616,7 @@ describe("federation transport liveness", () => {
       port: 0,
       store,
       maxFrameBytes: 64 * 1024,
+      maxDecodedFrameBytes: compressionEnabled ? 64 * 1024 : undefined,
       noiseStatic: gatewayNoise,
       onConnection: (connection) => {
         gatewayConnection = connection;
@@ -1626,7 +1631,7 @@ describe("federation transport liveness", () => {
       peerInstanceId: "client_one",
       privateKeyPem: clientKeyPair.privateKeyPem,
       publicKeyPem: clientKeyPair.publicKeyPem,
-      capabilities: ["remote_window"],
+      capabilities: compressionEnabled ? ["remote_window", "transport_brotli"] : ["remote_window"],
       inviteToken: invite.token,
       label: "Client",
       role: "client",
@@ -1649,6 +1654,9 @@ describe("federation transport liveness", () => {
     expect(() => gatewayConnection?.sendEnvelope(
       envelope("request-too-large", { blob: "x".repeat(128 * 1024) }),
     )).toThrow(/exceeds.*frame.*limit/i);
+    await expect(gatewayConnection!.sendEnvelopeWithBackpressure!(
+      envelope("request-too-large-async", { blob: "x".repeat(128 * 1024) }),
+    )).rejects.toThrow(/exceeds.*frame.*limit/i);
     gatewayConnection?.sendEnvelope(
       envelope("request-small", { note: "small" }),
     );
