@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { NavigationThreadSummary, ThreadDisplayData, SubAgentLens } from "@pwragent/shared";
+import type { NavigationThreadSummary, ThreadDisplayData, SubAgentLens, PricingGateSelection } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 
@@ -16,20 +16,21 @@ function appendPage(previous: ThreadDisplayData, page: ThreadDisplayData): Threa
 /** A mounted panel owns its resource request; closing it ends refresh demand. */
 export function useThreadDisplayResource(params: {
   desktopApi?: DesktopApi;
-  thread?: NavigationThreadSummary;
+  thread?: Pick<NavigationThreadSummary, "id" | "source" | "federation" | "updatedAt">;
   resource?: "pricing" | "tools" | "subagents";
   subAgentLens?: SubAgentLens;
+  pricingGateGroup?: PricingGateSelection;
 }) {
   const target = params.thread?.federation?.ref.target ?? readRendererFederationTarget();
   const instanceId = target?.scope === "remote" ? target.instanceId : undefined;
-  const key = JSON.stringify([instanceId, params.thread?.source, params.thread?.id, params.resource, params.resource === "subagents" ? params.subAgentLens : undefined]);
+  const key = JSON.stringify([instanceId, params.thread?.source, params.thread?.id, params.resource, params.resource === "subagents" ? params.subAgentLens : undefined, params.pricingGateGroup]);
   const current = useRef(params);
   current.current = params;
   const generation = useRef(0);
   const [state, setState] = useState<{ key: string; data?: ThreadDisplayData; loading?: boolean; error?: string }>({ key });
   const dataRef = useRef<{ key: string; data: ThreadDisplayData; pages: number } | undefined>(undefined);
   const read = useCallback(async (more = false) => {
-    const { desktopApi, thread, resource, subAgentLens } = current.current;
+    const { desktopApi, thread, resource, subAgentLens, pricingGateGroup } = current.current;
     if (!desktopApi?.readThread || !thread || !resource) return;
     const previous = dataRef.current?.key === key ? dataRef.current : undefined;
     if (more && !previous?.data.nextCursor) return;
@@ -45,7 +46,10 @@ export function useThreadDisplayResource(params: {
         const response = await desktopApi.readThread({
           backend: thread.source, threadId: thread.id,
           federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
-          display: { resource, cursor: data?.nextCursor, limit: 20, ...(resource === "subagents" && subAgentLens ? { subAgentLens } : {}) },
+          display: { resource, cursor: data?.nextCursor, limit: 20,
+            ...(resource === "subagents" && subAgentLens ? { subAgentLens } : {}),
+            ...(resource === "pricing" ? { deferPricingGates: true, ...(pricingGateGroup ? { pricingGateGroup } : {}) } : {}),
+          },
           includeTurns: false, viewOnly: true,
         });
         if (sequence !== generation.current) return;

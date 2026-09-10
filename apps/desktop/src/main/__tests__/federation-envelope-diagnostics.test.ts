@@ -96,6 +96,20 @@ describe("federation envelope diagnostics", () => {
     expect(JSON.stringify(fields)).not.toContain("private search phrase");
   });
 
+  it("breaks out Pricing display bytes and distinguishes expanded gate reads", () => {
+    const diagnostics = new FederationEnvelopeDiagnostics();
+    diagnostics.observe({ ...request, method: "backend.readThread", params: {
+      display: { resource: "pricing", deferPricingGates: true, pricingGateGroup: { usageLineId: "private-id", filter: "small" } },
+    } });
+    expect(diagnostics.describe(response)).toMatchObject({ displayResource: "pricing", deferredPricingGates: "true", pricingGateFilter: "small" });
+    const display = { pricingPage: { rows: [{ gates: [], gatesDeferred: true, private: "hidden text" }, { gates: [{ private: "nested" }] }] } };
+    const fields = describeLargeThreadReadResult({ ...response, result: { replay: { entries: [], messages: [] }, display } });
+    expect(fields).toMatchObject({ displayBytes: Buffer.byteLength(JSON.stringify(display)),
+      pricingDisplayBytes: Buffer.byteLength(JSON.stringify(display.pricingPage)), pricingRowCount: 2,
+      pricingNestedRowCount: 1, deferredPricingGroupCount: 1 });
+    expect(JSON.stringify([fields, diagnostics.describe(response)])).not.toContain("private");
+  });
+
   it("correlates both relay legs without retaining or logging payloads", () => {
     const diagnostics = new FederationEnvelopeDiagnostics();
     diagnostics.observe(request);

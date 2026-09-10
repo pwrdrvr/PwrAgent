@@ -24,6 +24,9 @@ export function projectThreadDisplay(
 ): AppServerReadThreadResponse {
   const demand = request.display;
   if (!demand) return response;
+  if (demand.pricingGateGroup && (demand.resource !== "pricing"
+    || typeof demand.pricingGateGroup.usageLineId !== "string" || !demand.pricingGateGroup.usageLineId
+    || !["primary", "small"].includes(demand.pricingGateGroup.filter))) throw new Error("Invalid pricing gate group.");
   const visibleSubAgents = (thread?.subAgents ?? [])
     .filter((agent) => isThreadSubAgentVisibleInPanel(agent, response.fetchedAt))
     .sort((left, right) => right.createdAt - left.createdAt);
@@ -41,7 +44,7 @@ export function projectThreadDisplay(
   // the complete overlay or internal ledger evidence invalidates an identical
   // transcript after selected-thread enrichment and ordinary metadata updates.
   const revision = demand.resource === "transcript" || demand.resource === "accounting" ? undefined
-    : createHash("sha256").update(JSON.stringify([demand.resource, revisionSource])).digest("base64url");
+    : createHash("sha256").update(JSON.stringify([demand.resource, demand.deferPricingGates, demand.pricingGateGroup, revisionSource])).digest("base64url");
   let offset = 0;
   if (demand.cursor) {
     const [cursorRevision, cursorOffset] = demand.cursor.split(":");
@@ -60,6 +63,8 @@ export function projectThreadDisplay(
     activeTurnId: thread?.activeTurnId ?? (response.threadStatus !== "idle" ? response.replay.entries.find((entry) => entry.turn?.status === "in_progress")?.turn?.id : undefined),
     offset: demand.resource === "pricing" ? offset : 0,
     limit: demand.resource === "pricing" ? limit : 0,
+    deferGates: demand.deferPricingGates,
+    gateSelection: demand.pricingGateGroup,
   });
   const { rows: _rows, spendByModel: _spendByModel, ...pricingSummary } = pricing;
   const messageIds = new Set(response.replay.entries.filter((entry) => entry.type === "message").map((entry) => entry.id));

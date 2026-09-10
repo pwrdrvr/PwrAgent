@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { AppServerReadThreadResponse, ThreadUsageLineRecord, AgentEvent } from "@pwragent/shared";
+import type { AppServerReadThreadResponse, ThreadUsageLineRecord, ThreadSubAgentSummary, AgentEvent } from "@pwragent/shared";
 import { projectThreadDisplay } from "../app-server/thread-display";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
@@ -202,4 +202,87 @@ it("places message-only provider content before its next timeline message", () =
   data.replay.messages.unshift({ id: "missing-before", role: "user", text: "Earlier question" });
   const result = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "transcript" } });
   expect(result.replay.entries.slice(0, 2).map((entry) => entry.id)).toEqual(["missing-before", "visible-message"]);
+});
+
+
+it("bounds Pricing reads with thousands of folded gates and keeps all group totals on the owner", () => {
+  const data = snapshot(20);
+  const parent = data.pricing!.lines[19]!;
+  const gates = Array.from({ length: 1000 }, (_, index) => ({
+    ...line(index), scope: "monitor" as const, source: "monitor" as const,
+    usageLineId: `gate-${index}`, sourceItemId: `system:token-miser:${index}`, turnId: `helper-turn-${index}`,
+  }));
+  data.pricing!.lines.push(...gates);
+  const subAgents: ThreadSubAgentSummary[] = gates.map((gate, index) => ({
+    monitorId: gate.sourceItemId, parentTurnId: parent.turnId, monitorTurnId: gate.turnId,
+    backend: "codex", agentName: "Token Miser", task: "Hidden helper task ".repeat(500),
+    lastMessage: "Hidden helper output ".repeat(500), status: "success", createdAt: gate.createdAt, updatedAt: gate.completedAt!,
+    monitorUsage: { summary: "Hidden usage summary", model: "gpt-5.6-luna", tokenUsage: { totalTokens: 110 } },
+    tokenMiserAccounting: {
+      currency: "USD", originalModel: "gpt-5.5", baselineParentTokens: 1000, baselineParentCostMicros: 500_000,
+      gateModel: "gpt-5.6-luna", gateTotalTokens: 110, gateCostMicros: 600,
+      revealedParentTokens: 100, revealedParentCostMicros: 1000,
+      savingsMicros: index < 21 ? 200_000 : 1000,
+    },
+  }));
+  const accounting = data.toolAccounting!.tokenMiser!;
+  accounting.interceptions = Array.from({ length: 1100 }, (_, index) => ({
+    objectId: `object-${index}`, toolUseId: `tool-${index}`, toolName: "exec", turnId: parent.turnId!, createdAt: 1,
+    originalCharacters: 1000, baselineParentTokens: 250, replacementTokens: 25, retrievedTokens: 0, estimatedParentTokensSaved: 225,
+    disposition: index < 1000 ? "summarized" : "passed_through",
+    decisionSource: index < 1000 ? "helper" : "policy",
+    summary: { summary: "Hidden decision evidence ".repeat(100), usefulDetails: [] },
+  }));
+  const request = { threadId: "fixture", display: { resource: "pricing" as const, deferPricingGates: true, limit: 20 } };
+  const first = projectThreadDisplay(data, request, { subAgents });
+  const page = first.display!.pricingPage!;
+  const group = page.rows.find((row) => row.line.usageLineId === parent.usageLineId)!;
+  expect(page.rows).toHaveLength(20);
+  expect(page.rows.every((row) => row.gates.length === 0)).toBe(true);
+  expect(group).toMatchObject({ gatesDeferred: true, gateSummary: {
+    gateCount: 1000, primaryCount: 21, smallCount: 979, unpricedCount: 0,
+    count: 1100, helperDecisionCount: 1000, policyDecisionCount: 100,
+    helperPassThroughCount: 0, policyPassThroughCount: 100, savingsMicros: 5_179_000,
+  } });
+  expect(page.summary!.totalCostMicros).toBe(612_000);
+  expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(40_000);
+  expect(JSON.stringify(first)).not.toContain("Hidden");
+  const select = (filter: "primary" | "small", cursor?: string) => projectThreadDisplay(data, {
+    ...request, display: { ...request.display, pricingGateGroup: { usageLineId: parent.usageLineId, filter }, cursor },
+  }, { subAgents });
+  const primary = select("primary");
+  const primaryMore = select("primary", primary.display!.nextCursor);
+  expect(primary.display!.pricingPage!.rows).toHaveLength(20);
+  expect(primaryMore.display!.pricingPage!.rows).toHaveLength(1);
+  expect(primaryMore.display!.nextCursor).toBeUndefined();
+  expect(primary.display!.pricingPage!.rows.every((row) => row.nested && !row.decisions && row.gates.length === 0)).toBe(true);
+  expect(primary.display!.pricingPage!.rows[0]!.subAgent).toMatchObject({ preferredModel: "gpt-5.6-luna", completedAt: expect.any(Number) });
+  expect(Buffer.byteLength(JSON.stringify(primary))).toBeLessThan(50_000);
+  expect(JSON.stringify(primary)).not.toContain("Hidden");
+  const small = select("small");
+  expect(small.display!.pricingPage!.totalRows).toBe(979);
+  expect(small.display!.pricingPage!.rows.every((row) => row.subAgent!.tokenMiserAccounting!.savingsMicros === 1000)).toBe(true);
+  expect(() => select("small", primary.display!.nextCursor)).toThrow(/history changed/);
+  expect(subAgents[0]!.task).toContain("Hidden");
+
+  // Viewers predating deferred groups still receive usable inline cards, but
+  // never the raw task/output/decision evidence that inflated the old payload.
+  const inline = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "pricing" } }, { subAgents });
+  expect(inline.display!.pricingPage!.rows.find((row) => row.line.usageLineId === parent.usageLineId)!.gates).toHaveLength(1000);
+  expect(JSON.stringify(inline)).not.toContain("Hidden");
+
+  // Gates can arrive before the parent turn has a usage row. Its orphan fold
+  // uses the newest gate as an anchor and still pages every low-savings card
+  // when none crosses the primary-card threshold.
+  data.pricing!.lines = gates;
+  const smallAgents = subAgents.map((agent) => ({ ...agent, tokenMiserAccounting: { ...agent.tokenMiserAccounting!, savingsMicros: 1000 } }));
+  const orphan = projectThreadDisplay(data, request, { subAgents: smallAgents });
+  expect(orphan.display!.pricingPage!.rows).toHaveLength(1);
+  const anchor = orphan.display!.pricingPage!.rows[0]!;
+  expect(anchor).toMatchObject({ orphan: true, gatesDeferred: true, gates: [], gateSummary: { primaryCount: 1000, smallCount: 0, count: 1100 } });
+  const expanded = projectThreadDisplay(data, { ...request, display: { ...request.display,
+    pricingGateGroup: { usageLineId: anchor.line.usageLineId, filter: "primary" },
+  } }, { subAgents: smallAgents });
+  expect(expanded.display!.pricingPage!.rows).toHaveLength(20);
+  expect(expanded.display!.pricingPage!.rows.every((row) => row.nested && !row.orphan)).toBe(true);
 });

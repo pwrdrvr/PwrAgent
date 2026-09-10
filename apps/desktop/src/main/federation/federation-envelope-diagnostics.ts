@@ -48,9 +48,18 @@ export function describeLargeThreadReadResult(envelope: FederationProtocolEnvelo
   };
   const size = (value: unknown): number => value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value), "utf8");
   const rows = Array.isArray(entries) ? entries as Record<string, unknown>[] : [];
+  const display = result.display as { pricingPage?: { rows?: Array<{ gates?: unknown[]; gatesDeferred?: boolean }> } } | undefined;
+  const pricingRows = display?.pricingPage?.rows;
   return {
     replayEntryCount: Array.isArray(entries) ? entries.length : 0,
     replayMessageCount: Array.isArray(messages) ? messages.length : 0,
+    ...(display ? { displayBytes: size(display) } : {}),
+    ...(Array.isArray(pricingRows) ? {
+      pricingDisplayBytes: size(display?.pricingPage),
+      pricingRowCount: pricingRows.length,
+      pricingNestedRowCount: pricingRows.reduce((sum, row) => sum + (row.gates?.length ?? 0), 0),
+      deferredPricingGroupCount: pricingRows.filter((row) => row.gatesDeferred).length,
+    } : {}),
     replayEntriesBytes: measure(entries),
     replayMessagesBytes: measure(messages),
     replayMetadataBytes: measure(metadata),
@@ -76,6 +85,8 @@ export class FederationEnvelopeDiagnostics {
     readReason?: string;
     displayResource?: string;
     deferredActivityDetails?: string;
+    deferredPricingGates?: string;
+    pricingGateFilter?: string;
     conditionalRead?: string;
     expiresAt: number;
   }>();
@@ -131,6 +142,7 @@ export class FederationEnvelopeDiagnostics {
         : request && request.expiresAt > this.now()
           ? { threadId: request.threadId, readReason: request.readReason,
             displayResource: request.displayResource, deferredActivityDetails: request.deferredActivityDetails,
+            deferredPricingGates: request.deferredPricingGates, pricingGateFilter: request.pricingGateFilter,
             conditionalRead: request.conditionalRead }
           : {}),
       ...(notificationParams && "threadId" in notificationParams
@@ -153,12 +165,15 @@ function threadReadLogFields(envelope: FederationProtocolEnvelope): {
   readReason?: string;
   displayResource?: string;
   deferredActivityDetails?: string;
+  deferredPricingGates?: string;
+  pricingGateFilter?: string;
   conditionalRead?: string;
 } {
   if (envelope.kind !== "request" || envelope.method !== "backend.readThread") return {};
   const params = envelope.params;
   if (!params || typeof params !== "object") return {};
   const display = "display" in params && params.display && typeof params.display === "object" ? params.display : undefined;
+  const group = display && "pricingGateGroup" in display && display.pricingGateGroup && typeof display.pricingGateGroup === "object" ? display.pricingGateGroup : undefined;
   return {
     threadId: "threadId" in params && typeof params.threadId === "string" && params.threadId.length <= 256
       ? params.threadId : undefined,
@@ -168,6 +183,8 @@ function threadReadLogFields(envelope: FederationProtocolEnvelope): {
       && ["transcript", "activity", "accounting", "pricing", "tools", "incident", "subagents", "subagent"].includes(display.resource)
       ? display.resource : undefined,
     deferredActivityDetails: display && "deferActivityDetails" in display && display.deferActivityDetails === true ? "true" : undefined,
+    deferredPricingGates: display && "deferPricingGates" in display && display.deferPricingGates === true ? "true" : undefined,
+    pricingGateFilter: group && "filter" in group && (group.filter === "primary" || group.filter === "small") ? group.filter : undefined,
     conditionalRead: "knownRevision" in params && typeof params.knownRevision === "string"
       ? params.knownRevision.length > 0 ? "revalidate" : "initial" : undefined,
   };

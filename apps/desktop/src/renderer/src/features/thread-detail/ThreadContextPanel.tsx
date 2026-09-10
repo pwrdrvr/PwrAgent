@@ -755,6 +755,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread) return null;
         return (
           <PricingPanel
+            desktopApi={props.desktopApi}
+            thread={{ id: props.thread.id, source: props.thread.source, federation: props.thread.federation, updatedAt: props.thread.updatedAt }}
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
             display={displayResource.data?.pricingPage}

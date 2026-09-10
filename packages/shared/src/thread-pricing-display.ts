@@ -14,6 +14,72 @@ export type PricingUsageLine = ThreadUsageLineRecord & {
   estimatedUsageGap?: true;
 };
 
+/** Pricing never needs a helper's task, output, runtime ownership, or usage ledger. */
+export type PricingSubAgent = Pick<ThreadSubAgentSummary,
+  "monitorId" | "backend" | "agentName" | "preferredModel" | "preferredReasoningEffort"
+  | "createdAt" | "updatedAt" | "status" | "completedAt" | "monitorTurnId" | "tokenMiserAccounting"
+>;
+
+export type PricingDecision = Pick<ThreadTokenMiserInterceptionAccounting, "decisionSource" | "disposition">;
+export type PricingGateSelection = { usageLineId: string; filter: "primary" | "small" };
+/**
+ * A gate below this saved (or cost) too little to earn its own card. Its
+ * dollars still count in the turn's summary line; only the card is withheld.
+ * Ten cents is where a card stops being noise: below it the equation reads as
+ * rounding, above it the reader can see which term moved.
+ */
+export const TOKEN_MISER_CARD_MIN_MICROS = 100_000;
+
+function pricingSubAgent(agent: ThreadSubAgentSummary | undefined): PricingSubAgent | undefined {
+  if (!agent) return undefined;
+  return {
+    monitorId: agent.monitorId, backend: agent.backend, agentName: agent.agentName,
+    preferredModel: agent.preferredModel ?? agent.monitorUsage?.model ?? agent.monitorUsage?.cost?.model,
+    preferredReasoningEffort: agent.preferredReasoningEffort,
+    createdAt: agent.createdAt, updatedAt: agent.updatedAt, status: agent.status,
+    completedAt: agent.completedAt ?? (isTerminalSubAgent(agent) && agent.updatedAt >= agent.createdAt ? agent.updatedAt : undefined),
+    monitorTurnId: agent.monitorTurnId, tokenMiserAccounting: agent.tokenMiserAccounting,
+  };
+}
+
+export function partitionPricingGateCards(
+  gates: readonly PricingUsageLine[],
+  subAgentsById: ReadonlyMap<string, Pick<ThreadSubAgentSummary, "tokenMiserAccounting">>,
+) {
+  const accounting = (line: PricingUsageLine) => line.sourceItemId ? subAgentsById.get(line.sourceItemId)?.tokenMiserAccounting : undefined;
+  const priced = gates.filter((line) => accounting(line) !== undefined);
+  const significant = priced.filter((line) => Math.abs(accounting(line)!.savingsMicros) >= TOKEN_MISER_CARD_MIN_MICROS);
+  const primary = significant.length ? significant : priced;
+  const primaryIds = new Set(primary.map((line) => line.usageLineId));
+  return { primary, small: priced.filter((line) => !primaryIds.has(line.usageLineId)), unpricedCount: gates.length - priced.length };
+}
+
+/** All folded-group figures are computed on the owner, independent of loaded gate pages. */
+export function buildPricingGateGroupDisplay(params: {
+  gates: readonly PricingUsageLine[];
+  subAgentsById: ReadonlyMap<string, Pick<ThreadSubAgentSummary, "tokenMiserAccounting">>;
+  decisions?: readonly PricingDecision[];
+}) {
+  const { gates, subAgentsById, decisions } = params;
+  const { primary, small, unpricedCount } = partitionPricingGateCards(gates, subAgentsById);
+  const accountings = gates.map((line) => line.sourceItemId ? subAgentsById.get(line.sourceItemId)?.tokenMiserAccounting : undefined);
+  const decisionRows = decisions ?? accountings;
+  return {
+    gateCount: gates.length, primaryCount: primary.length, smallCount: small.length, unpricedCount,
+    smallMicros: small.reduce((sum, line) => sum + subAgentsById.get(line.sourceItemId!)!.tokenMiserAccounting!.savingsMicros, 0),
+    savingsMicros: accountings.reduce((sum, accounting) => sum + (accounting?.savingsMicros ?? 0), 0),
+    gateCostMicros: gates.reduce((sum, line) => sum + line.totalCostMicros, 0),
+    hasDecisions: decisions !== undefined,
+    count: decisions?.length ?? gates.length,
+    helperDecisionCount: decisionRows.filter((decision) => decision?.decisionSource !== "policy").length,
+    policyDecisionCount: decisionRows.filter((decision) => decision?.decisionSource === "policy").length,
+    helperPassThroughCount: decisionRows.filter((decision) => decision?.disposition === "passed_through" && decision.decisionSource !== "policy").length,
+    policyPassThroughCount: decisionRows.filter((decision) => decision?.disposition === "passed_through" && decision.decisionSource === "policy").length,
+  };
+}
+
+export type PricingGateGroupDisplay = ReturnType<typeof buildPricingGateGroupDisplay>;
+
 export type PricingUsageRowData = {
   line: PricingUsageLine;
   nested: boolean;
@@ -21,16 +87,18 @@ export type PricingUsageRowData = {
   isActive: boolean;
   lineTotals: PricingRunningLineTotals | undefined;
   rowCompactions: ThreadCompactionRecord[];
-  subAgent: ThreadSubAgentSummary | undefined;
+  subAgent: PricingSubAgent | undefined;
   turnFailure: ThreadTurnFailure | undefined;
   threadReasoningEffort: string | undefined;
-  decisions: ThreadTokenMiserInterceptionAccounting[] | undefined;
+  decisions: PricingDecision[] | undefined;
+  gateSummary?: PricingGateGroupDisplay;
+  gatesDeferred?: true;
   gates: PricingUsageRowData[];
 };
 
 export function resolveUsageLineModel(
   line: ThreadUsageLineRecord,
-  subAgent?: ThreadSubAgentSummary,
+  subAgent?: Pick<ThreadSubAgentSummary, "preferredModel" | "monitorUsage">,
 ): string | undefined {
   return (
     line.model
@@ -433,6 +501,8 @@ export function buildThreadPricingDisplay(params: {
   turnFailures?: readonly ThreadTurnFailure[];
   offset?: number;
   limit?: number;
+  deferGates?: boolean;
+  gateSelection?: PricingGateSelection;
 }) {
   const summaries = params.pricing?.summaries ?? [];
   const allDisplayLines = buildPricingDisplayLines(params.pricing?.lines ?? []);
@@ -443,26 +513,39 @@ export function buildThreadPricingDisplay(params: {
   const totals = buildPricingRunningTotals(allDisplayLines);
   const compactionsByRow = groupCompactionsByRow(params.pricing?.compactions ?? []);
   const claimedCompactionTurns = new Set<string>();
+  const gatesForLine = (line: PricingUsageLine) => orphanGroupsByAnchor.get(line.usageLineId)
+    ?? (line.scope !== "monitor" && line.turnId ? gateLinesByTurn.get(line.turnId) ?? [] : []);
   const buildRow = (line: PricingUsageLine, nested = false): PricingUsageRowData => {
     const orphanGroup = nested ? undefined : orphanGroupsByAnchor.get(line.usageLineId);
-    const gates = orphanGroup ?? (line.scope !== "monitor" && line.turnId ? gateLinesByTurn.get(line.turnId) ?? [] : []);
+    const gates = nested ? [] : gatesForLine(line);
     const isActive = isActiveUsageLine({ activeTurnId: params.activeTurnId, line, subAgentsById });
+    const decisions = gates.length === 0 ? undefined : orphanGroup
+      ? tokenMiserDecisionsForGateLines({ accounting: params.tokenMiserAccounting, gates, subAgentsById })
+      : tokenMiserDecisionsForTurn(params.tokenMiserAccounting, line.turnId);
     return {
       line, nested, orphan: Boolean(orphanGroup), isActive,
       lineTotals: totals.byLineId.get(line.usageLineId),
       rowCompactions: selectRowCompactions(compactionsByRow, line, claimedCompactionTurns),
-      subAgent: line.scope === "monitor" && line.sourceItemId ? subAgentsById.get(line.sourceItemId) : undefined,
+      subAgent: pricingSubAgent(line.scope === "monitor" && line.sourceItemId ? subAgentsById.get(line.sourceItemId) : undefined),
       turnFailure: !isActive && line.scope === "turn" ? params.turnFailures?.find((failure) => failure.turnId === line.turnId) : undefined,
       threadReasoningEffort: isActive && line.scope !== "monitor" ? params.threadReasoningEffort : undefined,
-      decisions: orphanGroup
-        ? tokenMiserDecisionsForGateLines({ accounting: params.tokenMiserAccounting, gates, subAgentsById })
-        : tokenMiserDecisionsForTurn(params.tokenMiserAccounting, line.turnId),
-      gates: gates.map((gate) => buildRow(gate, true)),
+      decisions: params.deferGates ? undefined : decisions?.map(({ decisionSource, disposition }) => ({ decisionSource, disposition })),
+      ...(gates.length ? { gateSummary: buildPricingGateGroupDisplay({ gates, subAgentsById, decisions }) } : {}),
+      ...(params.deferGates && gates.length ? { gatesDeferred: true as const } : {}),
+      gates: params.deferGates ? [] : gates.map((gate) => buildRow(gate, true)),
     };
   };
+  let pageLines = displayLines;
+  if (params.gateSelection) {
+    const anchor = displayLines.find((line) => line.usageLineId === params.gateSelection!.usageLineId);
+    // A live owner can remove an orphan anchor after its parent usage arrives.
+    // An empty page lets the next parent refresh replace that obsolete group.
+    const groups = partitionPricingGateCards(anchor ? gatesForLine(anchor) : [], subAgentsById);
+    pageLines = groups[params.gateSelection.filter];
+  }
   const offset = params.offset ?? 0;
   // Earlier rows still claim their compactions when reading a later page.
-  for (const line of displayLines.slice(0, offset)) selectRowCompactions(compactionsByRow, line, claimedCompactionTurns);
+  for (const line of pageLines.slice(0, offset)) selectRowCompactions(compactionsByRow, line, claimedCompactionTurns);
   return {
     summary,
     spendByModel: buildPricingSpendByModel({
@@ -475,8 +558,8 @@ export function buildThreadPricingDisplay(params: {
     }),
     observedCostMicros: summaries.reduce((total, provider) => total + provider.totalCostMicros, 0),
     totals: { hasEstimatedRows: totals.hasEstimatedRows, totalCreditMicros: totals.totalCreditMicros },
-    rows: displayLines.slice(offset, params.limit === undefined ? undefined : offset + params.limit).map((line) => buildRow(line)),
-    totalRows: displayLines.length,
+    rows: pageLines.slice(offset, params.limit === undefined ? undefined : offset + params.limit).map((line) => buildRow(line, params.gateSelection !== undefined)),
+    totalRows: pageLines.length,
   };
 }
 

@@ -61,7 +61,7 @@ export function subAgentStatusLabel(status: ThreadSubAgentStatus): string {
 }
 
 /** Terminal evidence is stronger than progress-oriented status text. */
-export function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
+export function isTerminalSubAgent(subAgent: Pick<ThreadSubAgentSummary, "status" | "completedAt" | "outcome" | "completionSource">): boolean {
   return (
     subAgent.status === "success"
     || subAgent.status === "failure"
@@ -77,7 +77,7 @@ export function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
  * best durable completion boundary available and keeps their duration useful.
  */
 export function subAgentCompletedAt(
-  subAgent: ThreadSubAgentSummary,
+  subAgent: Pick<ThreadSubAgentSummary, "status" | "createdAt" | "updatedAt" | "completedAt" | "outcome" | "completionSource">,
 ): number | undefined {
   if (subAgent.completedAt !== undefined) {
     return subAgent.completedAt;

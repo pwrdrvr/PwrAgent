@@ -1027,6 +1027,9 @@ export type ThreadDisplayRead = {
   resource: "transcript" | "activity" | "accounting" | "pricing" | "tools" | "incident" | "subagents" | "subagent";
   /** Opt in only when the viewer supports resolving collapsed activity details. */
   deferActivityDetails?: boolean;
+  /** New viewers load folded Pricing gate cards only on expansion. */
+  deferPricingGates?: boolean;
+  pricingGateGroup?: { usageLineId: string; filter: "primary" | "small" };
   activity?: { turnId: string; entryId: string };
   firstWarningAt?: number;
   largeOutputThresholdChars?: number;

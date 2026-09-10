@@ -2,18 +2,18 @@ import type { ThreadSubAgentSummary } from "./contracts/navigation";
 
 export type SubAgentLens = "harness" | "token-miser" | "pwragent";
 
-export function isCodexNativeSubAgent(subAgent: ThreadSubAgentSummary): boolean {
+export function isCodexNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitorId">): boolean {
   return subAgent.monitorId.startsWith("codex-native:");
 }
 
 export function isSystemTitleHelperSubAgent(
-  subAgent: ThreadSubAgentSummary,
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
 ): boolean {
   return subAgent.monitorId.startsWith("system:title-helper:");
 }
 
 export function isTokenMiserSubAgent(
-  subAgent: ThreadSubAgentSummary,
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
 ): boolean {
   return subAgent.monitorId.startsWith("system:token-miser:");
 }
@@ -75,7 +75,7 @@ export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
 }
 
 export function subAgentPricingUsageTitle(
-  subAgent: ThreadSubAgentSummary,
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
 ): string {
   if (isSystemTitleHelperSubAgent(subAgent)) {
     return "Thread naming";
