@@ -3093,6 +3093,7 @@ export function useThreadNavigation(
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined;
   const selectedDetail = useNavigationSelectedDetail({
+    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
     desktopApi, enabled: enabled && viewVisible,
     ref: selectedIdentity,
     federationTarget: selectedIdentity?.ownerInstanceId

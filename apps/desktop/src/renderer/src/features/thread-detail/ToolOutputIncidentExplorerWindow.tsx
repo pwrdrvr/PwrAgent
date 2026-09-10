@@ -174,8 +174,32 @@ export function ToolOutputIncidentExplorerWindow() {
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent || !route) return;
-    return desktopApi.onAgentEvent((event) => {
-      if (event.backend !== route.backend) {
+    let cancelled = false;
+    let version = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = desktopApi.onAgentEvent((event) => {
+      if (event.backend !== route.backend
+        || (event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined)
+          !== (route.federationTarget?.scope === "remote" ? route.federationTarget.instanceId : undefined)) {
+        return;
+      }
+      const fields = event.notification.params as Record<string, unknown>;
+      if (fields.displayInvalidated && fields.threadId === route.threadId) {
+        // This explicit inspection window owns full-history demand. Ordinary
+        // transcript subscribers receive only the invalidation.
+        const sequence = ++version;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = undefined;
+          void desktopApi.readThread?.({
+            backend: route.backend, federationTarget: route.federationTarget,
+            threadId: route.threadId, includeTurns: false, includeAllToolInvocations: true, viewOnly: true,
+          }).then((response) => {
+            if (cancelled || sequence !== version) return;
+            setLatest((current) => current ? { ...current, pricing: response.pricing } : current);
+            setAccounting(response.toolAccounting);
+          }).catch((error) => { if (!cancelled && sequence === version) reportError(error); });
+        }, 200);
         return;
       }
       const notification = event.notification;
@@ -219,6 +243,7 @@ export function ToolOutputIncidentExplorerWindow() {
           : live;
       });
     });
+    return () => { cancelled = true; version += 1; if (timer) clearTimeout(timer); unsubscribe(); };
   }, [desktopApi, refresh, route]);
 
   const allInvocations = useMemo(

@@ -1,3 +1,4 @@
+import { projectThreadDisplay } from "./thread-display";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { rememberBoundedMap } from "../bounded-map";
@@ -13869,7 +13870,27 @@ export class DesktopBackendRegistry {
     );
   }
 
-  async readThread(
+  async readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
+    if (!request.display) return await this.readThreadData(request);
+    const backend = request.backend ?? "codex";
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
+    if (request.display.resource === "transcript") {
+      return projectThreadDisplay(await this.readThreadData(request), request, { ...overlay, activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId });
+    }
+    this.assertNotBootstrap("readThread");
+    const pricing = await this.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
+    const stored = await this.overlayStore.readThreadToolAccounting({
+      backend, threadId: request.threadId,
+      ...(request.display.resource === "tools" || request.display.resource === "incident" ? { includeAllInvocations: true } : {}),
+    });
+    const toolAccounting = stored ? await this.withTokenMiserAccounting({ accounting: stored, backend, threadId: request.threadId }) : undefined;
+    return projectThreadDisplay({
+      backend, threadId: request.threadId, fetchedAt: Date.now(), pricing, toolAccounting,
+      replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+    }, request, { ...overlay, activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId });
+  }
+
+  private async readThreadData(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
     this.assertNotBootstrap("readThread");

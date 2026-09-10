@@ -1660,6 +1660,7 @@ class DesktopAppServerService {
         .remoteBackend(request.federationTarget)
         .readThread({
           backend: request.backend,
+          display: request.display,
           threadId: request.threadId,
           before: request.before,
           includeAllToolInvocations: request.includeAllToolInvocations,
@@ -1674,6 +1675,7 @@ class DesktopAppServerService {
     const registry = getDesktopBackendRegistry();
     const response = await registry.readThread({
       backend,
+      display: request.display,
       threadId: request.threadId,
       includeAllToolInvocations: request.includeAllToolInvocations,
       includeTurns: request.includeTurns,
@@ -1684,6 +1686,7 @@ class DesktopAppServerService {
 
     logDebug("readThread", {
       backend,
+      displayResource: request.display?.resource,
       threadId: request.threadId,
       messageCount: response.replay.messages.length,
       hasLastUserMessage: Boolean(response.replay.lastUserMessage),

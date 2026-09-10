@@ -312,3 +312,13 @@ it("retains a completed history page across a configuration invalidation", async
   expect(result.current.state?.detail?.thread?.subAgents).toEqual(subAgents);
   unmount();
 });
+
+it("does not fetch sub-agent history when the transcript requests only its required collections", async () => {
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockResolvedValue({ ...detail("config"), collections: [{ name: "subAgents", count: 10000, revision: "history" }] });
+  const api: DesktopApi = { getNavigationSelectedDetail: read };
+  const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref, collections: ["turnFailureLog"] }));
+  await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(result.current.state?.detail?.thread?.subAgents).toBeUndefined();
+  unmount();
+});

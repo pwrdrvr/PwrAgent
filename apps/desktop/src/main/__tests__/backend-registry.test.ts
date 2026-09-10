@@ -52505,3 +52505,22 @@ describe("real-repo git test environment", () => {
     ).toEqual([]);
   });
 });
+
+it("serves owner display panels without replaying the provider transcript", async () => {
+  const codexClient = new MockBackendClient({});
+  const overlayStore = createOverlayStoreMock({ overlays: { "codex:thread-1": {
+    backend: "codex", threadId: "thread-1", executionMode: "default", extraLinkedDirectories: [],
+    subAgents: [{ monitorId: "monitor-1", task: "A displayed task", createdAt: 1, updatedAt: 1, status: "success" }],
+  } } });
+  const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+  onTestFinished(() => registry.close());
+  for (const resource of ["pricing", "tools", "subagents", "accounting"] as const) {
+    const result = await registry.readThread({ backend: "codex", threadId: "thread-1", display: { resource }, viewOnly: true, includeTurns: false });
+    expect(result.display).toBeDefined();
+    expect(result.pricing).toBeUndefined();
+    expect(result.toolAccounting).toBeUndefined();
+    expect(result.replay.entries).toEqual([]);
+    if (resource === "subagents") expect(result.display?.subAgents?.[0]?.task).toBe("A displayed task");
+  }
+  expect(codexClient.readThreadCalls).toEqual([]);
+});

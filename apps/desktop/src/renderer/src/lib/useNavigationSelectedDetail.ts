@@ -28,6 +28,7 @@ export function useNavigationSelectedDetail(params: {
   ref?: NavigationIdentity;
   federationTarget?: FederationTarget;
   enabled?: boolean;
+  collections?: readonly NavigationDetailCollectionName[];
 }): {
   state?: NavigationSelectionState;
   refresh: () => Promise<void>;
@@ -107,6 +108,7 @@ export function useNavigationSelectedDetail(params: {
         publish({ collectionReadiness: "loading", collectionError: undefined });
         try {
           for (const manifest of detail.collections) {
+            if (currentParams.collections && !currentParams.collections.includes(manifest.name)) continue;
             if (collectionsRef.current.revisions.get(manifest.name) === manifest.revision) continue;
             const cached = collectionsRef.current.values[manifest.name];
             if (cached && await collectionRevision(detail.ref, manifest.name, cached) === manifest.revision) {

@@ -843,7 +843,7 @@ function DesktopAppShell(props: {
         ? "Codex thread"
         : `${backend} thread`;
     };
-    return desktopApi?.onAgentEvent?.((event) => {
+    return desktopApi?.onAgentEvent?.(async (event) => {
       if (
         !federationTargetsEqual(
           event.federationTarget,
@@ -921,6 +921,8 @@ function DesktopAppShell(props: {
           threadId: string;
           incidentNotice?: ThreadToolIncidentNoticeState;
           toolAccounting?: ThreadToolAccounting;
+          displayInvalidated?: true;
+          incidentSummary?: import("@pwragent/shared").ThreadIncidentSummary;
           triggeredAlerts?: ThreadToolInvocationAlert[];
         };
         /* One card per thread, folded from the whole accounting snapshot,
@@ -953,8 +955,8 @@ function DesktopAppShell(props: {
             ...params.incidentNotice,
           });
         }
-        const incidentState = toolIncidentStateRef.current.get(noticeId);
-        const summary = buildThreadIncidentSummary({
+        let incidentState = toolIncidentStateRef.current.get(noticeId);
+        let summary = params.displayInvalidated ? params.incidentSummary : buildThreadIncidentSummary({
           accounting: params.toolAccounting,
           backend: event.backend,
           ...(incidentState?.firstWarningAt !== undefined
@@ -966,7 +968,20 @@ function DesktopAppShell(props: {
             buildThreadIdentityKey(event.backend, params.threadId),
           ),
         });
+        if (params.displayInvalidated && desktopApi?.readThread) {
+          try {
+            const detail = await desktopApi.readThread({
+              backend: event.backend, threadId: params.threadId, federationTarget: event.federationTarget,
+              display: { resource: "incident", firstWarningAt: incidentState?.firstWarningAt, largeOutputThresholdChars: largeOutputThresholdCharsRef.current },
+              includeTurns: false, viewOnly: true,
+            });
+            summary = detail.display?.incident ?? summary;
+          } catch {
+            // The event's owner-computed counts still warn when detail cannot be read.
+          }
+        }
         if (!summary) return;
+        incidentState = toolIncidentStateRef.current.get(noticeId);
         if (
           resolveToolIncidentVisibility({
             severity: summary.severity,

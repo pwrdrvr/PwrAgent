@@ -5,7 +5,7 @@ import type { ThreadUsageLineRecord } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ComponentProps } from "react";
 import { PricingPanel } from "../context-panels/PricingPanel";
-import * as spend from "../pricing-spend-by-model";
+import * as spend from "@pwragent/shared";
 import * as formatting from "../context-panels/subagent-format";
 import * as rail from "../context-panels/context-rail-shared";
 
@@ -49,7 +49,7 @@ it("ticks only live timestamps and keeps completed cards and pricing calculation
   vi.useFakeTimers();
   const startedAt = 1_800_000_000_000;
   vi.setSystemTime(startedAt + 10_000);
-  const calculate = vi.spyOn(spend, "buildPricingSpendByModel");
+  const calculate = vi.spyOn(spend, "buildThreadPricingDisplay");
   const formatTokens = vi.spyOn(formatting, "formatTokenCount");
   const formatTimestamp = vi.spyOn(rail, "formatTimestamp");
   const active = buildMonitorLine({
@@ -125,7 +125,7 @@ function wireCopy<T>(value: T): T {
 
 it("preserves historical DOM and formatting across remote snapshots, active updates and insertion", () => {
   const formatTokens = vi.spyOn(formatting, "formatTokenCount");
-  const calculate = vi.spyOn(spend, "buildPricingSpendByModel");
+  const calculate = vi.spyOn(spend, "buildThreadPricingDisplay");
   const historical = buildMonitorLine({
     usageLineId: "historical", scope: "turn", source: "live", turnId: "old-turn",
     uncachedInputTokens: 123456, createdAt: 1_800_000_000_000,
@@ -288,4 +288,16 @@ it("formats one changed card out of a full page of twenty remote usage rows", ()
     const after = Array.from(view.container.querySelectorAll("li.pricing-usage-row"));
     after.forEach((card, index) => { expect(card).toBe(before[index]); });
   }
+});
+
+it("renders owner-prepared pricing with the same visible values and no viewer ledger calculation", () => {
+  const pricing = { lines: [buildMonitorLine({ scope: "turn", turnId: "turn-1", source: "live", completedAt: 1_800_000_000_999 })], summaries: [] };
+  const display = spend.buildThreadPricingDisplay({ pricing });
+  const legacy = render(<PricingPanel pricing={pricing} />);
+  const text = legacy.container.textContent;
+  legacy.unmount();
+  const calculate = vi.spyOn(spend, "buildThreadPricingDisplay");
+  const view = render(<PricingPanel display={display} />);
+  expect(view.container.textContent).toBe(text);
+  expect(calculate).not.toHaveBeenCalled();
 });

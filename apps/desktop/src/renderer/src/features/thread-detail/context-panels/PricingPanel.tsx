@@ -1,3 +1,12 @@
+import { buildThreadPricingDisplay, type ThreadPricingDisplay } from "@pwragent/shared";
+import {
+  type PricingUsageLine,
+  resolveUsageLineModel,
+  type PricingRunningLineTotals,
+  isForkBaselineLine,
+  isEstimatedUsageGap,
+  type PricingUsageRowData,
+} from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   ThreadCompactionRecord,
@@ -10,7 +19,6 @@ import type {
 } from "@pwragent/shared";
 import {
   estimateOpenAiCodexCreditUsage,
-  estimateHistoricalThreadUsageGapLines,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -24,7 +32,6 @@ import { formatBackendLabel } from "../../../lib/backend-label";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   formatTokenCount,
-  isTerminalSubAgent,
   subAgentCompletedAt,
 } from "./subagent-format";
 import {
@@ -34,22 +41,21 @@ import {
 } from "./context-rail-shared";
 import { RailStatusChip } from "./RailStatusChip";
 import {
-  isTokenMiserSubAgent,
   subAgentPricingUsageTitle,
 } from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
 import {
-  addUsageLineToSummary,
-  buildPricingSpendByModel,
-  emptyPricingSummary,
   type PricingModelSpend,
   prunePricingSpendOverrides,
 } from "../pricing-spend-by-model";
-import { buildTokenMiserSavingsSummary } from "../token-miser-savings-summary";
+
 
 type PricingPanelProps = {
+  display?: ThreadPricingDisplay;
+  onLoadMore?: () => void;
+  loading?: boolean;
   activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
   /**
@@ -81,9 +87,7 @@ type PricingDisplayOptions = {
   usd: boolean;
 };
 
-type PricingUsageLine = ThreadUsageLineRecord & {
-  estimatedUsageGap?: true;
-};
+
 
 const DEFAULT_PRICING_DISPLAY_OPTIONS: PricingDisplayOptions = {
   codexCredits: false,
@@ -102,62 +106,16 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   const scrollToTurn = useCallback((turnId: string, turnTimeMs?: number) => {
     scrollToTurnRef.current?.(turnId, turnTimeMs);
   }, []);
-  // These derivations cover the entire history, including folded gate rows.
-  // Reuse them for presentation updates when their source data is unchanged.
-  const summaries = useMemo(
-    () => props.pricing?.summaries ?? [],
-    [props.pricing?.summaries],
-  );
-  const lines = useMemo(
-    () => props.pricing?.lines ?? [],
-    [props.pricing?.lines],
-  );
-  const allDisplayLines = useMemo(() => buildPricingDisplayLines(lines), [lines]);
-  const subAgentsById = useMemo(() => new Map(
-    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
-  ), [props.subAgents]);
-  // Gate rows nest under the turn they happened in. Left in the flat list they
-  // sort *above* their turn — a gate is created mid-turn, after the turn's
-  // first usage flush — and each one is a full card, so a turn with 25 gates
-  // pushed its own row a screen below the noise it produced.
-  const { gateLinesByTurn, displayLines, orphanGroupsByAnchor } = useMemo(
-    () => partitionTokenMiserGateLines(allDisplayLines, subAgentsById),
-    [allDisplayLines, subAgentsById],
-  );
-  const pricingHistoryKey = summaries[0]
-    ? `${summaries[0].backend}:${summaries[0].threadId}`
-    : displayLines[0]
-      ? `${displayLines[0].backend}:${displayLines[0].threadId}`
-      : "empty";
-  const [usagePage, setUsagePage] = useState({
-    count: PRICING_USAGE_PAGE_SIZE,
-    key: pricingHistoryKey,
-  });
-  const visibleUsageRowCount =
-    usagePage.key === pricingHistoryKey
-      ? usagePage.count
-      : PRICING_USAGE_PAGE_SIZE;
-  const visibleDisplayLines = displayLines.slice(0, visibleUsageRowCount);
-  const hiddenUsageRowCount = displayLines.length - visibleDisplayLines.length;
-  const summary = useMemo(() => {
-    const estimatedLines = allDisplayLines.filter(isEstimatedUsageGap);
-    const displaySummaries = addEstimatedLinesToSummaries(summaries, estimatedLines);
-    return aggregateSummaries(displaySummaries) ?? aggregateUsageLines(allDisplayLines);
-  }, [summaries, allDisplayLines]);
-  // The headline is the all-in bill, including naming, reviews, monitors and
-  // Token Miser. Underneath it, the same bill split by the model that spent
-  // it: a turn that sends four reviewers to four models bills three providers,
-  // and a per-provider split answers none of the questions that raises.
-  const spendByModel = useMemo(() => buildPricingSpendByModel({
-    lines: allDisplayLines,
-    resolveModel: (line) =>
-      resolveUsageLineModel(
-        line,
-        line.scope === "monitor" && line.sourceItemId
-          ? subAgentsById.get(line.sourceItemId)
-          : undefined,
-      ),
-  }), [allDisplayLines, subAgentsById]);
+  const model = useMemo(() => props.display ?? buildThreadPricingDisplay({
+    pricing: props.pricing, subAgents: props.subAgents, tokenMiserAccounting: props.tokenMiserAccounting,
+    activeTurnId: props.activeTurnId, threadReasoningEffort: props.threadReasoningEffort, turnFailures: props.turnFailures,
+  }), [props.display, props.pricing, props.subAgents, props.tokenMiserAccounting, props.activeTurnId, props.threadReasoningEffort, props.turnFailures]);
+  const { summary, spendByModel, tokenMiserSummary, observedCostMicros, totals: pricingTotals } = model;
+  const pricingHistoryKey = summary ? `${summary.backend}:${summary.threadId}` : "empty";
+  const [usagePage, setUsagePage] = useState({ count: PRICING_USAGE_PAGE_SIZE, key: pricingHistoryKey });
+  const visibleUsageRowCount = props.display ? model.rows.length : usagePage.key === pricingHistoryKey ? usagePage.count : PRICING_USAGE_PAGE_SIZE;
+  const visibleRows = model.rows.slice(0, visibleUsageRowCount);
+  const hiddenUsageRowCount = model.totalRows - visibleRows.length;
   const spendModelCount = spendByModel.reduce(
     (total, group) => total + group.models.length,
     0,
@@ -206,78 +164,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
       },
     }));
   };
-  // Thread-level gate result, from every gate this thread spawned. The
-  // per-turn folds below price one turn each; this is the same arithmetic run
-  // once across all of them, so the rail can answer "did the gate pay for
-  // itself" without expanding ninety folds.
-  //
-  // Enumerated from the sub-agents rather than from the gate usage rows: a
-  // decision that deterministic policy passed through never bills a helper
-  // turn, so it has accounting and a sub-agent and no usage line at all. Read
-  // from the rows, an all-policy thread looked like a thread with no gate.
-  const tokenMiserSummary = useMemo(
-    () => buildTokenMiserSavingsSummary({
-      ...(props.tokenMiserAccounting
-        ? { accounting: props.tokenMiserAccounting }
-        : {}),
-      gateAccountings: (props.subAgents ?? [])
-        .filter(isTokenMiserSubAgent)
-        .map((subAgent) => subAgent.tokenMiserAccounting),
-    }),
-    [props.subAgents, props.tokenMiserAccounting],
-  );
-  // The Explorer's own basis for "would have cost", so the two surfaces divide
-  // by the same denominator: the provider summaries as recorded, without the
-  // estimated-gap lines the rail folds into its headline total.
-  const observedCostMicros = summaries.reduce(
-    (total, provider) => total + provider.totalCostMicros,
-    0,
-  );
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
-  // Totals run over every line, nested gates included: a gate's helper cost is
-  // still part of the running total of every turn after it.
-  const pricingTotals = useMemo(
-    () => buildPricingRunningTotals(allDisplayLines),
-    [allDisplayLines],
-  );
-  const activeTurnId = props.activeTurnId;
-  const compactionsByRow = useMemo(
-    () => groupCompactionsByRow(props.pricing?.compactions ?? []),
-    [props.pricing?.compactions],
-  );
-  // Compaction ownership must be assigned in list order, before memoized
-  // cards decide whether to render. A skipped card still claims its markers.
-  const claimedCompactionTurns = new Set<string>();
-  const buildUsageRow = (line: PricingUsageLine, nested = false): PricingUsageRowData => {
-    const orphanGroup = nested ? undefined : orphanGroupsByAnchor.get(line.usageLineId);
-    const gates = orphanGroup ?? (line.scope !== "monitor" && line.turnId
-      ? gateLinesByTurn.get(line.turnId) ?? []
-      : []);
-    const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
-    return {
-      line,
-      nested,
-      orphan: Boolean(orphanGroup),
-      isActive,
-      lineTotals: pricingTotals.byLineId.get(line.usageLineId),
-      rowCompactions: selectRowCompactions(compactionsByRow, line, claimedCompactionTurns),
-      subAgent: line.scope === "monitor" && line.sourceItemId
-        ? subAgentsById.get(line.sourceItemId)
-        : undefined,
-      turnFailure: !isActive && line.scope === "turn"
-        ? props.turnFailures?.find((failure) => failure.turnId === line.turnId)
-        : undefined,
-      threadReasoningEffort: isActive && line.scope !== "monitor"
-        ? props.threadReasoningEffort
-        : undefined,
-      decisions: orphanGroup
-        ? tokenMiserDecisionsForGateLines({
-            accounting: props.tokenMiserAccounting, gates, subAgentsById,
-          })
-        : tokenMiserDecisionsForTurn(props.tokenMiserAccounting, line.turnId),
-      gates: gates.map((gate) => buildUsageRow(gate, true)),
-    };
-  };
 
   return (
     <section className="context-panel__section">
@@ -364,7 +251,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
             </p>
           ) : null}
         </>
-      ) : displayLines.length === 0 ? (
+      ) : model.totalRows === 0 ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
       ) : null}
 
@@ -380,12 +267,12 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
         />
       ) : null}
 
-      {displayLines.length > 0 ? (
+      {model.totalRows > 0 ? (
         <ul className="context-list context-list--cards pricing-usage-list">
-          {visibleDisplayLines.map((line) => (
+          {visibleRows.map((row) => (
             <PricingUsageRow
-              key={`${line.backend}:${line.threadId}:${line.usageLineId}`}
-              row={buildUsageRow(line)}
+              key={`${row.line.backend}:${row.line.threadId}:${row.line.usageLineId}`}
+              row={row}
               displayOptions={displayOptions}
               onScrollToTurn={props.onScrollToTurn ? scrollToTurn : undefined}
             />
@@ -395,16 +282,18 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
       {hiddenUsageRowCount > 0 ? (
         <div className="pricing-usage-list__pagination">
           <p className="pricing-usage-list__status">
-            Showing latest {visibleDisplayLines.length.toLocaleString()} of{" "}
-            {displayLines.length.toLocaleString()} usage rows.
+            Showing latest {visibleRows.length.toLocaleString()} of{" "}
+            {model.totalRows.toLocaleString()} usage rows.
           </p>
           <button
             className="button button--ghost pricing-usage-list__more"
             type="button"
+            disabled={props.loading}
             onClick={() => {
+              if (props.onLoadMore) { props.onLoadMore(); return; }
               setUsagePage({
                 count: Math.min(
-                  displayLines.length,
+                  model.totalRows,
                   visibleUsageRowCount + PRICING_USAGE_PAGE_SIZE,
                 ),
                 key: pricingHistoryKey,
@@ -424,19 +313,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   );
 }, equalPricingData);
 
-type PricingUsageRowData = {
-  line: PricingUsageLine;
-  nested: boolean;
-  orphan: boolean;
-  isActive: boolean;
-  lineTotals: PricingRunningLineTotals | undefined;
-  rowCompactions: ThreadCompactionRecord[];
-  subAgent: ThreadSubAgentSummary | undefined;
-  turnFailure: ThreadTurnFailure | undefined;
-  threadReasoningEffort: string | undefined;
-  decisions: ThreadTokenMiserInterceptionAccounting[] | undefined;
-  gates: PricingUsageRowData[];
-};
+
 
 // Federation/IPC delivers fresh JSON objects, even for finalized history.
 // The panel skips identical snapshots; each card compares only its own data
@@ -761,17 +638,7 @@ function formatUsageRowCount(count: number): string {
  * own and the sub-agent summary holds it, so the row card and the spend bucket
  * walk the same chain rather than disagreeing about who spent the money.
  */
-function resolveUsageLineModel(
-  line: ThreadUsageLineRecord,
-  subAgent?: ThreadSubAgentSummary,
-): string | undefined {
-  return (
-    line.model
-    ?? subAgent?.preferredModel
-    ?? subAgent?.monitorUsage?.model
-    ?? subAgent?.monitorUsage?.cost?.model
-  );
-}
+
 
 function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
   if (line.fastMode || line.serviceTier === "priority") {
@@ -791,12 +658,9 @@ function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
  */
 const TOKEN_MISER_CARD_MIN_MICROS = 100_000;
 
-const TOKEN_MISER_SOURCE_PREFIX = "system:token-miser:";
 
-function isTokenMiserGateLine(line: PricingUsageLine): boolean {
-  return line.scope === "monitor"
-    && Boolean(line.sourceItemId?.startsWith(TOKEN_MISER_SOURCE_PREFIX));
-}
+
+
 
 /**
  * Split gate rows out of the flat list and attach each to its parent turn.
@@ -805,100 +669,11 @@ function isTokenMiserGateLine(line: PricingUsageLine): boolean {
  * turn, or a turn whose usage has not landed yet — stays in the flat list, so
  * it is still visible rather than silently dropped.
  */
-function partitionTokenMiserGateLines(
-  lines: readonly PricingUsageLine[],
-  subAgentsById: Map<string, ThreadSubAgentSummary>,
-): {
-  displayLines: PricingUsageLine[];
-  gateLinesByTurn: Map<string, PricingUsageLine[]>;
-  /**
-   * Gates with no turn row to nest under — a native review's inner turn, or a
-   * turn whose usage has not landed yet — grouped by parent turn and keyed by
-   * the usage line they should render in place of, so the group keeps the
-   * position of its newest gate rather than surfacing as N loose cards.
-   */
-  orphanGroupsByAnchor: Map<string, PricingUsageLine[]>;
-} {
-  const turnRowIds = new Set<string>();
-  for (const line of lines) {
-    if (!isTokenMiserGateLine(line) && line.scope !== "monitor" && line.turnId) {
-      turnRowIds.add(line.turnId);
-    }
-  }
-  const gateLinesByTurn = new Map<string, PricingUsageLine[]>();
-  const orphansByTurn = new Map<string, PricingUsageLine[]>();
-  const displayLines: PricingUsageLine[] = [];
-  const push = (map: Map<string, PricingUsageLine[]>, key: string, line: PricingUsageLine) => {
-    const bucket = map.get(key);
-    if (bucket) {
-      bucket.push(line);
-    } else {
-      map.set(key, [line]);
-    }
-  };
-  for (const line of lines) {
-    if (!isTokenMiserGateLine(line)) {
-      displayLines.push(line);
-      continue;
-    }
-    const parentTurnId = line.sourceItemId
-      ? subAgentsById.get(line.sourceItemId)?.parentTurnId
-      : undefined;
-    if (parentTurnId && turnRowIds.has(parentTurnId)) {
-      push(gateLinesByTurn, parentTurnId, line);
-      continue;
-    }
-    // No parent turn known at all (a gate persisted before parentTurnId
-    // existed) groups under its own id, so it still gets the compact form.
-    push(orphansByTurn, parentTurnId ?? `gate:${line.usageLineId}`, line);
-  }
-  // Lines are newest-first; the first gate seen in each orphan group is its
-  // anchor. It stays in the flat list as a placeholder the renderer swaps for
-  // the group.
-  const orphanGroupsByAnchor = new Map<string, PricingUsageLine[]>();
-  for (const gates of orphansByTurn.values()) {
-    const anchor = gates[0]!;
-    orphanGroupsByAnchor.set(anchor.usageLineId, gates);
-    displayLines.push(anchor);
-  }
-  displayLines.sort(compareUsageLinesDescending);
-  return { displayLines, gateLinesByTurn, orphanGroupsByAnchor };
-}
 
-function tokenMiserDecisionsForTurn(
-  accounting: ThreadTokenMiserAccounting | undefined,
-  turnId: string | undefined,
-): ThreadTokenMiserInterceptionAccounting[] | undefined {
-  if (!accounting?.interceptions || !turnId) {
-    return undefined;
-  }
-  const decisions = accounting.interceptions.filter((decision) =>
-    decision.turnId === turnId
-  );
-  return decisions.length > 0 ? decisions : undefined;
-}
 
-function tokenMiserDecisionsForGateLines(params: {
-  accounting?: ThreadTokenMiserAccounting;
-  gates: readonly PricingUsageLine[];
-  subAgentsById: Map<string, ThreadSubAgentSummary>;
-}): ThreadTokenMiserInterceptionAccounting[] | undefined {
-  if (!params.accounting?.interceptions) {
-    return undefined;
-  }
-  const turnIds = new Set(
-    params.gates.flatMap((gate) => {
-      const turnId = gate.sourceItemId
-        ? params.subAgentsById.get(gate.sourceItemId)?.parentTurnId
-        : undefined;
-      return turnId ? [turnId] : [];
-    }),
-  );
-  const decisions = params.accounting.interceptions.filter((decision) =>
-    turnIds.has(decision.turnId)
-  );
-  return decisions.length > 0 ? decisions : undefined;
-}
+
+
+
 
 /**
  * The turn's Token Miser story, folded under the turn it belongs to.
@@ -1057,7 +832,7 @@ function TokenMiserTurnGroup(props: {
   );
 }
 
-const COMPACTION_TURN_KEY_PREFIX = "turn:";
+
 
 /**
  * Bucket compactions by the usage row that should show them.
@@ -1067,54 +842,12 @@ const COMPACTION_TURN_KEY_PREFIX = "turn:";
  * has not been claimed yet falls back to its turn, so a compaction observed
  * mid-turn is still visible before the request after it is priced.
  */
-function groupCompactionsByRow(
-  compactions: readonly ThreadCompactionRecord[],
-): Map<string, ThreadCompactionRecord[]> {
-  const grouped = new Map<string, ThreadCompactionRecord[]>();
-  for (const compaction of compactions) {
-    const key = compaction.coldUsageLineId
-      ?? (compaction.turnId
-        ? `${COMPACTION_TURN_KEY_PREFIX}${compaction.turnId}`
-        : undefined);
-    if (!key) {
-      continue;
-    }
-    const bucket = grouped.get(key);
-    if (bucket) {
-      bucket.push(compaction);
-    } else {
-      grouped.set(key, [compaction]);
-    }
-  }
-  return grouped;
-}
+
 
 // A row claims its directly-attributed compactions plus any of its turn's
 // still-unattributed ones. Sub-agent rows are excluded: compaction is a
 // property of the parent thread's context, not of a monitor's own usage.
-function selectRowCompactions(
-  grouped: Map<string, ThreadCompactionRecord[]>,
-  line: PricingUsageLine,
-  claimedTurnKeys: Set<string>,
-): ThreadCompactionRecord[] {
-  if (grouped.size === 0 || line.scope === "monitor") {
-    return [];
-  }
-  const attributed = grouped.get(line.usageLineId) ?? [];
-  // Unattributed markers are claimed by one row per turn, not every row in it.
-  // A turn routinely has several usage lines, and showing the pending marker on
-  // each of them read as several compactions rather than one.
-  const turnKey = line.turnId
-    ? `${COMPACTION_TURN_KEY_PREFIX}${line.turnId}`
-    : undefined;
-  const pending = turnKey && !claimedTurnKeys.has(turnKey)
-    ? (grouped.get(turnKey) ?? [])
-    : [];
-  if (turnKey && pending.length > 0) {
-    claimedTurnKeys.add(turnKey);
-  }
-  return [...attributed, ...pending];
-}
+
 
 /**
  * What a turn's compactions cost. A compaction forces the whole surviving
@@ -1166,93 +899,21 @@ function CompactionBreakdown(props: {
   );
 }
 
-function buildPricingDisplayLines(lines: ThreadUsageLineRecord[]): PricingUsageLine[] {
-  return [
-    ...lines,
-    ...estimateHistoricalThreadUsageGapLines(lines),
-  ].sort(compareUsageLinesDescending);
-}
 
-function addEstimatedLinesToSummaries(
-  summaries: ThreadPricingSummary[],
-  estimatedLines: PricingUsageLine[],
-): ThreadPricingSummary[] {
-  if (summaries.length === 0 || estimatedLines.length === 0) {
-    return summaries;
-  }
 
-  const byKey = new Map<string, ThreadPricingSummary>();
-  for (const summary of summaries) {
-    byKey.set(summaryKey(summary), { ...summary });
-  }
-  for (const line of estimatedLines) {
-    const key = usageLineSummaryKey(line);
-    const existing = byKey.get(key) ?? emptyPricingSummary(line);
-    byKey.set(key, addUsageLineToSummary(existing, line));
-  }
-  return [...byKey.values()].sort((left, right) => {
-    const providerCompare = left.provider.localeCompare(right.provider);
-    return providerCompare !== 0
-      ? providerCompare
-      : left.currency.localeCompare(right.currency);
-  });
-}
 
-function aggregateUsageLines(lines: PricingUsageLine[]): ThreadPricingSummary | undefined {
-  if (lines.length === 0) {
-    return undefined;
-  }
-  return lines.reduce<ThreadPricingSummary>(
-    (summary, line) => addUsageLineToSummary(summary, line),
-    emptyPricingSummary(lines[0]),
-  );
-}
 
-function summaryKey(summary: ThreadPricingSummary): string {
-  return [
-    summary.backend,
-    summary.threadId,
-    summary.provider,
-    summary.currency,
-  ].join(":");
-}
 
-function usageLineSummaryKey(line: PricingUsageLine): string {
-  return [
-    line.backend,
-    line.parentThreadId ?? line.threadId,
-    line.provider,
-    line.currency,
-  ].join(":");
-}
 
-function compareUsageLinesAscending(
-  left: ThreadUsageLineRecord,
-  right: ThreadUsageLineRecord,
-): number {
-  const leftTimestamp = lineSortTimestamp(left);
-  const rightTimestamp = lineSortTimestamp(right);
-  if (leftTimestamp !== rightTimestamp) {
-    return leftTimestamp - rightTimestamp;
-  }
-  return left.usageLineId.localeCompare(right.usageLineId);
-}
 
-function compareUsageLinesDescending(
-  left: ThreadUsageLineRecord,
-  right: ThreadUsageLineRecord,
-): number {
-  const leftTimestamp = lineSortTimestamp(left);
-  const rightTimestamp = lineSortTimestamp(right);
-  if (leftTimestamp !== rightTimestamp) {
-    return rightTimestamp - leftTimestamp;
-  }
-  return right.usageLineId.localeCompare(left.usageLineId);
-}
 
-function lineSortTimestamp(line: ThreadUsageLineRecord): number {
-  return line.startedAt ?? line.createdAt;
-}
+
+
+
+
+
+
+
 
 function formatSummaryEstimates(params: {
   codexCreditMicros: number | undefined;
@@ -1623,13 +1284,9 @@ function formatUsageLineCreditSuffix(line: PricingUsageLine): string {
   return "";
 }
 
-function isEstimatedUsageGap(line: ThreadUsageLineRecord): boolean {
-  return "estimatedUsageGap" in line && line.estimatedUsageGap === true;
-}
 
-function isForkBaselineLine(line: ThreadUsageLineRecord): boolean {
-  return line.scope === "fork-baseline";
-}
+
+
 
 // A row is a whole-thread/historical summary when its scope says so, or when
 // the live builder recorded that it could not attribute the usage to this turn
@@ -1646,40 +1303,12 @@ function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
 
 // The in-progress turn: the live, still-pending turn row whose id matches the
 // session's active turn. Drives the Running chip + live duration.
-function isActiveLiveTurnUsageLine(params: {
-  activeTurnId?: string;
-  line: PricingUsageLine;
-}): boolean {
-  return (
-    params.line.scope === "turn" &&
-    params.line.source === "live" &&
-    Boolean(params.activeTurnId) &&
-    params.line.turnId === params.activeTurnId
-  );
-}
+
 
 // A row is live if it's the main active turn OR a monitor row whose sub-agent
 // is still running. Sub-agents run concurrently, so more than one row can be
 // live at once (e.g. a fan-out of spawn_agent calls in a single turn).
-function isActiveUsageLine(params: {
-  activeTurnId?: string;
-  line: PricingUsageLine;
-  subAgentsById: Map<string, ThreadSubAgentSummary>;
-}): boolean {
-  if (
-    isActiveLiveTurnUsageLine({
-      activeTurnId: params.activeTurnId,
-      line: params.line,
-    })
-  ) {
-    return true;
-  }
-  if (params.line.scope !== "monitor" || !params.line.sourceItemId) {
-    return false;
-  }
-  const subAgent = params.subAgentsById.get(params.line.sourceItemId);
-  return Boolean(subAgent && !isTerminalSubAgent(subAgent));
-}
+
 
 function PricingUsageTimestamp(props: {
   isActive: boolean;
@@ -1813,42 +1442,7 @@ function PricingUsageActions(props: {
   );
 }
 
-function aggregateSummaries(
-  summaries: ThreadPricingSummary[],
-): ThreadPricingSummary | undefined {
-  if (summaries.length === 0) {
-    return undefined;
-  }
-  const [first, ...rest] = summaries;
-  if (!first) {
-    return undefined;
-  }
-  if (rest.some((summary) => summary.currency !== first.currency)) {
-    return first;
-  }
-  return rest.reduce<ThreadPricingSummary>(
-    (acc, summary) => ({
-      ...acc,
-      cachedInputTokens: acc.cachedInputTokens + summary.cachedInputTokens,
-      inputTokens: acc.inputTokens + summary.inputTokens,
-      outputTokens: acc.outputTokens + summary.outputTokens,
-      pricedUsageLineCount:
-        acc.pricedUsageLineCount + summary.pricedUsageLineCount,
-      provider: summaries.length === 1 ? acc.provider : "multiple",
-      reasoningOutputTokens:
-        acc.reasoningOutputTokens + summary.reasoningOutputTokens,
-      totalCostMicros: acc.totalCostMicros + summary.totalCostMicros,
-      totalTokens: acc.totalTokens + summary.totalTokens,
-      uncachedInputTokens:
-        acc.uncachedInputTokens + summary.uncachedInputTokens,
-      unpricedUsageLineCount:
-        acc.unpricedUsageLineCount + summary.unpricedUsageLineCount,
-      updatedAt: Math.max(acc.updatedAt, summary.updatedAt),
-      usageLineCount: acc.usageLineCount + summary.usageLineCount,
-    }),
-    { ...first },
-  );
-}
+
 
 function formatMoney(valueMicros: number, currency: string): string {
   if (currency === "USD") {
@@ -1857,73 +1451,11 @@ function formatMoney(valueMicros: number, currency: string): string {
   return `${currency} ${(valueMicros / 1_000_000).toFixed(4)}`;
 }
 
-type PricingRunningLineTotals = {
-  creditMicros?: number;
-  runningHasEstimate?: boolean;
-  runningCostMicros: number;
-  runningCreditMicros?: number;
-};
 
-function buildPricingRunningTotals(lines: PricingUsageLine[]): {
-  byLineId: Map<string, PricingRunningLineTotals>;
-  hasEstimatedRows: boolean;
-  totalCreditMicros: number;
-} {
-  const sortedLines = [...lines].sort(compareUsageLinesAscending);
-  const byLineId = new Map<string, PricingRunningLineTotals>();
-  let hasEstimatedRows = false;
-  let runningCostMicros = 0;
-  let runningCreditMicros = 0;
-  for (const line of sortedLines) {
-    const estimate = estimateCodexCreditsForLine(line);
-    if (isEstimatedUsageGap(line)) {
-      hasEstimatedRows = true;
-    }
-    if (line.priceStatus === "priced") {
-      runningCostMicros += Math.max(0, line.totalCostMicros);
-    }
-    if (estimate) {
-      runningCreditMicros += estimate.totalCreditMicros;
-    }
-    byLineId.set(line.usageLineId, {
-      ...(estimate ? { creditMicros: estimate.totalCreditMicros } : {}),
-      ...(hasEstimatedRows ? { runningHasEstimate: true } : {}),
-      runningCostMicros,
-      ...(runningCreditMicros > 0 ? { runningCreditMicros } : {}),
-    });
-  }
-  return {
-    byLineId,
-    hasEstimatedRows,
-    totalCreditMicros: runningCreditMicros,
-  };
-}
 
-function estimateCodexCreditsForLine(line: PricingUsageLine):
-  | {
-      totalCreditMicros: number;
-    }
-  | undefined {
-  if (line.provider !== "openai") {
-    return undefined;
-  }
-  // Inherited fork context was billed on the parent thread; never estimate
-  // (and never accumulate) credits for it on the fork.
-  if (isForkBaselineLine(line)) {
-    return undefined;
-  }
-  const estimate = estimateOpenAiCodexCreditUsage({
-    at: line.createdAt,
-    cachedInputTokens: line.cachedInputTokens,
-    fastMode: line.fastMode,
-    model: line.model,
-    outputTokens: line.outputTokens,
-    reasoningOutputTokens: line.reasoningOutputTokens,
-    serviceTier: line.serviceTier,
-    uncachedInputTokens: line.uncachedInputTokens,
-  });
-  return estimate ? { totalCreditMicros: estimate.totalCreditMicros } : undefined;
-}
+
+
+
 
 function formatCodexCredits(valueMicros: number): string {
   if (valueMicros <= 0) {

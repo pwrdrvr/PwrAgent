@@ -33,6 +33,11 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 
 type SubAgentsPanelProps = {
+  lens?: SubAgentLens;
+  lensCounts?: Record<SubAgentLens, number>;
+  onSelectLens?: (lens: SubAgentLens) => void;
+  onLoadMore?: () => void;
+  loading?: boolean;
   desktopApi?: DesktopApi;
   onDetailsModalOpenChange?: (open: boolean) => void;
   onRefreshNavigation?: () => Promise<void>;
@@ -58,7 +63,7 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
   const lensTabId = (lens: SubAgentLens): string =>
     `${lensControlId}-${lens}`;
   const [requestedLens, setRequestedLens] = useState<SubAgentLens>("harness");
-  const lensCounts = SUB_AGENT_LENSES.reduce<Record<SubAgentLens, number>>(
+  const lensCounts = props.lensCounts ?? SUB_AGENT_LENSES.reduce<Record<SubAgentLens, number>>(
     (counts, lens) => ({
       ...counts,
       [lens.id]: subAgents.filter(
@@ -79,9 +84,7 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
     ?? availableLenses.find((lens) => lens.id === "pwragent")?.id
     ?? availableLenses[0]?.id
     ?? "harness";
-  const activeLens = lensCounts[requestedLens] > 0
-    ? requestedLens
-    : preferredLens;
+  const activeLens = props.lens ?? (lensCounts[requestedLens] > 0 ? requestedLens : preferredLens);
   const visibleSubAgents = subAgents.filter(
     (subAgent) => subAgentLens(subAgent) === activeLens,
   );
@@ -221,7 +224,7 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
                   role="tab"
                   tabIndex={activeLens === lens.id ? 0 : -1}
                   type="button"
-                  onClick={() => setRequestedLens(lens.id)}
+                  onClick={() => { setRequestedLens(lens.id); props.onSelectLens?.(lens.id); }}
                 >
                   <span>{lens.label}</span>
                   <span className="subagent-lens-switch__count">
@@ -368,6 +371,7 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
           onClose={closeDetails}
         />
       ) : null}
+      {props.onLoadMore ? <button className="button button--ghost" disabled={props.loading} onClick={props.onLoadMore} type="button">Load more sub-agents</button> : null}
     </section>
   );
 });

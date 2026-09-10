@@ -375,6 +375,7 @@ describe("useThreadSessionState", () => {
 
     await waitForThreadHydration(result);
     expect(readThread).toHaveBeenCalledWith({
+      display: { resource: "transcript" },
       backend: "codex",
       limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
@@ -469,6 +470,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(readThread).toHaveBeenNthCalledWith(2, {
+      display: { resource: "transcript" },
       backend: "codex",
       before: "older-page",
       limit: THREAD_HISTORY_PAGE_LIMIT,
@@ -493,6 +495,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(readThread).toHaveBeenLastCalledWith({
+      display: { resource: "transcript" },
       backend: "codex",
       limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
@@ -2784,6 +2787,7 @@ describe("useThreadSessionState", () => {
     await waitForThreadHydration(result);
     expect(readThread).toHaveBeenCalledTimes(1);
     expect(readThread).toHaveBeenLastCalledWith({
+      display: { resource: "transcript" },
       backend: "codex",
       threadId: "thread-1",
     });
@@ -2794,6 +2798,7 @@ describe("useThreadSessionState", () => {
       expect(readThread).toHaveBeenCalledTimes(2);
     });
     expect(readThread).toHaveBeenLastCalledWith({
+      display: { resource: "transcript" },
       backend: "codex",
       limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
@@ -8054,6 +8059,7 @@ describe("useThreadSessionState", () => {
 
     await waitFor(() => {
       expect(readThread).toHaveBeenCalledWith({
+      display: { resource: "transcript" },
         backend: "codex",
         threadId: "thread-1",
       });
@@ -8461,6 +8467,7 @@ describe("useThreadSessionState", () => {
 
     expect(readThread).toHaveBeenCalledTimes(1);
     expect(readThread).toHaveBeenNthCalledWith(1, {
+      display: { resource: "transcript" },
       backend: "codex",
       threadId: "thread-1",
     });
@@ -8477,6 +8484,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(readThread).toHaveBeenNthCalledWith(2, {
+      display: { resource: "transcript" },
       backend: "codex",
       threadId: "thread-2",
     });
@@ -8488,6 +8496,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(readThread).toHaveBeenNthCalledWith(3, {
+      display: { resource: "transcript" },
       backend: "codex",
       threadId: "thread-1",
     });
@@ -15782,4 +15791,24 @@ describe("useThreadSessionState", () => {
       "activity:pnpm test",
     ]);
   });
+});
+
+it("refreshes a mounted remote transcript without event subscriptions, including an idle-only completion", async () => {
+  const target = { scope: "remote" as const, instanceId: "snapshot-only" };
+  const initial: AppServerThreadMessageEntry = { type: "message", role: "assistant", id: "initial", text: "Working", turn: { id: "turn-1", status: "in_progress", startedAt: 1_000 } };
+  const final: AppServerThreadMessageEntry = { type: "message", role: "assistant", id: "final", text: "Finished", turn: { id: "turn-1", status: "completed", completedAt: 2_000 } };
+  const readThread = vi.fn().mockResolvedValueOnce(readThreadResponse({ entries: [initial], hasPreviousPage: false, threadStatus: "active" }))
+    .mockResolvedValue(readThreadResponse({ entries: [initial, final], hasPreviousPage: false, threadStatus: "idle" }));
+  const api: DesktopApi = { readThread, onAgentEvent: () => () => undefined };
+  const { result, rerender, unmount } = renderHook(({ status }: { status: "active" | "idle" }) => useThreadSessionState({ desktopApi: api, thread: {
+    ...buildThread({ id: "thread-1", updatedAt: 1_000 }), threadStatus: status,
+    federation: { ref: { backend: "codex", threadId: "thread-1", target }, instanceLabel: "Snapshot peer", capabilities: ["thread_detail"] },
+  } }), { initialProps: { status: "active" as "active" | "idle" } });
+  await waitForThreadHydration(result);
+  expect(result.current.activeTurnId).toBe("turn-1");
+  rerender({ status: "idle" });
+  await waitFor(() => expect(result.current.entries.some((entry) => entry.id === "final")).toBe(true), { timeout: 3_000 });
+  expect(result.current.activeTurnId).toBeUndefined();
+  expect(readThread).toHaveBeenCalledTimes(2);
+  unmount();
 });

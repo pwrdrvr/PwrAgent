@@ -1,6 +1,8 @@
 import {
   memo,
   useMemo,
+  useRef,
+  useEffect,
   useState,
   type FocusEvent,
   type MouseEvent,
@@ -50,6 +52,7 @@ type TranscriptMessageProps = {
     | "openApplication"
     | "openMarkdownFileViewer"
     | "readMarkdownFile"
+    | "readThread"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   message: AppServerThreadMessageEntry;
@@ -101,11 +104,21 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
   const [monitorDetailsOpen, setMonitorDetailsOpen] = useState(false);
   const monitorOrigin = props.message.origin?.subAgent;
   const prAutomationOrigin = props.message.origin?.prAutomation;
+  const [loadedMonitor, setLoadedMonitor] = useState<ThreadSubAgentSummary>();
+  const [monitorError, setMonitorError] = useState<string>();
+  const monitorRequestVersion = useRef(0);
+  useEffect(() => {
+    monitorRequestVersion.current += 1;
+    setLoadedMonitor(undefined);
+    setMonitorDetailsOpen(false);
+    setMonitorError(undefined);
+    return () => { monitorRequestVersion.current += 1; };
+  }, [props.parentThreadId, props.message.id, props.threadLinkSource?.instanceId]);
   const monitorSubAgent = useMemo(
-    () => props.subAgents?.find(
+    () => loadedMonitor?.monitorId === monitorOrigin?.monitorId ? loadedMonitor : props.subAgents?.find(
       (subAgent) => subAgent.monitorId === monitorOrigin?.monitorId,
     ),
-    [monitorOrigin?.monitorId, props.subAgents],
+    [monitorOrigin?.monitorId, props.subAgents, loadedMonitor],
   );
 
   if (
@@ -221,11 +234,25 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
           >
             {monitorOutcomeLabel(monitorOrigin.outcome)}
           </RailStatusChip>
-          {monitorSubAgent ? (
+          {monitorSubAgent || (props.desktopApi?.readThread && monitorOrigin.monitorId) ? (
             <button
               type="button"
               className="button button--ghost transcript-monitor-result__details"
-              onClick={() => setMonitorDetailsOpen(true)}
+              onClick={async () => {
+                if (monitorSubAgent) { setMonitorDetailsOpen(true); return; }
+                const requestVersion = ++monitorRequestVersion.current;
+                try {
+                  const response = await props.desktopApi!.readThread!({
+                    backend: props.threadLinkSource?.backend ?? props.message.origin?.sourceThread?.backend ?? "codex",
+                    threadId: props.parentThreadId,
+                    federationTarget: props.threadLinkSource ? { scope: "remote", instanceId: props.threadLinkSource.instanceId } : readRendererFederationTarget(),
+                    display: { resource: "subagent", monitorId: monitorOrigin.monitorId }, includeTurns: false, viewOnly: true,
+                  });
+                  if (requestVersion !== monitorRequestVersion.current) return;
+                  if (!response.display?.subAgent) throw new Error("Sub-agent details are unavailable.");
+                  setLoadedMonitor(response.display.subAgent); setMonitorError(undefined); setMonitorDetailsOpen(true);
+                } catch (error) { if (requestVersion === monitorRequestVersion.current) setMonitorError(error instanceof Error ? error.message : String(error)); }
+              }}
             >
               Details
             </button>
@@ -250,6 +277,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             </div>
           </div>
         ) : null}
+        {monitorError ? <p className="context-empty" role="alert">{monitorError}</p> : null}
         {monitorDetailsOpen && monitorSubAgent ? (
           <SubAgentDetailsModal
             defaultBackend={

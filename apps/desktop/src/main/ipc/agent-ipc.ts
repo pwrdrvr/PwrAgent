@@ -1,3 +1,4 @@
+import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { stageQueuedFileInputs } from "../app-server/turn-input-attachment-files";
 import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
@@ -380,7 +381,7 @@ export function broadcastAgentEvent(event: AgentEvent): void {
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
   }
-  const rendererEvent = withRendererActivityEntry(hydratedEvent);
+  const rendererEvent = withRendererActivityEntry(projectThreadDisplayEvent(hydratedEvent));
   const federationWindowsOnly = remotePrStatusEventIsSupersededLocally(
     hydratedEvent,
   );

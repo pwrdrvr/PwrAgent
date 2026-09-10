@@ -1,3 +1,4 @@
+import { aggregateToolAccounting, type ToolAccountingTotals } from "@pwragent/shared";
 import { memo, useMemo, useState } from "react";
 import type {
   AppServerThreadActivityDetail,
@@ -18,6 +19,9 @@ import {
 } from "./context-rail-shared";
 
 type ToolCallsPanelProps = {
+  totals?: ToolAccountingTotals;
+  onLoadMore?: () => void;
+  loading?: boolean;
   entries?: AppServerThreadEntry[];
   loadingDetailItemId?: string;
   onAnalyzeHistory?: () => void;
@@ -28,21 +32,11 @@ type ToolCallsPanelProps = {
   toolAccounting?: ThreadToolAccounting;
 };
 
-type ToolAccountingTotals = {
-  errorLines: number;
-  estimatedOutputTokens: number;
-  invocationCount: number;
-  noisyInvocationCount: number;
-  outputChars: number;
-  outputLines: number;
-  warningLines: number;
-};
-
 export const ToolCallsPanel = memo(function ToolCallsPanel(props: ToolCallsPanelProps) {
   const [expandedSummary, setExpandedSummary] = useState<string>();
   const [expandedInvocation, setExpandedInvocation] = useState<string>();
   const accounting = props.toolAccounting;
-  const totals = aggregateToolAccounting(accounting);
+  const totals = props.totals ?? aggregateToolAccounting(accounting);
   const detailsByItemId = useMemo(
     () => collectCommandDetails(
       props.entries ?? [],
@@ -197,6 +191,7 @@ export const ToolCallsPanel = memo(function ToolCallsPanel(props: ToolCallsPanel
           </ul>
         </div>
       ) : null}
+      {props.onLoadMore ? <button className="button button--ghost" disabled={props.loading} onClick={props.onLoadMore} type="button">Load more tool calls</button> : null}
     </section>
   );
 });
@@ -337,36 +332,6 @@ function collectCommandDetails(
     }
   }
   return detailsByItemId;
-}
-
-function aggregateToolAccounting(
-  toolAccounting: ThreadToolAccounting | undefined,
-): ToolAccountingTotals | undefined {
-  if (!toolAccounting || toolAccounting.summaries.length === 0) {
-    return undefined;
-  }
-  return toolAccounting.summaries.reduce<ToolAccountingTotals>(
-    (totals, summary) => ({
-      errorLines: totals.errorLines + summary.errorLines,
-      estimatedOutputTokens:
-        totals.estimatedOutputTokens + summary.estimatedOutputTokens,
-      invocationCount: totals.invocationCount + summary.invocationCount,
-      noisyInvocationCount:
-        totals.noisyInvocationCount + summary.noisyInvocationCount,
-      outputChars: totals.outputChars + summary.outputChars,
-      outputLines: totals.outputLines + summary.outputLines,
-      warningLines: totals.warningLines + summary.warningLines,
-    }),
-    {
-      errorLines: 0,
-      estimatedOutputTokens: 0,
-      invocationCount: 0,
-      noisyInvocationCount: 0,
-      outputChars: 0,
-      outputLines: 0,
-      warningLines: 0,
-    },
-  );
 }
 
 function formatToolSummaryTitle(summary: ThreadToolInvocationSummary): string {

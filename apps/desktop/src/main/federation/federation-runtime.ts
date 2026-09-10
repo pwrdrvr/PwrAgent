@@ -1,3 +1,4 @@
+import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture } from "./federation-traffic-capture";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -4989,7 +4990,7 @@ export class DesktopFederationRuntime {
       ) {
         continue;
       }
-      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(event, ownerInstanceId);
+      federatedEvent ??= rewriteLiveTranscriptImagesForFederation(projectThreadDisplayEvent(event), ownerInstanceId);
       try {
         const payload = subscription.stream
           ? subscription.stream.accounting.encode(federatedEvent, {
@@ -5462,6 +5463,7 @@ function localBackendOperations(): FederationBackendOperations {
       const backend = request.backend ?? "codex";
       const response = await getDesktopBackendRegistry().readThread({
         backend,
+        display: request.display,
         threadId: request.threadId,
         ...(request.includeTurns !== undefined
           ? { includeTurns: request.includeTurns }

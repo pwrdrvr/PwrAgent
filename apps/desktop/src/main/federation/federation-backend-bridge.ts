@@ -1900,7 +1900,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse> {
     const key = JSON.stringify([request.backend, request.threadId, request.before, request.limit,
-      request.includeTurns, request.includeAllToolInvocations, request.viewOnly, request.knownRevision, request.readReason]);
+      request.includeTurns, request.includeAllToolInvocations, request.viewOnly, request.knownRevision, request.readReason, request.display]);
     const pending = this.pendingThreadReads.get(key);
     if (pending) return await pending;
     const read = this.rpc.request<FederationThreadReadResponse>({

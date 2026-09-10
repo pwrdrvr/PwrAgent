@@ -1,3 +1,9 @@
+import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
+import {
+  reconcileCompletedTurnUsageEntries,
+  tokenUsageActivityScope,
+  isTerminalTurnMetadata,
+} from "@pwragent/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerNotification,
@@ -21,7 +27,6 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
   NavigationThreadSummary,
-  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { isAppServerBackendKind, isCelestialIconId } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -50,7 +55,6 @@ import {
   buildMcpProgressDetail,
   buildTaskMonitorUsageActivityEntry,
   buildTokenUsageActivityEntry,
-  buildTurnUsageActivityEntryFromLine,
   formatChangedFileSummary,
   getNotificationItem,
   mergeActivityDetails,
@@ -362,56 +366,11 @@ function isDurableMonitorUsageActivity(
   return entry.type === "activity" && entry.summary.startsWith("Monitor usage:");
 }
 
-function tokenUsageActivityScope(
-  entry: AppServerThreadActivityEntry
-): "latest-request" | "total" | "turn" | undefined {
-  if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
-    return "turn";
-  }
-  if (entry.summary.startsWith("Latest request usage:")) {
-    return "latest-request";
-  }
-  if (entry.summary.startsWith("Usage:")) {
-    return "total";
-  }
-  if (entry.id.startsWith("live-token-usage-")) {
-    return "latest-request";
-  }
-  return undefined;
-}
 
-function isTerminalTurnMetadata(
-  turn: AppServerThreadTurnMetadata | undefined,
-): boolean {
-  return Boolean(
-    turn
-    && (
-      turn.status === "completed"
-      || turn.status === "failed"
-      || turn.status === "cancelled"
-      || turn.status === "interrupted"
-      || typeof turn.completedAt === "number"
-    )
-  );
-}
 
-function preferTurnUsageLine(
-  current: ThreadUsageLineRecord | undefined,
-  candidate: ThreadUsageLineRecord,
-): ThreadUsageLineRecord {
-  if (!current) {
-    return candidate;
-  }
-  if (candidate.source === "live" && current.source !== "live") {
-    return candidate;
-  }
-  if (candidate.turnUsageAttributed === true && current.turnUsageAttributed !== true) {
-    return candidate;
-  }
-  const currentAt = current.completedAt ?? current.createdAt;
-  const candidateAt = candidate.completedAt ?? candidate.createdAt;
-  return candidateAt >= currentAt ? candidate : current;
-}
+
+
+
 
 /**
  * Treat completed turn usage as one terminal transcript projection.
@@ -423,166 +382,7 @@ function preferTurnUsageLine(
  * anchor the result after every loaded entry from that turn. This stays
  * linear in the loaded transcript and does not disturb incremental collection.
  */
-function reconcileCompletedTurnUsageEntries(params: {
-  activeTurnId?: string;
-  entries: AppServerThreadEntry[];
-  lines?: ThreadUsageLineRecord[];
-  requireExistingTurnUsage?: boolean;
-}): AppServerThreadEntry[] {
-  const contentTurnById = new Map<string, AppServerThreadTurnMetadata>();
-  const existingTurnUsageByTurnId = new Map<
-    string,
-    AppServerThreadActivityEntry
-  >();
 
-  for (const entry of params.entries) {
-    const turnId =
-      entry.turn?.id
-      ?? (entry.type === "activity" ? entry.usageLine?.turnId : undefined);
-    if (!turnId || turnId === params.activeTurnId) {
-      continue;
-    }
-    if (
-      entry.type === "activity"
-      && tokenUsageActivityScope(entry) === "turn"
-    ) {
-      existingTurnUsageByTurnId.set(turnId, entry);
-      continue;
-    }
-    if (
-      entry.type === "activity"
-      && tokenUsageActivityScope(entry) !== undefined
-    ) {
-      continue;
-    }
-    if (entry.turn) {
-      contentTurnById.set(turnId, entry.turn);
-    }
-  }
-
-  const authoritativeLineByTurnId = new Map<string, ThreadUsageLineRecord>();
-  for (const line of params.lines ?? []) {
-    if (
-      !line.turnId
-      || line.turnId === params.activeTurnId
-      || line.scope !== "turn"
-      || line.status === "superseded"
-      || line.turnUsageAttributed === false
-      || !contentTurnById.has(line.turnId)
-    ) {
-      continue;
-    }
-    authoritativeLineByTurnId.set(
-      line.turnId,
-      preferTurnUsageLine(authoritativeLineByTurnId.get(line.turnId), line),
-    );
-  }
-
-  const replacementByTurnId = new Map<string, AppServerThreadActivityEntry>();
-  for (const [turnId, contentTurn] of contentTurnById) {
-    const existingUsage = existingTurnUsageByTurnId.get(turnId);
-    if (params.requireExistingTurnUsage && !existingUsage) {
-      continue;
-    }
-    const line = authoritativeLineByTurnId.get(turnId);
-    const completedAt =
-      line?.completedAt
-      ?? contentTurn.completedAt
-      ?? existingUsage?.turn?.completedAt;
-    const terminal = typeof completedAt === "number"
-      || isTerminalTurnMetadata(contentTurn)
-      || isTerminalTurnMetadata(existingUsage?.turn);
-    if (!terminal) {
-      continue;
-    }
-
-    const startedAt =
-      contentTurn.startedAt
-      ?? line?.startedAt
-      ?? existingUsage?.turn?.startedAt;
-    const interruptedStatus =
-      contentTurn.status === "failed"
-      || contentTurn.status === "cancelled"
-      || contentTurn.status === "interrupted"
-        ? contentTurn.status
-        : existingUsage?.turn?.status === "failed"
-          || existingUsage?.turn?.status === "cancelled"
-          || existingUsage?.turn?.status === "interrupted"
-          ? existingUsage.turn.status
-          : undefined;
-    const turn: AppServerThreadTurnMetadata = {
-      ...contentTurn,
-      id: turnId,
-      status: interruptedStatus ?? "completed",
-      ...(typeof startedAt === "number" ? { startedAt } : {}),
-      ...(typeof completedAt === "number" ? { completedAt } : {}),
-      ...(typeof (contentTurn.durationMs ?? existingUsage?.turn?.durationMs) === "number"
-        ? {
-            durationMs:
-              contentTurn.durationMs ?? existingUsage?.turn?.durationMs,
-          }
-        : typeof startedAt === "number" && typeof completedAt === "number"
-          ? { durationMs: Math.max(0, completedAt - startedAt) }
-          : {}),
-    };
-    const authoritativeEntry = line
-      ? buildTurnUsageActivityEntryFromLine({ line, turn })
-      : undefined;
-    if (authoritativeEntry) {
-      replacementByTurnId.set(turnId, authoritativeEntry);
-      continue;
-    }
-    if (existingUsage) {
-      replacementByTurnId.set(
-        turnId,
-        typeof completedAt === "number"
-          ? { ...existingUsage, createdAt: completedAt, turn }
-          : { ...existingUsage, turn },
-      );
-    }
-  }
-
-  if (replacementByTurnId.size === 0) {
-    return params.entries;
-  }
-
-  const filteredEntries: AppServerThreadEntry[] = [];
-  const lastEntryIndexByTurnId = new Map<string, number>();
-  for (const entry of params.entries) {
-    const usageTurnId = entry.type === "activity"
-      ? entry.turn?.id ?? entry.usageLine?.turnId
-      : undefined;
-    const scope = entry.type === "activity"
-      ? tokenUsageActivityScope(entry)
-      : undefined;
-    if (
-      usageTurnId
-      && replacementByTurnId.has(usageTurnId)
-      && (scope === "latest-request" || scope === "total" || scope === "turn")
-    ) {
-      continue;
-    }
-
-    const index = filteredEntries.length;
-    filteredEntries.push(entry);
-    if (entry.turn?.id && replacementByTurnId.has(entry.turn.id)) {
-      lastEntryIndexByTurnId.set(entry.turn.id, index);
-    }
-  }
-
-  const replacementAfterIndex = new Map<number, AppServerThreadActivityEntry>();
-  for (const [turnId, replacement] of replacementByTurnId) {
-    const anchorIndex = lastEntryIndexByTurnId.get(turnId);
-    if (anchorIndex !== undefined) {
-      replacementAfterIndex.set(anchorIndex, replacement);
-    }
-  }
-
-  return filteredEntries.flatMap((entry, index) => {
-    const replacement = replacementAfterIndex.get(index);
-    return replacement ? [entry, replacement] : [entry];
-  });
-}
 
 function hasTurnUsageForEntry(
   entries: AppServerThreadEntry[],
@@ -1361,7 +1161,7 @@ function normalizeMessageImageBoundaryText<
 function normalizeResponseImageBoundaryText(
   response: AppServerReadThreadResponse
 ): AppServerReadThreadResponse {
-  let changed = false;
+  let changed = Boolean(response.display);
   const entries = response.replay.entries.map((entry) => {
     if (entry.type !== "message") {
       return entry;
@@ -1371,7 +1171,7 @@ function normalizeResponseImageBoundaryText(
     changed = changed || normalizedEntry !== entry;
     return normalizedEntry;
   });
-  const messages = response.replay.messages.map((message) => {
+  const messages = (response.display ? entries.filter((entry) => entry.type === "message") : response.replay.messages).map((message) => {
     const normalizedMessage = normalizeMessageImageBoundaryText(message);
     changed = changed || normalizedMessage !== message;
     return normalizedMessage;
@@ -4950,6 +4750,7 @@ export function useThreadSessionState(params: {
           : undefined;
         const federationTarget = targetThread.federation?.ref.target ?? readRendererFederationTarget();
         const fetchedResponse = await readThread({
+          display: { resource: "transcript" },
           backend: targetThread.source,
           ...(initialHistoryLimit !== undefined
             ? { limit: initialHistoryLimit }
@@ -5324,7 +5125,7 @@ export function useThreadSessionState(params: {
             // Remote recovery is driven by subscription epochs and sequence
             // gaps. An idle projection can lag an admitted turn or precede its
             // terminal event; it must not schedule a full transcript read.
-            staleThinkingRecheckAt: (thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote"
+            staleThinkingRecheckAt: thread.federation?.capabilities?.includes("event_subscriptions")
               || backendReportedActive
               ? undefined
               : shouldRecheckStaleThinking
@@ -5508,9 +5309,9 @@ export function useThreadSessionState(params: {
     // threads. Renewed local interest or an acknowledged subscription/gap
     // requests catch-up; ordinary navigation timestamps do not imply missing
     // transcript data.
-    if (session.activeTurnId
+    if ((session.activeTurnId && ((thread.federation?.ref.target ?? readRendererFederationTarget())?.scope !== "remote" || thread.federation?.capabilities?.includes("event_subscriptions")))
       || (session.backendReportedActive
-        && (thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote")) return;
+        && thread.federation?.capabilities?.includes("event_subscriptions"))) return;
 
     if (
       session.needsHydrationAfterCompletion &&
@@ -5523,7 +5324,7 @@ export function useThreadSessionState(params: {
     // Mounted remote transcripts already receive idle metadata and terminal
     // items through their subscription. Only explicit recovery above or a
     // requested history-size change needs another snapshot.
-    if ((thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote"
+    if (thread.federation?.capabilities?.includes("event_subscriptions")
       && !session.needsHydrationAfterCompletion) {
       if (session.hydratedInitialHistoryLimit !== initialHistoryLimit) {
         void loadLatest(thread);
@@ -5584,7 +5385,7 @@ export function useThreadSessionState(params: {
     if (!thread || !threadKey) {
       return;
     }
-    if ((thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote") return;
+    if (thread.federation?.capabilities?.includes("event_subscriptions")) return;
     const recheckAt = sessions[threadKey]?.staleThinkingRecheckAt;
     if (typeof recheckAt !== "number") {
       return;
@@ -6768,6 +6569,7 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "thread/pricing/updated") {
+          if (event.notification.params.displayInvalidated) return current;
           return {
             ...current,
             lastTouchedAt: nextLastTouchedAt,
@@ -6781,6 +6583,7 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "thread/toolAccounting/updated") {
+          if (event.notification.params.displayInvalidated) return current;
           return {
             ...current,
             lastTouchedAt: nextLastTouchedAt,
@@ -7007,7 +6810,8 @@ export function useThreadSessionState(params: {
     }));
 
     try {
-      const olderResponse = await desktopApi.readThread({
+      const fetchedOlderResponse = await desktopApi.readThread({
+        display: { resource: "transcript" },
         backend: thread.source,
         federationTarget: thread.federation?.ref.target ??
           readRendererFederationTarget(),
@@ -7015,6 +6819,7 @@ export function useThreadSessionState(params: {
         before: selectedPagination.previousCursor,
         limit: THREAD_HISTORY_PAGE_LIMIT,
       });
+      const olderResponse = fetchedOlderResponse.display ? normalizeResponseImageBoundaryText(fetchedOlderResponse) : fetchedOlderResponse;
       const hasAuthoritativeTurnUsage = olderResponse.pricing?.lines.some(
         (line) =>
           Boolean(line.turnId)
@@ -7613,6 +7418,8 @@ export function useThreadSessionState(params: {
     ]
   );
 
+  const displayEntries = useThreadUsageDisplay({ desktopApi, thread, entries, response: selectedSession?.response, suspended });
+
   const messages = useMemo(
     () =>
       combineTranscriptMessages(
@@ -7685,7 +7492,7 @@ export function useThreadSessionState(params: {
     addOptimisticUserMessage,
     addOptimisticReviewEntry,
     clearPendingRequest,
-    entries,
+    entries: displayEntries,
     error: selectedSession?.error,
     initialLoadDurationMs: selectedSession?.initialLoadDurationMs,
     loading: selectedSession?.loading ?? false,
