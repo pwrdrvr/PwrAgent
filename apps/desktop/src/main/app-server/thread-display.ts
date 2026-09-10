@@ -102,7 +102,17 @@ export function projectThreadDisplay(
   }
   // Usage activities already contain their presentation; the attached ledger
   // record is for inspection clients and is not part of the display contract.
-  entries = entries.map((entry) => entry.type === "activity" ? { ...entry, usageLine: undefined } : entry);
+  entries = entries.map((entry) => {
+    if (entry.type === "activity") return { ...entry, usageLine: undefined };
+    if (entry.type !== "message") return entry;
+    // The renderer synthesizes a text part when parts are absent. Providers
+    // commonly repeat the entire message (including large pasted logs) here.
+    const part = entry.parts?.[0];
+    if (entry.parts?.length === 1 && part?.type === "text" && part.text === entry.text) {
+      return { ...entry, parts: undefined };
+    }
+    return entry;
+  });
   const tools = response.toolAccounting;
   const toolsPage = demand.resource === "tools" && tools
     ? { summaries: tools.summaries, alerts: tools.alerts, invocations: tools.invocations.slice(offset, offset + limit) }

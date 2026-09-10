@@ -4733,10 +4733,22 @@ export class DesktopFederationRuntime {
     const retainsStarMap = allowedClasses.includes("star_map")
       && previous?.eventClasses.has("star_map")
       && previous.viaPeerId === sourcePeerId;
+    const nextSelection = { eventClasses: new Set(allowedClasses), eventClassSelections, threadSelection: requestedThreadSelection };
+    const sameDetailInterests = previous && (["transcript", "pending_requests"] as const).every((eventClass) =>
+      previous.eventClasses.has(eventClass) === allowedClasses.includes(eventClass)
+      && equalFederationThreadSelections(selectionForEventClass(previous, eventClass), selectionForEventClass(nextSelection, eventClass)));
+    // A sidebar/navigation-only change must not invalidate continuously
+    // subscribed transcripts. An identical subscription replay still starts a
+    // fresh epoch: that is the recovery handshake after a gap or reconnect.
+    const sidebarInterestsChanged = previous && (!equalEventClassSets(previous.eventClasses, nextSelection.eventClasses)
+      || allowedClasses.some((eventClass) => !equalFederationThreadSelections(
+        selectionForEventClass(previous, eventClass), selectionForEventClass(nextSelection, eventClass))));
+    const retainedStream = previous?.viaPeerId === sourcePeerId && sameDetailInterests && sidebarInterestsChanged
+      ? previous.stream : undefined;
     if (allowedClasses.length > 0) {
       this.incomingEventSubscriptions.set(subscriberInstanceId, {
         ...(eventStream && allowedClasses.includes("transcript") ? {
-          stream: { epoch: randomUUID(), sequence: 0, accounting: new FederationAccountingStream() },
+          stream: retainedStream ?? { epoch: randomUUID(), sequence: 0, accounting: new FederationAccountingStream() },
         } : {}),
         ...(allowedClasses.includes("star_map") ? {
           starMapBootstrapToken: retainsStarMap ? previous?.starMapBootstrapToken : {},

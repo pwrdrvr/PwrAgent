@@ -71,7 +71,7 @@ describe("Electron E2E fixture teardown", () => {
     ).toEqual({ width: 1440, height: 901 });
   });
 
-  it("forces a real native frame change when compensation repeats", () => {
+  it("continues bounded compensation when the observed error remains", () => {
     expect(
       nextRendererViewportRequest({
         attempt: 1,
@@ -79,7 +79,48 @@ describe("Electron E2E fixture teardown", () => {
         previousRequest: { width: 1441, height: 899 },
         target: { width: 1440, height: 900 },
       }),
-    ).toEqual({ width: 1441, height: 898 });
+    ).toEqual({ width: 1442, height: 898 });
+  });
+
+  it("keeps the corrected width while the height settles instead of oscillating", () => {
+    const target = { width: 1280, height: 720 };
+    const first = nextRendererViewportRequest({
+      attempt: 0, target, previousRequest: null,
+      observed: { innerWidth: 1282, innerHeight: 721 },
+    });
+    expect(first).toEqual({ width: 1278, height: 719 });
+    const second = nextRendererViewportRequest({
+      attempt: 1, target, previousRequest: first,
+      observed: { innerWidth: 1280, innerHeight: 721 },
+    });
+    expect(second).toEqual({ width: 1278, height: 718 });
+    // A native width offset of +2 remains compensated while the height catches up.
+    expect(second.width + 2).toBe(target.width);
+  });
+
+  it("bounds accumulated corrections even if the renderer keeps reporting a stale frame", () => {
+    let previousRequest = { width: 1280, height: 720 };
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      previousRequest = nextRendererViewportRequest({
+        attempt, previousRequest, target: { width: 1280, height: 720 },
+        observed: { innerWidth: 1278, innerHeight: 722 },
+      });
+      expect(Math.abs(previousRequest.width - 1280)).toBeLessThanOrEqual(4);
+      expect(Math.abs(previousRequest.height - 720)).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it("removes an obsolete width correction after a stale initial observation", () => {
+    const target = { width: 1280, height: 720 };
+    const first = nextRendererViewportRequest({ attempt: 0, target, previousRequest: null,
+      observed: { innerWidth: 1282, innerHeight: 720 },
+    });
+    expect(first.width).toBe(1278);
+    // If the first observation was stale, the actual viewport follows this
+    // request exactly. Correct from that request, not from the original 1280.
+    expect(nextRendererViewportRequest({ attempt: 1, target, previousRequest: first,
+      observed: { innerWidth: first.width, innerHeight: first.height },
+    })).toEqual(target);
   });
 });
 

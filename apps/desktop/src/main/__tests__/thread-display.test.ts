@@ -70,6 +70,21 @@ it("pages owner-prepared pricing rows while keeping totals over the full history
   expect(() => projectThreadDisplay(snapshot(46), { threadId: "fixture", display: { resource: "pricing", cursor: first.display?.nextCursor } })).toThrow(/history changed/);
 });
 
+it("sends a large plain-text message once without dropping attachment parts", () => {
+  const data = snapshot(0);
+  const text = "Contrived federation log line: request completed.\n".repeat(8_000);
+  data.replay.entries = [{ type: "message", id: "log", role: "user", text, parts: [{ type: "text", text }] }];
+  data.replay.messages = [];
+  const projected = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "transcript" } });
+  expect(projected.replay.entries[0]).toMatchObject({ text, parts: undefined });
+  expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(Buffer.byteLength(JSON.stringify(data)) * 0.51);
+  expect(data.replay.entries[0]!.type === "message" && data.replay.entries[0]!.parts).toEqual([{ type: "text", text }]);
+
+  const parts = [{ type: "text" as const, text }, { type: "file" as const, name: "capture.log", mimeType: "text/plain" }];
+  data.replay.entries = [{ type: "message", id: "file", role: "user", text, parts }];
+  expect(projectThreadDisplay(data, { threadId: "fixture", display: { resource: "transcript" } }).replay.entries[0]).toMatchObject({ text, parts });
+});
+
 it("returns a late usage correction only for the requested loaded turn", () => {
   const data = snapshot(1000);
   data.pricing!.lines[0]!.totalCostMicros = 9_000;

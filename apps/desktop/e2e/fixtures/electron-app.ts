@@ -933,7 +933,7 @@ async function applyRendererViewport(params: {
  * Keep exact renderer layout contracts while compensating the native content
  * request that produces them. Under platform scaling, Electron can turn a
  * 1440x900 setContentSize request into a 1439x901 Chromium viewport. Feeding a
- * small observed error back into the next native request reaches the exact
+ * small observed error back into the previous native request reaches the exact
  * renderer dimensions without weakening layout assertions. Far-from-target
  * observations get only a 1px height nudge so a stale/coalesced native resize
  * cannot cause an unbounded correction.
@@ -947,13 +947,17 @@ export function nextRendererViewportRequest(params: {
   const widthError = params.target.width - params.observed.innerWidth;
   const heightError = params.target.height - params.observed.innerHeight;
   const nearTarget = (error: number): boolean => Math.abs(error) <= 2;
+  const previous = params.previousRequest ?? params.target;
+  // Preserve compensation on an axis that has already converged while the
+  // other axis settles. Recalculating from target undoes that correction.
+  // Bound accumulated feedback in case Chromium is still showing an old frame.
+  const compensate = (target: number, requested: number, error: number): number =>
+    Math.max(target - 4, Math.min(target + 4, requested + error));
   const request = {
     width:
-      params.target.width
-      + (nearTarget(widthError) ? widthError : 0),
+      nearTarget(widthError) ? compensate(params.target.width, previous.width, widthError) : params.target.width,
     height:
-      params.target.height
-      + (nearTarget(heightError) ? heightError : params.attempt % 2),
+      nearTarget(heightError) ? compensate(params.target.height, previous.height, heightError) : params.target.height + params.attempt % 2,
   };
 
   if (

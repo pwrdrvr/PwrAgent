@@ -8,6 +8,7 @@ import {
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { threadSummaryIdentityKey } from "./federated-thread-events";
 
 const THREAD_VIEW_EVENT_CLASS_ORDER: FederationEventClass[] = [
   "navigation",
@@ -19,7 +20,9 @@ const THREAD_VIEW_EVENT_CLASS_ORDER: FederationEventClass[] = [
 export function buildFederationThreadEventSubscriptions(params: {
   selectedThread?: NavigationThreadSummary;
   threads: NavigationThreadSummary[];
+  retainedRemoteThreads?: NavigationThreadSummary[];
 }): FederationEventSubscription[] {
+  const retainedKeys = new Set(params.retainedRemoteThreads?.map(threadSummaryIdentityKey));
   const selectedTarget = params.selectedThread?.federation?.ref.target;
   const selectedInstanceId =
     selectedTarget && isRemoteFederationTarget(selectedTarget)
@@ -30,11 +33,11 @@ export function buildFederationThreadEventSubscriptions(params: {
     string,
     Map<FederationEventClass, ThreadRefs>
   >();
-  const threads = params.selectedThread
-    ? [...params.threads, params.selectedThread]
-    : params.threads;
+  const threads = new Map([...params.threads, ...(params.retainedRemoteThreads ?? []),
+    ...(params.selectedThread ? [params.selectedThread] : [])]
+    .map((thread) => [threadSummaryIdentityKey(thread), thread]));
 
-  for (const thread of threads) {
+  for (const thread of threads.values()) {
     const federation = thread.federation;
     const target = federation?.ref.target;
     if (
@@ -57,10 +60,11 @@ export function buildFederationThreadEventSubscriptions(params: {
     if (federation.capabilities.includes("thread_navigation")) {
       eventClasses.add("navigation");
     }
-    if (target.instanceId === selectedInstanceId
+    const selected = target.instanceId === selectedInstanceId
       && thread.source === params.selectedThread?.source
-      && thread.id === params.selectedThread.id) {
-      if (federation.capabilities.includes("scheduled_actions")) eventClasses.add("scheduled_actions");
+      && thread.id === params.selectedThread.id;
+    if (selected && federation.capabilities.includes("scheduled_actions")) eventClasses.add("scheduled_actions");
+    if (selected || retainedKeys.has(threadSummaryIdentityKey(thread))) {
       if (federation.capabilities.includes("thread_detail")) {
         eventClasses.add("transcript");
       }
@@ -89,13 +93,14 @@ export function buildFederationThreadEventSubscriptions(params: {
       for (const refs of selections.values()) {
         for (const [key, ref] of refs) allRefs.set(key, ref);
       }
-      const eventClassSelections = Object.fromEntries([...selections].map(([eventClass, refs]) => [
-        eventClass, { kind: "threads" as const, threads: [...refs.values()] },
+      const orderedRefs = (refs: ThreadRefs) => [...refs].sort(([left], [right]) => left.localeCompare(right)).map(([, ref]) => ref);
+      const eventClassSelections = Object.fromEntries(THREAD_VIEW_EVENT_CLASS_ORDER.filter((eventClass) => selections.has(eventClass)).map((eventClass) => [
+        eventClass, { kind: "threads" as const, threads: orderedRefs(selections.get(eventClass)!) },
       ]));
       return {
         sourceInstanceId,
         eventClasses: THREAD_VIEW_EVENT_CLASS_ORDER.filter((eventClass) => selections.has(eventClass)),
-        threadSelection: { kind: "threads" as const, threads: [...allRefs.values()] },
+        threadSelection: { kind: "threads" as const, threads: orderedRefs(allRefs) },
         ...([...selections.values()].some((refs) => refs.size !== allRefs.size)
           ? { eventClassSelections } : {}),
       };
@@ -107,6 +112,7 @@ export function useFederationThreadEventSubscriptions(params: {
   enabled: boolean;
   selectedThread?: NavigationThreadSummary;
   threads: NavigationThreadSummary[];
+  retainedRemoteThreads?: NavigationThreadSummary[];
 }): FederationRemoteTarget[] {
   const subscriptionsJson = JSON.stringify(
     params.enabled
@@ -125,13 +131,17 @@ export function useFederationThreadEventSubscriptions(params: {
       consumer: "thread_view",
       subscriptions,
     });
+  }, [params.desktopApi, subscriptionsJson]);
+
+  useEffect(() => {
+    const desktopApi = params.desktopApi;
     return () => {
-      void params.desktopApi?.setFederationEventSubscriptions?.({
+      void desktopApi?.setFederationEventSubscriptions?.({
         consumer: "thread_view",
         subscriptions: [],
       });
     };
-  }, [params.desktopApi, subscriptionsJson]);
+  }, [params.desktopApi]);
 
   return useMemo(() => {
     const subscriptions = JSON.parse(

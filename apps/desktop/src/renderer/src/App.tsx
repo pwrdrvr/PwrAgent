@@ -85,9 +85,11 @@ import {
 import { useFederationPeerConnectivity } from "./lib/useFederationPeerConnectivity";
 import { useFederationHealth } from "./lib/useFederationHealth";
 import { useFederationThreadEventSubscriptions } from "./lib/useFederationThreadEventSubscriptions";
+import { useRecentRemoteThreads } from "./lib/useRecentRemoteThreads";
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import {
   federationTargetsEqual,
+  threadOwnerPlatform,
 } from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
@@ -1420,11 +1422,16 @@ function DesktopAppShell(props: {
       });
     });
   }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
+  const recentRemoteThreads = useRecentRemoteThreads({
+    selectedThread: navigation.selectedThread,
+    threads: navigation.threads,
+  });
   const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
     desktopApi,
     enabled: true,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
+    retainedRemoteThreads: recentRemoteThreads,
   });
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
@@ -2095,6 +2102,7 @@ function DesktopAppShell(props: {
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
     desktopApi,
+    retainedRemoteThreads: recentRemoteThreads,
     initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
     liveTranscriptEventFiltering:
       settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
@@ -2288,7 +2296,11 @@ function DesktopAppShell(props: {
     tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
     tokenMiserDefaultEnabled:
       settings.snapshot?.experimental.tokenMiserDefaultEnabled?.value,
-    platform: desktopApi?.platform,
+    platform: threadOwnerPlatform({
+      target: selectedThreadFederationTarget ?? readRendererFederationTarget(),
+      peers: liveFederationHealth?.peers,
+      localPlatform: desktopApi?.platform,
+    }),
     ...(navigation.creatingThread?.pendingForkEnvironmentSetup
       ? {
           pendingForkEnvironmentSetup:

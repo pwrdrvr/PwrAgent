@@ -354,6 +354,23 @@ describe("DesktopFederationRuntime", () => {
     owner.forwardLocalBackendEvent(delta("two"));
     expect(resets()).toHaveLength(1);
     expect(published.at(-1)?.notification).toEqual(delta("two").notification);
+    const detailSelection = { kind: "threads" as const, threads: [{ backend: "codex" as const, threadId: "thread-1" }] };
+    // Selecting a different sidebar target keeps the transcript interests and
+    // sequence intact, through direct and relayed connections alike.
+    for (const threadId of ["thread-2", "thread-3"]) {
+      viewer.setRendererEventSubscriptions(7, "thread-view", [{
+        sourceInstanceId: "owner_one", eventClasses: ["transcript", "pending_requests", "navigation"],
+        threadSelection: { kind: "all" },
+        eventClassSelections: {
+          transcript: detailSelection, pending_requests: detailSelection,
+          navigation: { kind: "threads", threads: [{ backend: "codex", threadId }] },
+        },
+      }]);
+      expect(resets()).toHaveLength(1);
+    }
+    owner.forwardLocalBackendEvent(delta("still-continuous"));
+    expect(published.at(-1)?.notification).toEqual(delta("still-continuous").notification);
+    expect(frames.at(-1)).toMatchObject({ params: { stream: { sequence: 3 } } });
     const duplicate = frames.at(-1)!;
     const beforeDuplicate = published.length;
     viewer.publishRemoteBackendEvent(duplicate, viaGateway ? "gateway_one" : "owner_one");

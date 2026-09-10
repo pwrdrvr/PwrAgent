@@ -4452,6 +4452,7 @@ export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
   initialHistoryLimit?: number;
   readReason?: "thread-view" | "star-map-card";
+  retainedRemoteThreads?: NavigationThreadSummary[];
   liveTranscriptEventFiltering?: boolean;
   suspended?: boolean;
   thread?: NavigationThreadSummary;
@@ -4552,20 +4553,20 @@ export function useThreadSessionState(params: {
   const inFlightHydrationsRef = useRef(new Map<string, number>());
   const streamRecoveryVersionsRef = useRef(new Map<string, number>());
   const remoteDetailInterestRef = useRef<string | undefined>(undefined);
+  const continuousRemoteInterestsRef = useRef(new Set<string>());
+  const retainedRemoteThreadsRef = useRef(params.retainedRemoteThreads ?? []);
+  retainedRemoteThreadsRef.current = params.retainedRemoteThreads ?? [];
+  const managesRemoteRetentionRef = useRef(false);
+  managesRemoteRetentionRef.current = params.retainedRemoteThreads !== undefined;
+  const retainedRemoteKeys = new Set(retainedRemoteThreadsRef.current.map(threadSummaryIdentityKey));
+  const retainedRemoteKeysJson = JSON.stringify([...retainedRemoteKeys].sort());
+  const previousRetainedRemoteKeysRef = useRef(new Set<string>());
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
-  // Keep the last owner page, not the live/optimistically patched session.
-  // Reusing a locally cleared approval would otherwise hide an owner request
-  // that is still pending. Only the selected thread retains this baseline;
-  // its entries are shared with the session rather than cloned.
-  const conditionalReadRef = useRef<{
-    threadKey: string;
-    response: AppServerReadThreadResponse;
-  } | undefined>(undefined);
-  if (conditionalReadRef.current?.threadKey !== threadKey) {
-    conditionalReadRef.current = undefined;
-  }
+  // Keep owner baselines separate from optimistic/live state so an unchanged
+  // recovery read cannot reuse a locally cleared approval. Share entry objects.
+  const conditionalReadsRef = useRef(new Map<string, AppServerReadThreadResponse>());
 
   selectedThreadKeyRef.current = threadKey;
   if (launchpadMessageCandidateRef.current?.threadKey !== threadKey) {
@@ -4584,6 +4585,9 @@ export function useThreadSessionState(params: {
 
   useEffect(() => {
     const retainedThreadKeys = new Set(Object.keys(sessions));
+    for (const key of conditionalReadsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) conditionalReadsRef.current.delete(key);
+    }
     for (const key of streamRecoveryVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) streamRecoveryVersionsRef.current.delete(key);
     }
@@ -4607,6 +4611,22 @@ export function useThreadSessionState(params: {
       }
     }
   }, [sessions]);
+
+  useEffect(() => {
+    const keys = new Set<string>(JSON.parse(retainedRemoteKeysJson));
+    const evicted = [...previousRetainedRemoteKeysRef.current].filter((key) => !keys.has(key));
+    previousRetainedRemoteKeysRef.current = keys;
+    if (!evicted.length) return;
+    for (const key of evicted) {
+      // Invalidate late reads as well as completed sessions, even if the
+      // background stream marked them interacted while they were retained.
+      requestVersionsRef.current[key] = (requestVersionsRef.current[key] ?? 0) + 1;
+      inFlightHydrationsRef.current.delete(key);
+      conditionalReadsRef.current.delete(key);
+    }
+    setSessions((current) => Object.fromEntries(Object.entries(current)
+      .filter(([key]) => !evicted.includes(key) || key === selectedThreadKeyRef.current)));
+  }, [retainedRemoteKeysJson]);
 
   const updateSession = useCallback(
     (
@@ -4745,9 +4765,7 @@ export function useThreadSessionState(params: {
           backend: targetThread.source,
           threadId: targetThread.id,
         });
-        const previousResponse = conditionalReadRef.current?.threadKey === targetThreadKey
-          ? conditionalReadRef.current.response
-          : undefined;
+        const previousResponse = conditionalReadsRef.current.get(targetThreadKey);
         const federationTarget = targetThread.federation?.ref.target ?? readRendererFederationTarget();
         const fetchedResponse = await readThread({
           display: { resource: "transcript" },
@@ -4786,8 +4804,8 @@ export function useThreadSessionState(params: {
         if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
           return;
         }
-        if (selectedThreadKeyRef.current === targetThreadKey && response.replayRevision) {
-          conditionalReadRef.current = { threadKey: targetThreadKey, response };
+        if (response.replayRevision) {
+          conditionalReadsRef.current.set(targetThreadKey, response);
         }
         if (
           !response.replay.pagination.supportsPagination
@@ -5087,6 +5105,7 @@ export function useThreadSessionState(params: {
     if (remoteDetailInterestRef.current !== remoteDetailInterest) {
       remoteDetailInterestRef.current = remoteDetailInterest;
       if (remoteDetailInterest
+        && !continuousRemoteInterestsRef.current.has(remoteDetailInterest)
         && (sessions[remoteDetailInterest] || inFlightHydrationsRef.current.has(remoteDetailInterest))) {
         // Another window can preserve the process-wide subscription while
         // this window misses events. Renewed local interest must catch up
@@ -5098,6 +5117,7 @@ export function useThreadSessionState(params: {
           (streamRecoveryVersionsRef.current.get(remoteDetailInterest) ?? 0) + 1);
       }
     }
+    continuousRemoteInterestsRef.current = new Set(suspended ? [] : JSON.parse(retainedRemoteKeysJson));
     if (!thread || !threadKey) {
       return;
     }
@@ -5374,6 +5394,7 @@ export function useThreadSessionState(params: {
     initialHistoryLimit,
     launchpadMessageCandidate,
     loadLatest,
+    retainedRemoteKeysJson,
     sessions,
     suspended,
     thread,
@@ -5470,12 +5491,13 @@ export function useThreadSessionState(params: {
       if (event.notification.method === "federation/eventStream/changed"
         || (event.notification.method === "federation/peerStatus/changed"
           && event.notification.params.status === "connected")) {
-        const target = thread?.federation?.ref.target ?? readRendererFederationTarget();
-        if (threadKey && target?.scope === "remote" && target.instanceId === event.notification.params.instanceId) {
-          // Record synchronously: an acknowledgement arriving during a read
-          // must cause another catch-up after that older read settles.
-          streamRecoveryVersionsRef.current.set(threadKey, (streamRecoveryVersionsRef.current.get(threadKey) ?? 0) + 1);
-          updateSession(threadKey, (current) => ({ ...current, lastTouchedAt: Date.now() }));
+        const targets = new Map(retainedRemoteThreadsRef.current.map((item) => [threadSummaryIdentityKey(item), item.federation?.ref.target]));
+        if (threadKey) targets.set(threadKey, thread?.federation?.ref.target ?? readRendererFederationTarget());
+        for (const [key, target] of targets) {
+          if (target?.scope !== "remote" || target.instanceId !== event.notification.params.instanceId) continue;
+          // Mark inactive cached sessions too; recover them lazily on selection.
+          streamRecoveryVersionsRef.current.set(key, (streamRecoveryVersionsRef.current.get(key) ?? 0) + 1);
+          updateSession(key, (current) => ({ ...current, lastTouchedAt: Date.now() }));
         }
         return;
       }
@@ -5491,9 +5513,15 @@ export function useThreadSessionState(params: {
 
       const targetThreadKey = agentEventThreadIdentityKey(event, notificationThreadId);
       const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
+      const isRetainedRemoteThread = retainedRemoteThreadsRef.current.some((item) => threadSummaryIdentityKey(item) === targetThreadKey);
+      // Another window can still subscribe to an evicted thread. Its events
+      // must not recreate this window's discarded transcript cache.
+      if (managesRemoteRetentionRef.current && event.federationTarget?.scope === "remote"
+        && isUnfocusedThread && !isRetainedRemoteThread) return;
       if (
         liveTranscriptEventFiltering &&
         isUnfocusedThread &&
+        !isRetainedRemoteThread &&
         isThreadLocalTranscriptNotification(event.notification)
       ) {
         return;
