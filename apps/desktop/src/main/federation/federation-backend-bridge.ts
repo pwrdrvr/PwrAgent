@@ -1,3 +1,4 @@
+import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -1102,7 +1103,7 @@ export function registerFederationBackendHandlers(params: {
             "utf8",
           ),
       });
-      return conditionalThreadRead({ ...response, replay }, request.knownRevision);
+      return projectFederationThreadRead(conditionalThreadRead({ ...response, replay }, request.knownRevision));
     },
   );
   params.router.registerHandler(
@@ -1902,10 +1903,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       request.includeTurns, request.includeAllToolInvocations, request.viewOnly, request.knownRevision, request.readReason]);
     const pending = this.pendingThreadReads.get(key);
     if (pending) return await pending;
-    const read = this.rpc.request<AppServerReadThreadResponse>({
+    const read = this.rpc.request<FederationThreadReadResponse>({
       method: FEDERATION_BACKEND_METHODS.readThread,
       params: request,
-    }).then((response) => this.transformReadThreadResponse(response));
+    }).then((response) => this.transformReadThreadResponse(materializeFederationThreadRead(response)));
     // Share concurrent card/window hydration, without caching a settled replay.
     // The RPC layer still owns admission; cap only this deduplication metadata.
     if (this.pendingThreadReads.size < 32) this.pendingThreadReads.set(key, read);

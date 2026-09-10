@@ -1,3 +1,4 @@
+import { materializeFederationThreadRead, type FederationThreadReadResponse } from "../federation/federation-thread-read";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerReadThreadRequest,
@@ -1338,7 +1339,9 @@ describe("federation backend bridge", () => {
       },
     });
 
-    expect(replies).toMatchObject([
+    expect(replies.map((reply) => reply.kind === "response"
+      ? { ...reply, result: materializeFederationThreadRead(reply.result as FederationThreadReadResponse) }
+      : reply)).toMatchObject([
       {
         kind: "response",
         requestId: "latest-request",
