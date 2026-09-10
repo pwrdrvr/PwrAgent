@@ -19,6 +19,7 @@ function grokEntry(
     distributionSource: "grok agent stdio",
     installable: false,
     installed: true,
+    enabled: true,
     installStatus: "installed",
     authStatus: "not-required",
     verificationStatus: "not-applicable",
@@ -28,6 +29,21 @@ function grokEntry(
 }
 
 describe("buildXaiGrokCliUpdateNotice", () => {
+  it.each([false, undefined])("hides vendor updates when enabled is %s", (enabled) => {
+    expect(buildXaiGrokCliUpdateNotice({
+      entry: grokEntry({
+        status: "available",
+        checkedAt: 100,
+        currentVersion: "1.0.5",
+        latestVersion: "1.0.25",
+      }, { enabled }),
+      now: 200,
+      onOpenUpdatePage: vi.fn(),
+      onDismiss: vi.fn(),
+      onSnooze: vi.fn(),
+    })).toBeUndefined();
+  });
+
   it("builds a version-keyed durable update notice", () => {
     const onOpenUpdatePage = vi.fn();
     const onDismiss = vi.fn();
@@ -144,6 +160,18 @@ describe("buildManagedGrokBuildNotice", () => {
     installedAt: 100,
     pinnedBehind: true,
   };
+
+  it.each([false, undefined])("hides managed build notices when enabled is %s", (enabled) => {
+    expect(buildManagedGrokBuildNotice({
+      entry: grokEntry(undefined, {
+        enabled,
+        managedBuild: managed,
+        pwrAgentManagedRuntime: true,
+      }),
+      onDismiss: vi.fn(),
+      onOpenReleasePage: vi.fn(),
+    })).toBeUndefined();
+  });
 
   it("names the PwrAgent channel and links its own release page", () => {
     const onOpenReleasePage = vi.fn();
