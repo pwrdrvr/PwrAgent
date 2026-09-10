@@ -8,9 +8,30 @@ import {
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   isCodexNativeSubAgentVisibleInNavigation,
   isThreadSubAgentVisibleInPanel,
+  projectActiveThreadSubAgents,
 } from "../subagent-visibility";
 
 const NOW = 1_800_000_000_000;
+
+describe("active sub-agent display", () => {
+  it("keeps live rows and both failure spellings while excluding terminal evidence", () => {
+    const live = { monitorId: "running", task: "Watch the build", status: "running" as const,
+      createdAt: NOW, updatedAt: NOW, monitorThreadId: "child", monitorTurnId: "turn" };
+    expect(projectActiveThreadSubAgents([
+      live,
+      { ...live, monitorId: "blocked", status: "blocked" },
+      { ...live, monitorId: "pending", status: "pending" },
+      { ...live, monitorId: "cancelling", status: "cancelling" },
+      { ...live, monitorId: "failed", status: "failed" },
+      { ...live, monitorId: "failure", status: "failure", completedAt: NOW },
+      { ...live, monitorId: "done", status: "success" },
+      { ...live, monitorId: "cancelled", status: "cancelled" },
+      { ...live, monitorId: "completed", completedAt: NOW },
+      { ...live, monitorId: "outcome", outcome: "success" },
+      { ...live, monitorId: "boundary", completionSource: { type: "monitor_tool" } },
+    ]).map((agent) => agent.monitorId)).toEqual(["running", "blocked", "pending", "cancelling", "failed", "failure"]);
+  });
+});
 
 function nativeSummary(
   overrides: Partial<CodexNativeSubAgentSummary> = {},

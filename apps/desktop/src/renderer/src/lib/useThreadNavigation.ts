@@ -898,6 +898,7 @@ function threadSummariesEqual(
     prSummariesEqual(left.prs, right.prs) &&
     reactionsEqual(left.reactions, right.reactions) &&
     subAgentsEqual(left.subAgents, right.subAgents) &&
+    subAgentsEqual(left.activeSubAgents, right.activeSubAgents) &&
     permissionTransitionLogsEqual(
       left.permissionTransitionLog,
       right.permissionTransitionLog

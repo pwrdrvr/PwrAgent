@@ -43,8 +43,8 @@ function isRunningSubAgent(subAgent: ThreadSubAgentSummary): boolean {
  * Covers every producer at once — PwrAgent task monitors, code review (which
  * is also the ACP path), Codex's own `spawnAgent`, and the title helper —
  * because all four persist the same `ThreadSubAgentSummary` through one store.
- * Reads the navigation snapshot the renderer already holds; adds no IPC and no
- * polling of its own.
+ * Reads compact owner-projected rows from selected navigation detail; adds no
+ * IPC or polling and does not need the lazily loaded sub-agent history.
  *
  * The rail panel remains the full-detail surface. This is a presence indicator
  * with a Stop button, deliberately not a second copy of the card.
@@ -59,7 +59,7 @@ export function ActiveSubAgentsStrip(props: {
   );
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set());
 
-  const subAgents = props.thread?.subAgents ?? [];
+  const subAgents = props.thread?.activeSubAgents ?? props.thread?.subAgents ?? [];
   const running = subAgents.filter(isRunningSubAgent);
   const blocked = subAgents.filter(isBlockedSubAgent);
   // Successful and cancelled sub-agents leave immediately — the sidebar and the

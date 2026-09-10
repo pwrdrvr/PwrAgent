@@ -13,6 +13,7 @@ import {
   NAVIGATION_DETAIL_COLLECTION_NAMES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   NAVIGATION_QUERY_PROTOCOL_VERSION,
+  projectActiveThreadSubAgents,
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "./backend-registry";
 import { getDesktopBackendRegistry } from "./backend-registry";
@@ -240,6 +241,7 @@ export class NavigationDetailService {
     }));
     const configuration = { ...thread };
     for (const name of NAVIGATION_DETAIL_COLLECTION_NAMES) delete configuration[name];
+    configuration.activeSubAgents = projectActiveThreadSubAgents(thread.subAgents ?? []);
     let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
     if (request.includeWorkspaceConfiguration) {
       if (thread.linkedDirectories.length > 100) {

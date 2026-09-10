@@ -43,6 +43,24 @@ function buildThread(
 }
 
 describe("ActiveSubAgentsStrip", () => {
+  it("renders owner-projected rows without history and clears them after completion", async () => {
+    const running = buildSubAgent();
+    const blocked = buildSubAgent({ monitorId: "blocked", task: "Wait for approval", status: "blocked" });
+    const failed = buildSubAgent({ monitorId: "failed", task: "Build package", status: "failure" });
+    const stopSubAgent = vi.fn<NonNullable<DesktopApi["stopSubAgent"]>>(async (request) => ({ ...request, stoppedAt: 3 }));
+    const thread = { ...buildThread([]), subAgents: undefined, activeSubAgents: [running, blocked, failed] };
+    const view = render(<ActiveSubAgentsStrip thread={thread} desktopApi={{ stopSubAgent }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Active sub-agents (2), 1 failed" }));
+    expect(screen.getByText("Blocked", { exact: true })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Dismiss failed sub-agent: Build package" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Stop sub-agent: Watch the deployment" }));
+    await waitFor(() => expect(stopSubAgent).toHaveBeenCalledWith({
+      backend: "codex", threadId: thread.id, monitorId: running.monitorId,
+    }));
+    view.rerender(<ActiveSubAgentsStrip thread={{ ...thread, subAgents: [running], activeSubAgents: [] }} />);
+    expect(view.container).toBeEmptyDOMElement();
+  });
+
   describe("presence", () => {
     it("renders nothing when the thread has no sub-agents", () => {
       const { container } = render(

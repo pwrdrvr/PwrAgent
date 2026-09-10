@@ -252,6 +252,38 @@ describe("NavigationDetailService", () => {
       .rejects.toMatchObject({ code: "navigation_cursor_expired" });
   });
 
+  it("projects composer sub-agents without loading result or accounting history", async () => {
+    const running = { monitorId: "running", task: "Watch the build", status: "running" as const,
+      createdAt: 1, updatedAt: 2, monitorThreadId: "child", monitorTurnId: "turn" };
+    const selected = thread("selected");
+    selected.subAgents = [
+      { ...running, lastMessage: "large result".repeat(100_000),
+        monitorUsage: { summary: "Large accounting summary".repeat(10_000), tokenUsage: { totalTokens: 1234 } } },
+      ...Array.from({ length: 10_000 }, (_, index) => ({
+        ...running, monitorId: `old-${index}`, status: "success" as const,
+      })),
+    ];
+    mocks.reconcileNavigationSnapshot.mockResolvedValue({ threads: [selected] });
+    const service = new NavigationDetailService({
+      getCachedThreadSummary: () => selected,
+      getQueuedExecutionModeForThread: () => undefined,
+      canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
+      hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
+      mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted,
+    } as unknown as DesktopBackendRegistry);
+    const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
+    const first = await service.readSelectedDetail(request);
+    expect(first.thread?.activeSubAgents).toEqual([running]);
+    expect(first.thread).not.toHaveProperty("subAgents");
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(4000);
+    expect(mocks.getThreadOverlayState).not.toHaveBeenCalled();
+
+    selected.subAgents[0] = { ...selected.subAgents[0]!, status: "success", completedAt: 3 };
+    const completed = await service.readSelectedDetail({ ...request, knownRevision: first.revision });
+    expect(completed.unchanged).not.toBe(true);
+    expect(completed.thread?.activeSubAgents).toEqual([]);
+  });
+
   it("pages a complete FIFO projection with its own revision", () => {
     let entries: ThreadQueuedTurnSummary[] = Array.from(
       { length: 205 },

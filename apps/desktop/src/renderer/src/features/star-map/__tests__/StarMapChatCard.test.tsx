@@ -337,7 +337,13 @@ describe("StarMapChatCard gesture persistence", () => {
 });
 
 describe("StarMapChatCard transcript loading", () => {
-  it("reads a restored remote card once during Strict Mode mount replay", async () => {
+  it.each([true, false])("reads a restored remote card once during Strict Mode mount replay (subscriptions: %s)", async (subscriptions) => {
+    const restoredThread = (updatedAt = 1): NavigationThreadSummary => {
+      const thread = remoteThread({ updatedAt });
+      return { ...thread, federation: { ...thread.federation!,
+        capabilities: subscriptions ? ["thread_detail", "event_subscriptions"] : ["thread_detail"],
+      } };
+    };
     const pending = deferred<AppServerReadThreadResponse>();
     const response: AppServerReadThreadResponse = {
       backend: "codex",
@@ -351,20 +357,20 @@ describe("StarMapChatCard transcript loading", () => {
     const desktopApi = buildApi({
       readThread: vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(response),
     });
-    const view = render(<StrictMode>{card({ desktopApi, thread: remoteThread() })}</StrictMode>);
+    const view = render(<StrictMode>{card({ desktopApi, thread: restoredThread() })}</StrictMode>);
     await act(async () => {});
     expect(desktopApi.readThread).toHaveBeenCalledTimes(1);
     await act(async () => pending.resolve(response));
     expect(desktopApi.readThread).toHaveBeenCalledTimes(1);
 
-    // Navigation timestamps do not invalidate a live remote card; reopening owns a fresh read.
-    view.rerender(<StrictMode>{card({ desktopApi, thread: remoteThread({ updatedAt: 2 }) })}</StrictMode>);
+    // Only subscribed peers can rely on their stream after the initial read.
+    view.rerender(<StrictMode>{card({ desktopApi, thread: restoredThread(2) })}</StrictMode>);
     await act(async () => {});
-    expect(desktopApi.readThread).toHaveBeenCalledTimes(1);
+    expect(desktopApi.readThread).toHaveBeenCalledTimes(subscriptions ? 1 : 2);
     view.unmount();
-    render(<StrictMode>{card({ desktopApi, thread: remoteThread({ updatedAt: 2 }) })}</StrictMode>);
+    render(<StrictMode>{card({ desktopApi, thread: restoredThread(2) })}</StrictMode>);
     await act(async () => {});
-    expect(desktopApi.readThread).toHaveBeenCalledTimes(2);
+    expect(desktopApi.readThread).toHaveBeenCalledTimes(subscriptions ? 2 : 3);
   });
 
   it("asks for the last few turns rather than the whole thread", async () => {

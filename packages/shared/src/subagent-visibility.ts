@@ -1,7 +1,7 @@
 import type {
   CodexNativeSubAgentSummary,
 } from "./contracts/normalized-app-server";
-import type { ThreadSubAgentSummary } from "./contracts/navigation";
+import type { ThreadActiveSubAgent, ThreadSubAgentSummary } from "./contracts/navigation";
 
 export const CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS = 60 * 60 * 1000;
 export const CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -38,6 +38,23 @@ function hasTerminalEvidence(subAgent: ThreadSubAgentSummary): boolean {
     || subAgent.outcome !== undefined
     || subAgent.completionSource !== undefined
   );
+}
+
+/** Composer presence includes live work and undismissed failures, without result or accounting history. */
+export function projectActiveThreadSubAgents(
+  subAgents: readonly ThreadSubAgentSummary[],
+): ThreadActiveSubAgent[] {
+  return subAgents
+    .filter((agent) => agent.status === "failed" || agent.status === "failure" || !hasTerminalEvidence(agent))
+    .map((agent) => ({
+      monitorId: agent.monitorId,
+      task: agent.task,
+      status: agent.status,
+      createdAt: agent.createdAt,
+      updatedAt: agent.updatedAt,
+      monitorThreadId: agent.monitorThreadId,
+      monitorTurnId: agent.monitorTurnId,
+    }));
 }
 
 /**

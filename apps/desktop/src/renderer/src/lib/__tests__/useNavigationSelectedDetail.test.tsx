@@ -314,11 +314,22 @@ it("retains a completed history page across a configuration invalidation", async
 });
 
 it("does not fetch sub-agent history when the transcript requests only its required collections", async () => {
-  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockResolvedValue({ ...detail("config"), collections: [{ name: "subAgents", count: 10000, revision: "history" }] });
-  const api: DesktopApi = { getNavigationSelectedDetail: read };
+  let listener!: (event: AgentEvent) => void;
+  const activeSubAgents = [{ monitorId: "live", task: "Watch build", status: "running" as const, createdAt: 1, updatedAt: 1 }];
+  const configured = { ...detail("config"), thread: { ...detail("config").thread!, activeSubAgents },
+    collections: [{ name: "subAgents" as const, count: 10000, revision: "history" }] };
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>().mockResolvedValue(configured);
+  const api: DesktopApi = { getNavigationSelectedDetail: read,
+    onAgentEvent: (callback) => { listener = callback; return () => {}; } };
   const { result, unmount } = renderHook(() => useNavigationSelectedDetail({ desktopApi: api, ref, collections: ["turnFailureLog"] }));
   await waitFor(() => expect(result.current.state?.readiness).toBe("ready"));
   expect(read).toHaveBeenCalledTimes(1);
   expect(result.current.state?.detail?.thread?.subAgents).toBeUndefined();
+  expect(result.current.state?.detail?.thread?.activeSubAgents).toEqual(activeSubAgents);
+  read.mockResolvedValue({ ...configured, revision: "completed", thread: { ...configured.thread, activeSubAgents: [] } });
+  act(() => listener({ backend: "codex", notification: { method: "thread/subAgents/updated", params: { threadId: ref.threadId } } }));
+  await waitFor(() => expect(result.current.state?.detail?.thread?.activeSubAgents).toEqual([]));
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls.every(([request]) => !request.collection)).toBe(true);
   unmount();
 });

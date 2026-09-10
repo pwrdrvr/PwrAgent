@@ -5404,6 +5404,7 @@ describe("App", () => {
     });
     expect(readThread).toHaveBeenNthCalledWith(1, {
       backend: "codex",
+      display: { resource: "transcript" },
       limit: 5,
       threadId: "thread-1",
     });
@@ -5420,6 +5421,7 @@ describe("App", () => {
     });
     expect(readThread).toHaveBeenNthCalledWith(2, {
       backend: "codex",
+      display: { resource: "transcript" },
       limit: 5,
       threadId: "thread-2",
     });
