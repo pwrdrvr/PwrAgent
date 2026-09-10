@@ -257,8 +257,14 @@ describe("Federation activity surfaces", () => {
   });
 
   it("shows exact one-second amounts on hover and keyboard focus", async () => {
-    render(<FederationActivityScreen desktopApi={{ readFederationActivity: async () => fixture() }} />);
-    const chart = await screen.findByRole("img", { name: /Data and wire amounts/ });
+    let resolveActivity!: (snapshot: ReadFederationActivityResponse) => void;
+    const activity = new Promise<ReadFederationActivityResponse>((resolve) => { resolveActivity = resolve; });
+    render(<FederationActivityScreen desktopApi={{ readFederationActivity: () => activity }} />);
+    expect(screen.queryByRole("img", { name: /Data and wire amounts/ })).not.toBeInTheDocument();
+    // Flush the async mount and its initial selection-reset effect before focusing.
+    // Finding the SVG alone can race that effect on a busy runner.
+    await act(async () => { resolveActivity(fixture()); });
+    const chart = screen.getByRole("img", { name: /Data and wire amounts/ });
     fireEvent.focus(chart);
     expect(screen.getByRole("tooltip")).toHaveTextContent("Sent wire: 800 bytes");
     expect(screen.getByRole("tooltip")).toHaveTextContent("In progress");
