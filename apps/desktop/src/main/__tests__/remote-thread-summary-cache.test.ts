@@ -84,6 +84,37 @@ function snapshotOf(threads: NavigationThreadSummary[]): NavigationSnapshot {
 
 const noArchivedThreads = async () => [];
 
+it("keeps mounted pin navigation subscriptions until removal and refreshes on lifecycle invalidation without a polling timer", async () => {
+  vi.useFakeTimers();
+  const summary = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Mounted" });
+  const fetchPinnedSnapshot = vi.fn(async () => snapshotOf([summary]));
+  const onPeerInterestChanged = vi.fn();
+  const cache = new RemoteThreadSummaryCache({
+    peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+    fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+    onPeerInterestChanged,
+  });
+  try {
+    await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "t1", summary })]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([
+      { instanceId: "peer-a", threadSelection: { kind: "all" } },
+    ]);
+    cache.invalidate("peer-a");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    await cache.resolvePinnedThreads([]);
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([]);
+    cache.invalidate("peer-a");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+  } finally {
+    cache.dispose();
+    vi.useRealTimers();
+  }
+});
+
 function pin(params: {
   instanceId: string;
   threadId: string;

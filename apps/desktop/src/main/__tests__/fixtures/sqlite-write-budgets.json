@@ -314,6 +314,20 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "navigation-viewer-pin-lifecycle-recovery": {
+    "commits": 1,
+    "note": "One changed owner summary commits once; repeated lens/directory reads add no commits. At 200 changed summaries/day and 4 KiB/page: ~0.8 MB/day per dirty page; idle polling adds 0 MB/day.",
+    "observedWalBytes": 0,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "navigation-viewer-pin-unchanged-reads": {
+    "commits": 0,
+    "note": "Twenty Attention and directory query pairs retain the same owner lifecycle: zero commits, 0 MB/day added WAL.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "owner-pr-candidate-bootstrap": {
     "commits": 1,
     "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes",

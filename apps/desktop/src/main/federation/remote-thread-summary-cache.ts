@@ -179,6 +179,8 @@ export class RemoteThreadSummaryCache {
    * instance, awaiting report to the caller that removes the pin.
    */
   private readonly provenArchived = new Map<string, Set<string>>();
+  /** Mounted pins own navigation demand until removed, independent of visible lens pages. */
+  private pinnedByInstanceId = new Map<string, RemoteThreadPin[]>();
 
   constructor(
     private readonly options: {
@@ -244,17 +246,18 @@ export class RemoteThreadSummaryCache {
   invalidate(instanceId?: string): void {
     if (instanceId === undefined) {
       this.globalGeneration += 1;
-      this.cache.clear();
+      for (const id of this.cache.keys()) this.expirePeerSnapshot(id);
       this.archivedCache.clear();
       this.refreshFailures.clear();
       this.provenArchived.clear();
+      this.refreshMountedPins();
       return;
     }
     this.peerGenerations.set(
       instanceId,
       (this.peerGenerations.get(instanceId) ?? 0) + 1,
     );
-    this.cache.delete(instanceId);
+    this.expirePeerSnapshot(instanceId);
     this.refreshFailures.delete(instanceId);
     this.provenArchived.delete(instanceId);
     for (const key of this.archivedCache.keys()) {
@@ -262,16 +265,39 @@ export class RemoteThreadSummaryCache {
         this.archivedCache.delete(key);
       }
     }
+    this.refreshMountedPins(instanceId);
+  }
+
+  private refreshMountedPins(instanceId?: string): void {
+    // Reapply demand on connection transitions too: pins may have been mounted while offline.
+    this.notifyPeerInterestChanged();
+    for (const peer of this.navigationPeers()) {
+      if (instanceId && peer.target.instanceId !== instanceId) continue;
+      const pins = this.pinnedByInstanceId.get(peer.target.instanceId);
+      if (pins?.length) this.refreshPeerSummariesInBackground(peer.target, pins);
+    }
+  }
+
+  private expirePeerSnapshot(instanceId: string): void {
+    const snapshot = this.cache.get(instanceId);
+    if (snapshot && this.pinnedByInstanceId.has(instanceId)) {
+      // Retain the last owner observation while revalidating. Falling back to the
+      // saved pin here would briefly disagree with the already-rendered owner row.
+      snapshot.fetchedAt = Number.NEGATIVE_INFINITY;
+    } else {
+      this.cache.delete(instanceId);
+    }
   }
 
   dispose(): void {
-    const hadPeerInterest = this.peerInterests.size > 0;
+    const hadPeerInterest = this.peerInterests.size > 0 || this.pinnedByInstanceId.size > 0;
     for (const interests of this.peerInterests.values()) {
       for (const interest of interests.values()) {
         clearTimeout(interest.timer);
       }
     }
     this.peerInterests.clear();
+    this.pinnedByInstanceId.clear();
     if (hadPeerInterest) {
       this.options.onPeerInterestChanged?.([]);
     }
@@ -515,6 +541,15 @@ export class RemoteThreadSummaryCache {
       const group = pinsByInstanceId.get(pin.ref.target.instanceId) ?? [];
       group.push(pin);
       pinsByInstanceId.set(pin.ref.target.instanceId, group);
+    }
+    const previousOwners = [...this.pinnedByInstanceId.keys()].sort().join("\n");
+    // Retain identities only; persisted payloads must not become another long-lived detail cache.
+    this.pinnedByInstanceId = new Map([...pinsByInstanceId].map(([owner, group]) => [
+      owner,
+      group.map(({ summary: _summary, ...pin }) => pin),
+    ]));
+    if (previousOwners !== [...this.pinnedByInstanceId.keys()].sort().join("\n")) {
+      this.notifyPeerInterestChanged();
     }
     const directPinKeys = new Set(
       pins.map((pin) =>
@@ -818,6 +853,9 @@ export class RemoteThreadSummaryCache {
         : (current.status ?? ("disconnected" as const));
     return {
       ...base,
+      // A saved running flag is not evidence of a live turn in this process.
+      // Keep the row, but establish activity from an owner refresh after startup.
+      threadStatus: base.threadStatus === "active" ? undefined : base.threadStatus,
       federation: {
         ref: pin.ref,
         instanceLabel: current.label ?? pin.instanceLabel,
@@ -879,12 +917,9 @@ export class RemoteThreadSummaryCache {
     // Keep new-child discovery notifications broad. Sparse payload selection
     // must not hide a child whose identity has not arrived yet.
     const interestSelection = descendants ? { kind: "all" } as const : selection;
-    this.touchPeerInterest(
-      target.instanceId,
-      interestKey,
-      interestSelection,
-      ttlMs,
-    );
+    if (interestKey !== "pins") {
+      this.touchPeerInterest(target.instanceId, interestKey, interestSelection, ttlMs);
+    }
     const cached = this.cache.get(target.instanceId);
     if (
       cached
@@ -956,12 +991,9 @@ export class RemoteThreadSummaryCache {
         threads,
         nameObservationSequence,
       );
-      this.touchPeerInterest(
-        target.instanceId,
-        interestKey,
-        interestSelection,
-        ttlMs,
-      );
+      if (interestKey !== "pins") {
+        this.touchPeerInterest(target.instanceId, interestKey, interestSelection, ttlMs);
+      }
       // ANY successful fetch is proof of life, including one the jump
       // search started. Clearing the flag only in the pinned-refresh path
       // would keep freshly-fetched rows dimmed until the next TTL lapse.
@@ -1079,15 +1111,15 @@ export class RemoteThreadSummaryCache {
   }
 
   private notifyPeerInterestChanged(): void {
+    const owners = new Set([...this.peerInterests.keys(), ...this.pinnedByInstanceId.keys()]);
     this.options.onPeerInterestChanged?.(
-      [...this.peerInterests]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([instanceId, interests]) => ({
-          instanceId,
-          threadSelection: mergeSelections(
-            [...interests.values()].map((interest) => interest.selection),
-          ),
-        })),
+      [...owners].sort().map((instanceId) => ({
+        instanceId,
+        // Navigation invalidations discover new mounted children too. This never requests transcript events.
+        threadSelection: this.pinnedByInstanceId.has(instanceId) ? { kind: "all" } : mergeSelections(
+          [...(this.peerInterests.get(instanceId)?.values() ?? [])].map((interest) => interest.selection),
+        ),
+      })),
     );
   }
 }

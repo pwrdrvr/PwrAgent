@@ -2905,6 +2905,50 @@ describe("Sidebar", () => {
     );
   });
 
+  it.each([false, true])("matches directory local/remote scanners to Attention (local activity: %s)", async (localActive) => {
+    const remote: NavigationThreadSummary = { ...sharedThread, id: "remote", title: "Remote work", threadStatus: "active",
+      inbox: { inInbox: false }, federation: { instanceLabel: "Studio", ref: {
+        backend: "codex", threadId: "remote", target: { scope: "remote", instanceId: "peer-1" },
+      } } };
+    const local: NavigationThreadSummary = { ...sharedThread, id: "local", title: "Local work", inbox: { inInbox: false },
+      threadStatus: localActive ? "active" : "idle" };
+    const props = (remoteThread: NavigationThreadSummary) => ({
+      backends, browseMode: "directories" as const,
+      directories: [{ ...directories[0]!, threadKeys: [threadSummaryIdentityKey(local), threadSummaryIdentityKey(remoteThread)] }],
+      inboxThreads: [], threads: [local, remoteThread], loading: false, creatingThread: undefined, selectedItemKey: undefined,
+      onBrowseModeChange: () => undefined, onCreateThread: async () => undefined,
+      onOpenLaunchpad: async () => undefined, onSelectThread: () => undefined,
+    });
+    const view = render(<Sidebar {...props(remote)} />);
+    const directoryHeader = () => screen.getAllByRole("button", { name: /PwrAgent/i })
+      .find((button) => button.hasAttribute("aria-expanded"))!;
+    const header = directoryHeader();
+    const remoteCount = header.querySelector("[data-remote-active-thread-count]");
+    expect(remoteCount).toHaveAttribute("data-remote-active-thread-count", "1");
+    expect(remoteCount).toHaveClass("signal-count--remote-active");
+    expect(header).toHaveAttribute("aria-label", expect.stringContaining("1 active thread on other instances"));
+    const localCount = header.querySelector(".signal-count--active");
+    if (localActive) {
+      expect(localCount).toHaveAttribute("data-active-thread-count", "1");
+      expect(header).toHaveAttribute("aria-label", expect.stringContaining("1 active thread on this machine"));
+    } else {
+      expect(localCount).toBeNull();
+    }
+    const tab = screen.getByRole("tab", { name: /^Attention,/ });
+    expect(tab.querySelector("[data-attention-active-count]"))
+      .toHaveAttribute("data-attention-active-count", localActive ? "1" : "0");
+    expect(tab.querySelector("[data-attention-remote-active-count]"))
+      .toHaveAttribute("data-attention-remote-active-count", "1");
+    fireEvent.mouseEnter(remoteCount!);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("1 active thread on other instances");
+    fireEvent.mouseLeave(remoteCount!);
+
+    view.rerender(<Sidebar {...props({ ...remote, threadStatus: "idle" })} />);
+    expect(directoryHeader().querySelector("[data-remote-active-thread-count]")).toBeNull();
+    expect(screen.getByRole("tab", { name: /^Attention,/ }).querySelector("[data-attention-remote-active-count]"))
+      .toHaveAttribute("data-attention-remote-active-count", "0");
+  });
+
   it("shows an approval chip for threads waiting on an approval request", () => {
     render(
       <Sidebar
