@@ -2873,6 +2873,27 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("routes an activity detail read directly to one provider turn without reading ledgers or base history", async () => {
+    const entry = { type: "activity" as const, id: "activity-command", summary: "Ran build", details: [] };
+    const readThreadActivity = vi.fn(async () => entry);
+    const codexClient = Object.assign(new MockBackendClient({}), { readThreadActivity });
+    const overlayStore = createOverlayStoreMock();
+    const pricingRead = vi.spyOn(overlayStore, "readThreadPricing");
+    const accountingRead = vi.spyOn(overlayStore, "readThreadToolAccounting");
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    try {
+      const response = await registry.readThread({ backend: "codex", threadId: "thread", display: {
+        resource: "activity", activity: { turnId: "turn", entryId: entry.id },
+      } });
+      expect(response.replay.entries).toEqual([entry]);
+      expect(readThreadActivity).toHaveBeenCalledExactlyOnceWith({ threadId: "thread", turnId: "turn", entryId: entry.id });
+      expect(codexClient.readThreadCalls).toEqual([]);
+      expect(pricingRead).not.toHaveBeenCalled();
+      expect(accountingRead).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
   it("overlays only the Codex spawn env with its Token Miser bridge", () => {
     const source = {
       CODEX_HOME: "/tmp/codex-profile",

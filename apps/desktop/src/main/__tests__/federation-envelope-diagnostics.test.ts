@@ -72,6 +72,19 @@ describe("federation envelope diagnostics", () => {
       threadId: undefined, readReason: undefined,
     });
   });
+  it("identifies deferred history and conditional recovery without logging revision or payload text", () => {
+    const diagnostics = new FederationEnvelopeDiagnostics();
+    const read = { ...request, method: "backend.readThread", params: {
+      threadId: "thread", knownRevision: "private revision", display: { resource: "transcript", deferActivityDetails: true },
+    } };
+    diagnostics.observe(read);
+    expect(diagnostics.describe(response)).toMatchObject({ displayResource: "transcript", deferredActivityDetails: "true", conditionalRead: "revalidate" });
+    expect(JSON.stringify(diagnostics.describe(response))).not.toContain("private");
+    const fields = describeLargeThreadReadResult({ ...response, result: { replay: {
+      messages: [], entries: [{ type: "message", text: "private text" }, { type: "activity", details: [], detailsRef: {} }],
+    } } });
+    expect(fields).toMatchObject({ deferredActivityCount: 1, messageTextBytes: 14, activityDetailsBytes: 2 });
+  });
   it("correlates search query fingerprints without logging query text", () => {
     const diagnostics = new FederationEnvelopeDiagnostics();
     const search = { ...request, method: "backend.searchNavigationThreads", params: { query: "private search phrase" } };

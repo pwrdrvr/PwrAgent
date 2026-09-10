@@ -82,6 +82,7 @@ type TranscriptListProps = {
     | "openMarkdownFileViewer"
     | "readMarkdownFile"
     | "onAgentEvent"
+    | "readThread"
   >;
   directoryPaths?: string[];
   entries: AppServerThreadEntry[];

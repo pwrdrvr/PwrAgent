@@ -6,6 +6,7 @@ import { useRecentRemoteThreads } from "../useRecentRemoteThreads";
 import { useFederationThreadEventSubscriptions } from "../useFederationThreadEventSubscriptions";
 import { useThreadSessionState } from "../useThreadSessionState";
 import { threadOwnerPlatform } from "../federated-thread-events";
+import { useFederationPeerConnectivity } from "../useFederationPeerConnectivity";
 
 function remoteThread(id: string, instanceId = "owner"): NavigationThreadSummary {
   return {
@@ -114,6 +115,39 @@ describe("recent remote threads", () => {
     await waitFor(() => expect(readThread).toHaveBeenCalledTimes(4));
     expect(readThread).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: "A", knownRevision: "revision-A" }));
     expect(rendered.result.current.entries).toEqual(expect.arrayContaining([expect.objectContaining({ id: "base-A" })]));
+  });
+
+  it("keeps the retained session through the health probe when switching owners", async () => {
+    const threads = [remoteThread("A"), remoteThread("B", "other-owner")];
+    const readThread = vi.fn(async ({ threadId }: { threadId: string }) => snapshot(threadId));
+    let finishHealth: (() => void) | undefined;
+    const desktopApi = {
+      readThread,
+      onAgentEvent: () => () => undefined,
+      setFederationEventSubscriptions: vi.fn(async ({ subscriptions }) => ({ subscriptions })),
+      readFederationHealth: vi.fn(() => new Promise((resolve) => {
+        finishHealth = () => resolve({ health: { peers: [
+          { id: "owner", status: "connected" }, { id: "other-owner", status: "connected" },
+        ] } });
+      })),
+    } as DesktopApi;
+    const rendered = renderHook(({ thread }) => {
+      const retainedRemoteThreads = useRecentRemoteThreads({ selectedThread: thread, threads });
+      useFederationThreadEventSubscriptions({ desktopApi, enabled: true, selectedThread: thread, threads, retainedRemoteThreads });
+      const target = thread.federation!.ref.target;
+      const connectivity = useFederationPeerConnectivity({ desktopApi, target: target.scope === "remote" ? target : undefined });
+      return useThreadSessionState({ desktopApi, thread, retainedRemoteThreads, suspended: !connectivity.ready || !connectivity.connected });
+    }, { initialProps: { thread: threads[0]! } });
+    await act(async () => finishHealth?.());
+    await waitFor(() => expect(rendered.result.current.response?.threadId).toBe("A"));
+    rendered.rerender({ thread: threads[1]! });
+    await act(async () => finishHealth?.());
+    await waitFor(() => expect(rendered.result.current.response?.threadId).toBe("B"));
+    rendered.rerender({ thread: threads[0]! });
+    await act(async () => finishHealth?.());
+    expect(rendered.result.current.entries).toEqual(expect.arrayContaining([expect.objectContaining({ id: "base-A" })]));
+    expect(readThread).toHaveBeenCalledTimes(2);
+    expect(desktopApi.setFederationEventSubscriptions).toHaveBeenCalledTimes(2);
   });
 
   it("evicts the sixth-oldest snapshot and does not reuse its forgotten revision", async () => {

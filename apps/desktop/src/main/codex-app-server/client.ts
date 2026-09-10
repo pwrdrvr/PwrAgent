@@ -7121,7 +7121,16 @@ async function listCodexThreadItems(params: {
       payload,
       timeoutMs: params.timeoutMs,
     });
-    items.push(...page.data);
+    // Newer servers wrap thread-wide item pages in { turnId, item }, while
+    // the legacy turn-items endpoint (and older servers) return items directly.
+    // Unwrap at this protocol boundary so message boundaries still split tool
+    // activity groups exactly as they do in thread/turns/list's full view.
+    items.push(...page.data.map((value) => {
+      const record = asRecord(value);
+      const item = typeof record?.type === "string" ? record : asRecord(record?.item);
+      if (!item || typeof item.type !== "string") throw new Error("Invalid Codex thread item page.");
+      return item as CodexThreadItem;
+    }));
     const nextCursor = page.nextCursor ?? undefined;
     if (!nextCursor || seenCursors.has(nextCursor)) {
       break;
@@ -8685,6 +8694,28 @@ export class CodexAppServerClient {
       payloads: [{}],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
+  }
+
+  async readThreadActivity(params: {
+    threadId: string;
+    turnId: string;
+    entryId: string;
+  }): Promise<AppServerThreadActivityEntry> {
+    await this.ensureInitialized();
+    const items = await listCodexThreadItems({
+      client: this.connection,
+      threadId: params.threadId,
+      turnId: params.turnId,
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    // Normalize exactly one turn through the same adapter as the history page.
+    // No transcript file, whole-thread replay, or accounting read is needed.
+    const replay = extractThreadReplayFromReadResult({ thread: {
+      id: params.threadId, turns: [{ id: params.turnId, items }],
+    } }, { threadId: params.threadId });
+    const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
+    if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
+    return entry;
   }
 
   async readThread(params: {

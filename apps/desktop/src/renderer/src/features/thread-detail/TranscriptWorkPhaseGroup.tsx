@@ -22,7 +22,7 @@ type TranscriptWorkPhaseGroupProps = {
   directoryPaths?: string[];
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile" | "readThread"
   >;
   entries: AppServerThreadEntry[];
   expanded: boolean;
@@ -136,7 +136,7 @@ function renderEntry(params: {
   directoryPaths?: string[];
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile" | "readThread"
   >;
   entry: AppServerThreadEntry;
   expandedActivityIds?: ReadonlySet<string>;

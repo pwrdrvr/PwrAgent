@@ -4768,7 +4768,7 @@ export function useThreadSessionState(params: {
         const previousResponse = conditionalReadsRef.current.get(targetThreadKey);
         const federationTarget = targetThread.federation?.ref.target ?? readRendererFederationTarget();
         const fetchedResponse = await readThread({
-          display: { resource: "transcript" },
+          display: { resource: "transcript", ...(federationTarget?.scope === "remote" ? { deferActivityDetails: true } : {}) },
           backend: targetThread.source,
           ...(initialHistoryLimit !== undefined
             ? { limit: initialHistoryLimit }
@@ -5117,7 +5117,10 @@ export function useThreadSessionState(params: {
           (streamRecoveryVersionsRef.current.get(remoteDetailInterest) ?? 0) + 1);
       }
     }
-    continuousRemoteInterestsRef.current = new Set(suspended ? [] : JSON.parse(retainedRemoteKeysJson));
+    // Read suspension also covers the health probe on every owner switch. It
+    // does not stop our retained subscriptions or the global event listener.
+    // Real disconnects/gaps invalidate these baselines through stream recovery.
+    continuousRemoteInterestsRef.current = new Set(JSON.parse(retainedRemoteKeysJson));
     if (!thread || !threadKey) {
       return;
     }
@@ -6838,11 +6841,11 @@ export function useThreadSessionState(params: {
     }));
 
     try {
+      const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
       const fetchedOlderResponse = await desktopApi.readThread({
-        display: { resource: "transcript" },
+        display: { resource: "transcript", ...(federationTarget?.scope === "remote" ? { deferActivityDetails: true } : {}) },
         backend: thread.source,
-        federationTarget: thread.federation?.ref.target ??
-          readRendererFederationTarget(),
+        federationTarget,
         threadId: thread.id,
         before: selectedPagination.previousCursor,
         limit: THREAD_HISTORY_PAGE_LIMIT,

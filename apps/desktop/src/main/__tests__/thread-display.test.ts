@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { AppServerReadThreadResponse, ThreadUsageLineRecord, AgentEvent } from "@pwragent/shared";
 import { projectThreadDisplay } from "../app-server/thread-display";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
+import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 
 function line(index: number): ThreadUsageLineRecord {
   return {
@@ -70,6 +71,25 @@ it("pages owner-prepared pricing rows while keeping totals over the full history
   expect(() => projectThreadDisplay(snapshot(46), { threadId: "fixture", display: { resource: "pricing", cursor: first.display?.nextCursor } })).toThrow(/history changed/);
 });
 
+it("revalidates a transcript when only undisplayed overlay or ledger metadata changed", () => {
+  const data = snapshot(2);
+  const request = { threadId: "fixture", display: { resource: "transcript" as const } };
+  // The registry passes the complete overlay object, not just the fields in
+  // projectThreadDisplay's parameter type. Selected-thread enrichment changes it.
+  const overlay = { reasoningEffort: "high", lastSeenAt: 100, updatedAt: 200 };
+  const first = conditionalThreadRead(projectThreadDisplay(data, request, overlay), "");
+  const next = snapshot(2);
+  next.fetchedAt += 1_000;
+  next.toolAccounting!.tokenMiser!.codeMode!.observations![0]!.script = "Different internal accounting evidence";
+  const updatedOverlay = { ...overlay, lastSeenAt: 300, updatedAt: 400 };
+  const repeated = conditionalThreadRead(projectThreadDisplay(next, request, updatedOverlay), first.replayRevision);
+  expect(repeated.unchanged).toBe(true);
+  expect(Buffer.byteLength(JSON.stringify(repeated))).toBeLessThan(400);
+
+  next.replay.entries[0] = { type: "message", id: "visible-message", role: "assistant", text: "Changed answer" };
+  expect(conditionalThreadRead(projectThreadDisplay(next, request, overlay), first.replayRevision).unchanged).not.toBe(true);
+});
+
 it("sends a large plain-text message once without dropping attachment parts", () => {
   const data = snapshot(0);
   const text = "Contrived federation log line: request completed.\n".repeat(8_000);
@@ -83,6 +103,39 @@ it("sends a large plain-text message once without dropping attachment parts", ()
   const parts = [{ type: "text" as const, text }, { type: "file" as const, name: "capture.log", mimeType: "text/plain" }];
   data.replay.entries = [{ type: "message", id: "file", role: "user", text, parts }];
   expect(projectThreadDisplay(data, { threadId: "fixture", display: { resource: "transcript" } }).replay.entries[0]).toMatchObject({ text, parts });
+});
+
+it("defers completed provider activity bodies only for a viewer that can resolve them", () => {
+  const data = snapshot(0);
+  const output = "Full command output\n".repeat(20_000);
+  const activity = {
+    type: "activity" as const, id: "activity-command", summary: "Ran a command", status: "completed" as const,
+    turn: { id: "turn", status: "completed" as const },
+    details: [{ id: "command", kind: "command" as const, label: "test", command: { displayCommand: "pnpm test", rawCommand: "bash -c pnpm test", output } }],
+  };
+  data.replay.entries = [activity];
+  data.replay.messages = [];
+  const request = { threadId: "fixture", display: { resource: "transcript" as const, deferActivityDetails: true } };
+  const projected = projectThreadDisplay(data, request);
+  expect(projected.replay.entries[0]).toMatchObject({ summary: activity.summary,
+    detailsRef: { threadId: "fixture", backend: "codex", entryId: activity.id, turnId: "turn" },
+    details: [{ id: "command", kind: "command", label: "test", command: { output: undefined, rawCommand: undefined } }],
+  });
+  expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(2_000);
+  expect(activity.details[0]!.command.output).toBe(output);
+  expect(projectThreadDisplay(data, { threadId: "fixture", display: { resource: "transcript" } }).replay.entries[0]).toMatchObject({ details: activity.details });
+  for (const inline of [
+    { ...activity, turn: undefined },
+    { ...activity, turn: { id: "turn", status: "in_progress" as const } },
+    { ...activity, id: "codex-environment-setup" },
+    { ...activity, details: [{ ...activity.details[0]!, command: { ...activity.details[0]!.command, rawCommand: "pwragent.read_thread" } }] },
+  ]) {
+    expect(projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [inline] } }, request).replay.entries[0]).not.toHaveProperty("detailsRef");
+  }
+  const fileDiff = { kind: "update" as const, diff: "+changed line", additions: 1, removals: 0 };
+  const withEdits = { ...activity, details: [...activity.details, { id: "edit", kind: "write" as const, label: "Edited file", fileDiff }] };
+  const projectedEdits = projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [withEdits] } }, request).replay.entries[0];
+  expect(projectedEdits).toMatchObject({ detailsRef: { entryId: activity.id }, details: [{ command: { output: undefined } }, { fileDiff }] });
 });
 
 it("returns a late usage correction only for the requested loaded turn", () => {

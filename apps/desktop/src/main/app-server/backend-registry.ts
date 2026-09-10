@@ -818,6 +818,7 @@ type BackendClient = {
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
+  readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
   injectThreadItems?(params: { threadId: string; items: unknown[] }): Promise<void>;
   startThread(params: {
     cwd?: string;
@@ -13873,6 +13874,19 @@ export class DesktopBackendRegistry {
   async readThread(request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> {
     if (!request.display) return await this.readThreadData(request);
     const backend = request.backend ?? "codex";
+    if (request.display.resource === "activity") {
+      this.assertNotBootstrap("readThread");
+      const activity = request.display.activity;
+      if (backend !== "codex" || !activity?.entryId || !activity.turnId) throw new Error("Invalid activity detail request.");
+      const entry = await this.withCodexThreadClient(request.threadId, async (client) => {
+        if (!client.readThreadActivity) throw new Error("Activity detail reads are unavailable.");
+        return await client.readThreadActivity({ threadId: request.threadId, ...activity });
+      }, undefined, false);
+      return {
+        backend, threadId: request.threadId, fetchedAt: Date.now(),
+        replay: { entries: [{ ...entry, usageLine: undefined }], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+      };
+    }
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
     if (request.display.resource === "transcript") {
       return projectThreadDisplay(await this.readThreadData(request), request, { ...overlay, activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId });

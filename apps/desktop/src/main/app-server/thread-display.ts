@@ -34,8 +34,14 @@ export function projectThreadDisplay(
   const subAgents = visibleSubAgents.filter((agent) => subAgentLens(agent) === selectedLens);
   const revisionSource = demand.resource === "tools" ? response.toolAccounting
     : demand.resource === "subagents" || demand.resource === "subagent" ? { visibleSubAgents, selectedLens }
-      : { pricing: response.pricing, tokenMiser: response.toolAccounting?.tokenMiser, thread };
-  const revision = createHash("sha256").update(JSON.stringify([demand.resource, revisionSource])).digest("base64url");
+      : { pricing: response.pricing, tokenMiser: response.toolAccounting?.tokenMiser,
+        subAgents: thread?.subAgents, turnFailures: thread?.turnFailureLog,
+        reasoningEffort: thread?.reasoningEffort, activeTurnId: thread?.activeTurnId };
+  // Transcript/accounting revisions describe the visible totals below. Hashing
+  // the complete overlay or internal ledger evidence invalidates an identical
+  // transcript after selected-thread enrichment and ordinary metadata updates.
+  const revision = demand.resource === "transcript" || demand.resource === "accounting" ? undefined
+    : createHash("sha256").update(JSON.stringify([demand.resource, revisionSource])).digest("base64url");
   let offset = 0;
   if (demand.cursor) {
     const [cursorRevision, cursorOffset] = demand.cursor.split(":");
@@ -103,7 +109,33 @@ export function projectThreadDisplay(
   // Usage activities already contain their presentation; the attached ledger
   // record is for inspection clients and is not part of the display contract.
   entries = entries.map((entry) => {
-    if (entry.type === "activity") return { ...entry, usageLine: undefined };
+    if (entry.type === "activity") {
+      const projected = { ...entry, usageLine: undefined };
+      // Completed provider activities can be resolved by their stable turn/id.
+      // Overlay-owned and live rows remain inline; their details are not owned
+      // by the provider's turn item API. Usage rows are already compact displays.
+      if (demand.deferActivityDetails && response.backend === "codex"
+        && entry.turn?.id && entry.turn.status !== "in_progress"
+        && entry.id.startsWith("activity-") && entry.status !== "in_progress"
+        && !entry.details.some((detail) => detail.command?.subAgent
+          || /(?:^|[/.])(?:read_thread|send_message_to_thread)$/i.test(detail.command?.rawCommand ?? ""))
+        && Buffer.byteLength(JSON.stringify(entry.details.map((detail) => [detail.markdown,
+          detail.command?.displayCommand, detail.command?.rawCommand, detail.command?.output]))) > 2_048) {
+        return { ...projected,
+          detailsRef: { backend: response.backend, threadId: response.threadId,
+            turnId: entry.turn.id, entryId: entry.id,
+            revision: createHash("sha256").update(JSON.stringify(entry.details)).digest("hex"),
+          },
+          // Keep fileDiff metadata/bodies for the independent Edits panel.
+          // Only the activity's expandable command/Markdown bodies are deferred.
+          details: entry.details.map((detail) => ({
+            ...detail, markdown: undefined,
+            command: detail.command ? { ...detail.command, displayCommand: "", rawCommand: undefined, output: undefined } : undefined,
+          })),
+        };
+      }
+      return projected;
+    }
     if (entry.type !== "message") return entry;
     // The renderer synthesizes a text part when parts are absent. Providers
     // commonly repeat the entire message (including large pasted logs) here.
@@ -146,7 +178,7 @@ export function projectThreadDisplay(
       ...(toolsPage ? { toolsPage, toolTotals: aggregateToolAccounting(tools) } : {}),
       ...((demand.resource === "pricing" || demand.resource === "tools" || demand.resource === "subagents") && offset + limit < totalRows
         ? { nextCursor: `${revision}:${offset + limit}` } : {}),
-      revision,
+      revision: revision ?? createHash("sha256").update(JSON.stringify([demand.resource, pricingSummary])).digest("base64url"),
     },
   };
 }

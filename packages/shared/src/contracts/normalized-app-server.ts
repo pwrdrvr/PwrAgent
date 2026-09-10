@@ -741,6 +741,14 @@ export type AppServerThreadActivityEntry = {
   tone?: "warning";
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
+  /** Owner-prepared collapsed history; resolve before expanding its details. */
+  detailsRef?: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+    entryId: string;
+    revision: string;
+  };
   turn?: AppServerThreadTurnMetadata;
   usageLine?: ThreadUsageLineRecord;
 };
@@ -1016,7 +1024,10 @@ export type RenameThreadResponse = {
 /** Display resources have independent pages. Transcript loads never carry accounting ledgers. */
 export type ThreadDisplayRead = {
   subAgentLens?: SubAgentLens;
-  resource: "transcript" | "accounting" | "pricing" | "tools" | "incident" | "subagents" | "subagent";
+  resource: "transcript" | "activity" | "accounting" | "pricing" | "tools" | "incident" | "subagents" | "subagent";
+  /** Opt in only when the viewer supports resolving collapsed activity details. */
+  deferActivityDetails?: boolean;
+  activity?: { turnId: string; entryId: string };
   firstWarningAt?: number;
   largeOutputThresholdChars?: number;
   monitorId?: string;

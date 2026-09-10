@@ -5070,6 +5070,36 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("loads one activity from wrapped item pages without reading base history", async () => {
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const threadId = "activity-thread";
+    const turnId = "activity-turn";
+    const items = [
+      { id: "command-1", type: "commandExecution", command: "first", aggregatedOutput: "First output", status: "completed", exitCode: 0 },
+      { id: "boundary", type: "agentMessage", text: "Commentary separates command groups", phase: "commentary" },
+      { id: "command-2", type: "commandExecution", command: "second", aggregatedOutput: "Second output", status: "completed", exitCode: 0 },
+    ];
+    const expected = extractThreadReplayFromReadResult({ thread: { id: threadId, turns: [{ id: turnId, items }] } }, { threadId });
+    const first = expected.entries.find((entry) => entry.type === "activity")!;
+    MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:`, {
+      data: items.slice(0, 2).map((item) => ({ turnId, item })), nextCursor: "more", backwardsCursor: null,
+    });
+    MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:more`, {
+      data: items.slice(2).map((item) => ({ turnId, item })), nextCursor: null, backwardsCursor: null,
+    });
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      expect(await client.readThreadActivity({ threadId, turnId, entryId: first.id })).toEqual(first);
+      const methods = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message).method);
+      expect(methods.filter((method) => method === "thread/items/list")).toHaveLength(2);
+      expect(methods).not.toContain("thread/read");
+      expect(methods).not.toContain("thread/turns/list");
+      await expect(client.readThreadActivity({ threadId, turnId, entryId: "missing" })).rejects.toThrow(/no longer available/);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("falls back to the legacy Codex turn item list method", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const threadId = "thread-legacy-item-list";
