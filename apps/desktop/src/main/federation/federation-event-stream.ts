@@ -136,6 +136,11 @@ export class FederationAccountingStream {
   constructor(private readonly maxBytes = 4 * 1024 * 1024, private readonly maxEntries = 32) {}
 
   private key(event: AgentEvent): string | undefined {
+    // An invalidation without a collection does not replace that collection.
+    // Patches omit the collection too, so identify those by their patch field.
+    if (event.notification.method === "thread/subAgents/updated"
+      && !("subAgents" in event.notification.params)
+      && !("accountingPatch" in event)) return undefined;
     return event.notification.method === "thread/pricing/updated" || event.notification.method === "thread/toolAccounting/updated"
       || event.notification.method === "thread/subAgents/updated"
       ? JSON.stringify([event.backend, event.notification.params.threadId, event.notification.method]) : undefined;

@@ -91,8 +91,12 @@ describe("federation accounting stream", () => {
       })),
     } } };
     for (let sequence = 1; sequence < 4; sequence += 1) {
-      const encoded = sender.encode(event, { epoch: "s", sequence });
+      const encoded = sender.encode(event, { epoch: "s", sequence: sequence * 2 });
       expect(receiver.decode(encoded)).toEqual(event);
+      const invalidation: AgentEvent = { backend: "codex", notification: {
+        method: "thread/subAgents/updated", params: { threadId: "thread-1" },
+      } };
+      expect(receiver.decode(sender.encode(invalidation, { epoch: "s", sequence: sequence * 2 + 1 }))).toEqual(invalidation);
       if (sequence > 1) expect(Buffer.byteLength(JSON.stringify(encoded))).toBeLessThan(500);
     }
   });

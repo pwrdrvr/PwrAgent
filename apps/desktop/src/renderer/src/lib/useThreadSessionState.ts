@@ -5215,7 +5215,7 @@ export function useThreadSessionState(params: {
               : current.pendingUserInput,
             response: responseWithRetainedTail,
             staleThinkingRecheckAt:
-              ownUpdateStillSettling || reviewUpdateStillSettling
+              federationTarget?.scope !== "remote" && (ownUpdateStillSettling || reviewUpdateStillSettling)
               ? ownUpdateSettlesAt
               : undefined,
             transientMessage: shouldClearStaleThinking
@@ -5321,13 +5321,11 @@ export function useThreadSessionState(params: {
             ...current,
             backendReportedActive,
             lastTouchedAt: now,
-            // Federation backend events are live-only. If a remote viewer
-            // misses the terminal notifications during a transport gap, its
-            // next navigation snapshot still carries the authoritative idle
-            // status. Re-read after the normal completion grace so that the
-            // transcript snapshot can clear the stale active turn without
-            // racing an idle-before-turn/completed notification pair.
-            staleThinkingRecheckAt: backendReportedActive
+            // Remote recovery is driven by subscription epochs and sequence
+            // gaps. An idle projection can lag an admitted turn or precede its
+            // terminal event; it must not schedule a full transcript read.
+            staleThinkingRecheckAt: (thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote"
+              || backendReportedActive
               ? undefined
               : shouldRecheckStaleThinking
                 ? now + OWN_UPDATE_IDLE_GRACE_MS
@@ -5586,6 +5584,7 @@ export function useThreadSessionState(params: {
     if (!thread || !threadKey) {
       return;
     }
+    if ((thread.federation?.ref.target ?? readRendererFederationTarget())?.scope === "remote") return;
     const recheckAt = sessions[threadKey]?.staleThinkingRecheckAt;
     if (typeof recheckAt !== "number") {
       return;
@@ -6559,6 +6558,7 @@ export function useThreadSessionState(params: {
             backendReportedActive: completedTurnMatchesActive
               ? false
               : current.backendReportedActive,
+            staleThinkingRecheckAt: completedTurnMatchesActive ? undefined : current.staleThinkingRecheckAt,
             completionHydrationRetries: completedTurnMatchesActive
               ? 0
               : current.completionHydrationRetries,
@@ -6729,8 +6729,8 @@ export function useThreadSessionState(params: {
                 ...current,
                 backendReportedActive: false,
                 lastTouchedAt: nextLastTouchedAt,
-                staleThinkingRecheckAt:
-                  nextLastTouchedAt + OWN_UPDATE_IDLE_GRACE_MS,
+                staleThinkingRecheckAt: (event.federationTarget ?? readRendererFederationTarget())?.scope === "remote"
+                  ? undefined : nextLastTouchedAt + OWN_UPDATE_IDLE_GRACE_MS,
               };
             }
 

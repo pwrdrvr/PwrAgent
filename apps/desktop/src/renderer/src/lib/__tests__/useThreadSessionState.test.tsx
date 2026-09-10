@@ -14851,6 +14851,13 @@ describe("useThreadSessionState", () => {
         threadId: "thread-1", turn: { id: "turn-1", status: "in_progress" },
       } },
     }));
+    // Provider startup briefly reports idle after the optimistic turn starts.
+    act(() => emit({ backend: "codex", federationTarget: target, notification: {
+      method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+    } }));
+    rerender({ updatedAt: 2_500, status: "idle" });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)); });
+    expect(readThread).toHaveBeenCalledTimes(1);
     rerender({ updatedAt: 3_000, status: "active" });
     act(() => emit({
       backend: "codex", federationTarget: target,
@@ -14859,6 +14866,10 @@ describe("useThreadSessionState", () => {
         item: { id: "final-1", type: "agentMessage", phase: "final_answer", text: "Finished through the live stream." },
       } },
     }));
+    // Idle precedes the terminal notification and must not leave a timer armed.
+    act(() => emit({ backend: "codex", federationTarget: target, notification: {
+      method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+    } }));
     // Codex can send an empty terminal turn after delivering its final item.
     act(() => emit({
       backend: "codex", federationTarget: target,
@@ -14872,6 +14883,8 @@ describe("useThreadSessionState", () => {
     expect(result.current.entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "message", id: "final-1", text: "Finished through the live stream." }),
     ]));
+    expect(readThread).toHaveBeenCalledTimes(1);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)); });
     expect(readThread).toHaveBeenCalledTimes(1);
     // Pricing/metadata changes after completion are not transcript invalidations.
     rerender({ updatedAt: 5_000, status: "idle" });

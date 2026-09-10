@@ -175,6 +175,9 @@ window can keep the aggregate subscription alive while this window misses events
 On reconnect, authentication refreshes connection capabilities and the gateway
 broadcasts a fresh peer directory and replays retained viewer subscriptions.
 Stream negotiation lives in those subscriptions, not cached discovery metadata.
+Remote idle status does not arm a delayed transcript read: it may precede the
+terminal event or briefly lag turn admission. Epoch and sequence recovery own
+remote catch-up.
 The client keeps post-authentication frames queued until its runtime installs
 the authenticated connection and restores subscription state, so an immediate
 gateway replay cannot be discarded as coming from an unknown connection.
