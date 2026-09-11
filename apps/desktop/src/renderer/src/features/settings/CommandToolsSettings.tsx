@@ -378,6 +378,12 @@ export function GhToolSection(props: {
   );
   const selected = discovery.candidates.find((candidate) => candidate.selected);
   const resolvedCommand = selected?.command ?? discovery.selectedCommand;
+  const signInCommand = isGitLab
+    ? `${desktopApi?.platform === "win32" ? "& " : ""}${quoteTerminalArgument(
+      resolvedCommand ?? "glab",
+      desktopApi?.platform,
+    )} auth login --hostname ${quoteTerminalArgument(host, desktopApi?.platform)}`
+    : undefined;
   const resolvedVersion = selected?.version;
   const sourceLabel = gh.path.source === "default" ? "auto" : gh.path.source;
   const saveGhPath = async (path: string): Promise<void> => {
@@ -502,6 +508,31 @@ export function GhToolSection(props: {
             </div>
           }
         />
+        {signInCommand && status?.installed && !status.loggedIn ? (
+          <SettingsField
+            label="Sign in to GitLab"
+            sub={`Run in ${desktopApi?.platform === "win32" ? "PowerShell" : "Terminal"}, follow the sign-in prompts, then click Re-check.`}
+            control={
+              <div className="settings-gh-status">
+                <SettingsCopyValue
+                  value={signInCommand}
+                  desktopApi={desktopApi}
+                  label="GitLab sign-in command"
+                />
+                <div className="settings-inline-actions">
+                  <a
+                    className="button button--secondary"
+                    href="https://docs.gitlab.com/cli/authentication/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open sign-in guide
+                  </a>
+                </div>
+              </div>
+            }
+          />
+        ) : null}
         {isGitLab && status && !status.installed ? (
           <SettingsField
             label="Install GitLab CLI"
@@ -714,6 +745,14 @@ function GhCandidateRow(props: {
       onSelect={usable ? () => props.onSelect(candidate.command) : undefined}
     />
   );
+}
+
+// Quote even simple values: custom executable paths and hosts are user input.
+// PowerShell uses doubled apostrophes; POSIX shells close and reopen the string.
+function quoteTerminalArgument(value: string, platform?: string): string {
+  return "'" + (platform === "win32"
+    ? value.replaceAll("'", "''")
+    : value.replaceAll("'", "'\"'\"'")) + "'";
 }
 
 function describeGitStatusPill(
