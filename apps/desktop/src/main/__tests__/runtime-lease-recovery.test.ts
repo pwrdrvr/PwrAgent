@@ -10,7 +10,7 @@ import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import type { DesktopMessagingConfig } from "../messaging/messaging-config";
+import type { DesktopMessagingConfigLoadOptions, DesktopMessagingConfig } from "../messaging/messaging-config";
 import type { DesktopMessagingRuntime } from "../messaging/messaging-runtime";
 
 let db: StateDb;
@@ -35,6 +35,7 @@ const config: DesktopMessagingConfig = {
 };
 const messagingRuntime = {
   isEnabled: () => messagingEnabled,
+  failClosedFullAccessPolicy: vi.fn(),
   applyConfig: vi.fn(async () => { messagingEnabled = true; }),
   stop: vi.fn(async () => { messagingEnabled = false; }),
 } as unknown as DesktopMessagingRuntime;
@@ -73,7 +74,7 @@ afterEach(() => {
 
 async function startBlocked() {
   await federation.applyMode(federationRuntime, "gateway");
-  await messaging.applyResolvedConfig(messagingRuntime, config);
+  await messaging.applyLatestConfig(messagingRuntime, async () => config);
   expect(federation.snapshot().leaseHeld).toBe(false);
   expect(messaging.snapshot().leaseHeld).toBe(false);
 }
@@ -155,14 +156,15 @@ describe("automatic runtime lease recovery", () => {
   it("does not rearm recovery when shutdown races a pending stop", async () => {
     let finishStop!: () => void;
     vi.mocked(messagingRuntime.stop).mockImplementationOnce(() => new Promise<void>((resolve) => { finishStop = resolve; }));
-    const start = messaging.applyResolvedConfig(messagingRuntime, config);
+    const start = messaging.applyLatestConfig(messagingRuntime, async () => config);
+    await vi.advanceTimersByTimeAsync(0);
     messaging.stopRecovery();
     finishStop();
     await start;
     owner.release("messaging");
     await vi.advanceTimersByTimeAsync(120_000);
     expect(messagingRuntime.applyConfig).not.toHaveBeenCalled();
-    await messaging.applyResolvedConfig(messagingRuntime, config);
+    await messaging.applyLatestConfig(messagingRuntime, async () => config);
     expect(messagingRuntime.applyConfig).not.toHaveBeenCalled();
   });
 
@@ -183,6 +185,70 @@ describe("automatic runtime lease recovery", () => {
     expect(messagingRuntime.applyConfig).not.toHaveBeenCalled();
     winner.release("federation");
     winner.release("messaging");
+  });
+
+  it.each(["replaced", "cleared"])("reloads a secret %s by another instance before takeover", async (change) => {
+    let currentConfig = config;
+    const loadConfig = vi.fn(async () => currentConfig);
+    await messaging.start(messagingRuntime, loadConfig);
+    currentConfig = {
+      ...config,
+      telegram: change === "cleared" ? undefined : { ...config.telegram!, botToken: "replacement-token" },
+    };
+    owner.release("messaging");
+    await vi.advanceTimersByTimeAsync(RUNTIME_LEASE_RETRY_MS);
+    expect(loadConfig).toHaveBeenCalledTimes(2);
+    if (change === "cleared") {
+      expect(messagingRuntime.applyConfig).not.toHaveBeenCalled();
+      expect(messaging.snapshot().leaseHeld).toBe(false);
+    } else {
+      expect(messagingRuntime.applyConfig).toHaveBeenCalledExactlyOnceWith(currentConfig, { allowStart: true });
+    }
+  });
+
+  it("preserves the session enable override when reloading for takeover", async () => {
+    let token = "old-token";
+    const loadConfig = vi.fn(async (options?: DesktopMessagingConfigLoadOptions) => ({
+      ...config,
+      enabled: options?.messagingEnabledOverride ?? false,
+      telegram: { ...config.telegram!, botToken: token },
+    }));
+    await messaging.applyLatestConfig(messagingRuntime, loadConfig, { messagingEnabledOverride: true });
+    token = "new-token";
+    owner.release("messaging");
+    await vi.advanceTimersByTimeAsync(RUNTIME_LEASE_RETRY_MS);
+    expect(loadConfig).toHaveBeenLastCalledWith({ messagingEnabledOverride: true, logStartupEligibility: false });
+    expect(messagingRuntime.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true, telegram: expect.objectContaining({ botToken: "new-token" }) }),
+      { allowStart: true },
+    );
+  });
+
+  it.each(["disable", "shutdown", "new-config"])("discards an in-flight recovery read superseded by %s", async (action) => {
+    let finishRead!: (value: DesktopMessagingConfig) => void;
+    const loadConfig = vi.fn(async () => config);
+    await messaging.start(messagingRuntime, loadConfig);
+    loadConfig.mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+    owner.release("messaging");
+    await vi.advanceTimersByTimeAsync(RUNTIME_LEASE_RETRY_MS);
+    if (action === "disable") await messaging.disableForSession(messagingRuntime);
+    else if (action === "shutdown") messaging.stopRecovery();
+    else await messaging.applyLatestConfig(messagingRuntime, async () => ({ ...config, enabled: false }));
+    finishRead(config);
+    await vi.advanceTimersByTimeAsync(RUNTIME_LEASE_RETRY_MS);
+    expect(messagingRuntime.applyConfig).not.toHaveBeenCalled();
+    expect(messaging.snapshot().leaseHeld).toBe(false);
+  });
+
+  it("fails closed when the recovery configuration cannot be loaded", async () => {
+    const loadConfig = vi.fn(async () => config);
+    await messaging.start(messagingRuntime, loadConfig);
+    loadConfig.mockRejectedValueOnce(new Error("shared secrets unavailable"));
+    owner.release("messaging");
+    await vi.advanceTimersByTimeAsync(RUNTIME_LEASE_RETRY_MS);
+    expect(messagingRuntime.failClosedFullAccessPolicy).toHaveBeenCalled();
+    expect(messagingRuntime.applyConfig).not.toHaveBeenCalled();
+    expect(messaging.snapshot().leaseHeld).toBe(false);
   });
 
   it("a newer disabled config supersedes the blocked messaging config", async () => {

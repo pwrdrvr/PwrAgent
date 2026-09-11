@@ -15,6 +15,10 @@ export class RuntimeLeaseRetry {
     return ++this.generation;
   }
 
+  isCurrent(generation: number): boolean {
+    return generation === this.generation;
+  }
+
   schedule(
     manager: RuntimeLeaseManager,
     kind: RuntimeLeaseKind,

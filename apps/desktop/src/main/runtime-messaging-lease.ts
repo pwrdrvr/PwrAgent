@@ -100,10 +100,10 @@ export class RuntimeMessagingLeaseCoordinator {
       };
     }
 
-    const config = await this.loadConfigFailClosed(runtime, loadConfig, {
+    return this.applyLatestConfig(runtime, loadConfig, {
       logStartupEligibility: true,
+      allowStart: true,
     });
-    return this.applyResolvedConfig(runtime, config, { allowStart: true });
   }
 
   async applyLatestConfig(
@@ -111,13 +111,23 @@ export class RuntimeMessagingLeaseCoordinator {
     loadConfig: DesktopMessagingConfigLoader,
     options: DesktopMessagingConfigLoadOptions & { allowStart?: boolean } = {},
   ): Promise<RuntimeMessagingLeaseApplyResult> {
-    this.retry.cancel();
+    const generation = this.retry.cancel();
     const config = await this.loadConfigFailClosed(runtime, loadConfig, {
       logStartupEligibility: options.logStartupEligibility,
       messagingEnabledOverride: options.messagingEnabledOverride,
     });
+    // A stop or newer configuration can supersede an asynchronous secret read.
+    if (!this.retry.isCurrent(generation)) {
+      return { enabled: false, disabledReasonKind: "runtime_stopped" };
+    }
     return this.applyResolvedConfig(runtime, config, {
       allowStart: options.allowStart ?? true,
+      // Shared secrets can change without a TOML notification in this process.
+      // Retain the loader and session override, never the resolved credentials.
+      recover: () => this.applyLatestConfig(runtime, loadConfig, {
+        ...options,
+        logStartupEligibility: false,
+      }),
     });
   }
 
@@ -137,7 +147,10 @@ export class RuntimeMessagingLeaseCoordinator {
   async applyResolvedConfig(
     runtime: DesktopMessagingRuntime,
     config: DesktopMessagingConfig,
-    options: { allowStart?: boolean } = {},
+    options: {
+      allowStart?: boolean;
+      recover?: () => Promise<RuntimeMessagingLeaseApplyResult>;
+    } = {},
   ): Promise<RuntimeMessagingLeaseApplyResult> {
     const generation = this.retry.cancel();
     if (this.shuttingDown) return { enabled: false, disabledReasonKind: "runtime_stopped" };
@@ -186,12 +199,9 @@ export class RuntimeMessagingLeaseCoordinator {
     const acquire = this.leaseManager.acquire("messaging");
     if (!acquire.acquired) {
       await runtime.stop();
-      this.retry.schedule(
-        this.leaseManager,
-        "messaging",
-        generation,
-        () => this.applyResolvedConfig(runtime, config, options),
-      );
+      if (options.recover) {
+        this.retry.schedule(this.leaseManager, "messaging", generation, options.recover);
+      }
       return {
         enabled: false,
         disabledReasonKind: "lease_held",
