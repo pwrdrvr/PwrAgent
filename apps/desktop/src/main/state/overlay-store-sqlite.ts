@@ -632,11 +632,37 @@ function stripFederationStamp(
 const NAVIGATION_UNREAD_BASELINE_KEY = "navigation-unread-baseline-v2";
 type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
 
+/** The identities navigation consumes, independent of worker status or history.
+ * Preserve the legacy per-overlay malformed-entry boundary: keep the valid
+ * prefix, then stop that parent's traversal if an entry cannot be read.
+ */
+function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | "threadId" | "subAgents">): Set<string> {
+  const keys = new Set<string>();
+  try {
+    for (const subAgent of overlay.subAgents ?? []) {
+      const threadId = subAgent.monitorThreadId?.trim();
+      const backend = subAgent.backend ?? overlay.backend;
+      if (!threadId || (backend === overlay.backend && threadId === overlay.threadId)) continue;
+      keys.add(buildThreadIdentityKey(backend, threadId));
+    }
+  } catch {
+    // A malformed unrelated overlay must not block navigation.
+  }
+  return keys;
+}
+
+function managedSubAgentSignature(keys: Set<string>): string {
+  return JSON.stringify([...keys].sort());
+}
+
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private managedSubAgentCache?: {
     dataVersion: number;
     threadChanges: number;
     threadKeys: Set<string>;
+    parentSignatures: Map<string, string>;
+    referencedStorageKeys: Set<string>;
+    groupedStorageKeys: Set<string>;
   };
   private remotePinNavigationCache?: { version: string; expires: number; rows: NavigationThreadSummary[] };
   private backendReadCache?: {
@@ -7026,7 +7052,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
     const rows = this.stateDb.raw
       .prepare(
-        `SELECT CASE WHEN json_valid(payload) THEN json_array(
+        `SELECT thread_id, CASE WHEN json_valid(payload) THEN json_array(
            json_extract(payload, '$.backend'), json_extract(payload, '$.threadId'),
            json(CASE WHEN json_type(payload, '$.subAgents') = 'array' THEN
              (SELECT json_group_array(CASE WHEN type = 'object' THEN json_object(
@@ -7037,8 +7063,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
          ) END AS projection FROM threads
          WHERE payload LIKE '%"monitorThreadId"%'`,
       )
-      .all() as Array<{ projection: string | null }>;
+      .all() as Array<{ thread_id: string; projection: string | null }>;
     const threadKeys = new Set<string>();
+    const parentSignatures = new Map<string, string>();
     for (const row of rows) {
       try {
         if (!row.projection) continue;
@@ -7053,17 +7080,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           string,
           ThreadOverlayState["subAgents"],
         ];
-        for (const subAgent of subAgents ?? []) {
-          const threadId = subAgent.monitorThreadId?.trim();
-          const backend = subAgent.backend ?? parentBackend;
-          if (
-            !threadId
-            || (backend === parentBackend && threadId === parentThreadId)
-          ) {
-            continue;
-          }
-          threadKeys.add(buildThreadIdentityKey(backend, threadId));
-        }
+        const childKeys = managedSubAgentChildKeys({ backend: parentBackend, threadId: parentThreadId, subAgents });
+        if (childKeys.size > 0) parentSignatures.set(row.thread_id, managedSubAgentSignature(childKeys));
+        for (const childKey of childKeys) threadKeys.add(childKey);
       } catch {
         // A malformed unrelated overlay must not block navigation.
       }
@@ -7081,6 +7100,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       ]),
     );
     const storageKeys = Array.from(canonicalKeyByStorageKey.keys());
+    const groupedStorageKeys = new Set<string>();
     if (storageKeys.length > 0) {
       const candidateRows = this.stateDb.raw
         .prepare(
@@ -7095,6 +7115,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }>;
       for (const candidate of candidateRows) {
         if (candidate.grouping_mode === "subthread") {
+          groupedStorageKeys.add(candidate.thread_id);
           const canonicalKey = canonicalKeyByStorageKey.get(
             candidate.thread_id,
           );
@@ -7105,7 +7126,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
     }
     if (generation) {
-      this.managedSubAgentCache = { ...generation, threadKeys };
+      this.managedSubAgentCache = {
+        ...generation, threadKeys, parentSignatures,
+        referencedStorageKeys: new Set(storageKeys), groupedStorageKeys,
+      };
     }
     return threadKeys;
   }
@@ -7139,6 +7163,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return results;
   }
 
+  /** Only advance the local stamp for a write whose navigation dependencies
+   * are unchanged. Unknown writes still invalidate through the existing thread
+   * counter; external commits still invalidate through data_version. Neither
+   * stamp may be adopted from a scan made inside a transaction.
+   */
+  private preservesManagedSubAgentRelationships(storageKey: string, state: ThreadOverlayState): boolean {
+    const cache = this.managedSubAgentCache;
+    if (!cache) return false;
+    // Invalid runtime values can serialize differently (e.g. NaN becomes null).
+    // Leave malformed writes to the durable reader rather than certify them
+    // using the pre-serialization object.
+    if (typeof state.backend !== "string" || typeof state.threadId !== "string") return false;
+    if (state.subAgents != null) {
+      if (!Array.isArray(state.subAgents)) return false;
+      for (const child of state.subAgents) {
+        if (!child || typeof child !== "object" || Array.isArray(child)
+          || (child.backend != null && typeof child.backend !== "string")
+          || (child.monitorThreadId != null && typeof child.monitorThreadId !== "string")) return false;
+      }
+    }
+    return (cache.parentSignatures.get(storageKey) ?? "[]") === managedSubAgentSignature(managedSubAgentChildKeys(state))
+      && (!cache.referencedStorageKeys.has(storageKey)
+        || cache.groupedStorageKeys.has(storageKey) === (state.handoffOrigin?.groupingMode === "subthread"));
+  }
+
   private putThread(threadKey: string, state: ThreadOverlayState): void {
     // Execution-mode queue fields are registry-memory state. PR auto-dispatch
     // pending state is durable too, but its transactional claim table is the
@@ -7149,19 +7198,31 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       prAutoDispatchPending: _prAutoDispatchPending,
       ...persistable
     } = state;
+    const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
+    const cache = this.managedSubAgentCache;
+    const previousThreadChanges = cache ? sqliteThreadChangeVersion(this.stateDb.raw) : undefined;
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO threads(thread_id, directory_path, last_seen_at, dismissed_at, snoozed_until, payload)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        encodeThreadIdentityKeyForStorage(threadKey),
+        storageKey,
         (persistable as Record<string, unknown>).directoryPath as string ?? null,
         persistable.lastSeenAt ?? null,
         persistable.dismissedAt ?? null,
         persistable.snoozedUntil ?? null,
         JSON.stringify(persistable),
       );
+    // The write already has these fields in memory. A status/title/usage write
+    // must not discard the complete relationship set and cause another scan.
+    // Never mask an earlier untracked write, a failed write, or extra writes
+    // made by another local trigger during this statement.
+    if (cache && cache.threadChanges === previousThreadChanges
+      && this.preservesManagedSubAgentRelationships(storageKey, persistable)) {
+      const threadChanges = sqliteThreadChangeVersion(this.stateDb.raw);
+      if (threadChanges === previousThreadChanges + 1) cache.threadChanges = threadChanges;
+    }
   }
 
   private getBackend(

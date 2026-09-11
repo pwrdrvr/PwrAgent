@@ -19,6 +19,12 @@ function seed(threadId: string, fields: Record<string, unknown>, db = stateDb.ra
     .run(`codex:${threadId}`, JSON.stringify({ backend: "codex", threadId, ...fields }));
 }
 
+function write(threadId: string, fields: Record<string, unknown>, backend: "codex" | "acp:grok" = "codex"): void {
+  store["putThread"](buildThreadIdentityKey(backend, threadId), {
+    backend, threadId, executionMode: "default", extraLinkedDirectories: [], ...fields,
+  });
+}
+
 function keys(target = store): string[] {
   return [...target["listManagedSubAgentThreadKeys"]()].sort();
 }
@@ -104,6 +110,143 @@ describe("managed subagent navigation reads", () => {
       expect(keys()).toEqual(["codex:child"]);
     }
     expect(prepare.mock.calls.filter(([sql]) => sql.includes("AS projection FROM threads"))).toHaveLength(0);
+  });
+
+  it("keeps the same in-memory set across ordinary overlay and worker metadata writes", async () => {
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }, { monitorThreadId: "grouped" }] });
+    seed("grouped", { handoffOrigin: { groupingMode: "subthread" } });
+    const original = store["listManagedSubAgentThreadKeys"]();
+    expect([...original]).toEqual(["codex:child"]);
+    const prepare = vi.spyOn(stateDb.raw, "prepare");
+    const { writes } = await measureSqliteWrites(async () => {
+      for (let i = 0; i < 20; i++) {
+        write("parent", { immutableUsageActivities: [{ text: "history".repeat(100) }], subAgents: [
+          { monitorThreadId: "child", status: String(i), title: String(i) },
+          { monitorThreadId: "grouped", task: String(i) },
+        ] });
+        write("ordinary", { title: String(i) });
+        write("grouped", { title: String(i), handoffOrigin: { groupingMode: "subthread" } });
+        expect(store["listManagedSubAgentThreadKeys"]()).toBe(original);
+      }
+    });
+    expect(prepare.mock.calls.some(([sql]) => /SELECT[\s\S]*FROM threads/.test(sql))).toBe(false);
+    expectSqliteWriteBudget({
+      scenario: "managed-subagent-metadata-writes",
+      note: "20 parent metadata, 20 ordinary overlay, 20 grouped-child metadata updates and navigation reads; no relationship reads or additional writes",
+      writes,
+    });
+  });
+
+  it("ignores identity-neutral ordering, duplicates, whitespace, explicit backend fallback and self references", () => {
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }, { monitorThreadId: "other" }] });
+    const original = store["listManagedSubAgentThreadKeys"]();
+    write("parent", { subAgents: [
+      { backend: "codex", monitorThreadId: "other" },
+      { monitorThreadId: "\u00a0child\u2029" },
+      { monitorThreadId: "child" }, { monitorThreadId: "parent" },
+    ] });
+    expect(store["listManagedSubAgentThreadKeys"]()).toBe(original);
+  });
+
+  it("invalidates for new, removed or redirected parent references and relevant child grouping changes", () => {
+    expect(keys()).toEqual([]);
+    write("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    expect(keys()).toEqual(["codex:child"]);
+    write("parent", { subAgents: [{ backend: "acp:grok", monitorThreadId: "child" }] });
+    expect(keys()).toEqual(["acp:grok:child"]);
+    write("child", { handoffOrigin: { groupingMode: "subthread" } }, "acp:grok");
+    expect(keys()).toEqual([]);
+    write("child", {}, "acp:grok");
+    expect(keys()).toEqual(["acp:grok:child"]);
+    write("parent", { subAgents: [{ monitorThreadId: "grouped" }] });
+    expect(keys()).toEqual(["codex:grouped"]);
+    write("grouped", { handoffOrigin: { groupingMode: "subthread" } });
+    expect(keys()).toEqual([]);
+    write("grouped", { handoffOrigin: { groupingMode: "none" } });
+    expect(keys()).toEqual(["codex:grouped"]);
+    write("second-parent", { subAgents: [{ monitorThreadId: "grouped" }] });
+    expect(keys()).toEqual(["codex:grouped"]);
+    write("parent", {});
+    expect(keys()).toEqual(["codex:grouped"]);
+    write("second-parent", {});
+    expect(keys()).toEqual([]);
+  });
+
+  it("invalidates when parent identity changes backend fallback or self-reference filtering", () => {
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    expect(keys()).toEqual(["codex:child"]);
+    write("parent", { threadId: "child", subAgents: [{ monitorThreadId: "child" }] });
+    expect(keys()).toEqual([]);
+    write("parent", { backend: "acp:grok", subAgents: [{ monitorThreadId: "child" }] });
+    expect(keys()).toEqual(["acp:grok:child"]);
+  });
+
+  it("does not hide earlier raw or external changes behind a later known metadata write", () => {
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    expect(keys()).toEqual(["codex:child"]);
+    seed("unknown-parent", { subAgents: [{ monitorThreadId: "raw-child" }] });
+    write("parent", { subAgents: [{ monitorThreadId: "child", status: "success" }] });
+    expect(keys()).toEqual(["codex:child", "codex:raw-child"]);
+    const other = new Database(dbPath);
+    try {
+      seed("unknown-parent", { subAgents: [{ monitorThreadId: "external-child" }] }, other);
+      write("parent", { subAgents: [{ monitorThreadId: "child", status: "failure" }] });
+      expect(keys()).toEqual(["codex:child", "codex:external-child"]);
+    } finally {
+      other.close();
+    }
+  });
+
+  it("retains metadata-only transaction writes but never certifies changed or rolled-back relationships", () => {
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    const original = store["listManagedSubAgentThreadKeys"]();
+    stateDb.raw.exec("BEGIN");
+    write("parent", { subAgents: [{ monitorThreadId: "child", status: "success" }] });
+    stateDb.raw.exec("ROLLBACK");
+    expect(store["listManagedSubAgentThreadKeys"]()).toBe(original);
+    stateDb.raw.exec("BEGIN");
+    write("parent", { subAgents: [{ monitorThreadId: "new-child" }] });
+    write("ordinary", { title: "cannot hide that relationship change" });
+    expect(keys()).toEqual(["codex:new-child"]);
+    stateDb.raw.exec("SAVEPOINT nested");
+    write("parent", { subAgents: [{ monitorThreadId: "nested-child" }] });
+    expect(keys()).toEqual(["codex:nested-child"]);
+    stateDb.raw.exec("ROLLBACK TO nested");
+    expect(keys()).toEqual(["codex:new-child"]);
+    stateDb.raw.exec("ROLLBACK");
+    expect(keys()).toEqual(["codex:child"]);
+    stateDb.raw.transaction(() => {
+      write("parent", { subAgents: [{ monitorThreadId: "committed" }] });
+      write("ordinary", {});
+    })();
+    expect(keys()).toEqual(["codex:committed"]);
+  });
+
+  it("does not advance the cache after a failed write or extra trigger writes", () => {
+    seed("parent", { subAgents: [{ monitorThreadId: "child" }] });
+    const original = store["listManagedSubAgentThreadKeys"]();
+    stateDb.raw.exec(`CREATE TEMP TRIGGER reject_write BEFORE INSERT ON threads
+      BEGIN SELECT RAISE(ABORT, 'fixture failure'); END`);
+    expect(() => write("parent", { subAgents: [{ monitorThreadId: "child" }] })).toThrow("fixture failure");
+    stateDb.raw.exec("DROP TRIGGER reject_write");
+    expect(keys()).toEqual(["codex:child"]);
+    stateDb.raw.exec(`CREATE TEMP TRIGGER extra_write AFTER INSERT ON threads WHEN NEW.thread_id = 'codex:ordinary'
+      BEGIN INSERT OR REPLACE INTO threads(thread_id, payload) VALUES ('codex:extra',
+        '{"backend":"codex","threadId":"extra","subAgents":[{"monitorThreadId":"extra-child"}]}'); END`);
+    write("ordinary", {});
+    expect(keys()).toEqual(["codex:child", "codex:extra-child"]);
+    expect(store["listManagedSubAgentThreadKeys"]()).not.toBe(original);
+  });
+
+  it("does not retain an empty set when malformed in-memory fields serialize into valid references", () => {
+    expect(keys()).toEqual([]);
+    write("parent", { subAgents: [{ monitorThreadId: Number.NaN }, { monitorThreadId: "valid" }] });
+    // JSON serializes NaN to null: the durable traversal skips it, then sees valid.
+    expect(keys()).toEqual(["codex:valid"]);
+    write("parent", { subAgents: [null, { monitorThreadId: "after-null" }] });
+    expect(keys()).toEqual([]);
+    write("parent", { subAgents: [{ monitorThreadId: "restored" }] });
+    expect(keys()).toEqual(["codex:restored"]);
   });
 
   it("sees shared-profile parent and child changes from another connection", () => {

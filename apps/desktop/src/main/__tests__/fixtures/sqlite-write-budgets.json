@@ -195,6 +195,13 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "managed-subagent-metadata-writes": {
+    "commits": 60,
+    "note": "20 parent metadata, 20 ordinary overlay, 20 grouped-child metadata updates and navigation reads; no relationship reads or additional writes",
+    "observedWalBytes": 988800,
+    "rowsChanged": 60,
+    "statements": 60
+  },
   "managed-subagent-navigation-reads": {
     "commits": 0,
     "note": "10 cold and 10 warm managed-child/backend reads, with large parent and child overlays",
