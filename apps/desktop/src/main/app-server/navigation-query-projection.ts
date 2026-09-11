@@ -120,6 +120,24 @@ function isOrdinaryThread(thread: NavigationThreadSummary): boolean {
   return thread.codexNativeSubAgent === undefined;
 }
 
+/** Resolve reachability against the complete inventory, never a loaded page.
+ * A local child can outlive a viewer mount of its remote parent. Keep the
+ * relationship on its row, but give directory/selection queries a root to
+ * render until that parent is mounted again.
+ */
+function availableParentIdentity(
+  thread: NavigationThreadSummary,
+  candidatesByOwner: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
+  coverage: NavigationQueryCoverage | undefined,
+): NavigationIdentity | undefined {
+  const parent = parentIdentity(thread, candidatesByOwner);
+  if (!parent) return undefined;
+  // Discovery still in progress cannot establish that a parent is absent.
+  if (coverage && coverage.state !== "complete") return parent;
+  const candidates = candidatesByOwner.get(JSON.stringify([parent.ownerInstanceId ?? null, parent.threadId])) ?? [];
+  return candidates.some((candidate) => candidate.source === parent.backend) ? parent : undefined;
+}
+
 function isActive(thread: NavigationThreadSummary): boolean {
   return thread.threadStatus === "active";
 }
@@ -326,12 +344,13 @@ function projectDirectoryGitStatus(
 function buildDirectoryRows(params: {
   snapshot: NavigationQueryIndex;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
+  parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
 }): NavigationDirectoryRow[] {
   return params.snapshot.directories.map((directory) => {
     const memberThreads = directory.threadKeys
       .map((key) => params.threadsByLegacyKey.get(key))
       .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-    const rootThreads = memberThreads.filter((thread) => !thread.parentThreadId);
+    const rootThreads = memberThreads.filter((thread) => !availableParentIdentity(thread, params.parentCandidates, params.snapshot.coverage));
     const pinnedRootCount = rootThreads.filter((thread) => thread.pinnedRank).length;
     const gitStatus = projectDirectoryGitStatus(directory);
     return {
@@ -571,7 +590,7 @@ function selectQueryThreads(params: {
       .map((key) => params.threadsByLegacyKey.get(key))
       .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
       .filter((thread) => {
-        const parent = parentIdentity(thread, params.parentCandidates);
+        const parent = availableParentIdentity(thread, params.parentCandidates, params.index.coverage);
         if (parent) return disclosedParents.has(buildThreadIdentityKey(parent.backend, parent.threadId));
         return query.roots === "pinned" ? thread.pinnedRank !== undefined
           : query.roots === "unpinned" ? thread.pinnedRank === undefined : true;
@@ -726,7 +745,7 @@ export function projectNavigationQuery(params: {
       }
     }
     const filter = query.filter?.trim().toLowerCase();
-    const directories = buildDirectoryRows({ snapshot: { ...params.index, directories: sourceDirectories }, threadsByLegacyKey: eligibleByLegacyKey })
+    const directories = buildDirectoryRows({ snapshot: { ...params.index, directories: sourceDirectories }, threadsByLegacyKey: eligibleByLegacyKey, parentCandidates })
       .filter((directory) => !filter || [directory.key, directory.label, directory.path,
         query.scratchpadFirst && directory.kind === "workspace" ? "Workspaces Scratchpad" : undefined]
         .some((value) => value?.toLowerCase().includes(filter)))
@@ -737,6 +756,8 @@ export function projectNavigationQuery(params: {
   }
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread, parentCandidates);
+    const placementParent = query.kind === "directory" || (query.kind === "exact" && query.includeAncestry)
+      ? availableParentIdentity(thread, parentCandidates, params.index.coverage) : parent;
     return {
       row: projectNavigationRow({
         childCount: childCountByParent.get(threadKey(thread)) ?? 0,
@@ -750,8 +771,8 @@ export function projectNavigationQuery(params: {
       ...(params.attentionOrder?.members.has(navigationAttentionIdentity(thread))
         ? { attentionRank: params.attentionOrder.members.get(navigationAttentionIdentity(thread))!.rank }
         : {}),
-      placement: parent
-        ? { kind: "child", parent }
+      placement: placementParent
+        ? { kind: "child", parent: placementParent }
         : { kind: "root" },
     };
   });
@@ -781,11 +802,11 @@ export function projectNavigationQuery(params: {
       // worktree path is not necessarily the directory key shown by the viewer.
       selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index,
         directories: params.index.directories.filter((directory) => directory.threadKeys.some((key) =>
-          selectedThreads[0] === threadsByLegacyKey.get(key))) }, threadsByLegacyKey })[0],
+          selectedThreads[0] === threadsByLegacyKey.get(key))) }, threadsByLegacyKey, parentCandidates })[0],
     } : {}),
     ...(query.kind === "messaging-threads" ? { collectionSize: entries.length,
       ...(query.directoryKey ? { selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index, directories: params.index.directories.filter((directory) =>
-          directory.key === query.directoryKey || directory.path === query.directoryKey) }, threadsByLegacyKey })
+          directory.key === query.directoryKey || directory.path === query.directoryKey) }, threadsByLegacyKey, parentCandidates })
         .find((directory) => directory.key === query.directoryKey || directory.path === query.directoryKey) } : {}) } : {}),
     ...(query.kind === "star-map" ? {
       facets: countNavigationStarMapFacets(
@@ -796,7 +817,7 @@ export function projectNavigationQuery(params: {
     } : {}),
     directories: includeDirectories
       ? (query.kind === "star-map-geometry" ? buildProjectGeometry(params.index)
-        : buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey }))
+        : buildDirectoryRows({ snapshot: params.index, threadsByLegacyKey, parentCandidates }))
           .filter((directory) => query.kind !== "directory-index" || ((!query.keys && !query.paths)
             || query.keys?.includes(directory.key) || (directory.path !== undefined && query.paths?.includes(directory.path))))
           .filter((directory) => query.kind !== "directory-index"
