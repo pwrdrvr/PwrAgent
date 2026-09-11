@@ -9,6 +9,9 @@ import {
   PWRSNAP_SESSION_REVOKED_ERROR,
 } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
+import * as appState from "../state/app-state";
+import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-broker-discovery";
+import { PwrGitConnectionService } from "../mcp-connections/pwrgit-connection-service";
 
 function createSettings(initial?: string) {
   let credential = initial;
@@ -73,6 +76,34 @@ afterEach(async () => {
 });
 
 describe("McpConnectionGatewayService", () => {
+  it("does not claim or publish a profile broker during bootstrap, including PwrGit status reads", async () => {
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("bootstrap");
+    const acquire = vi.fn();
+    const publish = vi.spyOn(McpConnectionBrokerDiscovery.prototype, "publish");
+    const service = new McpConnectionGatewayService({
+      settings: createSettings(),
+      leaseManager: { id: "bootstrap-test", acquire, release: vi.fn(), snapshot: vi.fn() },
+    });
+    services.push(service);
+    const git = new PwrGitConnectionService({
+      gateway: service,
+      fetchFn: async () => new Response(null, { status: 404 }),
+      resolveInstallPaths: () => [],
+    });
+    try {
+      await expect(service.start()).rejects.toThrow("Complete profile setup");
+      await expect(service.listConnections()).rejects.toThrow("Complete profile setup");
+      await expect(service.readStatus()).rejects.toThrow("Complete profile setup");
+      await expect(git.readStatus()).rejects.toThrow("Complete profile setup");
+      await expect(service.registerBridge("pwrgit")).rejects.toThrow("Complete profile setup");
+      expect(acquire).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+    } finally {
+      mode.mockRestore();
+      publish.mockRestore();
+    }
+  });
+
   it("distinguishes an absent install from a running MCP endpoint", async () => {
     const absent = new McpConnectionGatewayService({
       fetchFn: vi.fn(async () => {

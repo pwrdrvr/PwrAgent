@@ -32,6 +32,7 @@ import {
   type RuntimeLeaseHolder,
 } from "../runtime-lease-manager";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { getAppStateMode } from "../state/app-state";
 import {
   McpConnectionRegistry,
 } from "./mcp-connection-registry";
@@ -725,6 +726,12 @@ export class McpConnectionGatewayService {
   }
 
   private claimProfileOwnership(): ProfileOwnership {
+    // Status reads also start the broker on demand. During onboarding there
+    // is no active profile: publishing discovery would create profiles/default
+    // even when the operator is provisioning only named profiles.
+    if (getAppStateMode() === "bootstrap") {
+      throw new Error("Complete profile setup before using managed MCP connections.");
+    }
     if (!this.leaseManager || this.leaseHeld) return { owned: true };
     if (this.nonOwnerHolder) {
       return { owned: false, holder: this.nonOwnerHolder };
