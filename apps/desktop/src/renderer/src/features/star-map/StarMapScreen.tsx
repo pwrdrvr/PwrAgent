@@ -119,6 +119,10 @@ import {
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
+import {
+  findStarMapIntakeRevealTarget,
+  type StarMapIntakeReveal,
+} from "./star-map-intake-reveal";
 import { StarMapRenameDialog } from "./StarMapRenameDialog";
 import {
   readStoredPreferences,
@@ -291,6 +295,13 @@ const STAR_MAP_LOCATED_MS = 1_600;
  * happens to satisfy it.
  */
 const STAR_MAP_SUMMON_TIMEOUT_MS = 2_000;
+/**
+ * How long a just-created thread has to show up in a feed before the intake
+ * reveal is abandoned. Longer than a summon, because this waits on a
+ * poll-driven refresh (and, for a remote [+], on federation) rather than on
+ * a layout pass that has already been scheduled.
+ */
+const STAR_MAP_INTAKE_REVEAL_TIMEOUT_MS = 30_000;
 
 
 /**
@@ -3481,6 +3492,59 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   /**
+   * A thread the [+] intake just created, waiting for the feed that owns it
+   * to hand us a summary. Intake answers with ids, not a
+   * `NavigationThreadSummary`, and every reveal below needs the summary —
+   * so the reveal cannot happen in the response handler.
+   */
+  const [pendingIntakeReveal, setPendingIntakeReveal] =
+    useState<StarMapIntakeReveal>();
+
+  /**
+   * Land the operator on the thread they just asked for. Creating a thread
+   * and then leaving the operator to find its card is the map's version of
+   * opening a file and not showing it: the intake knows exactly which card
+   * is new, and it is the only moment when that is true.
+   *
+   * Deferred to the feed rather than done in the response handler, because
+   * both halves of the reveal — flying to the card and opening its chat —
+   * need the thread summary, which arrives on the next refresh.
+   */
+  useEffect(() => {
+    if (!pendingIntakeReveal) return;
+    const thread = findStarMapIntakeRevealTarget({
+      localInstanceId,
+      localThreads,
+      remoteThreadsByInstance: remote.threadsByInstance,
+      reveal: pendingIntakeReveal,
+    });
+    if (!thread) return;
+    setPendingIntakeReveal(undefined);
+    flyToThread(thread);
+    openThread(thread);
+  }, [
+    flyToThread,
+    localInstanceId,
+    localThreads,
+    openThread,
+    pendingIntakeReveal,
+    remote.threadsByInstance,
+  ]);
+
+  /**
+   * Give up on a reveal whose thread never reached a feed. Without this the
+   * effect above stays armed, and an unrelated refresh minutes later flies
+   * the map somewhere the operator stopped expecting.
+   */
+  useEffect(() => {
+    if (!pendingIntakeReveal) return;
+    const timer = window.setTimeout(() => {
+      setPendingIntakeReveal(undefined);
+    }, STAR_MAP_INTAKE_REVEAL_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [pendingIntakeReveal]);
+
+  /**
    * The bodies the edge arrows can point at, in the current lens: every
    * instance in the radial and lane lenses, every project sun in
    * Projects. Canvas units, like the bodies themselves. The arrows only
@@ -5305,12 +5369,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
           target={intakeTarget}
           onClose={() => setIntakeTarget(undefined)}
           onCreated={(created) => {
-            markThreadEntering(
-              buildThreadIdentityKey(
-                created.backend as NavigationThreadSummary["source"],
-                created.threadId,
-              ),
+            const threadKey = buildThreadIdentityKey(
+              created.backend as NavigationThreadSummary["source"],
+              created.threadId,
             );
+            markThreadEntering(threadKey);
+            setPendingIntakeReveal({
+              instanceId: created.instanceId,
+              threadKey,
+            });
             if (created.instanceId === localInstanceId) {
               void onRefreshLocalThreads();
             } else {

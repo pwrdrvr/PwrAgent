@@ -468,7 +468,23 @@ export type StarMapIntakeCandidate = {
   directoryKey: string;
   label: string;
   path?: string;
+  /**
+   * One short clause saying why this project is a candidate, from whatever
+   * ranked it. A bare list of project names is not an answer the operator
+   * can act on: every name is plausible, so the pick costs a re-read of the
+   * whole registry. The reason is what makes one row cheaper than the rest.
+   */
+  reason?: string;
 };
+
+/** What ordered the candidate list, so the dialog can say so honestly. */
+export type StarMapIntakeCandidateSource =
+  /** The resolver ranked them against the request. */
+  | "resolver"
+  /** The request names these projects literally; the resolver did not rank. */
+  | "label"
+  /** Nothing matched the request at all; ordered by directory recency. */
+  | "recent";
 
 /**
  * A PwrAgent-owned staged attachment supplied with a Star Map intake task.
@@ -502,13 +518,14 @@ export type StarMapIntakeResponse =
       requestId: string;
       backend: string;
       threadId: string;
-      title?: string;
     }
   | {
       status: "needs_disambiguation";
       requestId: string;
-      /** Ranked candidate projects for the operator to pick from. */
+      /** Candidate projects, best first. */
       candidates: StarMapIntakeCandidate[];
+      /** Whether `candidates` is a real ranking or a recency fallback. */
+      candidateSource: StarMapIntakeCandidateSource;
     }
   | {
       status: "failed";

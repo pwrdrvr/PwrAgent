@@ -262,6 +262,7 @@ describe("star map window IPC", () => {
       status: "needs_disambiguation",
       requestId: "request-forged",
       candidates: [],
+      candidateSource: "resolver",
     });
 
     await handlerFor(STAR_MAP_INTAKE_CHANNEL)({}, {

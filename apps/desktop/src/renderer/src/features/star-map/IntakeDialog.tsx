@@ -11,6 +11,7 @@ import type {
   CelestialIconId,
   FederationTarget,
   StarMapIntakeCandidate,
+  StarMapIntakeCandidateSource,
   StarMapIntakePhase,
 } from "@pwragent/shared";
 import { MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS } from "../../../../shared/star-map-intake";
@@ -39,6 +40,17 @@ export type IntakeDialogTarget = {
 const PHASE_COPY: Partial<Record<StarMapIntakePhase, string>> = {
   resolving: "Finding the right project…",
   creating: "Creating the thread…",
+};
+
+/**
+ * Say which question the list answers. "Which project?" over a recency
+ * fallback implies a judgment that was never made, and the operator reads
+ * the first row as a recommendation it is not.
+ */
+const CANDIDATE_HINT: Record<StarMapIntakeCandidateSource, string> = {
+  resolver: "Closest match first — pick the project:",
+  label: "Your request names more than one project:",
+  recent: "No project matched. Your most recent, newest first:",
 };
 
 type IntakeImageAttachment = {
@@ -88,7 +100,17 @@ export function IntakeDialog(props: {
     IntakeImageAttachment[]
   >([]);
   const [preparingImageCount, setPreparingImageCount] = useState(0);
-  const [candidates, setCandidates] = useState<StarMapIntakeCandidate[]>();
+  const [candidates, setCandidates] = useState<{
+    entries: StarMapIntakeCandidate[];
+    source: StarMapIntakeCandidateSource;
+  }>();
+  /**
+   * The project the owning instance resolved to, streamed with `creating`.
+   * When the resolver is confident it never asks, so this line is the only
+   * place the operator sees the pick while it is still worth seeing.
+   */
+  const [resolvedDirectoryLabel, setResolvedDirectoryLabel] =
+    useState<string>();
   const requestIdRef = useRef<string | undefined>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previewUrlsRef = useRef(new Set<string>());
@@ -118,9 +140,13 @@ export function IntakeDialog(props: {
         requestId: string;
         phase: StarMapIntakePhase;
         message?: string;
+        directoryLabel?: string;
       };
       if (params.requestId !== requestIdRef.current) return;
       setPhase(params.phase);
+      if (params.directoryLabel) {
+        setResolvedDirectoryLabel(params.directoryLabel);
+      }
       if (params.phase === "failed" && params.message) {
         setError(params.message);
       }
@@ -306,6 +332,7 @@ export function IntakeDialog(props: {
     setError(undefined);
     setAttachmentError(undefined);
     setCandidates(undefined);
+    setResolvedDirectoryLabel(undefined);
     setPhase("resolving");
     void props.desktopApi
       .dispatchStarMapIntake({
@@ -337,7 +364,10 @@ export function IntakeDialog(props: {
         }
         if (response.status === "needs_disambiguation") {
           setPhase("needs_disambiguation");
-          setCandidates(response.candidates);
+          setCandidates({
+            entries: response.candidates,
+            source: response.candidateSource,
+          });
           return;
         }
         setPhase("failed");
@@ -446,8 +476,10 @@ export function IntakeDialog(props: {
         ) : null}
         {candidates ? (
           <div className="star-map-intake__candidates">
-            <p className="star-map-intake__hint">Which project?</p>
-            {candidates.map((candidate) => (
+            <p className="star-map-intake__hint">
+              {CANDIDATE_HINT[candidates.source]}
+            </p>
+            {candidates.entries.map((candidate) => (
               <button
                 key={candidate.directoryKey}
                 type="button"
@@ -457,6 +489,11 @@ export function IntakeDialog(props: {
                 <span className="star-map-intake__candidate-label">
                   {candidate.label}
                 </span>
+                {candidate.reason ? (
+                  <span className="star-map-intake__candidate-reason">
+                    {candidate.reason}
+                  </span>
+                ) : null}
                 {candidate.path ? (
                   <span className="star-map-intake__candidate-path">
                     {candidate.path}
@@ -478,7 +515,9 @@ export function IntakeDialog(props: {
                 ? error
                 : preparingImages
                   ? "Preparing image…"
-                  : PHASE_COPY[phase as StarMapIntakePhase] ?? "")}
+                  : phase === "creating" && resolvedDirectoryLabel
+                    ? `Creating the thread in ${resolvedDirectoryLabel}…`
+                    : PHASE_COPY[phase as StarMapIntakePhase] ?? "")}
           </span>
           <button
             type="button"

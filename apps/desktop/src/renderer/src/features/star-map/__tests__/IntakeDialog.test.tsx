@@ -25,9 +25,18 @@ function setup(
     async (_request: { requestId: string; directoryKey?: string }) =>
       dispatchResult as never,
   );
+  // The owning instance streams progress over this channel, so the tests
+  // that assert on progress copy need to be able to push into it.
+  const agentEventListeners = new Set<(event: never) => void>();
+  const emitAgentEvent = (event: unknown) => {
+    for (const listener of agentEventListeners) listener(event as never);
+  };
   const desktopApi: DesktopApi = {
     dispatchStarMapIntake,
-    onAgentEvent: vi.fn(() => () => undefined),
+    onAgentEvent: vi.fn((listener: (event: never) => void) => {
+      agentEventListeners.add(listener);
+      return () => agentEventListeners.delete(listener);
+    }),
   };
   const onClose = vi.fn();
   const onCreated = vi.fn();
@@ -40,7 +49,7 @@ function setup(
       onCreated={onCreated}
     />,
   );
-  return { dispatchStarMapIntake, onClose, onCreated };
+  return { dispatchStarMapIntake, emitAgentEvent, onClose, onCreated };
 }
 
 function pastePng(bytes = new Uint8Array([137, 80, 78, 71])) {
@@ -163,8 +172,14 @@ describe("IntakeDialog", () => {
           : {
               status: "needs_disambiguation",
               requestId: request.requestId,
+              candidateSource: "resolver",
               candidates: [
-                { directoryKey: "dir-a", label: "PwrSnap", path: "/r/PwrSnap" },
+                {
+                  directoryKey: "dir-a",
+                  label: "PwrSnap",
+                  path: "/r/PwrSnap",
+                  reason: "the screenshot pipeline lives here",
+                },
                 { directoryKey: "dir-b", label: "PwrAgent" },
               ],
             }) as never,
@@ -172,12 +187,60 @@ describe("IntakeDialog", () => {
 
     submitText("Do a thing");
     await waitFor(() => {
-      expect(screen.getByText("Which project?")).toBeTruthy();
+      expect(screen.getByText(/Closest match first/)).toBeTruthy();
     });
+    // The reason is why this list beats the bare registry dump it replaced.
+    expect(
+      screen.getByText("the screenshot pipeline lives here"),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /PwrSnap/ }));
     await waitFor(() => {
       expect(dispatchStarMapIntake).toHaveBeenCalledWith(
         expect.objectContaining({ directoryKey: "dir-a" }),
+      );
+    });
+  });
+
+  it("says so when the list is a recency fallback rather than a ranking", async () => {
+    const { dispatchStarMapIntake } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) =>
+        ({
+          status: "needs_disambiguation",
+          requestId: request.requestId,
+          candidateSource: "recent",
+          candidates: [{ directoryKey: "dir-a", label: "PwrSnap" }],
+        }) as never,
+    );
+
+    submitText("Do a thing");
+    await waitFor(() => {
+      expect(screen.getByText(/No project matched/)).toBeTruthy();
+    });
+  });
+
+  it("names the resolved project while the thread is being created", async () => {
+    const { dispatchStarMapIntake, emitAgentEvent } = setup(undefined);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) => {
+        emitAgentEvent({
+          notification: {
+            method: "starMap/intake/status",
+            params: {
+              requestId: request.requestId,
+              phase: "creating",
+              directoryLabel: "PwrSnap",
+            },
+          },
+        });
+        return new Promise(() => {}) as never;
+      },
+    );
+
+    submitText("Look into the screenshot issue");
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toContain(
+        "Creating the thread in PwrSnap…",
       );
     });
   });
