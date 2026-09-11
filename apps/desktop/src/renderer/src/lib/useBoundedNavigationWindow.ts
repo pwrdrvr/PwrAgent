@@ -30,14 +30,21 @@ export function useBoundedNavigationWindow(params: Demand & {
   const directories = useMemo(() => {
     const descriptors = new Map<string, NavigationDirectoryRow>();
     for (const id of ["directory-index", "selected-directories"]) {
-      for (const directory of state.resources.get(id)?.state.page?.directories ?? []) descriptors.set(directory.key, directory);
+      const resource = state.resources.get(id);
+      if (!federationTargetsEqual(resource?.state.request.federationTarget, params.target)) continue;
+      for (const directory of resource?.state.page?.directories ?? []) descriptors.set(directory.key, directory);
     }
     for (const id of ["selected-context", "selected-viewer-mount"]) {
-      const directory = state.resources.get(id)?.state.page?.selectionDirectory;
+      const resource = state.resources.get(id);
+      // Owner exact reads supply ancestry, not viewer project membership or
+      // counts. Importing their descriptor duplicates peer paths and turns
+      // owner-local activity into viewer-local activity.
+      if (!federationTargetsEqual(resource?.state.request.federationTarget, params.target)) continue;
+      const directory = resource?.state.page?.selectionDirectory;
       if (directory) descriptors.set(directory.key, directory);
     }
     return [...descriptors.values()];
-  }, [state.resources]);
+  }, [state.resources, params.target]);
   const selectedResource = state.resources.get("selected-context");
   const selectedQuery = selectedResource?.state.request.query;
   const selectedContext = params.selectedRef && selectedQuery?.kind === "exact"
@@ -45,10 +52,15 @@ export function useBoundedNavigationWindow(params: Demand & {
     && navigationIdentityKey(selectedQuery.identities[0]!) === navigationIdentityKey(params.selectedRef)
     ? selectedResource?.state.page : undefined;
   const selectedRoot = selectedContext?.entries.find((entry) => entry.placement.kind === "root");
-  const selectedHome = state.resources.get("selected-viewer-mount")?.state.page?.selectionDirectory
-    ?? selectedContext?.selectionDirectory;
-  const selectedDirectoryKeys = selectedHome ? [selectedHome.key] : selectedRoot?.row.linkedDirectories.length
-    ? selectedRoot.row.linkedDirectories.map((directory) => classifyDirectory(directory).key) : params.selectedDirectoryKeys;
+  const remoteViewerSelection = Boolean(params.selectedRef?.ownerInstanceId) && params.target?.scope !== "remote";
+  const selectedHome = remoteViewerSelection
+    ? state.resources.get("selected-viewer-mount")?.state.page?.selectionDirectory
+    : selectedContext?.selectionDirectory;
+  // While the viewer mount loads, neither owner-linked paths nor detail
+  // fallback paths can identify a directory in the viewer inventory.
+  const selectedDirectoryKeys = selectedHome ? [selectedHome.key] : remoteViewerSelection ? []
+    : selectedRoot?.row.linkedDirectories.length
+      ? selectedRoot.row.linkedDirectories.map((directory) => classifyDirectory(directory).key) : params.selectedDirectoryKeys;
   const demandParams = { ...params, directories, selectedDirectoryKeys,
     selectedRootRef: selectedRoot?.row.ref, selectedContextReady: Boolean(selectedContext),
     indexedDirectoryKeys: new Set((state.resources.get("directory-index")?.state.page?.directories ?? []).map((directory) => directory.key)),

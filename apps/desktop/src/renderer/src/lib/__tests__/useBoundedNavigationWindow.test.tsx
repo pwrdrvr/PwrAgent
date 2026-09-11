@@ -25,6 +25,63 @@ function api() {
     } satisfies DesktopApi };
 }
 
+it.each([
+  [false, "owner"], [false, "viewer"], [true, "owner"], [true, "viewer"],
+] as const)("keeps viewer directory counts during remote selection (same path=%s, first=%s)", async (samePath, first) => {
+  const fixture = api();
+  const local = { ...directory, key: "directory:/viewer/PwrSnap", label: "PwrSnap",
+    counts: { total: 10, active: 2, activeRemote: 2, unread: 1, review: 1 } };
+  const remote = { ...local, key: samePath ? local.key : "directory:/owner/PwrSnap",
+    counts: { total: 3, active: 2, unread: 1, review: 1 } };
+  const ref = { backend: "codex" as const, threadId: "remote-root", ownerInstanceId: "peer" };
+  const row: NavigationRow = { id: ref.threadId, source: "codex", ref, title: "Remote root", titleSource: "explicit",
+    rowRevision: "r", linkedDirectories: [{ id: "owner-project", label: "PwrSnap", path: "/owner/PwrSnap", kind: "local" }],
+    inbox: { inInbox: false }, ordinaryChildCount: 1,
+    nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  fixture.read.mockImplementation(async (request) => {
+    if (request.query.kind === "directory-index") return page({ directories: request.query.keys ? [] : [local] });
+    if (request.query.kind !== "exact") return page();
+    const owner = request.federationTarget?.scope === "remote";
+    if (owner !== (first === "owner")) await gate;
+    return page({ selectionDirectory: owner ? remote : local,
+      entries: [{ row, placement: { kind: "root" }, orderKey: "root" }] });
+  });
+  const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base,
+    desktopApi: fixture.desktopApi, selectedRef: ref, selectedDirectoryKeys: [remote.key],
+  }));
+  try {
+    const firstId = first === "owner" ? "selected-context" : "selected-viewer-mount";
+    await waitFor(() => expect(result.current.resources.get(firstId)?.state.page).toBeDefined());
+    expect(result.current.directories).toEqual([local]);
+    expect(result.current.selectedDirectoryKeys).toEqual(first === "owner" ? [] : [local.key]);
+    await act(async () => finish());
+    await waitFor(() => expect(result.current.resources.get("selected-context")?.loading).toBe(false));
+    await waitFor(() => expect(result.current.resources.get("selected-viewer-mount")?.loading).toBe(false));
+    expect(result.current.directories).toEqual([local]);
+    expect(result.current.selectedDirectoryKeys).toEqual([local.key]);
+    expect(result.current.resources.get("selected-context")?.state.page?.entries[0]?.row.ordinaryChildCount).toBe(1);
+    if (!samePath) expect(fixture.read.mock.calls.some(([request]) =>
+      request.query.kind === "directory" && request.query.directoryKey === remote.key)).toBe(false);
+  } finally {
+    finish();
+    unmount();
+  }
+});
+
+it("uses owner directory descriptors in a window browsing that owner", async () => {
+  const fixture = api();
+  fixture.read.mockImplementation(async (request) => page(request.query.kind === "exact"
+    ? { selectionDirectory: directory } : {}));
+  const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base, desktopApi: fixture.desktopApi,
+    target: { scope: "remote", instanceId: "peer" }, selectedRef: { backend: "codex", threadId: "root", ownerInstanceId: "peer" },
+  }));
+  await waitFor(() => expect(result.current.directories).toEqual([directory]));
+  expect(result.current.selectedDirectoryKeys).toEqual([directory.key]);
+  unmount();
+});
+
 it.each([5, 35])("restores selected root %s without discarding the first page when it already contains that root", async (index) => {
   const fixture = api();
   const selectedRef = { backend: "codex" as const, threadId: `thread-${index}` };
