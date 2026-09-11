@@ -1,0 +1,465 @@
+{
+  "measured_date": "2026-09-11",
+  "repository_commit": "592efcd90557dd6ad02149e117a38ab90e9a214a",
+  "installed_application": "/Applications/PwrAgent.app",
+  "installed_version": "1.1.0-alpha.4",
+  "installed_electron_updater": "6.8.9",
+  "units": "bytes (decimal MB = bytes / 1000000)",
+  "method": {
+    "files": "Regular files only; do not follow symlinks. All other files retained unchanged.",
+    "arm64_projection": "Parse big-endian FAT_MAGIC/FAT_MAGIC_64 architecture records; use CPU_TYPE_ARM64 slice offset and length. Omit paths containing canvas-darwin-x64/.",
+    "compression": "Independent raw DEFLATE streams per file, level 6; compare whole file and projected slice. Sum compressed stream lengths, excluding archive headers and symlinks.",
+    "zlib_version": "1.2.12",
+    "python_version": "3.14.7",
+    "limitation": "Projection only. No signed app or actual release archive generated; no credit for SQLite source removal."
+  },
+  "totals": {
+    "bytes": 1021285004,
+    "arm64_bytes": 584778028,
+    "deflate_bytes": 393003210,
+    "arm64_deflate_bytes": 214139310
+  },
+  "published_alpha4": {
+    "universal_zip": 379597882,
+    "zip_blockmap": 398775,
+    "universal_dmg": 393047867
+  },
+  "changed_files": [
+    {
+      "path": "Contents/MacOS/PwrAgent",
+      "bytes": 118768,
+      "arm64_bytes": 53232,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 32800
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 65536,
+          "bytes": 53232
+        }
+      ],
+      "arm64_offset": 65536,
+      "deflate_bytes": 14513,
+      "arm64_deflate_bytes": 7222
+    },
+    {
+      "path": "Contents/PlugIns/PwrAgentDockTilePlugin.plugin/Contents/MacOS/PwrAgentDockTilePlugin",
+      "bytes": 141168,
+      "arm64_bytes": 75632,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 44608
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 65536,
+          "bytes": 75632
+        }
+      ],
+      "arm64_offset": 65536,
+      "deflate_bytes": 26139,
+      "arm64_deflate_bytes": 13391
+    },
+    {
+      "path": "Contents/Resources/tools/rg",
+      "bytes": 8483520,
+      "arm64_bytes": 4010688,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 4440864
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 4472832,
+          "bytes": 4010688
+        }
+      ],
+      "arm64_offset": 4472832,
+      "deflate_bytes": 3469061,
+      "arm64_deflate_bytes": 1652875
+    },
+    {
+      "path": "Contents/Resources/agents/grok/grok",
+      "bytes": 346308896,
+      "arm64_bytes": 167526688,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 178764096
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 178782208,
+          "bytes": 167526688
+        }
+      ],
+      "arm64_offset": 178782208,
+      "deflate_bytes": 131262907,
+      "arm64_deflate_bytes": 63050708
+    },
+    {
+      "path": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node",
+      "bytes": 224400,
+      "arm64_bytes": 109712,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 87136
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 114688,
+          "bytes": 109712
+        }
+      ],
+      "arm64_offset": 114688,
+      "deflate_bytes": 55831,
+      "arm64_deflate_bytes": 26392
+    },
+    {
+      "path": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper",
+      "bytes": 119344,
+      "arm64_bytes": 70192,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 29440
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 49152,
+          "bytes": 70192
+        }
+      ],
+      "arm64_offset": 49152,
+      "deflate_bytes": 15203,
+      "arm64_deflate_bytes": 7567
+    },
+    {
+      "path": "Contents/Resources/app.asar.unpacked/node_modules/@napi-rs/canvas-darwin-x64/skia.darwin-x64.node",
+      "bytes": 32558848,
+      "arm64_bytes": 0,
+      "slices": [],
+      "deflate_bytes": 13525331,
+      "arm64_deflate_bytes": 0
+    },
+    {
+      "path": "Contents/Resources/app.asar.unpacked/node_modules/@napi-rs/canvas-darwin-x64/package.json",
+      "bytes": 608,
+      "arm64_bytes": 0,
+      "slices": [],
+      "deflate_bytes": 301,
+      "arm64_deflate_bytes": 0
+    },
+    {
+      "path": "Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+      "bytes": 3941088,
+      "arm64_bytes": 1942240,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 1973088
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 1998848,
+          "bytes": 1942240
+        }
+      ],
+      "arm64_offset": 1998848,
+      "deflate_bytes": 1989091,
+      "arm64_deflate_bytes": 947137
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+      "bytes": 377834256,
+      "arm64_bytes": 178129680,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 199675008
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 199704576,
+          "bytes": 178129680
+        }
+      ],
+      "arm64_offset": 199704576,
+      "deflate_bytes": 160683934,
+      "arm64_deflate_bytes": 73914795
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libEGL.dylib",
+      "bytes": 207968,
+      "arm64_bytes": 109664,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 77200
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 98304,
+          "bytes": 109664
+        }
+      ],
+      "arm64_offset": 98304,
+      "deflate_bytes": 50418,
+      "arm64_deflate_bytes": 23887
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libvk_swiftshader.dylib",
+      "bytes": 21329648,
+      "arm64_bytes": 16611056,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 4687776
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 4718592,
+          "bytes": 16611056
+        }
+      ],
+      "arm64_offset": 4718592,
+      "deflate_bytes": 8376358,
+      "arm64_deflate_bytes": 6522698
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libGLESv2.dylib",
+      "bytes": 14699088,
+      "arm64_bytes": 6834768,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 7836672
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 7864320,
+          "bytes": 6834768
+        }
+      ],
+      "arm64_offset": 7864320,
+      "deflate_bytes": 5807484,
+      "arm64_deflate_bytes": 2692689
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libffmpeg.dylib",
+      "bytes": 4758000,
+      "arm64_bytes": 2218480,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 2514000
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 2539520,
+          "bytes": 2218480
+        }
+      ],
+      "arm64_offset": 2539520,
+      "deflate_bytes": 2063723,
+      "arm64_deflate_bytes": 976771
+    },
+    {
+      "path": "Contents/Frameworks/Electron Framework.framework/Versions/A/Helpers/chrome_crashpad_handler",
+      "bytes": 3091824,
+      "arm64_bytes": 1502576,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 1556880
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 1589248,
+          "bytes": 1502576
+        }
+      ],
+      "arm64_offset": 1589248,
+      "deflate_bytes": 1356510,
+      "arm64_deflate_bytes": 650504
+    },
+    {
+      "path": "Contents/Frameworks/ReactiveObjC.framework/Versions/A/ReactiveObjC",
+      "bytes": 794832,
+      "arm64_bytes": 385232,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 379120
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 409600,
+          "bytes": 385232
+        }
+      ],
+      "arm64_offset": 409600,
+      "deflate_bytes": 281686,
+      "arm64_deflate_bytes": 135758
+    },
+    {
+      "path": "Contents/Frameworks/Squirrel.framework/Versions/A/Squirrel",
+      "bytes": 326368,
+      "arm64_bytes": 162528,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 142768
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 163840,
+          "bytes": 162528
+        }
+      ],
+      "arm64_offset": 163840,
+      "deflate_bytes": 101654,
+      "arm64_deflate_bytes": 48945
+    },
+    {
+      "path": "Contents/Frameworks/Squirrel.framework/Versions/A/Resources/ShipIt",
+      "bytes": 291728,
+      "arm64_bytes": 144272,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 116112
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 147456,
+          "bytes": 144272
+        }
+      ],
+      "arm64_offset": 147456,
+      "deflate_bytes": 82394,
+      "arm64_deflate_bytes": 39948
+    },
+    {
+      "path": "Contents/Frameworks/Mantle.framework/Versions/A/Mantle",
+      "bytes": 221760,
+      "arm64_bytes": 107072,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 82800
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 114688,
+          "bytes": 107072
+        }
+      ],
+      "arm64_offset": 114688,
+      "deflate_bytes": 58735,
+      "arm64_deflate_bytes": 28432
+    },
+    {
+      "path": "Contents/Frameworks/PwrAgent Helper (GPU).app/Contents/MacOS/PwrAgent Helper (GPU)",
+      "bytes": 484016,
+      "arm64_bytes": 221872,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 239584
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 262144,
+          "bytes": 221872
+        }
+      ],
+      "arm64_offset": 262144,
+      "deflate_bytes": 172829,
+      "arm64_deflate_bytes": 77240
+    },
+    {
+      "path": "Contents/Frameworks/PwrAgent Helper (Renderer).app/Contents/MacOS/PwrAgent Helper (Renderer)",
+      "bytes": 484032,
+      "arm64_bytes": 221888,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 239600
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 262144,
+          "bytes": 221888
+        }
+      ],
+      "arm64_offset": 262144,
+      "deflate_bytes": 172822,
+      "arm64_deflate_bytes": 77242
+    },
+    {
+      "path": "Contents/Frameworks/PwrAgent Helper.app/Contents/MacOS/PwrAgent Helper",
+      "bytes": 484016,
+      "arm64_bytes": 221872,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 239584
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 262144,
+          "bytes": 221872
+        }
+      ],
+      "arm64_offset": 262144,
+      "deflate_bytes": 172830,
+      "arm64_deflate_bytes": 77241
+    },
+    {
+      "path": "Contents/Frameworks/PwrAgent Helper (Plugin).app/Contents/MacOS/PwrAgent Helper (Plugin)",
+      "bytes": 484032,
+      "arm64_bytes": 221888,
+      "slices": [
+        {
+          "cpu": "0x1000007",
+          "offset": 16384,
+          "bytes": 239600
+        },
+        {
+          "cpu": "0x100000c",
+          "offset": 262144,
+          "bytes": 221888
+        }
+      ],
+      "arm64_offset": 262144,
+      "deflate_bytes": 172835,
+      "arm64_deflate_bytes": 77247
+    }
+  ]
+}
